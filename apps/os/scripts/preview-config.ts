@@ -20,19 +20,10 @@ import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
 /** Beside Vite's built Worker config, so `main` and `assets.directory` resolve identically. */
 export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
 
-/** THE ENVS.TS ENTRY of the parent: `preview` (the dev/preview account), or `PREVIEW_PARENT_ENV`
- *  for main's throwaway run on the prd account (`prd-account-e2e`). */
-export const PREVIEW_PARENT_ENV = process.env.PREVIEW_PARENT_ENV || "preview";
-
 /** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
  *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
  *  that worker — os-next-preview on the dev/preview account (envs.ts). Nothing reads its data. */
-export const PREVIEW_PARENT = (() => {
-  const parent = osEnvs[PREVIEW_PARENT_ENV];
-  if (!parent)
-    throw new Error(`PREVIEW_PARENT_ENV=${PREVIEW_PARENT_ENV} is no envs.ts osEnvs entry`);
-  return parent;
-})();
+export const PREVIEW_PARENT = osEnvs.preview!;
 
 /** cloudflare-os's limit: the slug is the URL's first label, and KV/R2 names carry it too. */
 export const MAX_PREVIEW_NAME_LENGTH = 28;
@@ -157,30 +148,17 @@ export function changedApps(changedPaths: string[], apps: StartApp[] = APPS): St
 
 // ── the PR body's managed section ──────────────────────────────────────────────────────────────
 
-/** The preview's section of the PR body: the deploy writes it whole. */
-export const PREVIEW_SECTION_MARKERS = {
-  begin: "<!-- os-next-preview:begin -->",
-  end: "<!-- os-next-preview:end -->",
-};
-/** The residency gate's block inside it: the deploy writes it pending, the gate
- *  (scripts/preview-residency.ts) fills in its verdict. */
-export const RESIDENCY_SECTION_MARKERS = {
-  begin: "<!-- os-next-preview-residency:begin -->",
-  end: "<!-- os-next-preview-residency:end -->",
-};
+const SECTION_BEGIN = "<!-- os-next-preview:begin -->";
+const SECTION_END = "<!-- os-next-preview:end -->";
 
 /** Replace the managed section between the markers, or append one. Everything a person wrote
  *  around it is kept verbatim. */
-export function splicePullRequestBody(
-  body: string,
-  section: string,
-  markers = PREVIEW_SECTION_MARKERS,
-): string {
-  const block = `${markers.begin}\n${section.trim()}\n${markers.end}`;
-  const begin = body.indexOf(markers.begin);
-  const end = body.indexOf(markers.end, begin);
+export function splicePullRequestBody(body: string, section: string): string {
+  const block = `${SECTION_BEGIN}\n${section.trim()}\n${SECTION_END}`;
+  const begin = body.indexOf(SECTION_BEGIN);
+  const end = body.indexOf(SECTION_END, begin);
   if (begin >= 0 && end > begin) {
-    return body.slice(0, begin) + block + body.slice(end + markers.end.length);
+    return body.slice(0, begin) + block + body.slice(end + SECTION_END.length);
   }
   const kept = body.trimEnd();
   return `${kept ? `${kept}\n\n` : ""}${block}\n`;
@@ -210,10 +188,6 @@ export function renderPullRequestSection(input: {
           ...input.apps.map((app) => `| ${app.name} | ${app.url} |`),
         ]
       : ["No app preview was deployed in this run."]),
-    "",
-    RESIDENCY_SECTION_MARKERS.begin,
-    "#### Residency gate: pending — the residency job reads five minutes after the e2e suite ends, then redeploys the preview",
-    RESIDENCY_SECTION_MARKERS.end,
     "",
     "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md).",
   ].join("\n");
@@ -298,43 +272,6 @@ export function writePreviewWranglerConfig(input: { previewName: string; dashOri
     `${JSON.stringify(previewWranglerConfig({ template: built, ...input }), null, 2)}\n`,
   );
   return fileURLToPath(configUrl);
-}
-
-/** The root Playwright projects (playwright.config.ts) that need the platform alone, no app on top:
- *  what `pnpm spec --project …` runs beside the prd account's throwaway parent, whose account holds
- *  no Notes or Voice preview. preview.test.ts fails when a project is added that is neither this nor
- *  an app's. */
-export const PLATFORM_SPEC_PROJECTS = ["os", "os-phone", "suite"];
-
-/** Beside the preview's config: the prd account's throwaway parent's (`PREVIEW_PARENT_ENV=prd-account-e2e`). */
-export const THROWAWAY_PARENT_CONFIG_NAME = "dist/server/wrangler.parent.json";
-
-/** The prd account's throwaway parent, deployed on every run from the preview's guarded config:
- *  its top level (name, account, entry, assets, workers.dev, and no binding), with the build's
- *  `exports` in place of the legacy `migrations` entry, the way the dev parent's own deploy
- *  declares its classes. A migration's one `v1` tag is applied once, so a parent deployed with it
- *  would never gain a class main adds later, and a parent without the class fails every preview
- *  with 10061. Pure. */
-export function throwawayParentWranglerConfig(input: {
-  previewConfig: Record<string, unknown>;
-  template: { exports: unknown };
-}) {
-  const topLevel = Object.entries(input.previewConfig).filter(
-    ([key]) => key !== "previews" && key !== "migrations",
-  );
-  return { ...Object.fromEntries(topLevel), exports: input.template.exports };
-}
-
-/** Write the throwaway parent's config beside the preview's (`previewConfigPath`). */
-export function writeThrowawayParentWranglerConfig(previewConfigPath: string) {
-  const built = JSON.parse(
-    readFileSync(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),
-  );
-  const previewConfig = JSON.parse(readFileSync(previewConfigPath, "utf8"));
-  writeFileSync(
-    new URL(`../${THROWAWAY_PARENT_CONFIG_NAME}`, import.meta.url),
-    `${JSON.stringify(throwawayParentWranglerConfig({ previewConfig, template: built }), null, 2)}\n`,
-  );
 }
 
 /** wrangler.base.jsonc, the template every preview's config and resource names derive from. */

@@ -74,12 +74,6 @@ again, once. If the new preview fails the same way, the parent itself lacks the 
 parent from main with `pnpm --dir apps/os run deploy --env preview` (`run`, because `pnpm deploy` is
 pnpm's own command). A PR that itself adds a class needs the parent deployed from its branch first.
 
-After every suite, the `residency` job (`scripts/preview-residency.ts`) reads Cloudflare's Durable
-Object analytics for the five minutes starting five minutes after the suite ended, and fails if any
-object of the preview was still resident with every client closed. It writes the table into the PR
-body, then always redeploys the preview (a redeploy, never a reset), which ends the sessions the run
-left open. An object re-woken after the redeploy survives it, and the next run names it again.
-
 Run preview operations from this directory under the parent Doppler config:
 
 ```sh
@@ -89,12 +83,6 @@ doppler run --project project-worker --config preview -- \
   pnpm preview e2e --pr <number> --name <branch>
 doppler run --project project-worker --config preview -- \
   pnpm preview sweep
-# read-only: which objects were still resident five minutes after a suite
-PREVIEW_SUITE_STARTED=<iso> PREVIEW_SUITE_ENDED=<iso> doppler run --project project-worker --config preview -- \
-  pnpm preview residency --pr <number> --name <branch>
-# redeploy the same preview, ending the sessions a run left open
-doppler run --project project-worker --config preview -- \
-  pnpm preview release --pr <number> --name <branch>
 ```
 
 Use `e2e` in place of `deploy` to test an existing preview. `reset` destroys that preview's state

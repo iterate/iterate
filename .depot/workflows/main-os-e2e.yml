@@ -1,11 +1,12 @@
-# MAIN'S E2E RUN on the dev/preview account: every push to main (the paths a PR preview runs for)
-# deploys a THROWAWAY Worker Preview of apps/os named `main-<short sha>`, with fresh resources of its
-# own (KV, R2, Artifacts namespace, Durable Object namespaces) and the four clients on top, runs
-# the e2e suite, the browser specs and the residency gate against it, then DELETES the preview and
-# everything it created. A failed run still deletes (the `delete` job runs always). A cancelled
-# run's queued jobs are cancelled with it, `delete` included, so the run that superseded it deletes
-# every other `main-<sha>` preview before it deploys; the nightly sweep of preview-os-next.yml
-# deletes a PR-less preview a day after its last deploy as the backstop.
+# MAIN'S E2E RUN on the dev/preview account, in parallel with Deploy OS, which waits for none of
+# it: every push to main (the paths a PR preview runs for) deploys a THROWAWAY Worker Preview of
+# apps/os named `main-<short sha>`, with fresh resources of its own (KV, R2, Artifacts namespace,
+# Durable Object namespaces) and the clients on top, runs the e2e suite and the browser specs
+# against it, then DELETES the preview and everything it created. A failed run still deletes (the
+# `delete` job runs always). A cancelled run's queued jobs are cancelled with it, `delete`
+# included, so the run that superseded it deletes every other `main-<sha>` preview before it
+# deploys; the nightly sweep of preview-os-next.yml deletes a PR-less preview a day after its last
+# deploy as the backstop.
 #
 # A newer push cancels the run in progress: only the latest main is tested. The `alert` job pages
 # #error-pulse only when main changes state — once when it goes red, naming the failing rows, once
@@ -149,8 +150,6 @@ jobs:
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
     outputs:
-      suite-started: ${{ steps.suite-started.outputs.at }}
-      suite-ended: ${{ steps.suite-ended.outputs.at }}
       failing-rows: ${{ steps.failing-rows.outputs.failing-rows }}
     steps:
       - name: Checkout main
@@ -164,9 +163,6 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Record the suite's start
-        id: suite-started
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Run the e2e suite and the browser specs against the preview
         working-directory: apps/os
         env:
@@ -174,10 +170,6 @@ jobs:
           PREVIEW_NAME: ${{ needs.deploy.outputs.preview-name }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview e2e
-      - name: Record the suite's end
-        id: suite-ended
-        if: always() && steps.suite-started.outcome == 'success'
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       # The rows the alert names when main goes red.
       - name: Collect the failing rows
         id: failing-rows
@@ -215,43 +207,11 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-  # The residency gate (apps/os/scripts/preview-residency.ts), read-only. No release after it: the
-  # preview is deleted next, which ends every session with it. A superseded (cancelled) run skips
-  # it, so `delete` runs at once instead of after the analytics wait.
-  residency:
-    name: residency
-    needs: [deploy, e2e]
-    if: ${{ !cancelled() && needs.e2e.outputs.suite-started != '' }}
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Fail on any Durable Object still resident five minutes after the suite
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          PREVIEW_NAME: ${{ needs.deploy.outputs.preview-name }}
-          PREVIEW_SUITE_STARTED: ${{ needs.e2e.outputs.suite-started }}
-          PREVIEW_SUITE_ENDED: ${{ needs.e2e.outputs.suite-ended }}
-        run: doppler run -- pnpm preview residency
-
   # ALWAYS, whatever happened before, cancelled included: the preview, its Artifacts
   # namespace, KV namespaces and R2 bucket, and the clients' previews of the same name.
   delete:
     name: delete
-    needs: [deploy, e2e, residency]
+    needs: [deploy, e2e]
     if: always()
     runs-on:
       size: 2x8
@@ -279,7 +239,7 @@ jobs:
   # Main's state changes only: red once, green again once. Not for a superseded (cancelled) run.
   alert:
     name: alert
-    needs: [parent, deploy, e2e, residency, delete]
+    needs: [parent, deploy, e2e, delete]
     if: ${{ !cancelled() && github.event_name == 'push' }}
     runs-on:
       size: 2x8

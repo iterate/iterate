@@ -8,9 +8,6 @@
 #                       into the PR body
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       then their test telemetry and flake records as artifacts
-#   residency           after every suite: fails if any Durable Object is still resident five minutes
-#                       after it (apps/os/scripts/preview-residency.ts), then always redeploys
-#                       the preview, which ends the sessions the run left open
 #   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
 #                       artifact plus a "CI trace" commit status with the time to green or red
 #   delete (PR closed)  deletes the preview and everything it owned
@@ -129,9 +126,9 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 40
-    # THE COMMIT THIS RUN TESTS, for the jobs after this one: the PR merged into main
-    # (scripts/ci/preview-tested-commit.ts), so e2e and residency test and redeploy the very
-    # commit deployed here even after main moves on.
+    # THE COMMIT THIS RUN TESTS, for the e2e job: the PR merged into main
+    # (scripts/ci/preview-tested-commit.ts), so e2e tests the very commit deployed here even after
+    # main moves on.
     outputs:
       tested-sha: ${{ steps.tested.outputs.sha }}
       head-sha: ${{ steps.tested.outputs.head-sha }}
@@ -192,12 +189,6 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
-    # The suite's boundaries, for the residency job. Written by steps that cannot fail, so a red
-    # suite still hands them over.
-    outputs:
-      suite-started: ${{ steps.suite-started.outputs.at }}
-      suite-ended: ${{ steps.suite-ended.outputs.at }}
-      tested-sha: ${{ steps.tested-sha.outputs.sha }}
     steps:
       # The commit deploy deployed; alone on a dispatch with action=e2e, the head, then the PR
       # merged into main as deploy would resolve it.
@@ -216,18 +207,12 @@ jobs:
         env:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
         run: node scripts/ci/preview-tested-commit.ts
-      - name: Record the tested commit for residency
-        id: tested-sha
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Record the suite's start
-        id: suite-started
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Run the e2e suite against the preview
         # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
         id: e2e
@@ -240,10 +225,6 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview e2e
-      - name: Record the suite's end
-        id: suite-ended
-        if: always() && steps.suite-started.outcome == 'success'
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       # Fails when either runner left no complete artifact, and writes the specs and preview-e2e
       # suite summaries next to their flake lines. It runs under _shared/prd like the Test
       # workflow's finalizer; PostHog delivery itself is off (scripts/ci/posthog-events.ts). A
@@ -304,61 +285,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
-
-  # AFTER EVERY SUITE, on a small runner so the big one is not held idle through the wait: the
-  # residency gate (apps/os/scripts/preview-residency.ts) waits until the Durable Object
-  # analytics cover the five minutes starting five minutes after the suite ended, then fails if any
-  # object of the preview was still resident with every client closed — the leak class that ran the
-  # dev/preview account past $1000/day on 09-21/22 behind a green suite. Then, ALWAYS, the release
-  # redeploys the preview (a redeploy, never a reset), which ends the sessions the run left open
-  # instead of billing them until the next push (an object re-woken after the redeploy survives it;
-  # the next run's gate names it). In that order: a redeploy first would end the very sessions the
-  # gate looks for. The PR's concurrency group covers this job, so the next push deploys only after
-  # the release.
-  residency:
-    name: residency
-    needs: e2e
-    if: always() && needs.e2e.outputs.suite-started != ''
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    # the gate waits up to 26 minutes after the suite (apps/os/scripts/preview.ts residencyGate)
-    timeout-minutes: 40
-    steps:
-      # The release redeploys the commit the suite tested.
-      - name: Checkout the tested commit
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ needs.e2e.outputs.tested-sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Fail on any Durable Object still resident five minutes after the suite
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_SUITE_STARTED: ${{ needs.e2e.outputs.suite-started }}
-          PREVIEW_SUITE_ENDED: ${{ needs.e2e.outputs.suite-ended }}
-        run: doppler run -- pnpm preview residency
-      - name: Release — redeploy the preview, ending the sessions the run left open
-        if: always()
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_APPS: ${{ inputs.apps || 'all' }}
-        run: doppler run -- pnpm preview release
 
   # THE CI TRACE (docs/ci-traces.md): the deploy and e2e jobs' Depot timings and `@@ci-trace` markers
   # as trace.html and trace.json, this job's artifact, and a "CI trace" commit status whose

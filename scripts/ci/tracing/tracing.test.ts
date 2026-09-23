@@ -1270,11 +1270,11 @@ test("the standalone report embeds OTLP without allowing source names to break o
   ).toEqual(report);
 });
 
-// --- the Preview OS workflow: deploy → e2e, then residency, the trace job and cleanup ---
+// --- the Preview OS workflow: deploy → e2e, then the trace job and cleanup ---
 
 test("the preview trace covers deploy and e2e: green at e2e completion, post-suite jobs excluded", () => {
   const trace = assembleTrace(
-    osPreviewWorkflow({ residency: "running" }),
+    osPreviewWorkflow(),
     new Map([
       [
         "e2e-attempt",
@@ -1314,7 +1314,7 @@ test("the preview trace covers deploy and e2e: green at e2e completion, post-sui
 });
 
 test("a failed deploy is red at its completion and e2e never ran", () => {
-  const workflow = osPreviewWorkflow({ residency: "skipped" });
+  const workflow = osPreviewWorkflow();
   workflow.jobs[0]!.status = "failed";
   workflow.jobs[0]!.attempts[0]!.status = "failed";
   workflow.jobs[1]!.status = "skipped";
@@ -1399,8 +1399,8 @@ function previewWorkflow(cleanupStatus: string) {
   return workflow;
 }
 
-/** A Preview OS run: deploy and e2e passed; the post-suite jobs are in any state. */
-function osPreviewWorkflow({ residency }: { residency: string }) {
+/** A Preview OS run: deploy and e2e passed; the trace job is still running. */
+function osPreviewWorkflow() {
   const job = (key: string, status: string, startedAt: number, finishedAt: number) => ({
     jobId: key,
     jobKey: `preview-os-next.yml:${key}`,
@@ -1433,7 +1433,6 @@ function osPreviewWorkflow({ residency }: { residency: string }) {
     jobs: [
       job("deploy", "finished", 3, 40),
       job("e2e", "finished", 41, 180),
-      job("residency", residency, 181, 600),
       job("trace", "running", 181, 0),
       job("cleanup", "skipped", 0, 0),
       job("sweep", "skipped", 0, 0),

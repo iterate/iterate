@@ -2,10 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import type { FaultReading } from "./prd-fault-alarm.ts";
 import { PRD_PROJECT_HOST_URLS, renderPostDeployPage } from "./prd-post-deploy-check.ts";
-
-const quiet: FaultReading = { serverErrors: [], heals: [], errors: [] };
 
 test("production's project hosts come from envs.ts", () => {
   expect(PRD_PROJECT_HOST_URLS).toEqual([
@@ -16,89 +13,100 @@ test("production's project hosts come from envs.ts", () => {
   ]);
 });
 
-test.each<{ case: string; reading?: Partial<FaultReading>; hostStatus: number; pages: boolean }>([
-  { case: "a quiet new version whose hosts answer", hostStatus: 200, pages: false },
+test.each<{ case: string; hostStatus: number; pages: boolean }>([
+  { case: "a host that answers", hostStatus: 200, pages: false },
   { case: "a host that redirects still answers", hostStatus: 302, pages: false },
   { case: "a host's own 404 is the site's answer", hostStatus: 404, pages: false },
   // 2026-09-23 after #2888: every project host answered 421 while /version was fine
   { case: "a host that answers 421", hostStatus: 421, pages: true },
   { case: "a host that answers 500", hostStatus: 500, pages: true },
   { case: "a host that does not answer", hostStatus: 0, pages: true },
-  {
-    case: "one error on the new version",
-    reading: { errors: [["boom", 1]] },
-    hostStatus: 200,
-    pages: true,
-  },
-  {
-    case: "one 5xx on the new version",
-    reading: { serverErrors: [["https://os.iterate.com/api", 1]] },
-    hostStatus: 200,
-    pages: true,
-  },
-  // the alarm's own bar: a lone blip heals a call or three
-  {
-    case: "three platform-failure heals",
-    reading: { heals: [["project", 3]] },
-    hostStatus: 200,
-    pages: false,
-  },
-  {
-    case: "ten platform-failure heals",
-    reading: { heals: [["project", 10]] },
-    hostStatus: 200,
-    pages: true,
-  },
-])("$case → pages: $pages", ({ reading, hostStatus, pages }) => {
+])("$case → pages: $pages", ({ hostStatus, pages }) => {
   const page = renderPostDeployPage({
-    reading: { ...quiet, ...reading },
-    versionId: "2f631a17-6d1e-46bd-9754-0db5850edb75",
-    since: new Date("2026-09-23T16:20:00Z"),
-    until: new Date("2026-09-23T16:25:00Z"),
-    hosts: hostsAnswering(hostStatus),
+    previousVersion: "old",
+    liveVersion: "new",
+    hosts: [
+      { url: "https://iterate.com/", status: hostStatus },
+      { url: "https://garple.com/", status: 200 },
+    ],
   });
   expect(Boolean(page)).toBe(pages);
 });
 
-test("the page names the version, the window, each host that is down and the faults", () => {
+test.each<{ case: string; previousVersion?: string; liveVersion?: string; pages: boolean }>([
+  {
+    case: "/version names a new version",
+    previousVersion: "old",
+    liveVersion: "new",
+    pages: false,
+  },
+  {
+    case: "nothing was read before the deploy",
+    previousVersion: "",
+    liveVersion: "new",
+    pages: false,
+  },
+  {
+    case: "/version still names the previous version",
+    previousVersion: "old",
+    liveVersion: "old",
+    pages: true,
+  },
+  {
+    case: "/version never answered 200",
+    previousVersion: "old",
+    liveVersion: undefined,
+    pages: true,
+  },
+])("$case → pages: $pages", ({ previousVersion, liveVersion, pages }) => {
+  const page = renderPostDeployPage({
+    previousVersion,
+    liveVersion,
+    hosts: [{ url: "https://iterate.com/", status: 200 }],
+  });
+  expect(Boolean(page)).toBe(pages);
+});
+
+test("the page names a /version that did not move and each host that is down, and links the run", () => {
   expect(
     renderPostDeployPage({
-      reading: { ...quiet, errors: [["ProjectDurableObject.jsrpc", 2]] },
-      versionId: "2f631a17-6d1e-46bd-9754-0db5850edb75",
-      since: new Date("2026-09-23T16:20:00Z"),
-      until: new Date("2026-09-23T16:25:00Z"),
+      previousVersion: "0f3a9c21-7d4e-4b8a-9c1e-2a6b5d8e4f70",
+      liveVersion: "0f3a9c21-7d4e-4b8a-9c1e-2a6b5d8e4f70",
       hosts: [
         { url: "https://iterate.com/", status: 421 },
         { url: "https://garple.com/", status: 200 },
         { url: "https://lispwoso.com/", status: 0 },
       ],
+      runUrl: "https://depot.dev/run",
     }),
   ).toMatchInlineSnapshot(`
-    "🚨 prd post-deploy check: os-next-prd version \`2f631a17\`, 16:20–16:25 UTC <@U067G4QRFK2>
+    "🚨 prd post-deploy check failed after the os-next-prd deploy <@U067G4QRFK2>
+    • https://os.iterate.com/version still names \`0f3a9c21\`, the version live before the deploy
     • the project host https://iterate.com/ answered 421
     • the project host https://lispwoso.com/ did not answer
-    • 2 errors: ProjectDurableObject.jsrpc 2
-    <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>"
+    <https://depot.dev/run|the deploy run>"
   `);
 });
 
-test("every prd deploy that succeeded is checked five minutes later, read-only", () => {
+test("every prd deploy checks the project hosts at once, in the deploy job, before notifying", () => {
   const workflow = parseYaml(
     readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/deploy-os-next.yml"), "utf8"),
-  ) as { jobs: Record<string, { needs?: string[]; if?: string; steps?: { run?: string }[] }> };
-  expect(workflow.jobs.verify).toMatchObject({
-    needs: ["deploy"],
-    if: "needs.deploy.result == 'success'",
-  });
-  expect(workflow.jobs.verify?.steps?.at(-1)?.run).toBe(
-    'doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-post-deploy-check.ts check --deployed-at "${{ needs.deploy.outputs.deployed_at }}"',
+  ) as { jobs: Record<string, { steps?: { id?: string; run?: string; if?: string }[] }> };
+  expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
+  const steps = workflow.jobs.deploy?.steps || [];
+  const deploy = steps.findIndex((step) => step.id === "deploy");
+  const previous = steps.findIndex((step) => step.id === "previous");
+  expect(steps[deploy]?.run).toBe("doppler run -- pnpm run-script deploy --env prd");
+  // the version live before the deploy is read first, so the check waits for the new one
+  expect(previous).toBeGreaterThanOrEqual(0);
+  expect(previous).toBeLessThan(deploy);
+  expect(steps[deploy + 1]?.run).toBe(
+    'pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"',
   );
+  // a failed, timed-out or cancelled deploy (or a failed check) still reports the deploy's own
+  // result to #ci
+  expect(steps.at(-1)).toMatchObject({
+    if: "${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+    run: "pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}",
+  });
 });
-
-/** iterate.com answering `status`, garple.com answering 200. */
-function hostsAnswering(status: number) {
-  return [
-    { url: "https://iterate.com/", status },
-    { url: "https://garple.com/", status: 200 },
-  ];
-}

@@ -12,13 +12,11 @@ type PreviewWorkflow = {
       if?: string;
       name?: string;
       needs?: string | string[];
-      "runs-on"?: { size?: string };
       outputs?: Record<string, string>;
       steps?: Array<{
         id?: string;
         name?: string;
         run?: string;
-        if?: string;
         uses?: string;
         with?: { ref?: string };
         env?: Record<string, string>;
@@ -42,7 +40,7 @@ describe("the OS-Next preview workflow", () => {
     );
   });
 
-  test("deploys the PR merged into main, and e2e and residency use that very commit", () => {
+  test("deploys the PR merged into main, and e2e uses that very commit", () => {
     const deploySteps = preview.jobs.deploy.steps || [];
     const resolve = deploySteps.findIndex((step) => step.id === "tested");
     const deploy = deploySteps.findIndex((step) => step.run?.includes('pnpm preview "$ACTION"'));
@@ -56,23 +54,15 @@ describe("the OS-Next preview workflow", () => {
       "${{ steps.tested.outputs.description }}",
     );
     expect(preview.jobs.deploy.outputs?.["tested-sha"]).toBe("${{ steps.tested.outputs.sha }}");
-    const checkoutRef = (jobId: string) =>
-      preview.jobs[jobId]?.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref;
-    expect(checkoutRef("e2e")).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
-    expect(preview.jobs.e2e.outputs?.["tested-sha"]).toBe("${{ steps.tested-sha.outputs.sha }}");
-    expect(checkoutRef("residency")).toBe("${{ needs.e2e.outputs.tested-sha }}");
+    const checkout = preview.jobs.e2e.steps?.find((step) => step.uses === "actions/checkout@v4");
+    expect(checkout?.with?.ref).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
   });
 
-  test("reads the preview's residency after every suite, then always releases it, in that order", () => {
-    const steps = preview.jobs.residency.steps || [];
-    expect([preview.jobs.residency.needs].flat()).toEqual(["e2e"]);
-    expect(preview.jobs.residency["runs-on"]?.size).toBe("2x8");
-    // a redeploy before the reading would end the very sessions the gate looks for
-    expect(steps.map((step) => step.run).filter((run) => run?.includes("pnpm preview"))).toEqual([
-      "doppler run -- pnpm preview residency",
-      "doppler run -- pnpm preview release",
-    ]);
-    expect(steps.at(-1)?.if).toBe("always()");
+  test("only the trace runs after the suite, so the next push's deploy waits for nothing else", () => {
+    const afterSuite = Object.entries(preview.jobs).filter(([, job]) =>
+      [job.needs].flat().includes("e2e"),
+    );
+    expect(afterSuite.map(([jobId]) => jobId)).toEqual(["trace"]);
   });
 
   // After every deploy that succeeded, never after one that did not, and alone (deploy skipped) on

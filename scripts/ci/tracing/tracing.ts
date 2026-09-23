@@ -89,9 +89,7 @@ export function assembleTrace(
 ) {
   const workflow = Workflow.parse(input);
   const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
-  workflow.jobs = workflow.jobs.filter(
-    (job) => !/:(finish|trace|residency|cleanup|sweep)$/.test(job.jobKey),
-  );
+  workflow.jobs = workflow.jobs.filter((job) => !/:(finish|trace|cleanup|sweep)$/.test(job.jobKey));
   if (
     workflow.jobs.some(
       (job) => !["finished", "failed", "cancelled", "skipped"].includes(job.status),
