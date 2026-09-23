@@ -4,8 +4,9 @@
 // scripts/preview-config.ts (preview.test.ts). Commands: config (write wrangler.preview.jsonc),
 // deploy (build, the D1 and the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
 // e2e (vitest and Playwright against the live preview), reset (delete, then deploy), delete (the
-// preview, its D1 and Artifacts namespace, the apps on top), sweep (every preview whose PR is closed
-// or missing, or older than 7 days, and the resources left behind). `--dry-run` prints the plan.
+// preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, the apps on top), sweep (the
+// stale previews and the resources that outlived theirs — the rules are scripts/preview-sweep.ts).
+// `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,22 +36,31 @@ import {
   changedApps,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
-  previewNameOfResource,
   previewPullRequestNumber,
   previewResourceName,
+  previewResourceSuffixes,
   previewUrl,
   renderPullRequestSection,
   resolvePreviewName,
   splicePullRequestBody,
   writePreviewWranglerConfig,
 } from "./preview-config.ts";
+import {
+  planPreviewSweep,
+  previewNameOfSweptResource,
+  type PullRequestState,
+  type SweptResource,
+} from "./preview-sweep.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const OUTPUT_DIR = path.join(ROOT, "output");
 /** cloudflare-os runs on this draft build too: released wrangler accepts a binding-only KV entry in
  *  `previews` but sends `namespace_id: undefined`; the branch of workers-sdk PR #14416 provisions a
- *  fresh KV namespace and R2 bucket per preview and deletes them with the preview. Drop this, and
- *  the tmpdir install below, once a released changelog mentions preview auto-provisioning. */
+ *  fresh KV namespace and R2 bucket per preview. Its `preview delete` deletes them only when the
+ *  config it reads declares them (binding-only `previews` entries), and the delete here hands it one
+ *  naming the parent alone — so deletePreview deletes them itself (2026-09-23: 162 KV namespaces and
+ *  81 R2 buckets had leaked). Drop this, and the tmpdir install below, once a released changelog
+ *  mentions preview auto-provisioning. */
 const WRANGLER_PACKAGE = "https://pkg.pr.new/wrangler@14416";
 
 const Command = z.enum(["config", "deploy", "e2e", "reset", "delete", "sweep"]);
@@ -237,21 +247,17 @@ async function deleteDatabase(cf: Cf, name: string): Promise<void> {
 
 type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; created_at?: string };
 
-/** Cloudflare's error envelope, the codes only — what an Artifacts refusal is told apart by. */
+/** Cloudflare's error envelope, the codes only — what a refusal is told apart by. */
 const CloudflareErrors = z.array(z.object({ code: z.number() }));
 
-/** The Artifacts API's "does not exist": a 404 with code 10200 (measured; the one code for a
- *  namespace and for a repo). */
-const isArtifactsNotFoundError = (error: unknown) =>
+/** A Cloudflare refusal with this status and error code. Each one used here was measured:
+ *  Artifacts 404/10200 (no such namespace, or repo) and 409/10202 (namespace still holds repos); KV
+ *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
+ *  preview). */
+const isCloudflareError = (error: unknown, status: number, code: number) =>
   error instanceof CloudflareApiError &&
-  error.status === 404 &&
-  (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === 10200);
-
-/** The API's refusal to delete a namespace that still holds repos: a 409 with code 10202 (measured). */
-const isArtifactsNotEmptyError = (error: unknown) =>
-  error instanceof CloudflareApiError &&
-  error.status === 409 &&
-  (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === 10202);
+  error.status === status &&
+  (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === code);
 
 /** A preview's namespace, by name. The worker's repo create does NOT provision one: on a missing
  *  namespace it fails with "Namespace is not active" (measured 2026-09-22), and the binding names
@@ -260,7 +266,7 @@ async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
   const existing = await cf<ArtifactsNamespaceRow>(
     `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`,
   ).catch((error) => {
-    if (isArtifactsNotFoundError(error)) return undefined;
+    if (isCloudflareError(error, 404, 10200)) return undefined;
     throw error;
   });
   if (!existing)
@@ -282,7 +288,7 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
   // The namespace itself is what answers "does not exist" (404, code 10200); its repos list answers
   // an empty page for a missing namespace (measured 2026-09-22), so the check is on the namespace.
   const existing = await cf<ArtifactsNamespaceRow>(route).catch((error) => {
-    if (isArtifactsNotFoundError(error)) return undefined;
+    if (isCloudflareError(error, 404, 10200)) return undefined;
     throw error;
   });
   if (!existing)
@@ -303,7 +309,7 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
           // one already gone (a delete accepted on an earlier round) is fine
           cf(`${route}/repos/${encodeURIComponent(repo.name)}`, { method: "DELETE" }).catch(
             (error) => {
-              if (!isArtifactsNotFoundError(error)) throw error;
+              if (!isCloudflareError(error, 404, 10200)) throw error;
             },
           ),
         ),
@@ -315,8 +321,8 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
     const deleted = await cf(route, { method: "DELETE" }).then(
       () => true,
       (error) => {
-        if (isArtifactsNotFoundError(error)) return true;
-        if (!isArtifactsNotEmptyError(error)) throw error;
+        if (isCloudflareError(error, 404, 10200)) return true;
+        if (!isCloudflareError(error, 409, 10202)) throw error;
         return false;
       },
     );
@@ -324,6 +330,54 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
     await new Promise((resolve) => setTimeout(resolve, 2000)); // accepted deletes still landing
   }
   console.log(`deleted Artifacts namespace ${artifactsNamespaceName} (${deletedRepos} repos)`);
+}
+
+// ── the KV namespaces and the R2 bucket (provisioned by `wrangler preview`, deleted here) ──────
+
+type KvNamespaceRow = { id: string; title: string };
+
+/** One already gone — the sweep racing the close job, a re-run — is deleted. */
+async function deleteKvNamespace(cf: Cf, row: KvNamespaceRow): Promise<void> {
+  await cf(`/storage/kv/namespaces/${row.id}`, { method: "DELETE" }).catch((error) => {
+    if (!isCloudflareError(error, 404, 10013)) throw error;
+  });
+  console.log(`deleted KV namespace ${row.title}`);
+}
+
+/** Delete an R2 bucket: its objects first (the API refuses a bucket that still holds any), then the
+ *  bucket. The first thousand-key page is read again until it is empty, twenty deletes in flight —
+ *  a preview's e2e run leaves tens, the soak preview's bucket held 1,908 (measured 2026-09-23) — and
+ *  a ceiling keeps that bounded. A bucket that does not exist is the expected case. */
+async function deleteR2Bucket(cf: Cf, bucketName: string): Promise<void> {
+  const route = `/r2/buckets/${bucketName}`;
+  let deletedObjects = 0;
+  for (let round = 1; ; round++) {
+    if (round > 50)
+      throw new Error(
+        `R2 bucket ${bucketName} still holds objects after ${deletedObjects} deletes`,
+      );
+    const objects = await cf<{ key: string }[]>(`${route}/objects?per_page=1000`).catch((error) => {
+      if (isCloudflareError(error, 404, 10006)) return undefined;
+      throw error;
+    });
+    if (!objects) return console.warn(`R2 bucket ${bucketName} did not exist; continuing.`);
+    if (objects.length === 0) break;
+    for (let i = 0; i < objects.length; i += 20) {
+      await Promise.all(
+        objects.slice(i, i + 20).map(({ key }) =>
+          // a key's slashes are its path: each segment encoded, the slashes kept
+          cf(`${route}/objects/${key.split("/").map(encodeURIComponent).join("/")}`, {
+            method: "DELETE",
+          }),
+        ),
+      );
+    }
+    deletedObjects += objects.length;
+  }
+  await cf(route, { method: "DELETE" }).catch((error) => {
+    if (!isCloudflareError(error, 404, 10006)) throw error;
+  });
+  console.log(`deleted R2 bucket ${bucketName} (${deletedObjects} objects)`);
 }
 
 // ── the apps on top (cloudflare-os's second tier) ──────────────────────────────────────────────
@@ -573,16 +627,26 @@ async function deployPreview(
   }
 }
 
-/** The preview, then its D1 and its Artifacts namespace (wrangler deletes the auto-provisioned KV
- *  and R2 with the preview; these two it never knew). */
+/** The preview, then everything it owned, each found by its name: its D1 and its Artifacts
+ *  namespace (this script created them), its KV namespaces and its R2 bucket (wrangler provisioned
+ *  them; see WRANGLER_PACKAGE for why its delete leaves them). One already gone is the expected case. */
 async function deletePreview(cf: Cf, previewName: string, wrangler: string): Promise<void> {
   await deleteWorkerPreview(PREVIEW_PARENT, previewName, wrangler);
   await deleteDatabase(cf, previewResourceName(previewName, "db"));
   await deleteArtifactsNamespace(cf, previewResourceName(previewName, "repos"));
+  const suffixes = previewResourceSuffixes();
+  const kvNamespaces = await listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces");
+  for (const title of suffixes.kv.map((suffix) => previewResourceName(previewName, suffix))) {
+    const row = kvNamespaces.find((namespace) => namespace.title === title);
+    if (row) await deleteKvNamespace(cf, row);
+    else console.warn(`KV namespace ${title} did not exist; continuing.`);
+  }
+  for (const suffix of suffixes.r2)
+    await deleteR2Bucket(cf, previewResourceName(previewName, suffix));
 }
 
-/** os-next's preview, its D1 and its Artifacts namespace, then every app on top's preview (whether
- *  or not it exists). */
+/** os-next's preview and everything it owned, then every app on top's preview (whether or not it
+ *  exists). */
 async function deleteAll(cf: Cf, previewName: string): Promise<void> {
   const wrangler = preparePreviewWrangler();
   try {
@@ -626,8 +690,6 @@ async function runE2e(previewName: string): Promise<void> {
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
 
-type PullRequestState = "open" | "closed" | "missing" | "unknown";
-
 /** A 404 is an answer: the number came out of a live preview's name, so a PR that does not exist
  *  means the preview outlived it. A transient failure must never be what deletes a preview an open
  *  PR still uses, so it falls back to age alone. */
@@ -652,14 +714,83 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
   }
 }
 
-type ListedPreview = { name: string; slug?: string; created_on?: string; modified_on?: string };
+/** Every open pull request's head branch — what keeps a preview named after a branch (preview-sweep.ts
+ *  rule 3) — or undefined when GitHub cannot say, and rule 3 then deletes nothing. */
+async function openPullRequestBranches(): Promise<string[] | undefined> {
+  try {
+    const branches: string[] = [];
+    for (let page = 1; ; page++) {
+      // GET /pulls?state=open: one `head.ref` per open pull request, 100 per page.
+      const pulls = await github<{ head: { ref: string } }[]>(
+        `/repos/${repository()}/pulls?state=open&per_page=100&page=${page}`,
+      );
+      branches.push(...pulls.map((pull) => pull.head.ref));
+      if (pulls.length < 100) return branches;
+    }
+  } catch (error) {
+    console.warn(`${describe(error)}; previews without a PR number are judged on age alone.`);
+    return undefined;
+  }
+}
 
+/** Every KV namespace, D1 and Artifacts namespace on the account, and every R2 bucket whose name
+ *  begins with the parent's — each a candidate for preview-sweep.ts rule 4. */
+async function listSweptResources(cf: Cf): Promise<SweptResource[]> {
+  // R2 pages by cursor, which the API client does not hand back: one page of the API's ceiling,
+  // narrowed to the parent's prefix, and a full one refused.
+  const { buckets } = await cf<{ buckets: { name: string; creation_date?: string }[] }>(
+    `/r2/buckets?name_contains=${PREVIEW_PARENT.workerName}-&per_page=1000`,
+  );
+  if (buckets.length >= 1000)
+    throw new Error("1000 or more R2 buckets: the listing may be cut off");
+  return [
+    ...(await listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces")).map((row) => ({
+      kind: "kv" as const,
+      name: row.title,
+      id: row.id,
+    })),
+    ...buckets.map((bucket) => ({
+      kind: "r2" as const,
+      name: bucket.name,
+      id: bucket.name,
+      createdAt: bucket.creation_date,
+    })),
+    ...(await listAll<D1Row>(cf, "/d1/database")).map((row) => ({
+      kind: "d1" as const,
+      name: row.name,
+      id: row.uuid,
+      createdAt: row.created_at,
+    })),
+    ...(await listAll<ArtifactsNamespaceRow>(cf, "/artifacts/namespaces")).map((row) => ({
+      kind: "artifacts" as const,
+      name: row.namespace,
+      id: row.namespace,
+      createdAt: row.created_at,
+    })),
+  ];
+}
+
+type ListedPreview = { name: string; created_on?: string; deployed_on?: string };
+
+const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
+  kv: "KV namespace",
+  r2: "R2 bucket",
+  d1: "D1",
+  artifacts: "Artifacts namespace",
+};
+
+/** The stale previews (deletePreview, and the apps on top of the same name) and the resources that
+ *  outlived their preview, by the rules in scripts/preview-sweep.ts. */
 async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
+  // The resources BEFORE the previews (rule 5): wrangler creates a preview before its KV and R2.
+  const resources = await listSweptResources(cf);
   const previews = await listAll<ListedPreview>(
     cf,
     `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
   );
-  console.log(`${previews.length} preview(s) on ${PREVIEW_PARENT.workerName}`);
+  console.log(
+    `${previews.length} preview(s) on ${PREVIEW_PARENT.workerName}; ${resources.length} KV namespaces, R2 buckets, D1s and Artifacts namespaces to judge`,
+  );
   // An app's preview without an os-next preview of the same name is a leftover of a failed delete.
   const appPreviews: { app: StartApp; name: string }[] = [];
   for (const app of APPS) {
@@ -672,72 +803,59 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
     );
     for (const preview of listed) appPreviews.push({ app, name: preview.name });
   }
-  const stale: { name: string; reasons: string[] }[] = [];
-  for (const preview of previews) {
-    const reasons: string[] = [];
-    const stamp = preview.created_on || preview.modified_on;
-    const age = stamp ? (Date.now() - Date.parse(stamp)) / 86_400_000 : NaN;
-    if (age > 7) reasons.push(`${age.toFixed(1)} days old`);
-    const number = previewPullRequestNumber(preview.name);
-    const state = number === undefined ? "unknown" : await pullRequestState(number);
-    if (state === "closed") reasons.push("its pull request is closed");
-    if (state === "missing") reasons.push("it names no pull request in this repository");
-    if (reasons.length > 0) stale.push({ name: preview.name, reasons });
-    else
-      console.log(
-        `  keep ${preview.name} (${state}, ${Number.isNaN(age) ? "age unknown" : `${age.toFixed(1)} days`})`,
-      );
-  }
-  // A D1 whose preview is gone (a cleanup that failed after `preview delete`, a hand-deleted preview).
-  const live = new Set(previews.map((preview) => previewResourceName(preview.name, "db")));
-  // A D1 named for a preview that no longer exists — but only when its pull request is closed or
-  // missing, or the database is older than a day: a deploy in flight creates its D1 BEFORE the
-  // preview exists, and a sweep running at that moment must not take it.
-  const orphanDatabases: D1Row[] = [];
-  for (const row of await listAll<D1Row>(cf, "/d1/database")) {
-    const previewName = previewNameOfResource(row.name, "db");
-    if (!previewName?.startsWith("pr") || live.has(row.name)) continue;
-    const number = previewPullRequestNumber(previewName);
-    const state = number === undefined ? "unknown" : await pullRequestState(number);
-    const ageDays = row.created_at ? (Date.now() - Date.parse(row.created_at)) / 86_400_000 : NaN;
-    if (state === "closed" || state === "missing" || ageDays > 1) orphanDatabases.push(row);
-  }
-  // An Artifacts namespace whose preview is gone, judged exactly as the D1 is (the deploy creates
-  // both before the preview exists; deletePreview takes both with it): one still here outlived a
-  // failed delete, or a delete from before this script deleted namespaces (2026-09-22).
-  const liveArtifactsNamespaces = new Set(
-    previews.map((preview) => previewResourceName(preview.name, "repos")),
+  const workerNames = (await cf<{ id: string }[]>("/workers/scripts")).map((script) => script.id);
+  const resourceSuffixes = previewResourceSuffixes();
+  // The pull requests the rules read: a preview's (rule 2), a leftover D1's or Artifacts namespace's
+  // (rule 6).
+  const pullRequestNumbers = new Set(
+    [
+      ...previews.map((preview) => preview.name),
+      ...resources
+        .filter((resource) => resource.kind === "d1" || resource.kind === "artifacts")
+        .map(
+          (resource) =>
+            previewNameOfSweptResource(resource, { workerNames, resourceSuffixes }) || "",
+        ),
+    ]
+      .map((name) => previewPullRequestNumber(name))
+      .filter((number) => number !== undefined),
   );
-  const orphanArtifactsNamespaces: ArtifactsNamespaceRow[] = [];
-  for (const row of await listAll<ArtifactsNamespaceRow>(cf, "/artifacts/namespaces")) {
-    const previewName = previewNameOfResource(row.namespace, "repos");
-    if (!previewName?.startsWith("pr") || liveArtifactsNamespaces.has(row.namespace)) continue;
-    const number = previewPullRequestNumber(previewName);
-    const state = number === undefined ? "unknown" : await pullRequestState(number);
-    const ageDays = row.created_at ? (Date.now() - Date.parse(row.created_at)) / 86_400_000 : NaN;
-    if (state === "closed" || state === "missing" || ageDays > 1)
-      orphanArtifactsNamespaces.push(row);
-  }
+  const pullRequestStates = new Map<number, PullRequestState>();
+  for (const number of pullRequestNumbers)
+    pullRequestStates.set(number, await pullRequestState(number));
+  const plan = planPreviewSweep({
+    now: Date.now(),
+    workerNames,
+    resourceSuffixes,
+    previews: previews.map((preview) => ({
+      name: preview.name,
+      lastDeployedAt: preview.deployed_on || preview.created_on,
+    })),
+    resources,
+    pullRequestStates,
+    openPullRequestBranches: await openPullRequestBranches(),
+  });
+  const stale = plan.previews.filter((preview) => preview.verdict === "stale");
   const staleNames = new Set(stale.map(({ name }) => name));
-  const liveNames = new Set(previews.map((preview) => preview.name));
+  const listedNames = new Set(previews.map((preview) => preview.name));
   const staleAppPreviews = appPreviews.filter(
-    ({ name }) => staleNames.has(name) || !liveNames.has(name),
+    ({ name }) => staleNames.has(name) || !listedNames.has(name),
   );
-  for (const { name, reasons } of stale) console.log(`  delete ${name}: ${reasons.join("; ")}`);
-  for (const row of orphanDatabases) console.log(`  delete orphan D1 ${row.name}`);
-  for (const row of orphanArtifactsNamespaces)
+  for (const { name, verdict, reason } of plan.previews)
+    console.log(`  ${verdict === "stale" ? "delete" : "keep  "} preview ${name}: ${reason}`);
+  for (const orphan of plan.orphans)
     console.log(
-      `  delete orphan Artifacts namespace ${row.namespace} (${row.repo_count ?? "?"} repos)`,
+      `  delete orphan ${RESOURCE_KIND_LABELS[orphan.kind]} ${orphan.name}: ${orphan.reason}`,
     );
   for (const { app, name } of staleAppPreviews)
     console.log(`  delete apps/${app.name} preview ${name}`);
-  if (
-    dryRun ||
-    (stale.length === 0 &&
-      orphanDatabases.length === 0 &&
-      orphanArtifactsNamespaces.length === 0 &&
-      staleAppPreviews.length === 0)
-  )
+  const orphanCounts = Object.entries(RESOURCE_KIND_LABELS).map(
+    ([kind, label]) => `${plan.orphans.filter((orphan) => orphan.kind === kind).length} ${label}`,
+  );
+  console.log(
+    `plan: ${stale.length} stale preview(s); orphans: ${orphanCounts.join(", ")}; ${staleAppPreviews.length} app preview(s)`,
+  );
+  if (dryRun || (stale.length === 0 && plan.orphans.length === 0 && staleAppPreviews.length === 0))
     return;
   const wrangler = preparePreviewWrangler();
   try {
@@ -748,15 +866,35 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
         failures.push(`${name}: ${describe(error)}`),
       );
     }
-    for (const row of orphanDatabases) {
-      await cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).catch((error) =>
-        failures.push(`${row.name}: ${describe(error)}`),
+    // Each orphan's preview looked up once more, right before its resources go: a preview deployed
+    // under that name since the listing (a reset, a redeploy that reuses leftovers by name) keeps them.
+    for (const previewName of new Set(plan.orphans.map((orphan) => orphan.previewName))) {
+      const previewGone = await cf(
+        `/workers/workers/${PREVIEW_PARENT.workerName}/previews/${previewName}`,
+      ).then(
+        () => {
+          console.warn(`preview ${previewName} exists again; its resources stay.`);
+          return false;
+        },
+        (error) => {
+          if (isCloudflareError(error, 404, 10025)) return true;
+          failures.push(`preview ${previewName}: ${describe(error)}`);
+          return false;
+        },
       );
-    }
-    for (const row of orphanArtifactsNamespaces) {
-      await deleteArtifactsNamespace(cf, row.namespace).catch((error) =>
-        failures.push(`${row.namespace}: ${describe(error)}`),
-      );
+      if (!previewGone) continue;
+      for (const orphan of plan.orphans.filter((row) => row.previewName === previewName)) {
+        const deleteOrphan = {
+          kv: () => deleteKvNamespace(cf, { id: orphan.id, title: orphan.name }),
+          r2: () => deleteR2Bucket(cf, orphan.name),
+          d1: async () => {
+            await cf(`/d1/database/${orphan.id}`, { method: "DELETE" });
+            console.log(`deleted D1 ${orphan.name}`);
+          },
+          artifacts: () => deleteArtifactsNamespace(cf, orphan.name),
+        }[orphan.kind];
+        await deleteOrphan().catch((error) => failures.push(`${orphan.name}: ${describe(error)}`));
+      }
     }
     for (const { app, name } of staleAppPreviews) {
       await deleteWorkerPreview(app.envs.preview!, name, wrangler.command).catch((error) =>
