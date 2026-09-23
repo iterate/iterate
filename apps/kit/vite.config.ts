@@ -3,9 +3,8 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
-
 import { writeVoiceInstall } from "../agents/scripts/build-voice-install.ts";
+import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
 await writeVoiceInstall(new URL("./public/voice-install.json", import.meta.url));
 
