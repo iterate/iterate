@@ -13,8 +13,321 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const pluginPath = join(repoRoot, "lint", "oxlint-plugin-iterate.ts");
 const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
 
+test("mechanical-class-impl fixes implementation signatures from the TypeScript checker", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type Mechanical<T> = T;",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "  getFarewell(politeness: number, enthusiasm: number): void;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, Mechanical } from "./types.ts";',
+      "",
+      "class MyGreeter implements Mechanical<Greeter> {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "",
+      "  getFarewell(politeness: number, enthusiasm: number): void {",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter, Mechanical } from "./types.ts";',
+      "",
+      "class MyGreeter implements Mechanical<Greeter> {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "",
+      '  getFarewell(...[politeness, enthusiasm]: Parameters<Greeter["getFarewell"]>) {',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl reads methods from mapped helper implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type MechanicalMap<T> = {",
+      "  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R : T[K];",
+      "};",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
+      "",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
+      "",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl supports direct interface implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl allows omitted implementation params", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface IPerson {",
+      "  sayHello(): string;",
+      '  sayGoodbye(params: { mood: "happy" | "sad" | "neutral" }): string;',
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      "  sayHello(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "  sayGoodbye(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      "  sayHello(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "  sayGoodbye(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl allows simple implementation param types", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  setName(name: string): void;",
+      "  setEnabled(enabled: boolean): void;",
+      "  setScores(scores: number[]): void;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      "  setName(name: string) {",
+      "  }",
+      "  setEnabled(enabled: boolean) {",
+      "  }",
+      "  setScores(scores: number[]) {",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      "  setName(name: string) {",
+      "  }",
+      "  setEnabled(enabled: boolean) {",
+      "  }",
+      "  setScores(scores: number[]) {",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl fixes class field arrow implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface IPerson {",
+      '  sayGoodbye(params: { mood: "happy" | "sad" | "neutral" }): string;',
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      "  sayGoodbye = (_params: any): string => {",
+      '    return "bye";',
+      "  };",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      '  sayGoodbye = (_params: Parameters<IPerson["sayGoodbye"]>[0]) => {',
+      '    return "bye";',
+      "  };",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("type-aware lint service refreshes changed files without restarting the process", () => {
-  using fixture = createOxlintFixture({ rules: {} });
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
   const service = new TypeAwareLintService({ cwd: fixture.root });
   using _service = { [Symbol.dispose]: () => service.close() };
   const firstSource = [
@@ -63,7 +376,12 @@ test("type-aware lint service refreshes changed files without restarting the pro
 });
 
 test("type-aware lint service keeps all open files in snapshot updates", () => {
-  using fixture = createOxlintFixture({ rules: {} });
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "off",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
   const service = new TypeAwareLintService({ cwd: fixture.root });
   using _service = { [Symbol.dispose]: () => service.close() };
   const firstFile = join(fixture.root, "first.ts");
@@ -89,7 +407,12 @@ test("type-aware lint service keeps all open files in snapshot updates", () => {
 });
 
 test("type-aware lint service can read unsaved text overlays", () => {
-  using fixture = createOxlintFixture({ rules: {} });
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
   const service = new TypeAwareLintService({ cwd: fixture.root });
   using _service = { [Symbol.dispose]: () => service.close() };
   const fileName = join(fixture.root, "implementation.ts");
@@ -139,9 +462,190 @@ test("type-aware lint service can read unsaved text overlays", () => {
   assert.equal(fixture.read("implementation.ts"), savedSource);
 });
 
+test("mechanical-class-impl reports only the method params when params are not mechanical", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  const implementation = [
+    'import type { Greeter } from "./types.ts";',
+    "",
+    "class MyGreeter implements Greeter {",
+    "  getGreeting(input: { enthusiasm: number }): string {",
+    '    return "hello";',
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", implementation);
+
+  const result = fixture.runOxlint(["implementation.ts"], {
+    expectFailure: true,
+    format: "json",
+  });
+  const output = JSON.parse(result.stdout);
+  const span = output.diagnostics[0].labels[0].span;
+  const reportedText = implementation.slice(span.offset, span.offset + span.length);
+
+  assert.equal(reportedText, "input: { enthusiasm: number }");
+});
+
+test("mechanical-class-impl reports only the return type when return type is disallowed", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  const implementation = [
+    'import type { Greeter } from "./types.ts";',
+    "",
+    "class MyGreeter implements Greeter {",
+    '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]): string {',
+    '    return "hello";',
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", implementation);
+
+  const result = fixture.runOxlint(["implementation.ts"], {
+    expectFailure: true,
+    format: "json",
+  });
+  const output = JSON.parse(result.stdout);
+  const span = output.diagnostics[0].labels[0].span;
+  const reportedText = implementation.slice(span.offset, span.offset + span.length);
+
+  assert.equal(reportedText, ": string");
+});
+
+test("mechanical-class-impl follows arbitrary helper wrappers", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type MechanicalMap<T> = {",
+      "  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R : T[K];",
+      "};",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
+      "",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
+      "",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl preserves defaults in nested helper implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type Mechanical<T> = T;",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, Mechanical } from "./types.ts";',
+      "",
+      "const defaultInput = { enthusiasm: 1 };",
+      "",
+      'class MyGreeter implements Pick<Mechanical<Greeter>, "getGreeting"> {',
+      "  getGreeting(input: { enthusiasm: number } = defaultInput): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter, Mechanical } from "./types.ts";',
+      "",
+      "const defaultInput = { enthusiasm: 1 };",
+      "",
+      'class MyGreeter implements Pick<Mechanical<Greeter>, "getGreeting"> {',
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0] = defaultInput) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("typed-no-floating-promises reports only unhandled promise-like expression statements", () => {
   using fixture = createOxlintFixture({
     rules: {
+      "iterate/mechanical-class-impl": "off",
       "iterate/typed-no-floating-promises": "error",
     },
   });
@@ -168,6 +672,24 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   assert.doesNotMatch(output, /4:1/);
   assert.doesNotMatch(output, /5:1/);
   assert.doesNotMatch(output, /6:1/);
+});
+
+test("contract-package-imports permits Cloudflare only in the worker-only contract module", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/contract-package-imports": "error",
+      "iterate/mechanical-class-impl": "off",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  const source = 'import { WorkerEntrypoint } from "cloudflare:workers";\n';
+  fixture.write("src/worker.ts", source);
+  fixture.write("src/index.ts", source);
+
+  fixture.runOxlint(["src/worker.ts"]);
+  const result = fixture.runOxlint(["src/index.ts"], { expectFailure: true });
+  assert.match(result.stdout + result.stderr, /Forbidden runtime import "cloudflare:workers"/);
 });
 
 function getCallablePropertyNames(
@@ -247,10 +769,18 @@ function createOxlintFixture(input: { rules: Record<string, unknown> }) {
     read(path: string) {
       return readFileSync(join(root, path), "utf8");
     },
-    runOxlint(args: string[], options: { expectFailure?: boolean } = {}) {
+    runOxlint(args: string[], options: { expectFailure?: boolean; format?: string } = {}) {
       const result = spawnSync(
         oxlintBin,
-        [...args, "--config", configPath, "--threads", "1", "--format", "stylish"],
+        [
+          ...args,
+          "--config",
+          configPath,
+          "--threads",
+          "1",
+          "--format",
+          options.format || "stylish",
+        ],
         {
           cwd: root,
           encoding: "utf8",
