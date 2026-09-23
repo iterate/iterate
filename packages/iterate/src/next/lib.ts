@@ -60,14 +60,28 @@ export function errorCode(error: unknown): ErrorCode | undefined {
 
 // reportIssue — the ONE exit for unexpected failures (cloudflare-os error-reporting.ts, minus
 // its private Reporter Worker): one bounded console.error line; query event="issue" in Workers
-// Logs. The Reporter seam stayed out on purpose — when one exists, check an optional env
-// binding HERE and waitUntil the dispatch; capture sites never change. Deliberately NO
-// cloudflare:workers import: this file rides the platform-neutral SDK bundle. Reporting must
-// never disturb the caller — armored end to end; worst case it prints nothing.
+// Logs. A host forwards issues elsewhere too by `forwardIssues(forward)` (apps/os posthog.ts:
+// PostHog Error Tracking) — capture sites never change. Deliberately NO cloudflare:workers
+// import: this file rides the platform-neutral SDK bundle. Reporting must never disturb the
+// caller — armored end to end; worst case it prints nothing.
 
 // Bounds verbatim from cloudflare-os: hostile strings get clipped, never explode a log line.
 const MAX = { message: 1024, stack: 16_384, string: 256, attributeKeys: 32 } as const;
 type Scalar = string | number | boolean | null; // attribute values stay queryable scalars
+
+/** One reported issue as `reportIssue` prints it, and the value that was caught. */
+export type Issue = {
+  failureSite: string;
+  caught: unknown;
+  attributes: Record<string, Scalar>;
+};
+let forwardIssue: ((issue: Issue) => void) | undefined;
+
+/** Also hand every issue to `forward` (one per isolate; the last call wins). It runs inside
+ *  `reportIssue`'s armor: a throw is swallowed. */
+export function forwardIssues(forward: (issue: Issue) => void): void {
+  forwardIssue = forward;
+}
 
 /** Print ONE bounded console.error line for an unexpected failure; never throws. */
 export function reportIssue(
@@ -102,6 +116,7 @@ export function reportIssue(
       code,
       error,
     });
+    forwardIssue?.({ failureSite, caught, attributes: bounded });
   } catch {
     // Reporting must never disturb the caller — swallow and move on.
   }
