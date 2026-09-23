@@ -3,7 +3,7 @@ import { sameOriginPath } from "iterate/next/lib";
 import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
-import type { User } from "./directory.ts";
+import type { UserRecord } from "./control-plane/catalog.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 
 /** Verified Google login and explicitly enabled test/administrator login call this tail.
@@ -14,7 +14,7 @@ export async function startIssuerSession(
   env: Env,
   /** the sign-in request — its origin is the issuer on a deployment that named no `urls.os` */
   request: Request,
-  user: User,
+  user: UserRecord,
   next: string,
   /** what the identity provider said about the person (Google's profile); an email sign-in has none */
   profile: { picture?: string; name?: string } = {},

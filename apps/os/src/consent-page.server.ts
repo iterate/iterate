@@ -9,7 +9,7 @@ import { errorCode } from "iterate/next/lib";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ConsentRpcTarget } from "./consent.ts";
-import { directory } from "./directory.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import { loginSearchOf } from "./login-search.ts";
 import type { Env } from "./env.ts";
 import { SessionRpcTarget, SessionTeardown } from "./session.ts";
@@ -75,7 +75,7 @@ export async function createConsentProject(
     {
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
-      directory: directory(env.DB),
+      controlPlane: new ControlPlane(env.CONTROL_PLANE),
       appConfig: appConfigOf(env),
       platformOrigin: platformAddressesOf(env, request).platformOrigin,
     },
@@ -92,7 +92,7 @@ export async function createConsentProject(
     orgId =
       "id" in input.organization
         ? input.organization.id
-        : (await session.createOrg(input.organization.name)).id;
+        : (await session.organizations.create({ name: input.organization.name })).id;
     // The new project's root context is the platform's to hold, not this page's.
     await session.projects.create({ project: input.slug, orgId });
     return { orgId };

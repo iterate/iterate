@@ -3,7 +3,7 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import type { IngressRouting } from "iterate/next/project-ingress";
-import type { Org } from "../../directory.ts";
+import type { OrganizationRecord } from "../../control-plane/catalog.ts";
 import { typedSlug } from "./project-slug.ts";
 
 /** A project about to be created on the consent page: its slug as typed (or, on the first
@@ -36,7 +36,7 @@ export function ProjectFields({
 }: {
   draft: ProjectDraft;
   slug: string;
-  orgs: Org[];
+  orgs: OrganizationRecord[];
   ingressRouting: IngressRouting;
   platformOrigin: string;
   disabled: boolean;

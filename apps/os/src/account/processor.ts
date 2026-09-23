@@ -1,8 +1,10 @@
 // src/account/processor.ts — THE ACCOUNT PROCESSOR: the pure reduce of the account's facts into its
-// state, and of the user's own secrets' certificates (cross-posted from `/users/<id>/secrets/<name>`)
-// into their catalog; the kernel's `ProcessorEngine` drives it and projects it to live state, exactly
-// as a project processor. No effect lives here. Imports only the pure kernel, so a unit test constructs
-// it with `new` and reduces rows (processor.test.ts, in node).
+// state — the membership facts the session lands here (session.ts `publishAccountFact`, after the
+// control-plane database writes them) among them — and of the user's own secrets' certificates (cross-posted from
+// `/users/<id>/secrets/<name>`) into their catalog; the kernel's `ProcessorEngine` drives it and
+// projects it to live state, exactly as a project processor. No effect lives here: a PURE FOLD.
+// Imports only the pure kernel, so a unit test constructs it with `new` and reduces rows
+// (processor.test.ts, in node).
 import {
   type ConsumedEvent,
   type ReduceArgs,
@@ -52,8 +54,31 @@ export class AccountProcessor extends StreamProcessor<
         }),
       };
     }
+    if (event.type === "events.iterate.com/account/grant-used") {
+      const { grantId, at } = event.payload;
+      if ((state.grantUses[grantId]?.at ?? 0) >= at) return undefined; // only forward
+      return { ...state, grantUses: { ...state.grantUses, [grantId]: { at } } };
+    }
     if (event.type === "events.iterate.com/account/consent-approved")
       return { ...state, consents: [...state.consents, { ...event.payload, at: event.createdAt }] };
+    if (event.type === "events.iterate.com/organization/member-added") {
+      // The latest role is the row; the first membership's time stays. The same role again is a no-op.
+      const { orgId, role } = event.payload;
+      const known = state.memberships[orgId];
+      if (known?.role === role) return undefined;
+      return {
+        ...state,
+        memberships: {
+          ...state.memberships,
+          [orgId]: { role, since: known?.since ?? event.createdAt },
+        },
+      };
+    }
+    if (event.type === "events.iterate.com/organization/member-removed") {
+      if (!state.memberships[event.payload.orgId]) return undefined;
+      const { [event.payload.orgId]: _gone, ...memberships } = state.memberships;
+      return { ...state, memberships };
+    }
     if (
       event.type === "events.iterate.com/secret/set" ||
       event.type === "events.iterate.com/secret/deleted"

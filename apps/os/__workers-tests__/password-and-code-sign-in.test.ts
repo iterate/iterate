@@ -1,13 +1,11 @@
 // The email code sign-in (src/password-and-code-sign-in.ts) with a fake mailbox, so the test can read the code it
 // mailed: the message, the right code, the wrong ones, the spent challenge, the reserved domains.
 import { env } from "cloudflare:test";
-import { beforeAll, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { Env } from "../src/env.ts";
 import { finishLoginCode, startLoginCode } from "../src/password-and-code-sign-in.ts";
-import { applyDirectorySchema } from "./support.ts";
 
 const origin = "https://control.test";
-beforeAll(applyDirectorySchema);
 const withCookie = (setCookie: string) =>
   new Request(`${origin}/login`, {
     method: "POST",

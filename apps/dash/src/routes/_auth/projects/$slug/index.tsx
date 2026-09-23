@@ -12,6 +12,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { useOrganizationTree } from "../../../../components/organization-tree.tsx";
 import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
@@ -61,9 +62,11 @@ function useProjectContext(api: AuthenticatedApp["api"], projectId: string) {
 
 function ProjectOverview() {
   const { project } = Route.useRouteContext();
-  const { orgs } = shell.useLoaderData();
   const { api, info } = shell.useRouteContext();
-  const org = orgs.find((candidate) => candidate.id === project.orgId);
+  // its organization — the name and the person's role — from the tree, live
+  const org = useOrganizationTree().organizations.find(
+    (candidate) => candidate.id === project.orgId,
+  );
   const host = projectHostOf(info, project.slug);
   const context = useProjectContext(api, project.id);
   const live = useLiveState<unknown>(context, {
@@ -109,7 +112,7 @@ function ProjectOverview() {
         </dd>
         <dt className="text-muted-foreground">Organization</dt>
         <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {org?.name ? <span>{org.name}</span> : null}
+          {org ? <span>{org.name}</span> : null}
           <Identifier value={project.orgId} />
         </dd>
       </dl>

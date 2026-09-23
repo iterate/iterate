@@ -9,10 +9,13 @@ import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { PlatformAddresses } from "./app-config.ts";
 import type { Env } from "./env.ts";
-import { directory } from "./directory.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import {
+  accountStateOf,
   authorizationOf,
   oauthHelpers,
   parseAuthorization,
@@ -22,7 +25,7 @@ import {
   type Authorization,
 } from "./oauth.ts";
 import { ClientDisplayUrl, clientDisplay } from "./client-display.ts";
-import { publishGlobalFact } from "./session.ts";
+import { publishAccountFact } from "./session.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
@@ -70,57 +73,66 @@ export class GrantsRpcTarget extends RpcTarget {
     return { sub: grant.userId, email: grant.email, reach: this.#auth.reach, grant };
   }
   /** An ACCOUNT FACT on `/users/<userId>` — a token minted, a grant ended — stamped with this
-   *  caller; best-effort and async, as session.ts `publishGlobalFact` says: the provider is the
+   *  caller; best-effort and async, as session.ts `publishAccountFact` says: the provider is the
    *  truth for the grant, this is the person's record of it. */
   #publishAccountFact(userId: string, fact: StreamEventInput): void {
-    publishGlobalFact(
+    publishAccountFact(
       {
         contextNamespace: this.#env.ITERATE_CONTEXT,
         waitUntil: (promise) => this.#ctx.waitUntil(promise),
       },
-      `/users/${userId}`,
-      "account",
+      userId,
       fact,
       { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
+    );
+  }
+  /** AN ACCOUNT FACT THE VERB AWAITS — a grant's end: from the moment it lands, every admission of
+   *  the grant is refused (oauth.ts `grantIsRevoked` reads the account's `endedGrants`), whatever
+   *  the provider's rows still say. The row on the account first (a second enable appends nothing), then
+   *  the fact, keyed on the grant. */
+  async #landGrantEnded(userId: string, grantId: string): Promise<void> {
+    const name = DurableObjectNameCodec.stringify({
+      projectId: GLOBAL_PROJECT_ID,
+      path: `/users/${userId}`,
+    });
+    const caller = { principal: this.#auth.principal, grant: this.#auth.grant?.grantId };
+    const context = this.#env.ITERATE_CONTEXT.getByName(name);
+    await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
+    await context.invoke(
+      [
+        "itx",
+        [
+          "append",
+          {
+            type: "events.iterate.com/account/grant-ended",
+            idempotencyKey: `account/grant-ended/${grantId}`,
+            payload: { grantId } satisfies GrantEnded,
+          },
+        ],
+      ],
+      [],
+      caller,
     );
   }
   /** Any client can end its own grant. It cannot address another user's session. */
   async endCurrent() {
     const grant = this.#auth.grant;
     if (!grant) throw codedError("FORBIDDEN", "The administrator credential has no user session.");
-    const ended = await revokeGrant(this.#env, this.#addresses, grant);
-    this.#publishAccountFact(grant.userId, {
-      type: "events.iterate.com/account/grant-ended",
-      idempotencyKey: `account/grant-ended/${grant.grantId}`,
-      payload: { grantId: grant.grantId } satisfies GrantEnded,
-    });
-    return ended;
+    await this.#landGrantEnded(grant.userId, grant.grantId);
+    return revokeGrant(this.#env, this.#addresses, grant);
   }
 
-  /** Provider pagination is the inventory; D1 adds use and revocation state only. */
+  /** Provider pagination is the inventory; the person's own account (src/account/contract.ts) says
+   *  which grants have ended and when each was last used. */
   async list(cursor?: string) {
     const env = this.#env;
     const session = this.#account();
-    const page = await oauthHelpers(env, this.#addresses).listUserGrants(session.sub, {
-      limit: 50,
-      cursor,
-    });
-    type Activity = {
-      grant_id: string;
-      last_used_at: number | null;
-      revoked_at: number | null;
-      cleanup_pending: number;
-    };
-    const activity =
-      await env.DB.prepare(`SELECT grant_id, last_used_at, revoked_at, cleanup_pending
-FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "?").join(",") || "NULL"}) OR cleanup_pending = 1)`)
-        .bind(session.sub, ...page.items.map((grant) => grant.id))
-        .all<Activity>();
-    const records = new Map(activity.results.map((row) => [row.grant_id, row]));
+    const [page, account] = await Promise.all([
+      oauthHelpers(env, this.#addresses).listUserGrants(session.sub, { limit: 50, cursor }),
+      accountStateOf(env, session.sub),
+    ]);
     const items = page.items.flatMap((grant) => {
-      const row = records.get(grant.id);
-      records.delete(grant.id);
-      if (row?.revoked_at && !row.cleanup_pending) return [];
+      if (account.endedGrants[grant.id]) return [];
       const metadata = DisplayMetadata.parse(grant.metadata ?? {});
       // The provider stores an unexchanged grant with the code's ten-minute KV TTL.
       const expiresAt = (grant.expiresAt ?? grant.createdAt + 600) * 1000;
@@ -140,49 +152,28 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
                 : "Session",
           createdAt: grant.createdAt * 1000,
           expiresAt,
-          lastUsedAt: row?.last_used_at ?? null,
+          lastUsedAt: account.grantUses[grant.id]?.at ?? null,
           current: grant.id === session.grant.grantId,
-          cleanupPending: Boolean(row?.cleanup_pending),
           expired: Boolean(expiresAt && expiresAt <= Date.now()),
         },
       ];
     });
-    // A cleanup failure remains actionable even after the provider row disappeared.
-    const cleanup = [...records.values()]
-      .filter((row) => row.cleanup_pending)
-      .map((row) => ({
-        id: row.grant_id,
-        name: "Revoked session",
-        clientId: undefined,
-        logoUri: undefined,
-        clientDomain: undefined,
-        kind: "Session",
-        createdAt: 0,
-        expiresAt: null,
-        lastUsedAt: row.last_used_at,
-        current: row.grant_id === session.grant.grantId,
-        cleanupPending: true,
-        expired: false,
-      }));
     return {
-      items: [...items, ...cleanup],
+      items,
       cursor: page.cursor,
-      projects: await directory(env.DB).reachableProjects(session.reach),
+      projects: await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach),
       canMintToken: mintsPersonalAccessTokens(this.#addresses.platformOrigin),
     };
   }
 
-  /** Ownership comes from an existing marker or a full provider inventory scan.
-   * An arbitrary foreign grant id never creates a D1 row. */
+  /** Ownership comes from the account (a grant already ended there) or a full provider inventory
+   * scan — an arbitrary foreign grant id ends nothing. The end lands on the account FIRST and is
+   * awaited (the revocation truth); then the provider's rows go. */
   async end(grantId: string) {
     const env = this.#env;
     const session = this.#account();
-    const marker = await env.DB.prepare(
-      "SELECT revoked_at FROM oauth_activity WHERE user_id = ? AND grant_id = ?",
-    )
-      .bind(session.sub, grantId)
-      .first<{ revoked_at: number | null }>();
-    if (!marker) {
+    const account = await accountStateOf(env, session.sub);
+    if (!account.endedGrants[grantId]) {
       let owned: GrantSummary | undefined;
       let cursor: string | undefined;
       do {
@@ -194,13 +185,8 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       } while (!owned && cursor);
       if (!owned) throw codedError("GRANT_NOT_FOUND", "Session not found");
     }
-    const ended = await revokeGrant(env, this.#addresses, { userId: session.sub, grantId });
-    this.#publishAccountFact(session.sub, {
-      type: "events.iterate.com/account/grant-ended",
-      idempotencyKey: `account/grant-ended/${grantId}`,
-      payload: { grantId } satisfies GrantEnded,
-    });
-    return ended;
+    await this.#landGrantEnded(session.sub, grantId);
+    return revokeGrant(env, this.#addresses, { userId: session.sub, grantId });
   }
 
   /** The console's own OAuth client the personal-token exchange runs through: the client id
@@ -243,7 +229,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     const { platformOrigin: issuer, api, mcp } = this.#addresses;
     if (!mintsPersonalAccessTokens(issuer))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
-    const projects = (await directory(env.DB).reachableProjects(session.reach))
+    const projects = (await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach))
       .filter((project) => data.projects.includes(project.id))
       .map((project) => project.id);
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");

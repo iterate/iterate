@@ -2,8 +2,9 @@
 // FILE is the only place they are spelled. The `project` facet hosted there is the catalog host — the
 // collections hang off it (`itx.repos`, `itx.workspaces`: collection.ts, one per
 // entity on src/project/durable-object.ts) — and the project is itself a domain object with a
-// creation saga: `session.projects.create` (session.ts) says the directory row, enables the `project`
-// row on `/` and appends `project/create-requested`; processor.ts runs the saga from state at head
+// creation saga: `session.projects.create` writes the control-plane database's row, then (session.ts,
+// the same verb) enables the `project` processor on `/` and appends `project/create-requested`;
+// processor.ts runs the saga from state at head
 // and lands `project/created` or `project/create-failed`; the dash renders the state live. The rest
 // of the folder derives from here: processor.ts reduces these events, durable-object.ts hosts the
 // processor and the collections. Every type is derived here, never hand-kept:

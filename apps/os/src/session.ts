@@ -6,7 +6,10 @@ import {
 import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 // Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
 // socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
-// project contexts and own their teardown.
+// project contexts and own their teardown. What a session KNOWS — which projects and organizations
+// exist, who reaches what — and what it DOES to them — create an organization or a project,
+// rename, delete, a membership — is one call on the control plane (src/control-plane/edge.ts),
+// made under this caller.
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
@@ -24,10 +27,18 @@ import {
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
+import {
+  isOperator,
+  type MemberRecord,
+  type OrganizationRecord,
+  type ProjectRecord,
+  type UserRecord,
+} from "./control-plane/catalog.ts";
+import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
+import { OrganizationRole } from "./organization/contract.ts";
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
-import type { ProjectState } from "./project/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
@@ -54,7 +65,8 @@ export type SessionCredentials = z.infer<typeof SessionCredentials>;
 export interface SessionInput {
   contextNamespace: IterateContextNamespace;
   waitUntil: WaitUntil;
-  directory: Directory;
+  /** The control plane as the edge holds it: the catalog's reads and its commands. */
+  controlPlane: ControlPlane;
   /** Configuration for operator authentication and context capabilities. */
   appConfig: AppConfig;
   /** THE PLATFORM ORIGIN this session was reached on (app-config.ts `platformAddressesOf`) — what
@@ -126,9 +138,10 @@ export class IterateRpcTarget extends RpcTarget {
       this.#input.appConfig.secrets.adminBearer.exposeSecret(),
     );
     if (!admin) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
-    // Test/operator fixture only; product impersonation must retain operator attribution.
+    // Test/operator fixture only; product impersonation must retain operator attribution. The
+    // user is found or created in the control plane (a sign-in's own find-or-create).
     const user =
-      credentials.data.as && (await this.#input.directory.upsertUser(credentials.data.as.email));
+      credentials.data.as && (await this.#input.controlPlane.ensureUser(credentials.data.as.email));
     const principal = user ? { actor: user.id, email: user.email } : admin;
     this.#publishAuthenticationFact(principal, "admin-secret");
     // the operator acting as a user is that user with every scope
@@ -152,10 +165,9 @@ export class IterateRpcTarget extends RpcTarget {
   ): void {
     if (!principal.email) return;
     const operationId = crypto.randomUUID();
-    publishGlobalFact(
+    publishAccountFact(
       this.#input,
-      `/users/${principal.actor}`,
-      "account",
+      principal.actor,
       {
         type: "events.iterate.com/account/authenticated",
         payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
@@ -166,35 +178,108 @@ export class IterateRpcTarget extends RpcTarget {
   }
 }
 
-/** A CONTROL-PLANE FACT, appended to the global context of the entity it happened to — the
- *  organization (`/organizations/<id>`: created, renamed, deleted, a project created in it), the
- *  person (`/users/<id>`: authenticated; grants.ts and consent.ts add a token minted, a grant
- *  ended, a consent approved) — stamped with the caller, principal and grant: the audit lives where
- *  it happened, attributed to who did it and through which connection. Best-effort and ASYNC
- *  (waitUntil), off the verb's own path: the directory stays the truth for the state, this is the
- *  record of it — a fact lost to an eviction is a gap in the record, never a failed action. */
-export function publishGlobalFact(
+/** AN ACCOUNT FACT, appended to the person's own context (`/users/<id>`: authenticated here;
+ *  grants.ts and consent.ts add a token minted, a grant used, a consent approved) — stamped with
+ *  the caller, principal and grant: the audit lives where it happened, attributed to who did it and
+ *  through which connection. Best-effort and ASYNC (waitUntil), off the verb's own path: a fact
+ *  lost to an eviction is a gap in the record, never a failed action. (A grant's END is not
+ *  published this way: grants.ts AWAITS it — it is the revocation truth.) The organization's own
+ *  facts land the same way, on its context (`publishOrganizationFact`).
+ *
+ *  THE CONTROL-PLANE DATABASE IS THE TRUTH; these facts are the fold the dash renders and the entity's
+ *  activity, not the source of authority. A single command's facts are appended in one call and so
+ *  keep their order, but two CONCURRENT conflicting commands to the same context (a membership added
+ *  and removed at once) deliver on independent chains with no ordering between them — the fold can
+ *  settle opposite to the database's own order until the next authoritative read. Acceptable here: the
+ *  edge authorizes every action against the database, never the fold. */
+export function publishAccountFact(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
-  path: string,
-  /** The first-party processor that folds the fact (first-party-facets.ts): its row on the context
-   *  is enabled first — idempotent at the door, so every fact re-asks and only the first appends. */
-  processor: "account" | "organization",
-  fact: StreamEventInput,
+  userId: string,
+  facts: StreamEventInput | StreamEventInput[],
   caller: Caller,
 ): void {
-  const name = DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path });
+  const name = DurableObjectNameCodec.stringify({
+    projectId: GLOBAL_PROJECT_ID,
+    path: `/users/${userId}`,
+  });
   const context = input.contextNamespace.getByName(name);
+  const events = Array.isArray(facts) ? facts : [facts];
   input.waitUntil(
     // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; neither answer is
-    // read, so `unknown` is all the promises need to be.
-    (context.invoke(["itx", "processors", ["enable", processor]], [], caller) as Promise<unknown>)
-      .then(() => context.invoke(["itx", ["append", fact]], [], caller) as Promise<unknown>)
+    // read, so `unknown` is all the promises need to be. Several facts are appended in ONE call,
+    // so they land in the order given.
+    (context.invoke(["itx", "processors", ["enable", "account"]], [], caller) as Promise<unknown>)
+      .then(() => context.invoke(["itx", ["append", ...events]], [], caller) as Promise<unknown>)
       .then(
         () => undefined,
         () => undefined,
       ),
   );
 }
+
+/** AN ORGANIZATION FACT, appended to the organization's own context (`/organizations/<id>`): its
+ *  creation, rename, deletion, and each membership change — the fold the dash renders (src/organization/)
+ *  and the organization's activity. Best-effort and ASYNC (waitUntil), off the verb's own path: the
+ *  control-plane database (src/control-plane/) already decided the write; this is the record of it on
+ *  the stream. A membership also lands on the person's account (`publishAccountFact`). */
+function publishOrganizationFact(
+  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
+  organizationId: string,
+  facts: StreamEventInput | StreamEventInput[],
+  caller: Caller,
+): void {
+  const name = DurableObjectNameCodec.stringify({
+    projectId: GLOBAL_PROJECT_ID,
+    path: `/organizations/${organizationId}`,
+  });
+  const context = input.contextNamespace.getByName(name);
+  const events = Array.isArray(facts) ? facts : [facts];
+  input.waitUntil(
+    (
+      context.invoke(
+        ["itx", "processors", ["enable", "organization"]],
+        [],
+        caller,
+      ) as Promise<unknown>
+    )
+      .then(() => context.invoke(["itx", ["append", ...events]], [], caller) as Promise<unknown>)
+      .then(
+        () => undefined,
+        () => undefined,
+      ),
+  );
+}
+
+/** The organization's facts, built once (the same membership fact rides the organization's context
+ *  and the member's account). Their shapes are the organization contract's (src/organization/). */
+const orgCreatedFact = (name: string): StreamEventInput => ({
+  type: "events.iterate.com/organization/created",
+  payload: { name },
+});
+const orgRenamedFact = (name: string): StreamEventInput => ({
+  type: "events.iterate.com/organization/renamed",
+  payload: { name },
+});
+const orgDeletedFact = (): StreamEventInput => ({
+  type: "events.iterate.com/organization/deleted",
+  payload: {},
+});
+const memberAddedFact = (
+  orgId: string,
+  userId: string,
+  role: OrganizationRole,
+): StreamEventInput => ({
+  type: "events.iterate.com/organization/member-added",
+  payload: { orgId, userId, role },
+});
+const memberRemovedFact = (orgId: string, userId: string): StreamEventInput => ({
+  type: "events.iterate.com/organization/member-removed",
+  payload: { orgId, userId },
+});
+const projectCreatedFact = (projectId: string, slug: string): StreamEventInput => ({
+  type: "events.iterate.com/organization/project-created",
+  payload: { projectId, slug },
+});
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through. */
@@ -213,6 +298,7 @@ export class SessionRpcTarget extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
   readonly #projects: ProjectCollectionRpcTarget;
   readonly #organizations: OrganizationCollectionRpcTarget;
+  readonly #users: UserCollectionRpcTarget;
   readonly #input: SessionInput;
   readonly #authority: SessionAuthority;
 
@@ -221,28 +307,16 @@ export class SessionRpcTarget extends RpcTarget {
     this.#input = input;
     this.#authority = authority;
     this.#sessionTeardown = sessionTeardown;
-    this.#projects = new ProjectCollectionRpcTarget(
+    const session: SessionOf = {
       input,
-      sessionTeardown,
-      {
-        principal: authority.principal,
-        grant: authority.grant,
-        platformOrigin: input.platformOrigin,
-      },
-      authority.reach,
-    );
-    this.#organizations = new OrganizationCollectionRpcTarget(
-      (orgId) => this.#reachesOrg(orgId),
-      (orgId) => this.#globalContext(`/organizations/${orgId}`),
-    );
-  }
-
-  /** Whether this session may hold `orgId`'s context: the admin (every project) reaches every
-   *  organization; a user reaches the organizations `orgs()` lists — their memberships, narrowed to
-   *  the orgs of the projects a grant chose. */
-  async #reachesOrg(orgId: string): Promise<boolean> {
-    if (this.#authority.reach === "every") return true;
-    return (await this.orgs()).some((org) => org.id === orgId);
+      authority,
+      caller: this.#caller,
+      globalContext: (path) => this.#globalContext(path),
+      organizationsWriter: (verb) => this.#organizationsWriter(verb),
+    };
+    this.#projects = new ProjectCollectionRpcTarget(session, sessionTeardown);
+    this.#organizations = new OrganizationCollectionRpcTarget(session);
+    this.#users = new UserCollectionRpcTarget(session);
   }
 
   [Symbol.dispose](): void {
@@ -259,7 +333,7 @@ export class SessionRpcTarget extends RpcTarget {
   async exportProjectSecretForSeed(projectRef: string, path: string): Promise<unknown> {
     if (this.#authority.principal.actor !== "admin" || this.#authority.reach !== "every")
       throw codedError("FORBIDDEN", "Project-seed exports require operator authority.");
-    const project = await this.#input.directory.getProject(z.string().min(1).parse(projectRef));
+    const project = await this.#input.controlPlane.getProject(z.string().min(1).parse(projectRef));
     if (!project) throw codedError("INVALID_INPUT", "Project not found.");
     const name = DurableObjectNameCodec.stringify({
       projectId: project.id,
@@ -281,33 +355,22 @@ export class SessionRpcTarget extends RpcTarget {
     };
   }
 
-  /** The person's organizations. A grant narrowed to projects sees only the organizations those
-   *  projects belong to — unless it holds `organizations:write`, which is the organizations
-   *  themselves: every one the person belongs to, the one it just created included. */
-  async orgs() {
-    const { reach, scopes } = this.#authority;
-    if (reach === "every" || !("userId" in reach)) return [];
-    const orgs = await this.#input.directory.listOrgs(reach.userId);
-    if (!("projectIds" in reach) || scopes?.includes("organizations:write")) return orgs;
-    const projects = await this.#input.directory.reachableProjects(reach);
-    return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
-  }
-
-  /** Creating, renaming or deleting an organization is the `organizations:write` scope's: a user
-   *  grant whose consent kept it ticked (the dash asks for it; the consent page lets the person
-   *  untick it), the issuer's own session, or the operator acting as a user. The grant's project
+  /** Creating, renaming or deleting an organization, or changing its members, is the
+   *  `organizations:write` scope's: a user grant whose consent kept it ticked (the dash asks for
+   *  it; the consent page lets the person untick it), the issuer's own session, or the operator —
+   *  acting as a user, or as the operator (the replay of an older directory). The grant's project
    *  reach is beside the point — an organization is the person's, and the grant reaches what it
-   *  reached before. The person behind the grant, for the directory. */
-  #organizationsWriter(verb: string): { userId: string } {
+   *  reached before. */
+  #organizationsWriter(verb: string): void {
     const { reach, scopes } = this.#authority;
-    if (reach === "every" || !("userId" in reach))
+    if (reach === "every") return;
+    if (!("userId" in reach))
       throw codedError("FORBIDDEN", `A user session is required to ${verb} an organization.`);
     if (!scopes?.includes("organizations:write"))
       throw codedError(
         "FORBIDDEN",
         `The organizations:write permission is required to ${verb} an organization.`,
       );
-    return reach;
   }
 
   /** WHO this session is, as an event's stamp: the principal and the grant it acts through. */
@@ -317,63 +380,6 @@ export class SessionRpcTarget extends RpcTarget {
       grant: this.#authority.grant,
       platformOrigin: this.#input.platformOrigin,
     };
-  }
-
-  /** A new organization named `name`, the person its owner — and the fact of it on the
-   *  organization's own context (src/organization/). */
-  async createOrg(name: string) {
-    const { userId } = this.#organizationsWriter("create");
-    const org = await this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
-    publishGlobalFact(
-      this.#input,
-      `/organizations/${org.id}`,
-      "organization",
-      {
-        type: "events.iterate.com/organization/created",
-        idempotencyKey: "organization/created",
-        payload: { name: org.name },
-      },
-      this.#caller,
-    );
-    return org;
-  }
-
-  /** Rename an organization the person owns. */
-  async updateOrg(orgId: string, input: { name: string }) {
-    const { userId } = this.#organizationsWriter("rename");
-    const data = z.object({ name: z.string().trim().min(1) }).parse(input);
-    const org = await this.#input.directory.renameOrg(
-      userId,
-      z.string().min(1).parse(orgId),
-      data.name,
-    );
-    publishGlobalFact(
-      this.#input,
-      `/organizations/${org.id}`,
-      "organization",
-      { type: "events.iterate.com/organization/renamed", payload: { name: org.name } },
-      this.#caller,
-    );
-    return org;
-  }
-
-  /** Delete an organization the person owns, while it holds no project. The fact lands on the
-   *  organization's context, which outlives the directory row as its record. */
-  async deleteOrg(orgId: string) {
-    const { userId } = this.#organizationsWriter("delete");
-    const id = z.string().min(1).parse(orgId);
-    await this.#input.directory.deleteOrg(userId, id);
-    publishGlobalFact(
-      this.#input,
-      `/organizations/${id}`,
-      "organization",
-      {
-        type: "events.iterate.com/organization/deleted",
-        idempotencyKey: "organization/deleted",
-        payload: {},
-      },
-      this.#caller,
-    );
   }
 
   get consent() {
@@ -398,11 +404,19 @@ export class SessionRpcTarget extends RpcTarget {
     return this.#projects;
   }
 
-  /** The organizations this session can reach, each as a global IterateContextRpcTarget at
-   *  `(global, /organizations/<orgId>)` — the same context surface as a user or a project. `orgs()`
-   *  returns the directory rows; this vends the org's context, by membership. */
+  /** The organizations this session can reach: `list()` (the rows, with the person's role),
+   *  `get(orgId)` (the organization's context — a global IterateContextRpcTarget at
+   *  `(global, /organizations/<orgId>)`, the same context surface as a user or a project — by
+   *  membership), and the verbs, each one call on the control plane. */
   get organizations(): OrganizationCollectionRpcTarget {
     return this.#organizations;
+  }
+
+  /** THE PEOPLE — the operator's catalog alone: every other session names one person, itself. */
+  get users(): UserCollectionRpcTarget {
+    if (this.#authority.reach !== "every")
+      throw codedError("FORBIDDEN", "Only the operator reads the user catalog.");
+    return this.#users;
   }
 
   /** The signed-in human's own context in the deployment-global namespace — an ORDINARY
@@ -442,24 +456,53 @@ export class SessionRpcTarget extends RpcTarget {
   }
 }
 
-/** The organization catalog: `get(orgId)` vends an organization's context in the deployment-global
- *  namespace, `(global, /organizations/<orgId>)` — BY MEMBERSHIP (`SessionRpcTarget.#reachesOrg`):
- *  an org the session does not reach is FORBIDDEN, exactly as `projects.get` outside its reach. */
-class OrganizationCollectionRpcTarget extends RpcTarget {
-  readonly #reachesOrg: (orgId: string) => Promise<boolean>;
-  readonly #context: (orgId: string) => IterateContextRpcTarget;
+/** What the collections below share of their session. */
+type SessionOf = {
+  input: SessionInput;
+  authority: SessionAuthority;
+  /** The verified caller — principal and grant — stamped on every request and context event. */
+  caller: Caller;
+  globalContext(path: string): IterateContextRpcTarget;
+  organizationsWriter(verb: string): void;
+};
 
-  constructor(
-    reachesOrg: (orgId: string) => Promise<boolean>,
-    context: (orgId: string) => IterateContextRpcTarget,
-  ) {
+/** The organization catalog. `list()` is the person's organizations, with their role (a grant
+ *  narrowed to projects sees only the organizations those projects belong to — unless it holds
+ *  `organizations:write`, which is the organizations themselves); `get(orgId)` vends the
+ *  organization's context BY MEMBERSHIP (an org the session does not reach is FORBIDDEN, exactly as
+ *  `projects.get` outside its reach); `create`, `rename`, `delete`, `addMember`, `removeMember` are
+ *  each one call on the control plane under this caller, which checks the rest (an owner? the last
+ *  owner? projects still held?) against its catalog. */
+class OrganizationCollectionRpcTarget extends RpcTarget {
+  readonly #session: SessionOf;
+  constructor(session: SessionOf) {
     super();
-    this.#reachesOrg = reachesOrg;
-    this.#context = context;
+    this.#session = session;
+  }
+
+  /** The organizations this session reaches, narrowed as the docstring says. `fresh` re-reads the
+   *  person's memberships past the isolate's memo — the re-read before a refusal (edge.ts's rule),
+   *  so a membership that just landed elsewhere is admitted at once. */
+  async #reachable(fresh = false): Promise<OrganizationRecord[]> {
+    const { reach, scopes } = this.#session.authority;
+    const { controlPlane } = this.#session.input;
+    if (reach === "every") return controlPlane.listOrganizations();
+    if (!("userId" in reach)) return [];
+    const record = await controlPlane.accessibleTo(reach.userId, fresh);
+    if (!("projectIds" in reach) || scopes?.includes("organizations:write"))
+      return record.organizations;
+    const chosen = record.projects.filter((project) => reach.projectIds!.includes(project.id));
+    return record.organizations.filter((organization) =>
+      chosen.some((project) => project.orgId === organization.id),
+    );
+  }
+
+  list(): Promise<OrganizationRecord[]> {
+    return this.#reachable();
   }
 
   async get(orgId: string): Promise<IterateContextRpcTarget> {
-    // ONE path segment — the directory's `org_<hex>` — never a path: the id is interpolated into
+    // ONE path segment — the catalog's `org_<hex>` — never a path: the id is interpolated into
     // `/organizations/<id>`, and `..` or `x/../users/<id>` would canonicalize onto another global
     // context (the admin reaches every org, so the membership check alone would not catch it).
     const id = z.string().trim().min(1).parse(orgId);
@@ -468,108 +511,211 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
         "FORBIDDEN",
         `organizations.get(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
       );
-    if (!(await this.#reachesOrg(id)))
+    // BY MEMBERSHIP, AS `list()` NARROWS IT: a grant bound to projects reaches only the organizations
+    // those projects belong to (unless it holds `organizations:write`), so a personal access token
+    // opens no other organization's context. The admin reaches every one. A miss is re-read once
+    // past the memo before it is refused: a membership that just landed is admitted at once.
+    const reaches = (organizations: OrganizationRecord[]) =>
+      organizations.some((organization) => organization.id === id);
+    const reachable =
+      this.#session.authority.reach === "every" ||
+      reaches(await this.#reachable()) ||
+      reaches(await this.#reachable(true));
+    if (!reachable)
       throw codedError(
         "FORBIDDEN",
         `organizations.get(${JSON.stringify(id)}): not an organization this session belongs to`,
       );
-    return this.#context(id);
+    return this.#session.globalContext(`/organizations/${id}`);
+  }
+
+  /** An organization's members with their emails — the operator's alone (the project-seed CLI
+   *  captures an organization's membership with the project). */
+  async members(orgId: string): Promise<MemberRecord[]> {
+    if (this.#session.authority.reach !== "every")
+      throw codedError("FORBIDDEN", "Only the operator lists an organization's members.");
+    return this.#session.input.controlPlane.listMembers(z.string().min(1).parse(orgId));
+  }
+
+  /** A new organization named `name`, the person its owner. The operator may name the owner and
+   *  pin the id (the replay of an older directory). */
+  async create(input: {
+    name: string;
+    id?: string;
+    ownerId?: string;
+  }): Promise<OrganizationRecord> {
+    this.#session.organizationsWriter("create");
+    const data = z
+      .object({
+        name: z.string().trim().min(1, "Enter an organization name."),
+        id: z.string().optional(),
+        ownerId: z.string().optional(),
+      })
+      .parse(input);
+    const { input: sessionInput, caller } = this.#session;
+    const record = await sessionInput.controlPlane.createOrganization(caller, data);
+    // Land the organization on its own context (the fold the dash renders); the owner's membership
+    // rides there — after the creation, in one ordered append — and on their account. The operator's
+    // scripts add members themselves (an owner named by the operator gets no session here).
+    if (record.role === "owner") {
+      const membership = memberAddedFact(record.id, caller.principal!.actor, "owner");
+      publishOrganizationFact(
+        sessionInput,
+        record.id,
+        [orgCreatedFact(record.name), membership],
+        caller,
+      );
+      publishAccountFact(sessionInput, caller.principal!.actor, membership, caller);
+    } else publishOrganizationFact(sessionInput, record.id, orgCreatedFact(record.name), caller);
+    return record;
+  }
+
+  /** Rename an organization the person owns. */
+  async rename(orgId: string, input: { name: string }): Promise<OrganizationRecord> {
+    this.#session.organizationsWriter("rename");
+    const data = z
+      .object({ name: z.string().trim().min(1, "Enter an organization name.") })
+      .parse(input);
+    const { input: sessionInput, caller } = this.#session;
+    const organizationId = z.string().min(1).parse(orgId);
+    const record = await sessionInput.controlPlane.renameOrganization(
+      caller,
+      organizationId,
+      data.name,
+    );
+    publishOrganizationFact(sessionInput, organizationId, orgRenamedFact(record.name), caller);
+    return { ...record, role: "owner" };
+  }
+
+  /** Delete an organization the person owns, while it holds no project. The deletion lands on the
+   *  organization's own context, and each membership ends on the member's account. */
+  async delete(orgId: string): Promise<void> {
+    this.#session.organizationsWriter("delete");
+    const { input: sessionInput, caller } = this.#session;
+    const organizationId = z.string().min(1).parse(orgId);
+    // The members, read before the delete refuses or succeeds — to end their memberships below.
+    const members = await sessionInput.controlPlane.listMembers(organizationId);
+    await sessionInput.controlPlane.deleteOrganization(caller, organizationId);
+    for (const { userId } of members)
+      publishAccountFact(sessionInput, userId, memberRemovedFact(organizationId, userId), caller);
+    publishOrganizationFact(sessionInput, organizationId, orgDeletedFact(), caller);
+  }
+
+  /** Add a person to an organization the caller owns, as an owner or a member. */
+  async addMember(
+    orgId: string,
+    input: { userId: string; role?: OrganizationRole },
+  ): Promise<void> {
+    this.#session.organizationsWriter("add a member to");
+    const data = z
+      .object({ userId: z.string().min(1), role: OrganizationRole.default("member") })
+      .parse(input);
+    const { input: sessionInput, caller } = this.#session;
+    const organizationId = z.string().min(1).parse(orgId);
+    const userId = await sessionInput.controlPlane.addMember(caller, organizationId, data);
+    const fact = memberAddedFact(organizationId, userId, data.role);
+    publishOrganizationFact(sessionInput, organizationId, fact, caller);
+    publishAccountFact(sessionInput, userId, fact, caller);
+  }
+
+  /** Remove a person from an organization the caller owns. */
+  async removeMember(orgId: string, input: { userId: string }): Promise<void> {
+    this.#session.organizationsWriter("remove a member from");
+    const data = z.object({ userId: z.string().min(1) }).parse(input);
+    const { input: sessionInput, caller } = this.#session;
+    const organizationId = z.string().min(1).parse(orgId);
+    const userId = await sessionInput.controlPlane.removeMember(caller, organizationId, data);
+    const fact = memberRemovedFact(organizationId, userId);
+    publishOrganizationFact(sessionInput, organizationId, fact, caller);
+    publishAccountFact(sessionInput, userId, fact, caller);
   }
 }
 
 /** The project catalog: `list()`, `get(project)`, `create({ project })` — get and create vend the
- *  project's root context. What a session reaches is its `Reach` (directory.ts): every project,
- *  the projects of the user's orgs, or the projects named outright. */
+ *  project's root context. What a session reaches is its `Reach` (control-plane/edge.ts): every
+ *  project, the projects of the user's orgs, or the projects named outright. */
 class ProjectCollectionRpcTarget extends RpcTarget {
-  readonly #input: SessionInput;
+  readonly #session: SessionOf;
   readonly #sessionTeardown: SessionTeardown;
-  readonly #reach: Reach;
-  /** The verified caller — principal and grant — stamped on context events. */
-  readonly #caller: Caller;
 
-  constructor(input: SessionInput, sessionTeardown: SessionTeardown, caller: Caller, reach: Reach) {
+  constructor(session: SessionOf, sessionTeardown: SessionTeardown) {
     super();
-    this.#input = input;
+    this.#session = session;
     this.#sessionTeardown = sessionTeardown;
-    this.#reach = reach;
-    this.#caller = caller;
   }
 
-  /** The projects this session reaches, as directory rows: the projects of the orgs the user
+  /** The projects this session reaches, as catalog rows: the projects of the orgs the user
    *  belongs to, with their role — narrowed to the projects a grant chose; for the admin secret,
    *  every project (no role). */
-  list(): Promise<Project[]> {
-    return this.#input.directory.reachableProjects(this.#reach);
+  list(): Promise<ProjectRecord[]> {
+    return this.#session.input.controlPlane.reachableProjects(this.#session.authority.reach);
   }
 
-  /** Create the project named `project` (slugified into its hostname label; its id is minted unless
-   * an administrator restores an archived id —
-   *  the returned context's `whoami()` says it, so does `list()`) — in the user's org (the first
-   *  by name when they have several, created on first use when they have none), or in the
-   *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
-   *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
-   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
+  /** The built-in config repo templates a creation may name (generated/config-templates.js). */
   async templates() {
     return templates;
   }
 
+  /** Create the project named `project` (slugified into its hostname label; its id is minted —
+   *  or, for the operator restoring a project seed, the archived `restoreProjectId` — the returned
+   *  context's `whoami()` says it, so does `list()`) — in the organization named, or
+   *  the user's own (the first by name when they have several, created on first use when they
+   *  have none), or in the deployment's own for the admin secret — and vend its root context. The
+   *  config repo template is PINNED to a commit here (a resumed creation always reads the same
+   *  tree); the control plane refuses a slug ANY other organization holds (PROJECT_NAME_TAKEN),
+   *  answers the same organization's again with the same project, and opens the project's own saga
+   *  on its root (src/project/processor.ts seeds it from the template — the dash watches that
+   *  facet's live state). A grant narrowed to named projects creates none: FORBIDDEN. */
   async create(input: {
     project: string;
     orgId?: string;
-    configRepoTemplate?: string;
     restoreProjectId?: string;
+    configRepoTemplate?: string;
   }): Promise<IterateContextRpcTarget> {
     const data = z
       .object({
         project: z.string(),
         orgId: z.string().optional(),
-        configRepoTemplate: z.string().transform(normalizeConfigRepoTemplateReference).optional(),
         restoreProjectId: z.string().optional(),
+        configRepoTemplate: z.string().transform(normalizeConfigRepoTemplateReference).optional(),
       })
       .parse(input);
-    const project = await this.#input.directory.createProject(
-      this.#reach,
-      data.project,
-      data.orgId,
-      data.restoreProjectId,
-    );
-    // The fact of it, on the organization it was created in (idempotent on the project: the same
-    // org's same slug again is the same project).
-    publishGlobalFact(
-      this.#input,
-      `/organizations/${project.orgId}`,
-      "organization",
-      {
-        type: "events.iterate.com/organization/project-created",
-        idempotencyKey: `organization/project-created/${project.id}`,
-        payload: { projectId: project.id, slug: project.slug },
-      },
-      this.#caller,
-    );
-    // THE SAGA — the rule every entity collection follows: the `project` facet's state is read first;
-    // a project already created, or one whose creation is open, gets its context back and nothing
-    // appended; otherwise (never requested, or the last attempt failed) the `project` processor row
-    // is enabled on `/` and a NEW `project/create-requested` appended there — the row's facts, under
-    // this caller. The context is returned at once: the
-    // project processor (src/project/processor.ts) lands `project/created` or `project/create-failed`
-    // from state at head, and the dash watches the facet's live state.
-    const context = this.#context(project.id);
-    // The facet is the platform's own ProjectDurableObject and `snapshot()` the engine's
-    // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
-    const { state } = (await context.invoke([
-      "itx",
-      "facets",
-      ["get", "project"],
-      ["snapshot"],
-    ])) as { state: ProjectState };
-    if (state.creation?.status === "created" || state.creation?.status === "requested")
-      return context;
-    // Pin once, before the durable request. A resumed creation always reads the same tree.
+    const { reach } = this.#session.authority;
+    if (typeof reach === "object" && "projectIds" in reach)
+      throw codedError(
+        "FORBIDDEN",
+        `this session is ${describeReach(reach)} — creating a project needs a signed-in user or the admin secret`,
+      );
+    // pinned once, before the durable request: a resumed creation always reads the same tree
     const configRepoTemplate = data.configRepoTemplate
       ? formatConfigRepoTemplateReference(
           await pinPublicGithubTemplate(parseConfigRepoTemplateReference(data.configRepoTemplate)),
         )
       : undefined;
+    const { input: sessionInput, caller } = this.#session;
+    // A person's FIRST project mints their own organization (catalog.ts) — read the orgs they already
+    // belong to (FRESH, past the edge's memo, so a membership added seconds ago in another isolate is
+    // not mistaken for the mint), to tell that new one apart below and land its creation on the fold
+    // the dash renders. The operator's projects go to the deployment's own organization, which the
+    // dash never shows, so it feeds no facts.
+    const priorOrgIds =
+      caller.principal && !isOperator(caller)
+        ? new Set(
+            (
+              await sessionInput.controlPlane.accessibleTo(caller.principal.actor, true)
+            ).organizations.map((organization) => organization.id),
+          )
+        : null;
+    const project = await sessionInput.controlPlane.createProject(caller, {
+      project: data.project,
+      organizationId: data.orgId,
+      restoreProjectId: data.restoreProjectId,
+    });
+    // The project's own creation saga, on its root: enable the `project` processor, then request it —
+    // the saga (src/project/processor.ts) seeds the config repo from the template and lands the
+    // certificate. Idempotent: a request after the certificate is a harmless fact, one after a
+    // failure a new attempt. The dash watches the facet's live state; we return at once.
+    const context = this.#context(project.id);
     await context.invoke(["itx", "processors", ["enable", "project"]]);
     await context.invoke([
       "itx",
@@ -577,22 +723,38 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         "append",
         {
           type: "events.iterate.com/project/create-requested",
-          payload: {
-            slug: project.slug,
-            orgId: project.orgId,
-            configRepoTemplate,
-          },
+          payload: { slug: project.slug, orgId: project.orgId, configRepoTemplate },
         },
       ],
     ]);
+    // Feed the entity folds the dash tree reads (session-fed since the control-plane database is
+    // imperative). Every non-operator project lands on its organization; a first project's minted
+    // organization gets its creation and the owner's membership first, in one ordered append, so the
+    // fold sees the organization before its project.
+    if (priorOrgIds) {
+      const projectFact = projectCreatedFact(project.id, project.slug);
+      if (priorOrgIds.has(project.orgId))
+        publishOrganizationFact(sessionInput, project.orgId, projectFact, caller);
+      else {
+        const organization = await sessionInput.controlPlane.getOrganization(project.orgId);
+        const membership = memberAddedFact(project.orgId, caller.principal!.actor, "owner");
+        publishOrganizationFact(
+          sessionInput,
+          project.orgId,
+          [orgCreatedFact(organization?.name ?? project.orgId), membership, projectFact],
+          caller,
+        );
+        publishAccountFact(sessionInput, caller.principal!.actor, membership, caller);
+      }
+    }
     return context;
   }
 
   /** The project's root context ("/"), by its minted id (`prj_<hex>`) or its slug (a URL's
-   *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and
+   *  `/projects/<slug>`, a hostname's label) — the control plane resolves either (`projectIdOf`), and
    *  the id alone goes on: the DO name's host, a grant's list, `whoami()`. A project only — a
    *  context name belongs to `cd`. Outside this session's reach is FORBIDDEN; so is the global
-   *  namespace's id (it is no project). The admin secret alone addresses a project the directory
+   *  namespace's id (it is no project). The admin secret alone addresses a project the catalog
    *  never heard of, by id (a fresh context of its own). */
   async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
@@ -605,24 +767,65 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): the deployment-global namespace is no project — a global context is reached by identity (session.user, session.organizations)`,
       );
-    const id = await this.#input.directory.projectIdOf(address.projectId);
-    if (!(await this.#input.directory.reachesProject(this.#reach, id)))
+    const { controlPlane } = this.#session.input;
+    const { reach } = this.#session.authority;
+    const id = await controlPlane.projectIdOf(address.projectId);
+    if (!(await controlPlane.reachesProject(reach, id)))
       throw codedError(
         "FORBIDDEN",
-        `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(this.#reach)}`,
+        `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(reach)}`,
       );
     return this.#context(id);
   }
 
   #context(projectId: string): IterateContextRpcTarget {
-    this.#input.onProjectAccess?.(projectId);
+    this.#session.input.onProjectAccess?.(projectId);
     return new IterateContextRpcTarget(
-      this.#input.contextNamespace,
+      this.#session.input.contextNamespace,
       DurableObjectNameCodec.parse(projectId),
       this.#sessionTeardown,
-      this.#input.waitUntil,
-      this.#caller,
+      this.#session.input.waitUntil,
+      this.#session.caller,
     );
+  }
+}
+
+/** The people — the operator's catalog (`session.users` refuses everyone else): `list()`,
+ *  `get(ref)` by id or email, `create({ email, id? })` — the id pinned for the replay of an older
+ *  directory. */
+class UserCollectionRpcTarget extends RpcTarget {
+  readonly #session: SessionOf;
+  constructor(session: SessionOf) {
+    super();
+    this.#session = session;
+  }
+  list(): Promise<UserRecord[]> {
+    return this.#session.input.controlPlane.listUsers();
+  }
+  get(ref: string): Promise<UserRecord | null> {
+    return this.#session.input.controlPlane.getUser(z.string().min(1).parse(ref));
+  }
+  async create(input: { email: string; id?: string }): Promise<UserRecord> {
+    const data = z
+      .object({ email: z.string().trim().min(3), id: z.string().optional() })
+      .parse(input);
+    return this.#session.input.controlPlane.createUser(this.#session.caller, data);
+  }
+  /** A provider's subject linked to the user with this email (identity.ts does the same at
+   *  sign-in; the replay of an older directory carries the links over). */
+  async linkIdentity(input: {
+    provider: IdentityProvider;
+    subject: string;
+    email: string;
+  }): Promise<UserRecord> {
+    const data = z
+      .object({
+        provider: IdentityProvider,
+        subject: z.string().min(1),
+        email: z.string().trim().min(3),
+      })
+      .parse(input);
+    return this.#session.input.controlPlane.linkIdentity(data.provider, data.subject, data.email);
   }
 }
 

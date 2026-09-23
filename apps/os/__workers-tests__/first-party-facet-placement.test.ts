@@ -11,14 +11,14 @@
 
 import { SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, expect, test, vi } from "vitest";
 import { errorCode } from "iterate/next/lib";
+import type { ItxExpressionInput } from "iterate/next/expression";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { applyDirectorySchema, loginPassword } from "./support.ts";
+import { loginPassword } from "./support.ts";
 
 const origin = "https://control.test";
 const transports: Disposable[] = [];
-beforeAll(applyDirectorySchema);
 afterAll(() => {
   for (const transport of transports.splice(0)) transport[Symbol.dispose]();
 });
@@ -27,7 +27,7 @@ afterAll(() => {
  *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. The
  *  issuer fetches its own client metadata while it signs someone in; `fetch` reaches this worker for
  *  that one request (as control-plane.test.ts does), the network being out of reach here. */
-async function signedInSession(email: string): Promise<any> {
+async function signedInSession(email: string) {
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation((input, init) => SELF.fetch(new Request(input, init)));
@@ -93,7 +93,7 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS: FirstPartyFacetPlacementRow[] = [
 
 test("a signed-in person reaches `itx.facets.get(name)` on every context they hold, but a first-party facet answers only where the platform hosts it — every other placement is refused FORBIDDEN", async () => {
   const session = await signedInSession("placement@example.com");
-  const organization = (await session.createOrg("placement org")) as { id: string };
+  const organization = await session.organizations.create({ name: "placement org" });
   const project = await session.projects.create({ project: "placement", orgId: organization.id });
   const contextOf = (context: string) => {
     if (context === "session.user") return session.user;
@@ -166,7 +166,7 @@ export default class extends WorkerEntrypoint { hello() { return "hello from loa
 };
 
 /** Each way code is loaded on a context, as the call a client makes. */
-const LOADED_CODE_CALLS = {
+const LOADED_CODE_CALLS: Record<string, ItxExpressionInput> = {
   "facets.get(name, spec)": [
     "itx",
     "facets",
@@ -180,7 +180,7 @@ const LOADED_CODE_CALLS = {
   ],
   "workers.get(spec)": ["itx", "workers", ["get", { source: WORKER_SOURCE }], ["hello"]],
   "run(script)": ["itx", ["run", "async (itx) => 'hello from loaded code'"]],
-} as const;
+};
 
 type LoadedCodeRow = { call: keyof typeof LOADED_CODE_CALLS; context: string; allowed: boolean };
 
@@ -201,7 +201,7 @@ const LOADED_CODE_ROWS: LoadedCodeRow[] = [
 
 test("a signed-in person's own code — a facet, a processor, a worker, a script — runs inside their project, and never on their account or their organization in the global namespace", async () => {
   const session = await signedInSession("loaded-code@example.com");
-  const organization = (await session.createOrg("loaded code org")) as { id: string };
+  const organization = await session.organizations.create({ name: "loaded code org" });
   const project = await session.projects.create({
     project: "loaded-code",
     orgId: organization.id,

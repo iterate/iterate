@@ -2,13 +2,13 @@
 // (their scripts/preview/preview.ts: eighteen workers in three tiers collapsed to one). The effects
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
-// deploy (build, the D1 and the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
+// deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
 // e2e (vitest and Playwright against the live preview), residency (after e2e: fail on any Durable
 // Object still resident with no client connected; scripts/preview-residency.ts), release (after
 // residency: redeploy — never a reset — ending the sessions the run left open), reset (delete, then
-// deploy), delete (the preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, the apps on
-// top), sweep (the stale previews and the resources that outlived theirs — the rules are
-// scripts/preview-sweep.ts). `--dry-run` prints the plan.
+// deploy), delete (the preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any
+// leftover D1, the apps on top), sweep (the stale previews and the resources that outlived theirs —
+// the rules are scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -251,17 +251,6 @@ type D1Row = { uuid: string; name: string; created_at?: string };
 /** The list API's `name` filter matches by prefix (measured), so the exact match is made here. */
 async function findDatabase(cf: Cf, name: string): Promise<D1Row | undefined> {
   return (await listAll<D1Row>(cf, "/d1/database")).find((row) => row.name === name);
-}
-
-/** Create the preview's D1 if missing. The directory schema is the worker's own business — applied
- *  at boot, idempotent (src/control-plane.sql) — so a schema change is proven by the next request. */
-async function ensureDatabase(cf: Cf, name: string): Promise<string> {
-  const existing = await findDatabase(cf, name);
-  const row =
-    existing ||
-    (await cf<D1Row>("/d1/database", { method: "POST", body: JSON.stringify({ name }) }));
-  console.log(`${existing ? "found" : "created"} D1 ${name} (${row.uuid})`);
-  return row.uuid;
 }
 
 async function deleteDatabase(cf: Cf, name: string): Promise<void> {
@@ -575,17 +564,15 @@ function assertFreshInstall() {
     throw new Error("pnpm-lock.yaml is newer than node_modules: run `pnpm install` first");
 }
 
-/** The OS's own preview, from an OS build already made — its D1 and Artifacts namespace, its config
+/** The OS's own preview, from an OS build already made — its Artifacts namespace, its config
  *  (naming the PR's Dash preview when `apps` holds dash), the Previews secrets, `wrangler preview`,
  *  and the smoke that the new deployment serves. What `deploy` and `release` share. The wrangler it
  *  prepared comes back for the apps on top; the caller cleans it up (here, when this fails). */
 async function deployOsPreview(ctx: EnvContext<OsEnv>, previewName: string, apps: StartApp[]) {
-  const databaseId = await ensureDatabase(ctx.cf, previewResourceName(previewName, "db"));
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
   writePreviewWranglerConfig({
     previewName,
-    d1DatabaseId: databaseId,
     dashOrigin: dash && `https://${previewName}-${new URL(dash.envs.preview!.baseUrl).hostname}`,
   });
   const wrangler = preparePreviewWrangler();
@@ -1176,14 +1163,10 @@ async function main(argv: string[]): Promise<void> {
   if (parsed.command === "sweep") return sweep((await parentContext()).cf, parsed.dryRun);
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });
-  console.log(
-    `preview ${previewName} → ${previewUrl(previewName)} (D1 ${previewResourceName(previewName, "db")})`,
-  );
+  console.log(`preview ${previewName} → ${previewUrl(previewName)}`);
   if (parsed.command === "config" || parsed.dryRun) {
     await buildOsNext("preview");
-    console.log(
-      `wrote ${writePreviewWranglerConfig({ previewName, d1DatabaseId: "<created at deploy>" })}`,
-    );
+    console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
     return;
   }
   if (parsed.command === "e2e") return runE2e(previewName);

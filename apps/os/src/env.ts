@@ -1,18 +1,21 @@
 // env.ts — the one worker's bindings: the context DO's (iterate-context-durable-object.ts `Env`)
-// plus what the in-process control plane needs — the OAuth provider's store and helpers, the D1
-// directory, the browser sessions, the issuer's page files and the mailbox.
+// plus what the in-process control plane needs — the OAuth provider's store and helpers, the
+// browser sessions, the issuer's page files and the mailbox. The registry itself is the
+// `CONTROL_PLANE` singleton Durable Object, reached by binding (src/control-plane/edge.ts).
 
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { BrowserSession } from "iterate/next/app-session";
+import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
 /** Platform bindings for the issuer, public APIs and project ingress. */
 export interface Env extends DurableObjectEnv {
   BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
+  /** The registry: one singleton `ControlPlaneDurableObject` (getByName("global")), the worker's
+   *  strongly-consistent index of users, identities, organizations, memberships and projects. */
+  CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject>;
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
   OAUTH_KV: KVNamespace;
-  /** The directory: users, orgs, org_members, projects (control-plane.sql). Strongly consistent (D1). */
-  DB: D1Database;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
   /** Static assets for the Start client and the consent page. The Worker handles platform requests

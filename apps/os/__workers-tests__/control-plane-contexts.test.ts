@@ -13,16 +13,18 @@
 // `test.fails` here: the body asserts the SECURE outcome, so while the code is insecure the assertion
 // fails and the expected-fail passes; whoever wires the fix deletes the `.fails`.
 import { runInDurableObject } from "cloudflare:test";
-import { beforeAll, describe, expect, test } from "vitest";
+import type { RpcStub } from "capnweb";
+import { describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
-import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import type { IterateRpcTarget } from "../src/session.ts";
+import { adminCredentials, openSession, stub, until } from "./support.ts";
 
 /** A signed-in human's session: the admin fixture with `as` upserts the user and vends their session
- *  (src/session.ts `IterateRpcTarget.authenticate`). */
-async function userSession(email: string): Promise<any> {
-  const root = await openSession();
+ *  (src/session.ts `IterateRpcTarget.authenticate`). The bare `openSession()` door is `any` (it also
+ *  lends live stubs); a read helper names the real root type, so the session it vends is fully typed —
+ *  `.organizations.create(...)` is an `OrganizationRecord`, `.projects.list()` a `ProjectRecord[]`. */
+async function userSession(email: string) {
+  const root: RpcStub<IterateRpcTarget> = await openSession();
   return root.authenticate({ ...adminCredentials(), as: { email } });
 }
 
@@ -62,7 +64,7 @@ describe("shape — a global context is an ordinary context (passing)", () => {
 
   test("session.organizations.get vends the org's context at (global, /organizations/<id>) — by membership", async () => {
     const s = await userSession("org-shape@sec.test");
-    const org = (await s.createOrg("org-shape")) as { id: string };
+    const org = await s.organizations.create({ name: "org-shape" });
     expect(await s.organizations.get(org.id).whoami()).toEqual({
       projectId: "global",
       path: `/organizations/${org.id}`,
@@ -85,7 +87,7 @@ describe("shape — a global context is an ordinary context (passing)", () => {
   test("a project context CANNOT reach the global namespace — cd keeps the projectId (construction)", async () => {
     const s = await userSession("proj-iso@sec.test");
     using proj = await s.projects.create({ project: `prj_iso_${Date.now().toString(36)}` });
-    const who = (await proj.cd("/users/someone-else").whoami()) as { projectId: string };
+    const who = await proj.cd("/users/someone-else").whoami();
     // The hop stays in the project's own namespace; it can never spell `global`.
     expect(who.projectId).not.toBe("global");
   });
@@ -198,14 +200,14 @@ describe("security requirements — the global namespace is not navigable", () =
     // A project's id is minted (`prj_<hex>`), never its name — so `Global` (slug `global`) is an
     // ordinary project whose context is nowhere near `(global, "/")`.
     using named = await s.projects.create({ project: "Global" });
-    const who = (await named.whoami()) as { projectId: string; path: string };
+    const who = await named.whoami();
     expect(who).toEqual({
       projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
       path: "/",
       projectSlug: "global",
       projectUrl: "https://global.projects.test/",
     });
-    const listed = (await s.projects.list()) as { id: string; slug: string }[];
+    const listed = await s.projects.list();
     expect(listed.map(({ id, slug }) => ({ id, slug }))).toEqual([
       { id: who.projectId, slug: "global" },
     ]);
@@ -225,7 +227,7 @@ describe("security requirements — the global namespace is not navigable", () =
   test("a user cannot reach an organization they do not belong to", async () => {
     const a = await userSession("org-a@sec.test");
     const b = await userSession("org-b@sec.test");
-    const org = (await a.createOrg("a's org")) as { id: string };
+    const org = await a.organizations.create({ name: "a's org" });
     await refuses(() => b.organizations.get(org.id).invoke(["itx", ["readEvents"]]));
   });
 

@@ -1,7 +1,7 @@
 import { createCli } from "trpc-cli";
 import { osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
-import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
+import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { registrableDomainOf } from "../../../scripts/lib/start-app.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { ownZonesOf } from "./generate-wrangler-config.ts";
@@ -13,11 +13,10 @@ export default async function ensureResources(options: { env?: string } = {}) {
     env: options.env,
     allowDopplerConfigFallback: true,
   });
-  const db = await ensureD1(ctx, `${ctx.env.resourceNamePrefix}-directory`);
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(
     "/storage/kv/namespaces?per_page=1000",
   );
-  const resources = { directoryDbId: db.uuid, oauthKvId: "", itxKvId: "" };
+  const resources = { oauthKvId: "", itxKvId: "" };
   for (const [key, suffix] of [
     ["oauthKvId", "oauth"],
     ["itxKvId", "itx"],

@@ -25,7 +25,7 @@ describe("OrganizationProcessor — the organization's record folded from facts"
     {
       name: "the empty record",
       events: [],
-      state: { name: null, deletedAt: null, projects: {}, secrets: {} },
+      state: { name: null, deletedAt: null, members: {}, projects: {}, secrets: {} },
     },
     {
       name: "created sets the name, renamed replaces it; a project created in it is a row by id, stamped with the event's time; the same project again is ignored",
@@ -39,10 +39,48 @@ describe("OrganizationProcessor — the organization's record folded from facts"
       state: {
         name: "Booper Inc",
         deletedAt: null,
+        members: {},
         projects: {
           prj_1: { slug: "monkey", createdAt: expect.any(String) },
           prj_2: { slug: "voice", createdAt: expect.any(String) },
         },
+        secrets: {},
+      },
+    },
+    {
+      name: "a member added is a row by user id with the role and the first membership's time; the same role again is ignored, a new role replaces it; removed drops the row",
+      events: [
+        created("Booper"),
+        {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: "org_1", userId: "user_a", role: "owner" },
+        },
+        {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: "org_1", userId: "user_a", role: "owner" },
+        },
+        {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: "org_1", userId: "user_b", role: "member" },
+        },
+        {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: "org_1", userId: "user_b", role: "owner" },
+        },
+        {
+          type: "events.iterate.com/organization/member-removed",
+          payload: { orgId: "org_1", userId: "user_a" },
+        },
+        {
+          type: "events.iterate.com/organization/member-removed",
+          payload: { orgId: "org_1", userId: "user_zzz" },
+        },
+      ],
+      state: {
+        name: "Booper",
+        deletedAt: null,
+        members: { user_b: { role: "owner", since: new Date(4000).toISOString() } },
+        projects: {},
         secrets: {},
       },
     },
@@ -54,7 +92,13 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         { type: "events.iterate.com/organization/deleted", payload: {} },
         { type: "events.iterate.com/organization/deleted", payload: {} },
       ],
-      state: { name: "Booper", deletedAt: expect.any(String), projects: {}, secrets: {} },
+      state: {
+        name: "Booper",
+        deletedAt: expect.any(String),
+        members: {},
+        projects: {},
+        secrets: {},
+      },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
@@ -63,7 +107,7 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         { type: "events.iterate.com/organization/project-created", payload: { projectId: "x" } },
         created("Booper"),
       ],
-      state: { name: "Booper", deletedAt: null, projects: {}, secrets: {} },
+      state: { name: "Booper", deletedAt: null, members: {}, projects: {}, secrets: {} },
     },
   ];
   for (const { name, events, state } of rows)

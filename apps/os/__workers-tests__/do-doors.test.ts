@@ -34,18 +34,9 @@
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "iterate/next/expression";
-import {
-  adminCredentials,
-  applyDirectorySchema,
-  openSession,
-  owedAlarm,
-  stub,
-  until,
-} from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import { adminCredentials, openSession, owedAlarm, stub, until } from "./support.ts";
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
  *  by canonical match; both halves are the parsed ItxExpression, so `print` them to compare against

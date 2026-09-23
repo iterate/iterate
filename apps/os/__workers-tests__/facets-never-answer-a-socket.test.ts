@@ -14,11 +14,9 @@
 // spelling — and at the DO's own `invoke` method, where a caller passes the Request itself.
 
 import { SELF } from "cloudflare:test";
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { adminCredentials, applyDirectorySchema, openSession, stub } from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import { adminCredentials, openSession, stub } from "./support.ts";
 
 /** A stateful app hosted as a facet: `fetch()` serves plain HTTP AND would upgrade a WebSocket if
  *  asked — so the refusal below is the platform's, not the class's. `hits()` is its RPC method. */

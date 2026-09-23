@@ -1,11 +1,12 @@
-// /projects — every project the session reaches, a table (the slug → its overview, the id, its
-// organization → its settings, its site) in the organizations page's layout, and the one way to
-// make one: the "New project" sheet (`?new=1`, so the switcher and a shared link open it too) —
-// "New organization…" inside it when the grant holds `organizations:write`, a step-up link in its
-// place otherwise. A created project's page is where the sheet leads: `projects.create` returns as
-// soon as the request is on the project's log, and that page renders the creation's progress live.
+// /projects — every project in the tree (components/organization-tree.tsx, live), a table (the
+// slug → its overview, the id, its organization → its settings, its site) in the organizations
+// page's layout, and the one way to make one: the "New project" sheet (`?new=1`, so the switcher
+// and a shared link open it too) — "New organization…" inside it when the grant holds
+// `organizations:write`, a step-up link in its place otherwise. A created project's page is where
+// the sheet leads: `projects.create` returns once the control plane answered, the organization's
+// record lists the project the moment its fact lands, and that page renders the creation's progress live.
 import { useState, type FormEvent } from "react";
-import { createFileRoute, getRouteApi, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -33,8 +34,11 @@ import {
 } from "@iterate-com/ui/components/table";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";
+import {
+  reloadOrganizationTree,
+  useOrganizationTree,
+} from "../../../components/organization-tree.tsx";
 import { projectHostOf } from "../../../lib/origins.ts";
-import type { Org } from "../../../lib/projects.ts";
 
 const shell = getRouteApi("/_auth");
 
@@ -46,7 +50,7 @@ export const Route = createFileRoute("/_auth/projects/")({
 });
 
 function ProjectsPage() {
-  const { orgs, projects } = shell.useLoaderData();
+  const tree = useOrganizationTree();
   const { info } = shell.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate();
@@ -61,7 +65,15 @@ function ProjectsPage() {
             New project
           </Button>
         }
-        empty={projects.length ? undefined : "No projects yet — “New project” creates the first."}
+        empty={
+          tree.projects.length ? undefined : tree.loaded ? (
+            tree.error || "No projects yet — “New project” creates the first."
+          ) : (
+            <span className="flex items-center gap-2">
+              <Spinner /> Loading your projects…
+            </span>
+          )
+        }
       >
         <Table>
           <TableHeader>
@@ -73,25 +85,24 @@ function ProjectsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {projects.map((project) => {
-              const org = orgs.find((candidate) => candidate.id === project.orgId);
-              const host = projectHostOf(info, project.slug);
-              return (
-                <TableRow key={project.id}>
-                  <TableCell className="font-mono font-medium">
-                    <Link
-                      to="/projects/$slug"
-                      params={{ slug: project.slug }}
-                      className="underline-offset-4 hover:underline"
-                    >
-                      {project.slug}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Identifier value={project.id} textClassName="text-xs" />
-                  </TableCell>
-                  <TableCell>
-                    {org ? (
+            {tree.organizations.flatMap((org) =>
+              org.projects.map((project) => {
+                const host = projectHostOf(info, project.slug);
+                return (
+                  <TableRow key={project.id}>
+                    <TableCell className="font-mono font-medium">
+                      <Link
+                        to="/projects/$slug"
+                        params={{ slug: project.slug }}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        {project.slug}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <Identifier value={project.id} textClassName="text-xs" />
+                    </TableCell>
+                    <TableCell>
                       <Link
                         to="/organizations/$orgId"
                         params={{ orgId: org.id }}
@@ -99,26 +110,24 @@ function ProjectsPage() {
                       >
                         {org.name}
                       </Link>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {host ? (
-                      <a
-                        href={host}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                      >
-                        {new URL(host).host}
-                        <ArrowUpRight className="size-3" />
-                      </a>
-                    ) : null}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+                    </TableCell>
+                    <TableCell>
+                      {host ? (
+                        <a
+                          href={host}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                        >
+                          {new URL(host).host}
+                          <ArrowUpRight className="size-3" />
+                        </a>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              }),
+            )}
           </TableBody>
         </Table>
       </ListPage>
@@ -137,7 +146,7 @@ function ProjectsPage() {
           className="overflow-y-auto data-[side=right]:sm:max-w-md"
         >
           <NewProjectForm
-            orgs={orgs}
+            orgs={tree.organizations}
             canCreateOrg={info.scopes.includes("organizations:write")}
             pending={pending}
             setPending={setPending}
@@ -158,7 +167,8 @@ function NewProjectForm({
   setPending,
   onCreated,
 }: {
-  orgs: Org[];
+  /** the tree's organizations — the first is the default; may still be filling in */
+  orgs: { id: string; name: string }[];
   canCreateOrg: boolean;
   pending: boolean;
   setPending: (pending: boolean) => void;
@@ -167,14 +177,15 @@ function NewProjectForm({
 }) {
   const { api, info } = shell.useRouteContext();
   const { templateOptions } = Route.useLoaderData();
-  const router = useRouter();
   // the project's slug — its hostname's label (its id is minted): lowercased as typed, anything but
   // a-z, 0-9 and dashes becoming a dash (the platform slugs it the same way)
   const [name, setName] = useState("");
   const host = projectHostOf(info, name || "my-project");
-  // the chosen organization's id; "new" — the select's last option — the one named below; "" when
+  // the chosen organization's id — the first in the tree until the person picks one (the tree may
+  // land after the sheet opened); "new" — the select's last option — the one named below; "" when
   // there is none yet (the platform then makes the person's first, from their email)
-  const [orgId, setOrgId] = useState(orgs[0]?.id ?? "");
+  const [picked, setPicked] = useState<string | null>(null);
+  const orgId = picked || orgs[0]?.id || "";
   const [orgName, setOrgName] = useState("");
   const [template, setTemplate] = useState("");
   const [customTemplate, setCustomTemplate] = useState("");
@@ -187,13 +198,13 @@ function NewProjectForm({
     try {
       let chosenOrgId = orgId;
       if (creatingOrg) {
-        const created = await api.createOrg(orgName.trim());
+        const created = await api.organizations.create({ name: orgName.trim() });
         // the new organization stays chosen for the rest of the sheet's life: a refused project
         // name, retried, lands in it rather than minting a second one (names are not unique). The
-        // shell's loader lists it, so the select has its option.
+        // tree lists it as its membership lands, so the select has its option.
         chosenOrgId = created.id;
-        setOrgId(created.id);
-        await router.invalidate();
+        setPicked(created.id);
+        reloadOrganizationTree();
       }
       using created = await api.projects.create({
         project: name.trim(),
@@ -202,7 +213,7 @@ function NewProjectForm({
       });
       // the slug as the platform slugged it, off the root context handed back
       const { projectId, projectSlug } = await created.whoami();
-      await router.invalidate();
+      reloadOrganizationTree();
       await onCreated(projectSlug || projectId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -278,7 +289,7 @@ function NewProjectForm({
               id="project-organization"
               className="w-full"
               value={orgId}
-              onChange={(event) => setOrgId(event.target.value)}
+              onChange={(event) => setPicked(event.target.value)}
             >
               {orgs.map((org) => (
                 <NativeSelectOption key={org.id} value={org.id}>

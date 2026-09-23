@@ -7,18 +7,9 @@
 // prove (the context is aborted mid-run). The ten-minute DEADLINE is pinned with fake timers in
 // src/library.test.ts: inside workerd a test cannot fake the loaded isolate's clock.
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
-import {
-  adminCredentials,
-  applyDirectorySchema,
-  openSession,
-  releasePins,
-  stub,
-  until,
-} from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import { adminCredentials, openSession, releasePins, stub, until } from "./support.ts";
 
 const PROJECT = "prj_context_runs";
 const ROOT = `${PROJECT}.iterate/`;

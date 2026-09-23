@@ -12,7 +12,7 @@ import {
 } from "./password-and-code-sign-in.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
-import type { User } from "./directory.ts";
+import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
 
 /** The sign-in page's data for this request: who is signed in, or which ways to sign in exist. */
@@ -67,7 +67,7 @@ export async function loginFormResponse(request: Request, env: Env): Promise<Res
     return new Response(null, { status: 303, headers });
   };
   /** The person is signed in: the issuer session's cookie, any pending code dropped, onward. */
-  const signedIn = async (user: User) => {
+  const signedIn = async (user: UserRecord) => {
     const { setCookie, location } = await startIssuerSession(env, request, user, next);
     const headers = new Headers({ location });
     headers.append("set-cookie", setCookie);

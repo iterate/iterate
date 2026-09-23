@@ -1,6 +1,7 @@
 // The path in the shell's header: Projects › <organization> › <project>, or Organizations ›
-// <organization>. Read from the route params, so every page under /projects and /organizations gets
-// it for free; the leading segments hide on narrow screens.
+// <organization>. The project is the one its route resolved (the shell hands it down); the
+// organization's name comes from the tree (components/organization-tree.tsx, live); the leading
+// segments hide on narrow screens.
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Breadcrumb,
@@ -10,22 +11,22 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
-import type { Org, Project } from "../lib/projects.ts";
+import { useOrganizationTree } from "./organization-tree.tsx";
 
 export function DashBreadcrumbs({
-  orgs,
-  projects,
+  project,
   page,
 }: {
-  orgs: Org[];
-  projects: Project[];
+  /** inside a project: the one the URL names */
+  project: { id: string; slug: string; orgId: string } | null;
   /** the label of a page outside /projects and /organizations (Sessions) */
   page?: string;
 }) {
   const { slug, orgId } = useParams({ strict: false });
-  // the URL names a project by slug (its id works too)
-  const project = projects.find((candidate) => candidate.slug === slug || candidate.id === slug);
-  const org = orgs.find((candidate) => candidate.id === (project ? project.orgId : orgId));
+  const tree = useOrganizationTree();
+  const org = tree.organizations.find(
+    (candidate) => candidate.id === (project ? project.orgId : orgId),
+  );
   const crumbs: { label: string; to?: string; hideOnMobile?: boolean }[] = slug
     ? [
         { label: "Projects", to: "/projects", hideOnMobile: true },

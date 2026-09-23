@@ -16,7 +16,8 @@ import {
 } from "iterate/next/project-ingress";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./env.ts";
-import { directory, type Org, type Project } from "./directory.ts";
+import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
   authorizationOf,
@@ -26,7 +27,7 @@ import {
   type GrantProps,
 } from "./oauth.ts";
 import { clientDisplay } from "./client-display.ts";
-import { publishGlobalFact } from "./session.ts";
+import { publishAccountFact } from "./session.ts";
 
 export type ConsentView =
   | {
@@ -41,8 +42,8 @@ export type ConsentView =
       email: string;
       /** the identity provider's picture of the signed-in person, when the sign-in brought one */
       picture?: string;
-      projects: Project[];
-      orgs: Org[];
+      projects: ProjectRecord[];
+      orgs: OrganizationRecord[];
       projectBound: boolean;
       /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
       scopes: ConsentScope[];
@@ -67,7 +68,8 @@ export async function projectsForClient(
   clientId: string,
   userId: string,
 ) {
-  const projects = await directory(env.DB).listProjects(userId);
+  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  const projects = await controlPlane.reachableProjects({ userId });
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const config = appConfigOf(env);
   const host =
@@ -82,7 +84,7 @@ export async function projectsForClient(
             )))
       : null;
   if (!host) return { projects, projectBound: false };
-  const project = await directory(env.DB).getProject(host.project);
+  const project = await controlPlane.getProject(host.project);
   return { projects: projects.filter((p) => p.id === project?.id), projectBound: true };
 }
 
@@ -158,7 +160,8 @@ export class ConsentRpcTarget extends RpcTarget {
           const name = OAuthScope.parse(scope);
           return { name, ...OAuthScopeDescriptions[name] };
         }),
-        orgs: await directory(env.DB).listOrgs(this.#grant.userId),
+        orgs: (await new ControlPlane(env.CONTROL_PLANE).accessibleTo(this.#grant.userId))
+          .organizations,
         ingressRouting: appConfigOf(env).urls.ingressRouting,
         suggestedOrganizationName: suggestOrganizationName({
           name: this.#grant.name,
@@ -230,13 +233,12 @@ export class ConsentRpcTarget extends RpcTarget {
       });
       // The fact of the approval, on the person's account context, stamped with them and the
       // issuer grant they approved through.
-      publishGlobalFact(
+      publishAccountFact(
         {
           contextNamespace: env.ITERATE_CONTEXT,
           waitUntil: (promise) => this.#ctx.waitUntil(promise),
         },
-        `/users/${this.#grant.userId}`,
-        "account",
+        this.#grant.userId,
         {
           type: "events.iterate.com/account/consent-approved",
           payload: {
