@@ -28,19 +28,20 @@ that each cell decrypts locally before declaring the archive usable.
 Secret ciphertext authenticates its original context (project ID and path),
 URL restrictions and revision. Those fields travel with the archive. Restore
 opens it locally using the deployment's `APP_CONFIG_SECRETS__KEY` (or its retained
-previous key during rotation), then calls `itx.secrets.set` to encrypt it afresh
-under the new project's identity. **Retain the encryption key.** A wrong key or
-altered binding fails before restore creates users, organizations or projects.
+previous key during rotation), recreates an absent project with its archived ID,
+then calls `itx.secrets.set` to encrypt it afresh under that same identity.
+**Retain the encryption key.** A wrong key or altered binding fails before restore
+creates users, organizations or projects.
 The operator-only export bypasses project-authored rewrites; an ordinary project
 owner cannot export encrypted cells.
 
-Restore creates fresh IDs when the project is absent. It recreates users and
+Restore preserves the archived project ID when the project is absent. It recreates users and
 organization memberships, restores secrets, then commits the config file tree
 through the normal repository API. It verifies decrypted secret readback, the Git
 tree, the project processor's published commit and membership roles. Reapplying
-converges on the same project and config tree. Existing projects in another
-organization, ambiguous organization names and failed project creation are
-refused. Membership restoration adds/updates the requested members; it does not
+converges on the same project and config tree. A slug with a different ID, an archived
+ID held by another project, existing projects in another organization, ambiguous organization names
+and failed project creation are refused. Membership restoration adds/updates the requested members; it does not
 remove unrelated memberships from an existing organization. OS-Next currently
 has no member-management API, so the CLI uses parameterized D1 membership writes.
 
