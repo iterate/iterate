@@ -28,7 +28,12 @@ const CHANGE_TYPES = {
   Generated: ["**/*generated*", "*lock*"],
   // Last, so every path inside os-next belongs to os-next, whatever else it
   // looks like: its scripts, components, tests, README and generated files.
-  OsNext: ["apps/os-next/**/*", ".depot/workflows/preview-os-next.yml"],
+  OsNext: [
+    "apps/os-next/**/*",
+    ".depot/workflows/deploy-os-next.yml",
+    ".depot/workflows/deploy-notes.yml",
+    ".depot/workflows/preview-os-next.yml",
+  ],
 } as const satisfies Record<string, string[]>;
 
 export type ChangeType = keyof typeof CHANGE_TYPES;
