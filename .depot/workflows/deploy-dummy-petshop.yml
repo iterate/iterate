@@ -10,6 +10,8 @@ on:
     paths:
       - .depot/workflows/deploy-dummy-petshop.yml
       - apps/dummy-petshop/**
+      - envs.ts
+      - scripts/lib/**
       - pnpm-lock.yaml
   workflow_dispatch:
 jobs:
@@ -23,11 +25,10 @@ jobs:
         with:
           clean: false
       - run: pnpm install --frozen-lockfile --prefer-offline
-      # The committed wrangler.jsonc names the worker and the prd account; Doppler supplies the
-      # Cloudflare credentials. PETSHOP_SEAL_KEY is already a worker secret, and deploys keep it.
+      # envs.ts names the worker and the prd account; Doppler supplies the Cloudflare credentials.
+      # PETSHOP_SEAL_KEY is already a worker secret, and deploys keep it. The deploy script ends by
+      # smoking the shop's index.
       - name: Deploy apps/dummy-petshop
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project dummy-petshop --config prd -- pnpm --dir apps/dummy-petshop run-script deploy
-      - name: Smoke the shop index
-        run: curl --fail --silent --show-error --retry 5 --retry-all-errors --output /dev/null https://dummy-petshop.iterate.workers.dev/

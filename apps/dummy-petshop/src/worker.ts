@@ -58,7 +58,7 @@ const CODE_TTL_SECONDS = 120;
  * refresh exercised): 60s, so an integration that caches one hits real re-mint. */
 const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
-/** Bindings the worker runs with (wrangler.jsonc). */
+/** Bindings the worker runs with (vite.config.ts). */
 export interface Env {
   PETSHOP_STATE: DurableObjectNamespace<PetshopStateDurableObject>;
   /** Seals every code/token; 32 bytes base64. A worker secret, set once; deploys keep it. */

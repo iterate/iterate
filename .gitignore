@@ -91,8 +91,6 @@ apps/mobile/expo-env.d.ts
 
 # Retired app directories may contain local build/development state.
 apps/*/wrangler.jsonc
-# ...except the pet shop's, which is hand-written and committed.
-!apps/dummy-petshop/wrangler.jsonc
 apps/auth/
 apps/semaphore/
 apps/streams-example-app/
