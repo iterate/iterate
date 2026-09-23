@@ -1,6 +1,5 @@
 // Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the last half hour of os-next-prd's
-// Workers Logs and pages #error-pulse on any 5xx, a burst of platform-failure heals, or a burst of
-// errors. On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for
+// Workers Logs and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error. On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for
 // ~2.5 hours: ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and
 // garple.com — and our recovery kept most requests green, so only the logs knew.
 //
@@ -41,7 +40,7 @@ export function renderFaultPage(reading: FaultReading, windowEnd: Date): string 
   const tripped =
     total(reading.serverErrors) > 0 || // prd answers no 5xx on purpose since #2844
     total(reading.heals) >= 10 || // a lone blip heals a call or three; 2026-09-23 ran ~1,800
-    total(reading.errors) >= 10; // the quiet baseline was 8 in 2.5 hours
+    total(reading.errors) > 0; // every error is a page; expected ones are filtered in readWindow
   if (!tripped) return null;
   const line = (what: string, rows: [string, number][], label: (raw: string) => string) => {
     const merged = new Map<string, number>();
@@ -104,7 +103,13 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
     if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
     return body.result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
-  const [serverErrors, heals, errors] = await Promise.all([
+  // workerd#918: a Durable Object that answers before a request body is read can log
+  // "Can't read from request stream after response has been sent." though the client got its
+  // response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
+  // fetch lane's pipe (#2871; the #2880 follow-up measured no effect). It pages only on `/api`
+  // itself — the capnweb endpoint, a platform call, not a site visit (`/api/…` is a site's path).
+  const unreadBody = "Can't read from request stream after response has been sent";
+  const [serverErrors, heals, errors, apiUnreadBodyErrors] = await Promise.all([
     rows(
       [{ key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" }],
       "$workers.event.request.url",
@@ -126,11 +131,33 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
           value: "itx.abort() reset the context",
           type: "string",
         },
+        { key: "$metadata.message", operation: "not_includes", value: unreadBody, type: "string" },
+        // A deploy: the runtime resets every Durable Object on new code and logs it as an error on
+        // each one it caught mid-call (14:32Z 2026-09-23). A request it failed still pages as a 5xx.
+        {
+          key: "$metadata.message",
+          operation: "not_includes",
+          value: "Durable Object reset because its code was updated",
+          type: "string",
+        },
+      ],
+      "$metadata.message",
+    ),
+    rows(
+      [
+        { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
+        { key: "$metadata.message", operation: "includes", value: unreadBody, type: "string" },
+        {
+          key: "$workers.event.request.url",
+          operation: "regex",
+          value: "^https?://[^/]+/api(\\?|$)",
+          type: "string",
+        },
       ],
       "$metadata.message",
     ),
   ]);
-  return { serverErrors, heals, errors };
+  return { serverErrors, heals, errors: [...errors, ...apiUnreadBodyErrors] };
 }
 
 if (isMainModule(import.meta.url))
