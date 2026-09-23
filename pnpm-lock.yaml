@@ -211,6 +211,9 @@ importers:
 
   apps/dash:
     dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -391,6 +394,9 @@ importers:
 
   apps/notes:
     dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -561,6 +567,9 @@ importers:
 
   apps/voice:
     dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui

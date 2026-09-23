@@ -1,5 +1,3 @@
-import { shouldSendPosthogEvents } from "@iterate-com/shared/posthog";
-
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
 // server bundle.
 const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
@@ -54,14 +52,10 @@ function resolveBrowserUrl(url?: string) {
 }
 
 function buildPosthogInitOptions(options: SetupPosthogOptions) {
-  // Non-production deployments still initialize the SDK (feature flags,
-  // toolbar) but never send events: `before_send` drops everything at egress,
-  // and session recording is off since its $snapshot events would be dropped
-  // anyway. appStage is the deployed worker name; local dev has none.
-  const sendEvents = shouldSendPosthogEvents(options.appStage);
-  const sessionRecording = options.sessionRecording !== false && sendEvents;
+  // Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK
+  // sends. Nothing is masked in replays: every app here is ours, and seeing it is the point.
+  const sessionRecording = options.sessionRecording !== false;
   return {
-    ...(!sendEvents && { before_send: () => null }),
     api_host: resolveBrowserUrl(options.proxyUrl ?? "/e"),
     ui_host: resolveBrowserUrl(options.uiHost ?? "https://eu.posthog.com"),
     defaults: "2026-06-25" as const,
@@ -75,13 +69,10 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
     },
     disable_session_recording: !sessionRecording,
     disable_capture_url_hashes: true,
-    mask_all_element_attributes: true,
-    mask_all_text: true,
     strict_script_versioning: true,
     ...(sessionRecording && {
       session_recording: {
-        maskAllInputs: true,
-        maskTextSelector: "*",
+        maskAllInputs: false,
         recordBody: false,
         recordHeaders: false,
       },

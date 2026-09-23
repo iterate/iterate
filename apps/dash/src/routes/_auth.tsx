@@ -14,6 +14,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
+import { useEffect } from "react";
 import { z } from "zod";
 import { createIterateClient } from "iterate/next/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
@@ -23,6 +24,7 @@ import {
   DropdownMenuLabel,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import { syncPosthogContext } from "@iterate-com/ui/components/posthog";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
 import { OrganizationTree, useOrganizationTree } from "../components/organization-tree.tsx";
@@ -65,6 +67,25 @@ function Shell() {
     .map((match) => match.staticData.page)
     .filter((label): label is string => Boolean(label))
     .at(-1);
+  // PostHog: the person is the platform user id (the same person in every app); the groups are the
+  // project on screen and its organization, keyed by id (docs: organization, then project).
+  const activeOrg = active && orgs.find((org) => org.id === active.orgId);
+  useEffect(() => {
+    syncPosthogContext({
+      person: {
+        distinctId: info.principal.actor,
+        properties: info.principal.email ? { email: info.principal.email } : {},
+      },
+      groups: active
+        ? [
+            ...(activeOrg
+              ? [{ type: "organization", key: activeOrg.id, properties: { name: activeOrg.name } }]
+              : []),
+            { type: "project", key: active.id, properties: { slug: active.slug } },
+          ]
+        : [],
+    });
+  }, [info.principal.actor, info.principal.email, active, activeOrg]);
   return (
     <>
       <OrganizationTree api={api} info={info} />
