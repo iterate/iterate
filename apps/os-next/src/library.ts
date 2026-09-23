@@ -348,7 +348,13 @@ export async function runSettlementOf(execution: Promise<unknown>): Promise<RunS
           return JSON.stringify(value);
         } finally {
           // Any value may carry a disposer (an RPC result, a stub); a primitive or plain data has none.
-          (value as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
+          // A disposer that throws (already released, or not ours to release) never turns the run's
+          // outcome into a failure: the release is housekeeping, the settlement is the fact.
+          try {
+            (value as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
+          } catch {
+            /* already released or not ours */
+          }
         }
       }),
       RUN_DEADLINE_MS,

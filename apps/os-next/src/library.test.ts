@@ -586,6 +586,16 @@ describe("the runner's settlement", () => {
       },
       { status: "failed", error: "nope", failureKind: "runtime" },
     ],
+    [
+      "a value whose release throws (already released) still settles succeeded",
+      async () => ({
+        n: 1,
+        [Symbol.dispose]: () => {
+          throw new Error("RPC stub used after being disposed");
+        },
+      }),
+      { status: "succeeded", result: { n: 1 } },
+    ],
   ] satisfies [string, () => Promise<unknown>, unknown][])(
     "%s",
     async ([, execute, settlement]) => {
