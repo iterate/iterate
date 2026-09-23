@@ -10,7 +10,12 @@
 // one to --state-out for the workflow to upload. Without a previous state it starts over from the
 // workflows Depot still lists. --dry-run writes neither the issue nor state (it prints the body to
 // --body-out); locally it uses `gh`'s token and the Depot CLI's login.
+//
+// The issue is written as the iterate GitHub App, as it was before #2837: with GITHUB_APP_ID and
+// GITHUB_APP_PRIVATE_KEY set, the writer mints an installation token that can only write issues in
+// this repository. The Depot app's job token has no Issues permission.
 import { execFile as execFileCallback } from "node:child_process";
+import { createSign } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -148,7 +153,24 @@ async function main() {
   const bodyOut = flagValue("--body-out");
   const repository = process.env.GITHUB_REPOSITORY || "iterate/iterate";
   const [owner, repo] = repository.split("/") as [string, string];
-  const github = new Octokit({ auth: process.env.GH_TOKEN || process.env.GITHUB_TOKEN });
+  const app =
+    process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY
+      ? await iterateAppIssuesToken({
+          appId: process.env.GITHUB_APP_ID,
+          privateKey: process.env.GITHUB_APP_PRIVATE_KEY,
+          owner,
+          repo,
+        })
+      : undefined;
+  if (app)
+    console.log(
+      `[flake-dashboard] iterate app token for ${app.repositories.join(", ")}: ${JSON.stringify(app.permissions)}`,
+    );
+  else if (!dryRun)
+    throw new Error("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY are required to write the dashboard");
+  const github = new Octokit({
+    auth: app?.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN,
+  });
 
   const previous = await readPreviousState();
   const now = new Date();
@@ -303,6 +325,62 @@ async function readPreviousState(): Promise<WriterState | undefined> {
     }
   }
   return undefined;
+}
+
+/**
+ * An installation token of the iterate GitHub App, the app that wrote #2580 before #2837, narrowed to
+ * writing issues in this one repository.
+ */
+export async function iterateAppIssuesToken(input: {
+  appId: string;
+  privateKey: string;
+  owner: string;
+  repo: string;
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const segment = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  // GitHub App JWT: RS256, issued a minute back for clock drift, valid for less than ten minutes.
+  const unsigned = `${segment({ alg: "RS256", typ: "JWT" })}.${segment({
+    iat: now - 60,
+    exp: now + 540,
+    iss: input.appId,
+  })}`;
+  const signature = createSign("RSA-SHA256")
+    .update(unsigned)
+    .sign(input.privateKey.replaceAll("\\n", "\n"), "base64url");
+  const github = async (path: string, body?: object) => {
+    const response = await fetch(`https://api.github.com${path}`, {
+      method: body ? "POST" : "GET",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${unsigned}.${signature}`,
+        "x-github-api-version": "2022-11-28",
+      },
+      ...(body && { body: JSON.stringify(body) }),
+    });
+    if (!response.ok) throw new Error(`GitHub ${path} returned HTTP ${response.status}`);
+    return response.json();
+  };
+  const installation = z
+    .object({ id: z.number() })
+    .parse(await github(`/repos/${input.owner}/${input.repo}/installation`));
+  const access = z
+    .object({
+      token: z.string().min(1),
+      permissions: z.record(z.string(), z.string()),
+      repositories: z.array(z.object({ name: z.string() })),
+    })
+    .parse(
+      await github(`/app/installations/${installation.id}/access_tokens`, {
+        repositories: [input.repo],
+        permissions: { issues: "write" },
+      }),
+    );
+  return {
+    token: access.token,
+    permissions: access.permissions,
+    repositories: access.repositories.map(({ name }) => name),
+  };
 }
 
 /** The open issue that carries the dashboard marker (the legacy app's authority, not the title). */

@@ -34,14 +34,20 @@ export async function run(options: { at?: string; dryRun?: boolean } = {}) {
   throw new Error(`prd fault alarm tripped:\n${page}`); // a red run too, like the DO duration alarm
 }
 
-/** The page for one window, or null when prd is quiet. Pure. */
-export function renderFaultPage(reading: FaultReading, windowEnd: Date): string | null {
+/** The page for one window, or null when prd is quiet. Pure. A caller with its own question (the
+ *  post-deploy check, scripts/ci/prd-post-deploy-check.ts) names the page and adds its own lines,
+ *  which page on their own. */
+export function renderFaultPage(
+  reading: FaultReading,
+  windowEnd: Date,
+  options: { title?: string; extraLines?: string[] } = {},
+): string | null {
   const total = (rows: [string, number][]) => rows.reduce((sum, [, n]) => sum + n, 0);
   const tripped =
     total(reading.serverErrors) > 0 || // prd answers no 5xx on purpose since #2844
     total(reading.heals) >= 10 || // a lone blip heals a call or three; 2026-09-23 ran ~1,800
     total(reading.errors) > 0; // every error is a page; expected ones are filtered in readWindow
-  if (!tripped) return null;
+  if (!tripped && !options.extraLines?.length) return null;
   const line = (what: string, rows: [string, number][], label: (raw: string) => string) => {
     const merged = new Map<string, number>();
     for (const [raw, n] of rows) merged.set(label(raw), (merged.get(label(raw)) ?? 0) + n);
@@ -50,7 +56,9 @@ export function renderFaultPage(reading: FaultReading, windowEnd: Date): string 
   };
   return [
     // "prd fault page:" is how `run` finds the last page; the mention is Jonas (./slack.ts).
-    `🚨 prd fault page: os-next-prd, 30 min to ${windowEnd.toISOString().slice(11, 16)} UTC <@U067G4QRFK2>`,
+    options.title ||
+      `🚨 prd fault page: os-next-prd, 30 min to ${windowEnd.toISOString().slice(11, 16)} UTC <@U067G4QRFK2>`,
+    ...(options.extraLines || []),
     line("5xx responses", reading.serverErrors, (url) =>
       url.replace(/^https?:\/\/([^/]+).*$/, "$1"),
     ),
@@ -64,7 +72,12 @@ export function renderFaultPage(reading: FaultReading, windowEnd: Date): string 
     .join("\n");
 }
 
-async function readWindow(windowEnd: Date): Promise<FaultReading> {
+/** The signals over the half hour to `windowEnd`, or from `from`; only `scriptVersionId`'s
+ *  invocations when given (a deploy's new version, not the one it replaced). */
+export async function readWindow(
+  windowEnd: Date,
+  options: { from?: Date; scriptVersionId?: string } = {},
+): Promise<FaultReading> {
   const { CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: token } = process.env;
   if (!account || !token)
     throw new Error("run under doppler --project project-worker --config prd");
@@ -79,7 +92,10 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
         body: JSON.stringify({
           queryId: "prd-fault-alarm",
           view: "calculations",
-          timeframe: { from: windowEnd.getTime() - 30 * 60_000, to: windowEnd.getTime() },
+          timeframe: {
+            from: options.from?.getTime() ?? windowEnd.getTime() - 30 * 60_000,
+            to: windowEnd.getTime(),
+          },
           parameters: {
             datasets: ["cloudflare-workers"],
             calculations: [{ operator: "count" }],
@@ -88,6 +104,16 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
             limit: 2000,
             filters: [
               { key: "$metadata.service", operation: "eq", value: "os-next-prd", type: "string" },
+              ...(options.scriptVersionId
+                ? [
+                    {
+                      key: "$workers.scriptVersion.id",
+                      operation: "eq",
+                      value: options.scriptVersionId,
+                      type: "string",
+                    },
+                  ]
+                : []),
               ...filters,
             ],
           },

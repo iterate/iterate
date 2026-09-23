@@ -69,7 +69,7 @@ function Shell() {
     .at(-1);
   // PostHog: the person is the platform user id (the same person in every app); the groups are the
   // project on screen and its organization, keyed by id (docs: organization, then project).
-  const activeOrg = active && orgs.find((org) => org.id === active.orgId);
+  const activeOrg = active && tree.organizations.find((org) => org.id === active.orgId);
   useEffect(() => {
     syncPosthogContext({
       person: {
