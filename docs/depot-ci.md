@@ -459,12 +459,15 @@ Its rules still hold for any workflow that overlaps jobs again:
 
 ## Interactive trace reports
 
-The legacy preview workflows published a **CI trace** commit status after
-cleanup and report upload; its **Details** link opened the report:
-workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
-The trace tooling (`scripts/ci/tracing/`) went with that pipeline in #2837, and
-no current workflow publishes the status. See [CI traces](./ci-traces.md) for the
-timing model, publishing, replay commands and OTLP JSON export.
+The Preview OS workflow's `trace` job publishes a **CI trace** commit status
+after deploy and e2e, whatever their outcome: the time to green or red, linked
+to the job on Depot, where the `public-ci-trace-<workflow>-<execution>`
+artifact (`trace.html`, `trace.json`) downloads. The report shows workflow →
+jobs → setup/wait/test/finish → shell steps → Playwright attempts and Vitest
+tests. The legacy preview workflows published the same status from webhooks
+and served the report in place; that host went with #2837, so download the
+artifact and open `trace.html`. See [CI traces](./ci-traces.md) for the timing
+model, publishing, replay commands and OTLP JSON export.
 
 ## Browser reports from artifacts
 

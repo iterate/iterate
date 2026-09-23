@@ -33,7 +33,7 @@ pnpm --dir apps/os e2e
 The Worker is a TanStack Start app built by Vite: `src/worker.ts` serves the platform, and the
 pages people see (`/`, `/login`, the `/oauth2/auth` consent) are server-rendered routes in
 `src/routes/` using the shared `@iterate-com/ui` components. The build emits the Worker and its
-`dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects a deployed target for integration tests; browser tests use
+`dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects a deployed target for integration tests; browser tests
 (`pnpm spec`, [specs/](../../specs/AGENTS.md) at the repo root) use `DEMO_BASE_URL`. See
 [testing](../../docs/testing.md) for the suite boundary and required evidence.
 
@@ -60,7 +60,7 @@ named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.c
 
 The Preview OS workflow deploys a platform preview and all five hosted clients (Dash,
 Agents, Notes, Voice, Kit); its separate `e2e` job then runs integration and browser checks against
-them, only once that deploy succeeded. To run it from a checkout:
+them, only once that deploy succeeded. The commands to run it from a checkout are below.
 
 A platform preview is named `pr<n>-<branch slug>` under the `os-next-preview` parent Worker. It
 has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the

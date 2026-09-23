@@ -255,7 +255,7 @@ is unset, Playwright boots the local dev server. It never infers credentials
 from redirects.
 
 The legacy `mobile` project (Expo Web and phone-sized baselines under
-`specs/mobile/`) went with the mobile app in #2837. The `phone` project is its
+`specs/mobile/`) went with the mobile app in #2837. The `os-phone` project is its
 successor for phone-width browser coverage of the platform's own pages.
 
 ### Minting in production
@@ -424,7 +424,7 @@ WORKER_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -
 
 # one spec, repeated
 DEMO_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
-  pnpm spec specs/auth.spec.ts --repeat-each 25
+  pnpm spec specs/os/auth.spec.ts --repeat-each 25
 ```
 
 The soak runs sequentially and writes `output/soak/summary.json` plus a table:
