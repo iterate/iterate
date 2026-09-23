@@ -290,6 +290,16 @@ test("the configured header bearer is the same administrator at both protocols",
       ).body.result.content[0].text,
     ),
   ).toEqual({ projectId: "admin-probe", path: "/" }); // MCP executes on the authorized project root.
+  // the global namespace is no project, even for the admin secret — at either protocol
+  await expect(root.projects.get("global")).rejects.toThrow(/deployment-global namespace/);
+  const global = await tool(adminSecret, "run", {
+    project: "global",
+    script: "async (itx) => itx.whoami()",
+  });
+  expect(global.body.result).toMatchObject({ isError: true });
+  expect(global.body.result.content[0].text).toBe(
+    'FORBIDDEN: project "global": the deployment-global namespace is no project',
+  );
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
