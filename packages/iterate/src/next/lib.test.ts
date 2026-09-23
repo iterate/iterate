@@ -2,8 +2,15 @@
 // always deep-equals b — every shape below proves it, then asserts the op shapes we promised: append
 // fast path, wholesale array replace, key remove) and the same-origin check as `{ origin, becomes }`
 // rows.
-import { describe, expect, test } from "vitest";
-import { applyPatch, diff, isSameOriginBrowserRequest } from "./lib.ts";
+import { describe, expect, test, vi } from "vitest";
+import {
+  applyPatch,
+  diff,
+  forwardIssues,
+  type Issue,
+  isSameOriginBrowserRequest,
+  reportIssue,
+} from "./lib.ts";
 
 const roundtrip = (a: unknown, b: unknown) => {
   const ops = diff(a, b);
@@ -115,4 +122,25 @@ describe("isSameOriginBrowserRequest", () => {
         becomes,
       );
     });
+});
+
+test("reportIssue hands each issue to the forwarder — bounded attributes, the caught value itself — and a throwing forwarder never reaches the caller", () => {
+  const seen: Issue[] = [];
+  const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+  const boom = new Error("boom");
+  forwardIssues((issue) => seen.push(issue));
+  reportIssue("site.a", boom, { projectId: "prj_1", skipped: undefined, long: "x".repeat(300) });
+  expect(seen).toEqual([
+    {
+      failureSite: "site.a",
+      caught: boom,
+      attributes: { projectId: "prj_1", long: "x".repeat(256) },
+    },
+  ]);
+  forwardIssues(() => {
+    throw new Error("forwarder down");
+  });
+  expect(() => reportIssue("site.b", boom)).not.toThrow();
+  forwardIssues(() => {});
+  quiet.mockRestore();
 });

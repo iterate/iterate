@@ -6,6 +6,7 @@
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
+import { forwardIssues } from "iterate/next/lib";
 import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
@@ -16,6 +17,7 @@ import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
+import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
@@ -107,6 +109,10 @@ function projectHostRequestTo(
   if (routing.identity.grant) headers.set(ITX_GRANT_HEADER, routing.identity.grant);
   return new Request(withoutBasePath(request, routing.basePath), { headers });
 }
+
+// Every `reportIssue` in this script — edge and Durable Objects share the module graph — also goes
+// to PostHog Error Tracking (posthog.ts).
+forwardIssues(captureIssueInPosthog);
 
 export { IterateContextDurableObject };
 export { BrowserSession } from "iterate/next/app-session";

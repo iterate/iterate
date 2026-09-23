@@ -507,6 +507,9 @@ importers:
       posthog-js:
         specifier: 1.404.0
         version: 1.404.0(preact-render-to-string@6.6.5(preact@11.0.0-beta.0))
+      posthog-node:
+        specifier: ^5.52.5
+        version: 5.52.5
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -2917,8 +2920,14 @@ packages:
   '@posthog/core@1.43.1':
     resolution: {integrity: sha512-hGM8f5sp3we6Em/RQHXbmyYm554hUx9+9jhf92ZQgDS4/xW72KHyZiO9wcFye+qAx2cJAOhOCDIznmO1FV8IbA==}
 
+  '@posthog/core@1.55.1':
+    resolution: {integrity: sha512-S76bSbCHGVC8oQa1zyue6A6WzkNf1Ue4oRvfvBNLRnFM3UoWnpWnQ4T/4IzrIEtVCQYv1OI7gk8uL8/U6Tuu7w==}
+
   '@posthog/types@1.397.0':
     resolution: {integrity: sha512-Pa7FtsBo3V0XrhY4y8Xquwp8U07syuZ2IGQdlsRyxhz0yejQLceFjI58UssCXE5zDCDj3km5l7H3ufD6rHChCg==}
+
+  '@posthog/types@1.412.4':
+    resolution: {integrity: sha512-Q7lV9O9TbLngjOYw1ucm3bS3tn48xb1B4ZQdDy8gv7yfKe99hCTeWYG4xZ36nJM80VxpTF9TriiJt5hngDOkBg==}
 
   '@quansync/fs@1.0.0':
     resolution: {integrity: sha512-4TJ3DFtlf1L5LDMaM6CanJ/0lckGNtJcMjQ1NAV6zDmA0tEHKZtxNKin8EgPaVX1YzljbxckyT2tJrpQKAtngQ==}
@@ -6304,6 +6313,15 @@ packages:
   posthog-js@1.404.0:
     resolution: {integrity: sha512-8uQ6fPctCYEH6Us5nXxx79n1TkwzKx309xIYd9XquGZkFBAIZZr4znfhYQmwYKzFzdrdiHEJ7SYnSyO5q7ZGYQ==}
 
+  posthog-node@5.52.5:
+    resolution: {integrity: sha512-r4KRXh2MvcHYh1s3NUca022GqujkJjpmD4qbRzWOLVTu8BfN3fqZj+MyKIxvHPXsS8sKsNVX+MlKk2qzW0Y4GQ==}
+    engines: {node: ^20.20.0 || >=22.22.0}
+    peerDependencies:
+      rxjs: ^7.0.0
+    peerDependenciesMeta:
+      rxjs:
+        optional: true
+
   preact-render-to-string@6.6.5:
     resolution: {integrity: sha512-O6MHzYNIKYaiSX3bOw0gGZfEbOmlIDtDfWwN1JJdc/T3ihzRT6tGGSEWE088dWrEDGa1u7101q+6fzQnO9XCPA==}
     peerDependencies:
@@ -9643,7 +9661,13 @@ snapshots:
     dependencies:
       '@posthog/types': 1.397.0
 
+  '@posthog/core@1.55.1':
+    dependencies:
+      '@posthog/types': 1.412.4
+
   '@posthog/types@1.397.0': {}
+
+  '@posthog/types@1.412.4': {}
 
   '@quansync/fs@1.0.0':
     dependencies:
@@ -14273,6 +14297,10 @@ snapshots:
       web-vitals: 5.3.0
     transitivePeerDependencies:
       - preact-render-to-string
+
+  posthog-node@5.52.5:
+    dependencies:
+      '@posthog/core': 1.55.1
 
   preact-render-to-string@6.6.5(preact@11.0.0-beta.0):
     dependencies:

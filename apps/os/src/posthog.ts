@@ -1,0 +1,42 @@
+// posthog.ts — every `reportIssue` (iterate/next/lib) also becomes a `$exception` in PostHog Error
+// Tracking, from the edge and from every Durable Object alike: worker.ts installs it with
+// `forwardIssues` at module load, the one module graph both run in. PostHog's Workers recipe
+// (posthog.com/docs/libraries/cloudflare-workers): a client per capture, `flushAt: 1` and
+// `flushInterval: 0`, the send in `waitUntil`. Retries are off: the SDK's only timers are then the
+// request's own timeout, cleared when the fetch settles, so a report never holds a Durable
+// Object resident past its one request.
+
+import { env, waitUntil } from "cloudflare:workers";
+import type { Issue } from "iterate/next/lib";
+import { PostHog } from "posthog-node";
+import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
+import type { Env } from "./env.ts";
+
+/** Sent where the worker has a PostHog project key — envs.ts gives one to prd only, so previews
+ *  and local dev report nothing. */
+export function captureIssueInPosthog(issue: Issue): void {
+  const { POSTHOG_PROJECT_KEY: apiKey } = env as Env;
+  if (!apiKey) return;
+  const config = appConfigOf(env as AppConfigEnv);
+  const client = new PostHog(apiKey, {
+    host: "https://eu.i.posthog.com",
+    flushAt: 1,
+    flushInterval: 0,
+    fetchRetryCount: 0,
+    requestTimeout: 5_000,
+  });
+  // No person: an issue carries no user, so PostHog records it without a person profile.
+  const sent = client
+    .captureExceptionImmediate(issue.caught, undefined, {
+      ...issue.attributes,
+      failureSite: issue.failureSite,
+      $environment: config.urls.os ? new URL(config.urls.os).host : "unconfigured",
+      deployId: config.deployId,
+    })
+    .catch((error: unknown) =>
+      // warn, not error: a failed report must not page the prd fault alarm on its own
+      console.warn({ event: "posthog.capture-failed", message: String(error) }),
+    )
+    .finally(() => client.shutdown());
+  waitUntil(sent);
+}
