@@ -26,8 +26,8 @@ export const screenshot = (): Plugin => {
         const screenshotSlug = occurrence === 1 ? locatorSlug : `${locatorSlug}-${occurrence}`;
         const path = context.testInfo.outputPath(`${screenshotSlug}.png`);
         // A capture after a click that starts a navigation (`noWaitAfter`) waits for the new page
-        // to paint; the page.screenshot default is the tight actionTimeout. timeout: the capture
-        // is the harness's, not a UI wait the spinner-waiter could extend
+        // to paint, and page.screenshot defaults to the tight actionTimeout.
+        // timeout: the capture is the harness's, not a UI wait the spinner-waiter could extend
         await context.page.screenshot({ fullPage: true, path, timeout: 15_000 });
         await context.testInfo.attach(screenshotSlug, { contentType: "image/png", path });
       }
