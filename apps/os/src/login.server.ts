@@ -14,6 +14,7 @@ import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
+import { switchAccountHref } from "./login-search.ts";
 
 /** The sign-in page's data for this request: who is signed in, or which ways to sign in exist. */
 export async function loginState(request: Request, env: Env, ctx: ExecutionContext) {
@@ -27,7 +28,7 @@ export async function loginState(request: Request, env: Env, ctx: ExecutionConte
   return {
     next,
     signedInAs: session ? session.principal.email || session.principal.actor : null,
-    switchAccount: `/.auth/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`,
+    switchAccount: switchAccountHref(next),
     codeSentTo: session ? null : await loginCodePending(env, request),
     error: url.searchParams.get("error"),
     // the email the refused post carried, so the page keeps what was typed

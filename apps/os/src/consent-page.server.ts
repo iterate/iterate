@@ -10,14 +10,9 @@ import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { loginSearchOf } from "./login-search.ts";
+import { signInHref } from "./login-search.ts";
 import type { Env } from "./env.ts";
 import { SessionRpcTarget, SessionTeardown } from "./session.ts";
-
-/** Sign in first, and come back to this very authorization request. */
-function signInHref(authorization: string) {
-  return `/login?${new URLSearchParams({ next: `/oauth2/auth${authorization}` })}`;
-}
 
 /** The browser's issuer session — the only grant that may approve access or act on the consent
  *  page. Anything else (no cookie, an ended session) is not signed in to the issuer. */
@@ -36,7 +31,7 @@ export async function describeConsent(
   authorization: string,
 ) {
   const signedIn = await issuerSignIn(request, env, ctx);
-  if (!signedIn) throw redirect({ href: signInHref(authorization) });
+  if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${authorization}`) });
   const addresses = platformAddressesOf(env, request);
   const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses).describe(
     authorization,
@@ -65,11 +60,7 @@ export async function createConsentProject(
   input: z.infer<typeof NewConsentProject>,
 ): Promise<{ orgId?: string; error?: string }> {
   const signedIn = await issuerSignIn(request, env, ctx);
-  if (!signedIn)
-    throw redirect({
-      to: "/login",
-      search: loginSearchOf({ next: `/oauth2/auth${input.authorization}` }),
-    });
+  if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${input.authorization}`) });
   const teardown = new SessionTeardown();
   const session = new SessionRpcTarget(
     {
@@ -120,7 +111,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
   const seeOther = (location: string) =>
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
   const signedIn = await issuerSignIn(request, env, ctx);
-  if (!signedIn) return seeOther(signInHref(authorization));
+  if (!signedIn) return seeOther(signInHref(`/oauth2/auth${authorization}`));
   const form = await request.formData().catch(() => null);
   const approval = ConsentApproval.safeParse({
     project: form?.getAll("project"),

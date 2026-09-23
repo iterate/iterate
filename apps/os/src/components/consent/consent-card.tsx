@@ -4,6 +4,7 @@ import { useHydrated, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import type { ConsentView } from "../../consent.ts";
 import { createProjectForConsent } from "../../issuer.functions.ts";
+import { switchAccountHref } from "../../login-search.ts";
 import { IssuerPage } from "../issuer-page.tsx";
 import { ClientHeading } from "./client-heading.tsx";
 import { OnboardingStep } from "./onboarding-step.tsx";
@@ -61,9 +62,7 @@ export function ConsentCard({
   const onboarding = !view.projectBound && !view.projects.length;
   const organizationName = draft.orgId ? (orgNames.get(draft.orgId) ?? "") : draft.organizationName;
   const slug = onboarding && draft.followsName ? proposedSlug(organizationName) : draft.slug;
-  const switchAccount = `/.auth/logout?next=${encodeURIComponent(
-    `/login?next=${encodeURIComponent(`/oauth2/auth${authorization}`)}`,
-  )}`;
+  const switchAccount = switchAccountHref(`/oauth2/auth${authorization}`);
 
   /** Change step and move focus to its heading, so the change is announced. */
   function showStep(next: "projects" | "permissions") {
