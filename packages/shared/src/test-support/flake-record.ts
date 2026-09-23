@@ -2,8 +2,7 @@
  * The wire format of test-health telemetry: one JSON line per observed
  * outcome, appended to `$FLAKE_RECORD_DIR`, shipped by CI as
  * `flake-records-<suite>` artifacts, and folded by the flake dashboard
- * (packages/iterate/src/starter-apps/flake-dashboard — its contract mirrors
- * this shape in zod).
+ * (docs/testing.md#flakes-and-pinned-failures).
  *
  * Three producers write records:
  * - `createFlake` (./flake-test.ts): kind "flake" — pass / flake-fail /
@@ -11,8 +10,8 @@
  *   whose names contain "flake sentinel"; the dashboard groups them by name.
  * - `createFailing` (./failing-test.ts): kind "failing" — pinned-fail (the
  *   pin held) / unexpected-pass (the bug looks fixed) / unexpected-error.
- * - The telemetry reporters (vitest's RetryTelemetryReporter, the root
- *   playwright reporter): kind "unknown" — retried-pass for a PLAIN test
+ * - The telemetry reporters (vitest's RetryTelemetryReporter, the
+ *   Playwright telemetry reporter): kind "unknown" — retried-pass for a PLAIN test
  *   that failed and then passed on retry, carrying the failed attempt's
  *   error text. That record is the adoption funnel: the dashboard shows the
  *   error samples a person or agent turns into a createFlake pattern.

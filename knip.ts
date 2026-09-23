@@ -72,8 +72,9 @@ function makeSharedWorkspace(): WorkspaceConfig {
   return {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
-    // use the declared export map as the public entry surface.
-    entry: ["src/**/*.test.ts"],
+    // use the declared export map as the public entry surface. The flake-test fixture is run by a
+    // child vitest that flake-test.test.ts spawns with its own config.
+    entry: ["src/**/*.test.ts", "src/test-support/flake-test-fixture/*.ts"],
     project: ["src/**/*.ts"],
   };
 }
