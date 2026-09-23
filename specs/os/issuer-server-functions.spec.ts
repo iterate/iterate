@@ -71,7 +71,7 @@ test("client navigation loads sign-in through its server function and rejects ma
     malformed.searchParams.set("payload", payload);
     expect((await page.request.get(malformed.href)).status(), payload).toBe(400);
   }
-  // a frozen object is still plain data (src/start.ts); the input validator reads it as no search
+  // a frozen object is still plain data (apps/os/src/start.ts); the input validator reads it as no search
   const withFrozen = new URL(response.url());
   withFrozen.searchParams.set("payload", frozen);
   const frozenRequested = await page.request.get(withFrozen.href, {
