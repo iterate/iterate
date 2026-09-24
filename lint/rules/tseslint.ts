@@ -1,8 +1,11 @@
-import type { Rule } from "eslint";
-import type { Expression, Node } from "estree";
+import type { Expression } from "estree";
 
-import { getTypeAwareLintService, type TypeAwareLintFileService } from "../oxlint-type-aware.ts";
+import {
+  getTypeAwareLintFileService,
+  type TypeAwareLintFileService,
+} from "../oxlint-type-aware.ts";
 import type { StrictRule } from "../types.ts";
+import { getPropertyName } from "./ast.ts";
 
 export const tseslintRules: Record<string, StrictRule> = {
   "typed-no-floating-promises": {
@@ -25,7 +28,7 @@ export const tseslintRules: Record<string, StrictRule> = {
           if (isExplicitlyHandledPromiseExpression(node.parent.expression)) return;
           if (isPromiseHandlingCallExpression(node)) return;
 
-          fileService ??= getPreparedTypeAwareLintFileService(context);
+          fileService ||= getTypeAwareLintFileService(context);
           if (!fileService) return;
           const thenable = fileService.getThenableInfo(node);
           if (!thenable) return;
@@ -42,12 +45,6 @@ export const tseslintRules: Record<string, StrictRule> = {
   },
 };
 
-function getPreparedTypeAwareLintFileService(context: Rule.RuleContext) {
-  const service = getTypeAwareLintService();
-  service.setFileText(context.filename, context.sourceCode.getText());
-  return service.getFileService(context.filename);
-}
-
 function isExplicitlyHandledPromiseExpression(expression: Expression) {
   if (expression.type === "AwaitExpression") return true;
   return expression.type === "UnaryExpression" && expression.operator === "void";
@@ -57,13 +54,6 @@ function isPromiseHandlingCallExpression(node: any) {
   if (node.callee.type !== "MemberExpression") return false;
   const propertyName = getPropertyName(node.callee.property);
   return propertyName === "catch" || propertyName === "then" || propertyName === "finally";
-}
-
-function getPropertyName(node: Node | undefined) {
-  if (!node) return undefined;
-  if (node.type === "Identifier") return node.name;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  return undefined;
 }
 
 function truncateTypeText(text: string) {

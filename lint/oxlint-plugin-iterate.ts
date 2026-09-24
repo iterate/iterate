@@ -6,6 +6,7 @@ import unicorn from "eslint-plugin-unicorn";
 import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program, Node } from "estree";
 
+import { getPropertyName } from "./rules/ast.ts";
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
@@ -72,12 +73,6 @@ const getCalleeName = (callee: any) => {
   }
   return null;
 };
-function getPropertyName(node: Node | undefined) {
-  if (!node) return undefined;
-  if (node.type === "Identifier") return node.name;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  return undefined;
-}
 function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   const path = filename.replaceAll("\\", "/");
 

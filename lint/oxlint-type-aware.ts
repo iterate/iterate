@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -9,6 +9,7 @@ import {
   type Snapshot,
   type Type,
 } from "@typescript/native-preview/unstable/sync";
+import type { Rule } from "eslint";
 import type { CallExpression, Expression, Node } from "estree";
 
 const IGNORED_DIRS = new Set([".cache", ".git", ".turbo", "build", "dist", "node_modules"]);
@@ -25,6 +26,23 @@ export function getTypeAwareLintService(options: { cwd?: string } = {}) {
   return service;
 }
 
+/** The type-aware view of the file a rule is linting, with the linted text overlaid when it
+ * differs from disk (a fix pass, or a file oxlint only has in memory). Disk-backed files need no
+ * overlay: registering every file as changed rebuilds TypeScript snapshots as oxlint walks the
+ * repository. */
+export function getTypeAwareLintFileService(context: Rule.RuleContext) {
+  const service = getTypeAwareLintService({ cwd: context.cwd });
+  const file = resolve(context.filename);
+  if (
+    service.textByFile.has(file) ||
+    !existsSync(file) ||
+    readFileSync(file, "utf8") !== context.sourceCode.text
+  ) {
+    service.setFileText(file, context.sourceCode.text);
+  }
+  return service.getFileService(context.filename);
+}
+
 export class TypeAwareLintService {
   cwd: string;
   api: API | undefined;
@@ -38,14 +56,6 @@ export class TypeAwareLintService {
 
   constructor(input: { cwd: string }) {
     this.cwd = input.cwd;
-  }
-
-  getStats() {
-    return {
-      openFiles: this.openFiles.size,
-      projects: this.snapshot?.getProjects().length || 0,
-      tsconfigs: this.getTsconfigFiles().length,
-    };
   }
 
   close() {

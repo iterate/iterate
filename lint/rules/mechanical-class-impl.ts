@@ -1,9 +1,12 @@
 import { SignatureKind } from "@typescript/native-preview/unstable/sync";
 import type { Rule } from "eslint";
-import type { Node } from "estree";
 
-import { getTypeAwareLintService, type TypeAwareLintFileService } from "../oxlint-type-aware.ts";
+import {
+  getTypeAwareLintFileService,
+  type TypeAwareLintFileService,
+} from "../oxlint-type-aware.ts";
 import type { StrictRule } from "../types.ts";
+import { getPropertyName } from "./ast.ts";
 
 type TypeTextReference = {
   start: number;
@@ -31,7 +34,7 @@ export const mechanicalClassImplRule: StrictRule = {
         const contracts = getMechanicalClassImplContracts(context, node);
         if (!contracts?.length) return;
 
-        fileService ||= getPreparedTypeAwareLintFileService(context);
+        fileService ||= getTypeAwareLintFileService(context);
         if (!fileService) return;
         const typedFileService = fileService;
         const classMethodNames = new Set(
@@ -394,19 +397,6 @@ function fixMethodReturnType(element: any, fixer: Rule.RuleFixer) {
   return fixer.removeRange(returnType.range);
 }
 
-function getPreparedTypeAwareLintFileService(context: Rule.RuleContext) {
-  const service = getTypeAwareLintService();
-  service.setFileText(context.filename, context.sourceCode.getText());
-  return service.getFileService(context.filename);
-}
-
 function compactTypeText(text: string) {
   return text.replace(/\s+/g, "");
-}
-
-function getPropertyName(node: Node | undefined) {
-  if (!node) return undefined;
-  if (node.type === "Identifier") return node.name;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  return undefined;
 }
