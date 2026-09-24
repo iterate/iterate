@@ -193,12 +193,12 @@ test.each([
 });
 
 test.each([
-  { paged: "green", judgement: "over", page: "red" },
-  { paged: "red", judgement: "over", page: null },
-  { paged: "red", judgement: "under", page: "green" },
-  { paged: "green", judgement: "under", page: null },
-  { paged: "red", judgement: "too-few", page: null },
-  { paged: "green", judgement: "too-few", page: null },
+  { paged: "under", judgement: "over", page: "over" },
+  { paged: "over", judgement: "over", page: null },
+  { paged: "over", judgement: "under", page: "under" },
+  { paged: "under", judgement: "under", page: null },
+  { paged: "over", judgement: "too-few", page: null },
+  { paged: "under", judgement: "too-few", page: null },
 ] as const)("told $paged, judged $judgement → pages $page", ({ paged, judgement, page }) => {
   expect(pageFor(paged, judgement)).toBe(page);
 });
@@ -215,7 +215,7 @@ test("a red page names the lines and each group, and mentions Jonas unless it is
     { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
   );
   expect(
-    renderPage({ page: "red", summary, runUrl: "https://depot.dev/run", testRun: false }),
+    renderPage({ page: "over", summary, runUrl: "https://depot.dev/run", testRun: false }),
   ).toBe(
     [
       "🔴 PR time to green over its lines <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
@@ -228,9 +228,22 @@ test("a red page names the lines and each group, and mentions Jonas unless it is
       "<https://depot.dev/run|the run>",
     ].join("\n"),
   );
-  const test = renderPage({ page: "green", summary, testRun: true });
-  expect(test).toMatch(/^🧪 TEST RUN 🟢 PR time to green back under its lines/);
+  const test = renderPage({ page: "over", summary, testRun: true });
+  expect(test).toMatch(/^🧪 TEST RUN 🔴 PR time to green over its lines: /);
   expect(test).not.toContain("<@");
+  expect(renderPage({ page: "under", summary, testRun: false })).toMatch(
+    /^🟢 PR time to green back under its lines: /,
+  );
+  // a test page before any push skipped the slow rows
+  expect(
+    renderPage({
+      page: "too-few",
+      summary: summarizePushes([], { from: 0, to: 1 }),
+      testRun: true,
+    }).split("\n")[0],
+  ).toBe(
+    "🧪 TEST RUN ⚪ PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
+  );
 });
 
 test("one PostHog event per push with a verdict, the same id whenever it is sent", () => {
@@ -269,7 +282,7 @@ test("the state round-trips through its schema", () => {
       push({ seconds: 150, e2e: "no-summary", minute: 0 }),
       push({ outcome: "not-a-push", minute: 1 }),
     ],
-    paged: "red",
+    paged: "over",
   };
   expect(TtgState.parse(JSON.parse(JSON.stringify(state)))).toEqual(state);
 });

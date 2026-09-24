@@ -81,8 +81,8 @@ type Push = z.infer<typeof Push>;
 export const TtgState = z.object({
   schemaVersion: z.literal(1),
   pushes: z.array(Push),
-  /** What #error-pulse was last told. */
-  paged: z.enum(["green", "red"]),
+  /** What #error-pulse was last told: `over` in red, `under` in green. */
+  paged: z.enum(["over", "under"]),
 });
 export type TtgState = z.infer<typeof TtgState>;
 
@@ -170,7 +170,7 @@ type PushSummary = ReturnType<typeof summarizePushes>;
 
 /** The last 24 hours against LINES: `over` when the time to green of the pushes that skipped the
  *  slow rows crossed either line, `too-few` below LINES.minPushes of them. Pure. */
-export function judge(summary: PushSummary) {
+export function judge(summary: PushSummary): "over" | "under" | "too-few" {
   const green = summary.byRows["slow-rows-skipped"].timeToGreen;
   if (!green || green.n < LINES.minPushes) return "too-few";
   return green.p50 > LINES.p50 || green.p90 > LINES.p90 ? "over" : "under";
@@ -178,14 +178,13 @@ export function judge(summary: PushSummary) {
 
 /** The page a judgement owes the channel, which was last told `paged`, if any. Pure. */
 export function pageFor(paged: TtgState["paged"], judgement: ReturnType<typeof judge>) {
-  if (judgement === "over" && paged === "green") return "red";
-  if (judgement === "under" && paged === "red") return "green";
-  return null;
+  return judgement === "too-few" || judgement === paged ? null : judgement;
 }
 
-/** The Slack message: the heading's colour, then each group of the last 24 hours. Pure. */
+/** The Slack message: the judgement, then each group of the last 24 hours. Only a test page is
+ *  ever `too-few`. Pure. */
 export function renderPage(input: {
-  page: "red" | "green";
+  page: ReturnType<typeof judge>;
   summary: PushSummary;
   runUrl?: string;
   testRun: boolean;
@@ -194,10 +193,11 @@ export function renderPage(input: {
   const numbers = green
     ? `p50 ${seconds(green.p50)} (line ${LINES.p50} s), p90 ${seconds(green.p90)} (line ${LINES.p90} s), n=${green.n}`
     : "none green";
-  const heading =
-    input.page === "red"
-      ? `🔴 PR time to green over its lines${input.testRun ? "" : ` ${onCallMention}`}`
-      : "🟢 PR time to green back under its lines";
+  const heading = {
+    over: `🔴 PR time to green over its lines${input.testRun ? "" : ` ${onCallMention}`}`,
+    under: "🟢 PR time to green back under its lines",
+    "too-few": `⚪ PR time to green not judged below ${LINES.minPushes} pushes`,
+  }[input.page];
   return [
     `${input.testRun ? "🧪 TEST RUN " : ""}${heading}: pushes that skipped the slow rows, last 24 h: ${numbers}`,
     ...renderGroups(input.summary),
@@ -268,7 +268,7 @@ async function measure(options: {
   const state: TtgState =
     options.state && existsSync(options.state)
       ? TtgState.parse(JSON.parse(readFileSync(options.state, "utf8")))
-      : { schemaVersion: 1, pushes: [], paged: "green" };
+      : { schemaVersion: 1, pushes: [], paged: "under" };
 
   // 26 hours: the page's 24, and two for a run that settled late or an hourly run that failed.
   const listed = await listPullRequestRuns(depot, now - 26 * HOUR_MS);
@@ -303,10 +303,10 @@ async function measure(options: {
     ["last 7 days:", ...renderGroups(week), "last 24 hours:", ...renderGroups(day)].join("\n"),
   );
   const judgement = judge(day);
-  // A test page shows this run's numbers whatever the channel was last told; any other run off main
-  // pages nothing.
-  const testPage = options.testPage ? (judgement === "over" ? "red" : "green") : null;
-  const page = testRun ? testPage : pageFor(state.paged, judgement);
+  const change = pageFor(state.paged, judgement);
+  // A test page shows this run's judgement whatever the channel was last told; any other run off
+  // main pages nothing.
+  const page = testRun ? (options.testPage ? judgement : null) : change;
   const text =
     page && renderPage({ page, summary: day, runUrl: process.env.DEPOT_JOB_URL, testRun });
   console.log(JSON.stringify({ testRun, judgement, paged: state.paged, page }));
@@ -320,7 +320,7 @@ async function measure(options: {
     await getSlackClient().chat.postMessage({ channel: slackChannelIds["#error-pulse"], text });
   if (testRun) return;
   if (options.stateOut) {
-    const next: TtgState = { schemaVersion: 1, pushes, paged: page || state.paged };
+    const next: TtgState = { schemaVersion: 1, pushes, paged: change || state.paged };
     mkdirSync(dirname(options.stateOut), { recursive: true });
     writeFileSync(options.stateOut, `${JSON.stringify(next)}\n`);
   }
