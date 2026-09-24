@@ -13,6 +13,7 @@ import type { ItxExpression } from "iterate/expression";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { atRestKeysOf, parseAppConfig } from "../src/app-config.ts";
+import { ADMIN_ORG_ID } from "../src/control-plane/catalog.ts";
 import {
   DeploymentStructure,
   EncryptedSecretSeed,
@@ -21,6 +22,7 @@ import {
   compareStructure,
   configTree,
   openProjectSeed,
+  restorableHostnames,
   restoreHostnames,
 } from "./project-seed-format.ts";
 
@@ -285,7 +287,9 @@ async function readStructure(context: Awaited<ReturnType<typeof target>>, rpc: R
 
 /** Restore current configuration through normal project/repository/secret commands. Owners may
  * explicitly replace archived membership. Existing projects must belong to the selected org.
- * Every step converges, so a rerun (after a failure, or a deploy that cut it) finishes the job. */
+ * Every step converges, so a rerun (after a failure, or a deploy that cut it) finishes the job.
+ * A rerun also resets the config tree, the archived secrets and the members to the archive: safe
+ * inside the restore window only (`land-projects` lands projects on their records later). */
 export async function apply(options: {
   env: string;
   file: string;
@@ -373,7 +377,9 @@ export async function apply(options: {
         .parse(await root.invoke(["itx", "facets", ["get", "project"], ["snapshot"]]));
       if (snapshot.state.creation?.status === "created") break;
       if (snapshot.state.creation?.status === "failed")
-        throw new Error("Project creation failed; inspect its creation error before rerunning.");
+        throw new Error(
+          "Project creation failed (its project/create-failed event says why). A rerun of apply asks for a new attempt.",
+        );
       if (Date.now() > deadline) throw new Error("Timed out waiting for project creation.");
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -435,10 +441,7 @@ export async function apply(options: {
     }
     // A custom hostname is a Cloudflare for SaaS custom hostname on the capturing deployment's zone:
     // it is restored onto that deployment only (a recreation keeps its base URL).
-    const hostnames =
-      context.env.baseUrl === seed.source.platform
-        ? await restoreHostnames(root, seed.hostnames)
-        : [];
+    const hostnames = await restoreHostnames(root, restorableHostnames(seed, context.env.baseUrl));
     if (seed.hostnames.length && !hostnames.length)
       console.log(
         `Skipped hostnames [${seed.hostnames.join(", ")}]: captured on ${seed.source.platform}, not ${context.env.baseUrl}.`,
@@ -463,5 +466,71 @@ export async function apply(options: {
     );
   });
 }
+
+/** Land every project in a named organization on that organization's record — the list the dash
+ * shows — and change nothing else. For each project the record lacks, the operator's
+ * `projects.create` asks for it again (src/session.ts `landProjectOnOrganization` appends the
+ * missing `organization/project-created`; the project's own saga ignores a request once it is
+ * created, and a project whose creation is not finished is refused); a project already listed is
+ * only read. Unlike a rerun `apply`, it writes no config, secret or membership, so it is safe on a
+ * live deployment long after a restore. For projects restored before 2026-09-24, whose
+ * operator-made creations never landed. */
+export async function landProjects(options: {
+  env: string;
+  dryRun?: boolean;
+  yesIMeanPrd?: boolean;
+}) {
+  if (options.env === "prd" && !options.dryRun && !options.yesIMeanPrd)
+    throw new Error("Landing projects on prd requires --yes-i-mean-prd (or --dry-run).");
+  const context = await target(options.env);
+  await withApi(context, async (rpc) => {
+    const admin = rpc.authenticate({ type: "admin-secret", secret: context.adminSecret });
+    const organizations = new Map(
+      (await admin.organizations.list()).map((org) => [org.id, org.name]),
+    );
+    const listed = async (orgId: string) =>
+      z
+        .object({ state: z.object({ projects: z.record(z.string(), z.unknown()) }) })
+        .parse(
+          await admin.organizations
+            .get(orgId)
+            .invoke(["itx", "facets", ["get", "organization"], ["snapshot"]]),
+        ).state.projects;
+    let landed = 0;
+    for (const project of await admin.projects.list()) {
+      if (project.orgId === ADMIN_ORG_ID) continue;
+      const where = `${project.slug} (${project.id}) in ${organizations.get(project.orgId) ?? project.orgId}`;
+      if ((await listed(project.orgId))[project.id]) {
+        console.log(`${where}: already listed.`);
+        continue;
+      }
+      // a creation still running or failed would take the request as a new attempt: not ours to start
+      const creation = z
+        .object({ state: z.object({ creation: z.object({ status: z.string() }).nullable() }) })
+        .parse(
+          await (
+            await admin.projects.get(project.id)
+          ).invoke(["itx", "facets", ["get", "project"], ["snapshot"]]),
+        ).state.creation?.status;
+      if (creation !== "created")
+        throw new Error(
+          `${where}: its creation is ${creation || "absent"}, not created; landing nothing.`,
+        );
+      if (options.dryRun) {
+        console.log(`${where}: not listed; would land it.`);
+        continue;
+      }
+      await admin.projects.create({ project: project.slug, orgId: project.orgId });
+      if (!(await listed(project.orgId))[project.id])
+        throw new Error(`${where}: the organization's record still does not list it.`);
+      landed++;
+      console.log(`${where}: landed.`);
+    }
+    console.log(
+      options.dryRun ? "Dry run: nothing written." : `Landed ${landed} projects on their records.`,
+    );
+  });
+}
+
 if (process.argv[1]?.endsWith("project-seed.ts"))
   void createCli({ ...import.meta, name: "project-seed" }).run();

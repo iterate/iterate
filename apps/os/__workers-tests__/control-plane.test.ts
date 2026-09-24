@@ -247,11 +247,12 @@ test("concurrent restores through the control plane: one slug never answers a di
   ]);
 });
 
-test("the operator's project in a named organization lands on the organization's record — the list the dash shows — as a person's does; the same creation again (a project seed's apply, rerun) lands nothing twice, and lands one the record lacks", async () => {
+test("the operator's project in a named organization lands on the organization's record — the list the dash shows — as a person's does; the same creation again (a project seed's apply, rerun, or two at once) lands nothing twice, and lands one the record lacks", async () => {
   const admin = await operator();
   // what a seed's apply does: the owner (the operator acting as them) makes the organization, the
   // operator itself makes the project under its archived id
   const owner = await operator("seed-owner@directory.test");
+  const { actor: ownerActor } = await owner.whoami();
   const org = await owner.organizations.create({ name: "Seeded organization" });
   const projectFacts = async () =>
     (await globalLog(`/organizations/${org.id}`))
@@ -263,6 +264,8 @@ test("the operator's project in a named organization lands on the organization's
   expect(await organizationState(owner, org.id)).toMatchObject({
     projects: { prj_seeded: { slug: "seeded", createdAt: expect.any(String) } },
   });
+  // the operator lands the project, never itself: the organization's members are still the owner
+  expect(Object.keys((await organizationState(owner, org.id)).members)).toEqual([ownerActor]);
   // the same creation again answers the same project and lands no second fact
   using again = await restore("seeded", "prj_seeded");
   expect(await again.whoami()).toMatchObject({ projectId: "prj_seeded" });
@@ -285,9 +288,42 @@ test("the operator's project in a named organization lands on the organization's
     { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
     { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
   ]);
+  // two creations at the same moment both read the record without it: the key lands it once
+  const raced = await Promise.all([restore("raced", "prj_raced"), restore("raced", "prj_raced")]);
+  for (const context of raced) context[Symbol.dispose]();
+  expect(await projectFacts()).toEqual([
+    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
+    { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
+    { payload: { projectId: "prj_raced", slug: "raced" }, platform: true },
+  ]);
   expect(Object.keys((await organizationState(owner, org.id)).projects).sort()).toEqual([
+    "prj_raced",
     "prj_seeded",
     "prj_seeded_earlier",
+  ]);
+  // a member who takes a project's key first — the same body, or another — leaves no gap: the fold
+  // ignores their event (not the platform's), and the record read again lands the platform's unkeyed
+  using ownersRecord = await owner.organizations.get(org.id);
+  for (const [slug, squatted] of [
+    ["squatted", "squatted"],
+    ["squatted-other", "someone-elses"],
+  ] as const)
+    await ownersRecord.append({
+      type: "events.iterate.com/organization/project-created",
+      payload: { projectId: `prj_${slug.replace("-", "_")}`, slug: squatted },
+      idempotencyKey: `organization/project-created:prj_${slug.replace("-", "_")}`,
+    });
+  using _squatted = await restore("squatted", "prj_squatted");
+  using _squattedOther = await restore("squatted-other", "prj_squatted_other");
+  expect((await organizationState(owner, org.id)).projects).toMatchObject({
+    prj_squatted: { slug: "squatted" },
+    prj_squatted_other: { slug: "squatted-other" },
+  });
+  expect((await projectFacts()).slice(3)).toEqual([
+    { payload: { projectId: "prj_squatted", slug: "squatted" }, platform: undefined },
+    { payload: { projectId: "prj_squatted_other", slug: "someone-elses" }, platform: undefined },
+    { payload: { projectId: "prj_squatted", slug: "squatted" }, platform: true },
+    { payload: { projectId: "prj_squatted_other", slug: "squatted-other" }, platform: true },
   ]);
   // the deployment's own organization (the operator's projects with no orgId) has no record to land on
   using _own = await admin.projects.create({ project: "operator-own" });
@@ -335,6 +371,20 @@ test("a person's first project mints their organization: its record gets the cre
       .map(({ type }) => type)
       .slice(3),
   ).toEqual(["events.iterate.com/organization/project-created"]);
+  // a person's first two projects at once mint one organization, created and joined once
+  const racer = await operator("first-two@directory.test");
+  const racing = await Promise.all([
+    racer.projects.create({ project: "first-two-a" }),
+    racer.projects.create({ project: "first-two-b" }),
+  ]);
+  for (const context of racing) context[Symbol.dispose]();
+  const racerOrgs = await racer.organizations.list();
+  expect(racerOrgs).toMatchObject([{ name: "first-two", projects: 2 }]);
+  expect(
+    (await globalLog(`/organizations/${racerOrgs[0]!.id}`))
+      .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
+      .map(({ type }) => type.replace("events.iterate.com/organization/", "")),
+  ).toEqual(["created", "member-added", "project-created", "project-created"]);
 });
 
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {

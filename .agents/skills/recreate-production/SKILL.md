@@ -39,13 +39,20 @@ restore resets Durable Objects under a running `apply`. Before the erase:
 
 1. The owner or you announce a merge pause where the team merges, lasting until
    `verify-structure` passes. Nothing enforces it.
-2. Check that no Deploy OS run is in flight:
-   `depot ci run list --org 0p91s0lz49 --repo iterate/iterate`.
+2. Check that no Deploy OS run is in flight: the `Deploy OS / deploy` check run on each of
+   main's recent commits reads `completed` (the command is in
+   [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Pause merges").
 
 If a deploy lands mid-restore anyway (for example `apply` fails with "Durable Object reset
 because its code was updated"), wait for it to finish. Then rerun `apply` for every seed, not
-only the one that failed, and then `verify-structure`. `apply` is idempotent, so a rerun only
-finishes what was cut off. Lift the pause once verification passes.
+only the one that failed, with the same `--organization` and `--owners` as the first run, and
+then `verify-structure`. Lift the pause once verification passes.
+
+A rerun of `apply` resets the project to its archive: the config tree (files added since are
+deleted), every archived secret's value, and the members. Inside the restore window that only
+finishes what was cut off. Never rerun it on a live deployment hours later. To land projects on
+their organization's record after the fact (the dash's project lists), use
+`project-seed land-projects`, which changes nothing else.
 
 ## Restore
 

@@ -42,7 +42,17 @@ through the normal repository API. It verifies decrypted secret readback, the Gi
 tree, the project processor's published commit, membership roles, and that the
 organization's record lists the project. Every step converges: reapplying
 converges on the same project, config tree and hostnames, and finishes an apply
-that a failure or a deploy cut short. A slug with a different ID, an archived
+that a failure or a deploy cut short.
+
+**A rerun resets the project to the archive; it is only safe inside the restore
+window.** It commits the archived config tree again (deleting files added since and
+reverting later edits), sets every archived secret back to its archived value
+(reverting a rotated key or a refreshed OAuth token), and adds the archive's members,
+or the `--owners` given. Rerun it with the same `--organization` and `--owners` as the
+first run. To land projects on their organization's record long after a restore, use
+`land-projects` (below), which changes nothing else.
+
+A slug with a different ID, an archived
 ID held by another project, existing projects in another organization, ambiguous organization names
 and failed project creation are refused. Membership restoration adds/updates the requested members; it does not
 remove unrelated memberships from an existing organization; the CLI writes them through the
@@ -52,8 +62,19 @@ operator's `organizations.create` and `organizations.addMember`.
 organization, and calls it again for a project that already exists. Every creation,
 a person's or the operator's, lands `organization/project-created` on the
 organization's record (the `organization` fold the dash lists an organization's
-projects from) unless the record already has it. So a rerun writes no second event,
-and a project the record lacks (restored before 2026-09-24) gets its event.
+projects from) unless the record already has it, under an idempotency key. So a
+rerun, or two creations at once, write no second event.
+
+Projects restored before 2026-09-24 never landed on their organization's record, so
+the dash lists none of them. `land-projects` lands every such project and nothing
+else: for each project in a named organization that the record lacks, and whose
+creation has finished, it calls `projects.create` again and checks the record. It
+writes no config, secret or membership, so it is safe on a live deployment:
+
+```sh
+pnpm --dir apps/os project-seed land-projects --env prd --dry-run
+pnpm --dir apps/os project-seed land-projects --env prd --yes-i-mean-prd
+```
 
 `--organization` changes the destination organization. `--owners` replaces the
 archive's requested member list with explicit owners. Without these flags, the
@@ -75,10 +96,11 @@ recorded. Archives captured before 2026-09-24 have no `hostnames` field and rest
 
 After the config is published, `apply` appends `project/hostname-add-requested` for
 each archived hostname the project does not serve. This is the same event the dash's
-Hostnames page appends. `apply` then waits up to 60 s for each answer and prints
-Cloudflare's status. A hostname already served is left alone, so a rerun requests
-nothing. A refused hostname, or one with no answer within 60 s, fails `apply`
-with its name and the reason. `erase-data` does not delete the Cloudflare custom
+Hostnames page appends. `apply` then waits for the answers, 60 s in total for all
+of the seed's hostnames, and prints Cloudflare's status for each. A hostname already
+served is left alone, so a rerun requests nothing. A refused hostname fails `apply`
+with its name and the reason; so do answers still missing after 60 s, naming the
+hostnames. `erase-data` does not delete the Cloudflare custom
 hostname and the owner's CNAMEs are on their own DNS, so the add finds the existing
 custom hostname and the answer is usually `active` straight away.
 
@@ -153,10 +175,19 @@ reset because its code was updated"), and #3033's landed during verification.
 Nothing enforces the pause. The owner,
 or the agent running the recreate, announces it where the team merges, before the
 erase, and lifts it after verification. Before the erase, check that no Deploy OS run
-is in flight (`depot ci run list --org 0p91s0lz49 --repo iterate/iterate`). If a deploy
-lands mid-restore anyway, rerun `apply` for every seed once the deploy has finished,
-then `verify-structure`. `apply` is idempotent, so a rerun only finishes what was cut
-off.
+is in flight: Deploy OS reports a `Deploy OS / deploy` check run on each commit it
+deploys, and every line below must read `completed`:
+
+```sh
+for sha in $(gh api 'repos/iterate/iterate/commits?sha=main&per_page=5' -q '.[].sha'); do
+  gh api "repos/iterate/iterate/commits/$sha/check-runs?check_name=Deploy%20OS%20/%20deploy" \
+    -q ".check_runs[] | \"${sha:0:9} \(.status) \(.conclusion)\""
+done
+```
+
+If a deploy lands mid-restore anyway, wait for it to finish, then rerun `apply` for
+every seed with the same `--organization` and `--owners` as the first run, then
+`verify-structure`. Inside the restore window a rerun only finishes what was cut off.
 
 The erase refuses shared data resources while another worker still binds them,
 and refuses preview parents with multiple namespaces for a class. Retire any

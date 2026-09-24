@@ -226,21 +226,29 @@ export async function until<T>(
 }
 
 /** Cloudflare's custom-hostname API on the SaaS zone (wrangler.test.jsonc `saas.test`), faked in
- *  this isolate's `fetch`; every other request goes through. */
-export function fakeCloudflareCustomHostnames() {
-  const hostnames: string[] = [];
+ *  this isolate's `fetch`; every other request goes through. `active` are custom hostnames the zone
+ *  already holds, validated (what an erase leaves behind: it never deletes them); a new one is
+ *  pending. `writes` records each POST and DELETE. */
+export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string[] } = {}) {
+  const hostnames: string[] = [...active];
+  const writes: string[] = [];
   const through = globalThis.fetch;
   const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.hostname !== "api.cloudflare.com") return through(request);
     const ok = (result: unknown) => Response.json({ success: true, result });
-    const entry = (hostname: string) => ({
-      id: `ch-${hostname}`,
-      hostname,
-      status: "pending",
-      ssl: { wildcard: true },
-    });
+    const entry = (hostname: string) =>
+      active.includes(hostname)
+        ? {
+            id: `ch-${hostname}`,
+            hostname,
+            status: "active",
+            ssl: { wildcard: true, status: "active" },
+          }
+        : { id: `ch-${hostname}`, hostname, status: "pending", ssl: { wildcard: true } };
+    if (request.method === "POST" || request.method === "DELETE")
+      writes.push(`${request.method} ${url.pathname.split("/custom_hostnames")[1] || "/"}`);
     if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-saas" }]);
     if (request.method === "POST") {
       const { hostname } = (await request.json()) as { hostname: string };
@@ -255,5 +263,5 @@ export function fakeCloudflareCustomHostnames() {
     return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
   });
   onTestFinished(() => spy.mockRestore());
-  return { hostnames };
+  return { hostnames, writes };
 }

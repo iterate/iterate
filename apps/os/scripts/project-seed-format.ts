@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hashObject, treeObjectsOf } from "@iterate-com/shared/git-wire";
 import type { ItxExpression } from "iterate/expression";
+import { HOSTNAME } from "../src/project/custom-hostnames.ts";
 import { decryptSecretMaterial, type MaterialKeys } from "../src/secret-at-rest.ts";
 import { normalizeSecretRecord } from "../src/secrets.ts";
 
@@ -45,9 +46,15 @@ export const ProjectSeed = z.object({
   secrets: z.array(EncryptedSecretSeed),
   /** The project's own hostnames (`project/hostname-*`, src/project/custom-hostnames.ts): each one
    *  it served at capture. Absent from an archive captured before they were recorded. */
-  hostnames: z.array(z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)).default([]),
+  hostnames: z.array(z.string().regex(HOSTNAME)).default([]),
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
+
+/** The archived hostnames `apply` restores onto the deployment at `baseUrl`: every one on the
+ *  deployment the seed was captured from, none on another — a custom hostname lives on its
+ *  deployment's SaaS zone, and a preview must never ask for prd's. */
+export const restorableHostnames = (seed: ProjectSeed, baseUrl: string) =>
+  new URL(seed.source.platform).origin === new URL(baseUrl).origin ? seed.hostnames : [];
 
 export async function configTree(files: ProjectSeed["config"]["files"]) {
   const manifest = new Map<string, { oid: string; mode: string }>();
@@ -79,6 +86,10 @@ export async function openProjectSeed(raw: unknown, keys: MaterialKeys) {
     throw new Error("Config tree does not match the archive's Git tree hash.");
   if (!seed.config.files.some((file) => file.path === "worker.ts"))
     throw new Error("Config archive has no worker.ts.");
+  const duplicateHostname = seed.hostnames.find(
+    (hostname, index) => seed.hostnames.indexOf(hostname) !== index,
+  );
+  if (duplicateHostname) throw new Error(`Duplicate hostname: ${duplicateHostname}`);
   const paths = new Set<string>();
   const secrets = [];
   for (const secret of seed.secrets) {
@@ -212,12 +223,14 @@ export async function captureHostnames(root: SeedRoot): Promise<string[]> {
  *  serve — absent (an erase), refused, or being removed — with the same `hostname-add-requested` the
  *  dash appends, then wait for the processor's answer to it (and to an add already in flight). A
  *  hostname the project serves is left alone, so a rerun asks for nothing. Answers each hostname's
- *  outcome; throws when one is refused, or unanswered by `timeoutMs`. */
+ *  outcome; throws when one is refused, or when they are not all answered within `timeoutMs`
+ *  (one limit for the whole list). */
 export async function restoreHostnames(
   root: SeedRoot,
   hostnames: string[],
   { timeoutMs = 60_000 }: { timeoutMs?: number } = {},
 ): Promise<{ hostname: string; asked: boolean; status: string }[]> {
+  if (!hostnames.length) return [];
   const before = await projectHostnames(root);
   const ask = hostnames.filter(
     (hostname) => !serves(before[hostname]) && before[hostname]?.requested?.verb !== "add",

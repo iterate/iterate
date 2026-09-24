@@ -4,6 +4,7 @@ import {
   compareStructure,
   configTree,
   openProjectSeed,
+  restorableHostnames,
   type DeploymentStructure,
 } from "./project-seed-format.ts";
 
@@ -51,15 +52,26 @@ test("duplicate file or secret paths cannot silently shadow an archived entry", 
   seed.secrets.push(seed.secrets[0]!);
   await expect(openProjectSeed(seed, keys)).rejects.toThrow("Duplicate secret");
 });
-test("hostnames: an archive from before they were recorded has none; a malformed one is refused", async () => {
+test("hostnames: an archive from before they were recorded has none; a malformed or repeated one is refused", async () => {
   const seed = await archive();
   expect((await openProjectSeed(seed, keys)).seed).toMatchObject({ hostnames: [] });
   expect((await openProjectSeed({ ...seed, hostnames: ["garple.com"] }, keys)).seed).toMatchObject({
     hostnames: ["garple.com"],
   });
+  // the processor's own rule (src/project/custom-hostnames.ts HOSTNAME): two labels or more, no empty one
+  for (const hostname of ["https://garple.com/", "a..b", "localhost", "-garple.com"])
+    await expect(openProjectSeed({ ...seed, hostnames: [hostname] }, keys)).rejects.toThrow();
   await expect(
-    openProjectSeed({ ...seed, hostnames: ["https://garple.com/"] }, keys),
-  ).rejects.toThrow();
+    openProjectSeed({ ...seed, hostnames: ["garple.com", "garple.com"] }, keys),
+  ).rejects.toThrow("Duplicate hostname: garple.com");
+});
+test("hostnames are restored only onto the deployment the seed was captured on", async () => {
+  const { seed } = await openProjectSeed({ ...(await archive()), hostnames: ["garple.com"] }, keys);
+  expect(restorableHostnames(seed, seed.source.platform)).toEqual(["garple.com"]);
+  expect(restorableHostnames(seed, `${seed.source.platform.replace(/\/$/, "")}/`)).toEqual([
+    "garple.com",
+  ]);
+  expect(restorableHostnames(seed, "https://os-pr3045.preview.example.test")).toEqual([]);
 });
 test("a recreation with fresh user and organization IDs matches; the empty admin org is a note", () => {
   expect(compareStructure(captured, recreated())).toEqual({

@@ -161,3 +161,48 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
     restoreHostnames(project, ["x.projects.test"], { timeoutMs: 10_000 }),
   ).rejects.toThrow(/refused: x\.projects\.test \(.+\)/);
 });
+
+test("apply never takes a hostname another project holds: the restore fails naming it, the holder keeps it, and Cloudflare is not asked", async () => {
+  const cloudflare = fakeCloudflareCustomHostnames();
+  const session = await openSession();
+  const admin = session.authenticate(adminCredentials());
+  const holder = await admin.projects.create({ project: "seed-hostname-holder" });
+  const { projectId: holderId } = await holder.whoami();
+  const [asked] = await holder.append({
+    type: "events.iterate.com/project/hostname-add-requested",
+    payload: { hostname: "www.held.test" },
+  });
+  await holder.waitForEvent({
+    type: "events.iterate.com/project/hostname-add-answered",
+    afterOffset: asked.offset,
+    timeoutMs: 10_000,
+  });
+  const writes = [...cloudflare.writes];
+  const restored = await admin.projects.create({ project: "seed-hostname-restored" });
+  await expect(
+    restoreHostnames(restored, ["www.held.test"], { timeoutMs: 10_000 }),
+  ).rejects.toThrow(/refused: www\.held\.test \(.*belongs to another project/);
+  expect(await controlPlaneStub().projectByHostname(["www.held.test"])).toMatchObject({
+    project: { id: holderId },
+  });
+  expect(cloudflare).toMatchObject({ writes, hostnames: ["www.held.test"] });
+  expect(await captureHostnames(restored)).toEqual([]);
+});
+
+test("after a real erase the zone still holds the custom hostname: apply's request finds it active, creates none, and the project serves it", async () => {
+  // what erase-data leaves: the Cloudflare custom hostname, validated; no claim, no project events
+  const cloudflare = fakeCloudflareCustomHostnames({ active: ["kept.erased.test"] });
+  const session = await openSession();
+  const admin = session.authenticate(adminCredentials());
+  const project = await admin.projects.create({ project: "seed-hostname-erased" });
+  const { projectId } = await project.whoami();
+  expect(await captureHostnames(project)).toEqual([]);
+  expect(await restoreHostnames(project, ["kept.erased.test"], { timeoutMs: 10_000 })).toEqual([
+    { hostname: "kept.erased.test", asked: true, status: "active, certificate active" },
+  ]);
+  expect(cloudflare).toMatchObject({ writes: [] });
+  expect(await controlPlaneStub().projectByHostname(["kept.erased.test"])).toMatchObject({
+    project: { id: projectId },
+  });
+  expect(await captureHostnames(project)).toEqual(["kept.erased.test"]);
+});
