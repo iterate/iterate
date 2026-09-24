@@ -51,14 +51,19 @@ export function runAsync(
 /**
  * `vite build` of one app for one envs.ts environment, into a fresh dist/: the Cloudflare Vite
  * plugin snapshots that environment's Worker config (CLOUDFLARE_ENV) into dist/, and that snapshot
- * is what deploys and what a per-PR preview starts from.
+ * is what deploys and what a per-PR preview starts from. Its output streams as it runs; a failure's
+ * error carries the last 40 lines, so a report of it (the PR preview's `deploy failed`) says why.
  */
-export function viteBuild(appRoot: string, cloudflareEnv: string) {
+export async function viteBuild(appRoot: string, cloudflareEnv: string) {
   rmSync(join(appRoot, "dist"), { recursive: true, force: true });
-  return runAsync("pnpm", ["exec", "vite", "build"], {
+  const result = await runStreamingCaptured("pnpm", ["exec", "vite", "build"], {
     cwd: appRoot,
     env: { CLOUDFLARE_ENV: cloudflareEnv },
   });
+  if (result.code === 0) return;
+  throw new Error(
+    `pnpm exec vite build exited with ${result.code ?? `signal ${result.signal || "unknown"}`}\n${result.output.trimEnd().split("\n").slice(-40).join("\n")}`,
+  );
 }
 
 /**

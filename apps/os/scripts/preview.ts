@@ -2,8 +2,8 @@
 // (their scripts/preview/preview.ts: eighteen workers in three tiers collapsed to one). The effects
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
-// deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
-// e2e (vitest and Playwright against the live preview), reset (delete, then deploy), delete (the
+// deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its
+// status line), e2e (vitest and Playwright against the live preview; the status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
 // top), delete-superseded (every `main-<sha>` preview but this one: main's cancelled runs'), sweep
 // (the stale previews and the resources that outlived theirs — the rules are
@@ -53,6 +53,8 @@ import {
   appPreviewUrl,
   assertFreshInstall,
   changedApps,
+  configTemplateNames,
+  lastLines,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
   isDurableObjectClassNotExportedError,
@@ -62,8 +64,11 @@ import {
   previewUrl,
   renderPullRequestSection,
   resolvePreviewName,
+  splicePreviewStatus,
   splicePullRequestBody,
+  templateQuickLaunches,
   writePreviewWranglerConfig,
+  type PreviewStatus,
 } from "./preview-config.ts";
 import {
   planPreviewSweep,
@@ -74,6 +79,7 @@ import {
 } from "./preview-sweep.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
+const REPO_ROOT = path.resolve(ROOT, "../..");
 const OUTPUT_DIR = path.join(ROOT, "output");
 /** cloudflare-os runs on this draft build too: released wrangler accepts a binding-only KV entry in
  *  `previews` but sends `namespace_id: undefined`; the branch of workers-sdk PR #14416 provisions a
@@ -228,24 +234,55 @@ const repository = () => requireEnv("GITHUB_REPOSITORY");
 
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
- *  re-splicing onto whatever is there now converges on both edits within a few rounds. */
-async function writePullRequestSection(prNumber: string, section: string) {
+ *  re-splicing onto whatever is there now converges on both edits within a few rounds. `what` names
+ *  the write in the log: the whole preview section, or its status line alone. */
+async function writePullRequestBody(
+  prNumber: string,
+  what: string,
+  splice: (body: string) => string,
+) {
   const route = `/repos/${repository()}/pulls/${prNumber}`;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = (await github<{ body: string | null }>(route)).body || "";
-    const body = splicePullRequestBody(before, section);
-    if (body === before)
-      return console.log(`PR #${prNumber}'s body already carries this preview section`);
+    const body = splice(before);
+    if (body === before) return console.log(`PR #${prNumber}'s body already carries ${what}`);
     await github(route, { method: "PATCH", body: { body } });
     const after = (await github<{ body: string | null }>(route)).body || "";
-    if (after === body)
-      return console.log(`wrote the preview section into the body of PR #${prNumber}`);
+    if (after === body) return console.log(`wrote ${what} into the body of PR #${prNumber}`);
     console.warn(
       `PR #${prNumber}'s body changed under the write (attempt ${attempt}); re-splicing`,
     );
   }
-  throw new Error(
-    `could not write the preview section into PR #${prNumber}'s body: it kept changing`,
+  throw new Error(`could not write ${what} into PR #${prNumber}'s body: it kept changing`);
+}
+
+/** The commit this checkout is: the one the job deployed or tested (the PR merged into main in CI). */
+function checkedOutCommit() {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git rev-parse HEAD: ${result.stderr.trim()}`);
+  return result.stdout.trim();
+}
+
+/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`):
+ *  this checkout's commit, this CI job (`DEPOT_JOB_URL`), now. Only with a PR and a token; a
+ *  write that fails is logged, never the job's failure — the job's own outcome stands. */
+async function writeStatus(
+  prNumber: string | undefined,
+  status: Pick<PreviewStatus, "state" | "failedSuites" | "error">,
+) {
+  if (!prNumber || !process.env.GITHUB_TOKEN) return;
+  await (async () => {
+    const full: PreviewStatus = {
+      ...status,
+      commit: checkedOutCommit(),
+      runUrl: process.env.DEPOT_JOB_URL,
+      at: new Date(),
+    };
+    await writePullRequestBody(prNumber, `the preview status (${status.state})`, (body) =>
+      splicePreviewStatus(body, full),
+    );
+  })().catch((error: unknown) =>
+    console.warn(`could not write the preview status (${status.state}): ${describe(error)}`),
   );
 }
 
@@ -356,7 +393,9 @@ async function deployAppPreview(
   }
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.status !== 0)
-    throw new Error(`apps/${app.name}: wrangler preview failed with exit code ${result.status}`);
+    throw new Error(
+      `apps/${app.name}: wrangler preview failed with exit code ${result.status}\n${lastLines(`${result.stdout}\n${result.stderr}`, 40)}`,
+    );
   const url = parseWranglerJson(result.stdout).preview?.urls?.[0];
   if (url !== appPreviewUrl(app, previewName))
     throw new Error(
@@ -510,7 +549,9 @@ async function deployOsPreview(
         : isDurableObjectClassNotExportedError(output)
           ? ` — Cloudflare 10061 on a new preview too: the parent worker ${PREVIEW_PARENT.workerName} does not export a Durable Object class this build binds. Deploy the parent from main (pnpm --dir apps/os run deploy --env preview); a PR that itself adds a class needs the parent deployed from its branch first`
           : "";
-      throw new Error(`wrangler preview failed with exit code ${result.status}${hint}`);
+      throw new Error(
+        `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
+      );
     }
     const data = parseWranglerJson(result.stdout);
     const url = data.preview?.urls?.[0];
@@ -537,13 +578,30 @@ async function deployOsPreview(
   }
 }
 
+/** The status line says `deploying` first and `deploy failed`, with the error's tail, when any
+ *  step throws; a deploy that lands rewrites the whole section, `deployed`. */
 async function deployPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
   prNumber: string | undefined,
   apps: StartApp[],
 ) {
-  assertFreshInstall(path.resolve(ROOT, "../.."));
+  await writeStatus(prNumber, { state: "deploying" });
+  try {
+    await deployPreviewSteps(ctx, previewName, prNumber, apps);
+  } catch (error) {
+    await writeStatus(prNumber, { state: "deploy failed", error: describe(error) });
+    throw error;
+  }
+}
+
+async function deployPreviewSteps(
+  ctx: EnvContext<OsEnv>,
+  previewName: string,
+  prNumber: string | undefined,
+  apps: StartApp[],
+) {
+  assertFreshInstall(REPO_ROOT);
   // The apps' vite builds run beside apps/os's build, their rejection handlers attached at once:
   // apps/os's build and deployment can take minutes, and an app build may fail before its result is
   // consumed. Each step is a span in the CI trace (docs/ci-traces.md), so the deploy step shows
@@ -554,9 +612,15 @@ async function deployPreview(
   await traceOperation("Build OS", () => buildOs("preview"));
   const appBuildResults = await appBuilds;
   const failedBuilds = appBuildResults.flatMap((result, index) =>
-    result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
+    result.status === "rejected"
+      ? [{ app: apps[index]!.name, error: describe(result.reason) }]
+      : [],
   );
-  if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
+  // the apps on the first line (the PR body's summary), each one's error and output tail after it
+  if (failedBuilds.length)
+    throw new Error(
+      `app preview build failed: ${failedBuilds.map(({ app }) => app).join(", ")}\n${failedBuilds.map(({ app, error }) => `${app}: ${error}`).join("\n\n")}`,
+    );
   const appOrigins = appPreviewOrigins(apps, previewName);
   const { wrangler, url, deploymentId, slug } = await traceOperation("Deploy OS preview", () =>
     deployOsPreview(ctx, previewName, appOrigins.dash),
@@ -571,6 +635,12 @@ async function deployPreview(
     );
     const summary = {
       previewName,
+      status: {
+        state: "deployed",
+        commit: checkedOutCommit(),
+        runUrl: process.env.DEPOT_JOB_URL,
+        at: new Date(),
+      } satisfies PreviewStatus,
       url,
       deploymentId,
       slug,
@@ -587,15 +657,20 @@ async function deployPreview(
     mkdirSync(OUTPUT_DIR, { recursive: true });
     writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
     console.log(`\npreview ${previewName}: ${url}`);
-    if (prNumber && process.env.GITHUB_TOKEN)
-      await writePullRequestSection(prNumber, renderPullRequestSection(summary));
+    if (prNumber && process.env.GITHUB_TOKEN) {
+      const section = renderPullRequestSection(summary);
+      await writePullRequestBody(prNumber, "the preview section", (body) =>
+        splicePullRequestBody(body, section),
+      );
+    }
   } finally {
     wrangler.cleanup();
   }
 }
 
 /** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): seed the PR's test person and
- *  project, mint the links, and smoke the heading's. The person is `pr<N>@preview.iterate.test`,
+ *  project, mint the links — with the Dash, one per config template into its New project sheet
+ *  (preview-config.ts `templateQuickLaunches`) — and smoke the heading's. The person is `pr<N>@preview.iterate.test`,
  *  the project `pr<N>` — created as them through the operator's bearer (`as`), the same idempotent
  *  call as e2e/support/project-host.ts `registerProject`, so the Dash link lands inside it. Each
  *  link is signed with the preview's own key for this preview's origin, expires in 14 days (every
@@ -658,6 +733,22 @@ async function previewSignIn(
   const apps = Object.fromEntries(
     await Promise.all(preview.apps.map(async (app) => [app.name, await link(landing(app))])),
   );
+  const templates = dash
+    ? await Promise.all(
+        templateQuickLaunches({
+          dashUrl: dash.url,
+          templates: configTemplateNames(REPO_ROOT),
+          changedPaths: await changedPaths(preview.prNumber).catch((error: unknown) => {
+            console.warn(
+              `sign-in: ${describe(error)}; every template link names the preview's own copy`,
+            );
+            return [];
+          }),
+          // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
+          headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
+        }).map(async ({ name, fromHead, next }) => ({ name, fromHead, link: await link(next) })),
+      )
+    : [];
   const smoke = await fetch(heading, { redirect: "manual" }).catch((error: unknown) => error);
   if (smoke instanceof Response && smoke.status === 302 && smoke.headers.has("set-cookie"))
     console.log(`sign-in: the heading link signs in (302 to ${smoke.headers.get("location")})`);
@@ -665,7 +756,7 @@ async function previewSignIn(
     console.warn(
       `sign-in: the heading link did not sign in: ${smoke instanceof Response ? `${smoke.status} ${await smoke.text()}` : describe(smoke)}`,
     );
-  return { heading, apps, email, project, seeded };
+  return { heading, apps, templates, email, project, seeded };
 }
 
 /** The preview, then everything it owned, each found by its name: its Artifacts namespace (this
@@ -738,8 +829,26 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
  *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps, the
  *  Notes session specs signing out in its Dash (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL;
- *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. */
-async function runE2e(previewName: string) {
+ *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. The
+ *  status line in the PR body then says `e2e passed`, or `e2e failed` and which suites. */
+async function runE2e(previewName: string, prNumber: string | undefined) {
+  let failedSuites: string[];
+  try {
+    failedSuites = await runE2eSuites(previewName);
+  } catch (error) {
+    await writeStatus(prNumber, { state: "e2e failed", error: describe(error) });
+    throw error;
+  }
+  await writeStatus(
+    prNumber,
+    failedSuites.length ? { state: "e2e failed", failedSuites } : { state: "e2e passed" },
+  );
+  if (failedSuites.length > 0)
+    throw new Error(`${failedSuites.join(" and ")} failed against ${previewUrl(previewName)}`);
+}
+
+/** The two suites side by side; the names of those that failed. */
+async function runE2eSuites(previewName: string) {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
@@ -747,10 +856,10 @@ async function runE2e(previewName: string) {
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-        cwd: path.resolve(ROOT, "../.."),
+        cwd: REPO_ROOT,
       });
     return run("pnpm", ["spec"], {
-      cwd: path.resolve(ROOT, "../.."),
+      cwd: REPO_ROOT,
       env: {
         ...process.env,
         ...env,
@@ -777,10 +886,9 @@ async function runE2e(previewName: string) {
   process.stdout.write(
     `\n── playwright (pnpm spec) ──\n${specResult.stdout}${specResult.stderr}\n`,
   );
-  const failed = [!e2ePassed && "vitest e2e", specResult.status !== 0 && "pnpm spec"].filter(
-    Boolean,
+  return [!e2ePassed && "vitest e2e", specResult.status !== 0 && "pnpm spec"].filter(
+    (suite) => suite !== false,
   );
-  if (failed.length > 0) throw new Error(`${failed.join(" and ")} failed against ${url}`);
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1107,7 +1215,7 @@ async function main(argv: string[]) {
     console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
     return;
   }
-  if (parsed.command === "e2e") return runE2e(previewName);
+  if (parsed.command === "e2e") return runE2e(previewName, pr);
   const ctx = await parentContext();
   if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
   if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
