@@ -138,7 +138,7 @@ export async function admitProjectHost(
     "project",
     () => controlPlane.getProject(address.project),
     async () =>
-      hostnameRow ?? (await firstCopy([lastKnownKey("project", address.project)]))?.row ?? null,
+      hostnameRow || (await firstCopy([lastKnownKey("project", address.project)]))?.row || null,
   );
   return { address, project, stale: stale && { ...stale, copies } };
 }
