@@ -14,9 +14,10 @@ app holds no OAuth credentials and no state of its own. It frames itself in
 packages/ui's `AppShell` — the sidebar, the project switcher and the account menu
 every OS app shares — with the note as its one page.
 
-Mount [config-worker.ts](config-worker.ts) with an explicit worker spec,
-`itx.provide("itx.apps.notes", ["itx", "workers", ["get", { source }]])`, so
-`notes--<project>.iterate.app` reaches it. It serves only the `notes` app slug (see
+Publish [config-worker.ts](config-worker.ts) as the project's config worker
+(`project/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
+project reaches its `fetch`, and it serves only the `notes` routing slug (`x-iterate-routing-slug`),
+so `notes--<project>.iterate.app` reaches Notes (see
 [specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)).
 
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to

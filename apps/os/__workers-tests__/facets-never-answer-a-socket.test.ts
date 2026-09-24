@@ -9,14 +9,13 @@
 // secret-facet-proxies-a-socket.test.ts.
 //
 // Pinned in the `workers` vitest project (inside workerd) because the refusal must be seen on the
-// production route — a project host `<app>--<project>.projects.test`, the edge's `x-itx-expression:
-// itx.apps.<app>`, the rewrite rule provided at `itx.apps.<app>` whose target is the hosting
-// spelling — and at the DO's own `invoke` method, where a caller passes the Request itself.
+// production route — a project host `<routingSlug>--<project>.projects.test`, the edge's empty
+// `x-itx-expression` selecting the project's ingress target, published as the hosting spelling — and at the DO's own `invoke` method, where a caller passes the Request itself.
 
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
-import { adminCredentials, openSession, stub } from "./support.ts";
+import { adminCredentials, openSession, publishConfigWorker, stub } from "./support.ts";
 
 /** A stateful app hosted as a facet: `fetch()` serves plain HTTP AND would upgrade a WebSocket if
  *  asked — so the refusal below is the platform's, not the class's. `hits()` is its RPC method. */
@@ -89,15 +88,15 @@ test("the DO's invoke method refuses the same upgrade, coded, on a facet it has 
   expect(await plain.json()).toMatchObject({ served: "plain-http", path: "/page" });
 });
 
-/** The project in the directory, its root context on the admin session, and the app provided at
- *  `itx.apps.app` — the rewrite rule whose target is the hosting spelling. */
+/** The project in the directory, its root context on the admin session, and the app facet published
+ *  as its config worker — the ingress target is the hosting spelling. */
 async function projectWithAppFacet(project: string) {
   const itx = await (
     await openSession()
   )
     .authenticate(adminCredentials())
     .projects.create({ project });
-  await itx.provide("itx.apps.app", ["itx", "facets", ["get", "app", APP_FACET_SPEC]]);
+  await publishConfigWorker(itx, ["itx", "facets", ["get", "app", APP_FACET_SPEC]]);
   const { projectId } = (await itx.invoke("itx.whoami()")) as { projectId: string };
   return { ctx: projectId, host: `https://app--${project}.projects.test` };
 }

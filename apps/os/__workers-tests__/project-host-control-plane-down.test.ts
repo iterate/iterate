@@ -194,7 +194,7 @@ test("a host the worker admits leaves this data center a signed copy of each ans
   expect(address).toMatchObject({
     copy: "last-known-project",
     key: keyOf(`hostname/${hostname}`),
-    value: { project: projectId, app: null, basePath: "" },
+    value: { project: projectId, routingSlug: null, basePath: "" },
   });
   expect(row).toMatchObject({
     copy: "last-known-project",

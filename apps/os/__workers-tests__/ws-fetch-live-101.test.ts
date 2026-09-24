@@ -7,9 +7,10 @@
 // real capnweb session; a real eyeball dials the app's project host. Every hop is
 // production-shaped:
 //
-//   eyeball exports.default.fetch `wsdev--<project>.projects.test` → the edge sets x-itx-expression to
-//   `itx.apps.wsdev` → the DO's itx-expression fetch → the rewrite rule at `itx.apps.wsdev`
-//   (pure data: target `itx.rpcStubs.get('itx.apps.wsdev')`, the registry naming the lent provider)
+//   eyeball exports.default.fetch `wsdev--<project>.projects.test` → the edge sets an empty
+//   x-itx-expression → the DO's itx-expression fetch resolves the project's ingress target
+//   `itx.wsdev` → the rewrite rule at `itx.wsdev` (pure data: target `itx.rpcStubs.get('itx.wsdev')`,
+//   the registry naming the lent provider)
 //   → context/rpc-stubs.ts: the DO asks the borrowed stub to dial (an RPC call that EXECUTES in the
 //   relay's session context; its return is the honest ack), the relay dials the provider's fetch()
 //   over capnweb and opens ONE dedicated fetch-upgrade leg back into the DO, the DO mints the
@@ -28,13 +29,15 @@
 // The LOADED-worker half rides the same host: a `WorkerEntrypoint`'s own 101 — here the SDK's
 // `newWorkersRpcResponse` serving a capnweb API at `rpc--<project>.projects.test/<path>`, the path
 // arriving verbatim — flows back through the expression fetch natively (no upgrade leg: the loader hop carries it).
+// And the shape a project actually routes with: a CONFIG WORKER that branches on
+// `x-iterate-routing-slug` and forwards the upgrade to the lent stub through its own `env.ITX.fetch`.
 // Run:
 //   pnpm exec vitest run --project workers __workers-tests__/ws-fetch-live-101.test.ts
 
 import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { adminCredentials, openSession } from "./support.ts";
+import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
 
@@ -91,7 +94,9 @@ test("lent-stub WebSocket fetch: the eyeball's upgrade on the project host gets 
 // (#peerOf → null) and is dropped. A regression pin for that accept-order (context/rpc-stubs.ts).
 test("a lent-stub WebSocket provider that GREETS on connect: the eyeball receives the server's first frame without sending one", async () => {
   const project = "ws101-greet";
-  await (await createProject(project)).provide("itx.apps.wsdev", new GreetingSite());
+  const itx = await createProject(project);
+  await itx.provide("itx.wsdev", new GreetingSite());
+  await publishConfigWorker(itx, ["itx", "wsdev"]);
   const res = await exports.default.fetch(`https://wsdev--${project}.projects.test/`, {
     headers: { Upgrade: "websocket" },
   });
@@ -135,7 +140,7 @@ export default class CapnwebServer extends WorkerEntrypoint {
 
 test("a LOADED worker's 101 through the project host: the SDK's newWorkersRpcResponse serves a capnweb API at `rpc--<project>.<base>/<path>`, the path arriving verbatim", async () => {
   const itx = await createProject("ws101-capnweb");
-  await itx.provide("itx.apps.rpc", ["itx", "workers", ["get", { source: SRC_CAPNWEB_SERVER }]]);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_CAPNWEB_SERVER }]]);
   const res = await exports.default.fetch("https://rpc--ws101-capnweb.projects.test/rpc/v1", {
     headers: { Upgrade: "websocket" },
   });
@@ -146,6 +151,57 @@ test("a LOADED worker's 101 through the project host: the SDK's newWorkersRpcRes
   expect(await remote.hello("host")).toBe("hello host");
   expect(await remote.path()).toBe("/rpc/v1");
   remote[Symbol.dispose]();
+});
+
+/** A config worker routing in plain code: the `wsdev` routing slug is forwarded — upgrade and all —
+ *  to the lent stub at `itx.wsdev` through its own `env.ITX.fetch` (a native fetch hop, which
+ *  carries a WebSocket); anything else is its 404. */
+const SRC_WSDEV_ROUTER = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Router extends WorkerEntrypoint {
+  fetch(request) {
+    if (request.headers.get("x-iterate-routing-slug") !== "wsdev")
+      return new Response("no route", { status: 404 });
+    const headers = new Headers(request.headers);
+    headers.set("x-itx-expression", "itx.wsdev");
+    return this.env.ITX.fetch(new Request(request, { headers }));
+  }
+}`,
+};
+
+test("a CONFIG WORKER forwards a lent stub's WebSocket: the eyeball's upgrade on `wsdev--<project>` reaches the config worker, which forwards it through env.ITX.fetch; the provider's GENUINE 101 echoes and closes cleanly", async () => {
+  const project = "ws101-router";
+  const site = new LiveSite();
+  const itx = await createProject(project);
+  await itx.provide("itx.wsdev", site);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_WSDEV_ROUTER }]]);
+  const plain = await exports.default.fetch(`https://wsdev--${project}.projects.test/`);
+  expect(await plain.text()).toBe("live site");
+  expect(await exports.default.fetch(`https://other--${project}.projects.test/`)).toMatchObject({
+    status: 404,
+  });
+  const res = await exports.default.fetch(`https://wsdev--${project}.projects.test/`, {
+    headers: { Upgrade: "websocket" },
+  });
+  expect(res).toMatchObject({ status: 101 });
+  expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
+  const eyeball = res.webSocket;
+  if (!eyeball) throw new Error("101 without a webSocket");
+  const echo = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("no echo within 10s")), 10_000);
+    eyeball.addEventListener("message", (ev) => {
+      clearTimeout(timer);
+      resolve(String(ev.data));
+    });
+    eyeball.addEventListener("close", (ev) => {
+      clearTimeout(timer);
+      reject(new Error(`eyeball socket closed before the echo: ${ev.code} ${ev.reason}`));
+    });
+    eyeball.accept();
+    eyeball.send("ping");
+  });
+  expect(echo).toBe("live-echo:ping");
+  eyeball.close(1000, "done");
 });
 
 /** The live provider: a fetch-shaped value that CAN fabricate a 101 (we are in workerd).
@@ -173,11 +229,14 @@ async function createProject(project: string) {
   return (await openSession()).authenticate(adminCredentials()).projects.create({ project });
 }
 
-/** Provide a fresh LiveSite over a live capnweb session as the app `wsdev` of `project` — the
- *  rewrite rule at `itx.apps.wsdev`, the ONE route — and hand back its host. */
+/** Provide a fresh LiveSite over a live capnweb session at `itx.wsdev` of `project` and publish that
+ *  expression as the project's ingress target — every host of the project reaches the lent stub —
+ *  and hand back its `wsdev` host. */
 async function provideLiveSite(project: string): Promise<{ site: LiveSite; host: string }> {
   const site = new LiveSite();
-  await (await createProject(project)).provide("itx.apps.wsdev", site);
+  const itx = await createProject(project);
+  await itx.provide("itx.wsdev", site);
+  await publishConfigWorker(itx, ["itx", "wsdev"]);
   return { site, host: `https://wsdev--${project}.projects.test/` };
 }
 

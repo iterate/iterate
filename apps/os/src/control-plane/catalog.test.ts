@@ -336,7 +336,7 @@ test("hostnames: a claim routes the hostname and the names under it to its proje
   expect(lookup("iterate.shop.test")).toBeNull();
   c.claimHostname(shop.id, "iterate.shop.test");
   c.claimHostname(shop.id, "iterate.shop.test");
-  // the most specific name the lookup was handed wins: the apex, then `<app>.` under it
+  // the most specific name the lookup was handed wins: the apex, then `<routingSlug>.` under it
   expect(lookup("iterate.shop.test")).toEqual({ hostname: "iterate.shop.test", project: shop });
   expect(lookup("notes.iterate.shop.test")).toEqual({
     hostname: "iterate.shop.test",

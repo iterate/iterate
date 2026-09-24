@@ -85,9 +85,9 @@ export interface OsEnv {
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl?: string;
   /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
-   *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
+   *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
-   *  serves `<baseUrl>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
+   *  serves `<baseUrl>/projects/<project>/<routingSlug>/…` from the one origin. Unset ⇒ no ingress. */
   ingressRouting?: NonNullable<IngressRouting>;
   /** The Artifacts namespace the `ARTIFACTS` binding names, `<workerName>-…`; ensure-resources
    *  creates it. A namespace cannot be renamed, and no other Worker may bind it: erase-data refuses a
@@ -122,7 +122,7 @@ export const osEnvs: Record<string, OsEnv> = {
     workerName: "os-preview",
     baseUrl: "https://os-preview.iterate-dev-preview.workers.dev",
     mcpBaseUrl: "https://os-preview.iterate-dev-preview.workers.dev/mcp",
-    // Projects as paths on the one origin (`/projects/<slug>/<app>/…`): workers.dev has no wildcard
+    // Projects as paths on the one origin (`/projects/<slug>/<routingSlug>/…`): workers.dev has no wildcard
     // subdomains, and every preview inherits this.
     ingressRouting: { type: "paths" },
     artifactsNamespace: "os-preview-repos",

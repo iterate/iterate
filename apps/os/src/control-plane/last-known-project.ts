@@ -68,7 +68,7 @@ let readBack = false;
 /** The address a project's own hostname names (edge.ts `customHostOf`). */
 const Address = z.object({
   project: z.string(),
-  app: z.string().nullable(),
+  routingSlug: z.string().nullable(),
   basePath: z.string(),
 }) satisfies z.ZodType<ProjectAddress>;
 /** A project's catalog row (catalog.ts `ProjectRecord`, without a reader's role). */

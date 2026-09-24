@@ -20,37 +20,37 @@ const DEV = "http://localhost:8788";
 const subdomainRows: { url: string; names: ProjectAddress | null; why: string }[] = [
   {
     url: "https://site--p.iterate.app/x?y",
-    names: { app: "site", project: "p", basePath: "" },
-    why: "<app>--<project>",
+    names: { routingSlug: "site", project: "p", basePath: "" },
+    why: "<routingSlug>--<project>",
   },
   {
     url: "https://site.p.iterate.app/",
-    names: { app: "site", project: "p", basePath: "" },
-    why: "<app>.<project>",
+    names: { routingSlug: "site", project: "p", basePath: "" },
+    why: "<routingSlug>.<project>",
   },
   {
     url: "https://p.iterate.app/",
-    names: { app: null, project: "p", basePath: "" },
-    why: "the apex names no app",
+    names: { routingSlug: null, project: "p", basePath: "" },
+    why: "the apex names no routing slug",
   },
   {
     url: "https://My-App--My-Proj.Iterate.App./",
-    names: { app: "my-app", project: "my-proj", basePath: "" },
+    names: { routingSlug: "my-app", project: "my-proj", basePath: "" },
     why: "lowercased, the trailing dot dropped",
   },
   { url: "https://os.iterate.com/site--p", names: null, why: "not under the hostname" },
   { url: "https://iterate.app/", names: null, why: "the hostname itself has no labels" },
-  { url: "https://a.b.c.iterate.app/", names: null, why: "deeper than <app>.<project>" },
+  { url: "https://a.b.c.iterate.app/", names: null, why: "deeper than <routingSlug>.<project>" },
   {
     url: "https://xn--bcher-kva.iterate.app/",
     names: null,
-    why: "an IDN label (punycode) is never <app>--<project>, and is not a DNS label",
+    why: "an IDN label (punycode) is never <routingSlug>--<project>, and is not a DNS label",
   },
-  { url: "https://--p.iterate.app/", names: null, why: "an empty app label" },
+  { url: "https://--p.iterate.app/", names: null, why: "an empty routing slug" },
   {
     url: "https://9site--p.iterate.app/",
     names: null,
-    why: "an app label starts with a letter",
+    why: "a routing slug starts with a letter",
   },
   {
     url: "https://site--p-.iterate.app/",
@@ -67,30 +67,30 @@ test.each(subdomainRows)("$url → $why", ({ url, names }) => {
 const pathRows: { url: string; names: ProjectAddress | null; why: string }[] = [
   {
     url: `${PRD}/projects/p/site/x?y`,
-    names: { app: "site", project: "p", basePath: "/projects/p/site" },
-    why: "<project>/<app>/…",
+    names: { routingSlug: "site", project: "p", basePath: "/projects/p/site" },
+    why: "<project>/<routingSlug>/…",
   },
   {
     url: `${PRD}/projects/p/site`,
-    names: { app: "site", project: "p", basePath: "/projects/p/site" },
-    why: "<project>/<app>",
+    names: { routingSlug: "site", project: "p", basePath: "/projects/p/site" },
+    why: "<project>/<routingSlug>",
   },
   {
     url: `${PRD}/projects/p/`,
-    names: { app: null, project: "p", basePath: "/projects/p" },
+    names: { routingSlug: null, project: "p", basePath: "/projects/p" },
     why: "the apex, trailing slash",
   },
   {
     url: `${PRD}/projects/p`,
-    names: { app: null, project: "p", basePath: "/projects/p" },
+    names: { routingSlug: null, project: "p", basePath: "/projects/p" },
     why: "the apex, bare",
   },
   { url: `${PRD}/`, names: null, why: "the platform's root" },
   { url: `${PRD}`, names: null, why: "the origin alone" },
   { url: "https://other.example/projects/p/site", names: null, why: "another origin" },
   { url: `${PRD}/projects/P/site`, names: null, why: "a slug is lowercase" },
-  { url: `${PRD}/projects/p/9site`, names: null, why: "an app label starts with a letter" },
-  { url: `${PRD}/projects/p/Site`, names: null, why: "an app label is lowercase" },
+  { url: `${PRD}/projects/p/9site`, names: null, why: "a routing slug starts with a letter" },
+  { url: `${PRD}/projects/p/Site`, names: null, why: "a routing slug is lowercase" },
   { url: `${PRD}/p/site`, names: null, why: "not under /projects/ — the platform's own paths" },
   { url: `${PRD}/api`, names: null, why: "a platform endpoint" },
   { url: `${PRD}/projects`, names: null, why: "the prefix alone" },
@@ -104,7 +104,7 @@ test("the platform origin compares normalized", () => {
   expect(
     projectAddressOf(paths, new URL(`${PRD}/projects/p/site`), "https://OS.iterate.com:443"),
   ).toEqual({
-    app: "site",
+    routingSlug: "site",
     project: "p",
     basePath: "/projects/p/site",
   });
@@ -114,23 +114,23 @@ test("the platform origin compares normalized", () => {
 const urlRows: {
   routing: IngressRouting;
   origin: string;
-  target: { project: string; app?: string | null; path?: string };
+  target: { project: string; routingSlug?: string | null; path?: string };
   url: string | null;
   why: string;
 }[] = [
   {
     routing: subdomains,
     origin: PRD,
-    target: { project: "p", app: "site" },
+    target: { project: "p", routingSlug: "site" },
     url: "https://site--p.iterate.app/",
-    why: "an app, the root",
+    why: "a routing slug, the root",
   },
   {
     routing: subdomains,
     origin: PRD,
-    target: { project: "p", app: "site", path: "/a/b?c=1" },
+    target: { project: "p", routingSlug: "site", path: "/a/b?c=1" },
     url: "https://site--p.iterate.app/a/b?c=1",
-    why: "an app, a path with a query",
+    why: "a routing slug, a path with a query",
   },
   {
     routing: subdomains,
@@ -142,14 +142,14 @@ const urlRows: {
   {
     routing: subdomains,
     origin: PRD,
-    target: { project: "p", app: null, path: "/hooks" },
+    target: { project: "p", routingSlug: null, path: "/hooks" },
     url: "https://p.iterate.app/hooks",
     why: "the apex, a path",
   },
   {
     routing: { type: "subdomains", hostname: "localhost" },
     origin: DEV,
-    target: { project: "p", app: "site" },
+    target: { project: "p", routingSlug: "site" },
     url: "http://site--p.localhost:8788/",
     why: "local dev keeps the scheme and port",
   },
@@ -163,16 +163,16 @@ const urlRows: {
   {
     routing: paths,
     origin: PRD,
-    target: { project: "p", app: "site" },
+    target: { project: "p", routingSlug: "site" },
     url: `${PRD}/projects/p/site/`,
-    why: "an app, the root — a trailing slash so relative URLs resolve inside it",
+    why: "a routing slug, the root — a trailing slash so relative URLs resolve inside it",
   },
   {
     routing: paths,
     origin: PRD,
-    target: { project: "p", app: "site", path: "/a/b?c=1" },
+    target: { project: "p", routingSlug: "site", path: "/a/b?c=1" },
     url: `${PRD}/projects/p/site/a/b?c=1`,
-    why: "an app, a path with a query",
+    why: "a routing slug, a path with a query",
   },
   {
     routing: paths,
@@ -184,42 +184,42 @@ const urlRows: {
   {
     routing: paths,
     origin: DEV,
-    target: { project: "p", app: "site" },
+    target: { project: "p", routingSlug: "site" },
     url: `${DEV}/projects/p/site/`,
     why: "local dev",
   },
   {
     routing: null,
     origin: PRD,
-    target: { project: "p", app: "site" },
+    target: { project: "p", routingSlug: "site" },
     url: null,
     why: "no ingress",
   },
   {
     routing: subdomains,
     origin: PRD,
-    target: { project: "P", app: "site" },
+    target: { project: "P", routingSlug: "site" },
     url: null,
     why: "a bad slug composes nothing",
   },
   {
     routing: paths,
     origin: PRD,
-    target: { project: "p", app: "9site" },
+    target: { project: "p", routingSlug: "9site" },
     url: null,
-    why: "a bad app label composes nothing",
+    why: "a bad routing slug composes nothing",
   },
   {
     routing: paths,
     origin: PRD,
-    target: { project: "p", app: "site", path: "/../other" },
+    target: { project: "p", routingSlug: "site", path: "/../other" },
     url: null,
-    why: "a path may not climb out of its app",
+    why: "a path may not climb out of its routing slug",
   },
   {
     routing: paths,
     origin: PRD,
-    target: { project: "p", app: "site", path: "/../../q/x" },
+    target: { project: "p", routingSlug: "site", path: "/../../q/x" },
     url: null,
     why: "nor out of its project",
   },
@@ -236,8 +236,11 @@ test("every composed URL parses back to its target", () => {
   for (const { routing, origin, target, url } of urlRows) {
     if (!url) continue;
     const parsed = projectAddressOf(routing, new URL(url), origin);
-    expect(parsed, url).toMatchObject({ project: target.project, app: target.app || null });
-    // and the app sees the path it was given, once the edge strips basePath
+    expect(parsed, url).toMatchObject({
+      project: target.project,
+      routingSlug: target.routingSlug || null,
+    });
+    // and the config worker sees the path it was given, once the edge strips basePath
     const seen = new URL(url).pathname.slice(parsed!.basePath.length) + new URL(url).search;
     expect(seen, url).toBe(target.path || "/");
   }
@@ -273,41 +276,41 @@ test("no project wildcard names no project", () => {
   expect(projectWildcardHostOf("iterate.com", undefined)).toBeNull();
 });
 
-// ── customHostnameCandidatesOf ── a project's own hostname is its apex; one label under it, an app
+// ── customHostnameCandidatesOf ── a project's own hostname is its apex; one label under it, a routing slug
 test.each([
   {
     host: "iterate.somedomain.com",
     candidates: [
-      { hostname: "iterate.somedomain.com", app: null },
-      { hostname: "somedomain.com", app: "iterate" },
+      { hostname: "iterate.somedomain.com", routingSlug: null },
+      { hostname: "somedomain.com", routingSlug: "iterate" },
     ],
   },
   {
     host: "notes.iterate.somedomain.com",
     candidates: [
-      { hostname: "notes.iterate.somedomain.com", app: null },
-      { hostname: "iterate.somedomain.com", app: "notes" },
+      { hostname: "notes.iterate.somedomain.com", routingSlug: null },
+      { hostname: "iterate.somedomain.com", routingSlug: "notes" },
     ],
   },
   {
     host: "Notes.Iterate.SomeDomain.com.",
     candidates: [
-      { hostname: "notes.iterate.somedomain.com", app: null },
-      { hostname: "iterate.somedomain.com", app: "notes" },
+      { hostname: "notes.iterate.somedomain.com", routingSlug: null },
+      { hostname: "iterate.somedomain.com", routingSlug: "notes" },
     ],
   },
   // a bare domain's parent is a TLD, never a project's hostname
-  { host: "garple.com", candidates: [{ hostname: "garple.com", app: null }] },
-  // a first label that is no app label (a digit first, `--`) names no app: only the exact host
+  { host: "garple.com", candidates: [{ hostname: "garple.com", routingSlug: null }] },
+  // a first label that is no routing slug (a digit first, `--`) names no routing slug: only the exact host
   {
     host: "1st.iterate.somedomain.com",
-    candidates: [{ hostname: "1st.iterate.somedomain.com", app: null }],
+    candidates: [{ hostname: "1st.iterate.somedomain.com", routingSlug: null }],
   },
   {
     host: "a--b.iterate.somedomain.com",
-    candidates: [{ hostname: "a--b.iterate.somedomain.com", app: null }],
+    candidates: [{ hostname: "a--b.iterate.somedomain.com", routingSlug: null }],
   },
-  { host: "localhost", candidates: [{ hostname: "localhost", app: null }] },
+  { host: "localhost", candidates: [{ hostname: "localhost", routingSlug: null }] },
 ])("custom hostname candidates of $host", ({ host, candidates }) => {
   expect(customHostnameCandidatesOf(host)).toEqual(candidates);
 });

@@ -22,11 +22,12 @@ const FileUrlClaims = z.object({
 });
 
 const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
-/** The reserved app label a signed file URL hangs under: `files--<project>.<base>`. */
-export const FILES_APP_LABEL = "files";
+/** The reserved routing slug a signed file URL hangs under: `files--<project>.<base>` — served by
+ *  the edge before any config worker (worker.ts). */
+export const FILES_ROUTING_SLUG = "files";
 
 /** Mint a signed URL for `key` in `project`'s slice of the bucket: the claim names the project by
- *  id, the URL is the `files` app's in the project (project-ingress.ts `projectUrlOf` — `host` the
+ *  id, the URL is the `files` routing slug's in the project (project-ingress.ts `projectUrlOf` — `host` the
  *  project's slug, the label the edge admits a project by). Refused on a deployment with no project
  *  ingress (nothing could serve it). */
 export async function signedFileUrl(input: {
@@ -42,7 +43,7 @@ export async function signedFileUrl(input: {
   const path = `/${input.key.split("/").map(encodeURIComponent).join("/")}`;
   const url = projectUrlOf(input.routing, input.platformOrigin, {
     project: input.host,
-    app: FILES_APP_LABEL,
+    routingSlug: FILES_ROUTING_SLUG,
     path,
   });
   if (!url)

@@ -19,7 +19,7 @@ test("a GET with an empty Origin and no principal still redirects to sign in", (
   expect(response?.headers.get("Location")).toBe("/.auth/login?next=%2Fx");
 });
 
-// A WebSocket handshake is a GET, but it is checked like a write: every `<app>--<project>.iterate.app`
+// A WebSocket handshake is a GET, but it is checked like a write: every `<routingSlug>--<project>.iterate.app`
 // host is same-site with every other, so a SameSite=Lax cookie rides a socket another project opens.
 const signedIn = { "x-itx-principal": JSON.stringify({ actor: "user:1" }) };
 test.each<{ name: string; headers: Record<string, string>; status: number | null }>([

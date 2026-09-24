@@ -98,7 +98,7 @@ read secrets.
   (Chromium resolves `*.localhost` to loopback, and so does curl on current
   macOS). A client that does not should use `localhost:<port>` with a `Host`
   header. Deployed previews route projects as paths instead
-  (`/projects/<slug>/<app>/…`), because workers.dev has no wildcard
+  (`/projects/<slug>/<routingSlug>/…`), because workers.dev has no wildcard
   subdomains.
 - Local MCP is the platform route: `http://localhost:<port>/mcp`. The
   operator bearer works there (it reaches every project, so every call names

@@ -57,8 +57,11 @@ test("the Notes app works through a project config worker, and its session there
   await using fixture = await helpers.createFixture("notes-proxy");
   const { project } = fixture;
   const note = `Written on the independent app: ${project.slug}`;
-  // the same app on the project's `notes` label: notes--<project>.<hostname>
-  const proxiedUrl = projectUrlOf(ingressRouting, origin, { project: project.slug, app: "notes" })!;
+  // the same app on the project's `notes` routing slug: notes--<project>.<hostname>
+  const proxiedUrl = projectUrlOf(ingressRouting, origin, {
+    project: project.slug,
+    routingSlug: "notes",
+  })!;
   // A project host's `/.auth/*` is the OS edge's (apps/os/src/browser-client.ts), whose client
   // document names no app off the platform origin: the consent page names the client by its host.
   const proxied = { origin: proxiedUrl.origin, name: proxiedUrl.host, host: proxiedUrl.host };
@@ -75,20 +78,19 @@ test("the Notes app works through a project config worker, and its session there
       `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,
     );
   expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
-  // The fixture's operator handle installs the config worker and points the `notes` app label at it,
-  // so the app's host reaches the config worker with the app slug in x-iterate-app, and it fetches
-  // through to the Notes worker. Every app interaction after this is real browser RPC.
-  await Promise.all([
-    fixture.itx.append({
-      type: "events.iterate.com/project/ingress-configured",
-      payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
-    }),
-    fixture.itx.provide("itx.apps.notes", [
-      "itx",
-      "workers",
-      ["get", { source: { "cap.js": source } }],
-    ]),
-  ]);
+  // The fixture's operator handle publishes the config worker: every host of the project reaches it,
+  // `notes--<project>` with `x-iterate-routing-slug: notes`, and it fetches through to the Notes
+  // worker. Every app interaction after this is real browser RPC.
+  // after the project's own saga has published its seed, which would otherwise land after and win
+  await fixture.itx.waitForEvent({
+    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  await fixture.itx.append({
+    type: "events.iterate.com/project/ingress-configured",
+    payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
+  });
   // On its own origin: one note.
   await page.goto(notes.origin);
   await page

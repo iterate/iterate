@@ -25,6 +25,7 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -264,7 +265,7 @@ test("a personal access token — one OAuth grant the account mints, for one res
   const member = { email: `${slug}@example.com` };
   const projectId = await registerProject(slug, member);
   const other = await registerProject(otherSlug, member); // the same org: the USER reaches it, the token will not
-  await openItx(projectId).provide("itx.apps.echo", [
+  await publishConfigWorker(openItx(projectId), [
     "itx",
     "workers",
     ["get", { source: SRC_ECHO_APP }],
@@ -309,7 +310,7 @@ test("a personal access token — one OAuth grant the account mints, for one res
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
-  const echoOf = (project: string) => projectUrl({ project, app: "echo", path: "/" });
+  const echoOf = (project: string) => projectUrl({ project, routingSlug: "echo", path: "/" });
   const bearer = { Authorization: `Bearer ${token}` };
   const covered = await fetchProjectUrl(echoOf(slug), bearer);
   expect(covered, covered.text).toMatchObject({ status: 200 });

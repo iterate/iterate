@@ -1,6 +1,6 @@
 // src/project/custom-hostnames.ts — A PROJECT'S OWN HOSTNAMES: `iterate.example.com` serves the
-// project's apex and `<app>.iterate.example.com` its apps, exactly as `<project>.<hostname>` and
-// `<app>--<project>.<hostname>` do. Three parts, one file:
+// project's apex and `<routingSlug>.iterate.example.com` with that routing slug, exactly as `<project>.<hostname>` and
+// `<routingSlug>--<project>.<hostname>` do. Three parts, one file:
 //   the rule        which hostnames a project may add (`customHostnameProblem`) and the DNS records
 //                   its owner adds (`customHostnameRecords`), both pure
 //   Cloudflare      a WILDCARD Cloudflare for SaaS custom hostname on the deployment's SaaS zone

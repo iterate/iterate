@@ -36,6 +36,7 @@ import {
   deployedSubdomainsOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -249,7 +250,7 @@ deployedSubdomainsOnly(
     const slug = freshDnsSafeProjectSlug("secrets-arrive");
     const itx = openItx(await registerProject(slug));
     // an app that echoes two headers back, served at `echo--<slug>.<base>`
-    await itx.provide("itx.apps.echo", [
+    await publishConfigWorker(itx, [
       "itx",
       "workers",
       [
@@ -266,7 +267,7 @@ export default class Echo extends WorkerEntrypoint {
     ]);
     // the app's address; a secret is pinned to its ORIGIN (secrets.ts `originsOf`) — under paths that
     // is the platform's own origin, every project's apps included
-    const app = projectUrl({ project: slug, app: "echo", path: "/" }).href;
+    const app = projectUrl({ project: slug, routingSlug: "echo", path: "/" }).href;
     await itx.secrets.set("/secrets/arrives", "the-value", { urls: [app] });
     await itx.secrets.set("/secrets/arrives-json", { a: { b: "the-field" } }, { urls: [app] });
     // one request, one secret — the whole-string form, then the `{ field }` form of an object material

@@ -120,7 +120,7 @@ test("a signed URL downloads the file from the project host — content type, et
   const download = await itx.files.get("/docs/readme.md").url();
   // the `files` app's address for that path under the worker's routing, plus the token
   const signed = new URL(download.url);
-  const address = projectUrl({ project: slug, app: "files", path: "/docs/readme.md" });
+  const address = projectUrl({ project: slug, routingSlug: "files", path: "/docs/readme.md" });
   expect(`${signed.origin}${signed.pathname}`).toBe(`${address.origin}${address.pathname}`);
   expect(signed.searchParams.get("token")).toBeTruthy();
   expect(Date.parse(download.expiresAt)).toBeGreaterThan(Date.now() + 6 * 24 * 3600 * 1000);

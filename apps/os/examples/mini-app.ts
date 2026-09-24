@@ -1,9 +1,11 @@
 // examples/mini-app.ts — a super-simple, no-build userspace mini-app for a project.
 //
-// The WHOLE app is ONE loaded WorkerEntrypoint. A project registers it with a single rewrite rule:
+// The WHOLE app is ONE WorkerEntrypoint module. A project's config worker imports it beside its own
+// module (`mini-app.js`, this file with TS stripped) and routes a routing slug to it in plain code —
+// in the same isolate, so the page's WebSocket upgrade is served directly:
 //
-//   itx.provide("itx.apps.notes",
-//     "itx.workers.get({ source: { 'cap.js': <this file, TS stripped> }, cacheKey: 'notes:v1' })")
+//   if (request.headers.get("x-iterate-routing-slug") === "notes")
+//     return new MiniApp(this.ctx, this.env).fetch(request);
 //
 // and it is reachable at  https://notes--<project>.<base>/  (deployed) or
 //   http://notes.<project>.localhost:<port>/  (dev). No bundler, no framework build, no deploy step.

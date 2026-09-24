@@ -1,4 +1,4 @@
-// project-host.ts — reach the worker AS a project host (`<app>--<project>.<base>`, the one HTTP way
+// project-host.ts — reach the worker AS a project host (`<routingSlug>--<project>.<base>`, the one HTTP way
 // into a project). Against the local worker the hosts hang under `localhost`, which macOS does not
 // resolve and Node's fetch will not let a test override, so every request rides an undici Agent
 // whose connector dials the worker's own address and port whatever the URL says — the URL, the
@@ -51,16 +51,20 @@ export function ingressRouting(): IngressRouting {
 }
 
 /** `test`, skipped where the worker under test does not route projects by SUBDOMAIN — for what only a
- *  hostname can say: a host label outside the DNS grammar, the dotted `<app>.<project>` shape, an
- *  app's own `/.auth/*` routes (under paths an app shares the platform's origin, whose routes are the
+ *  hostname can say: a host label outside the DNS grammar, the dotted `<routingSlug>.<project>` shape, a
+ *  site's own `/.auth/*` routes (under paths an app shares the platform's origin, whose routes are the
  *  issuer's). Everything else composes its address with `projectUrl` and runs under both routings. */
 export const subdomainsOnly = test.skipIf(ingressRouting()?.type !== "subdomains");
 
 /** THE ONE COMPOSER a row addresses a project with — `projectUrlOf` (iterate/project-ingress)
- *  under the worker's routing and origin: `<app>--<project>.<hostname>` (the apex `<project>.<hostname>`)
- *  under subdomains, `<worker>/projects/<project>[/<app>]<path>` under paths. The rows never spell a
+ *  under the worker's routing and origin: `<routingSlug>--<project>.<hostname>` (the apex `<project>.<hostname>`)
+ *  under subdomains, `<worker>/projects/<project>[/<routingSlug>]<path>` under paths. The rows never spell a
  *  host; the platform's own `whoami().projectUrl`, a signed file URL and `itx.url` compose the same way. */
-export function projectUrl(target: { project: string; app?: string | null; path?: string }): URL {
+export function projectUrl(target: {
+  project: string;
+  routingSlug?: string | null;
+  path?: string;
+}): URL {
   const url = projectUrlOf(ingressRouting(), worker().origin, target);
   if (!url)
     throw new Error(
@@ -69,17 +73,21 @@ export function projectUrl(target: { project: string; app?: string | null; path?
   return url;
 }
 
-/** The URL the APP receives for `target`: the URL itself under subdomains; under paths the edge strips
- *  the `/projects/<project>[/<app>]` prefix before the app sees it (and says it in
- *  `x-iterate-base-path`), so the app sees `path` on the platform's own origin. */
-export function appSeesUrl(target: { project: string; app?: string | null; path?: string }): URL {
+/** The URL the config worker receives for `target`: the URL itself under subdomains; under paths
+ *  the edge strips the `/projects/<project>[/<routingSlug>]` prefix before the config worker sees
+ *  it (and says it in `x-iterate-base-path`), so it sees `path` on the platform's own origin. */
+export function appSeesUrl(target: {
+  project: string;
+  routingSlug?: string | null;
+  path?: string;
+}): URL {
   const url = projectUrl(target);
   if (ingressRouting()?.type !== "paths") return url;
-  const base = `/projects/${target.project}${target.app ? `/${target.app}` : ""}`;
+  const base = `/projects/${target.project}${target.routingSlug ? `/${target.routingSlug}` : ""}`;
   return new URL(`${url.pathname.slice(base.length) || "/"}${url.search}`, url.origin);
 }
 
-/** The hostname project hosts hang under — `<app>--<project>.<hostname>`, the apex
+/** The hostname project hosts hang under — `<routingSlug>--<project>.<hostname>`, the apex
  *  `<project>.<hostname>` — where the worker under test routes projects by subdomain. Only a
  *  `subdomainsOnly` row spells a host with it; every other row composes through `projectUrl`. */
 export function ingressHostname(): string {
@@ -122,6 +130,18 @@ const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): stri
 export async function registerProject(slug: string, as?: { email: string }): Promise<string> {
   using itx = await session().authenticate(adminCredentials(as)).projects.create({ project: slug });
   return (await itx.whoami()).projectId;
+}
+
+/** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
+ *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
+ *  saga publishes the seeded config repo, and an append before it lands would be overwritten. */
+export async function publishConfigWorker(itx: any, target: unknown): Promise<void> {
+  await itx.waitForEvent({
+    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  await itx.append({ type: "events.iterate.com/project/ingress-configured", payload: { target } });
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry

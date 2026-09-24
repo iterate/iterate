@@ -48,6 +48,7 @@ import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -442,8 +443,8 @@ deployedOnly(
     const webhookSecret = crypto.randomUUID();
     await petshopRegisterApp({ installationId, webhookSecret });
     await itx.secrets.set("/secrets/github-webhook", webhookSecret, { urls: [petshopBaseUrl()] });
-    await itx.provide("itx.apps.hooks", ["itx", "workers", ["get", { source: WEBHOOK_RECEIVER }]]);
-    const url = projectUrl({ project: slug, app: "hooks", path: "/github" }).href;
+    await publishConfigWorker(itx, ["itx", "workers", ["get", { source: WEBHOOK_RECEIVER }]]);
+    const url = projectUrl({ project: slug, routingSlug: "hooks", path: "/github" }).href;
 
     const event = { action: "created", pet: { id: "pet-9", name: "Moss" } };
     expect(await petshopFireAppWebhook({ installationId, url, event })).toMatchObject({

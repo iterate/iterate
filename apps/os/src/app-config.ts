@@ -95,8 +95,8 @@ export const AppConfig = z.object({
        *  origin being headless. Blank ⇒ the page names no dash. */
       dash: optionalOrigin,
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
-       *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard on
-       *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no
+       *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard on
+       *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<routingSlug>/…` from the one origin. Unset ⇒ no
        *  ingress: `/api` and `/mcp` still answer, no app is reachable over HTTP. */
       ingressRouting: z
         .object({
@@ -491,7 +491,7 @@ export function platformAddressesOf(env: AppConfigEnv, request: Request): Platfo
 }
 
 /** The project `url` is a host of by the deployment's STATIC rules: under the ingress routing
- *  (iterate/project-ingress: subdomains — a host under the wildcard; paths — `/<project>[/<app>]` on
+ *  (iterate/project-ingress: subdomains — a host under the wildcard; paths — `/projects/<project>[/<routingSlug>]` on
  *  the platform origin), or the project wildcard (an owned zone's apex and first-level names). A
  *  hostname a project added itself is the control plane's (control-plane/edge.ts `projectHostOf`). The platform and MCP origins are the
  *  platform's own even when their zone also has a project wildcard. What worker.ts admits a project

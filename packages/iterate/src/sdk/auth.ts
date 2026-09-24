@@ -10,7 +10,7 @@ const Principal = z.object({ actor: z.string().min(1), email: z.string().optiona
  * A WebSocket upgrade is treated like a write: it must come from this origin (or carry no Origin, a
  * non-browser client), and signed out it gets a 401, since a socket cannot follow the sign-in
  * redirect. The handshake is a GET, but it opens a two-way channel, and the app session cookie is
- * `SameSite=Lax`: every `<app>--<project>.iterate.app` host is same-site with every other, so a page
+ * `SameSite=Lax`: every `<routingSlug>--<project>.iterate.app` host is same-site with every other, so a page
  * on another project's host could otherwise open a socket to this app with the visitor's cookie. */
 export const auth = {
   require(request: Request): Response | null {

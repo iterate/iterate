@@ -1,15 +1,17 @@
 // fetch.e2e.test.ts — the ONE fetch, in and out. IN: a PROJECT HOST — a GET and a WebSocket
-// upgrade on `<app>--<project>.<base>` reach whatever `itx.apps.<app>`'s fetch() is: a LOADED WORKER
-// behind a rewrite rule (the site fixture — workerd-native WebSocketPair + 101) or a LENT RPC STUB
-// provided by a plain NODE capnweb client (the device/ESP32 shape: `new WebSocketPair()` +
-// `upgradeWebSocketResponse(pair[0])`, capnweb's universal pair + sender-side answer). OUT:
+// upgrade on `<routingSlug>--<project>.<base>` reach the project's config worker fetch(): a LOADED
+// WORKER published as the config worker (the site fixture — workerd-native WebSocketPair + 101), or a
+// config worker that routes the `device` routing slug in plain code to a LENT RPC STUB provided by a
+// plain NODE capnweb client (the device/ESP32 shape: `new WebSocketPair()` +
+// `upgradeWebSocketResponse(pair[0])`, capnweb's universal pair + sender-side answer), forwarding the
+// Request through its own `env.ITX.fetch` with `x-itx-expression` naming the stub. OUT:
 // `itx.fetch(request)` is THE egress path (the tutorial's chapter 8), a Request through the context's
 // own terminal — the LAST hop that owns the project scope. Layered so a regression names its hop. Pins:
-//   • a loaded worker as an app: GET → 200 HTML; WebSocket upgrade → 101 echo, clean close
-//   • a lent stub's plain HTTP fetch (eyeball → the project host → DO's expression fetch → rule → the rpcStubs
-//     registry → relay → capnweb → the Node provider and back, the request crossing intact — the
-//     URL as the eyeball spelled it) and its WebSocket upgrade (101, echo, close through the Node
-//     provider)
+//   • a loaded worker as the config worker: GET → 200 HTML; WebSocket upgrade → 101 echo, clean close
+//   • a lent stub's plain HTTP fetch (eyeball → the project host → DO's expression fetch → the config
+//     worker → its env.ITX.fetch → DO's expression fetch → rule → the rpcStubs registry → relay →
+//     capnweb → the Node provider and back, the request crossing intact — the URL as the eyeball
+//     spelled it) and its WebSocket upgrade (101, echo, close through the Node provider)
 //   • a hop count the platform never wrote (`NaN`) is over budget on arrival — a project host is the
 //     ONE HTTP way in (who a visitor is: ingress-project-host.e2e,
 //     __workers-tests__/project-host-routing.test.ts)
@@ -35,6 +37,7 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
+  publishConfigWorker,
   registerProject,
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";
@@ -42,14 +45,31 @@ import { SOURCES } from "./support/sources.ts";
 
 // ── the project host: HTTP and WebSocket, a loaded worker and a lent stub ──
 
-test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
+/** A config worker that routes the `device` routing slug to the lent stub at `itx.device` in plain
+ *  code: the Request, upgrade and body intact, forwarded through its own `env.ITX.fetch` with
+ *  `x-itx-expression` naming the stub — a native fetch hop, which carries a WebSocket (Workers RPC
+ *  does not). */
+const SRC_DEVICE_ROUTER = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Router extends WorkerEntrypoint {
+  fetch(request) {
+    if (request.headers.get("x-iterate-routing-slug") !== "device")
+      return new Response("Not found\\n", { status: 404 });
+    const headers = new Headers(request.headers);
+    headers.set("x-itx-expression", "itx.device");
+    return this.env.ITX.fetch(new Request(request, { headers }));
+  }
+}`,
+};
+
+test("a project host serves a LOADED WORKER as the config worker: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
   const slug = freshDnsSafeProjectSlug("capcode");
   const projectId = await registerProject(slug);
-  // A rule whose target is a stateless dynamic worker (its .fetch serves the host) — the target is
-  // an itx EXPRESSION (workers.get({ source })), same as every other rule.
+  // The config worker is a stateless dynamic worker (its .fetch serves every host of the project) —
+  // the target is an itx EXPRESSION (workers.get({ source })), same as every other target.
   const itx = openItx(projectId);
-  await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-  const site = projectUrl({ project: slug, app: "site", path: "/" });
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SOURCES.site }]]);
+  const site = projectUrl({ project: slug, routingSlug: "site", path: "/" });
 
   const page = await fetchProjectUrl(site);
   expect(page, page.text).toMatchObject({ status: 200 });
@@ -59,42 +79,41 @@ test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSock
   expect(ws.error).toBeUndefined();
   expect(ws).toMatchObject({ opened: true, echo: "site-echo:hello-from-eyeball", closeCode: 1000 });
 
-  // observability is the core reduce's snapshot (the rewrite above already committed, so the wake
-  // record has reduced)
+  // observability is the core reduce's snapshot (the publication above already committed, so the
+  // wake record has reduced)
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(typeof snap.state.incarnation).toBe("number");
 });
 
-test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node provider's fetch() and its Response rides back out", async () => {
+test("lent stub HTTP fetch: an eyeball POST on the project host reaches the config worker, which routes it to the Node provider's fetch(), and its Response rides back out", async () => {
   const slug = freshDnsSafeProjectSlug("caplivehttp");
   const projectId = await registerProject(slug);
   const device = new HttpDevice();
-  await session()
-    .authenticate(adminCredentials())
-    .projects.get(projectId)
-    .provide("itx.apps.device", device);
-  const target = { project: slug, app: "device", path: "/hunt?probe=1" };
+  const itx = session().authenticate(adminCredentials()).projects.get(projectId);
+  await itx.provide("itx.device", device);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_DEVICE_ROUTER }]]);
+  const target = { project: slug, routingSlug: "device", path: "/hunt?probe=1" };
 
   const res = await fetchProjectUrl(projectUrl(target), {}, { method: "POST", body: "ping" });
   expect(res, res.text).toMatchObject({ status: 201 });
   expect(res).toMatchObject({ text: "pong-from-node-provider" });
   expect(res.headers["x-device"]).toBe("node-live-cap");
-  // the URL as the eyeball spelled it (under paths: with the project prefix stripped, as the app sees it)
+  // the URL as the eyeball spelled it (under paths: with the project prefix stripped, as the config
+  // worker sees it)
   const seen = appSeesUrl(target);
   expect(device).toMatchObject({
     saw: [`POST ${seen.host}${seen.pathname}${seen.search} body=ping`],
   });
 });
 
-test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the Node provider", async () => {
+test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the config worker and the Node provider", async () => {
   const slug = freshDnsSafeProjectSlug("caplivews");
   const projectId = await registerProject(slug);
-  await session()
-    .authenticate(adminCredentials())
-    .projects.get(projectId)
-    .provide("itx.apps.device", new WsDevice());
-  const device = projectUrl({ project: slug, app: "device", path: "/" });
-  // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
+  const itx = session().authenticate(adminCredentials()).projects.get(projectId);
+  await itx.provide("itx.device", new WsDevice());
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_DEVICE_ROUTER }]]);
+  const device = projectUrl({ project: slug, routingSlug: "device", path: "/" });
+  // Sanity: the route still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetchProjectUrl(device);
   expect(plain).toMatchObject({ text: "http-fallback" });
 
@@ -110,7 +129,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
   // before admission — the count is read first, so the project need not exist
   const response = await fetchProjectUrl(
-    projectUrl({ project: freshDnsSafeProjectSlug("nan-hops"), app: "site", path: "/" }),
+    projectUrl({ project: freshDnsSafeProjectSlug("nan-hops"), routingSlug: "site", path: "/" }),
     { "x-itx-expression-hops": "NaN" },
   );
   expect(response).toMatchObject({ status: 508 });

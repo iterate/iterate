@@ -1,12 +1,13 @@
 // ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/worker.ts), the one HTTP way into a
-// project: an app is served at `/` on `<app>--<project>.<base>` and `<app>.<project>.<base>` with the
-// URL verbatim, so its relative asset loads from the same host; inbound `x-itx-*` never reach it and
-// `x-iterate-app` is the label the host selected, whatever a visitor sent; the apex `<project>.<base>`
-// names no app and lands on the config worker's `fetch` (the bundled default: 404; a project's own
-// routes it); a label with no rule is a 404; and — deployed — an upgrade rides through the host to the
-// app. The app is one rule row: the log never names a hostname. WHO, on a host: an OAuth bearer stamps the verified
-// principal; credentials never reach the app. Browser cookie flows are in specs/os/auth.spec.ts. RED, deployed: the hop budget counts only
-// what an app forwards — an app fetching its own host with a FRESH Request is not stopped by it.
+// project: EVERY host of a project — `<routingSlug>--<project>.<base>`, `<routingSlug>.<project>.<base>`
+// and the apex `<project>.<base>` — reaches the project's config worker `fetch` with the URL verbatim,
+// so a relative asset loads from the same host; inbound `x-itx-*` never reach it and
+// `x-iterate-routing-slug` is the slug the host names (absent on the apex), whatever a visitor sent;
+// a routing slug the config worker does not serve reaches it too, and its 404 is the config worker's;
+// and — deployed — an upgrade rides through the host to the config worker. The log never names a
+// hostname. WHO, on a host: an OAuth bearer stamps the verified principal; credentials never reach the
+// config worker. Browser cookie flows are in specs/os/auth.spec.ts. RED, deployed: the hop budget
+// counts only what a site forwards — a site fetching its own host with a FRESH Request is not stopped by it.
 
 import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
@@ -22,16 +23,21 @@ import {
   ingressRouting,
   projectHostsAreLocal,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 
-/** A site: HTML at `/` with a RELATIVE script, the script at `/app.js`, an echo of what it was handed
- *  at `/echo`, and a WebSocket echo on an upgrade. */
+/** A config worker routing in plain code: the apex and the `site` routing slug serve the site — HTML
+ *  at `/` with a RELATIVE script, the script at `/app.js`, an echo of what it was handed at `/echo`,
+ *  and a WebSocket echo on an upgrade — and any other routing slug is its own 404, naming the slug. */
 const SRC_SITE = {
   "cap.js": String.raw`import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   fetch(request) {
     const url = new URL(request.url);
+    const routingSlug = request.headers.get("x-iterate-routing-slug");
+    if (routingSlug !== null && routingSlug !== "site")
+      return new Response("the config worker serves no " + routingSlug + "\n", { status: 404 });
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
       pair[1].accept();
@@ -44,7 +50,7 @@ export default class Site extends WorkerEntrypoint {
       return Response.json({
         url: request.url,
         itxHeaders: [...request.headers.keys()].filter((name) => name.startsWith("x-itx-")),
-        app: request.headers.get("x-iterate-app"),
+        routingSlug,
         principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
         cookie: request.headers.get("cookie"),
         authorization: request.headers.get("authorization"),
@@ -58,26 +64,15 @@ export default class Site extends WorkerEntrypoint {
 }`,
 };
 
-/** A project's own config worker: `fetch` routes the apex host to the `site` app — the tutorial's
- *  shape (sdk/index.ts `ConfigWorker`). */
-const SRC_CONFIG_ROUTER = {
-  "cap.js": `import { ConfigWorker } from "./processor.js";
-export default class extends ConfigWorker {
-  fetch(request) {
-    return this.env.ITX.get().apps.site.fetch(request);
-  }
-}`,
-};
-
-test("an app is served at / on its project host — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-app the host's label; both app shapes; the apex is the config worker's fetch; a label with no rule is 404", async () => {
+test("every host of a project reaches its config worker — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; both shapes; an unknown routing slug reaches the config worker too", async () => {
   const slug = freshDnsSafeProjectSlug("ingress");
   const projectId = await registerProject(slug);
   const itx = openItx(projectId);
-  await itx.provide("itx.apps.site", siteRule());
-  const site = (path: string) => projectUrl({ project: slug, app: "site", path });
-  /** what the app sees of `path`: host, path and query (under paths, the project prefix stripped) */
+  await publishConfigWorker(itx, siteTarget());
+  const site = (path: string) => projectUrl({ project: slug, routingSlug: "site", path });
+  /** what the config worker sees of `path`: host, path and query (under paths, the prefix stripped) */
   const sees = (path: string) => {
-    const seen = appSeesUrl({ project: slug, app: "site", path });
+    const seen = appSeesUrl({ project: slug, routingSlug: "site", path });
     return `${seen.host}${seen.pathname}${seen.search}`;
   };
 
@@ -90,20 +85,24 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const asset = await fetchProjectUrl(site("/app.js"));
   expect(asset, asset.text).toMatchObject({ status: 200 });
   expect(asset.text).toContain("document.title");
-  // a visitor's x-itx-* never reach the app (the expression fetch's own header is set after the strip), and
-  // x-iterate-app is the label the address selected — a visitor's own is overwritten by the DO's
-  // expression fetch, from the expression
+  // a visitor's x-itx-* never reach the config worker (the expression fetch's own header is set after
+  // the strip), and x-iterate-routing-slug is the slug the address named — a visitor's own is
+  // overwritten by the edge
   const echo = await fetchProjectUrl(site("/echo"), {
     "x-itx-expression": "itx.kv",
     "x-itx-visitor": "1",
-    "x-iterate-app": "other",
+    "x-iterate-routing-slug": "other",
   });
-  const seen = JSON.parse(echo.text) as { url: string; itxHeaders: string[]; app: string | null };
+  const seen = JSON.parse(echo.text) as {
+    url: string;
+    itxHeaders: string[];
+    routingSlug: string | null;
+  };
   expect(seen.url).toContain(`//${sees("/echo")}`);
   expect(seen.itxHeaders).not.toContain("x-itx-expression");
   expect(seen.itxHeaders).not.toContain("x-itx-visitor");
-  expect(seen).toMatchObject({ app: "site" });
-  // the second app shape, `<app>.<project>.<base>`: the same row. LOCAL ONLY: a wildcard
+  expect(seen).toMatchObject({ routingSlug: "site" });
+  // the second shape, `<routingSlug>.<project>.<base>`: the same config worker. LOCAL ONLY: a wildcard
   // certificate covers ONE label under the base (`*.iterate.app`), and a wildcard
   // never matches two, so on the deployed worker this shape fails the TLS handshake until a
   // certificate per project subdomain exists — a deploy-side fact, not the edge's (the Workers suite
@@ -114,38 +113,25 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     expect(dotted, dotted.text).toMatchObject({ status: 200 });
     expect(dotted.text).toContain(`<p>site.${slug}.${routing.hostname}/w</p>`);
   }
-  // An apex with no site yet is 404. Publishing the router sends requests to
-  // `itx.apps.site.fetch`, which derives `x-iterate-app` from that expression.
-  // The wrapper's forwarded headers cannot override the resolved app label.
+  // the apex is the same config worker, with no routing slug — a visitor's is deleted by the edge
   const apexRoot = projectUrl({ project: slug, path: "/" });
-  const bare = await fetchProjectUrl(apexRoot);
-  expect(bare, bare.text).toMatchObject({ status: 404 });
-  expect(bare.text).toMatch(/no site yet/);
-  await itx.append({
-    type: "events.iterate.com/project/ingress-configured",
-    payload: {
-      target: [
-        "itx",
-        "workers",
-        ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
-      ],
-    },
-  });
-  const apex = await fetchProjectUrl(apexRoot, { "x-iterate-app": "other" });
+  const apex = await fetchProjectUrl(apexRoot, { "x-iterate-routing-slug": "site" });
   expect(apex, apex.text).toMatchObject({ status: 200 });
   expect(apex.text).toContain("<title>site</title>");
   // a path ON the apex reaches the config worker too — under subdomains: under paths the segment after
-  // `/projects/<slug>/` is an APP label, so the apex has its root alone (the paths design's one gap)
+  // `/projects/<slug>/` is a ROUTING SLUG, so the apex has its root alone (the paths design's one gap)
   if (routing?.type === "subdomains") {
     const echoed = await fetchProjectHost(`${slug}.${routing.hostname}`, "/echo", {
-      "x-iterate-app": "other",
+      "x-iterate-routing-slug": "site",
     });
     expect(echoed, echoed.text).toMatchObject({ status: 200 });
-    expect(JSON.parse(echoed.text)).toMatchObject({ app: "site" });
+    expect(JSON.parse(echoed.text)).toMatchObject({ routingSlug: null });
   }
-  // a label no rule serves is the expression fetch's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
-  const missing = await fetchProjectUrl(projectUrl({ project: slug, app: "other", path: "/" }));
-  expect(missing, missing.text).toMatchObject({ status: 404 });
+  // a routing slug the config worker does not serve still reaches it, the header set: its own 404
+  const missing = await fetchProjectUrl(
+    projectUrl({ project: slug, routingSlug: "other", path: "/" }),
+  );
+  expect(missing).toMatchObject({ status: 404, text: "the config worker serves no other\n" });
 });
 
 test("a project host verifies an OAuth bearer, strips credentials and rejects a grant for another project", async () => {
@@ -153,8 +139,8 @@ test("a project host verifies an OAuth bearer, strips credentials and rejects a 
   const member = { email: `${slug}@example.com` };
   const projectId = await registerProject(slug, member);
   const itx = openItx(projectId);
-  await itx.provide("itx.apps.site", siteRule());
-  const echoUrl = projectUrl({ project: slug, app: "site", path: "/echo" });
+  await publishConfigWorker(itx, siteTarget());
+  const echoUrl = projectUrl({ project: slug, routingSlug: "site", path: "/echo" });
   const { token, principal } = await oauthSession(projectId, member);
   const echo = await fetchProjectUrl(echoUrl, {
     Authorization: `Bearer ${token}`,
@@ -174,7 +160,7 @@ test("a project host verifies an OAuth bearer, strips credentials and rejects a 
   ).toMatchObject({ status: 403 });
 });
 
-/** An app that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */
+/** A config worker that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */
 const SRC_SELF_LOOP = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Loop extends WorkerEntrypoint {
@@ -183,7 +169,7 @@ export default class Loop extends WorkerEntrypoint {
 };
 
 // RED BY CONSTRUCTION: the hop budget (src/worker.ts `PROJECT_HOST_HOPS_HEADER`) is the count the
-// app FORWARDS — an app that fetches its own host with a fresh Request re-enters at 1 every pass,
+// site FORWARDS — a site that fetches its own host with a fresh Request re-enters at 1 every pass,
 // and the fourth pass is never reached. Deployed only: the local DO's fetch cannot resolve a
 // `*.localhost` host. OPT-IN (RUN_SELF_LOOP_PROBE=1), like the wake-loop probe: the row starts a
 // REAL self-nesting chain on the deployed worker that runs until the eyeball's 10 s abort — never
@@ -194,46 +180,51 @@ createFailing(
   /TimeoutError: The operation was aborted due to timeout/,
   { timeoutMs: 60_000, retries: process.env.CI ? E2E_CI_RETRIES : 0 },
 )(
-  "an app that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
+  "a site that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
   async () => {
     const slug = freshDnsSafeProjectSlug("ingress-loop");
     const itx = openItx(await registerProject(slug));
-    await itx.provide("itx.apps.loop", ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
-    const answer = await fetch(projectUrl({ project: slug, app: "loop", path: "/" }), {
+    await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
+    const answer = await fetch(projectUrl({ project: slug, path: "/" }), {
       signal: AbortSignal.timeout(10_000),
     });
     expect(answer).toMatchObject({ status: 508 });
   },
 );
 
-deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app", async () => {
-  const slug = freshDnsSafeProjectSlug("ingress-ws");
-  const itx = openItx(await registerProject(slug));
-  await itx.provide("itx.apps.site", siteRule());
-  const ws = new WebSocket(
-    projectUrl({ project: slug, app: "site", path: "/ws" }).href.replace(/^http/, "ws"),
-  );
-  const echo = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
-    ws.addEventListener("open", () => ws.send("hi"));
-    ws.addEventListener("message", (event) => {
-      clearTimeout(timer);
-      resolve(String(event.data));
+deployedOnly(
+  "deployed: a WebSocket upgrade on the project host reaches the config worker",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("ingress-ws");
+    const itx = openItx(await registerProject(slug));
+    await publishConfigWorker(itx, siteTarget());
+    const ws = new WebSocket(
+      projectUrl({ project: slug, routingSlug: "site", path: "/ws" }).href.replace(/^http/, "ws"),
+    );
+    const echo = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
+      ws.addEventListener("open", () => ws.send("hi"));
+      ws.addEventListener("message", (event) => {
+        clearTimeout(timer);
+        resolve(String(event.data));
+      });
+      ws.addEventListener("error", () => reject(new Error("WebSocket error")));
     });
-    ws.addEventListener("error", () => reject(new Error("WebSocket error")));
-  });
-  ws.close(1000, "done");
-  expect(echo).toBe("site-echo:hi");
-});
+    ws.close(1000, "done");
+    expect(echo).toBe("site-echo:hi");
+  },
+);
 
 // ADMISSION: a hostname for a project the control plane's catalog does not know is
 // 421 at the edge, before any project Durable Object is dialled — a stranger's label under the
 // wildcard mints nothing.
-test("an address for a project the catalog does not know is 421, and its label is never an app", async () => {
+test("an address for a project the catalog does not know is 421, whatever its routing slug", async () => {
   const unknown = freshDnsSafeProjectSlug("ingress-unknown"); // never registered
-  const answer = await fetchProjectUrl(projectUrl({ project: unknown, app: "site", path: "/" }));
+  const answer = await fetchProjectUrl(
+    projectUrl({ project: unknown, routingSlug: "site", path: "/" }),
+  );
   expect(answer, answer.text).toMatchObject({ status: 421 });
   expect(answer.text).toContain(unknown);
 });
 
-const siteRule = () => ["itx", "workers", ["get", { source: SRC_SITE }]];
+const siteTarget = () => ["itx", "workers", ["get", { source: SRC_SITE }]];

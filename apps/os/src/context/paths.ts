@@ -39,7 +39,7 @@ export type ResourceScope = {
  *  the OWNER SUBTREE: under `/users/<id>` or `/organizations/<id>` it is `{ id:
  *  "global--<kind>--<id>", rootPath: "/<kind>/<id>" }`, and the global root `/` (or any other global
  *  path) is `{ id: "global", rootPath: "/" }`, the kernel's own. The `--` join is the project-host
- *  label convention (`<app>--<project>`); the owner id is held to the projectId charset, so the
+ *  label convention (`<routingSlug>--<project>`); the owner id is held to the projectId charset, so the
  *  joined id stays inside `[A-Za-z0-9_-]` and the `:` and `.` delimiters still cannot collide, and
  *  no project can spell it (`DurableObjectNameCodec.address` refuses the prefix). User
  *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own

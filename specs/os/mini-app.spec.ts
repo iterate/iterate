@@ -1,6 +1,6 @@
 // A no-build userspace mini-app (Preact + capnweb from esm.sh, ONE HTML file) served by a project.
-// Proves the "super simple mini-app" path end to end: install the app worker on a project with ONE
-// itx.provide, open its project host, and a note round-trips through the app's OWN capnweb API
+// Proves the "super simple mini-app" path end to end: publish a config worker that routes the `notes`
+// routing slug to the app module in plain code, open its project host, and a note round-trips through the app's OWN capnweb API
 // (backed by the project's itx.kv). SWAPPABLE via DEMO_BASE_URL like the other specs; the signed-in
 // person and their project are the signed-in session fixture's, so it works local and deployed.
 import { readFileSync } from "node:fs";
@@ -31,17 +31,34 @@ test("a no-build mini-app served by a project persists a note through its own ca
   await using fixture = await helpers.createFixture("mini");
   const { project } = fixture;
 
-  // Install the mini-app as an app label — ONE rewrite rule. (The fixture's operator handle here; a
-  // project owner would run the same provide() through their own session.)
-  const source = transformSync(
+  // Publish a config worker that serves the mini-app on the `notes` routing slug — the app module
+  // beside a router that branches on x-iterate-routing-slug. (The fixture's operator handle here; a
+  // project owner commits the same worker to their config repo.)
+  const miniApp = transformSync(
     readFileSync(resolve(import.meta.dirname, "../../apps/os/examples/mini-app.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   ).code;
-  await fixture.itx.provide("itx.apps.notes", [
-    "itx",
-    "workers",
-    ["get", { source: { "cap.js": source } }],
-  ]);
+  const router = `import { WorkerEntrypoint } from "cloudflare:workers";
+import MiniApp from "./mini-app.js";
+export default class extends WorkerEntrypoint {
+  fetch(request) {
+    if (request.headers.get("x-iterate-routing-slug") === "notes")
+      return new MiniApp(this.ctx, this.env).fetch(request);
+    return new Response("Not found\\n", { status: 404 });
+  }
+}`;
+  // after the project's own saga has published its seed, which would otherwise land after and win
+  await fixture.itx.waitForEvent({
+    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  await fixture.itx.append({
+    type: "events.iterate.com/project/ingress-configured",
+    payload: {
+      target: ["itx", "workers", ["get", { source: { "cap.js": router, "mini-app.js": miniApp } }]],
+    },
+  });
 
   // Open the app on notes--<project>.<base> and prove a note round-trips through /rpc.
   const appOrigin = new URL(origin);

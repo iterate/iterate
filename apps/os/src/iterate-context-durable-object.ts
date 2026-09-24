@@ -37,7 +37,7 @@ import {
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
-import { projectUrlOf } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER, projectUrlOf } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
   ITX_APP_HEADER,
@@ -155,12 +155,6 @@ export interface Env extends AppConfigEnv {
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
 }
-
-/** The app label an app sees. Written only by `fetch` below,
- *  from the expression: the label of `itx.apps.<label>…`, deleted for any other expression — so
- *  neither a visitor on a project host nor loaded code on `env.ITX.fetch` can pick an app the
- *  expression did not. */
-const ITERATE_APP_HEADER = "x-iterate-app";
 
 export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operator RPC only. Bypass every project rewrite so no project code can observe
@@ -1103,8 +1097,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.appendWakeRecord("request");
     // The handlers, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
-    // terminal `fetch(request)`, dotted text from a project host (`itx.apps.<app>` or an explicit worker expression) or
-    // a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
+    // terminal `fetch(request)`, "" from a project host (the project's ingress target) or dotted text
+    // or JSON from a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
     // as its one runtime arg; the routing header is stripped so it never reaches the capability or
     // egress); everything else is EGRESS.
     // LOADED CODE's fetch (`ItxEntrypoint.fetch` set the header): neither the rpc-stub pager
@@ -1123,7 +1117,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       try {
         // The header is UNTRUSTED. Its JSON form comes from a session's terminal fetch
         // (`encodeFetchExpression`) or from loaded code's self-addressed `env.ITX.fetch`, which
-        // `ItxEntrypoint.fetch` forwards unchanged; the edge (worker.ts) only sets dotted text or "".
+        // `ItxEntrypoint.fetch` forwards unchanged; the edge (worker.ts) only sets "".
         // The resolver's `normalizedItxExpression` shape-checks it, and for loaded code the app wall
         // (`admitLoadedCodeExpression`) admits it, before anything runs.
         if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
@@ -1140,17 +1134,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);
-        // THE APP LABEL the app sees (`x-iterate-app`) is derived HERE from the
-        // expression, on every `x-itx-expression` Request — a project host's, a session's terminal fetch, a
-        // loaded worker's `env.ITX.fetch` — so whatever a visitor or loaded code wrote is overwritten
-        // (set to the label of `itx.apps.<label>…`, deleted for any other expression).
-        const appLabel =
-          itxExpression[0] === "itx" && itxExpression[1] === "apps"
-            ? itxExpressionStepName(itxExpression[2])
-            : undefined;
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- undefined means the expression is not `itx.apps.*` (delete the header); an app label from the untrusted expression, even empty, still sets it
-        if (appLabel === undefined) headers.delete(ITERATE_APP_HEADER);
-        else headers.set(ITERATE_APP_HEADER, appLabel);
+        // THE ROUTING SLUG (`x-iterate-routing-slug`) is the EDGE's alone: it rides only a
+        // project-host Request — the empty expression from outside loaded code, which only the edge
+        // sends (worker.ts sets or deletes the header there) — and is deleted from every other
+        // expression fetch (a session's terminal fetch, a loaded worker's `env.ITX.fetch`, even one
+        // spelling ""), so loaded code can never forge one.
+        if (itxExpressionHeader !== "" || app) headers.delete(ITERATE_ROUTING_SLUG_HEADER);
         // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
         // under that principal, and the header stays on the Request the app receives. Trusted here —
         // the edge sets it and ItxEntrypoint strips a loaded worker's, so it is the edge's JSON or absent.
