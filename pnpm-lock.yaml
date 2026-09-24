@@ -723,9 +723,6 @@ importers:
       pako:
         specifier: ^3.0.1
         version: 3.0.1
-      type-fest:
-        specifier: ^5.5.0
-        version: 5.5.0
       zod:
         specifier: 4.5.4
         version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
@@ -7042,10 +7039,6 @@ packages:
   type-fest@0.8.1:
     resolution: {integrity: sha512-4dbzIzqvjtgiM5rw1k5rEHtBANKmdudhGyBEajN01fEyhaAIhsoKNy6y7+IN93IfpFtwY9iqi7kD+xwKhQsNJA==}
     engines: {node: '>=8'}
-
-  type-fest@5.5.0:
-    resolution: {integrity: sha512-PlBfpQwiUvGViBNX84Yxwjsdhd1TUlXr6zjX7eoirtCPIr08NAmxwa+fcYBTeRQxHo9YC9wwF3m9i700sHma8g==}
-    engines: {node: '>=20'}
 
   type-fest@5.8.0:
     resolution: {integrity: sha512-YGYEVz3Fm5iy/AybuA0oyNFq7H4CgQNfRp/qfe8nurE1kuCeNm3/vfm9X4Mtl+qLyaKJUh5xrFZwogr41SMjYA==}
@@ -15190,10 +15183,6 @@ snapshots:
   type-fest@0.6.0: {}
 
   type-fest@0.8.1: {}
-
-  type-fest@5.5.0:
-    dependencies:
-      tagged-tag: 1.0.0
 
   type-fest@5.8.0:
     dependencies:

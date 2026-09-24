@@ -201,7 +201,11 @@ describe("which apps on top a preview run deploys", () => {
     ["the SDK: every app", ["packages/iterate/src/next/app.ts"], APPS.map((app) => app.name)],
     ["the shared UI: every app", ["packages/ui/src/button.tsx"], APPS.map((app) => app.name)],
     ["envs.ts: every app", ["envs.ts"], APPS.map((app) => app.name)],
-    ["shared utilities: every app", ["packages/shared/src/config.ts"], APPS.map((app) => app.name)],
+    [
+      "shared utilities: every app",
+      ["packages/shared/src/slugify.ts"],
+      APPS.map((app) => app.name),
+    ],
     ...["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"].map(
       (file): [string, string[], string[]] => [file, [file], APPS.map((app) => app.name)],
     ),

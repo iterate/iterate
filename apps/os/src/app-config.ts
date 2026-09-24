@@ -1,7 +1,7 @@
 // ── app config ── THE WORKER'S CONFIGURATION: ONE JSON object per deployment — the `APP_CONFIG`
-// Worker secret — parsed once per isolate by the shared env parser (`@iterate-com/shared/config`),
-// plus the platform-supplied deploy identity (the version-metadata binding). Loud on anything
-// malformed, at first use — never a silent default.
+// Worker secret — parsed once per isolate by `parseAppConfig` below, plus the platform-supplied
+// deploy identity (the version-metadata binding). Loud on anything malformed, at first use — never a
+// silent default.
 //
 // Configuration is what differs between deployments of the SAME code. A constant (a timeout, a
 // budget, the AI Gateway's name, the loaded-worker compatibility flags) is a property of the code and
@@ -20,7 +20,6 @@
 // it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept.
 
-import { compileRawAppConfigFromEnv, redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
 import {
   customProjectHostOf,
@@ -28,6 +27,31 @@ import {
   type IngressRouting,
   type ProjectAddress,
 } from "iterate/next/project-ingress";
+
+/** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
+ *  only "REDACTED", so a config dump can never leak it. */
+class Redacted<T> {
+  #value: T;
+  constructor(value: T) {
+    this.#value = value;
+  }
+  exposeSecret(): T {
+    return this.#value;
+  }
+  toString(): string {
+    return "REDACTED";
+  }
+  toJSON(): string {
+    return "REDACTED";
+  }
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return "Redacted {}";
+  }
+}
+
+function redacted<Schema extends z.ZodTypeAny>(schema: Schema) {
+  return schema.transform((value): Redacted<z.output<Schema>> => new Redacted(value));
+}
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
@@ -54,8 +78,8 @@ const dnsName = z
 
 /** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
  *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
- *  the shared env parser needs plain object schemas to check override keys against. Every object
- *  `prefault`s to `{}` so a deployment that names none of a block's keys still gets the block. */
+ *  `warnUnknownKeys` needs plain object schemas to check keys against. Every object `prefault`s to
+ *  `{}` so a deployment that names none of a block's keys still gets the block. */
 export const AppConfig = z.object({
   /** Where this deployment answers. Every one optional. */
   urls: z
@@ -163,7 +187,7 @@ export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string }; APP_CONFIG?: 
 };
 
 /** The override var a schema path answers to — `["urls", "os"]` → `APP_CONFIG_URLS__OS` — the inverse
- *  of the shared parser's mapping, so a boot error names both spellings a human might have used. */
+ *  of `overridesOf`, so a boot error names both spellings a human might have used. */
 function envVarNameOf(path: readonly (string | number | symbol)[]): string {
   return `APP_CONFIG_${path
     .map((segment) =>
@@ -179,9 +203,8 @@ function fieldNameOf(path: readonly (string | number | symbol)[]): string {
   return `APP_CONFIG ${path.map(String).join(".")} (${envVarNameOf(path)})`;
 }
 
-/** Warn, loudly, about a key the schema does not name — the shared parser does this for the
- *  `APP_CONFIG_*` overrides; this does it for the object itself, which reaches the schema whole. Walks
- *  the plain objects only; a record accepts any key. */
+/** Warn, loudly, about a key the schema does not name — in the object or an `APP_CONFIG_*` override,
+ *  checked once on the merged config. Walks the plain objects only; a record accepts any key. */
 function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): void {
   const object = z.record(z.string(), z.unknown()).safeParse(raw);
   if (!object.success) return;
@@ -206,11 +229,90 @@ function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): vo
   }
 }
 
+type PlainObject = Record<string, unknown>;
+
+function isPlainObject(value: unknown): value is PlainObject {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** The `APP_CONFIG` object itself; blank ⇒ `{}`. */
+function objectOf(appConfig: string | undefined): PlainObject {
+  if (!appConfig?.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(appConfig);
+  } catch (error) {
+    throw new Error("APP_CONFIG must be valid JSON", { cause: error });
+  }
+  if (!isPlainObject(parsed)) throw new Error("APP_CONFIG must be a JSON object");
+  return parsed;
+}
+
+/** The `APP_CONFIG_*` overrides as one nested object: `__` separates path segments and each
+ *  segment's SNAKE_CASE becomes camelCase (`APP_CONFIG_LOGIN__EMAIL_CODE__FROM` → `login.emailCode.from`).
+ *  A value that reads as JSON (`true`, `false`, `null`, an object, an array, a quoted string) is
+ *  parsed; anything else is the string itself. */
+function overridesOf(configEnv: Record<string, string>): PlainObject {
+  const overrides: PlainObject = {};
+  for (const [key, value] of Object.entries(configEnv)) {
+    if (!key.startsWith("APP_CONFIG_")) continue;
+    const path = key
+      .slice("APP_CONFIG_".length)
+      .split("__")
+      .map((segment) =>
+        segment
+          .toLowerCase()
+          .split("_")
+          .filter(Boolean)
+          .map((word, index) => (index === 0 ? word : word[0]!.toUpperCase() + word.slice(1)))
+          .join(""),
+      )
+      .filter(Boolean);
+    const last = path.pop();
+    if (!last) continue;
+    let target = overrides;
+    for (const segment of path) {
+      const existing = target[segment];
+      const next: PlainObject = isPlainObject(existing) ? existing : {};
+      target[segment] = next;
+      target = next;
+    }
+    target[last] = overrideValueOf(value);
+  }
+  return overrides;
+}
+
+function overrideValueOf(value: string): unknown {
+  const trimmed = value.trim();
+  const looksLikeJson =
+    ["true", "false", "null"].includes(trimmed) ||
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'));
+  if (!looksLikeJson) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+/** `overrides` over `base`, plain objects merged key by key; anything else replaced whole. */
+function deepMerge(base: PlainObject, overrides: PlainObject): PlainObject {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    const existing = merged[key];
+    merged[key] =
+      isPlainObject(existing) && isPlainObject(value) ? deepMerge(existing, value) : value;
+  }
+  return merged;
+}
+
 /** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
  *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; every test parses through it. A
  *  malformed field throws naming itself. */
 export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
-  const configEnv: Record<string, unknown> = {};
+  const configEnv: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (!(key === "APP_CONFIG" || key.startsWith("APP_CONFIG_"))) continue;
     if (typeof value !== "string" || !value.trim()) continue;
@@ -218,11 +320,7 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
   }
   let parsed: z.output<typeof AppConfig>;
   try {
-    const raw = compileRawAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: configEnv,
-    });
+    const raw = deepMerge(objectOf(configEnv.APP_CONFIG), overridesOf(configEnv));
     warnUnknownKeys(raw, AppConfig, []);
     parsed = AppConfig.parse(raw);
   } catch (error) {
