@@ -1,7 +1,7 @@
 // stream/stream.ts — THE STREAM, a dependency-injected class the context DO holds and drives. The
 // one thing it needs from its host is `onCommit` (the post-commit fan-out); nothing here reaches
-// back into the DO. `ReachableContext`, the seam one context reaches another through, is at the bottom.
-//   stream storage — `StreamStorage`, THE STREAM'S TABLES: every SQL statement the stream runs, over the one platform handle
+// back into the DO. `ReachableContext`, the interface one context reaches another through, is at
+// the bottom.
 //
 // EPHEMERALS COST ZERO WRITES. An ephemeral event takes an offset from the shared sequence but is
 // never stored — and an ephemeral-only batch touches storage NOT AT ALL: no row, no transaction, not
@@ -110,7 +110,7 @@ interface StreamDeps {
   wakeRecordDetail?: () => Record<string, unknown>;
 }
 
-/** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door, one
+/** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
  *  shared offset sequence (the header's ephemeral contract), and THE CORE REDUCE (core-processor.ts)
  *  reduced inside every commit and checkpointed with the rows it was reduced from. A body over
  *  EVENT_CHUNK_SIZE is chunked (`StreamStorage` below) — still ONE row at ONE offset. */
@@ -187,6 +187,7 @@ export class Stream {
         } catch (error) {
           // An unreadable row must not brick the context on every wake: report it, skip it, go on.
           if (errorCode(error) !== "EVENT_UNREADABLE") throw error;
+          // EVENT_UNREADABLE's one producer is `read` below, which codes it with `{ offset }`.
           const { offset } = (error as { data: { offset: number } }).data;
           reportIssue("stream.core-rereduce", error, { offset });
           this.#coreReducedThroughOffset = offset;
@@ -204,14 +205,14 @@ export class Stream {
 
   #wakeRecorded = false;
 
-  /** THE BIRTH RECORD — the DO constructor calls this before any door opens, so a probe on a
+  /** THE BIRTH RECORD — the DO constructor calls this before any handler runs, so a probe on a
    *  never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
    *  gets `stream/created { projectId, path }` at offset 1 and the first incarnation's wake record
    *  in the same batch (a birth is always a request's — nothing has an alarm before it exists). A
-   *  store with rows gets nothing here: its wake is recorded by the first door that opens
-   *  (`appendWakeRecord`), because only that door knows WHY it woke — workerd hides a firing alarm
-   *  from `getAlarm()` for the whole run, the constructor included. Both events are exempt from
-   *  pause: a paused stream still records its wake. */
+   *  store with rows gets nothing here: its wake is recorded by the first handler that runs (an
+   *  RPC, a fetch, the alarm: `appendWakeRecord`), because only that handler knows WHY it woke —
+   *  workerd hides a firing alarm from `getAlarm()` for the whole run, the constructor included.
+   *  Both events are exempt from pause: a paused stream still records its wake. */
   appendBirthRecord(): void {
     if (this.#highestDurableOffset !== 0) return;
     this.append(
@@ -228,8 +229,8 @@ export class Stream {
   }
 
   /** THE WAKE RECORD, once per incarnation: `stream/woken { incarnation, reason }` — `"alarm"` from
-   *  the alarm handler, `"request"` from every other door (an RPC, a fetch, a message on a hibernated
-   *  socket). The first arrival appends it, before its own work; the ones after find it done.
+   *  the alarm handler, `"request"` from every other handler (an RPC, a fetch, a message on a
+   *  hibernated socket). The first arrival appends it, before its own work; the ones after find it done.
    *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
    *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
    *  incarnation, and whoever asked reads the settlement, not a second attempt. */
@@ -292,13 +293,13 @@ export class Stream {
     return this.#highestDurableOffset;
   }
 
-  /** The core reduced state as of the last commit — what the append door, the dispatcher and the
+  /** The core reduced state as of the last commit — what `append`, the dispatcher and the
    *  delivery loop read, synchronously. */
   get coreReducedState(): CoreState {
     return this.#coreReducedState;
   }
 
-  /** `{ offset, state }` — the `itx.facets.get('core').snapshot()` door. */
+  /** `{ offset, state }` — what `itx.facets.get('core').snapshot()` answers. */
   coreReducedStateSnapshot(): { offset: number; state: CoreState } {
     return { offset: this.#coreReducedThroughOffset, state: this.#coreReducedState };
   }
@@ -322,7 +323,7 @@ export class Stream {
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
     for (const event of events) {
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement point (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
     }
@@ -347,6 +348,8 @@ export class Stream {
         : undefined;
       if (eventInput.idempotencyKey && !existingEvent) {
         const row = this.storage.readEventByIdempotencyKey(eventInput.idempotencyKey);
+        // row.body is the stored input plus createdAt, written only by the insert below; the row
+        // supplies the offset and the stream the path, which completes a StreamEvent.
         if (row)
           existingEvent = {
             ...(JSON.parse(row.body) as object),
@@ -377,7 +380,8 @@ export class Stream {
         );
       throughOffset = offset;
       // THE BODY, serialized once: the row carries the offset and the stream is the path, so the
-      // stored body is the input plus `createdAt`. THE APPEND CEILING (EVENT_BODY_MAX_CHARS) is
+      // stored body is the input plus `createdAt` — adding offset, createdAt and path to the input
+      // is what makes the StreamEvent cast below whole. THE APPEND CEILING (EVENT_BODY_MAX_CHARS) is
       // measured on it for every event alike — an ephemeral is never stored, but it rides every push
       // over the same 32 MiB RPC and sits in the same delivery memory.
       const serializedBody = JSON.stringify({ ...eventInput, createdAt });
@@ -405,7 +409,7 @@ export class Stream {
     // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
     // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
     // Folded here, ahead of the core reduce's own fold, because this refusal depends on the state
-    // and must land before any write: the reduce's batch door skips a throwing event, never refuses.
+    // and must land before any write: `reduceCoreEventBatch` skips a throwing event, never refuses.
     if (freshEvents.some((event) => event.type === "events.iterate.com/stream/append-scheduled")) {
       const scheduledAppends = freshEvents.reduce(
         reduceScheduledAppends,
@@ -462,7 +466,7 @@ export class Stream {
     return committedEvents;
   }
 
-  /** THE ONE DOOR into the core reduce — the commit's fresh events and each page of the constructor's
+  /** THE ONE CALL SITE of the core reduce — the commit's fresh events and each page of the constructor's
    *  re-reduce. A malformed control event must not wedge the stream: record the skip, move on. */
   #reduceEventsIntoCoreReducedState(events: StreamEvent[], state: CoreState): CoreState {
     return reduceCoreEventBatch(events, state, (error, event) =>
@@ -596,7 +600,7 @@ export class Stream {
 
 // ── stream storage ── THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
 // over the ONE platform handle — `ctx.storage.sql` and `transactionSync`. Workerd's kv
-// is itself a SQLite table, so the stream keeps none of its own: the whole seam is SQL, and a
+// is itself a SQLite table, so the stream keeps none of its own: the whole interface is SQL, and a
 // node:sqlite stand-in satisfies it in a screen (test-support.ts `nodeSqliteDurableObjectStorage`).
 //
 //   events                offset · body · idempotency_key   one row per durable event
@@ -773,10 +777,13 @@ class StreamStorage {
   }
 
   listSubscriptionCursors(): [name: string, cursor: SubscriptionCursor][] {
-    return this.#sql
-      .exec<{ name: string; cursor: string }>("SELECT name, cursor FROM subscription_cursors")
-      .toArray()
-      .map((row) => [String(row.name), JSON.parse(String(row.cursor)) as SubscriptionCursor]);
+    return (
+      this.#sql
+        .exec<{ name: string; cursor: string }>("SELECT name, cursor FROM subscription_cursors")
+        .toArray()
+        // `cursor` is written only by writeSubscriptionCursor, as JSON.stringify(SubscriptionCursor).
+        .map((row) => [String(row.name), JSON.parse(String(row.cursor)) as SubscriptionCursor])
+    );
   }
 
   writeSubscriptionCursor(name: string, cursor: SubscriptionCursor): void {
@@ -817,7 +824,7 @@ export interface ReachableContext {
     limit?: number,
     options?: { includeEphemeral?: boolean },
   ): Promise<StreamPage>;
-  /** THE dispatch door. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
+  /** THE dispatch entry point. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
    *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
    *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */
   invoke(call: ItxExpressionInput, args?: unknown[], caller?: Caller): Promise<unknown>;

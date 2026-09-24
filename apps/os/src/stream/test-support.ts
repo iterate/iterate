@@ -1,16 +1,14 @@
 /// <reference types="node" />
-// stream/test-support.ts — the in-memory stand-ins the unit lane drives the processor engine with.
+// stream/test-support.ts — the in-memory stand-ins the unit tests drive the processor engine with.
 // Imported by the `*.test.ts` files, never by production code — ONE copy, so the commit semantics
 // the tests assume cannot drift between files.
 //
-// `memoryStream` mirrors the Stream's commit semantics (one shared offset sequence, idempotency at
-// the door, the scanned-range proof) plus THE PUMP — a fire-and-forget `processEventBatch` to every
+// `memoryStream` mirrors the Stream's commit semantics (one shared offset sequence, idempotency on
+// append, the scanned-range proof) plus THE PUMP — a fire-and-forget `processEventBatch` to every
 // engine in `engines` after each append (awaited, it would deadlock a processor that appends during
 // its own batch). A short page's proof is the in-memory head, so the engine's stale-push and
 // ephemeral-window rules are exercised directly; the real Stream stops at the DURABLE mark
 // (stream.test.ts pins that against real SQL).
-//   node:sqlite durable object storage — `nodeSqliteDurableObjectStorage`, the `DurableObjectStorageSlice` over
-//   node:sqlite, so the REAL Stream runs in plain Node
 import { DatabaseSync } from "node:sqlite";
 import {
   idempotencyConflictMessage,
@@ -132,7 +130,7 @@ export function memoryStream(path = "/") {
 }
 
 /** A facet's checkpoint table (processor.ts `ReduceCheckpointTable`) over an in-memory
- *  node:sqlite database — the real table, so the unit lane checkpoints exactly as a facet does —
+ *  node:sqlite database — the real table, so the unit tests checkpoint exactly as a facet does —
  *  with `writes` counting every write: rule 4 ("one durable commit per batch") and the ephemeral
  *  zero-write rule are pinned by counting it. */
 class WriteCountingReduceCheckpointTable extends ReduceCheckpointTable {

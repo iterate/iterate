@@ -1,8 +1,8 @@
-// The processor engine's concurrency contract, rule by rule (stream/processor.ts's header): the
-// per-event barrier under slow and nested blockers (rule 2), background work that never blocks the
-// commit (rule 3), one durable commit per batch — all or nothing (rule 4), exactly one caughtUp per
-// at-head batch (rule 5), waitUntilProcessed under gap repair and concurrent timeouts, the
-// version-bump re-reduce's edges, a flaky live-state projection, and ephemeral windows across a stale
+// The processor engine's concurrency contract, rule by rule (the header of
+// packages/iterate/src/next/stream/processor.ts): the per-event barrier under slow and nested
+// blockers (rule 2), background work that never blocks the commit (rule 3), one durable commit per
+// batch — all or nothing (rule 4), exactly one caughtUp per at-head batch (rule 5),
+// waitUntilProcessed under gap repair and concurrent timeouts, the version-bump re-reduce's edges, a flaky live-state projection, and ephemeral windows across a stale
 // push, an eviction and a non-contiguous push. The hook-by-hook spec is processor.test.ts; the
 // in-memory stream and storage are stream/test-support.ts. Each processor is the pure author class
 // (`new X()`), driven by a `ProcessorEngine` — the engine is what wakes, snapshots and takes pushes.
@@ -30,8 +30,6 @@ const contractOf = (slug: string, version: string, consumes: readonly string[]) 
     consumes,
     emits: [],
   });
-
-// ═══════════════════════════════ rule 2 — the per-event barrier ═══════════════════════════════
 
 describe("rule 2 — per-event barrier under slow blockers", () => {
   test("event N's slow blocker completes (by timestamp) before event N+1's processEvent starts", async () => {
@@ -97,8 +95,6 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
   });
 });
 
-// ═══════════════════════ rule 3 — background work never blocks the commit ═══════════════════════
-
 describe("rule 3 — runInBackground never blocks the batch commit", () => {
   test("the batch commits (cursor persisted) while background work is still in flight; a bg failure never fails the batch", async () => {
     const mem = memoryStream();
@@ -133,8 +129,6 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     expect((await p.snapshot()).offset).toBe(2);
   });
 });
-
-// ═══════════════════════════ rule 4 — one durable commit per batch ═══════════════════════════
 
 describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
   test("a throwing REDUCE on the last event is contained: the batch still commits exactly once, the event is skipped", async () => {
@@ -270,8 +264,6 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
   });
 });
 
-// ═══════════════════════════════════ waitUntilProcessed ═══════════════════════════════════
-
 describe("waitUntilProcessed", () => {
   test("resolves for an offset that arrives via GAP REPAIR (no push ever delivered)", async () => {
     const mem = memoryStream();
@@ -391,8 +383,6 @@ describe("version bump re-reduce", () => {
   });
 });
 
-// ═══════════════════════════════ live state — flaky projections ═══════════════════════════════
-
 describe("live state with a projection that throws only sometimes", () => {
   test("state advances through the throwing window; the chain resumes and stays linked", async () => {
     const mem = memoryStream();
@@ -438,8 +428,6 @@ describe("live state with a projection that throws only sometimes", () => {
     expect(next.from).toBe(healed.to); // linked exactly — from === the previous emission's to
   });
 });
-
-// ═══════════════════════════ ephemeral windows, eviction, repair ═══════════════════════════
 
 describe("ephemeral windows and repair", () => {
   const EphContract = contractOf("ephwin", "1", ["tick", "chunk"]); // chunk arrives ephemeral — NAMED
@@ -513,7 +501,7 @@ describe("ephemeral windows and repair", () => {
     // An ephemeral is lost only when nobody could deliver it. Here the processor is alive and WAS
     // handed the event: a non-contiguous push repairs the log up to its scannedAfterOffset and then
     // consumes the pushed batch itself — otherwise one transient failure would swallow a whole
-    // window of the named ephemerals voice/telemetry lanes ride (pushes are their ONLY delivery).
+    // window of the named ephemerals voice and telemetry streams ride (pushes are their ONLY delivery).
     const mem = memoryStream();
     const storage = memoryStorage();
     let attempts = 0;

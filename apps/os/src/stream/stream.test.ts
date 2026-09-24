@@ -3,7 +3,7 @@
 // (test-support.ts's nodeSqliteDurableObjectStorage — the same SQL the DO's storage runs; nothing here needs
 // workerd): waitForEvent's wait/settle/timeout mechanics, what construction writes, the wake record
 // (`appendBirthRecord()` + `appendWakeRecord()` — explicit calls here; in production the DO's
-// first act), the pause check, the zero-write ephemeral contract and the step-1 refusals. Every
+// first act), the pause check, the zero-write ephemeral contract and the step-2 refusals. Every
 // test constructs a BARE Stream with no-op host deps — no wake record unless the test appends one.
 
 import { expect, test } from "vitest";
@@ -140,7 +140,7 @@ test("waitForEvent: a timed-out wait writes nothing — construction made the ta
     (e: unknown) => e,
   );
   expect(errorCode(err)).toBe("WAIT_TIMEOUT");
-  // The constructor opened storage (both tables, incarnation 1) — the wait itself wrote nothing.
+  // The constructor opened storage (its tables, incarnation 1) — the wait itself wrote nothing.
   const tables = storage.sql
     .exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")
     .toArray()
@@ -332,7 +332,7 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
 
 // ── THE BIRTH AND WAKE RECORDS (`appendBirthRecord()` / `appendWakeRecord()`): created + woken on a fresh store, woken only on a store with rows ──
 
-test('the wake record says WHY, from the door that opened: a birth is a request\'s; a later incarnation records what its first door says — "alarm" from the alarm handler, "request" from any other — once', () => {
+test('the wake record says WHY, from the handler that ran first: a birth is a request\'s; a later incarnation records what its first handler says — "alarm" from the alarm handler, "request" from any other — once', () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
   first.appendBirthRecord();
@@ -413,7 +413,7 @@ test("the wake record settles what the last incarnation left open: every core `s
   ]);
 });
 
-test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch; the first append lands at 3; a later incarnation over the same store gets woken only, from its first door (appendWakeRecord)", () => {
+test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch; the first append lands at 3; a later incarnation over the same store gets woken only, from its first handler (appendWakeRecord)", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const batches: StreamEvent[][] = [];
   const first = bareStream({ storage, batches });
@@ -471,7 +471,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
     "events.iterate.com/stream/woken",
     "events.iterate.com/stream/paused",
   ]);
-  // a non-control append is refused at the door, CODED, committing nothing and burning no offset
+  // a non-control append is refused on append, CODED, committing nothing and burning no offset
   let err: unknown;
   try {
     stream.append({ type: "work" });
@@ -493,7 +493,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
   expect(stream.append({ type: "work" })[0].offset).toBe(5);
 });
 
-test("a raw subscription-configured lands at the stream: a name is the command door's to refuse (core-processor.test.ts pins `core` and the prototype keys)", () => {
+test("a raw subscription-configured lands at the stream: a name is normalizeControlEvent's to refuse (core-processor.test.ts pins `core` and the prototype keys)", () => {
   const stream = bareStream();
   const [event] = stream.append({
     type: CONFIGURED,
@@ -633,7 +633,7 @@ test("a warm ephemeral-only append runs NO SQL at all (no read, no write, no tra
   expect(counts).toEqual({ exec: 0, txn: 0 });
 });
 
-// ── STEP 1 REFUSALS: idempotency and the expected-offset precondition, decided before any write ──
+// ── STEP 2 REFUSALS: idempotency and the expected-offset precondition, decided before any write ──
 
 test("idempotency: same key + same body echoes the EXISTING event (no row, no offset); a different body under the key refuses the WHOLE batch before any write; a duplicate inside one batch is one row, two receipts", () => {
   const stream = bareStream();
@@ -694,7 +694,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
   const first = bareStream({ storage });
   first.appendBirthRecord();
   first.appendWakeRecord("request");
-  const birthRow = {
+  const configureEvent = {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name: "config",
@@ -703,20 +703,20 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
     },
     idempotencyKey: "config-subscription",
   };
-  const [configured] = first.append(birthRow);
+  const [configured] = first.append(configureEvent);
   first.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
   expect(first.coreReducedState.paused).toEqual({ reason: "operator" });
 
   // A fresh event is still refused…
   expect(() => first.append({ type: "mark" })).toThrow(/stream paused/);
   // …the replay lands as the event it already is, and consumes no offset.
-  expect(first.append(birthRow)[0].offset).toBe(configured.offset);
+  expect(first.append(configureEvent)[0]).toMatchObject({ offset: configured.offset });
 
-  // The next incarnation (what an eviction makes): its constructor's replay, then the resume.
+  // The next incarnation (what an eviction makes): the same replay, then the resume.
   const second = bareStream({ storage });
   second.appendBirthRecord();
   second.appendWakeRecord("request");
-  expect(second.append(birthRow)[0].offset).toBe(configured.offset);
+  expect(second.append(configureEvent)[0]).toMatchObject({ offset: configured.offset });
   second.append({ type: "events.iterate.com/stream/resumed" });
   expect(second.coreReducedState.paused).toBeNull();
   expect(second.append({ type: "mark" })[0].type).toBe("mark");

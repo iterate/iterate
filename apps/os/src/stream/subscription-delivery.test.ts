@@ -8,16 +8,16 @@
 //     memory-budget.test.ts's row; this file is the semantics.
 //   • A RESUME wakes a halted facet row NOW, on the incarnation that halted it or a fresh one: the
 //     resume classifies the row by evaluating its target, never by what this incarnation remembers.
-//   • THE CURSOR LANE across an eviction and a replace: the alarm's ROW-driven pass recovers a first
+//   • CURSOR DELIVERY across an eviction and a replace: the alarm's ROW-driven pass recovers a first
 //     delivery an eviction interrupted, a row replaced mid-delivery delivers to the NEW target, and a
 //     two-step target (`itx.<alias>`, the spelling every `provide` mints) is the callee itself.
-//   • HALT ONCE, FOR THE RIGHT ROW (v4 §2.3): a push queued behind a delivery never lands on a row
+//   • HALT ONCE, FOR THE RIGHT ROW: a push queued behind a delivery never lands on a row
 //     that halted meanwhile; a facet catch-up refused for good halts the row like a push's refusal;
 //     a push and a resume's catch-up seeing the same refusal append ONE fact; a refusal of a call
 //     made for a row since replaced halts nothing.
 //   • `subscribe({ afterOffset })`: the cursor is born where the row asked (0 = the whole log) and
-//     the configure is its wake — history is delivered now; the push lane is unaffected.
-//   • THE CURSOR LANE'S READ RESERVATION is never re-acquired while held: a page whose events
+//     the configure is its wake — history is delivered now; push delivery is unaffected.
+//   • CURSOR DELIVERY'S READ RESERVATION is never re-acquired while held: a page whose events
 //     serialize past it (a body near the ceiling plus its envelope) is delivered, and the other
 //     cursor rows keep flowing.
 //   • A rule RE-POINT re-classifies: a facet row re-pointed at a cursor target leaves the push set,
@@ -104,7 +104,7 @@ function incarnation(
     reconcileAlarm: () => coordinator.reconcile(),
   });
   stream.appendBirthRecord(); // created + woken on a fresh store…
-  stream.appendWakeRecord("request"); // …the wake alone on one with rows, as the DO's first door records it
+  stream.appendWakeRecord("request"); // …the wake alone on one with rows, as the DO's first handler records it
   return {
     storage,
     stream,
@@ -235,7 +235,7 @@ describe("an operator's resume wakes a halted FACET row now — the facet catche
     await rig.release();
     expect(rig.facetMethods.slice(before)).toEqual(["catchUpFromLog"]);
     expect(rig.stream.coreReducedState.subscriptions.slow.halted).toBeUndefined();
-    expect(rig.delivery.cursor("slow")).toBeUndefined(); // a facet owns its progress — never this lane's
+    expect(rig.delivery.cursor("slow")).toBeUndefined(); // a facet owns its progress — no cursor
   });
 });
 
@@ -305,7 +305,7 @@ describe("halt once, for the right row", () => {
 
   test("a push answered with a PIPELINED refusal (a sibling hop's FORBIDDEN) is settled before it is released — the row halts, the batch is never acked as delivered", async () => {
     // On workerd a call on a sibling context answers with a branded promise the step walk hands back
-    // UNAWAITED (expression.ts). Before the delivery loop settled it, the branded rejection was
+    // UNAWAITED (expression.ts). Unless the delivery loop settles it, the branded rejection is
     // released unseen and the push counted as delivered. A brand registered here stands in for it.
     class PipelinedAnswer<T> extends Promise<T> {}
     registerPipelinedRpcBrand(PipelinedAnswer);
@@ -384,48 +384,48 @@ describe("halt once, for the right row", () => {
 /** The `n` of each delivered event — what a sink saw, in order. */
 const ns = (events: { payload?: { n?: number } }[]) => events.map((e) => e.payload?.n ?? -1);
 
-describe("subscribe({ afterOffset }) — the cursor lane starts where the row asked", () => {
-  test("a row configured with afterOffset: 0 after three durable events delivers those three NOW (its configure is its wake); a row without it starts from its configure offset; both take what lands next", async () => {
-    const history: number[][] = [];
-    const now: number[][] = [];
-    const rig = incarnation((printed) =>
-      printed === "itx.history"
-        ? { push: (events: { payload?: { n?: number } }[]) => void history.push(ns(events)) }
-        : printed === "itx.now"
-          ? { push: (events: { payload?: { n?: number } }[]) => void now.push(ns(events)) }
-          : undefined,
-    );
-    for (const n of [1, 2, 3]) rig.stream.append({ type: "demo/ping", payload: { n } });
-    rig.stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "now", target: "itx.now.push", consumes: ["demo/ping"] },
+// ── subscribe({ afterOffset }) — cursor delivery starts where the row asked ──
+
+test("a row configured with afterOffset: 0 after three durable events delivers those three NOW (its configure is its wake); a row without it starts from its configure offset; both take what lands next", async () => {
+  const history: number[][] = [];
+  const now: number[][] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.history"
+      ? { push: (events: { payload?: { n?: number } }[]) => void history.push(ns(events)) }
+      : printed === "itx.now"
+        ? { push: (events: { payload?: { n?: number } }[]) => void now.push(ns(events)) }
+        : undefined,
+  );
+  for (const n of [1, 2, 3]) rig.stream.append({ type: "demo/ping", payload: { n } });
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "now", target: "itx.now.push", consumes: ["demo/ping"] },
+      },
+      "/",
+    ),
+  );
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "history",
+          target: "itx.history.push",
+          consumes: ["demo/ping"],
+          afterOffset: 0,
         },
-        "/",
-      ),
-    );
-    rig.stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "history",
-            target: "itx.history.push",
-            consumes: ["demo/ping"],
-            afterOffset: 0,
-          },
-        },
-        "/",
-      ),
-    );
-    await settled();
-    expect({ history, now }).toEqual({ history: [[1, 2, 3]], now: [] });
-    expect(rig.delivery.cursor("history")?.confirmedOffset).toBe(rig.stream.highestDurableOffset());
-    rig.stream.append({ type: "demo/ping", payload: { n: 4 } });
-    await settled();
-    expect({ history, now }).toEqual({ history: [[1, 2, 3], [4]], now: [[4]] });
-  });
+      },
+      "/",
+    ),
+  );
+  await settled();
+  expect({ history, now }).toEqual({ history: [[1, 2, 3]], now: [] });
+  expect(rig.delivery.cursor("history")?.confirmedOffset).toBe(rig.stream.highestDurableOffset());
+  rig.stream.append({ type: "demo/ping", payload: { n: 4 } });
+  await settled();
+  expect({ history, now }).toEqual({ history: [[1, 2, 3], [4]], now: [[4]] });
 });
 
 describe('a wake reaches every "*" row and leaves nothing armed', () => {
@@ -488,224 +488,223 @@ describe('a wake reaches every "*" row and leaves nothing armed', () => {
   });
 });
 
-describe("the cursor lane across an eviction and a replace", () => {
-  test("the alarm's cursor pass recovers a row whose FIRST delivery an eviction interrupted — from the claim written before the call, and the lane had armed the alarm to come back", async () => {
-    let ackInterrupted!: () => void;
-    const interrupted = new Promise<void>((r) => (ackInterrupted = r));
-    const beforeEviction: number[] = [];
-    const afterEviction: number[] = [];
-    const first = incarnation((printed) =>
+// ── cursor delivery across an eviction and a replace ──
+
+test("the alarm's cursor pass recovers a row whose FIRST delivery an eviction interrupted — from the claim written before the call, and the loop had armed the alarm to come back", async () => {
+  let ackInterrupted!: () => void;
+  const interrupted = new Promise<void>((r) => (ackInterrupted = r));
+  const beforeEviction: number[] = [];
+  const afterEviction: number[] = [];
+  const first = incarnation((printed) =>
+    printed === "itx.sink"
+      ? {
+          push: async (events: { payload?: { n?: number } }[]) => {
+            beforeEviction.push(...ns(events));
+            await interrupted; // the delivery the eviction interrupts
+          },
+        }
+      : undefined,
+  );
+  first.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      },
+      "/",
+    ),
+  );
+  const armedBeforeAnyDelivery = first.alarms.length;
+  first.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  first.stream.append({ type: "demo/ping", payload: { n: 2 } });
+  await settled();
+  expect(beforeEviction).toEqual([1, 2]); // both landed before the loop's read: one batch, in flight, never acked
+  // …so the table holds the CLAIM written before the call (attempt 1, a time to come back by),
+  // never an ack…
+  expect(first.stream.storage.listSubscriptionCursors()).toMatchObject([
+    [
+      "s",
+      {
+        attempt: 1,
+        confirmedOffset: first.stream.coreReducedState.subscriptions.s.configuredAtOffset,
+      },
+    ],
+  ]);
+  expect(first.alarms.length).toBeGreaterThan(armedBeforeAnyDelivery); // …and the loop armed the alarm
+
+  // THE EVICTION: a fresh incarnation over the same storage — the log and the kv, nothing else.
+  const second = incarnation(
+    (printed) =>
       printed === "itx.sink"
         ? {
-            push: async (events: { payload?: { n?: number } }[]) => {
-              beforeEviction.push(...ns(events));
-              await interrupted; // the delivery the eviction interrupts
-            },
+            push: (events: { payload?: { n?: number } }[]) =>
+              void afterEviction.push(...ns(events)),
           }
         : undefined,
-    );
-    first.stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-        },
-        "/",
-      ),
-    );
-    const armedBeforeAnyDelivery = first.alarms.length;
-    first.stream.append({ type: "demo/ping", payload: { n: 1 } });
-    first.stream.append({ type: "demo/ping", payload: { n: 2 } });
-    await settled();
-    expect(beforeEviction).toEqual([1, 2]); // both landed before the loop's read: one batch, in flight, never acked
-    // …so the table holds the CLAIM written before the call (attempt 1, a time to come back by),
-    // never an ack…
-    expect(first.stream.storage.listSubscriptionCursors()).toMatchObject([
-      [
-        "s",
-        {
-          attempt: 1,
-          confirmedOffset: first.stream.coreReducedState.subscriptions.s.configuredAtOffset,
-        },
-      ],
-    ]);
-    expect(first.alarms.length).toBeGreaterThan(armedBeforeAnyDelivery); // …and the lane armed the alarm
-
-    // THE EVICTION: a fresh incarnation over the same storage — the log and the kv, nothing else.
-    const second = incarnation(
-      (printed) =>
-        printed === "itx.sink"
-          ? {
-              push: (events: { payload?: { n?: number } }[]) =>
-                void afterEviction.push(...ns(events)),
-            }
-          : undefined,
-      first.storage,
-    );
-    expect(Object.keys(second.stream.coreReducedState.subscriptions)).toEqual(["s"]); // the row survived
-    vi.useFakeTimers({ now: second.delivery.cursor("s")!.nextAttemptAtMs! + 1, toFake: ["Date"] });
-    try {
-      await second.delivery.deliverEveryCursorSubscription(); // THE ALARM'S OWN DOOR, past the claim
-    } finally {
-      vi.useRealTimers();
-    }
-    await settled();
-    expect(afterEviction).toEqual([1, 2]);
-    ackInterrupted(); // (releases the first incarnation's watchdog — no timer outlives the test)
-  });
-
-  test("a row re-configured onto a NEW target while a delivery is in flight delivers the next batch to the NEW target", async () => {
-    const sinkA: number[][] = [];
-    const sinkB: number[][] = [];
-    let releaseSinkA!: () => void;
-    const sinkAGate = new Promise<void>((r) => (releaseSinkA = r));
-    // Both targets are three-step (`itx.<sink>.push`), so the head/method split is the normal one.
-    const { stream } = incarnation((printed) => {
-      if (printed === "itx.sinkA")
-        return {
-          push: async (events: { payload?: { n?: number } }[]) => {
-            sinkA.push(ns(events));
-            await sinkAGate;
-          },
-        };
-      if (printed === "itx.sinkB")
-        return { push: (events: { payload?: { n?: number } }[]) => void sinkB.push(ns(events)) };
-      return undefined;
-    });
-    stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "s", target: "itx.sinkA.push", consumes: ["demo/ping"] },
-        },
-        "/",
-      ),
-    );
-    stream.append({ type: "demo/ping", payload: { n: 1 } });
-    await settled();
-    expect(sinkA).toEqual([[1]]); // the first batch is in flight, parked on the gate
-
-    // The row is REPLACED while that delivery is parked, and a second batch lands behind it.
-    stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "s", target: "itx.sinkB.push", consumes: ["demo/ping"] },
-        },
-        "/",
-      ),
-    );
-    stream.append({ type: "demo/ping", payload: { n: 2 } });
-    await settled();
-    releaseSinkA();
-    await settled();
-    expect({ sinkA, sinkB }).toEqual({ sinkA: [[1]], sinkB: [[2]] });
-  });
-
-  test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS the callee: delivered to whole, never split into a bare root and a method", async () => {
-    const delivered: number[][] = [];
-    const { stream, evaluated } = incarnation((printed) =>
-      // What a rewrite rule resolves `itx.sink` to: the bare callable a client lent.
-      printed === "itx.sink"
-        ? (events: { payload?: { n?: number } }[]) => void delivered.push(ns(events))
-        : undefined,
-    );
-    stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "mirror", target: "itx.sink", consumes: ["demo/ping"] },
-        },
-        "/",
-      ),
-    );
-    stream.append({ type: "demo/ping", payload: { n: 1 } });
-    await settled();
-    // the target evaluated is `itx.sink` itself — at configure, then per commit that reached the row
-    expect(delivered).toEqual([[1]]);
-    expect(evaluated.length).toBeGreaterThan(0);
-    expect(evaluated.every((printed) => printed === "itx.sink")).toBe(true);
-  });
+    first.storage,
+  );
+  expect(Object.keys(second.stream.coreReducedState.subscriptions)).toEqual(["s"]); // the row survived
+  vi.useFakeTimers({ now: second.delivery.cursor("s")!.nextAttemptAtMs! + 1, toFake: ["Date"] });
+  try {
+    await second.delivery.deliverEveryCursorSubscription(); // THE ALARM'S OWN PASS, past the claim
+  } finally {
+    vi.useRealTimers();
+  }
+  await settled();
+  expect(afterEviction).toEqual([1, 2]);
+  ackInterrupted(); // (releases the first incarnation's watchdog — no timer outlives the test)
 });
 
-describe("the cursor lane's read reservation is never re-acquired while held", () => {
-  // The read branch reserves the whole cursor budget (8 MiB) before its read. A page's BODIES fill
-  // the read budget (8 MiB of stored bytes) and each event's offset and path ride on top, so a full
-  // page serializes PAST the reservation. Acquiring the overshoot while holding the whole budget
-  // waited on the reservation itself — forever — and every other cursor row on the context behind it.
-  test.each([
-    { bodyShortfall: 100, label: "CONTROL: a body 100 chars under the ceiling (the page fits)" },
-    {
-      bodyShortfall: 5,
-      label: "a body 5 chars under the ceiling (the page overshoots by its envelope)",
-    },
-  ])("$label — delivered, and the other cursor row keeps flowing", async ({ bodyShortfall }) => {
-    const delivered: Record<string, number[]> = { history: [], now: [] };
-    const rig = incarnation((printed) => {
-      const name =
-        printed === "itx.history" ? "history" : printed === "itx.now" ? "now" : undefined;
-      return (
-        name && {
-          push: (events: { offset: number }[]) =>
-            void delivered[name].push(...events.map((e) => e.offset)),
-        }
-      );
-    });
-    const overhead = JSON.stringify({
-      type: "blob",
-      payload: { blob: "" },
-      createdAt: new Date().toISOString(),
-    }).length;
-    const [big] = rig.stream.append({
-      type: "blob",
-      payload: { blob: "x".repeat(8 * MiB - overhead - bodyShortfall) },
-    });
-    // `history` must READ the page holding the big event (the whole log); `now` is "from now".
-    rig.stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "history",
-            target: "itx.history.push",
-            consumes: ["blob"],
-            afterOffset: 0,
-          },
+test("a row re-configured onto a NEW target while a delivery is in flight delivers the next batch to the NEW target", async () => {
+  const sinkA: number[][] = [];
+  const sinkB: number[][] = [];
+  let releaseSinkA!: () => void;
+  const sinkAGate = new Promise<void>((r) => (releaseSinkA = r));
+  // Both targets are three-step (`itx.<sink>.push`), so the head/method split is the normal one.
+  const { stream } = incarnation((printed) => {
+    if (printed === "itx.sinkA")
+      return {
+        push: async (events: { payload?: { n?: number } }[]) => {
+          sinkA.push(ns(events));
+          await sinkAGate;
         },
-        "/",
-      ),
-    );
-    rig.stream.append(
-      normalizeControlEvent(
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "now", target: "itx.now.push", consumes: ["tick"] },
-        },
-        "/",
-      ),
-    );
-    const [tick] = rig.stream.append({ type: "tick" });
-    await settled();
-    expect(delivered).toEqual({ history: [big.offset], now: [tick.offset] });
-    expect(rig.delivery.cursor("now")?.confirmedOffset).toBe(tick.offset);
+      };
+    if (printed === "itx.sinkB")
+      return { push: (events: { payload?: { n?: number } }[]) => void sinkB.push(ns(events)) };
+    return undefined;
   });
+  stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sinkA.push", consumes: ["demo/ping"] },
+      },
+      "/",
+    ),
+  );
+  stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await settled();
+  expect(sinkA).toEqual([[1]]); // the first batch is in flight, parked on the gate
+
+  // The row is REPLACED while that delivery is parked, and a second batch lands behind it.
+  stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sinkB.push", consumes: ["demo/ping"] },
+      },
+      "/",
+    ),
+  );
+  stream.append({ type: "demo/ping", payload: { n: 2 } });
+  await settled();
+  releaseSinkA();
+  await settled();
+  expect({ sinkA, sinkB }).toEqual({ sinkA: [[1]], sinkB: [[2]] });
+});
+
+test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS the callee: delivered to whole, never split into a bare root and a method", async () => {
+  const delivered: number[][] = [];
+  const { stream, evaluated } = incarnation((printed) =>
+    // What a rewrite rule resolves `itx.sink` to: the bare callable a client lent.
+    printed === "itx.sink"
+      ? (events: { payload?: { n?: number } }[]) => void delivered.push(ns(events))
+      : undefined,
+  );
+  stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "mirror", target: "itx.sink", consumes: ["demo/ping"] },
+      },
+      "/",
+    ),
+  );
+  stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await settled();
+  // the target evaluated is `itx.sink` itself — at configure, then per commit that reached the row
+  expect(delivered).toEqual([[1]]);
+  expect(evaluated.length).toBeGreaterThan(0);
+  expect(evaluated.every((printed) => printed === "itx.sink")).toBe(true);
+});
+
+// ── cursor delivery's read reservation is never re-acquired while held ──
+
+// The read branch reserves the whole cursor budget (8 MiB) before its read. A page's BODIES fill
+// the read budget (8 MiB of stored bytes) and each event's offset and path ride on top, so a full
+// page serializes PAST the reservation. Acquiring the overshoot while holding the whole budget
+// waited on the reservation itself — forever — and every other cursor row on the context behind it.
+test.each([
+  { bodyShortfall: 100, label: "CONTROL: a body 100 chars under the ceiling (the page fits)" },
+  {
+    bodyShortfall: 5,
+    label: "a body 5 chars under the ceiling (the page overshoots by its envelope)",
+  },
+])("$label — delivered, and the other cursor row keeps flowing", async ({ bodyShortfall }) => {
+  const delivered: Record<string, number[]> = { history: [], now: [] };
+  const rig = incarnation((printed) => {
+    const name = printed === "itx.history" ? "history" : printed === "itx.now" ? "now" : undefined;
+    return (
+      name && {
+        push: (events: { offset: number }[]) =>
+          void delivered[name].push(...events.map((e) => e.offset)),
+      }
+    );
+  });
+  const overhead = JSON.stringify({
+    type: "blob",
+    payload: { blob: "" },
+    createdAt: new Date().toISOString(),
+  }).length;
+  const [big] = rig.stream.append({
+    type: "blob",
+    payload: { blob: "x".repeat(8 * MiB - overhead - bodyShortfall) },
+  });
+  // `history` must READ the page holding the big event (the whole log); `now` is "from now".
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "history",
+          target: "itx.history.push",
+          consumes: ["blob"],
+          afterOffset: 0,
+        },
+      },
+      "/",
+    ),
+  );
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "now", target: "itx.now.push", consumes: ["tick"] },
+      },
+      "/",
+    ),
+  );
+  const [tick] = rig.stream.append({ type: "tick" });
+  await settled();
+  expect(delivered).toEqual({ history: [big.offset], now: [tick.offset] });
+  expect(rig.delivery.cursor("now")?.confirmedOffset).toBe(tick.offset);
 });
 
 describe("a rule re-point re-classifies a row", () => {
   test("push → cursor: a facet row re-pointed at a plain function leaves the push set, so the alarm's pass retries its ladder", async () => {
-    let lane: "facet" | "sink" = "facet";
+    let targetKind: "facet" | "sink" = "facet";
     let sinkCalls = 0;
     const rig = incarnation((printed) =>
       printed !== "itx.proc"
         ? undefined
-        : lane === "facet"
+        : targetKind === "facet"
           ? new FacetHandle(() => Promise.resolve())
           : () => {
               sinkCalls++;
               throw new Error("sink down");
             },
     );
-    // A two-step target (`itx.proc`) — root-called whole. The RULE decides the lane: a row is a
+    // A two-step target (`itx.proc`) — root-called whole. The RULE decides the delivery: a row is a
     // push row when its target RESOLVES (through the rule table, never by evaluating it) to a facet.
     rig.stream.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -723,10 +722,10 @@ describe("a rule re-point re-classifies a row", () => {
     await settled();
     rig.stream.append({ type: "blob" });
     await settled();
-    expect(rig.delivery.cursor("s")).toBeUndefined(); // a facet: the push lane keeps no cursor
+    expect(rig.delivery.cursor("s")).toBeUndefined(); // a facet: push delivery keeps no cursor
     // THE RE-POINT: a rule commit replaces the rule table (the per-row target memo keys on it), and
     // `itx.proc` now resolves to — and evaluates to — a plain value that cannot own its progress.
-    lane = "sink";
+    targetKind = "sink";
     rig.stream.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.proc", target: "itx.kv" },

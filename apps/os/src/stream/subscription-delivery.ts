@@ -61,7 +61,7 @@ const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
  *  concurrent appends (30 × 7 MiB ephemerals to 10 facets reset the parent at 16 — this budget is
  *  what the fan-out retains on top of the args workerd is deserializing; e2e LARGE EPHEMERAL FAN-OUT). */
 const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
-/** THE CURSOR-READ BUDGET: the most chars the CURSOR lane may hold across its read-through-call at
+/** THE CURSOR-READ BUDGET: the most chars CURSOR delivery may hold across its read-through-call at
  *  once — a SEPARATE ceiling from the push budget so a cursor reserving a worst-case page never trips
  *  a live-client push drop. N cursor rows firing on one commit each read a page and hold the batch
  *  across the awaited call; without this they coexist (20 × an 8 MiB page = 160 MiB, a reset). A
@@ -140,7 +140,7 @@ type SubscriptionDeliveryRecord = {
   };
 };
 
-/** A CHARS BUDGET with waiters — the most serialized event chars one lane may hold at once.
+/** A CHARS BUDGET with waiters — the most serialized event chars one kind of delivery may hold.
  *  `acquire` waits for room (a call larger than the whole budget runs alone when nothing is held —
  *  never a deadlock); `release` wakes every waiter, each re-checks; `tryTake` takes the room now or
  *  refuses (the live-client push's drop). Two instances, kept apart on purpose (the constants above). */
@@ -206,7 +206,7 @@ export class SubscriptionDelivery {
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
-  /** The cursor lane's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
+  /** Cursor delivery's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
    *  loop drains a name at a time, and the loop that was draining a row when it was replaced goes on
    *  to deliver the replacement once its call returns — so the lock outlives `#forgetSubscription`.
    *  The value is the running loop's promise, so a second kick JOINS it: the alarm's pass awaits a
@@ -215,7 +215,7 @@ export class SubscriptionDelivery {
   readonly #cursorDeliveryLoops = new Map<string, Promise<void>>();
   /** Chars handed to calls that have not settled, all rows (DELIVERY_IN_FLIGHT_BUDGET_CHARS). */
   readonly #deliveryCharsInFlight = new DeliveryCharsBudget(DELIVERY_IN_FLIGHT_BUDGET_CHARS);
-  /** The CURSOR lane's read-through-call — a SEPARATE ceiling (CURSOR_READ_BUDGET_CHARS says why). */
+  /** CURSOR delivery's read-through-call — a SEPARATE ceiling (CURSOR_READ_BUDGET_CHARS says why). */
   readonly #cursorReadCharsInFlight = new DeliveryCharsBudget(CURSOR_READ_BUDGET_CHARS);
 
   constructor(deps: SubscriptionDeliveryDeps) {
@@ -270,6 +270,8 @@ export class SubscriptionDelivery {
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
           // retry armed — without this it would wait for the next matching commit).
           // A halted FACET row resumes by catching up from the log itself; a cursor row from its cursor.
+          // The resumed payload is not validated on append: a missing or non-string name looks up
+          // no row and breaks.
           const name = (event.payload as { name: string }).name;
           const row = rows[name];
           if (!row) break;
@@ -289,6 +291,7 @@ export class SubscriptionDelivery {
           // configure. That catch-up is the HEAD of this name's delivery chain, so the first push
           // queues behind it. A cursor row that asked for HISTORY (`afterOffset`) is delivered from
           // there NOW — its configure is its wake, as a resume is — not on its next consumed commit.
+          // The payload passed normalizeControlEvent on append, which parsed the name.
           const name = (event.payload as { name: string }).name;
           this.#forgetSubscription(name);
           const row = rows[name];
@@ -476,7 +479,7 @@ export class SubscriptionDelivery {
   }
 
   /** Everything remembered about the row under `name` goes with it — the persisted cursor too. A
-   *  closure still queued finds no pending push and exits; the cursor lane's lock stays (above). */
+   *  closure still queued finds no pending push and exits; cursor delivery's lock stays (above). */
   #forgetSubscription(name: string): void {
     this.#stream.storage.deleteSubscriptionCursor(name);
     this.#deliveryRecordByName.delete(name);
@@ -547,9 +550,9 @@ export class SubscriptionDelivery {
           .finally(() => this.#deliveryCharsInFlight.release(chars));
         return;
       }
-      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and no
-      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (FacetHost#call, 60 s) bounds a
-      // hung facet; its own gap repair covers a dropped push.
+      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order. The DO's
+      // facet watchdog (FacetHost#call, 60 s) bounds a hung facet; its own gap repair covers a
+      // dropped push.
       try {
         const chars = serializedChars(events);
         await this.#deliveryCharsInFlight.acquire(chars);
@@ -559,7 +562,7 @@ export class SubscriptionDelivery {
           this.#deliveryCharsInFlight.release(chars);
         }
       } catch (error) {
-        // A refusal that can only repeat HALTS the row — the same fact the cursor lane's ladder
+        // A refusal that can only repeat HALTS the row — the same fact cursor delivery's ladder
         // ends in — instead of being re-pushed into on every commit; an operator's resume is the
         // way back. Anything else is the facet's own gap repair to heal on its next push.
         if (deterministicFailure(error)) {
@@ -668,7 +671,7 @@ export class SubscriptionDelivery {
     // scope root as the head, which nothing can ever match.
     const method = typeof last === "string" && target.length > 2 ? last : undefined;
     const head = await this.#evaluateItxExpression(method ? target.slice(0, -1) : target);
-    // Every lane below AWAITS this only for the ack and IGNORES the return. A Workers-RPC/capnweb
+    // Every delivery below AWAITS this only for the ack and IGNORES the return. A Workers-RPC/capnweb
     // call result pins the callee's export table until disposed, so release it here — a live client's
     // push runs on every commit, and leaving each result to GC would leak a slot per delivered batch.
     const call = async (events: StreamEvent[], range: ScannedRange): Promise<void> => {
@@ -723,7 +726,7 @@ export class SubscriptionDelivery {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
         if (!row) return this.#forgetSubscription(name);
-        // Re-pointed at a target that owns its progress meanwhile: nothing of this lane's applies.
+        // Re-pointed at a target that owns its progress meanwhile: cursor delivery no longer applies.
         if (targetOwnsProgress(this.#stream.coreReducedState, row)) return;
         let cursor = this.cursor(name);
         if (!cursor) {

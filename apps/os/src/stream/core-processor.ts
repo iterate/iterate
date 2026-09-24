@@ -1,6 +1,6 @@
 // core-processor.ts — THE CORE REDUCE: the one processor the context DO reduces INLINE at its commit
-// point. Its reduced state is everything the DO needs SYNCHRONOUSLY at its doors, event-sourced from
-// the context's own control events and nothing else:
+// point. Its reduced state is everything the DO needs SYNCHRONOUSLY in its handlers, event-sourced
+// from the context's own control events and nothing else:
 //
 //   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
@@ -12,9 +12,9 @@
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //   which scripts are running context/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
-// ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch door
+// ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch form
 // (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
-// inside every commit, because its readers (the append door, the dispatcher, the delivery loop) are
+// inside every commit, because its readers (Stream.append, the dispatcher, the delivery loop) are
 // all synchronous. The COMMANDS that append these events live beside the code that reads each slice
 // (context/itx-expression-rewriting.ts for the rules, `normalizeControlEvent` below normalizes literal rows). Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
@@ -22,7 +22,6 @@
 // trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
-//   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 //
 // ONE VALIDATION BOUNDARY: every append the DO commits passes `normalizeControlEvent` (below), which
 // zod-parses each control event's payload and stores the normalized form, so the fold CASTS what it
@@ -73,8 +72,8 @@ type HostingFacetSpec = {
 /** The hosting spec inside a target RESOLVED to the fixed point
  *  (`itx.builtins.facets.get(name, { source, className, cacheKey? }).…`) — present ONLY in the raw
  *  log event's target, before the reduce elides the source (M1). Undefined for an address-only
- *  target. Resolution is what makes a user's short spelling, or a rule of their own naming the door,
- *  host exactly like the platform's. */
+ *  target. Resolution is what makes a user's short spelling, or a rule of their own naming
+ *  `itx.builtins.facets`, host exactly like the platform's. */
 export function facetSpecFromHostingTarget(
   resolvedTarget: ItxExpression,
 ): HostingFacetSpec | undefined {
@@ -85,6 +84,8 @@ export function facetSpecFromHostingTarget(
   if (getStep.length === 2 && firstPartyClassName)
     return { name: getStep[1], className: firstPartyClassName };
   if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null) {
+    // The spec is caller-authored and only its object-ness is checked here: a malformed one is
+    // copied as it is and fails where the facet host loads it (FacetHost `#facetStartupMemoFor`).
     const spec = getStep[2] as { source: unknown; className: string; cacheKey?: string };
     return {
       name: getStep[1],
@@ -144,6 +145,7 @@ function elideHostedFacetSource(
         ? target
         : [
             ...target.slice(0, specStepIndex),
+            // The findIndex predicate above checked step[0] === "get" and a string step[1].
             ["get", (target[specStepIndex] as [string, string])[1]],
             ...target.slice(specStepIndex + 1),
           ],
@@ -215,7 +217,7 @@ export type Subscription = {
   consumes?: string[];
   /** The row's identity — the offset of its subscription-configured event. */
   configuredAtOffset: number;
-  /** Where the CURSOR lane starts for this row — its first delivery follows this offset (0 = the
+  /** Where CURSOR delivery starts for this row — its first delivery follows this offset (0 = the
    *  whole log); absent = `configuredAtOffset`, "from now". A target that owns its progress (a
    *  facet, a lent stub) ignores it. */
   afterOffset?: number;
@@ -262,13 +264,9 @@ export type CoreState = {
 /** One open script run: when it was asked for (its identity is its key, the request's offset). */
 type OpenScriptRun = { requestedAt: string };
 
-// ── the run events ── THE CONTEXT'S OWN VOCABULARY beyond its control events, owned by this
-// contract (`CoreContract.events`): the one place their schemas live. A processor that consumes
-// them names the contract in its `processorDeps` (the agent); the runner and `itx.run` read them here.
-
 /** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
  *  tables are plain records indexed by name, so such a name would read or write the prototype
- *  instead of a row) and never `core`: the always-on reduce is addressable as a facet but not a
+ *  instead of a row — and never `core`: the always-on reduce is addressable as a facet but not a
  *  configurable subscription — a row named `core` would be undeliverable and climb the retry ladder
  *  to a halt. */
 const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -290,10 +288,10 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  // 11: the ingress target; 12: the scriptRuns table (`context/run-requested` / `run-settled`).
-  // 13: rule 8 — a null with `ifTarget` deletes; a physical target restates only an implicit row in effect.
   version: "13.0.0",
-  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (the run events section above). */
+  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas:
+   *  iterate/next/stream/run). A processor that consumes them names the contract in its
+   *  `processorDeps` (the agent); the runner and `itx.run` read them here. */
   events: {
     "events.iterate.com/context/run-requested": {
       description:
@@ -316,7 +314,7 @@ export const CoreContract = {
   }),
 };
 
-/** THE BATCH DOOR: the events in order over `state`, each table copied once for the whole batch
+/** THE BATCH REDUCE: the events in order over `state`, each table copied once for the whole batch
  *  (`draftOf`). A throwing event is handed to `onError` and skipped — the reduce touches a draft
  *  only after everything that can throw, so one bad hand-appended event never wedges the batch,
  *  and the state handed in is never mutated: a mid-transaction throw rolls back to it cleanly. */
@@ -340,7 +338,7 @@ export function reduceCoreEventBatch(
  *  change signal). Without `draftTables` (the tests' single-event fold) every touch copies.
  *  Ephemeral control events are IGNORED (they would vanish from any rebuild). Payloads are read as
  *  the boundary stored them (the header); a target the codec still refuses THROWS here like any
- *  reduce would — BEFORE any draft is touched — and the batch door contains it. */
+ *  reduce would — BEFORE any draft is touched — and `reduceCoreEventBatch` contains it. */
 export function reduceCoreEvent(
   { event, state }: ReduceArgs<CoreState>,
   draftTables?: DraftTables,
@@ -537,13 +535,13 @@ export function reduceCoreEvent(
 // ── subscriptions ── THE SUBSCRIPTIONS TABLE's one COMMAND (the rows are core state; the reader is
 // subscription-delivery.ts). A subscription is pure data — a NAME, a TARGET expression whose
 // terminal is callable with `(events, range)`, an optional `consumes` filter, and an optional
-// `afterOffset` (where the cursor lane starts: 0 = the whole log; absent = from the configure
+// `afterOffset` (where cursor delivery starts: 0 = the whole log; absent = from the configure
 // offset). `configured` REPLACES a same-named row; a `null` target REMOVES it. The halted fact is
 // appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
 /** The `subscription-configured` event for `input.name`. `ifConfiguredAtOffset` (with a null
  *  target) is a handle's undo: the reduce drops the row ONLY while it is still the one configured at
- *  that offset (core-processor.ts). */
+ *  that offset. */
 function normalizeSubscriptionConfigured(input: {
   name: string;
   target: ItxExpressionInput | null;
@@ -557,8 +555,8 @@ function normalizeSubscriptionConfigured(input: {
     throw new Error(
       `a subscription's afterOffset is a non-negative integer offset (got ${JSON.stringify(afterOffset)})`,
     );
-  // Through the codec's one door, so a target the reduce could not read fails LOUD here, in the
-  // parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
+  // Through the codec (`normalizedItxExpression`), so a target the reduce could not read fails LOUD
+  // here, in the parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
   // the reduce must never re-parse that through the string codec (its 2 KiB cap).
   // oxlint-disable-next-line iterate/simple-truthiness-check -- input.target is `string | ItxExpression | null`; its null is the explicit undo/mask sentinel, distinct from a malformed empty-string target that normalization must still reject
   const target = input.target === null ? null : normalizedItxExpression(input.target);
