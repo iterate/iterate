@@ -14,7 +14,7 @@ import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "./lib
 import { OAuthScopes } from "./oauth-scopes.ts";
 
 /** The port separates local apps sharing localhost's cookie jar. */
-function sessionCookieName(url: URL) {
+export function sessionCookieName(url: URL) {
   return `__Host-itx-session${url.port ? `-${url.port}` : ""}`;
 }
 export function appSession(namespace: DurableObjectNamespace<BrowserSession>, request: Request) {

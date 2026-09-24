@@ -118,6 +118,10 @@ test("a failed end is observable and does not create another authorization", asy
       "kit.device_login_failed",
       expect.objectContaining({ deviceId: "satellite1" }),
     );
+    // the refusal says which sign-in it couldn't end, and offers to forget it
+    const page = await response!.text();
+    expect(page).toContain("issuer.example");
+    expect(page).toContain('<form method="post" action="/.auth/forget?device=satellite1">');
   } finally {
     log.mockRestore();
   }
@@ -186,6 +190,33 @@ test("a platform that doesn't answer as iterate is refused before any session ch
   expect(f.begin).not.toHaveBeenCalled();
 });
 
+test("forgetting an old sign-in clears this browser's session and goes back to device selection", async () => {
+  const f = fixture();
+  const forget = await deviceAuth(
+    new Request(`${origin}/.auth/forget?device=satellite1&issuer=${encodeURIComponent(selfHost)}`, {
+      method: "POST",
+      headers: { origin, cookie },
+    }),
+    f.env,
+    f.deps,
+  );
+  expect(forget?.status).toBe(303);
+  expect(forget?.headers.get("location")).toBe(
+    `/?device=satellite1&issuer=${encodeURIComponent(selfHost)}`,
+  );
+  expect(forget?.headers.get("set-cookie")).toMatch(/^__Host-itx-session=; .*Max-Age=0/);
+  expect(f.end).not.toHaveBeenCalled();
+  expect(f.begin).not.toHaveBeenCalled();
+  for (const [method, headers, status] of [
+    ["GET", { origin, cookie }, 405],
+    ["POST", { origin: "https://other.example", cookie }, 403],
+  ] as const)
+    expect(
+      (await deviceAuth(new Request(`${origin}/.auth/forget`, { method, headers }), f.env, f.deps))
+        ?.status,
+    ).toBe(status);
+});
+
 function fixture() {
   const begin = vi.fn(
     async (_host: BrowserHost, _next: string) => "https://issuer.example/oauth2/auth",
@@ -197,8 +228,12 @@ function fixture() {
     logoUri: `${origin}/vendors/futureproofhomes.png`,
   }));
   const bearer = vi.fn(async (): Promise<string | null> => "token");
+  const host = vi.fn(async () => ({
+    issuer: "https://issuer.example",
+    resource: "https://issuer.example/api",
+  }));
   const sessions = {
-    getByName: () => ({ begin, end, client, bearer }),
+    getByName: () => ({ begin, end, client, bearer, host }),
   } as unknown as DurableObjectNamespace<BrowserSession>;
   const issuerAnswersAt = vi.fn(async (_origin: string): Promise<string | null> => null);
   return {
