@@ -18,18 +18,20 @@ export function deployedTarget(workerBaseUrl: string): {
   // secrets scripts/deploy.ts ships, nothing else in the environment.
   if (!process.env.APP_CONFIG)
     throw new Error(
-      "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer and the sign-in password the e2e sessions use (run under `doppler run --project os --config <preview|prd>`)",
+      "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer (and the sign-in password, where it sets one) the e2e sessions use (run under `doppler run --project os --config <preview|prd>`)",
     );
   const appConfig = parseAppConfig({
     APP_CONFIG: process.env.APP_CONFIG,
     APP_CONFIG_SECRETS__KEY: process.env.APP_CONFIG_SECRETS__KEY,
   });
   const adminApiSecret = appConfig.secrets.adminBearer.exposeSecret();
-  const loginPassword = appConfig.login.password.exposeSecret();
-  if (!adminApiSecret || !loginPassword)
+  if (!adminApiSecret)
     throw new Error(
-      "The deployment's APP_CONFIG sets no secrets.adminBearer or no login.password — every e2e session authenticates with the one and signs in with the other",
+      "The deployment's APP_CONFIG sets no secrets.adminBearer — every e2e session authenticates with it",
     );
+  // prd sets no password (nobody signs in there without proving their email); a test that signs in
+  // with it fails at that sign-in (support/client.ts `loginPassword`), the operator-only ones run
+  const loginPassword = appConfig.login.password.exposeSecret();
   // The envs.ts entry the worker falls under, by host suffix: `os.iterate.com` is prd's; a preview,
   // `pr<n>-<slug>-os-preview.<subdomain>.workers.dev`, hangs under its parent's host and
   // inherits the parent's routing.
