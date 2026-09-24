@@ -1,16 +1,20 @@
 // src/project/collection.ts — THE COLLECTION: `itx.repos`, `itx.workspaces`, one
 // instance per entity, a member of the project facet on `/` (durable-object.ts), where the catalog
-// lives. `list()` reads the catalog; `create(path)` is THE CREATION — the processor row on the
-// path, the request, then the terminal fact; `delete(path)` is THE DELETION, its mirror — the
-// request, the death certificate, then the row goes. Both entities share every step; the slug
+// lives. `list()` reads the catalog; `create(path, { creator })` is THE CREATION — the processor
+// row on the path, the parent link and the request, then the terminal fact; `delete(path)` is THE
+// DELETION, its mirror — the request, the death certificate, then the row goes. Both entities share every step; the slug
 // is all that varies — the facet's name, the row's, the event prefix, the catalog's key. Addressing
 // an entity (`itx.repos.get(path)`) is the library's (library.ts): straight to the path, never through `/`.
 import { RpcTarget } from "cloudflare:workers";
+import { z } from "zod";
+import { codedError, resolveContextPath } from "iterate/next/lib";
 import type { WithItx } from "iterate/next/sdk";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
 import type { EntityCreationAndDeletionState } from "./entity-state.ts";
+
+const CreationOptions = z.object({ creator: z.string().startsWith("/") });
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";
@@ -37,15 +41,25 @@ export class EntityCollectionRpcTarget extends RpcTarget {
     }));
   }
 
-  /** Bring the entity at `path` into being: the entity's processor row on that path, then
-   *  `<entity>/create-requested`, then the terminal fact — `<entity>/created` (in the catalog by
-   *  then), or `<entity>/create-failed`, thrown; a later call is a new attempt. Idempotent: a
-   *  created entity answers at once, and a creation already open is WAITED ON, never requested
-   *  again — the terminal is sought after the request that opened it, so a certificate landing
-   *  between the read and the wait is seen, not missed. A deleted entity is not re-creatable:
-   *  thrown. Data back, never the handle: `itx.<entity>s.get(path)` addresses it. */
-  create(path: string, options: { creator?: string } = {}): Promise<{ path: string }> {
+  /** Bring the entity at `path` into being: the entity's processor row on that path, then its
+   *  parent link `itx ⇒ itx.builtins.cd(creator)` with `<entity>/create-requested`, then the
+   *  terminal fact — `<entity>/created` (in the catalog by then), or `<entity>/create-failed`,
+   *  thrown; a later call is a new attempt. Idempotent: a created entity answers at once, and a
+   *  creation already open is WAITED ON, never requested again — the terminal is sought after the
+   *  request that opened it, so a certificate landing between the read and the wait is seen, not
+   *  missed. A deleted entity is not re-creatable: thrown. Data back, never the handle:
+   *  `itx.<entity>s.get(path)` addresses it. */
+  create(path: string, options: { creator: string }): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
+      // The library always names an absolute creator, but a project member at `/` reaches this facet
+      // directly (`itx.facets.get('project')`), and the creator becomes a parent link as written.
+      const parsed = CreationOptions.safeParse(options);
+      if (!parsed.success)
+        throw codedError(
+          "INVALID_INPUT",
+          `${this.slug}s.create(${JSON.stringify(path)}): the creator must be an absolute context path`,
+        );
+      const creator = resolveContextPath("/", parsed.data.creator);
       const context = itx.cd(path);
       // The facet is the platform's own durable object for the entity and `snapshot()` the engine's
       // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
@@ -61,13 +75,28 @@ export class EntityCollectionRpcTarget extends RpcTarget {
       if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
       else {
         await context.processors.enable(this.slug);
+        // The link is written HERE, never by the entity's processor from the request: whoever may
+        // append on a path may append a request, so a creator it named would be the appender's
+        // choice (e2e/loaded-code.e2e.test.ts). `creator` is the library's, from the caller's
+        // originating context (library.ts `createEntity`); any other caller reaches this facet only
+        // at `/`, from where it may write the same row itself. It lands with the request, before the
+        // certificate: a born context is never re-pointed, and an owner's later row is the last word.
+        const link = {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: {
+            match: "itx",
+            target: ["itx", "builtins", ["cd", creator]],
+            description: "everything this context does not claim, its creator answers",
+          },
+          idempotencyKey: `itx@${creator}`,
+        };
+        const request = { type: `events.iterate.com/${this.slug}/create-requested`, payload: {} };
         // Over the loopback stub an append's answer types as an RPC result, not the array the context
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-        const [requested] = (await context.append({
-          type: `events.iterate.com/${this.slug}/create-requested`,
-          payload: { creator: options.creator },
-        })) as unknown as StreamEvent[];
-        requestedAtOffset = requested!.offset;
+        const appended = (await context.append(
+          ...(creator === path ? [request] : [link, request]),
+        )) as unknown as StreamEvent[];
+        requestedAtOffset = appended.at(-1)!.offset;
       }
       const settled = (await context.waitForEvent({
         type: [

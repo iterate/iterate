@@ -65,11 +65,16 @@ export class AgentCollectionRpcTarget extends RpcTarget {
    *  sought after the request that opened it, so a certificate landing between the read and the
    *  wait is seen, not missed. A deleted agent is not re-creatable: thrown. Data back, never the
    *  handle: `itx.agents.get(path)` addresses it. */
-  create(path: string, options: { creator?: string } = {}): Promise<{ path: string }> {
+  create(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
-      const creator = resolveContextPath("/", options.creator || this.base);
+      // The parent link goes to this collection's base — the context whose own `itx.agents` row
+      // reached it — and never to a context `create` names: a script could otherwise link its child
+      // above its own masks. The base itself is still the caller's to choose through the public
+      // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
+      // e2e/inherited-capabilities.e2e.test.ts.
+      const creator = resolveContextPath("/", this.base);
       // Writing a parent link on an ancestor would point back down to its child.
       // Refuse before loading a facet or changing any context rows.
       if (creator.startsWith(`${path}/`))
@@ -122,7 +127,7 @@ export class AgentCollectionRpcTarget extends RpcTarget {
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
         const [requested] = (await context.append({
           type: "events.iterate.com/agent/create-requested",
-          payload: { creator },
+          payload: {},
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }

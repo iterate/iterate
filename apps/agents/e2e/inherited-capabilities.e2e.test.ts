@@ -1,5 +1,8 @@
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
 import { freshCtx, rejection } from "../../os/e2e/support/client.ts";
+import { buildVoiceInstall } from "../scripts/build-voice-install.ts";
+import { ensureVoiceAgent } from "../voice/install.ts";
 import { openAgentItx } from "./support.ts";
 
 test("THE CHAIN: a subagent two levels down resolves a capability provided at the root through parent links, lists it with its description and origin, and births its own children relative to itself", async () => {
@@ -72,3 +75,101 @@ test("an agent cannot create an ancestor and invert its parent capability chain"
     { path: "/agents/child", createdAt: expect.any(String) },
   ]);
 });
+
+test("a script cannot choose its new agent's parent link: the child links to the context that created it, whatever `creator` the call names", async () => {
+  const root = await openAgentItx(freshCtx("agent-creator"));
+  await root.provide("itx.tool", () => "hello-from-root");
+  await root.agents.create("/agents/a");
+  await root.cd("/agents/a").provide("itx.tool", null);
+  // The script runs in /agents/a/sandbox, beneath the mask, and names the root as the creator.
+  const { links, tool } = (await root
+    .cd("/agents/a")
+    .run(
+      "async (itx) => { await itx.agents.create('./b', { creator: '/' }); const links = (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); const tool = await itx.cd('./b').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
+    )) as { links: string[]; tool: string };
+  expect(links, "the child's parent link should be its caller's own context").toEqual([
+    "itx.cd('/agents/a/sandbox')",
+  ]);
+  expect(tool).toMatch(/is masked/);
+});
+
+// PINNED, ONE CAUSE: the agents collection is a userspace facet on `/` that cannot see who called
+// it, and it acts with the root's authority. The root's `itx.agents` row is inherited by every context
+// linked to the root, and an agent's own row reaches the same facet through the public `at(base)`, so
+// a context beneath a mask can have that facet write for it. Closing these needs the platform to
+// hand a facet the caller's originating context (`Caller.path`, which the library already uses for
+// repos and workspaces: apps/os/src/library.ts `createEntity`).
+const linkedToTheRootBeneathAMask = async (name: string) => {
+  const root = await openAgentItx(freshCtx(name));
+  await root.provide("itx.tool", () => "hello-from-root");
+  await root.workspaces.create("/jail");
+  const jail = root.cd("/jail");
+  await jail.provide("itx.tool", null);
+  return { root, jail };
+};
+
+createFailing(test, /parent link should be the context that created it/)(
+  "a context linked to the root cannot reach past its own mask through an agent it creates with the root's `itx.agents`",
+  async () => {
+    const { jail } = await linkedToTheRootBeneathAMask("agent-root-linked");
+    const { links, tool } = (await jail.builtins.run(
+      "async (itx) => { await itx.agents.create('/jail/a'); const links = (await itx.cd('./a').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/jail/a').map((r) => r.target); const tool = await itx.cd('./a').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
+    )) as { links: string[]; tool: string };
+    expect(links, "the agent's parent link should be the context that created it").toEqual([
+      "itx.cd('/jail')",
+    ]);
+    expect(tool).toMatch(/is masked/);
+  },
+);
+
+createFailing(test, /should land beneath the context that asked/)(
+  "a context linked to the root that creates `./a` with the root's `itx.agents` gets its own `./a`",
+  async () => {
+    const { jail } = await linkedToTheRootBeneathAMask("agent-root-linked-relative");
+    const { path } = (await jail.builtins.run("async (itx) => itx.agents.create('./a')")) as {
+      path: string;
+    };
+    expect(path, "a relative agent path should land beneath the context that asked").toBe(
+      "/jail/a",
+    );
+  },
+);
+
+createFailing(test, /should not reach past the mask/)(
+  "an agent's script cannot unmask itself by appending a parent link through `itx.agents.get(path).append`",
+  async () => {
+    const root = await openAgentItx(freshCtx("agent-reference-append"));
+    await root.provide("itx.tool", () => "hello-from-root");
+    await root.agents.create("/agents/a");
+    await root.cd("/agents/a").provide("itx.tool", null);
+    // The script runs in /agents/a/sandbox, beneath the mask; the facet appends with the root's authority.
+    const tool = await root
+      .cd("/agents/a")
+      .run(
+        "async (itx) => { await itx.agents.get('./x').append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.cd('/')\" } }).catch(() => {}); return itx.cd('./x').tool().then((v) => v, (e) => String(e.message)); }",
+      );
+    expect(tool, "a script beneath a mask should not reach past the mask").not.toBe(
+      "hello-from-root",
+    );
+  },
+);
+
+createFailing(test, /voice agent's parent link should be the context that asked/, {
+  timeoutMs: 120_000,
+})(
+  "a context linked to the root cannot reach past its own mask through a voice agent it sets up with the root's `itx.voice`",
+  async () => {
+    const { root, jail } = await linkedToTheRootBeneathAMask("voice-root-linked");
+    const install = await buildVoiceInstall();
+    await ensureVoiceAgent(root, async () => install, "placeholder-openai-key");
+    // The voice worker is loaded code at `/` whose `env.ITX` is its own, so it creates every agent
+    // through the root's `itx.agents`, at whatever absolute `streamPath` the caller names.
+    const { links, tool } = (await jail.builtins.run(
+      "async (itx) => { await itx.voice.setupVoiceAgent({ streamPath: '/jail/v', activation: 'pin' }); const links = (await itx.cd('./v').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/jail/v').map((r) => r.target); const tool = await itx.cd('./v').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
+    )) as { links: string[]; tool: string };
+    expect(links, "the voice agent's parent link should be the context that asked").toEqual([
+      "itx.cd('/jail')",
+    ]);
+    expect(tool).toMatch(/is masked/);
+  },
+);

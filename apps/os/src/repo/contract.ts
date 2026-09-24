@@ -34,8 +34,8 @@ export const RepoContract = defineProcessorContract({
   events: {
     "events.iterate.com/repo/create-requested": {
       description:
-        "Someone asked for this repo (`itx.repos.create(path)`). The context it lands on IS the repo; `creator` is the context that asked — the saga writes the child's parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor provisions the Artifacts repo and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
-      payloadSchema: z.object({ creator: z.string().optional() }),
+        "Someone asked for this repo (`itx.repos.create(path)`). No payload: the context it lands on IS the repo. The collection writes the child's parent link `itx ⇒ itx.builtins.cd(creator)` before this request, the creator being the context that called, so the link is part of the birth and nothing re-points a born context. The processor provisions the Artifacts repo and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({}),
     },
     "events.iterate.com/repo/created": {
       description:

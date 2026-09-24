@@ -17,8 +17,6 @@ export const EntityCreationAndDeletionState = z.object({
     .object({
       status: z.enum(["requested", "created", "failed"]),
       offset: z.number().int().positive(),
-      /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
-      creator: z.string().optional(),
     })
     .nullable()
     .default(null),

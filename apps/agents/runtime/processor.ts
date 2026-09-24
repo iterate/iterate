@@ -356,11 +356,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           ? undefined
           : {
               ...state,
-              creation: {
-                status: "requested",
-                offset: event.offset,
-                creator: event.payload.creator,
-              },
+              creation: { status: "requested", offset: event.offset },
             };
       case "events.iterate.com/agent/created":
         return { ...state, creation: { status: "created", offset: event.offset } };

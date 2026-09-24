@@ -123,3 +123,35 @@ test("owner-written physical redirects survive a loaded-code hop, while fresh ca
   ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
   expect(await root.builtins.rewriteRules.get("itx.escape")).toBeNull();
 });
+
+// The collection writes a new entity's parent link from the library's caller; a request appended
+// by hand names nothing the processor acts on.
+for (const kind of ["repo", "workspace"] as const)
+  test(`a ${kind}'s parent link is the context that created it: one born through itx.${kind}s.create links to its caller, one whose create-requested loaded code appended by hand links to nothing the request named — a script beneath a mask cannot reach past it`, async () => {
+    const root = openItx(freshCtx(`hand-${kind}`));
+    await root.provide("itx.tool", () => "hello-from-root");
+    await root.workspaces.create("/jail");
+    const jail = root.cd("/jail");
+    await jail.provide("itx.tool", null);
+    // The script runs at /jail, beneath the mask; by hand it names the root as the creator.
+    const script = `async (itx) => {
+      const outcome = async (child) => {
+        const { path } = await child.whoami();
+        const rows = await child.rewriteRules.list();
+        return {
+          links: rows.filter((r) => r.match === 'itx' && r.context === path).map((r) => r.target),
+          tool: await child.tool().then((v) => v, (e) => String(e.message)),
+        };
+      };
+      await itx.${kind}s.create('./born');
+      const child = itx.cd('./by-hand');
+      await child.processors.enable('${kind}');
+      const [requested] = await child.append({ type: 'events.iterate.com/${kind}/create-requested', payload: { creator: '/' } });
+      await child.waitForEvent({ type: ['events.iterate.com/${kind}/created', 'events.iterate.com/${kind}/create-failed'], afterOffset: requested.offset });
+      return { born: await outcome(itx.cd('./born')), byHand: await outcome(child) };
+    }`;
+    expect(await jail.builtins.run(script)).toEqual({
+      born: { links: ["itx.builtins.cd('/jail')"], tool: expect.stringMatching(/is masked/) },
+      byHand: { links: [], tool: expect.stringMatching(/no rewrite rule matches/) },
+    });
+  });

@@ -440,11 +440,11 @@ function entityRoot<Facet>(
   };
 }
 
-/** THE CREATION, from the caller's context: the path resolved against it, the CREATOR named on the
- *  request — the collection's saga on the `project` facet (`<entity>/create-requested { creator }` …
- *  `created`) writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new context before the
- *  certificate (itx-expression-rewriting.ts rule 3: everything the new context does not claim, its
- *  creator answers). A created entity answers at once, and nothing re-points it. */
+/** THE CREATION, from the caller's context: the path resolved against it, and the CREATOR — the
+ *  collection's saga on the `project` facet writes the parent link `itx ⇒ itx.builtins.cd(creator)`
+ *  on the new context with `<entity>/create-requested`, before the certificate
+ *  (itx-expression-rewriting.ts rule 3: everything the new context does not claim, its creator
+ *  answers). A created entity answers at once, and nothing re-points it. */
 async function createEntity(
   itx: LibraryItx,
   path: string,
@@ -461,7 +461,7 @@ async function createEntity(
       "FORBIDDEN",
       `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
     );
-  // The creator rides the request: the entity's saga writes the parent link before the certificate.
+  // The creator is the caller's originating context, which the platform stamped — never an argument.
   return projectFacet(itx, [[collection], ["create", absolute, { creator }]]) as Promise<{
     path: string;
   }>;
