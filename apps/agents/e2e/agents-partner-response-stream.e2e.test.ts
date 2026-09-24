@@ -8,7 +8,7 @@ import { localOnly } from "../../os/e2e/support/project-host.ts";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { AI_TRANSPORT_SOURCE } from "../runtime/ai-transport-source.ts";
 import { installAgents } from "../runtime/install.ts";
-import { assistantWords, onWorkersAi } from "./fixtures.ts";
+import { assistantWords, configureModel, settledLog } from "./fixtures.ts";
 
 class DeferredResponsesAi extends RpcTarget {
   calls = 0;
@@ -138,7 +138,7 @@ localOnly(
         target: chunks.fn,
       });
       await itx.agents.create("/agents/support");
-      await onWorkersAi(support, "gpt-5.6-terra");
+      await configureModel(support, "gpt-5.6-terra");
 
       await itx.agents.get("/agents/support").message("Answer in prose.");
       await until(
@@ -156,12 +156,7 @@ localOnly(
         sequence: 0,
       });
       partnerAi.release();
-      const events = await until("the streamed partner-model settlement", async () => {
-        const all = await readAll(support);
-        return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
-          ? all
-          : undefined;
-      });
+      const events = await settledLog(support, "the streamed partner-model settlement");
 
       expect(assistantWords(events)).toEqual(["A delayed streamed answer."]);
       expect(partnerAi.calls).toBe(1); // the project's override, rather than the physical binding
@@ -180,14 +175,9 @@ localOnly(
       const workersAi = new DelayedWorkersAi();
       await native.provide("itx.ai", workersAi);
       await itx.agents.create("/agents/worker-ai");
-      await onWorkersAi(native);
+      await configureModel(native);
       await itx.agents.get("/agents/worker-ai").message("Answer in prose.");
-      const nativeEvents = await until("the streamed Workers AI settlement", async () => {
-        const all = await readAll(native);
-        return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
-          ? all
-          : undefined;
-      });
+      const nativeEvents = await settledLog(native, "the streamed Workers AI settlement");
       expect(assistantWords(nativeEvents)).toEqual(["A native streamed answer."]);
       expect(workersAi.calls).toBe(1); // the same override law holds for the @cf stream shape
       expect(
@@ -199,15 +189,10 @@ localOnly(
       const maskedAi = new DeferredResponsesAi();
       await masked.provide("itx.ai", maskedAi);
       await itx.agents.create("/agents/masked-ai");
-      await onWorkersAi(masked, "gpt-5.6-terra");
+      await configureModel(masked, "gpt-5.6-terra");
       await masked.provide("itx.ai", null);
       await itx.agents.get("/agents/masked-ai").message("This must not reach the provider.");
-      const maskedEvents = await until("the masked model failure", async () => {
-        const all = await readAll(masked);
-        return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
-          ? all
-          : undefined;
-      });
+      const maskedEvents = await settledLog(masked, "the masked model failure");
       expect(maskedAi.calls).toBe(0);
       expect(
         maskedEvents.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
@@ -218,14 +203,9 @@ localOnly(
       const failedAi = new FailedResponsesAi();
       await failed.provide("itx.ai", failedAi);
       await itx.agents.create("/agents/failed-partner");
-      await onWorkersAi(failed, "gpt-5.6-terra");
+      await configureModel(failed, "gpt-5.6-terra");
       await itx.agents.get("/agents/failed-partner").message("This must report provider failure.");
-      const failedEvents = await until("the partner HTTP failure settlement", async () => {
-        const all = await readAll(failed);
-        return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
-          ? all
-          : undefined;
-      });
+      const failedEvents = await settledLog(failed, "the partner HTTP failure settlement");
       expect(failedAi.calls).toBe(1);
       expect(
         failedEvents.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
@@ -243,14 +223,9 @@ localOnly(
       const nullBodyAi = new NullBodyResponsesAi();
       await nullBody.provide("itx.ai", nullBodyAi);
       await itx.agents.create("/agents/null-body-partner");
-      await onWorkersAi(nullBody, "gpt-5.6-terra");
+      await configureModel(nullBody, "gpt-5.6-terra");
       await itx.agents.get("/agents/null-body-partner").message("This has no provider body.");
-      const nullBodyEvents = await until("the null-body partner failure", async () => {
-        const all = await readAll(nullBody);
-        return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
-          ? all
-          : undefined;
-      });
+      const nullBodyEvents = await settledLog(nullBody, "the null-body partner failure");
       expect(nullBodyAi.calls).toBe(1);
       expect(
         nullBodyEvents.find(
@@ -264,14 +239,9 @@ localOnly(
       const failedSseAi = new FailedSseThenMoreResponsesAi();
       await failedSse.provide("itx.ai", failedSseAi);
       await itx.agents.create("/agents/failed-sse-partner");
-      await onWorkersAi(failedSse, "gpt-5.6-terra");
+      await configureModel(failedSse, "gpt-5.6-terra");
       await itx.agents.get("/agents/failed-sse-partner").message("This must stop promptly.");
-      const failedSseEvents = await until("the failed SSE settlement", async () => {
-        const all = await readAll(failedSse);
-        return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
-          ? all
-          : undefined;
-      });
+      const failedSseEvents = await settledLog(failedSse, "the failed SSE settlement");
       expect(failedSseAi.calls).toBe(1);
       expect(
         failedSseEvents.find(

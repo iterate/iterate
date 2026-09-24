@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { installAgents } from "../runtime/install.ts";
-import { ScriptedAi, assistantWords, onWorkersAi } from "./fixtures.ts";
+import { ScriptedAi, assistantWords, configureModel } from "./fixtures.ts";
 
 test("install and reinstall preserve existing agents, sandbox grants and conversation history", async () => {
   const itx = openItx(freshCtx("agents-install"));
@@ -19,7 +19,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
     payload: { match: "itx.secrets", target: null },
   });
   await context.provide("itx.ai", new ScriptedAi(["Before upgrade.", "After upgrade."]));
-  await onWorkersAi(context);
+  await configureModel(context);
   await itx.agents.get("/agents/support").message("Remember this conversation.");
   await until("first reply", async () => assistantWords(await readAll(context)).length === 1);
   const grants = await sandbox.rewriteRules.list();

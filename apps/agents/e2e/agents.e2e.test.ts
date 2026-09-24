@@ -1,4 +1,4 @@
-// e2e/agents.e2e.test.ts — AN AGENT IS A DOMAIN OBJECT (src/agent/): a conversation on the context at
+// e2e/agents.e2e.test.ts — AN AGENT IS A DOMAIN OBJECT (runtime/): a conversation on the context at
 // any path, driven by a model that acts by writing scripts against that context's `itx`.
 // `itx.agents.create(path)` births it — the processor row, `agent/create-requested`, then the saga
 // lands `agent/created` on `/` (the catalog `itx.agents.list()` reads) and on its path with the
@@ -25,7 +25,8 @@ import {
   ScriptedAi,
   WORKERS_AI_MODEL,
   assistantWords,
-  onWorkersAi,
+  configureModel,
+  operatorPrompt,
   short,
 } from "./fixtures.ts";
 
@@ -45,7 +46,7 @@ test("a fully masked visitor sandbox can receive a prose reply without gaining t
       payload: { match: "itx.agents", target: null },
     },
   );
-  await onWorkersAi(support);
+  await configureModel(support);
   await itx.agents.get(path).message("Suggest a name in prose.");
   const log = await until("prose reply with no sandbox capabilities", async () => {
     const events = await readAll(support);
@@ -73,7 +74,7 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
     /not created — itx\.agents\.create\("\/agents\/support"\) first/,
   );
   expect(await itx.agents.create("/agents/support")).toEqual({ path: "/agents/support" });
-  // The operator's instructions ADD to the platform's rules — their own keyed item after the
+  // The operator's instructions ADD to the default prompt — their own keyed item after the
   // birth, through the handle's typed append; a system item raises no turn.
   await agent.append({
     type: "events.iterate.com/agent/context-added",
@@ -123,12 +124,8 @@ test("the loop: a person's words → the model → a script run against itx → 
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
-  await onWorkersAi(support);
+  await operatorPrompt(agent);
+  await configureModel(support);
   const asked = await agent.message("Store 42 under the key answer and tell me when done.");
   expect(asked).toMatchObject({
     type: "events.iterate.com/agent/context-added",
@@ -224,11 +221,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
+  await operatorPrompt(agent);
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: WORKERS_AI_MODEL }, llmRequestDebounceMs: 1_500 } },
@@ -241,7 +234,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   });
   expect(assistantWords(first)).toEqual(["Both noted."]);
   // ONE request opened and ran (the second message's late intent is a harmless fact the reduce
-  // ignores — the platform's rule — so the intents may number two; the settlements never do).
+  // ignores, so the intents may number two; the settlements never do).
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
@@ -279,12 +272,8 @@ test("a script that returns nothing ends the turn: no result item, no further re
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
-  await onWorkersAi(support);
+  await operatorPrompt(agent);
+  await configureModel(support);
   await agent.message("Write the note.");
   const settled = await until("the script's settlement", async () => {
     const all = await readAll(support);
@@ -318,11 +307,7 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   );
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
+  await operatorPrompt(agent);
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: {
@@ -396,12 +381,8 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
-  await onWorkersAi(support);
+  await operatorPrompt(agent);
+  await configureModel(support);
   const asked = await agent.message({
     message: "What do you see?",
     files: [
@@ -460,12 +441,8 @@ test("interrupted: the person's next words cut the running answer short — sett
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
-  await onWorkersAi(support);
+  await operatorPrompt(agent);
+  await configureModel(support);
   await agent.message("Tell me everything.");
   await until("the request is in flight", async () =>
     (await readAll(support)).some(
@@ -473,7 +450,7 @@ test("interrupted: the person's next words cut the running answer short — sett
     ),
   );
   await sleep(500); // the runner has dialed the model
-  // the platform's interrupt: a developer item from the person, its policy the cancellation.
+  // The interrupt: a developer item from the person, its policy the cancellation.
   await support.append({
     type: "events.iterate.com/agent/context-added",
     payload: {
@@ -528,12 +505,8 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   });
   const agent = itx.agents.get("/agents/support");
   await itx.agents.create("/agents/support");
-  await agent.append({
-    type: "events.iterate.com/agent/context-added",
-    payload: { role: "system", content: "Be terse." },
-    idempotencyKey: "operator-prompt:v1",
-  });
-  await onWorkersAi(support);
+  await operatorPrompt(agent);
+  await configureModel(support);
   await agent.message("hello");
   await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
   const system = ai.calls[0]!.messages.filter((m) => m.role === "system").map((m) => m.content);
@@ -580,7 +553,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
   await support.provide("itx.ai", ai);
   const agent = itx.agents.get(agentPath);
   await itx.agents.create(agentPath);
-  await onWorkersAi(support);
+  await configureModel(support);
   // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
   // (the append itself resolves before the mask lands; afterwards the owner writes through
   // `builtins`, which a session may spell and loaded code may not)
