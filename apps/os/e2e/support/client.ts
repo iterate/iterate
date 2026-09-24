@@ -268,7 +268,7 @@ export const readAll = async (itx: any): Promise<any[]> => {
 };
 
 /** A log as its repo facts' short type names, in order (`repo/created`, …; a processor row's
- *  `stream/…` fact is not one). */
+ *  `itx/…` fact is not one). */
 export const repoFactTypes = (log: { type: string }[]): string[] =>
   log
     .filter((e) => e.type.startsWith("events.iterate.com/repo"))

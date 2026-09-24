@@ -2,16 +2,16 @@
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY in its handlers, event-sourced
 // from the context's own control events and nothing else:
 //
-//   future event batches     itx/schedule-set · schedule-{cancelled,fired,failed}                   → schedules
-//   who this context is       itx/created { projectId, path }            → projectId · path · createdAt
-//   which incarnation runs    itx/woken { incarnation }                  → incarnation
-//   what reset it             itx/aborted, then itx/woken            → wokenAfterContextAbortedOffset
-//   may appends land          itx/paused { reason } · itx/resumed     → paused        (one `if` in Stream.append)
+//   future event batches      itx/schedule-set · schedule-{cancelled,fired,failed} → schedules
+//   who this context is       itx/created { projectId, path } → projectId · path · createdAt
+//   which incarnation runs    itx/woken { incarnation } → incarnation
+//   what reset it             itx/aborted, then itx/woken → wokenAfterContextAbortedOffset
+//   may appends land          itx/paused { reason } · itx/resumed → paused (one `if` in Stream.append)
 //   where the project apex goes itx/ingress-configured { target|null } → ingressTarget
 //   which requests go where   itx/fetch-route-configured { fetchRouteName, … } → fetchRoutes (every `match`)
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
-//   who is sent each commit   itx/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
-//                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
+//   who is sent each commit   itx/subscription-configured { name, target|null, ifConfiguredAtOffset? }
+//                             | -delivery-halted | -delivery-resumed → subscriptions (the delivery loop)
 //   which scripts are running itx/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
 // ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch form

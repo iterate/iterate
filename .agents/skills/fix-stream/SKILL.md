@@ -93,7 +93,7 @@ Print the conversation with offsets and times before reading product code. Every
 - `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
   or an operator.
 - `voice-agent/*`: a call's transcripts, delegations and commentary (`apps/agents/voice/`).
-- `stream/*`: the context's own facts, such as wakes and processor rows
+- Other `itx/*`: the context's own facts, such as wakes (`itx/woken`) and processor rows
   (`itx/subscription-configured`).
 
 Find where the person lost: silence after their input, a wrong answer, an error leak, or a

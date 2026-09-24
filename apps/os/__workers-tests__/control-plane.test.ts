@@ -399,7 +399,7 @@ test("a person's first project mints their organization: its record gets the cre
     (await globalLog(`/organizations/${racerOrgs[0]!.id}`))
       .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
       .map(({ type }) => type.replace("events.iterate.com/organization/", "")),
-  ).toEqual(["created", "member-added", "project-created", "project-created"]);
+  ).toEqual(["created", "member-added", "project-added", "project-added"]);
 });
 
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
