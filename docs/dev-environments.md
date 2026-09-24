@@ -41,6 +41,13 @@ pnpm install
 
 pnpm dev          # fully-local OS dev server on http://localhost:8788
 pnpm dev -- --port 8799   # a second worktree, alongside
+
+pnpm dev start --detach   # the same, in the background; returns once /version answers
+pnpm dev status           # pid, port, URL (exit 1: not running)
+pnpm dev attach           # follow its log, apps/os/.wrangler/dev.log
+pnpm dev kill             # or `restart`
+pnpm getin                # a browser signed in as test@preview.iterate.test, in project `test`
+pnpm -s getin --print     # the one-click sign-in URL alone, for Playwright and agents
 ```
 
 OS local dev needs no Doppler. `doppler.yaml` still maps each app directory to
@@ -66,13 +73,23 @@ read secrets.
   or pin copies of derived values in Doppler: a manually pinned copy can only
   drift.
 
+- **Detached and `getin`**: the running server is recorded in
+  `apps/os/.wrangler/dev-server.json` (`{pid, port, baseUrl, startedAt, detached}`), which
+  is how `status`, `kill` and `pnpm getin` find it. Without `--port` the port is
+  the worktree's last recorded one, else `8788`, else a free one. `pnpm getin`
+  (`scripts/getin.ts`) starts the server if need be, creates the project as the
+  person through the operator bearer (idempotent), and opens a one-click sign-in
+  link (below) signed with the local key. With a local Dash up at
+  `http://localhost:5173` whose `ITERATE_ORIGIN` is this server, it lands on the
+  Dash's project page with no Allow page; else on `/login`. `-e`/`-p` pick
+  another `@preview.iterate.test` person and project; `--dash` another Dash.
 - The port is the one you chose (default `8788`); wrangler prints
   `Ready on http://localhost:<port>`. `GET /version` answers
   `<deployment id> <base url>` once the worker is up — poll it before driving
   the server. Playwright's `webServer` waits on the same URL. A second
   `pnpm dev` in the same worktree needs its own `--port`.
-- Dev server output is `wrangler dev`'s, in the terminal that started it. Run it
-  with output redirected to a file when you need to tail it from elsewhere.
+- Dev server output is in the terminal that started it; a detached server's is
+  in `apps/os/.wrangler/dev.log` (`pnpm dev attach`).
 - Project hosts work in the browser as `<proj-slug>.localhost:<port>`
   (Chromium resolves `*.localhost` to loopback, and so does curl on current
   macOS). A client that does not should use `localhost:<port>` with a `Host`

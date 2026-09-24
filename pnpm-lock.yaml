@@ -892,6 +892,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.14.1
         version: 7.14.1
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@^0.12.2
+        version: '@iterate-com/capnweb@0.12.2'
       yaml:
         specifier: ^2.8.3
         version: 2.8.3

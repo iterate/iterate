@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --dir apps/os dev",
+    "getin": "tsx scripts/getin.ts",
+    "os": "pnpm --dir apps/os",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
