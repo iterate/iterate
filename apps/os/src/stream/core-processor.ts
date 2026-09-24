@@ -609,11 +609,13 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   STREAM_ALARM_TRACE_EVENT,
 ]);
 
-/** The operator's control events: `itx.append` of a literal event, no command in between. */
-const StreamPaused = z.object({ reason: z.string().optional() });
-const StreamResumed = z.object({});
-const SubscriptionDeliveryResumed = z.object({
-  name: z.string(),
+/** The operator's control events: `itx.append` of a literal event, no command in between. Checked,
+ *  never rewritten: strict, so an unknown key throws instead of being dropped, and the event is
+ *  stored as sent (an idempotent retry compares the stored payload with `jsonEqual`). */
+const StreamPaused = z.strictObject({ reason: z.string().optional() }).optional();
+const StreamResumed = z.strictObject({}).optional();
+const SubscriptionDeliveryResumed = z.strictObject({
+  name: z.string().transform(parseSubscriptionName),
   afterOffset: z.number().int().nonnegative().optional(),
 });
 
@@ -627,12 +629,18 @@ const SubscriptionDeliveryResumed = z.object({
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
-  if (event.type === "events.iterate.com/stream/paused")
-    return { ...event, payload: StreamPaused.parse(event.payload || {}) };
-  if (event.type === "events.iterate.com/stream/resumed")
-    return { ...event, payload: StreamResumed.parse(event.payload || {}) };
-  if (event.type === "events.iterate.com/stream/subscription-delivery-resumed")
-    return { ...event, payload: SubscriptionDeliveryResumed.parse(event.payload) };
+  if (event.type === "events.iterate.com/stream/paused") {
+    StreamPaused.parse(event.payload);
+    return event;
+  }
+  if (event.type === "events.iterate.com/stream/resumed") {
+    StreamResumed.parse(event.payload);
+    return event;
+  }
+  if (event.type === "events.iterate.com/stream/subscription-delivery-resumed") {
+    SubscriptionDeliveryResumed.parse(event.payload);
+    return event;
+  }
   if (event.type === "events.iterate.com/project/ingress-configured") {
     if (event.ephemeral) throw new Error("ingress configuration must be durable");
     return { ...event, payload: normalizeIngressConfigured(event.payload) };

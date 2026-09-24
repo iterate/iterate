@@ -142,24 +142,34 @@ test.each([
 });
 
 test("an operator's pause, resume and delivery resume are parsed at the append boundary: the reduce's casts are true", () => {
+  // stored as sent: a bare pause stays bare, so a keyed retry still matches the committed event
   const paused = "events.iterate.com/stream/paused";
-  expect(normalizeControlEvent({ type: paused }, "/")).toEqual({ type: paused, payload: {} });
-  expect(
-    normalizeControlEvent({ type: paused, payload: { reason: "breaker", extra: 1 } }, "/"),
-  ).toEqual({ type: paused, payload: { reason: "breaker" } });
-  expect(() => normalizeControlEvent({ type: paused, payload: { reason: 42 } }, "/")).toThrow();
+  expect(normalizeControlEvent({ type: paused }, "/")).toEqual({ type: paused });
+  expect(normalizeControlEvent({ type: paused, payload: { reason: "breaker" } }, "/")).toEqual({
+    type: paused,
+    payload: { reason: "breaker" },
+  });
+  for (const payload of [{ reason: 42 }, { reason: "breaker", extra: 1 }])
+    expect(() => normalizeControlEvent({ type: paused, payload }, "/")).toThrow();
   const resumed = "events.iterate.com/stream/resumed";
-  expect(normalizeControlEvent({ type: resumed }, "/")).toEqual({ type: resumed, payload: {} });
+  expect(normalizeControlEvent({ type: resumed }, "/")).toEqual({ type: resumed });
+  expect(() => normalizeControlEvent({ type: resumed, payload: { extra: 1 } }, "/")).toThrow();
   const deliveryResumed = "events.iterate.com/stream/subscription-delivery-resumed";
   expect(
     normalizeControlEvent({ type: deliveryResumed, payload: { name: "s", afterOffset: 0 } }, "/"),
   ).toEqual({ type: deliveryResumed, payload: { name: "s", afterOffset: 0 } });
-  // a non-numeric seek would have become a NaN cursor in the delivery loop
+  // a non-numeric seek would have become a NaN cursor in the delivery loop; a prototype key would
+  // have read `Object.prototype` as a row, and `core` is never a subscription
   for (const payload of [
     {},
     { name: 1 },
     { name: "s", afterOffset: "3" },
     { name: "s", afterOffset: -1 },
+    { name: "constructor" },
+    { name: "toString" },
+    { name: "__proto__" },
+    { name: "core" },
+    { name: "a/b" },
   ])
     expect(() => normalizeControlEvent({ type: deliveryResumed, payload }, "/")).toThrow();
 });
