@@ -9,7 +9,12 @@ export default defineConfig(({ command }) => ({
   plugins: [
     cloudflare({
       viteEnvironment: { name: "ssr" },
-      config: viteWranglerConfig(process.env.OS_NEXT_ENV, command === "serve"),
+      config: viteWranglerConfig(process.env.OS_NEXT_ENV, {
+        localDev: command === "serve",
+        // scripts/dev.ts sets it from the `--port` it forwards to `vite dev`, which overrides
+        // `server.port` below.
+        port: process.env.OS_NEXT_DEV_PORT || "8788",
+      }),
     }),
     tanstackStart({
       router: { addExtensions: true, semicolons: true, quoteStyle: "double" },

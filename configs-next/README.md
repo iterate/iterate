@@ -16,7 +16,7 @@ platform subscribes the config worker's `processEventBatch(events, range)` befor
 also accepts custom references such as `github:owner/repo#main&path:templates/example`. The API
 resolves the ref to a commit before persisting the creation request. Omit it for the minimal seed.
 
-The build generates preset references using the repository commit, or `ITERATE_TEMPLATE_SOURCE_REF`.
+The build generates preset references using the repository commit.
 That commit must be available on GitHub and contain these folders before preset cloning can work.
 The minimal seed is embedded in the platform build and needs no GitHub request.
 

@@ -79,7 +79,6 @@ type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
-export const DEFAULT_APPS_MODE = "all" satisfies AppsMode;
 const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--dry-run]`;
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
@@ -94,13 +93,7 @@ const parentContext = () =>
 
 // ── process helpers (cloudflare-os) ────────────────────────────────────────────────────────────
 
-interface CommandResult {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function describe(error: unknown): string {
+function describe(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -111,32 +104,34 @@ function run(
   command: string,
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<CommandResult> {
+) {
   console.log(
     `running${options.cwd ? ` in ${path.relative(ROOT, options.cwd) || "."}` : ""}: ${command} ${args.join(" ")}`,
   );
-  return new Promise<CommandResult>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd || ROOT,
-      env: options.env || process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (data: string) => (stdout += data));
-    child.stderr.on("data", (data: string) => (stderr += data));
-    child.once("error", (error) => reject(new Error(`failed to run ${command}: ${error.message}`)));
-    child.once("close", (status) => resolve({ status, stdout, stderr }));
-  });
+  return new Promise<{ status: number | null; stdout: string; stderr: string }>(
+    (resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd: options.cwd || ROOT,
+        env: options.env || process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (data: string) => (stdout += data));
+      child.stderr.on("data", (data: string) => (stderr += data));
+      child.once("error", (error) =>
+        reject(new Error(`failed to run ${command}: ${error.message}`)),
+      );
+      child.once("close", (status) => resolve({ status, stdout, stderr }));
+    },
+  );
 }
 
-/** The wrangler a run uses: PREVIEW_WRANGLER, or the pinned draft build installed into a tmpdir the
+/** The wrangler a run uses: the pinned draft build (WRANGLER_PACKAGE) installed into a tmpdir the
  *  way cloudflare-os does it (pnpm, exotic subdeps allowed for the pkg.pr.new workspace packages). */
-function preparePreviewWrangler(): { command: string; ready: Promise<void>; cleanup: () => void } {
-  const override = process.env.PREVIEW_WRANGLER;
-  if (override) return { command: override, ready: Promise.resolve(), cleanup: () => {} };
+function preparePreviewWrangler() {
   const installDir = mkdtempSync(path.join(tmpdir(), "os-next-preview-wrangler-"));
   writeFileSync(
     path.join(installDir, "package.json"),
@@ -168,7 +163,7 @@ function parseWranglerJson(raw: string): {
 
 /** Every row of a paged account listing — D1, Artifacts namespaces and a worker's previews all page
  *  the same way (`per_page`, `page`; the previews list hands out ten a page unless asked, measured). */
-async function listAll<T>(cf: Cf, route: string): Promise<T[]> {
+async function listAll<T>(cf: Cf, route: string) {
   const rows: T[] = [];
   for (let page = 1; ; page++) {
     const batch = await cf<T[]>(`${route}?per_page=100&page=${page}`);
@@ -179,7 +174,7 @@ async function listAll<T>(cf: Cf, route: string): Promise<T[]> {
 
 // ── GitHub over fetch ──────────────────────────────────────────────────────────────────────────
 
-function requireEnv(name: string): string {
+function requireEnv(name: string) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
@@ -219,7 +214,7 @@ const repository = () => requireEnv("GITHUB_REPOSITORY");
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
  *  re-splicing onto whatever is there now converges on both edits within a few rounds. */
-async function writePullRequestSection(prNumber: string, section: string): Promise<void> {
+async function writePullRequestSection(prNumber: string, section: string) {
   const route = `/repos/${repository()}/pulls/${prNumber}`;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = (await github<{ body: string | null }>(route)).body || "";
@@ -244,11 +239,11 @@ async function writePullRequestSection(prNumber: string, section: string): Promi
 type D1Row = { uuid: string; name: string; created_at?: string };
 
 /** The list API's `name` filter matches by prefix (measured), so the exact match is made here. */
-async function findDatabase(cf: Cf, name: string): Promise<D1Row | undefined> {
+async function findDatabase(cf: Cf, name: string) {
   return (await listAll<D1Row>(cf, "/d1/database")).find((row) => row.name === name);
 }
 
-async function deleteDatabase(cf: Cf, name: string): Promise<void> {
+async function deleteDatabase(cf: Cf, name: string) {
   const row = await findDatabase(cf, name);
   if (!row) return console.warn(`D1 ${name} did not exist; continuing.`);
   await cf(`/d1/database/${row.uuid}`, { method: "DELETE" });
@@ -275,7 +270,7 @@ const isCloudflareError = (error: unknown, status: number, code: number) =>
 /** A preview's namespace, by name. The worker's repo create does NOT provision one: on a missing
  *  namespace it fails with "Namespace is not active" (measured 2026-09-22), and the binding names
  *  the namespace only. */
-async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string): Promise<void> {
+async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string) {
   const existing = await cf<ArtifactsNamespaceRow>(
     `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`,
   ).catch((error) => {
@@ -296,7 +291,7 @@ async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
  *  a ceiling keeps that bounded. A namespace that does not exist — a preview deleted before its
  *  deploy created one, a re-run of the cleanup job, the sweep racing the close job — is the
  *  expected case. */
-async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string): Promise<void> {
+async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string) {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
   // The namespace itself is what answers "does not exist" (404, code 10200); its repos list answers
   // an empty page for a missing namespace (measured 2026-09-22), so the check is on the namespace.
@@ -353,7 +348,7 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
 type KvNamespaceRow = { id: string; title: string };
 
 /** One already gone — the sweep racing the close job, a re-run — is deleted. */
-async function deleteKvNamespace(cf: Cf, row: KvNamespaceRow): Promise<void> {
+async function deleteKvNamespace(cf: Cf, row: KvNamespaceRow) {
   await cf(`/storage/kv/namespaces/${row.id}`, { method: "DELETE" }).catch((error) => {
     if (!isCloudflareError(error, 404, 10013)) throw error;
   });
@@ -364,7 +359,7 @@ async function deleteKvNamespace(cf: Cf, row: KvNamespaceRow): Promise<void> {
  *  bucket. The first thousand-key page is read again until it is empty, twenty deletes in flight —
  *  a preview's e2e run leaves tens, the soak preview's bucket held 1,908 (measured 2026-09-23) — and
  *  a ceiling keeps that bounded. A bucket that does not exist is the expected case. */
-async function deleteR2Bucket(cf: Cf, bucketName: string): Promise<void> {
+async function deleteR2Bucket(cf: Cf, bucketName: string) {
   const route = `/r2/buckets/${bucketName}`;
   let deletedObjects = 0;
   for (let round = 1; ; round++) {
@@ -410,7 +405,7 @@ const appPreviewUrl = (app: StartApp, previewName: string) =>
 
 /** A config that names a parent worker and nothing else: enough for `wrangler preview delete`
  *  and the sweep, on a checkout that never built anything. */
-function writeParentConfig(parent: { workerName: string; cloudflareAccountId: string }): string {
+function writeParentConfig(parent: { workerName: string; cloudflareAccountId: string }) {
   const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-parent-"));
   const file = path.join(dir, "wrangler.json");
   writeFileSync(
@@ -428,7 +423,7 @@ async function deployAppPreview(
   previewName: string,
   issuer: string,
   wrangler: string,
-): Promise<{ name: string; url: string }> {
+) {
   const root = path.resolve(import.meta.dirname, "../..", app.name);
   const config = writeStartAppPreviewConfig(app, { issuer });
   const previewArgs = ["preview", "--name", previewName, "-c", config, "--json"];
@@ -451,7 +446,7 @@ async function deployAppPreview(
 }
 
 /** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes. */
-async function appsToPreview(mode: AppsMode, prNumber: string | undefined): Promise<StartApp[]> {
+async function appsToPreview(mode: AppsMode, prNumber: string | undefined) {
   if (mode === "all") return APPS;
   if (mode === "none") return [];
   try {
@@ -467,7 +462,7 @@ async function appsToPreview(mode: AppsMode, prNumber: string | undefined): Prom
 /** The paths this pull request changes. From GitHub when there is a PR — the same cumulative diff
  *  the PR page shows, and independent of how deep CI's checkout is (a depth-1 checkout has no
  *  merge-base); from git against origin/main on a laptop. */
-async function changedPaths(prNumber: string | undefined): Promise<string[]> {
+async function changedPaths(prNumber: string | undefined) {
   if (prNumber && process.env.GITHUB_TOKEN) {
     const paths: string[] = [];
     for (let page = 1; ; page++) {
@@ -497,7 +492,7 @@ async function deleteWorkerPreview(
   parent: { workerName: string; cloudflareAccountId: string },
   previewName: string,
   wrangler: string,
-): Promise<void> {
+) {
   const config = writeParentConfig(parent);
   try {
     const result = await run(wrangler, [
@@ -530,7 +525,7 @@ async function deleteWorkerPreview(
  *  (src/app-config.ts, scripts/deploy.ts ships the same two): the one `APP_CONFIG` object —
  *  `login.password`, `secrets.adminBearer` — and `APP_CONFIG_SECRETS__KEY` beside it. Values go
  *  through a 0600 tmp file, never argv or the config. */
-async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>): Promise<void> {
+async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
   const secrets = collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
   const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-secrets-"));
   const file = path.join(dir, "secrets.json");
@@ -683,7 +678,7 @@ async function deployPreview(
  *  script created it), any `db` D1 a preview from before the control plane moved to a Durable Object
  *  left behind, its KV namespaces and its R2 bucket (wrangler provisioned them; see WRANGLER_PACKAGE
  *  for why its delete leaves them). One already gone is the expected case. */
-async function deletePreview(cf: Cf, previewName: string, wrangler: string): Promise<void> {
+async function deletePreview(cf: Cf, previewName: string, wrangler: string) {
   await deleteWorkerPreview(PREVIEW_PARENT, previewName, wrangler);
   await deleteDatabase(cf, previewResourceName(previewName, "db"));
   await deleteArtifactsNamespace(cf, previewResourceName(previewName, "repos"));
@@ -700,7 +695,7 @@ async function deletePreview(cf: Cf, previewName: string, wrangler: string): Pro
 
 /** os-next's preview and everything it owned, then every app on top's preview (whether or not it
  *  exists). */
-async function deleteAll(cf: Cf, previewName: string): Promise<void> {
+async function deleteAll(cf: Cf, previewName: string) {
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;
@@ -742,7 +737,7 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps, the
  *  Notes session specs signing out in its Dash (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL;
  *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. */
-async function runE2e(previewName: string): Promise<void> {
+async function runE2e(previewName: string) {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
@@ -828,7 +823,7 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
 
 /** Every open pull request's head branch — what keeps a preview named after a branch (preview-sweep.ts
  *  rule 3) — or undefined when GitHub cannot say, and rule 3 then deletes nothing. */
-async function openPullRequestBranches(): Promise<string[] | undefined> {
+async function openPullRequestBranches() {
   try {
     const branches: string[] = [];
     for (let page = 1; ; page++) {
@@ -886,11 +881,7 @@ type ListedPreview = { name: string; created_on?: string; deployed_on?: string }
 
 /** Main's superseded throwaway previews (preview-sweep.ts `supersededMainPreviews`), each deleted
  *  with everything it owns and the apps on top: the delete a cancelled run never ran. */
-async function deleteSupersededMainPreviews(
-  cf: Cf,
-  current: string,
-  dryRun: boolean,
-): Promise<void> {
+async function deleteSupersededMainPreviews(cf: Cf, current: string, dryRun: boolean) {
   const listed = await listAll<ListedPreview>(
     cf,
     `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
@@ -918,7 +909,7 @@ const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
 
 /** The stale previews (deletePreview, and the apps on top of the same name) and the resources that
  *  outlived their preview, by the rules in scripts/preview-sweep.ts. */
-async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
+async function sweep(cf: Cf, dryRun: boolean) {
   // The resources BEFORE the previews (rule 5): wrangler creates a preview before its KV and R2.
   const resources = await listSweptResources(cf);
   const previews = await listAll<ListedPreview>(
@@ -1075,7 +1066,7 @@ function parseArgs(argv: string[]): {
 
 /** The branch a PR-numbered run names its preview after: the flag, PREVIEW_NAME (the workflow's
  *  `github.head_ref`), or — a dispatch that only knows the number — the PR's head ref from GitHub. */
-async function resolveBranch(pr: string | undefined, name: string | undefined): Promise<string> {
+async function resolveBranch(pr: string | undefined, name: string | undefined) {
   if (name) return name;
   if (process.env.PREVIEW_NAME) return process.env.PREVIEW_NAME;
   if (pr && process.env.GITHUB_TOKEN) {
@@ -1089,10 +1080,10 @@ async function resolveBranch(pr: string | undefined, name: string | undefined): 
 
 /** The flags, then the workflow's spellings — PREVIEW_PR_NUMBER, PREVIEW_APPS (all | auto | none),
  *  PREVIEW_NAME (resolveBranch) — then the defaults. */
-async function main(argv: string[]): Promise<void> {
+async function main(argv: string[]) {
   const parsed = parseArgs(argv);
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
-  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || DEFAULT_APPS_MODE);
+  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
   if (parsed.command === "sweep") return sweep((await parentContext()).cf, parsed.dryRun);
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });

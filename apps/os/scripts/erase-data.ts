@@ -5,15 +5,14 @@
  * (users, organizations, projects) lives in Durable Objects, retired with the rest.
  * A failed or incomplete erase throws; rerunning is safe. Deploy again to restore service.
  */
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import JSON5 from "json5";
 import { createCli } from "trpc-cli";
 import { osEnvs } from "../../../envs.ts";
 import { fetchCloudflareWith429Retry } from "../../../scripts/lib/cloudflare-429-retry.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 const Listing = z.object({
   success: z.boolean(),
@@ -163,7 +162,7 @@ export default async function eraseData(options: {
     );
   const { compatibility_date: compatibilityDate } = z
     .object({ compatibility_date: z.string() })
-    .parse(JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8")));
+    .parse(readWranglerBase());
 
   await resetWorkerDurableObjects({
     ctx: context,

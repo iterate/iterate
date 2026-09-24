@@ -5,8 +5,8 @@ import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 /**
  * The minimum an app's envs.ts entry must carry for the deploy tooling:
  * which Doppler config supplies secrets and which Cloudflare account the
- * env lives in. Each app's env interface (DeployedEnv, AuthDeployedEnv, …)
- * extends this structurally.
+ * env lives in. Each app's env interface (envs.ts OsEnv, KitEnv,
+ * DummyPetshopEnv; start-app.ts StartAppEnv) extends this structurally.
  */
 export interface DeployableEnv {
   cloudflareAccountId: string;
@@ -35,8 +35,8 @@ export class CloudflareApiError extends Error {
 /**
  * A resolved `--env <name>` invocation: the app's envs.ts entry plus that
  * env's Doppler secrets. Every deployed-environment script starts here, so
- * the environment is always selected explicitly by name — never implied by
- * whatever Doppler config the shell happened to be wrapped in.
+ * the environment is selected by name (a deploy's or ensure-resources'
+ * DOPPLER_CONFIG fallback aside; see resolveEnvContext).
  */
 export interface EnvContext<E extends DeployableEnv> {
   name: string;
@@ -55,7 +55,7 @@ export interface EnvContext<E extends DeployableEnv> {
  *
  * `allowDopplerConfigFallback` (default false) permits the CI bridge: when
  * `env` is absent, fall back to DOPPLER_CONFIG — so CI's existing
- * `doppler run --config preview_N -- pnpm run-script deploy` (no flags)
+ * `doppler run -- pnpm run-script deploy` (no flags)
  * selects the matching env without extra plumbing (env names and Doppler
  * config names coincide; the account-id assertion below still catches any
  * mismatch). Deploys pass `allowDopplerConfigFallback: true`; erase-data
@@ -65,7 +65,7 @@ export interface EnvContext<E extends DeployableEnv> {
  */
 export async function resolveEnvContext<E extends DeployableEnv>(options: {
   envs: Record<string, E>;
-  /** Doppler project the env's config lives in (e.g. "os", "auth"). */
+  /** Doppler project the env's config lives in (e.g. "project-worker", "dash"). */
   dopplerProject: string;
   /** Explicit environment name (the caller's --env flag). */
   env?: string;

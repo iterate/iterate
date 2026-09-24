@@ -1,11 +1,9 @@
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import {
   collectSecrets,
   deployWithSecrets,
   findBuiltWranglerConfig,
-  runAsync,
   smoke,
+  viteBuild,
 } from "./deploy-helpers.ts";
 import {
   assertProvisioned,
@@ -14,21 +12,12 @@ import {
   type EnvContext,
 } from "./env-context.ts";
 
-/** One smoke probe against the deployed app. */
-export interface SmokeProbe {
-  url: string;
-  /** Which HTTP statuses count as healthy for this probe. */
-  ok: (status: number) => boolean;
-  label: string;
-}
-
 /**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
  *   resolve --env → assert resources provisioned → collect secrets →
- *   app-specific prepare (migrations, seeds, config preflight) → build plus
- *   explicitly independent prerequisites → final pre-deploy mutations → deploy
- *   code+secrets in one version → smoke-probe → ✅
+ *   app-specific prepare (config preflight, synced assets) → vite build → deploy
+ *   code+secrets in one version → smoke-probe → afterDeploy → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
@@ -38,8 +27,7 @@ export interface SmokeProbe {
  * This is a parameterized imperative function, not a framework: every input
  * is a plain value or a hook called exactly once at a fixed point you can
  * read below. Apps with genuinely unique steps put them in
- * `prepare`/`afterDeploy`; everything else is the
- * shared skeleton that used to be copy-pasted per app.
+ * `prepare`/`afterDeploy`.
  */
 export async function deployApp<E extends DeployableEnv>(input: {
   /** Absolute app root (wrangler/vite commands run here). */
@@ -60,53 +48,29 @@ export async function deployApp<E extends DeployableEnv>(input: {
   servingUrl: (env: E) => string;
   /** Resource-ID map to assert provisioned (omit when the app owns none). */
   resources?: (env: E) => Record<string, string>;
-  /** Secret names the deploy fails without / ships when present. */
+  /** Secret names the deploy fails without; each ships with the code. */
   requiredSecrets?: readonly string[];
-  optionalSecrets?: readonly string[];
   /** Extra env vars for the Vite build. */
   buildEnv?: (ctx: EnvContext<E>) => Record<string, string>;
   /**
    * Runs after secret collection, before build/deploy: config preflights,
-   * D1 migrations, seed data. May add deploy-time-computed secrets to
-   * `secretValues`. `credentials` carry CLOUDFLARE_API_TOKEN/ACCOUNT_ID for
-   * wrangler subcommands.
+   * synced assets. May add deploy-time-computed secrets to `secretValues`.
+   * `credentials` carry CLOUDFLARE_API_TOKEN/ACCOUNT_ID for wrangler
+   * subcommands.
    */
   prepare?: (
     ctx: EnvContext<E>,
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
   ) => Promise<void> | void;
-  /**
-   * Independent prerequisites that may overlap the Vite build but MUST
-   * complete before code upload. Both lanes are joined (including on failure)
-   * before deploy, so this cannot expose a version whose prerequisites are
-   * still running.
-   */
-  concurrentBuildWork?: (
-    ctx: EnvContext<E>,
-    secretValues: Record<string, string>,
-    credentials: Record<string, string>,
-  ) => Promise<void> | void;
-  /**
-   * Runs only after a successful build, immediately before code upload. Use
-   * for destructive rollout steps that must not run when the build is broken.
-   */
-  beforeDeploy?: (
-    ctx: EnvContext<E>,
-    secretValues: Record<string, string>,
-    credentials: Record<string, string>,
-  ) => Promise<void> | void;
   /** Runs after a healthy deploy. */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
-  /**
-   * Extra `wrangler deploy` args after prepare. Called after `prepare` so
-   * it can depend on bootstrap results.
-   */
-  extraDeployArgs?: (
-    ctx: EnvContext<E>,
-    secretValues: Record<string, string>,
-  ) => string[] | undefined;
-  smokes: (env: E) => SmokeProbe[];
+  smokes: (env: E) => {
+    url: string;
+    /** Which HTTP statuses count as healthy for this probe. */
+    ok: (status: number) => boolean;
+    label: string;
+  }[];
 }) {
   const ctx = await resolveEnvContext({
     envs: input.envs,
@@ -124,43 +88,18 @@ export async function deployApp<E extends DeployableEnv>(input: {
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
     CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
   };
-  const secretValues = collectSecrets(ctx, input.requiredSecrets ?? [], input.optionalSecrets);
-  // Resolve build-only inputs before app-specific preparation mutates any
-  // deployed resource. A missing upload/build credential must fail the whole
-  // deploy before sidecars, queues, buckets, or migrations advance.
+  const secretValues = collectSecrets(ctx, input.requiredSecrets || []);
+  // Resolved before `prepare`, so a missing build input fails the deploy before anything changes.
   const buildEnv = input.buildEnv?.(ctx);
 
   await input.prepare?.(ctx, secretValues, credentials);
-
-  const concurrentBuildWork = Promise.resolve().then(() =>
-    input.concurrentBuildWork?.(ctx, secretValues, credentials),
-  );
-  // rm dist + `vite build` with CLOUDFLARE_ENV: the Cloudflare Vite plugin snapshots that env's
-  // Worker config into dist, and that is what deploys.
-  rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
-  const results = await Promise.allSettled([
-    runAsync("pnpm", ["exec", "vite", "build"], {
-      cwd: input.appRoot,
-      env: { CLOUDFLARE_ENV: ctx.name, ...buildEnv },
-    }),
-    concurrentBuildWork,
-  ]);
-  const failures = results
-    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-    .map((result) => result.reason);
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "App build and concurrent build work both failed");
-  }
-  const builtConfig = findBuiltWranglerConfig(input.appRoot);
-  await input.beforeDeploy?.(ctx, secretValues, credentials);
+  await viteBuild(input.appRoot, ctx.name, buildEnv);
 
   await deployWithSecrets({
     cwd: input.appRoot,
-    builtConfig,
+    builtConfig: findBuiltWranglerConfig(input.appRoot),
     secretValues,
     credentials,
-    extraDeployArgs: input.extraDeployArgs?.(ctx, secretValues),
   });
 
   for (const probe of input.smokes(ctx.env)) {

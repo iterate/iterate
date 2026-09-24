@@ -45,7 +45,7 @@ export const ProjectSeed = z.object({
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
 
-export async function configTree(files: ProjectSeed["config"]["files"]): Promise<string> {
+export async function configTree(files: ProjectSeed["config"]["files"]) {
   const manifest = new Map<string, { oid: string; mode: string }>();
   for (const file of files) {
     if (manifest.has(file.path)) throw new Error(`Duplicate config path: ${file.path}`);
