@@ -2,8 +2,6 @@ import { readFileSync } from "node:fs";
 
 import { Octokit } from "@octokit/rest";
 
-import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
-
 export function getOctokit() {
   const auth = process.env.GITHUB_TOKEN;
   if (!auth) {
@@ -22,14 +20,6 @@ export function getRepo() {
     throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
   }
   return { owner, repo };
-}
-
-export function getEventName() {
-  const eventName = process.env.GITHUB_EVENT_NAME;
-  if (!eventName) {
-    throw new Error("GITHUB_EVENT_NAME is required");
-  }
-  return eventName;
 }
 
 /** The subset of GitHub webhook event payload fields our CI scripts read. */
@@ -67,25 +57,4 @@ export function getRunUrl() {
     throw new Error("GITHUB_REPOSITORY and GITHUB_RUN_ID are required");
   }
   return `${serverUrl}/${repository}/actions/runs/${runId}`;
-}
-
-export function prState<State>(body: string, label: string) {
-  let currentBody = body;
-  return {
-    read: () => {
-      const annotator = markdownAnnotator(currentBody, label);
-      const currentContents = annotator.current?.trim() || `<!-- {} -->`;
-      if (!currentContents.startsWith("<!-- ") || !currentContents.endsWith(" -->")) {
-        throw new Error(
-          `Invalid current contents:\n\n${annotator.current}\n\nWhole body:\n\n${currentBody}`,
-        );
-      }
-      const value = currentContents.slice("<!-- ".length, -1 * " -->".length).trim();
-      return JSON.parse(value) as Partial<State>;
-    },
-    write: (state: State) => {
-      const newContents = `<!-- ${JSON.stringify(state, null, 2)} -->`;
-      return (currentBody = markdownAnnotator(currentBody, label).update(newContents));
-    },
-  };
 }

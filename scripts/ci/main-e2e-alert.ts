@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 
 export type MainE2eState = "green" | "red";
@@ -76,8 +76,7 @@ export function mainE2ePage(input: {
   if (input.verdict === "green") return [`${GREEN} at ${commit}`, link].filter(Boolean).join("\n");
   const shown = input.failingRows.slice(0, 8);
   return [
-    // the mention is Jonas (./slack.ts)
-    `${RED} at ${commit} <@U067G4QRFK2>`,
+    `${RED} at ${commit} ${onCallMention}`,
     `• failed: ${input.failedJobs.join(", ") || "a job"}`,
     shown.length > 0 &&
       `• failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,

@@ -1,6 +1,6 @@
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { getSlackClient, slackChannelIds, slackEscape } from "./slack.ts";
 
 type DeployOptions = {
   app: string;
@@ -131,10 +131,6 @@ function formatPullRequestLink(pullRequest: PullRequestPayload) {
   const title = pullRequest.title ? ` ${slackEscape(pullRequest.title)}` : "";
   const label = `#${pullRequest.number}${title}`;
   return pullRequest.html_url ? `<${pullRequest.html_url}|${label}>` : label;
-}
-
-function slackEscape(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function readOption(name: string) {

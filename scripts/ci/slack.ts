@@ -3,10 +3,7 @@ import { execSync } from "node:child_process";
 import { WebClient } from "@slack/web-api";
 
 export const slackChannelIds = {
-  "#test-blank": "C08R1SMTZGD",
-  "#misha-test": "C09B4EGQT7E",
   "#error-pulse": "C09K1CTN4M7",
-  "#building": "C06LU7PGK0S",
   "#ci": "C0B3QJSU32A",
 };
 
@@ -20,7 +17,6 @@ export const slackUsers = [
     id: "U08V1A83Y2W",
     handle: "Rahul",
     github: "BlankParticle",
-    oooUntil: new Date("2025-11-07T08:00:00Z"),
   },
   {
     id: "U099JH9TAF2",
@@ -31,11 +27,10 @@ export const slackUsers = [
     id: "U067G4QRFK2",
     handle: "jonas",
     github: "jonastemplestein",
-    oooUntil: new Date("2026-01-01"),
   },
 ];
 
-export function getSlackBotToken() {
+function getSlackBotToken() {
   if (process.env.SLACK_CI_BOT_TOKEN) {
     return process.env.SLACK_CI_BOT_TOKEN;
   }
@@ -49,6 +44,14 @@ export function getSlackBotToken() {
   );
 }
 
-export function getSlackClient(token = getSlackBotToken()) {
-  return new WebClient(token);
+/** Who a page mentions: Jonas, on call for prd and main. */
+export const onCallMention = `<@${slackUsers.find((user) => user.handle === "jonas")!.id}>`;
+
+export function getSlackClient() {
+  return new WebClient(getSlackBotToken());
+}
+
+/** Escapes the three characters Slack's mrkdwn treats as control characters. */
+export function slackEscape(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

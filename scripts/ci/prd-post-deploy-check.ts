@@ -13,7 +13,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createCli } from "trpc-cli";
 import { osEnvs } from "../../envs.ts";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Production's project hosts, from envs.ts: each apex prd serves as a project's site
  *  (`osEnvs.prd.temporaryCustomHostnames` — iterate.com, garple.com, lispwoso.com, templestein.com). */
@@ -36,7 +36,8 @@ export async function check(options: { previousVersion?: string; dryRun?: boolea
     runUrl: process.env.DEPOT_JOB_URL,
   });
   console.log(JSON.stringify({ previousVersion: options.previousVersion, liveVersion, hosts }));
-  if (!page) return `os-next-prd version ${liveVersion} is live and every project host answers`;
+  if (!page)
+    return `${osEnvs.prd!.workerName} version ${liveVersion} is live and every project host answers`;
   if (!options.dryRun)
     await getSlackClient().chat.postMessage({
       channel: slackChannelIds["#error-pulse"],
@@ -62,8 +63,7 @@ export function renderPostDeployPage(input: {
   const down = input.hosts.filter((host) => hostIsDown(host.status));
   if (!versionLine && down.length === 0) return null;
   return [
-    // the mention is Jonas (./slack.ts)
-    `🚨 prd post-deploy check failed after the os-next-prd deploy <@U067G4QRFK2>`,
+    `🚨 prd post-deploy check failed after the ${osEnvs.prd!.workerName} deploy ${onCallMention}`,
     versionLine,
     ...down.map((host) =>
       host.status
