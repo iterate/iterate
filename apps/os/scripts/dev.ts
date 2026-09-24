@@ -99,9 +99,18 @@ async function serve(argv: string[]) {
   });
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
     process.on(signal, () => vite.kill(signal));
-  vite.on("exit", (code) => process.exit(code ?? 0));
+  vite.on("exit", (code) => process.exit(process.exitCode ?? code ?? 0));
   const baseUrl = `http://localhost:${port}`;
-  if (!(await answers(baseUrl, vite))) return;
+  const outcome = await answers(baseUrl, vite);
+  if (outcome === "exited") return;
+  if (outcome === "timeout") {
+    // stop vite (and its workerd) rather than leave it holding the port unrecorded; its exit ends
+    // this process, and a detached launcher then fails with the log's tail
+    console.error(`${baseUrl}/version did not answer within 3 minutes; stopping vite`);
+    process.exitCode = 1;
+    vite.kill("SIGTERM");
+    return;
+  }
   const record = {
     pid: process.pid,
     port,
@@ -161,16 +170,16 @@ async function stop(pid: number) {
 }
 
 /** `/version` every 250ms until it answers, for up to 3 minutes (the first `vite dev` optimizes
- *  dependencies); false once vite has exited. */
+ *  dependencies), or until vite exits. */
 async function answers(baseUrl: string, vite: ChildProcess) {
   const deadline = Date.now() + 180_000;
-  while (Date.now() < deadline && vite.exitCode === null) {
+  while (Date.now() < deadline) {
+    if (vite.exitCode !== null || vite.signalCode) return "exited";
     const response = await fetch(`${baseUrl}/version`).catch(() => null);
-    if (response?.ok) return true;
+    if (response?.ok) return "ready";
     await sleep(250);
   }
-  if (vite.exitCode !== null) return false;
-  throw new Error(`${baseUrl}/version did not answer within 3 minutes`);
+  return "timeout";
 }
 
 type DevServer = {
