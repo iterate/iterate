@@ -46,6 +46,24 @@ void iterate_kit_conversation_ring_animate(
 
   const bool listening = state->microphone_listening;
   const bool active = listening || state->conversation_active;
+
+  if (state->network == ITERATE_KIT_NETWORK_OFFLINE && !active) {
+    /*
+     * A slow red pulse: the one look that is neither coming up (amber
+     * breathing), muted (steady dim red) nor broken (steady red-orange). On a
+     * board with no screen it is the only way to see the device will refuse
+     * a press, before pressing and hearing why.
+     */
+    animation->microphone = 0.0f;
+    animation->speaker = 0.0f;
+    animation->presence = 0.0f;
+    const float pulse_phase = (float)(now_ms % 2500U) * (6.2831853f / 2500.0f);
+    const float red = 2.0f + 12.0f * (0.5f - 0.5f * cosf(pulse_phase));
+    for (uint8_t i = 0U; i < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++i) {
+      pixels[i] = (struct iterate_kit_rgb8){(uint8_t)(red + 0.5f), 0U, 0U};
+    }
+    return;
+  }
   const bool ready = state->network == ITERATE_KIT_NETWORK_CONNECTED &&
       state->media_ready && state->reach >= ITERATE_KIT_REACH_STREAM;
   /* Closing capture removes its indication immediately, including its decay.

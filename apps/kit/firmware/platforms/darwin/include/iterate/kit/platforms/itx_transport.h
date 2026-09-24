@@ -2,6 +2,7 @@
 #define ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 
 #include "iterate/kit/configuration.h"
+#include "iterate/kit/connectivity.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/itx_outbox_sender.h"
 #include "iterate/kit/platforms/posix_websocket_client.h"
@@ -123,6 +124,12 @@ struct iterate_kit_itx_transport {
   struct iterate_kit_posix_websocket_client websocket;
   struct iterate_kit_retry_gate websocket_retry;
   enum iterate_kit_itx_transport_state state;
+  /*
+   * How far the newest open got: REACHING_HOST until the host answers the
+   * upgrade, REACHING_ITERATE once it does (refusing or accepting). A Mac has
+   * no station of its own, so this is never JOINING_WIFI.
+   */
+  enum iterate_kit_network_stage network_stage;
   enum capnweb_status last_capnweb_status;
   int64_t websocket_open_deadline_us;
   int64_t mount_deadline_us;
@@ -184,6 +191,10 @@ void iterate_kit_itx_transport_lifecycle(
 
 const char *iterate_kit_itx_transport_state_name(
     enum iterate_kit_itx_transport_state state);
+
+/** How far the newest attempt to reach iterate got (iterate/kit/connectivity.h). */
+enum iterate_kit_network_stage iterate_kit_itx_transport_network_stage(
+    const struct iterate_kit_itx_transport *transport);
 
 #ifdef __cplusplus
 }

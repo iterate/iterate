@@ -56,6 +56,7 @@ static bool clock_slug(char *out, size_t capacity);
 static uint32_t abandon_speaker_audio(void);
 static void end_local_activation(const char *reason, const char *status);
 #include "iterate/kit/configuration.h"
+#include "iterate/kit/connectivity.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/microphone_flush.h"
 #include "iterate/kit/peer.h"
@@ -183,6 +184,14 @@ EXT_RAM_BSS_ATTR static uint8_t
 
 /* One fresh child stream per activation; the client mount itself is stable. */
 static char stream_path[160];
+
+/*
+ * The two lines shown while coming up, one object each, so the pass that moves
+ * "joining Wi-Fi" on to "connecting to iterate" can tell its own line from a
+ * status something else set, and leave that one alone.
+ */
+static const char status_joining_wifi[] = "joining Wi-Fi";
+static const char status_connecting[] = "connecting to iterate";
 /* "itx.clients.<device name>" — the itx expression this board answers. */
 static char capability_match[ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY];
 
@@ -318,6 +327,12 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t stats_sequence;
   enum iterate_kit_itx_transport_state last_transport_state;
   enum iterate_kit_voice_stream_state last_voice_stream_state;
+  /** How long the device has gone without a mounted session; see connectivity.h. */
+  struct iterate_kit_connectivity_tracker connectivity;
+  /** Mounted at least once since boot, so an offline verdict is not boot news. */
+  bool ever_online;
+  /** The one offline notice a boot speaks without a press has been given. */
+  bool boot_notice_given;
   /* Cross-task audio plumbing. */
   QueueHandle_t mic_queue;
   QueueHandle_t speaker_queue;
@@ -2423,7 +2438,7 @@ bool iterate_kit_voice_loop_init(
     park_with_fault("board bring-up failed");
   }
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
-  runtime.view.status = ("connecting to iterate");
+  runtime.view.status = status_connecting;
   ESP_LOGI(
       tag,
       /*
@@ -2606,6 +2621,52 @@ void iterate_kit_voice_loop_step(void) {
         published_link_ready = ready;
         runtime.view.link_ready = ready;
       }
+
+      /*
+       * CAN A CALL WORK AT ALL?
+       *
+       * A board flashed with the wrong Wi-Fi password used to start a call on
+       * the wake word, record into nothing, and say "Call ended." twenty
+       * seconds later: from across the room, a broken voice agent. The
+       * transport knew all along how far it had got, so after fifteen seconds
+       * without a mount the view says where it is stuck (connectivity.h),
+       * a press is refused below, and the board speaks the reason.
+       */
+      const enum iterate_kit_connectivity connectivity =
+          iterate_kit_connectivity_update(
+              &runtime.connectivity, now_ms(NULL), api_ready,
+              iterate_kit_itx_transport_network_stage(&transport));
+      if (connectivity != runtime.view.connectivity) {
+        ESP_LOGW(
+            tag, "connectivity=%s transport state=%s",
+            iterate_kit_connectivity_name(connectivity),
+            iterate_kit_itx_transport_state_name(transport.state));
+        runtime.view.connectivity = connectivity;
+      }
+      if (connectivity == ITERATE_KIT_CONNECTIVITY_ONLINE) runtime.ever_online = true;
+      if (iterate_kit_connectivity_offline(connectivity)) {
+        bool speak = false;
+        /*
+         * Spoken once at boot without a press, because someone who just
+         * plugged the board in is listening for it. Not after the loop's own
+         * restart (it leaves a note; a power cycle does not): a board offline
+         * for good restarts itself every few minutes, and must not say so
+         * every few minutes to an empty room.
+         */
+        if (!runtime.ever_online && !runtime.boot_notice_given &&
+            iterate_kit_platform_last_restart_note()[0] == '\0') {
+          speak = true;
+        }
+        runtime.boot_notice_given = true;
+        /* A press made while still connecting ends now rather than at the
+         * twenty-second opening deadline, with the reason instead of "Call ended." */
+        if (runtime.activation_live && !runtime.voice_stream->call_active) {
+          end_local_activation(
+              "offline", iterate_kit_connectivity_status(connectivity));
+          speak = true;
+        }
+        if (speak) ++runtime.view.offline_notices;
+      }
     }
     /*
      * INTENT IS THE LOOP'S, and this is the only place a control changes it.
@@ -2629,8 +2690,16 @@ void iterate_kit_voice_loop_step(void) {
     if (runtime.intent.start_call && !runtime.intent.microphone_muted &&
         !runtime.voice_stream->call_active &&
         runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY) {
-      runtime.view.wants_call = true;
-      ESP_LOGI(tag, "control: starting call");
+      if (iterate_kit_connectivity_offline(runtime.view.connectivity)) {
+        /* No call can work; the board says why instead of starting one. */
+        ++runtime.view.offline_notices;
+        ESP_LOGW(
+            tag, "control: not starting a call while offline (%s)",
+            iterate_kit_connectivity_name(runtime.view.connectivity));
+      } else {
+        runtime.view.wants_call = true;
+        ESP_LOGI(tag, "control: starting call");
+      }
     }
     runtime.intent.start_call = false;
     runtime.intent.end_call = false;
@@ -3247,6 +3316,29 @@ void iterate_kit_voice_loop_step(void) {
     ++runtime.loop_count;
   }
   /*
+   * WHILE THE DEVICE CANNOT GET ONLINE, THE STATUS LINE SAYS WHY.
+   *
+   * A level, set every pass just before the view is shown, because several
+   * places above write the status on their own transitions and a one-shot
+   * reason would last only until the next of them. CONNECTING is the screen
+   * because the device is still trying; back online, the idle transition
+   * above clears both. Coming up, the line names the step it is on.
+   */
+  if (!runtime.view.fault) {
+    if (iterate_kit_connectivity_offline(runtime.view.connectivity)) {
+      runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
+      runtime.view.status =
+          iterate_kit_connectivity_status(runtime.view.connectivity);
+    } else if (runtime.view.status == status_joining_wifi ||
+               runtime.view.status == status_connecting) {
+      runtime.view.status =
+          iterate_kit_itx_transport_network_stage(&transport) ==
+                  ITERATE_KIT_NETWORK_STAGE_JOINING_WIFI
+              ? status_joining_wifi
+              : status_connecting;
+    }
+  }
+  /*
    * The meter, carried across from the capture task exactly here — one
    * relaxed load per pass, on the task that owns the view, immediately before
    * the view is shown. Anywhere earlier and a board renders a peak one whole
@@ -3298,7 +3390,9 @@ void iterate_kit_voice_view_lights(
     struct iterate_kit_conversation_visual_state *out) {
   *out = (struct iterate_kit_conversation_visual_state){
     .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                : ITERATE_KIT_NETWORK_CONNECTING,
+               : iterate_kit_connectivity_offline(view->connectivity)
+                   ? ITERATE_KIT_NETWORK_OFFLINE
+                   : ITERATE_KIT_NETWORK_CONNECTING,
     .reach = iterate_kit_reach_from(
         view->api_ready, view->stream_ready, view->call_active),
     .conversation_active = view->call_active,

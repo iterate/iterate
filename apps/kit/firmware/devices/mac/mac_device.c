@@ -87,6 +87,12 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
       value->call_active != view.call_active ||
       value->listening != view.listening || value->fault != view.fault ||
       value->link_ready != view.link_ready || strcmp(before, after) != 0;
+  /* A board with a speaker says the reason here; the Mac plays no baked clips. */
+  if (value->offline_notices != view.offline_notices) {
+    (void)fprintf(
+        stderr, "mac: would say why it is offline: %s\n",
+        iterate_kit_connectivity_name(value->connectivity));
+  }
   view = *value;
   if (!changed) return;
   (void)fprintf(

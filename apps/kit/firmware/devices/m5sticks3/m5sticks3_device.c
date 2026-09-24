@@ -216,7 +216,10 @@ static const struct iterate_kit_board board = {
   .button = {.gpio = -1},
   .read_gestures = read_gestures,
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
-    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended),
+    .no_wifi = sound_offline_no_wifi, .no_wifi_bytes = sizeof(sound_offline_no_wifi),
+    .no_internet = sound_offline_no_internet, .no_internet_bytes = sizeof(sound_offline_no_internet),
+    .no_iterate = sound_offline_no_iterate, .no_iterate_bytes = sizeof(sound_offline_no_iterate)},
   .play_sound = m5sticks3_audio_play_sound,
   .extra = &ops,
 };

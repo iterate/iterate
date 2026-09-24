@@ -103,6 +103,27 @@ void iterate_kit_board_apply_gestures(
   iterate_kit_session_step(session, &poll, actions);
 }
 
+const uint8_t *iterate_kit_board_offline_sound(
+    const struct iterate_kit_board_sounds *sounds,
+    enum iterate_kit_connectivity connectivity, uint32_t *bytes) {
+  switch (connectivity) {
+    case ITERATE_KIT_CONNECTIVITY_NO_WIFI:
+      *bytes = sounds->no_wifi_bytes;
+      return sounds->no_wifi;
+    case ITERATE_KIT_CONNECTIVITY_NO_INTERNET:
+      *bytes = sounds->no_internet_bytes;
+      return sounds->no_internet;
+    case ITERATE_KIT_CONNECTIVITY_NO_ITERATE:
+      *bytes = sounds->no_iterate_bytes;
+      return sounds->no_iterate;
+    case ITERATE_KIT_CONNECTIVITY_ONLINE:
+    case ITERATE_KIT_CONNECTIVITY_CONNECTING:
+      break;
+  }
+  *bytes = 0U;
+  return NULL;
+}
+
 /** Fill omitted audio facts before voice_loop validates processor/capture cadence. */
 struct iterate_kit_board_facts iterate_kit_board_defaults(
     const struct iterate_kit_board *board) {
@@ -315,9 +336,17 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   return true;
 }
 
+static void play_sound(const uint8_t *pcm, uint32_t bytes);
+
 static void present(void *context, const struct iterate_kit_voice_view *value) {
   (void)context;
+  const bool offline_notice = value->offline_notices != view.offline_notices;
   view = *value;
+  if (offline_notice) {
+    uint32_t bytes;
+    const uint8_t *pcm = iterate_kit_board_offline_sound(&board->sounds, view.connectivity, &bytes);
+    play_sound(pcm, bytes);
+  }
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(
       !microphone_muted &&
@@ -369,9 +398,15 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     .end_call = microphone_muted ? (view.call_active || view.wants_call) : actions.end_call,
     .microphone_muted = microphone_muted,
   };
-  /* End before wake: replacement playback leaves the newer intent audible. */
-  if (!microphone_muted && actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
-  if (!microphone_muted && actions.wake_chime) play_sound(board->sounds.wake, board->sounds.wake_bytes);
+  /*
+   * End before wake: replacement playback leaves the newer intent audible.
+   * Neither while offline: the loop refuses the press, or ends the call it
+   * was opening, and the offline notice says why. A wake chime or "Call
+   * ended." would talk over it.
+   */
+  const bool quiet = microphone_muted || iterate_kit_connectivity_offline(view.connectivity);
+  if (!quiet && actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
+  if (!quiet && actions.wake_chime) play_sound(board->sounds.wake, board->sounds.wake_bytes);
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase value) {

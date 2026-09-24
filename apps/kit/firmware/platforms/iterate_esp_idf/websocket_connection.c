@@ -456,6 +456,7 @@ iterate_kit_esp_idf_websocket_connection_open(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   destroy_transports(connection);
+  connection->last_upgrade_status = 0;
   /*
    * Handles are created per generation instead of recycled. Parser/TLS state
    * from an interrupted frame is not meaningful on a new WebSocket, and a
@@ -503,6 +504,9 @@ iterate_kit_esp_idf_websocket_connection_open(
         ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_CONNECT,
         result,
         take_socket_errno(connection));
+    /* Nonzero only when the host answered the upgrade; read before destroy. */
+    connection->last_upgrade_status =
+        esp_transport_ws_get_upgrade_request_status(connection->websocket);
     destroy_transports(connection);
     return ITERATE_KIT_IO_ERROR;
   }

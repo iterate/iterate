@@ -11,6 +11,7 @@
 #endif
 
 #include "iterate/kit/configuration.h"
+#include "iterate/kit/connectivity.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/itx_outbox_sender.h"
 #include "iterate/kit/platforms/esp_idf_websocket_connection.h"
@@ -330,6 +331,13 @@ struct iterate_kit_itx_transport {
   /* Latest generation whose authentication and live provision reached READY. */
   uint32_t ready_socket_generation;
   uint32_t wifi_connected;
+  /*
+   * How far the newest WebSocket open got once Wi-Fi had an IP lease, as an
+   * `enum iterate_kit_network_stage`: REACHING_HOST until an open fails
+   * without an HTTP answer, REACHING_ITERATE once the host answers (refusing
+   * the upgrade or accepting it). Written by the network task only.
+   */
+  uint32_t network_stage;
   uint32_t wifi_retry_now;
   uint32_t wifi_retry_later;
   uint32_t restart_requested;
@@ -462,6 +470,15 @@ void iterate_kit_itx_transport_lifecycle(
 
 const char *iterate_kit_itx_transport_state_name(
     enum iterate_kit_itx_transport_state state);
+
+/**
+ * How far the newest attempt to reach iterate got (iterate/kit/connectivity.h):
+ * JOINING_WIFI without an IP lease, REACHING_HOST while DNS/TCP/TLS to the
+ * OS host fails, REACHING_ITERATE once the host has answered. Safe from the
+ * application task at any time.
+ */
+enum iterate_kit_network_stage iterate_kit_itx_transport_network_stage(
+    const struct iterate_kit_itx_transport *transport);
 
 #ifdef __cplusplus
 }

@@ -53,6 +53,13 @@ void iterate_kit_fake_platform_set_state(
     enum iterate_kit_itx_transport_state state);
 
 /**
+ * How far the pretend device's newest attempt to get online got. JOINING_WIFI
+ * after reset, as on a board that has just booted.
+ */
+void iterate_kit_fake_platform_set_network_stage(
+    enum iterate_kit_network_stage stage);
+
+/**
  * Everything the loop sent, in order, as whole Cap'n Web messages.
  *
  * The loop's egress is `send_text` fragments; this reassembles them, because a
@@ -69,6 +76,12 @@ void iterate_kit_fake_platform_fail_next_send(void);
 void iterate_kit_fake_platform_fill_control_outbox(void);
 /** Drain the synthetic control backlog so the app may append again. */
 void iterate_kit_fake_platform_drain_control_outbox(void);
+
+/**
+ * Boot as if the previous run restarted itself leaving `why`, the way the
+ * loop's own watchdogs do; after reset, the board looks freshly powered on.
+ */
+void iterate_kit_fake_platform_set_last_restart_note(const char *why);
 
 /** Restarts the loop asked the transport for. */
 size_t iterate_kit_fake_platform_restarts_requested(void);

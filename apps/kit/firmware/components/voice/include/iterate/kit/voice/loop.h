@@ -8,6 +8,7 @@
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/speaker.h"
+#include "iterate/kit/connectivity.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/voice_playout.h"
 #include "iterate/kit/conversation_lights.h"
@@ -46,6 +47,18 @@ struct iterate_kit_voice_view {
   bool stream_ready;
   /** The mounted project connection, plus the direct stream while a call is live. */
   bool link_ready;
+  /**
+   * Whether a call can work, and if not, where the connection gets stuck
+   * (iterate/kit/connectivity.h). While this is offline a press starts no
+   * call and the status line names the reason.
+   */
+  enum iterate_kit_connectivity connectivity;
+  /**
+   * Bumped each time the reason should be SPOKEN: the first offline verdict
+   * after boot, and every press refused while offline. A board with a speaker
+   * says the message for `connectivity` when this changes.
+   */
+  uint32_t offline_notices;
   bool call_active;
   /**
    * INTENT, which the loop owns and the board only renders — not stored

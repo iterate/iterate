@@ -782,7 +782,11 @@ static void network_task(void *context) {
     if (wifi_connected && !prior_wifi_connected) {
       /*
        * A proven IP lease resets both retry histories for immediate recovery.
+       * Nothing is known yet about reaching the host on this lease.
        */
+      atomic_store_u32(
+          &transport->network_stage,
+          ITERATE_KIT_NETWORK_STAGE_REACHING_HOST);
       wifi_retry_ms = WIFI_RETRY_INITIAL_MS;
       wifi_retry_at_us = 0;
       iterate_kit_retry_gate_reset(&websocket_retry);
@@ -879,6 +883,16 @@ static void network_task(void *context) {
        * sample that can make the next deadline immediately eligible.
        */
       now_us = esp_timer_get_time();
+      /*
+       * An HTTP answer, even a refusal, means DNS, TCP and TLS all worked:
+       * whatever is wrong is at iterate's end, not the network's.
+       */
+      atomic_store_u32(
+          &transport->network_stage,
+          status == ITERATE_KIT_OK ||
+                  transport->websocket.last_upgrade_status != 0
+              ? ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE
+              : ITERATE_KIT_NETWORK_STAGE_REACHING_HOST);
       if (status == ITERATE_KIT_OK &&
           mark_socket_connected(transport)) {
         websocket_started = true;
@@ -1791,6 +1805,17 @@ void iterate_kit_itx_transport_lifecycle(
   lifecycle->ready_socket_generation =
       atomic_load_u32(
           &transport->ready_socket_generation);
+}
+
+enum iterate_kit_network_stage iterate_kit_itx_transport_network_stage(
+    const struct iterate_kit_itx_transport *transport) {
+  if (atomic_load_u32(&transport->wifi_connected) == 0U) {
+    return ITERATE_KIT_NETWORK_STAGE_JOINING_WIFI;
+  }
+  return atomic_load_u32(&transport->network_stage) ==
+          ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE
+      ? ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE
+      : ITERATE_KIT_NETWORK_STAGE_REACHING_HOST;
 }
 
 const char *iterate_kit_itx_transport_state_name(

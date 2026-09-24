@@ -275,7 +275,10 @@ static const struct iterate_kit_board board = {
   .button = {.gpio = 0, .active_low = true},
   .wake_word = "jarvis",
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
-    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended),
+    .no_wifi = sound_offline_no_wifi, .no_wifi_bytes = sizeof(sound_offline_no_wifi),
+    .no_internet = sound_offline_no_internet, .no_internet_bytes = sizeof(sound_offline_no_internet),
+    .no_iterate = sound_offline_no_iterate, .no_iterate_bytes = sizeof(sound_offline_no_iterate)},
   .open_codec = open_codec,
   .extra = &ops,
 };

@@ -7,7 +7,7 @@ static uint8_t scale_channel(uint8_t channel, uint8_t scale) {
 }
 
 /*
- * The seven-way classification the equality gate compares. No screen renders
+ * The eight-way classification the equality gate compares. No screen renders
  * it as text; it exists because overlay_equal is StackChan's repaint gate —
  * the function whose misuse once caused the 1 Hz face blackout. Order matters
  * and mirrors the light renderer's: a broken speaker while the network is
@@ -17,6 +17,7 @@ static uint8_t overlay_class(
     const struct iterate_kit_conversation_visual_state *state) {
   if (state == NULL) return 0U;
   if (state->media_failed) return 1U;
+  if (state->network == ITERATE_KIT_NETWORK_OFFLINE) return 7U;
   if (state->network == ITERATE_KIT_NETWORK_CONNECTING) return 2U;
   if (!state->media_ready) return 2U;
   if (!state->conversation_active) return 3U;
@@ -84,12 +85,13 @@ void iterate_kit_conversation_lights_animate(
   }
 }
 
-/* Red when something is broken, amber while the device is still working on
- * it. Deliberately the same two meanings the network sector of the light
- * renderer already uses. */
+/* Red when something is broken or the device has given up saying it is
+ * connecting, amber while it is still working on it. Deliberately the same
+ * meanings the network sector of the light renderer already uses. */
 static struct iterate_kit_rgb8 attention_colour(
     const struct iterate_kit_conversation_visual_state *state) {
-  if (state != NULL && !state->media_failed) {
+  if (state != NULL && !state->media_failed &&
+      state->network != ITERATE_KIT_NETWORK_OFFLINE) {
     return (struct iterate_kit_rgb8){255U, 156U, 24U};
   }
   return (struct iterate_kit_rgb8){255U, 64U, 48U};

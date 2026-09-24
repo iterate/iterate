@@ -208,6 +208,30 @@ static void down_edge_wakes_before_release(void) {
   assert(actions.end_call);
 }
 
+/* Each offline verdict speaks its own clip; coming up and online speak none. */
+static void each_offline_verdict_has_its_own_clip(void) {
+  static const uint8_t no_wifi[2], no_internet[4], no_iterate[6];
+  const struct iterate_kit_board_sounds sounds = {
+    .no_wifi = no_wifi, .no_wifi_bytes = sizeof(no_wifi),
+    .no_internet = no_internet, .no_internet_bytes = sizeof(no_internet),
+    .no_iterate = no_iterate, .no_iterate_bytes = sizeof(no_iterate),
+  };
+  uint32_t bytes;
+  assert(iterate_kit_board_offline_sound(
+             &sounds, ITERATE_KIT_CONNECTIVITY_NO_WIFI, &bytes) == no_wifi &&
+         bytes == sizeof(no_wifi));
+  assert(iterate_kit_board_offline_sound(
+             &sounds, ITERATE_KIT_CONNECTIVITY_NO_INTERNET, &bytes) == no_internet &&
+         bytes == sizeof(no_internet));
+  assert(iterate_kit_board_offline_sound(
+             &sounds, ITERATE_KIT_CONNECTIVITY_NO_ITERATE, &bytes) == no_iterate &&
+         bytes == sizeof(no_iterate));
+  assert(iterate_kit_board_offline_sound(
+             &sounds, ITERATE_KIT_CONNECTIVITY_CONNECTING, &bytes) == NULL && bytes == 0U);
+  assert(iterate_kit_board_offline_sound(
+             &sounds, ITERATE_KIT_CONNECTIVITY_ONLINE, &bytes) == NULL && bytes == 0U);
+}
+
 int main(void) {
   volume_table();
   i2s_table();
@@ -215,5 +239,6 @@ int main(void) {
   iterate_kit_board_defaults_table();
   normalized_gestures_use_the_shared_grammar();
   down_edge_wakes_before_release();
+  each_offline_verdict_has_its_own_clip();
   return 0;
 }

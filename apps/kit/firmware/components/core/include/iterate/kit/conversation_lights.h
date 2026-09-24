@@ -20,13 +20,16 @@ struct iterate_kit_rgb8 {
 };
 
 /*
- * No DISCONNECTED state: every board maps `link_ready` to CONNECTED or
- * CONNECTING, because a device that cannot see the network is still trying
- * to, and saying "offline" about it would be a promise the fleet never keeps.
+ * No DISCONNECTED state: a device that cannot see the network is still trying
+ * to. OFFLINE is not that. It is the voice loop's verdict that it has tried
+ * for long enough to say so (iterate/kit/connectivity.h), and it is what lets a
+ * board with nothing but a ring look different from one still coming up.
  */
 enum iterate_kit_network_state {
   ITERATE_KIT_NETWORK_CONNECTING = 0,
   ITERATE_KIT_NETWORK_CONNECTED,
+  /** No mount for long enough that a press is refused; see connectivity.h. */
+  ITERATE_KIT_NETWORK_OFFLINE,
 };
 
 /**

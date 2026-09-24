@@ -4,6 +4,12 @@
 Sources are the Apache-2.0 Home Assistant Voice PE press chime and OpenAI
 marin announcements. tools/baked-sounds.cmake supplies each board's measured
 wake trim and gain.
+
+The offline_*.wav announcements were rendered once with OpenAI's
+/v1/audio/speech (model gpt-4o-mini-tts, voice marin, WAV), resampled to
+16 kHz mono PCM16 with ffmpeg, trimmed of leading and trailing silence, and
+scaled so their speech loudness matches call_ended.wav. Builds never call a
+TTS service; re-render only to change the words.
 """
 import argparse
 from fractions import Fraction

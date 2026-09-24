@@ -246,6 +246,9 @@ static const struct iterate_kit_board board = {
   .sounds = {
     .wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
     .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended),
+    .no_wifi = sound_offline_no_wifi, .no_wifi_bytes = sizeof(sound_offline_no_wifi),
+    .no_internet = sound_offline_no_internet, .no_internet_bytes = sizeof(sound_offline_no_internet),
+    .no_iterate = sound_offline_no_iterate, .no_iterate_bytes = sizeof(sound_offline_no_iterate),
   },
   .open_codec = iterate_kit_satellite1_open_codec,
   .set_volume = iterate_kit_satellite1_set_volume,

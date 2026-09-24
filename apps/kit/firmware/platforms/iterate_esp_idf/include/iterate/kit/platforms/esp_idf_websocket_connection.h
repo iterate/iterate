@@ -208,6 +208,14 @@ struct iterate_kit_esp_idf_websocket_connection {
   int32_t last_esp_tls_error;
   int32_t last_tls_stack_error;
   int32_t last_tls_cert_flags;
+  /*
+   * The HTTP status the newest open's upgrade request was answered with: 0
+   * when no answer arrived (DNS, TCP or TLS failed first), -1 when the answer
+   * was not HTTP. A refused upgrade —
+   * a deleted preview answers 404 — is the host answering, which is a
+   * different fault from not reaching it; the transport reports the two apart.
+   */
+  int last_upgrade_status;
   int port;
   int last_error;
   bool secure;

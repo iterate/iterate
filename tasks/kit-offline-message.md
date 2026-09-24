@@ -5,7 +5,7 @@ size: medium
 
 # Kit boards say when they can't get online
 
-**Status:** spec written, implementation not started.
+**Status:** mostly done. Firmware change, clips and host tests are in; the loop test proves boot notice, refused press, early end and quiet after the loop's own restart. Missing: Mac board run against a real unreachable host / deleted preview, README paragraph, real-hardware check (Misha).
 
 ## Problem
 
@@ -31,7 +31,7 @@ Made by the agent while fleshing this out; review these first.
    | Stage the newest attempt reached                                                                                                              | Verdict       | Spoken                                                                                        | Screen status                      |
    | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- | ---------------------------------- |
    | no IP lease (wrong password, SSID not visible, 5 GHz-only network)                                                                            | `no-wifi`     | "Couldn't join the Wi-Fi network. Check the password, and that it's a 2.4 gigahertz network." | `couldn't join the Wi-Fi network`  |
-   | IP lease, but DNS/TCP/TLS to the OS host failed                                                                                               | `no-internet` | "Couldn't connect to the internet."                                                           | `couldn't connect to the internet` |
+   | IP lease, but DNS/TCP/TLS to the OS host failed                                                                                               | `no-internet` | "Joined the Wi-Fi, but couldn't connect to the internet."                                     | `couldn't connect to the internet` |
    | the host answered, but the WebSocket upgrade was refused (HTTP ≠ 101, e.g. a deleted preview's 404) or authenticate/mount failed or timed out | `no-iterate`  | "Connected to the internet, but couldn't reach iterate."                                      | `couldn't reach iterate`           |
 
    Telling these apart is cheap: the ESP transport already knows whether it has an IP lease, and ESP-IDF's `esp_transport_ws_get_upgrade_request_status()` says whether an HTTP response arrived. The Mac transport parses the status line itself. A Mac never reports `no-wifi`.
@@ -52,20 +52,23 @@ Made by the agent while fleshing this out; review these first.
 
 ## Checklist
 
-- [ ] core: `iterate/kit/connectivity.h` — the stage enum each transport reports, the verdict enum, and the 15 s rule as a pure function with a host test
-- [ ] ESP transport: report the stage (IP lease, last open failure had an HTTP response or not, socket open but not mounted)
-- [ ] Mac transport: report the stage (DNS/TCP/TLS vs HTTP refusal vs mount)
-- [ ] fake transport: scriptable stage for loop tests
-- [ ] voice loop: verdict in the view, refuse starts while offline, end an opening activation when the verdict turns offline, notice counter for spoken messages, connecting status names the step, verdict in health and logs
-- [ ] board table: offline clips in `struct iterate_kit_board_sounds`; board.c plays the clip on a notice and keeps the session chimes quiet while offline
-- [ ] every board table (havpe, satellite1, m5sticks3, stackchan, waveshare, waveshare-rlcd, zectrix-note4) references the clips
-- [ ] ring + diagnostic lights: offline look
-- [ ] three WAVs rendered and committed; `make-sounds.py` docstring says how
-- [ ] host test driving the loop: boot with no Wi-Fi → spoken `no-wifi` at 15 s; a press → refused, spoken again; a press while connecting → ended early when the verdict turns; online → a press starts a call
+- [x] core: `iterate/kit/connectivity.h` — the stage enum each transport reports, the verdict enum, and the 15 s rule as a pure function with a host test _(components/core/src/connectivity.c, tests/connectivity_test.c)_
+- [x] ESP transport: report the stage (IP lease, last open failure had an HTTP response or not, socket open but not mounted) _(`esp_transport_ws_get_upgrade_request_status` read before destroy in websocket_connection.c; `network_stage` atomic in itx_transport.c)_
+- [x] Mac transport: report the stage (DNS/TCP/TLS vs HTTP refusal vs mount) _(any response byte = host answered; failure log prints the status line)_
+- [x] fake transport: scriptable stage for loop tests _(also `set_last_restart_note`)_
+- [x] voice loop: verdict in the view, refuse starts while offline, end an opening activation when the verdict turns offline, notice counter for spoken messages, connecting status names the step, ~~verdict in health~~ and logs _(health is only readable while online, and its 2816-byte buffer fails whole when a field overflows; the verdict is logged on every change instead)_
+- [x] board table: offline clips in `struct iterate_kit_board_sounds`; board.c plays the clip on a notice and keeps the session chimes quiet while offline _(clip lookup is `iterate_kit_board_offline_sound`, host-tested in board_table_test.c)_
+- [x] every board table (havpe, satellite1, m5sticks3, stackchan, waveshare, waveshare-rlcd, zectrix-note4) references the clips
+- [x] ring + diagnostic lights: offline look _(`ITERATE_KIT_NETWORK_OFFLINE`; ring pulses red, grid's network sector red, screen chase red)_
+- [x] three WAVs rendered and committed; `make-sounds.py` docstring says how _(gpt-4o-mini-tts/marin, speech loudness matched to call_ended.wav, checked by transcribing with whisper-1)_
+- [x] host test driving the loop: boot with no Wi-Fi → spoken `no-wifi` at 15 s; a press → refused, spoken again; a press while connecting → ended early when the verdict turns; online → a press starts a call _(tests/voice_loop_offline_test.c, plus `after-own-restart`; mutation-checked)_
 - [ ] Mac board proof: `iterate-kit-mac` against an unreachable host and a deleted preview prints the verdicts
 - [ ] firmware README: a paragraph on the offline verdicts
 - [ ] PR body: real-hardware steps for Misha (HA Voice PE, wrong Wi-Fi password)
 
 ## Implementation notes
 
-(log, appended while working)
+- Spoken words changed from the first draft for `no-internet`: "Joined the Wi-Fi, but couldn't connect to the internet." reads as the middle rung of the other two.
+- The boot notice is skipped when the loop restarted itself (`iterate_kit_platform_last_restart_note()` is non-empty): a board offline for good restarts every 7 minutes (`ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS`), and would otherwise announce itself to an empty room each time.
+- A deleted preview (`pr1-deleted-os-preview.iterate-dev-preview.workers.dev/api`) answers the WebSocket upgrade with HTTP 404, confirmed with curl; `os.iterate.com/api` without a token answers 401. Both are `no-iterate`.
+- Flash: the three clips are 368 KB of PCM. Smallest headroom is M5StickS3 (2 MiB app slot, 1.37 MB image).

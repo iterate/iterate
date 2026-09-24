@@ -39,7 +39,13 @@ struct iterate_kit_board_gestures {
 };
 
 /** Flash-resident 16 kHz PCM16LE chimes; NULL = silent. */
-struct iterate_kit_board_sounds { const uint8_t *wake; uint32_t wake_bytes; const uint8_t *ended; uint32_t ended_bytes; };
+struct iterate_kit_board_sounds {
+  const uint8_t *wake; uint32_t wake_bytes; const uint8_t *ended; uint32_t ended_bytes;
+  /** Why the device can't get online, one per offline verdict (connectivity.h). */
+  const uint8_t *no_wifi; uint32_t no_wifi_bytes;
+  const uint8_t *no_internet; uint32_t no_internet_bytes;
+  const uint8_t *no_iterate; uint32_t no_iterate_bytes;
+};
 
 /**
  * THE BOARD, AS DATA. Three things are code because no table can say them:
@@ -109,6 +115,12 @@ enum iterate_kit_status iterate_kit_board_set_volume(uint8_t percent, uint8_t *a
 enum iterate_kit_status iterate_kit_board_nudge_volume(int step);
 /** Queue a synthetic down edge in the same classifier as physical controls. */
 void iterate_kit_board_inject_press(void);
+/** The clip that says why the device can't get online, or NULL (bytes 0) for
+ * ONLINE and CONNECTING. Exposed for focused host tests; board.c is the only
+ * firmware caller, when the view's offline_notices changes. */
+const uint8_t *iterate_kit_board_offline_sound(
+    const struct iterate_kit_board_sounds *sounds,
+    enum iterate_kit_connectivity connectivity, uint32_t *bytes);
 /** Apply the shared grammar to normalized input. Exposed for focused host
  * tests; board.c is the only firmware caller. */
 void iterate_kit_board_apply_gestures(

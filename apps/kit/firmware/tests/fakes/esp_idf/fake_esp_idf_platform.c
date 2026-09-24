@@ -50,6 +50,7 @@ static struct {
   bool message_open;
   bool fail_next_send;
   size_t restarts_requested;
+  enum iterate_kit_network_stage network_stage;
   uint32_t pongs;
   uint32_t frames_received;
   char restart_note[128];
@@ -67,6 +68,11 @@ void iterate_kit_fake_platform_set_state(
     enum iterate_kit_itx_transport_state state) {
   if (platform.transport == NULL) return;
   platform.transport->state = state;
+}
+
+void iterate_kit_fake_platform_set_network_stage(
+    enum iterate_kit_network_stage stage) {
+  platform.network_stage = stage;
 }
 
 void iterate_kit_fake_platform_connect(void) {
@@ -190,6 +196,11 @@ void iterate_kit_platform_restart_with_note(const char *why) {
       platform.restart_note, sizeof(platform.restart_note), "%s",
       why == NULL ? "" : why);
   esp_restart();
+}
+
+void iterate_kit_fake_platform_set_last_restart_note(const char *why) {
+  (void)snprintf(
+      platform.restart_note, sizeof(platform.restart_note), "%s", why);
 }
 
 const char *iterate_kit_platform_last_restart_note(void) {
@@ -324,6 +335,12 @@ void iterate_kit_itx_transport_lifecycle(
   memset(lifecycle, 0, sizeof(*lifecycle));
   if (transport == NULL) return;
   lifecycle->ready_socket_generation = transport->ready_socket_generation;
+}
+
+enum iterate_kit_network_stage iterate_kit_itx_transport_network_stage(
+    const struct iterate_kit_itx_transport *transport) {
+  (void)transport;
+  return platform.network_stage;
 }
 
 const char *iterate_kit_itx_transport_state_name(

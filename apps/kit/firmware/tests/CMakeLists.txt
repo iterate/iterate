@@ -68,6 +68,8 @@ iterate_kit_add_test(iterate-kit-wake-word-test
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
 iterate_kit_add_core_test(iterate-kit-button-test button_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
+# When a board says it is offline, and which of three things it says.
+iterate_kit_add_core_test(iterate-kit-connectivity-test connectivity_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-lights-test conversation_lights_test.c)
 iterate_kit_add_core_test(
@@ -131,6 +133,16 @@ iterate_kit_add_test(
 iterate_kit_add_test(
   iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
+
+# A BOARD THAT CAN'T GET ONLINE, driven through the same loop: the offline
+# verdict, a refused press and the spoken notices. One boot per process, so
+# booting after the loop's own restart is a second entry with an argument.
+iterate_kit_add_test(
+  iterate-kit-voice-loop-offline-test voice_loop_offline_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
+add_test(
+  NAME iterate-kit-voice-loop-offline-after-own-restart-test
+  COMMAND iterate-kit-voice-loop-offline-test after-own-restart)
 
 iterate_kit_add_test(iterate-kit-audio-interfaces-test audio_interfaces_test.c
   LINK iterate-kit-audio)

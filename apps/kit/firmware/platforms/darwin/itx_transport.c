@@ -217,10 +217,23 @@ static void service_control_messages(
 static int64_t transport_now_us(
     const struct iterate_kit_itx_transport *transport);
 
+/*
+ * Any byte of an HTTP answer, even a refusal (a deleted preview answers 404),
+ * means DNS, TCP and TLS all worked: what is wrong is at iterate's end. Read
+ * before the client is closed, which forgets the response.
+ */
+static void remember_open_failure_stage(
+    struct iterate_kit_itx_transport *transport) {
+  transport->network_stage = transport->websocket.response_size != 0U
+      ? ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE
+      : ITERATE_KIT_NETWORK_STAGE_REACHING_HOST;
+}
+
 static void timeout_open_attempt(
     struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   (void)fprintf(stderr, "transport: websocket open timed out; retrying\n");
+  remember_open_failure_stage(transport);
   increment(&transport->websocket_open_timeouts);
   transport->last_platform_error = ETIMEDOUT;
   transport->websocket_open_attempt_active = false;
@@ -271,10 +284,18 @@ static void drive_socket(
       return;
     }
     if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED) {
-      /* The loop only sees CONNECTING while this retries; say why here. */
+      /* The loop only sees CONNECTING while this retries; say why here, with
+       * the status line when the host answered the upgrade. */
+      const char *answer = transport->websocket.response;
+      const char *answer_end = strstr(answer, "\r\n");
+      const int answer_length = transport->websocket.response_size == 0U ? 0
+          : answer_end != NULL ? (int)(answer_end - answer)
+          : (int)strlen(answer);
       (void)fprintf(
-          stderr, "transport: websocket open failed (error %d); retrying\n",
-          transport->websocket.last_error);
+          stderr, "transport: websocket open failed (error %d%s%.*s); retrying\n",
+          transport->websocket.last_error, answer_length != 0 ? ", " : "",
+          answer_length, answer);
+      remember_open_failure_stage(transport);
       transport->websocket_open_attempt_active = false;
       transport->websocket_open_deadline_us = 0;
       transport->last_platform_error =
@@ -296,6 +317,7 @@ static void drive_socket(
       return;
     }
     ++transport->socket_generation;
+    transport->network_stage = ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE;
     transport->websocket_open_attempt_active = false;
     transport->websocket_open_deadline_us = 0;
     transport->socket_connected = true;
@@ -474,6 +496,7 @@ enum iterate_kit_status iterate_kit_itx_transport_prepare(
     return ITERATE_KIT_IO_ERROR;
   }
   transport->state = ITERATE_KIT_ITX_IDLE;
+  transport->network_stage = ITERATE_KIT_NETWORK_STAGE_REACHING_HOST;
   transport->last_capnweb_status = CAPNWEB_OK;
   transport->initialized = true;
   return ITERATE_KIT_OK;
@@ -647,6 +670,11 @@ void iterate_kit_itx_transport_lifecycle(
       (enum iterate_kit_itx_fatal_failure_reason)
           transport->fatal_failure_reason;
   lifecycle->ready_socket_generation = transport->ready_socket_generation;
+}
+
+enum iterate_kit_network_stage iterate_kit_itx_transport_network_stage(
+    const struct iterate_kit_itx_transport *transport) {
+  return transport->network_stage;
 }
 
 const char *iterate_kit_itx_transport_state_name(
