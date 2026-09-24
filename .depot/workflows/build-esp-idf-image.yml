@@ -1,0 +1,56 @@
+name: Build ESP-IDF Image
+
+# The image Kit Firmware's build legs run on (kit-firmware.yml): Node 24 and the ESP-IDF that
+# scripts/depot-ci/esp-idf.sh pins, nothing else. An image of their own keeps ESP-IDF's 3.9 GB and
+# ~105 downloads out of every bake of the preview CI image. The pin is its only input: a leg whose
+# esp-idf.sh differs from the image's receipt installs from the network (`esp-idf.sh ensure`).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/depot-ci/esp-idf.sh
+      - .depot/workflows/build-esp-idf-image.yml
+  schedule:
+    # Weekly (Mondays 04:47 UTC) drift repair, as for the preview CI image
+    - cron: "47 4 * * 1"
+  workflow_dispatch:
+
+# One bake at a time, never cancelled, so an older bake never publishes over a newer one.
+concurrency:
+  group: build-esp-idf-image
+  cancel-in-progress: false
+
+jobs:
+  build-image:
+    name: Build ESP-IDF image
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # A snapshot keeps files, not the PATH setup-node exported. The legs run
+      # `node apps/kit/scripts/firmware-release.ts`, which needs Node 24's type stripping.
+      - name: Put Node 24 on the system PATH
+        run: |-
+          set -euo pipefail
+          sudo rm -rf /opt/iterate-node
+          sudo cp -a "$(dirname "$(dirname "$(command -v node)")")" /opt/iterate-node
+          sudo ln -sf /opt/iterate-node/bin/node /usr/local/bin/node
+          /usr/local/bin/node --version
+
+      - name: Install ESP-IDF
+        run: scripts/depot-ci/esp-idf.sh install
+
+      - name: Snapshot ESP-IDF image
+        uses: depot/snapshot-action@v1
+        with:
+          image: 0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24

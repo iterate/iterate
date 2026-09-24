@@ -13,7 +13,6 @@ on:
       - "patches/**"
       - "scripts/depot-ci/dependencies.mjs"
       - "scripts/depot-ci/bake-preview-ci-image.sh"
-      - "scripts/depot-ci/esp-idf.sh"
       - ".depot/workflows/build-preview-ci-image.yml"
   schedule:
     # Weekly (Mondays 04:17 UTC) repairs drift even when dependency inputs have
@@ -27,13 +26,54 @@ on:
         description: Destination tag (override for isolated experiments)
         required: false
 
+# One run per tag at a time, never cancelled: a push's check then reads the image the bake before
+# it published, not the one that bake is about to replace.
+concurrency:
+  group: build-preview-ci-image-${{ inputs.image-tag || 'node24-pnpm10-worktree' }}
+  cancel-in-progress: false
+
 env:
   PREVIEW_CI_IMAGE: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:${{ inputs.image-tag || 'node24-pnpm10-worktree' }}
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
+  # A push whose install inputs match the live image's own stamp needs no bake: a package.json edit
+  # outside the install fields, or a revert to what the image holds. The fingerprint covers this
+  # workflow and the bake script too (dependencies.mjs). A bake that changes nothing still leaves
+  # the next jobs' runners paging in a new image. The schedule and a dispatch skip this and bake.
+  check:
+    name: Check the live image
+    if: github.event_name == 'push'
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    outputs:
+      current: ${{ steps.stamp.outputs.current }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          persist-credentials: false
+      - id: stamp
+        name: Compare this commit's fingerprint with the image's stamp
+        run: |-
+          set -euo pipefail
+          baked=$(jq -r .fingerprint node_modules/.iterate-baked-deps.json 2>/dev/null || echo none)
+          wanted=$(node scripts/depot-ci/dependencies.mjs fingerprint)
+          if [ "$baked" = "$wanted" ]; then
+            echo "The live image is baked from this commit's install inputs ($wanted), so nothing to bake."
+            echo current=true >>"$GITHUB_OUTPUT"
+          else
+            echo "The live image's stamp ($baked) is not this commit's fingerprint ($wanted), so it bakes."
+          fi
+
   build-image:
     name: Build preview CI image
+    needs: check
+    # a skipped check (schedule, dispatch) or a failed one bakes
+    if: ${{ !cancelled() && needs.check.outputs.current != 'true' }}
     runs-on: depot-ubuntu-24.04-16
     steps:
       - name: Checkout code

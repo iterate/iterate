@@ -50,7 +50,9 @@ replays.
 - Workflow files: `.depot/workflows/*.yml`
 - CI scripts: `scripts/ci/*.ts`
 - Custom image:
-  `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`
+  `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`;
+  Kit Firmware's build legs run on their own,
+  `0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24`
 - `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
   credentials live in Doppler; GitHub supplies a short-lived job token.
 - Non-secret variables are managed with `depot ci vars`.
@@ -83,7 +85,8 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                  |
 | `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                |
-| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image))                                                      |
+| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image)) when the live image's stamp is stale                 |
+| `build-esp-idf-image.yml`    | Main push touching `esp-idf.sh`, weekly, dispatch        | Bakes Kit Firmware's legs' image: Node 24 and ESP-IDF ([Kit firmware releases](#kit-firmware-releases)) |
 | `do-duration-probe.yml`      | Hourly, dispatch                                         | Durable Object cost alarm for both Cloudflare accounts                                                  |
 | `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                        |
 | `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                      |
@@ -550,25 +553,33 @@ newest `kit-firmware/<device>/<version>` release, and each one builds in its own
 nothing, runs only `gh` and `jq` on the legs' artifacts, and creates releases only
 on main, where it then downloads every new file through `k.iterate.com` and
 compares the bytes. Deploy Kit builds no firmware. The ESP-IDF pin lives in
-`scripts/depot-ci/esp-idf.sh` and in each target's `dependencies.lock`. The CI
-image carries that ESP-IDF, so a leg downloads none of it: `esp-idf.sh ensure`
-checks the image's receipt against the script and installs from the network,
-with a warning, only while they differ (a pull request that changes the script,
-or main until the image bake that change triggers finishes). The legs still
-fetch each target's managed components. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
+`scripts/depot-ci/esp-idf.sh` and in each target's `dependencies.lock`. The legs
+run on an image of their own, `iterate-esp-idf-ci:node24`, holding only Node 24
+and that ESP-IDF (`build-esp-idf-image.yml` bakes it when the script changes on
+main, and weekly), so a leg downloads none of it and the shared image is 3.9 GB
+smaller. `esp-idf.sh ensure` checks the image's receipt against the script and
+installs from the network, with a warning, only while they differ (a pull
+request that changes the script, or main until the image bake that change
+triggers finishes). The legs still fetch each target's managed components.
+Plan, Publish and the failure notice run on the shared image. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
 
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
-It contains Node, pnpm, workspace dependencies, Doppler CLI, the preview
-browser, and Kit Firmware's ESP-IDF ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
+It contains Node, pnpm, workspace dependencies, Doppler CLI and the preview
+browser; Kit Firmware's ESP-IDF has an image of its own ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `8x32`, or `16x64` from measured workload demand. Deploy preview, E2E tests
 and Browser specs each run on `4x16`, the two suites on runners of their own.
 The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
-rebuild as drift repair. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
+rebuild as drift repair. A push's run first checks the live image on `2x8`:
+when the commit's fingerprint (below) equals the image's own stamp, as after a
+`package.json` edit outside the install fields or a revert, it bakes nothing,
+because every bake leaves the next jobs paging in a new image. The schedule and
+a dispatch always bake, and runs for one tag go one at a time, so a push's check
+reads the image the bake before it published. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
 Lint and Typecheck, OS crash hunt and OS e2e soak jobs run
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
@@ -606,7 +617,7 @@ false hit. The `image-tag` dispatch input allows isolated experiment images.
 The fingerprint includes the lockfile, manifests (including new/deleted ones;
 only their install fields, so editing a package's `test` script does not force a
 reinstall), workspace config, pnpm hook, npm config, patches, local file dependency sources,
-bake script, verifier, checkout path, Node version, OS/architecture and install
+bake script and workflow, verifier, checkout path, Node version, OS/architecture and install
 configuration environment. Reuse also checks pnpm's installed metadata and the
 workspace module directory listings. New workspace lifecycle scripts disable
 reuse; the current root `is-ci || husky` prepare is a no-op in CI.

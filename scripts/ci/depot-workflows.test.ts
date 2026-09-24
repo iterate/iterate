@@ -15,6 +15,7 @@ import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
+const espIdfImage = "0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24";
 /** What a test job's evidence artifacts end with: the job attempt's id (docs/depot-ci.md#artifacts-per-job-attempt). */
 const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
 
@@ -367,17 +368,29 @@ test("Kit Firmware publishes from one job that runs no repository code", () => {
 });
 
 // A leg that installed ESP-IDF itself made a GitHub clone and a PyPI install, and one broken
-// download failed a board with no firmware change (scripts/depot-ci/esp-idf.sh).
-test("Kit Firmware legs take ESP-IDF from the CI image", () => {
+// download failed a board with no firmware change (scripts/depot-ci/esp-idf.sh). The image is the
+// legs' own: in the shared one, ESP-IDF's 3.9 GB and downloads rode along on every bake.
+test("Kit Firmware legs take ESP-IDF from their own CI image", () => {
   const workflow = loadWorkflow(".depot/workflows/kit-firmware.yml");
   const leg = workflow.jobs["build-firmware"]!;
   const runs = (leg.steps || []).map((step) => step.run || "");
-  const bake = readFileSync(resolve(repoRoot, "scripts/depot-ci/bake-preview-ci-image.sh"), "utf8");
+  const bake = loadWorkflow(".depot/workflows/build-esp-idf-image.yml");
+  const bakeSteps = bake.jobs["build-image"]!.steps || [];
+  const sharedBake = readFileSync(
+    resolve(repoRoot, "scripts/depot-ci/bake-preview-ci-image.sh"),
+    "utf8",
+  );
 
-  expect(leg["runs-on"]).toMatchObject({ image: bakedImage });
+  expect(leg["runs-on"]).toMatchObject({ image: espIdfImage });
   expect(runs).toContain("scripts/depot-ci/esp-idf.sh ensure");
   expect(runs.filter((run) => /git clone|install\.sh/.test(run))).toEqual([]);
-  expect(bake).toContain("scripts/depot-ci/esp-idf.sh install");
+  expect(bakeSteps.map((step) => step.run)).toContain("scripts/depot-ci/esp-idf.sh install");
+  expect(bakeSteps.at(-1)).toMatchObject({
+    uses: "depot/snapshot-action@v1",
+    with: { image: espIdfImage },
+  });
+  expect(bake.on?.push?.paths).toContain("scripts/depot-ci/esp-idf.sh");
+  expect(sharedBake).not.toContain("esp-idf");
   expect(workflow.on?.pull_request?.paths).toContain("scripts/depot-ci/esp-idf.sh");
 });
 
@@ -516,7 +529,6 @@ test("refreshes the baked workspace when dependency inputs land on main", () => 
       "patches/**",
       "scripts/depot-ci/dependencies.mjs",
       "scripts/depot-ci/bake-preview-ci-image.sh",
-      "scripts/depot-ci/esp-idf.sh",
       ".depot/workflows/build-preview-ci-image.yml",
     ]),
   );
@@ -548,14 +560,15 @@ test.for([
 
 // Reuse of the baked node_modules hangs on all three: the image's preinstalled workspace, the
 // store it was baked with (dependencies.mjs fingerprints every pnpm_config_*), and the reconcile
-// command itself. A job missing one pays a full install on every run.
-test("every job that reconciles the baked workspace has the image, the store and the checkout it needs", () => {
+// command itself. A job missing one pays a full install on every run, and the image bake's check,
+// which compares the same fingerprint with the image's stamp, would bake on every push.
+test("every job that fingerprints the baked workspace has the image, the store and the checkout it needs", () => {
   const reconcilers = readdirSync(resolve(repoRoot, ".depot/workflows"))
     .filter((file) => file.endsWith(".yml"))
     .flatMap((file) => {
       const workflow = loadWorkflow(`.depot/workflows/${file}`);
       return Object.entries(workflow.jobs).flatMap(([jobId, job]) =>
-        job.steps?.some((step) => step.run === "node scripts/depot-ci/dependencies.mjs install")
+        job.steps?.some((step) => step.run?.includes("node scripts/depot-ci/dependencies.mjs "))
           ? [{ file, jobId, workflow, job }]
           : [],
       );
@@ -666,17 +679,19 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
-// only runs on its schedule carries that job as a skipped check. Four workflows run the same jobs
-// on every trigger: the image bake (its push to main runs the same bake), Kit Firmware, whose
-// daily run re-plans every board so a failed publish is repaired without a firmware push, the
-// latency guard, which measures a main push as it measures main every 3 hours, and the real-model
-// suite, which runs a main push to the agents runtime as it runs main daily.
+// only runs on its schedule carries that job as a skipped check. Five workflows run the same jobs
+// on every trigger: the two image bakes (a push to main bakes as the schedule does, the preview
+// image's once a check finds its stamp stale), Kit Firmware, whose daily run re-plans every board
+// so a failed publish is repaired without a firmware push, the latency guard, which measures a
+// main push as it measures main every 3 hours, and the real-model suite, which runs a main push to
+// the agents runtime as it runs main daily.
 test.for(
   depotWorkflowFiles.filter(
     (file) =>
       loadWorkflow(file).on?.schedule &&
       ![
         ".depot/workflows/build-preview-ci-image.yml",
+        ".depot/workflows/build-esp-idf-image.yml",
         ".depot/workflows/kit-firmware.yml",
         ".depot/workflows/os-latency.yml",
         ".depot/workflows/os-real-model.yml",
