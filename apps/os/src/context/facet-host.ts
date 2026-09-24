@@ -147,7 +147,8 @@ type MaterializedFacet = {
   retireLoadedIdentity?: () => void;
   startupFailed: () => boolean;
   generation: number;
-  /** A platform start's (`#start`): the `facet:<name>:loader-id` row it owes once the facet started. */
+  /** The `facet:<name>:loader-id` row owed once the facet started under a new identity: a platform
+   *  start's (`#start`, `#recover`), or a call's whose restart did not start it (`#callFacet`). */
   recordLoadedIdentity?: () => void;
 };
 
@@ -671,7 +672,14 @@ export class FacetHost {
         platformStart: false,
       });
       try {
-        return await this.#call(materialized, name, itxExpressionSteps, FACET_CALL_WATCHDOG);
+        const answer = await this.#call(
+          materialized,
+          name,
+          itxExpressionSteps,
+          FACET_CALL_WATCHDOG,
+        );
+        materialized.recordLoadedIdentity?.();
+        return answer;
       } catch (error) {
         if (!this.#isRecoverableFacetFailure(name, error, materialized)) throw error;
         // The platform failure (the predicate's doc), or a restart for one: recovered below, one
@@ -870,6 +878,9 @@ export class FacetHost {
         | undefined;
       const previousLoaderId = this.#loaderIdByName.get(name) ?? recordedLoaderId;
       this.#loaderIdByName.set(name, loaderId);
+      // Whether the facet runs under this identity already: a restart whose start failed leaves it
+      // stopped, and this call is its start.
+      let started = true;
       if (previousLoaderId && previousLoaderId !== loaderId) {
         // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
         // it first — abort and start with nothing between (`#restart`), the identity recorded there.
@@ -877,7 +888,7 @@ export class FacetHost {
           this.#abortFacetIfRunning(name, "loaded identity changed");
           this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
         } else {
-          await this.#restart(name, () =>
+          started = await this.#restart(name, () =>
             this.#abortFacetIfRunning(name, "loaded identity changed"),
           );
           if (this.#facetStartupMemoByName.get(name) !== memo)
@@ -890,7 +901,10 @@ export class FacetHost {
       if (this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) !== loaderId)
         recordLoadedIdentity = () =>
           this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
-      if (!platformStart) recordLoadedIdentity?.();
+      if (!platformStart && started) {
+        recordLoadedIdentity?.();
+        recordLoadedIdentity = undefined;
+      }
       mintClass = () => load().getDurableObjectClass(memo.className, { props });
       retireLoadedIdentity = retire;
     }
@@ -924,7 +938,7 @@ export class FacetHost {
       retireLoadedIdentity,
       startupFailed: () => startupFailed,
       generation: this.#facetGenerationByName.get(name) ?? 0,
-      recordLoadedIdentity: platformStart ? recordLoadedIdentity : undefined,
+      recordLoadedIdentity,
     };
   }
 
