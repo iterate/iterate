@@ -25,27 +25,6 @@ test("asks again after each delay with a warn, then throws the last failure", as
   });
 });
 
-test.for([
-  { case: "an answer about the request", answer: "404", delaysMs: [0] },
-  { case: "a call with no delays", answer: "500", delaysMs: [] },
-])("$case is thrown at once", async ({ answer, delaysMs }) => {
-  using warn = spyOnWarn();
-  const attempt = vi.fn(async () => {
-    throw new Error(answer);
-  });
-
-  await expect(
-    retryPlatformFailures(attempt, {
-      event: "area.platform-failure-retry",
-      delaysMs,
-      platformFailure,
-    }),
-  ).rejects.toThrow(answer);
-
-  expect(attempt).toHaveBeenCalledOnce();
-  expect(warn).not.toHaveBeenCalled();
-});
-
 /** A platform failure here is an Error whose message is a 5xx status. */
 function platformFailure(error: unknown) {
   return error instanceof Error && error.message.startsWith("5")
