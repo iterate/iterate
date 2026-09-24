@@ -49,7 +49,7 @@ const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) =
 };
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
-  // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources, and until the v4 review one isolate.
+  // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
   const { env, keys } = fakeLoaderEnv();
   const load = (main: string) =>
     loadConfined({

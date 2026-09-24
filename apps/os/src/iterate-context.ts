@@ -160,9 +160,8 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  same session. Pure addressing — and, the projectId being kept, a project's `cd` can never spell
    *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
    *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused for everyone
-   *  — the admin included; the one path hop the platform needs there is the kernel's own, inside the
-   *  DO (built-ins.ts `cd`). This is the whole path mask: with no way to name another user's path,
-   *  there is no policy to get wrong. */
+   *  — the admin included — and the DO's built-in `cd` refuses it too. This is the whole path mask:
+   *  with no way to name another user's path, there is no policy to get wrong. */
   cd(path: string): IterateContextRpcTarget {
     if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID)
       throw codedError(
@@ -423,7 +422,8 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — `null` WITH the target it
    *  wrote (`ifTarget`), which the core reduce applies as a compare-and-set DELETE only while the
    *  row's target is still that (a later provide at the same match owns the row now); never a mask,
-   *  never a "restore" (rule 8: at a child that spelling would be a grant). Fire-and-forget under
+   *  never a "restore" (at a child that spelling would be a grant: stream/core-processor.ts
+   *  `CoreState.itxExpressionRewriteRules`). Fire-and-forget under
    *  waitUntil (a disposer cannot await), a refusal ignored. */
   #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(

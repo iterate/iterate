@@ -13,7 +13,7 @@
 // itx-expression-rewriting.test.ts: matching and rewriting (`resolveItxExpression`: the most specific
 // row of THIS context's table wins, the fixed point `itx.builtins` ends the chain, a bare `itx` row
 // with a target yields to the implicit rows and a bare `null` denies all), the implicit rows
-// (`implicitRootsAt`), the door every row passes at the append boundary
+// (`implicitRootsAt`), the check every row passes at the append boundary
 // (`normalizeRewriteRuleConfigured`), `@` as the caller's input (expression.ts), the app wall on a
 // loaded worker's calls and rows (`admitLoadedCodeExpression`, `admitLoadedCodeRow`), and un-setting
 // — a `null` kept as a mask only where something beneath would answer, `ifTarget` as a compare-and-set
@@ -111,7 +111,7 @@ const BUILT_IN_ROOT_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ROOTS);
 
 /** THE CONTEXT ROOTS: the built-ins that are a context's OWN — its log, its tables, its facets, the
  *  hosts whose loaded code speaks for it, its own reset, and where it lives (`whoami`, `url`:
- *  information, not a capability). Implicit in every context (rule 3): nothing else could `append`
+ *  information, not a capability). Implicit in every context (`implicitRootsAt`): nothing else could `append`
  *  or `abort` mean at `/agents/x`, and a hop for it would land in another context. Everything else in
  *  `BUILT_IN_ROOTS` is a PROJECT resource or an external capability (`fetch`, `ai`, `browser`),
  *  implicit at the owner root only. */
@@ -135,11 +135,11 @@ export const CONTEXT_ROOTS = [
 
 const CONTEXT_ROOT_SET: ReadonlySet<string> = new Set<string>(CONTEXT_ROOTS);
 
-/** THE ONE PREDICATE (rule 3): which roots have an implicit row at `path` — every built-in at a
+/** THE ONE PREDICATE: which roots have an implicit row at `path` — every built-in at a
  *  project's root, the context roots anywhere below it. The GLOBAL namespace is not navigable (no
  *  `cd`, so nothing there can inherit through a link): a user's or an organization's subtree is that
  *  owner's own, and every context in it has every root — `/users/<id>/x` reads its owner's kv and
- *  shares its owner's secrets catalog, as before. Read by the resolver, the reduce and `list()`. */
+ *  shares its owner's secrets catalog. Read by the resolver, the reduce and `list()`. */
 export function implicitRootsAt(projectId: string, path: string): ReadonlySet<string> {
   return projectId === GLOBAL_PROJECT_ID || resolveContextPath("/", path) === "/"
     ? BUILT_IN_ROOT_SET
@@ -152,11 +152,11 @@ export function implicitRootsAt(projectId: string, path: string): ReadonlySet<st
 export type ItxExpressionRewriteRule = {
   match: ItxExpressionPrefix;
   target: ItxExpression | null;
-  /** The one line a model reads for `match` here (rule 6). */
+  /** The one line a model reads for `match` here (`normalizeRewriteRuleConfigured`). */
   description?: string;
 };
 
-/** The proxy's own verbs — a match may not start with one (rule 6). */
+/** The proxy's own verbs — a match may not start with one (`normalizeRewriteRuleConfigured`). */
 const PROXY_VERBS: readonly string[] = ["invoke", "provide", "subscribe"];
 
 /** Is `call` at the fixed point — rooted at `itx.builtins` (a NAME step; `itx.builtins(…)` is not)? */
@@ -170,7 +170,7 @@ export function isBuiltInsRooted(call: ItxExpression): boolean {
  *  prefix step matched a call step) and the call's steps after the match. */
 type ItxExpressionPrefixMatch = { unpinnedArgs?: unknown[]; stepsAfterMatch: ItxExpression };
 
-/** Rule 2: claim `call` with `match`, step by step from the start — or null. */
+/** Claim `call` with `match`, step by step from the start — or null. */
 export function matchItxExpressionPrefix(
   match: ItxExpressionPrefix,
   call: ItxExpression,
@@ -204,7 +204,7 @@ export function matchItxExpressionPrefix(
 const pinnedArgCount = (match: ItxExpressionPrefix): number =>
   match.reduce<number>((n, step) => n + (Array.isArray(step) ? step.length - 1 : 0), 0);
 
-/** Rule 3: the most specific matching rule — or null. A mask row competes like any other. */
+/** The most specific matching rule — or null. A mask row competes like any other. */
 function pickItxExpressionRewriteRule(
   rules: readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
@@ -221,7 +221,7 @@ function pickItxExpressionRewriteRule(
   return best;
 }
 
-/** Rule 7: the template's arguments with `@` filled from the caller's unpinned args. */
+/** The template's arguments with `@` filled from the caller's unpinned args. */
 function fillItxExpressionHoles(
   templateArgs: unknown[],
   unpinnedArgs: unknown[] | undefined,
@@ -262,7 +262,8 @@ function fillItxExpressionHoles(
   );
 }
 
-/** Rule 4 (and 7): the call with the matched prefix replaced by the target. */
+/** The call with the matched prefix replaced by the target (its `@` holes filled by
+ *  `fillItxExpressionHoles`). */
 function applyItxExpressionRewriteRule(
   target: ItxExpression,
   match: ItxExpressionPrefixMatch,
@@ -339,7 +340,7 @@ export function resolveItxExpression(
  *  target may carry a whole facet source, which the reduce must never re-parse through the string
  *  codec (its 2 KiB cap). So call sites write `itx.append({ type, payload: { match, target } })`
  *  literally. A `null` target is the caller's deliberate MASK (deny); the platform-equivalent target
- *  with `ifTarget` is a compare-and-set removal (rule 8). */
+ *  with `ifTarget` is a compare-and-set removal (stream/core-processor.ts `CoreState.itxExpressionRewriteRules`). */
 export function normalizeRewriteRuleConfigured(
   payload: RewriteRuleConfigured & { ifTarget?: ItxExpressionInput | null },
 ): {
@@ -382,7 +383,7 @@ export function normalizeRewriteRuleConfigured(
     );
   if (targetExpression && targetExpression.slice(0, -1).some(containsItxExpressionHole))
     throw new Error(
-      `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier (rule 7)`,
+      `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier`,
     );
   // The match is the PARSED prefix, never re-stringified: a target may carry a whole source as data,
   // and a canonical match can itself exceed the string codec's cap even when the input did not — the
@@ -450,7 +451,7 @@ export function rowsNamingRpcStub(args: {
   const indirect = remaining.filter((rule) => rule.target && namesThroughRemaining(rule.target));
   return {
     // Each unset carries the target the census SAW (`ifTarget`), so the removal is a compare-and-set:
-    // the reduce restores the row only while it still names this dead stub. A `provide` that lands at
+    // the reduce removes the row only while it still names this dead stub. A `provide` that lands at
     // the same match in the detach window owns the row with a different target, and is left untouched.
     ruleUnsets: [...direct, ...indirect].map((rule) => ({
       match: rule.match,
@@ -665,7 +666,7 @@ export async function describeRewriteRules(args: {
 export class ItxExpressionResolver {
   /** The built-ins: a plain record whose keys (kv, append, readEvents, cd, …) are the physical-layer
    *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through an implicit
-   *  row where one exists (rule 3) unless the context's table says otherwise. */
+   *  row where one exists (`implicitRootsAt`) unless the context's table says otherwise. */
   readonly #builtIns: Record<string, unknown>;
   readonly #rewriteRules: () => readonly ItxExpressionRewriteRule[];
   readonly #implicitRoots: ReadonlySet<string>;
@@ -689,7 +690,7 @@ export class ItxExpressionResolver {
     this.#caller = args.caller;
   }
 
-  /** THE APP WALL (rule 5): loaded code hands in short names and nothing else — never the fixed
+  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else — never the fixed
    *  point, never a `cd` above its own context (self and descendants only, resolved step by step). On
    *  the INPUT only: the rows a call rewrites through are the owner's grants and are never checked, so
    *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
@@ -703,7 +704,8 @@ export class ItxExpressionResolver {
     if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
   }
 
-  /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).
+  /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run
+   *  (`resolveItxExpression`, after the app wall).
    *  Nothing is dispatched. The one law: `invoke(call)` ≡ `invoke(resolve(call).at(-1))`. */
   resolve(call: ItxExpressionInput): ItxExpression[] {
     const expression = normalizedItxExpression(call);
@@ -713,7 +715,7 @@ export class ItxExpressionResolver {
 
   /** Resolve + run one call: the chain's last element, walked against the physical scope from the
    *  record (expression.ts `walkSteps` — the root after `builtins` is the first step). Runtime `extraArgs`
-   *  are LIVE args (a Request, a callback — not expression data; the fetch lane and the public
+   *  are LIVE args (a Request, a callback — not expression data; an `x-itx-expression` fetch and the public
    *  `invoke(call, ...args)` hand them in): when the call ends in a NAME they are FOLDED INTO it BEFORE
    *  resolving — `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a template fills, a pinned row
    *  matches and a mask refuses exactly as the dotted call would; when it ends in a call they apply to

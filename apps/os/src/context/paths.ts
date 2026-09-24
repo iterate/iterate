@@ -12,8 +12,8 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  `/users/<id>`, `/organizations/<id>`, and `/projects/<id>` records — live here. A global context
  *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
  *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
- *  NAVIGABLE: `cd` is refused on a global edge handle (IterateContextRpcTarget.cd) and, for a
- *  principal, inside a global DO (built-ins.ts `cd`). A project's id is minted (`prj_<hex>`), so the word is never one;
+ *  NAVIGABLE: `cd` is refused for every caller, on a global edge handle (IterateContextRpcTarget.cd)
+ *  and inside a global DO (built-ins.ts `cd`). A project's id is minted (`prj_<hex>`), so the word is never one;
  *  `projects.get` refuses it all the same. */
 export const GLOBAL_PROJECT_ID = "global";
 

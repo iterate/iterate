@@ -11,7 +11,7 @@ import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression"
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
-// table — physical, never event-sourced. Two layers, in the order the tutorial builds them:
+// table — physical, never event-sourced. Two layers:
 //
 //   LAYER 1 — THE BORROWED RPC STUBS. Anyone with a Workers-RPC route to this DO can LEND a stub
 //   under an OPAQUE key (`lendRpcStub`); the DO keeps it BORROWED — every call on that key rides
@@ -172,7 +172,7 @@ export class RpcStubDirectory {
         return await this.#rpcStubFetch.serve(borrowed, terminalFetch.steps, terminalFetch.request);
       return await borrowed.invoke(itxExpressionSteps);
     } catch (error) {
-      // A BROKEN STUB IS DROPPED, NEVER KEPT (v4 §2.7): every later call on it would fail the same
+      // A BROKEN STUB IS DROPPED, NEVER KEPT: every later call on it would fail the same
       // way until the pins' release, while its pager may already lend a live one — so the NEXT call
       // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
       // The failed call is not retried.

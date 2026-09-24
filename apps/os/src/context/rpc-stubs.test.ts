@@ -22,7 +22,7 @@ test("fetch expression headers preserve Unicode worker source through the HTTP B
 });
 
 // ── rpc stub directory ── the borrowed table's one lifetime rule beyond lend/return:
-// A BROKEN STUB IS DROPPED (v4 §2.7). workerd stamps `retryable: true` on a call that failed at the
+// A BROKEN STUB IS DROPPED. workerd stamps `retryable: true` on a call that failed at the
 // transport (DISCONNECTED — "Network connection lost.", a DO reset), and a stub whose transport is
 // gone fails every later call the same way; kept borrowed it would answer that error until the idle
 // return, while its pager could lend a live one. A client's own throw, or a coded refusal, is not a

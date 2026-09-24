@@ -705,7 +705,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       }),
     ).toBeUndefined();
     // a PINNED match's physical target is NOT the implicit row it sits under (`itx.ai`): it is a
-    // grant of exactly that call and is STORED (rule 8) — what re-opens a prefix beneath a mask
+    // grant of exactly that call and is STORED — what re-opens a prefix beneath a mask
     const pinned = reduceAll([
       at(1, "events.iterate.com/itx/rewrite-rule-configured", {
         match: "itx.ai.run('gpt-5')",
@@ -837,7 +837,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
 describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
   const configured = (offset: number, match: string, target: string | null) =>
     at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
-  // Rule 8 in the presence of a broader mask: the physical spelling beneath it is a GRANT through
+  // Un-setting in the presence of a broader mask: the physical spelling beneath it is a GRANT through
   // the wall and is stored, so exactly that prefix re-opens — what longest-match promises.
   test("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
     const s = reduceAll([

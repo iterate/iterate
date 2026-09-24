@@ -13,8 +13,6 @@
 // PRODUCES the modules, in which case the caller MUST name the `cacheKey` (a build id, a commit): the
 // producer runs inside `getCode`, i.e. only on a cold isolate, and the caller owns "same key ⇒ same
 // code". A producer without a key is refused: hashing the expression would be the stale-code trap.
-// (the cache key derives from a repo's content hash;
-// that tier belongs to a build capability, not here.)
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
 // is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
@@ -47,8 +45,8 @@ export type WorkerCacheKey = string;
 export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
 /** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
  *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
- *  ceiling; an oversize source must fail at the door, coded, not late at materialization (the 2026-09-07
- *  wave-0 plan, issue 2). A producer EXPRESSION is small by nature and is not measured. */
+ *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
+ *  producer EXPRESSION is small by nature and is not measured. */
 export const FACET_SOURCE_MAX_CHARS = 1 << 20;
 /** Refuse a spec whose literal source is over the ceiling — the one check both doors
  *  (`itx.processors.enable`, the DO's facet door) make, so the refusal is atomic: nothing appended, no memo. */

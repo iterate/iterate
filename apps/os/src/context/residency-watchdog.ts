@@ -9,8 +9,8 @@
 // A DURABLE ALARM, NEVER A TIMER (measured on a deployed preview, 2026-09-23): a pending `setTimeout`
 // holds off eviction AND hibernation for its full length, billed (a 900 s timer: 900 s billed per
 // touch with the caller connected, ~73 s after it leaves); an alarm holds off neither (8/8 evicted,
-// 8/8 hibernated) and still fires in a pinned incarnation on time (6/6). So the deadline is the
-// fourth source of the context's one alarm (alarm-coordinator.ts), and it lives IN MEMORY: a fresh
+// 8/8 hibernated) and still fires in a pinned incarnation on time (6/6). So the deadline is one of
+// the in-memory sources of the context's one alarm (alarm-coordinator.ts): a fresh
 // incarnation has none — its armer was evicted, the normal end — so the alarm it is woken by does
 // nothing. Armed by an inbound call when none is armed: one alarm write per quiet window, not per call.
 

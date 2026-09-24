@@ -1,10 +1,11 @@
-// context/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
+// next/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
 // STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar, comments included
 // (no hand-rolled number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting
-// one IS revocation. The rewrite rules (match, rank, rewrite) are ./itx-expression-rewriting.ts. Two more concepts
-// ride with the codec, the only platform primitives the library tier may import:
+// one IS revocation. The rewrite rules (match, rank, rewrite) are apps/os
+// src/context/itx-expression-rewriting.ts. Two more concepts ride with the codec, the only platform
+// primitives the library tier may import:
 //   dispatch      — `walkSteps` / `callOn`: EXECUTE a rewritten call's steps against a live object graph
-//   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED DOOR, every unknown chain one `invoke(expression)`
+//   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED SURFACE, every unknown chain one `invoke(expression)`
 import JSON5 from "json5";
 import { RpcTarget } from "capnweb";
 import { codedError, jsonEqual, reportIssue } from "./lib.ts";
@@ -12,7 +13,7 @@ import { codedError, jsonEqual, reportIssue } from "./lib.ts";
 /** A STRING expression is for what a person types: short. Anything bigger — a worker's source, a large
  *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never
  *  meets json5. The cap is O(1), before any parsing (stock json5 allocates per character and a
- *  multi-megabyte literal kills a 128 MiB isolate — the 2026-09-07 wave-0 plan, issue 2). */
+ *  multi-megabyte literal kills a 128 MiB isolate). */
 const ITX_EXPRESSION_STRING_MAX_CHARS = 2048;
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. The
@@ -46,11 +47,12 @@ const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 // string like any other); `...@` as an object-literal entry is the merge form. In the array half the
 // marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
 // `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
-// target (the codec's one reservation). What `@` MEANS is rule 7 in ./itx-expression-rewriting.ts; here
-// it is only lexed (parse, targets only) and printed back (print, targets only).
+// target (the codec's one reservation). What `@` MEANS is apps/os src/context/itx-expression-rewriting.ts
+// `fillItxExpressionHoles`; here it is only lexed (parse, targets only) and printed back (print,
+// targets only).
 /** The marker's array-half spelling, the one reserved literal. */
 const ITX_EXPRESSION_HOLE = { "@": true } as const;
-/** The merge entry's key — `...@` — read by rule 7. */
+/** The merge entry's key — `...@` — read by apps/os `fillItxExpressionHoles`. */
 export const ITX_EXPRESSION_MERGE_KEY = "...@";
 
 /** A single- or double-quoted string literal (escapes honored) or a JSON5 comment (block or line):

@@ -5,8 +5,9 @@
 // LIBRARY (`connectTo*`, library.ts — code a user could write, taking only `itx`).
 // THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
 // and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
-// unless the context's own table says otherwise (itx-expression-rewriting.ts, rule 5) — so a test may
-// shadow `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` is always the physical door.
+// unless the context's own table says otherwise (itx-expression-rewriting.ts `implicitRootsAt`) — so a
+// test may shadow `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` always reaches the
+// physical scope.
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
@@ -91,7 +92,8 @@ export type SubscriptionListEntry = {
   /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
-   *  lives in the log + the facet's kv memo, never here — M1). Address-only rows have none. */
+   *  lives in the log + the facet's kv memo, never here — a hosting row is source-less). Address-only
+   *  rows have none. */
   hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
@@ -536,16 +538,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };
-  /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root
-   *  (`owner.rootPath`: a project's `/`, a user's `/users/<id>` — `resolveContextPath` joins
-   *  `/secrets/<name>` onto it). Each writing verb runs `here` on the SECRET'S OWN context — where
-   *  the `secret` facet keeps the value, so the log's order is the value's — and on any other
-   *  context runs as the same call there, over the DO hop, the caller carried (the fact stays
-   *  attributed). The catalog is the owner root's facet (`ownerRootFacet`). */
-  // A context below the owner's root runs every secrets verb as the SAME call on that ROOT (one
-  // catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
-  // stays broken after a root DO failure (Cloudflare's DO error-handling requires re-acquiring). And
-  // forward `deps.caller()` so the durable change event keeps the child call's authenticated principal.
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
    *  for what LOADED CODE spells on its input, and the expressions below are the platform's, fixed
@@ -555,6 +547,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     const { app: _loadedCode, ...caller } = deps.caller();
     return caller;
   };
+  /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root
+   *  (`owner.rootPath`: a project's `/`, a user's `/users/<id>` — `resolveContextPath` joins
+   *  `/secrets/<name>` onto it). Each writing verb runs `here` on the SECRET'S OWN context — where
+   *  the `secret` facet keeps the value, so the log's order is the value's — and on any other
+   *  context runs as the same call there, over the DO hop, the caller carried (the fact stays
+   *  attributed). The catalog is the owner root's facet (`ownerRootFacet`). */
   const onSecretContext = <T>(
     secretPath: string,
     call: ItxExpressionStep,
@@ -564,7 +562,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     return path === contextPath
       ? here(ownContext())
       : // The secret's context runs the SAME verb `here` would run (the one built-in, the same
-        // arguments), so its answer has `here`'s type; `invoke` is untyped across the DO hop.
+        // arguments), so its answer has `here`'s type; `invoke` is untyped across the DO hop. The
+        // context is acquired PER CALL: a stub cached across calls stays broken after a DO failure
+        // (Cloudflare's DO error handling requires re-acquiring). `hopCaller()` keeps the change
+        // attributed to the authenticated principal.
         (deps
           .context(contextPath)
           .invoke(["itx", "builtins", "secrets", call], [], hopCaller()) as Promise<T>);
