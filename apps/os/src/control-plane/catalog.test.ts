@@ -8,14 +8,13 @@ import { nodeSqliteDurableObjectStorage } from "../stream/test-support.ts";
 import { ADMIN_ORG_ID, type Caller, ControlPlaneDatabase, projectSlug } from "./catalog.ts";
 
 const admin: Caller = { principal: { actor: "admin" } };
-const nobody: Caller = { principal: null };
 const as = (user: { id: string; email: string }): Caller => ({
   principal: { actor: user.id, email: user.email },
 });
 
 function catalog() {
   const c = new ControlPlaneDatabase(nodeSqliteDurableObjectStorage().sql);
-  return { c, person: (email: string) => c.createUser(nobody, { email }) };
+  return { c, person: (email: string) => c.createUser({ email }) };
 }
 
 const refusal = (thunk: () => unknown) => {
@@ -30,12 +29,12 @@ const refusal = (thunk: () => unknown) => {
 describe("people", () => {
   test("find-or-create by email, one spelling of an address", () => {
     const { c } = catalog();
-    const ada = c.createUser(nobody, { email: " Ada@Example.com " });
+    const ada = c.createUser({ email: " Ada@Example.com " });
     expect(ada).toEqual({
       id: expect.stringMatching(/^user_[0-9a-f]{32}$/),
       email: "ada@example.com",
     });
-    expect(c.createUser(nobody, { email: "ADA@example.com" })).toEqual(ada);
+    expect(c.createUser({ email: "ADA@example.com" })).toEqual(ada);
     expect(c.user("ada@example.com")).toEqual(ada);
   });
 

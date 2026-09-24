@@ -473,12 +473,7 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
 });
 
 test("the consent page renders on the server, and Authorize posts the choice to the exact authorization URL", async () => {
-  const user = await controlPlaneStub().createUser(
-    { principal: null },
-    {
-      email: "consent-page@example.com",
-    },
-  );
+  const user = await controlPlaneStub().createUser({ email: "consent-page@example.com" });
   const project = await controlPlaneStub().createProject(
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },

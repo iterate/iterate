@@ -838,7 +838,7 @@ class UserCollectionRpcTarget extends RpcTarget {
   }
   async create(input: { email: string }): Promise<UserRecord> {
     const data = z.object({ email: z.string().trim().min(3) }).parse(input);
-    return this.#session.input.controlPlane.createUser(this.#session.caller, data);
+    return this.#session.input.controlPlane.createUser(data);
   }
 }
 

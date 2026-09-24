@@ -48,7 +48,6 @@ export async function startIssuerSession(
     revokeExistingGrants: false,
     props: {
       kind: "issuer",
-      version: 2,
       userId: user.id,
       email: user.email,
       picture: profile.picture,

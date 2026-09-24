@@ -47,8 +47,8 @@ export class ControlPlaneDurableObject extends DurableObject {
     return this.#db.accessibleTo(userId);
   }
 
-  createUser(caller: Caller, input: { email: string }) {
-    return this.#write(() => this.#db.createUser(caller, input));
+  createUser(input: { email: string }) {
+    return this.#write(() => this.#db.createUser(input));
   }
   linkIdentity(input: { provider: IdentityProvider; subject: string; email: string }) {
     return this.#write(() => this.#db.linkIdentity(input));

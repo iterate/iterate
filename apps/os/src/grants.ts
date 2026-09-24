@@ -245,7 +245,6 @@ export class GrantsRpcTarget extends RpcTarget {
       },
       props: {
         kind: "personal",
-        version: 2,
         userId: session.sub,
         email: session.email,
         projects,

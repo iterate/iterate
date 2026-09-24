@@ -20,10 +20,6 @@ import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-
  * nonempty, allowed resource audience. */
 export const GrantProps = z.object({
   kind: z.enum(["issuer", "app", "personal"]),
-  /** Being dropped: no other version ever existed. Optional for one deploy, so an isolate still
-   *  running this reads the grants the next deploy mints without it; that deploy stops the writers
-   *  stamping it (issuer-session.ts, consent.ts, grants.ts) and deletes this key. */
-  version: z.literal(2).optional(),
   userId: z.string().startsWith("user_"),
   email: z.string(),
   /** the identity provider's picture and display name of the person (when the provider supplies them), shown where the

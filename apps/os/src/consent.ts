@@ -211,7 +211,6 @@ export class ConsentRpcTarget extends RpcTarget {
         revokeExistingGrants: false,
         props: {
           kind: "app",
-          version: 2,
           userId: this.#grant.userId,
           email: this.#grant.email,
           projects: allProjects ? null : granted,

@@ -154,10 +154,8 @@ export class ControlPlaneDatabase {
 
   // ── the writes: each one synchronous block — check, then write ──
 
-  /** Find-or-create the person for an email. `caller` is unused since the operator's id pin went;
-   *  it stays one deploy so a worker isolate still on the previous version reaches this DO with the
-   *  same arguments — then the argument goes, edge.ts and durable-object.ts with it. */
-  createUser(_caller: Caller, input: { email: string }): UserRecord {
+  /** Find-or-create the person for an email. */
+  createUser(input: { email: string }): UserRecord {
     const email = emailAddress(input.email);
     return this.user(email) ?? this.#insertUser(newId("user"), email);
   }
