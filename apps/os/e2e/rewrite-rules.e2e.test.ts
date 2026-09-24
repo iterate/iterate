@@ -107,7 +107,7 @@ test("a DENY: provide(match, null) at a built-in's name masks it; the physical d
   );
   expect(await itx.kv.get("k")).toBe("v");
   expect(codeOf(await rejection(itx.kv.put("k", "w")))).toBe("NO_ITX_EXPRESSION_MATCH"); // the partial mask stands
-  // a pinned physical target under the root is a GRANT of exactly that call (rule 8): the row is
+  // a pinned physical target under the root is a GRANT of exactly that call (the rewrite-rule reduce, stream/core-processor.ts): the row is
   // stored — and re-opens the prefix the partial mask closed
   await itx.provide("itx.kv.put", "itx.builtins.kv.put");
   expect(await itx.rewriteRules.get("itx.kv.put")).toMatchObject({ target: "itx.builtins.kv.put" });
@@ -339,8 +339,8 @@ test("itx.llm.run('special') rewrites past the plain itx.llm.run rule; pinned ar
     "llm",
     ["run", "special"],
   ]);
-  // un-setting by the canonical pinned spelling deletes exactly that rule; the plain rule (rule 3:
-  // less specific) matches the call from now on
+  // un-setting by the canonical pinned spelling deletes exactly that rule; the plain rule (less specific,
+  // `pickItxExpressionRewriteRule`) matches the call from now on
   await itx.provide("itx.llm.run('special')", null);
   expect(await itx.invoke("itx.llm.run('special')")).toBeNull(); // the plain rule → kv.get('special') → null
 });

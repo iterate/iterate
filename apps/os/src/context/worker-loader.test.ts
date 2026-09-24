@@ -249,6 +249,14 @@ test("prepare resolves the identity without asking the loader; load() is the one
     where: 'facet "counter"',
   });
   expect(keys).toEqual([]); // `FacetHost#callFacet` stores this identity before any isolate exists
+  // the stored restart marker: respelling it restarts every facet once on its next wake
+  expect(JSON.parse(prepared.loaderId)).toEqual([
+    "facet",
+    "deploy-1",
+    null,
+    ["prj_u.iterate/", "Counter"],
+    expect.stringMatching(/^[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/),
+  ]);
   prepared.load();
   expect(keys).toEqual([prepared.loaderId]);
   prepared.load();

@@ -384,7 +384,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
       const pager = await lendRpcStubOverPager(
         () => this.#durableObject,
-        input.target as ClientRpcStub, // neither a string nor an array, so the live object
+        input.target as ClientRpcStub, // neither a string nor an array, so a live object or a plain callback
         rpcStubKey,
         this.#caller.app ? [] : [row],
         this.#waitUntil,
@@ -396,7 +396,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     }
     // An expression (or a removal): appended FIRST, then this session's lend under the name is
     // recalled — the same order as `provide`, for the same reason.
-    const target = input.target as ItxExpressionInput | null; // the live object returned above
+    const target = input.target as ItxExpressionInput | null; // the live-object branch returned above, so this is an expression or null
     const [committed] = (await this.#append({
       type: "events.iterate.com/stream/subscription-configured",
       payload: { name, target, ...delivery },

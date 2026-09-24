@@ -97,7 +97,7 @@ export class WorkspaceProcessor extends StreamProcessor<
         try {
           const { path } = await this.withItx((itx) => itx.whoami());
           // THE PARENT LINK, part of the birth: everything this context does not claim, its creator
-          // answers (itx-expression-rewriting.ts rule 3) — written before the certificate, so a born
+          // answers (the most specific row wins: itx-expression-rewriting.ts `pickItxExpressionRewriteRule`) — written before the certificate, so a born
           // context is never re-pointed and an owner's later row (a jail) is the last word.
           const creator = state.creation?.creator;
           if (creator && creator !== path)

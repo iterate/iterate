@@ -3,7 +3,7 @@
 // reserved root as `itx.builtins.ai` and reached as `itx.ai` through its platform row. So a test can
 // SHADOW it with a deterministic stub (`provide("itx.ai", fake)`) — Misha's test on the real root —
 // and THE DREAM is one rewrite rule: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model, and `@`
-// (rule 7) is the caller's input — spliced as an argument, the one argument when nested, its fields
+// (`fillItxExpressionHoles`) is the caller's input — spliced as an argument, the one argument when nested, its fields
 // merged by `...@` under the template's own keys (a pinned gateway model cannot be talked out of).
 // Locally the real binding is never called: every call lands on the fake. Against the deployed worker
 // (WORKER_BASE_URL not local) the last test asks the real binding for `models()` and runs ONE

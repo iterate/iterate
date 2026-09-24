@@ -1221,8 +1221,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects an itx-expression fetch, absent (null) routes to egress — that distinction must not collapse
     if (itxExpressionHeader !== null) {
       try {
-        // The JSON form is an edge-set (worker.ts) or self-addressed (env.ITX.fetch) expression; the
-        // resolver below canonicalizes it and rejects a malformed shape, so this parse trusts the JSON.
+        // The header is UNTRUSTED. Its JSON form comes from a session's terminal fetch
+        // (`encodeFetchExpression`) or from loaded code's self-addressed `env.ITX.fetch`, which
+        // `ItxEntrypoint.fetch` forwards unchanged; the edge (worker.ts) only sets dotted text or "".
+        // The resolver's `normalizedItxExpression` shape-checks it, and for loaded code the app wall
+        // (`admitLoadedCodeExpression`) admits it, before anything runs.
         if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
           return new Response(
             "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
@@ -1232,9 +1235,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           itxExpressionHeader === ""
             ? this.#stream.coreReducedState.ingressTarget!
             : itxExpressionHeader.trimStart().startsWith("[")
-              ? // JSON a session's terminal fetch wrote; the resolver's `normalizedItxExpression`
-                // shape-checks it before anything runs.
-                (JSON.parse(itxExpressionHeader) as ItxExpression)
+              ? (JSON.parse(itxExpressionHeader) as ItxExpression) // untrusted: see above
               : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
@@ -1266,7 +1267,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
-        const forwarded = new Request(request, { headers, body: this.#fetchLaneBody(request) });
+        const forwarded = new Request(request, {
+          headers,
+          body: this.#expressionFetchBody(request),
+        });
         const caller = this.#withPlatformOrigin({
           principal,
           grant,
@@ -1309,7 +1313,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  An app may ignore its body (a scanner POSTing to a static site, prd 2026-09-23), so the pending
    *  read is this pipe's, and its end is recorded here instead of thrown uncaught. Streamed, never
    *  buffered: an app that proxies uploads or echoes the body still streams. */
-  #fetchLaneBody(request: Request): ReadableStream | null {
+  #expressionFetchBody(request: Request): ReadableStream | null {
     if (!request.body) return null;
     const { readable, writable } = new IdentityTransformStream();
     request.body.pipeTo(writable).catch((error: unknown) => {

@@ -1,5 +1,5 @@
-// loaded-code.e2e.test.ts — WHAT LOADED CODE MAY SAY (context/itx-expression-rewriting.ts rule 5, the
-// app wall; iterate-context.ts `ItxEntrypoint`): a worker's, a facet's, a script's `env.ITX` runs every
+// loaded-code.e2e.test.ts — WHAT LOADED CODE MAY SAY (the app wall, context/itx-expression-rewriting.ts
+// `admitLoadedCodeExpression`; iterate-context.ts `ItxEntrypoint`): a worker's, a facet's, a script's `env.ITX` runs every
 // call as `Caller.app`. On what it hands in, the fixed point `itx.builtins` is not a word and `cd`
 // goes down only — self and descendants; the rows a call rewrites through are the owner's and are never
 // checked, so a parent link carries a script up exactly as far as its owner said. `provide` and
