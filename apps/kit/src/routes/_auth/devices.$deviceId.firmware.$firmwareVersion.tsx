@@ -63,6 +63,19 @@ const root = getRouteApi("__root__");
 const horizontalFieldClassName =
   "grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start sm:gap-4";
 
+// TODO: feedback from flashing a Home Assistant Voice Preview Edition against a self-hosted platform:
+// - ask for the OpenAI key up front, in the same form as Wi-Fi (check the project's /secrets/openai
+//   when it's picked), not after the first Prepare
+// - Wi-Fi password: a show/hide (eye) button
+// - make Prepare → Flash one modal wizard: say what's coming (the browser's serial-port chooser and
+//   which entry to pick, per board: HA Voice PE is "USB JTAG/serial debug unit", not Bluetooth or
+//   debug-console), frame esp-web-tools' own steps (Install, erase, Install), then a done screen
+// - the done screen replaces esp-web-tools' Install / Logs & Console menu, with board-specific next
+//   steps that work (HA Voice PE: press the top button or say "Jarvis", ask "what's my project called?")
+// - a dropped connection during Prepare surfaced as "Peer closed WebSocket: 1006": retry once, else
+//   say the connection dropped
+// - a board whose platform has gone away just fails its calls; nothing tells the person
+// - Log out is blocked by a platform that's gone, like device login was (the shared app-server sign-out)
 function KitPage() {
   const params = Route.useParams();
   const navigate = Route.useNavigate();
