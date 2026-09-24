@@ -1245,7 +1245,6 @@
       "expect(chat.dropped).toBe(1);",
       "expect(chat.reseeds).toBe(0);",
       "expect(chat.store.get()!.messages[1].text).toBe(\"again\");",
-      "expect(door.rev).toBe(chat.store.rev());",
       "expect(proc.applied).toBe(2);",
       "expect(proc.reseeds).toBe(0);",
       "expect(proc.store.get()!.marks).toBe(0);",
