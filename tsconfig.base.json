@@ -1,7 +1,7 @@
 {
-  // The compiler options every app on Workers shares (apps/os, dash, agents, notes, voice, kit and
-  // dummy-petshop): each app's tsconfig.json extends this and adds only what is its own — its
-  // `include`, and apps/os its Worker-only `lib`.
+  // The compiler options every app on Workers shares (apps/os, dash, agents, notes, voice, kit,
+  // dummy-petshop and ci-reports): each app's tsconfig.json extends this and adds only what is its
+  // own — its `include`, and apps/os its Worker-only `lib`.
   "compilerOptions": {
     "target": "ES2024",
     "module": "ESNext",

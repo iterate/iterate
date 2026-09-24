@@ -13,6 +13,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `apps/spa`               | Static SPA archetype; also hosts the browser extension download |
 | `apps/browser-extension` | Chrome side panel that lends a browser to a project             |
 | `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
+| `apps/ci-reports`        | Opens CI traces and Playwright reports from Depot artifacts     |
 | `packages/iterate`       | `iterate/next/*` SDK                                            |
 | `packages/ui`            | Components used by the apps                                     |
 | `packages/shared`        | Shared configuration, events, and test telemetry                |

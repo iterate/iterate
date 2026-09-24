@@ -17,3 +17,5 @@ setup:
     path: apps/voice/
   - project: dummy-petshop
     path: apps/dummy-petshop/
+  - project: _shared
+    path: apps/ci-reports/

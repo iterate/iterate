@@ -76,7 +76,7 @@ jobs:
         if: always()
         env:
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/ci-reports,@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit ${{ cancelled() && '--cancelled' || '' }}
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow

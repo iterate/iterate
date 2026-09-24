@@ -133,6 +133,12 @@ export default {
       // types are named by tsconfig.base.json.
       ignoreDependencies: ["cloudflare", "@cloudflare/workers-types"],
     },
+    "apps/ci-reports": {
+      // vite.config.ts names the Worker's main inline.
+      entry: ["src/worker.ts!"],
+      // The Workers types are named by tsconfig.base.json.
+      ignoreDependencies: ["@cloudflare/workers-types"],
+    },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],

@@ -1,0 +1,40 @@
+# The ci-reports viewer (apps/ci-reports, docs/ci-traces.md): the Worker the "CI trace" and
+# "Playwright report" commit statuses open. CI tooling on the dev/preview account; Doppler
+# _shared/preview supplies its Cloudflare credentials and the Depot token it ships as a secret.
+name: Deploy ci-reports
+permissions:
+  contents: read
+concurrency:
+  group: deploy-ci-reports-production
+  cancel-in-progress: false
+on:
+  push:
+    branches: [main]
+    paths:
+      - .depot/workflows/deploy-ci-reports.yml
+      - apps/ci-reports/**
+      - packages/shared/**
+      - envs.ts
+      - scripts/lib/**
+      - pnpm-lock.yaml
+  workflow_dispatch:
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+jobs:
+  deploy:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      # The deploy script ends by smoking the viewer's index.
+      - name: Deploy apps/ci-reports
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config preview -- pnpm --dir apps/ci-reports run-script deploy --env ci
