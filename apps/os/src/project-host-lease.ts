@@ -2,10 +2,11 @@
 // A project host admits a bearer once, when the request arrives (worker.ts), and hands the request
 // to the project's app. A WebSocket or a streamed body can stay open long after that, so when the
 // bearer carries a grant (an OAuth access token, a personal access token) the edge holds the
-// connection itself and renews its lease the way `/api` renews a socket's (rpc.ts): every 30 s
-// the grant must still be live (oauth.ts `grantIsLive`: not ended, not expired, its email still
-// allowed) and still reach the project, and a connection whose last successful check is 60 s old
-// ends. A revoked key's connection therefore closes within a minute, on every door.
+// connection itself and holds it to `holdGrantLease`, the lease `/api`'s socket holds too
+// (rpc.ts): every 30 s the grant must still be live (oauth.ts `grantIsLive`: not ended, not
+// expired, its email still allowed) and still reach the project, and a connection whose last
+// successful check is 60 s old ends. A revoked key's connection therefore closes within a minute,
+// on every door.
 //
 // What is held, and how:
 //   - a WebSocket: relayed through a pair the edge owns, so the edge can close both ends;
@@ -21,7 +22,7 @@ import { grantIsLive, type AccessGrant } from "./oauth.ts";
 import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 
 /** How often a held connection's grant is read again, and how long the connection stays good
- *  without a read that succeeded: `/api`'s socket lease (rpc.ts). */
+ *  without a read that succeeded. */
 const RECHECK_MS = 30_000;
 const LEASE_MS = 60_000;
 
@@ -37,25 +38,31 @@ export function leasedProjectHostAnswer(
   projectId: string,
   answer: Response,
 ): Response {
-  const hold = (end: (reason: string) => void) => lease(env, grant, reach, projectId, end);
+  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  const hold = (end: (reason: string) => void) =>
+    holdGrantLease(
+      env,
+      grant,
+      () => controlPlane.reachesProject(reach, projectId),
+      end,
+      "project-host-lease",
+    );
   if (answer.webSocket) return relayed(answer, answer.webSocket, hold);
   if (answer.body && !answer.headers.has("content-length")) return piped(answer, answer.body, hold);
   return answer;
 }
 
-/** THE LEASE: `end` once, when a re-check finds the grant ended or the project out of reach, or no
- *  re-check has succeeded for `LEASE_MS` (a retryable read, such as a deploy's reset of the
- *  account's Durable Object, or a control plane that is down, is asked again every 2 s within that
- *  bound). The grant's own
- *  expiry bounds it too. Returns the lease's release, for a connection that closed on its own. */
-function lease(
+/** THE LEASE on a connection a grant holds open (`/api`'s socket, rpc.ts; a project host's, above):
+ *  `end` once, when a re-check finds the grant ended or `reaches` false, or no re-check has
+ *  succeeded for `LEASE_MS`. The grant's own expiry bounds it too. `name` is the door, in the logs.
+ *  Returns the lease's release, for a connection that closed on its own. */
+export function holdGrantLease(
   env: Env,
   grant: AccessGrant,
-  reach: Reach,
-  projectId: string,
+  reaches: () => Promise<boolean>,
   end: (reason: string) => void,
+  name: "live-authorization" | "project-host-lease",
 ): () => void {
-  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
   let released = false;
   let renewal: ReturnType<typeof setTimeout> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -80,31 +87,29 @@ function lease(
   const renew = async () => {
     const started = Date.now();
     try {
-      const [live, reaches] = await Promise.all([
-        grantIsLive(env, grant),
-        controlPlane.reachesProject(reach, projectId),
-      ]);
+      const [live, reached] = await Promise.all([grantIsLive(env, grant), reaches()]);
       if (released) return;
-      if (!live || !reaches) return finish("Session revoked or project access removed");
+      if (!live || !reached) return finish("Session revoked or project access removed");
       arm(Math.min(started + LEASE_MS, grant.expiresAt));
     } catch (error) {
       if (released) return;
-      // A retryable read (a deploy's reset of the account or the control plane) or a control
-      // plane that is down (ControlPlaneUnavailableError) is asked again within the lease's
-      // bound, as rpc.ts asks it: the platform failed, not the grant.
+      // A RETRYABLE READ (a deploy resets the Durable Objects the tick reads, and workerd marks the
+      // cut call retryable) or a control plane that is down (ControlPlaneUnavailableError) is asked
+      // again within the lease's bound: the platform failed, not the grant. The event tells a
+      // deploy's expected reset from a failure the prd fault alarm counts.
       if (isRetryableTransportError(error) || error instanceof ControlPlaneUnavailableError) {
         console.warn({
           event: isDeployReset(error)
             ? "oauth.deploy-reset-live-authorization-retry"
             : "oauth.platform-failure-live-authorization-retry",
-          name: "project-host-lease",
+          name,
           grantId: grant.grantId,
           message: String(error),
         });
         renewal = setTimeout(renew, 2_000);
         return;
       }
-      reportIssue("project-host.live-authorization-failed", error, { grantId: grant.grantId });
+      reportIssue("oauth.live-authorization-failed", error, { grantId: grant.grantId, name });
       finish("Session authorization could not be renewed");
     }
   };
