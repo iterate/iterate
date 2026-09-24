@@ -2,19 +2,8 @@
 // on a person's, an organization's or a project's context — the context view's renderer registry.
 // The platform's own events (the stream's lifecycle, script runs) come with the view's renderers;
 // anything not named there or here falls back to the view's default row (the type and a glance).
+import { list, mono, record, str } from "@iterate-com/ui/components/context-view/renderer-helpers";
 import type { EventRenderers } from "@iterate-com/ui/components/context-view/types";
-
-const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
-const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
-/** A plain object (the payload's shape), else an empty one. */
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Object.prototype.toString.call(value) === "[object Object]";
-const record = (value: unknown): Record<string, unknown> => (isRecord(value) ? value : {});
-
-/** A muted mono span for an id or a path inside a sentence. */
-const mono = (text: string) => (
-  <span className="font-mono text-xs text-muted-foreground">{text}</span>
-);
 
 const platformFactRenderers: EventRenderers = {
   "events.iterate.com/account/authenticated": (e) => {
