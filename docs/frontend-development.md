@@ -49,9 +49,9 @@ generated; `apps/os` asserts its classes satisfy it), and served by
 ## The four nouns
 
 - A **Session** is what `authenticate()` returns (`IterateSessionApi`) — who is
-  calling (`whoami`, `info`), their `orgs()`, `grants`, and a catalog that vends
-  contexts (`projects.list/create/get`, `organizations.get`, `user`). It is _not_
-  itself a context.
+  calling (`whoami`, `info`), their `grants`, and a catalog that vends contexts
+  (`projects.list/create/get`, `organizations.list/get/create`, `user`). It is
+  _not_ itself a context.
 - A **project** is the tenant boundary (`prj_…`), its Durable Objects, its streams.
 - A **context** is a capability handle scoped into one place — a project's `/`,
   a path under it (`cd(path)`), an organization, the user (`IterateContextApi`).
@@ -140,10 +140,13 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
 });
 ```
 
-The session's own reads (the shell's `orgs()` and `projects.list()`) are the
-`_auth` layout's loader, shared by every page under it. Resolve the connection
-_per call_ through `api` (never a render-captured stub of a closed socket): the
-proxy hands every call to the live connection.
+The shell's session reads, the organization tree, are made once by
+`<OrganizationTree>` (`apps/dash/src/components/organization-tree.tsx`) and
+shared by every page through `useOrganizationTree()`: live state on `api.user`
+and `api.organizations.get(orgId)`, or `organizations.list()` and
+`projects.list()` when the session cannot open the account. Resolve the
+connection _per call_ through `api` (never a render-captured stub of a closed
+socket): the proxy hands every call to the live connection.
 
 ### Live state (server pushes)
 
@@ -217,7 +220,7 @@ The entire browser-facing API. A "handle" is a capnweb stub of a context
 | ------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `createIterateClient({ scopes })`                                                     | fn        | The app's one client (`iterate/next/app`). Create once per app.                                                                                                                                  |
 | `iterate.authenticate(next?)`                                                         | fn        | Probe `/api`, open the socket, resolve `{ api, info, signInFor }` — or leave for `/.auth/login` (never settles) when there is no session. Single-flight; a failure lets the next call try again. |
-| `api`                                                                                 | stub      | The **session** (`IterateSessionApi`), proxied to the current connection: `projects.list/get/create`, `orgs()`, `grants`, `organizations.get`, `user`, `logout()`.                               |
+| `api`                                                                                 | stub      | The **session** (`IterateSessionApi`), proxied to the current connection: `projects.list/get/create`, `grants`, `organizations.list/get/create/…`, `user`, `logout()`.                           |
 | `info`                                                                                | data      | `{ principal, scopes, platformOrigin, ingressRouting, mcpOrigin }` — the granted `scopes` decide what a page offers (consent is task-based: optional scopes may be unticked).                    |
 | `signInFor(project)`                                                                  | fn        | The page names a project this sign-in does not include: leave for `/.auth/login`, which offers to sign in again and returns to this URL.                                                         |
 | `useLiveState(itx, { key, name?, door })`                                             | hook      | Subscribe to one producer's live state; seed through `door`, apply pushed deltas, heal a gap. Never suspends. The LiveView primitive.                                                            |
@@ -231,22 +234,19 @@ The entire browser-facing API. A "handle" is a capnweb stub of a context
 | `IterateContextEvent`, `IterateContextProcessorRow`, `IterateContextPresence` (types) | type      | One committed event, one processors-table row, one presence — as the hook hands them out.                                                                                                        |
 
 Mutations have no hook — you call the capability on the handle
-(`context.secrets.set(...)`, `api.createOrg(name)`), then invalidate or let the
-projection answer.
+(`context.secrets.set(...)`, `api.organizations.create({ name })`), then
+invalidate or let the projection answer.
 
 That's the whole surface. The everyday four are `createIterateClient` /
 `useLiveState` / `useIterateContext` / the route `loader`; the rest are the
 low-level client, the UI kit's pure components, and types.
 
-## The one exception (for now): the stream feed
+## One consumption model, the stream feed included
 
-There is no second consumption model any more. The legacy dashboard's stream
-feed ran a browser stream mirror (the whole log downloaded into an OPFS SQLite
-database, queried with its own hooks); the retained apps don't. The agents app's
-feed is `useIterateContext` over the agent's context (`apps/agents`
-`routes/_auth/projects.$slug.tsx`, `useAgentLog`): the log in memory, deduped by
-offset, reduced for the chat by `lib/agent-events.ts`. The principle stands:
-don't build new UI on a second client-side store; use
+The agents app's feed is `useIterateContext` over the agent's context
+(`apps/agents` `routes/_auth/projects.$slug.tsx`, `useAgentLog`): the log in
+memory, deduped by offset, reduced for the chat by `lib/agent-events.ts`.
+Don't build new UI on a second client-side store; use
 `useLiveState`/`useIterateContext` and a server-owned projection.
 
 ## Where the boundary is
