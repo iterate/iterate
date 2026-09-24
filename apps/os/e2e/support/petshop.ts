@@ -1,8 +1,9 @@
 // e2e/support/petshop.ts — the deployed dummy-petshop (apps/dummy-petshop), the fake third party the
 // secret-cell proofs connect to over plain HTTP: an OAuth 2.0 provider with refresh, a GraphQL
-// session-login door speaking the Waitrose wire shape, one bearer-protected pets API, and a
-// `/__backdoor` console to force expiry. The worker under test fetches it directly (the local
-// worker over the real network, the deployed worker from the edge); nothing here proxies for it.
+// session-login door speaking the Waitrose wire shape, one bearer-protected pets API, GitHub-App
+// style signed webhooks, and a `/__backdoor` console to force expiry, fail the token endpoint and
+// fire webhooks. The worker under test fetches it directly (the local worker over the real network,
+// the deployed worker from the edge); nothing here proxies for it.
 
 /** The deployed fixture (apps/dummy-petshop) — `PETSHOP_BASE_URL` picks another. */
 export const petshopBaseUrl = (): string =>
@@ -71,6 +72,45 @@ export const petshopRegisterPublicClient = (redirectUri: string): Promise<{ clie
       response_types: ["code"],
     }),
   }).then((registered) => ({ clientId: registered.client_id }));
+
+/** The provider failing: the next `times` token-endpoint calls for this client answer 500. */
+export const petshopFailTokenEndpoint = (
+  clientId: string,
+  times: number,
+): Promise<{ clientId: string; tokenEndpointFailuresRemaining: number }> =>
+  petshopJson("/__backdoor/fail-token-endpoint", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify({ clientId, times }),
+  });
+
+/** A GitHub App installation of the caller's own, so its webhook secret is the caller's alone. The
+ *  shop requires a public key for its App JWT door; the webhook rows never sign a JWT, so any PEM
+ *  string stands. */
+export const petshopRegisterApp = (input: {
+  installationId: string;
+  webhookSecret: string;
+}): Promise<unknown> =>
+  petshopJson("/__backdoor/apps", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify({ ...input, publicKeyPem: "unused by the webhook rows" }),
+  });
+
+/** The shop POSTs `event` to `url` as that installation's webhook, signed the way GitHub signs
+ *  (`x-hub-signature-256: sha256=<hex HMAC of the body>`); `badSignature` signs with another key.
+ *  Answers the delivery: the receiver's status, 0 with `error` when the POST itself failed. */
+export const petshopFireAppWebhook = (input: {
+  installationId: string;
+  url: string;
+  event: unknown;
+  badSignature?: boolean;
+}): Promise<{ status: number; error?: string }> =>
+  petshopJson("/__backdoor/apps/fire-webhook", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify(input),
+  });
 
 /** Revoke one refresh token at the provider — the next refresh grant with it is `invalid_grant`. */
 export const petshopRevokeRefreshToken = (refreshToken: string): Promise<unknown> =>

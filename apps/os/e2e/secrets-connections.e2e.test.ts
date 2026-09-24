@@ -12,6 +12,9 @@
 //     Object; HTTP Basic at the token endpoint.
 //   • the same with a PUBLIC client — dynamically registered (RFC 7591), no secret, PKCE alone at the
 //     exchange, `client_id` in the body on refresh: the MCP-client shape.
+//   • a token-endpoint outage mid-refresh: one failed run, a fact, and recovery on the next use.
+//   • the other direction: the petshop DELIVERS a GitHub-style signed webhook to an app on the
+//     project's host, which checks it with `itx.secrets.verifyHmac` (deployed only).
 // The OAuth rows run in a DIRECTORY-REGISTERED project — a row on the console, not an ad-hoc
 // context — exactly what a person would do. A SECRET IS ITS PATH (secrets.e2e.test.ts): every verb
 // is keyed by `/secrets/<name>` and runs on that context, whose `secret` facet is the Durable Object
@@ -20,17 +23,32 @@
 // catalog, the facts and the logs carry the pin and the strategy kind, never a value.
 
 import { expect, test } from "vitest";
-import { adminCredentials, freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
+import {
+  adminCredentials,
+  freshCtx,
+  openItx,
+  readAll,
+  runId,
+  workerUrl,
+} from "./support/client.ts";
 import {
   petshopAuthorizationServer,
   petshopBaseUrl,
   petshopConnect,
   petshopExpireTokens,
+  petshopFailTokenEndpoint,
+  petshopFireAppWebhook,
   petshopMintClient,
+  petshopRegisterApp,
   petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
 } from "./support/petshop.ts";
-import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
+import {
+  deployedOnly,
+  freshDnsSafeProjectSlug,
+  projectUrl,
+  registerProject,
+} from "./support/project-host.ts";
 
 /** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder —
  *  `secret` is the secret's path, what the placeholder spells (`itx` is the untyped capnweb stub
@@ -212,6 +230,49 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   expect(refusal).not.toContain(first.accessToken);
 });
 
+// THE PROVIDER FAILING MID-REFRESH. A token endpoint that answers 500 is an ordinary outage, and
+// the secret must come through it: the refresh runs once for the request that needed it (no retry
+// loop inside the Durable Object), the upstream 401 stays the caller's answer, the failure is a fact
+// naming the status, and the stored refresh token is untouched, so the next use refreshes cleanly.
+test("oauth-refresh-token through a token-endpoint outage: one failed refresh, the caller gets the provider's 401 and the failure is a fact; the refresh token survives, so the next call refreshes and succeeds", async () => {
+  const itx = openItx(freshCtx("secrets-oauth-outage"));
+  const petshop = petshopBaseUrl();
+  const { token_endpoint: tokenEndpoint } = await petshopAuthorizationServer();
+  const client = await petshopMintClient();
+  await itx.secrets.set(
+    "/secrets/petshop",
+    { ...client, ...(await petshopConnect(client)) },
+    { urls: [petshop], refresh: { kind: "oauth-refresh-token", tokenEndpoint } },
+  );
+  const secret = itx.cd("/secrets/petshop");
+
+  await petshopExpireTokens(client.clientId);
+  await petshopFailTokenEndpoint(client.clientId, 1);
+  // One scheduled 500: had the object retried the refresh, the second grant would have won and
+  // this call would be a 200.
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({ status: 401 });
+  expect(await refreshedFacts(secret)).toEqual([
+    {
+      kind: "oauth-refresh-token",
+      ok: false,
+      error: "oauth-refresh-token: the token endpoint answered 500",
+    },
+  ]);
+
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
+    status: 200,
+    body: { clientId: client.clientId },
+  });
+  expect(await refreshedFacts(secret)).toEqual([
+    {
+      kind: "oauth-refresh-token",
+      ok: false,
+      error: "oauth-refresh-token: the token endpoint answered 500",
+    },
+    { kind: "oauth-refresh-token", ok: true },
+  ]);
+});
+
 // THE FIRST TOKENS, obtained by the platform: `itx.secrets.beginOAuth` hands back the provider's
 // authorize URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for
 // the page); the provider redirects the human to the platform's one callback with the code; the
@@ -364,3 +425,61 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
     { kind: "oauth-refresh-token", ok: true },
   ]);
 });
+
+/** An app on the project's host that receives GitHub-style webhooks: it checks the signature with the
+ *  project's secret through its own `env.ITX` (the key never enters the app) and records what it
+ *  accepted. */
+const WEBHOOK_RECEIVER = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class WebhookReceiver extends WorkerEntrypoint {
+  async fetch(request) {
+    const payload = await request.text();
+    const signature = (request.headers.get("x-hub-signature-256") || "").replace(/^sha256=/, "");
+    const itx = this.env.ITX.get();
+    try {
+      if (!(await itx.secrets.verifyHmac("/secrets/github-webhook", { payload, signature })))
+        return new Response("bad signature", { status: 401 });
+      await itx.append({ type: "webhook-received", payload: JSON.parse(payload) });
+      return new Response(null, { status: 204 });
+    } finally {
+      itx[Symbol.dispose]?.();
+    }
+  }
+}`,
+};
+
+// INBOUND: the third party calls the project. The petshop delivers a webhook over the internet to an
+// app on the project's host, signed with a secret only it and the project hold. Deployed only: the
+// deployed petshop cannot reach a local worker.
+deployedOnly(
+  "a third party's signed webhook reaches an app on the project's host, which verifies it with itx.secrets.verifyHmac and records it; one signed with another key is refused",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("webhook-in");
+    const itx = openItx(await registerProject(slug));
+    const installationId = `e2e-${runId()}-${crypto.randomUUID().slice(0, 8)}`;
+    const webhookSecret = crypto.randomUUID();
+    await petshopRegisterApp({ installationId, webhookSecret });
+    await itx.secrets.set("/secrets/github-webhook", webhookSecret, { urls: [petshopBaseUrl()] });
+    await itx.provide("itx.apps.hooks", ["itx", "workers", ["get", { source: WEBHOOK_RECEIVER }]]);
+    const url = projectUrl({ project: slug, app: "hooks", path: "/github" }).href;
+
+    const event = { action: "created", pet: { id: "pet-9", name: "Moss" } };
+    expect(await petshopFireAppWebhook({ installationId, url, event })).toMatchObject({
+      status: 204,
+    });
+    expect(
+      await petshopFireAppWebhook({
+        installationId,
+        url,
+        event: { action: "deleted", pet: { id: "pet-9" } },
+        badSignature: true,
+      }),
+    ).toMatchObject({ status: 401 });
+
+    expect(
+      (await readAll(itx))
+        .filter((e: any) => e.type === "webhook-received")
+        .map((e: any) => e.payload),
+    ).toEqual([event]);
+  },
+);
