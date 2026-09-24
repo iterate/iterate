@@ -55,6 +55,20 @@ export async function unwrapBrowserRunQuickAction(
   return envelope;
 }
 
+/** Browser Run's own timeout (`{"code":6002,"message":"A timeout was reached. …","detail":"Promise
+ *  timed out"}`) on a page that is INLINE HTML: nothing remote to wait for, so the timeout is the
+ *  service's (a browser it could not start or drive in time), never the page's. A `url` page's
+ *  timeout may be that site's and is not classified as the platform's. */
+function isBrowserRunPlatformTimeout(error: unknown, options: CfBrowserQuickActionOptions) {
+  return (
+    "html" in options &&
+    /"code":6002\b/.test(String((error as { message?: unknown })?.message ?? error))
+  );
+}
+
+/** How long a quick action waits before its one retry after Browser Run's own timeout. */
+const PLATFORM_FAILURE_RETRY_DELAY_MS = 1000;
+
 /** Cloudflare Browser Run binding exposed through itx. */
 export function cfBrowser(binding: BrowserRun) {
   return {
@@ -69,18 +83,37 @@ export function cfBrowser(binding: BrowserRun) {
      * actions (links, json, scrape, …) are their parsed value, and binary
      * actions (screenshot, pdf) are bytes — instead of the binding's raw
      * Response and its `{ success, result }` JSON envelope. A failed action
-     * throws with the envelope's error.
+     * throws with the envelope's error — after ONE retry, a second later, when
+     * the failure is Browser Run's own timeout on inline HTML (logged as
+     * `browser.platform-failure-retry`; scripts/ci/prd-fault-alarm.ts pages on
+     * a burst). A quick action only reads the page, so running it twice is safe.
      */
     async quickAction(
       action: CfBrowserQuickAction,
       options: CfBrowserQuickActionOptions,
     ): Promise<string | Uint8Array | unknown> {
-      const response = await (
-        binding as BrowserRun & {
-          quickAction(action: string, options: Record<string, unknown>): Promise<Response>;
-        }
-      ).quickAction(action, options);
-      return unwrapBrowserRunQuickAction(action, response);
+      const attempt = async () =>
+        unwrapBrowserRunQuickAction(
+          action,
+          await (
+            binding as BrowserRun & {
+              quickAction(action: string, options: Record<string, unknown>): Promise<Response>;
+            }
+          ).quickAction(action, options),
+        );
+      try {
+        return await attempt();
+      } catch (error) {
+        if (!isBrowserRunPlatformTimeout(error, options)) throw error;
+        console.warn({
+          event: "browser.platform-failure-retry",
+          namespace: "iterate-context",
+          action,
+          message: String((error as { message?: unknown })?.message ?? error),
+        });
+        await new Promise((resolve) => setTimeout(resolve, PLATFORM_FAILURE_RETRY_DELAY_MS));
+        return await attempt();
+      }
     },
   };
 }

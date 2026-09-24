@@ -225,9 +225,13 @@ test("debounced: two messages inside the window are answered by ONE request that
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
   await operatorPrompt(agent);
+  // The window is the story's premise — the second words must land inside it, a full round trip
+  // after the first — so it is generous: at 1.5 s a loaded run's second message landed after it
+  // closed, and the one request saw the first words alone (soak 2026-09-24, agents.e2e).
+  const windowMs = 5_000;
   await support.append({
     type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: WORKERS_AI_MODEL }, llmRequestDebounceMs: 1_500 } },
+    payload: { config: { llm: { model: WORKERS_AI_MODEL }, llmRequestDebounceMs: windowMs } },
   });
   await agent.message("First.");
   await agent.message("Second, right after.");
@@ -235,6 +239,14 @@ test("debounced: two messages inside the window are answered by ONE request that
     const all = await readAll(support);
     return assistantWords(all).length === 1 ? all : undefined;
   });
+  // THE PREMISE, said as itself when it fails: both words landed inside the window.
+  const words = first.filter(
+    (e) => e.type === "events.iterate.com/agent/context-added" && e.payload.role === "user",
+  );
+  expect(
+    Date.parse(words[1]?.createdAt) - Date.parse(words[0]?.createdAt),
+    `the second words landed inside the ${windowMs} ms window: ${JSON.stringify(words.map((e) => e.createdAt))}`,
+  ).toBeLessThan(windowMs);
   expect(assistantWords(first)).toEqual(["Both noted."]);
   // ONE request opened and ran (the second message's late intent is a harmless fact the reduce
   // ignores, so the intents may number two; the settlements never do).
@@ -253,7 +265,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   const said = first.filter((e) => e.type === "events.iterate.com/agent/context-added");
   const requested = first.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
   expect(Date.parse(requested.createdAt) - Date.parse(said[2].createdAt)).toBeGreaterThanOrEqual(
-    1_400,
+    windowMs - 100,
   );
   // Words after the answer are a new trigger: a second window, a second request.
   await agent.message("Third.");
@@ -621,7 +633,11 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
   const settled = (await readAll(support))
     .filter((e) => e.type === "events.iterate.com/context/run-settled")
     .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
-  expect(settled.map((s) => s.status)).toEqual([
+  // a mismatch names every settlement — which script answered what
+  expect(
+    settled.map((s) => s.status),
+    JSON.stringify(settled),
+  ).toEqual([
     "failed",
     "failed",
     "failed",

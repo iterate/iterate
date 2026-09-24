@@ -5,7 +5,11 @@
  * storage fake.
  */
 import { expect, onTestFinished, test, vi } from "vitest";
-import { GRAPHQL_LOGIN_PASSWORD, GRAPHQL_SESSION_TTL_SECONDS } from "./graphql-login.ts";
+import {
+  GRAPHQL_LOGIN_PASSWORD,
+  GRAPHQL_SESSION_TTL_SECONDS,
+  graphqlSessionAccountClientId,
+} from "./graphql-login.ts";
 import { makeShop, type Shop } from "./test/shop.ts";
 
 test("NewSession mints a session with deterministic customer/order ids and no refresh grant", async () => {
@@ -48,7 +52,7 @@ test("the minted session is an ordinary bearer on the pets API", async () => {
   expect(await pets.json()).toMatchObject({ owner: "jonas@example.com" });
 });
 
-test("sessions die at the ~3s TTL and on an epoch bump — the strategy's cues to re-login", async () => {
+test("sessions die at the TTL and on an epoch bump — the strategy's cues to re-login", async () => {
   const shop = makeShop();
   vi.useFakeTimers({ now: Date.now() });
   onTestFinished(() => {
@@ -66,6 +70,27 @@ test("sessions die at the ~3s TTL and on an epoch bump — the strategy's cues t
     body: JSON.stringify({ clientId: "graphql-session-login" }),
   });
   expect(await api(shop, "/api/me", fresh)).toMatchObject({ status: 401 });
+});
+
+test("an account's epoch bump kills that account's sessions and no one else's — the whole door's kills all", async () => {
+  const shop = makeShop();
+  const expire = (clientId: string) =>
+    shop.call("/__backdoor/expire-tokens", {
+      method: "POST",
+      body: JSON.stringify({ clientId }),
+    });
+  const mine = (await login(shop, "mine@example.com")).accessToken as string;
+  const theirs = (await login(shop, "theirs@example.com")).accessToken as string;
+
+  await expire(graphqlSessionAccountClientId("mine@example.com"));
+  expect(await api(shop, "/api/me", mine)).toMatchObject({ status: 401 });
+  expect(await api(shop, "/api/me", theirs)).toMatchObject({ status: 200 });
+  const again = (await login(shop, "mine@example.com")).accessToken as string;
+  expect(await api(shop, "/api/me", again)).toMatchObject({ status: 200 });
+
+  await expire("graphql-session-login");
+  expect(await api(shop, "/api/me", again)).toMatchObject({ status: 401 });
+  expect(await api(shop, "/api/me", theirs)).toMatchObject({ status: 401 });
 });
 
 test("any operation other than NewSession is a loud error — the door only logs in", async () => {

@@ -9,29 +9,46 @@
  *
  * - `NewSession` — login. Any username, password "correct-horse" (the same
  *   fixture password as /api/legacy-login) → a sealed session token that
- *   lives ~{@link GRAPHQL_SESSION_TTL_SECONDS}s, so a cached token hits real
- *   re-mint fast. A wrong password answers HTTP 200 with a GraphQL-style
- *   `failures` array (type `AUTHENTICATION_FAILED`).
+ *   lives {@link GRAPHQL_SESSION_TTL_SECONDS}s. A wrong password answers HTTP
+ *   200 with a GraphQL-style `failures` array (type `AUTHENTICATION_FAILED`).
+ * - Revocation is per door AND per account: `POST /__backdoor/expire-tokens`
+ *   with `{ clientId: "graphql-session-login" }` kills every session, with
+ *   `{ clientId: graphqlSessionAccountClientId(username) }` only that
+ *   account's — what a test that forces a 401 wants, since this ONE shop
+ *   serves every concurrent CI run.
  * - Anything else on the GraphQL door is a loud `errors` answer: the door
  *   logs you in; the API it unlocks is `/api/*`.
  */
 import { nowSeconds, seal, unseal } from "./seal.ts";
 
-/** How long a GraphQL-minted session lives. Deliberately ~3 seconds: short
- * enough that an e2e proves re-mint-on-401 without a backdoor call, long
- * enough for the mint → first-use round trip. */
-export const GRAPHQL_SESSION_TTL_SECONDS = 3;
+/** How long a GraphQL-minted session lives: the pets API's ordinary two
+ * minutes (state.ts DEFAULT_ACCESS_TTL_SECONDS). It was 3 s, which a session
+ * could outlive between its mint and its first use: a secret's Durable Object
+ * appends its `secret/refreshed` fact between the two, and under a loaded e2e
+ * run that took longer, so a just-minted session answered 401 (PR #2940
+ * 8324a3cc). A test forces its 401 through the backdoor instead. */
+export const GRAPHQL_SESSION_TTL_SECONDS = 120;
+
+/** The client every GraphQL-minted session belongs to (`/api/me`'s `clientId`)
+ * — its revocation epoch is the whole door's. */
+export const GRAPHQL_SESSION_CLIENT_ID = "graphql-session-login";
+
+/** The revocation key of ONE account's GraphQL sessions: expire-tokens with
+ * it bumps that account's epoch and no one else's. */
+export const graphqlSessionAccountClientId = (username: string) =>
+  `${GRAPHQL_SESSION_CLIENT_ID}:${username}`;
 
 /** The fixture login password (any username works) — same convention as
  * petshop's legacy-login endpoint. */
 export const GRAPHQL_LOGIN_PASSWORD = "correct-horse";
 
 /** What the door needs from the shop: the sealing key and a per-call read of
- * the GraphQL login client's revocation epoch, so targeted expiry invalidates
- * its outstanding sessions exactly like every other petshop token. */
+ * the revocation epochs a session of `username` is bound to — the door's and
+ * the account's — so targeted expiry invalidates outstanding sessions exactly
+ * like every other petshop token. */
 export interface GraphqlLoginDeps {
   sealKey: string;
-  getAccessTokenEpoch(): Promise<number>;
+  getAccessTokenEpochs(username: string): Promise<{ epoch: number; accountEpoch: number }>;
 }
 
 /** Sealed GraphQL-minted session token: expiring and epoch-bound like an
@@ -41,7 +58,11 @@ export interface GraphqlSessionPayload {
   t: "graphql-session";
   /** The login username — the grant's subject on the pets API. */
   sub: string;
+  /** The door's revocation epoch at mint. */
   epoch: number;
+  /** The account's revocation epoch at mint (absent on a session minted
+   * before accounts had one: epoch 0). */
+  accountEpoch?: number;
   exp: number;
 }
 
@@ -81,7 +102,7 @@ async function mintSession(
   const payload: GraphqlSessionPayload = {
     t: "graphql-session",
     sub: username,
-    epoch: await deps.getAccessTokenEpoch(),
+    ...(await deps.getAccessTokenEpochs(username)),
     exp: nowSeconds() + GRAPHQL_SESSION_TTL_SECONDS,
   };
   return json({
@@ -114,7 +135,8 @@ export async function graphqlSessionFromBearer(
   const session = await unseal<GraphqlSessionPayload>(token, deps.sealKey);
   if (!session || session.t !== "graphql-session") return null;
   if (session.exp < nowSeconds()) return null;
-  if (session.epoch !== (await deps.getAccessTokenEpoch())) return null;
+  const { epoch, accountEpoch } = await deps.getAccessTokenEpochs(session.sub);
+  if (session.epoch !== epoch || (session.accountEpoch ?? 0) !== accountEpoch) return null;
   return session;
 }
 
