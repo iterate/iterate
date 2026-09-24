@@ -3,8 +3,8 @@
 // outage, and every project host failed after 12–15 s: the new isolates had no project memo. Each
 // row here creates its project straight on the control plane's Durable Object, so the worker under
 // test (Vite's built worker, in this isolate) has never looked it up — a fresh isolate, as the
-// deploy's were — then makes that Durable Object's `project` read throw what the outage threw or
-// never answer.
+// deploy's were — then makes that Durable Object's `project` read throw what the outage threw, lose
+// its connection, or never answer.
 import { runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -15,7 +15,7 @@ import { controlPlane, controlPlaneStub } from "./support.ts";
 /** A failing read's bound is 3 s (edge.ts READ_TIMEOUT_MS); the platform took 12–15 s to fail. */
 const FAST_MS = 4_500;
 
-test.for(["throws", "hangs"] as const)(
+test.for(["throws", "is cut", "hangs"] as const)(
   "the control plane's read %s: a host this data center served before serves from its last-known copy, logged as a platform failure; once the control plane answers again, it answers",
   async (how) => {
     const { slug, host } = await catalogOnlyProject(`stale-${how}`);
@@ -36,12 +36,15 @@ test.for(["throws", "hangs"] as const)(
       method: "project",
       waitedMs: expect.any(Number),
       ageMs: expect.any(Number),
-      message:
-        how === "throws"
-          ? expect.stringMatching(
-              /^The control plane failed project after \d+ ms: internal error; reference = workers-test$/,
-            )
-          : "The control plane did not answer project within 3000 ms",
+      message: {
+        throws: expect.stringMatching(
+          /^The control plane failed project after \d+ ms: internal error; reference = workers-test$/,
+        ),
+        "is cut": expect.stringMatching(
+          /^The control plane failed project after \d+ ms: Network connection lost\.$/,
+        ),
+        hangs: "The control plane did not answer project within 3000 ms",
+      }[how],
     });
 
     // the stale answer was never memoized: the next request asks the control plane
@@ -52,7 +55,7 @@ test.for(["throws", "hangs"] as const)(
   },
 );
 
-test.for(["throws", "hangs"] as const)(
+test.for(["throws", "is cut", "hangs"] as const)(
   "the control plane's read %s: a host with no last-known copy answers 503 at once, logged as a platform failure",
   async (how) => {
     const { slug, host } = await catalogOnlyProject(`uncached-${how}`);
@@ -96,7 +99,7 @@ test("while the control plane answers, a request never reads the last-known copy
 /** A project the catalog holds and the worker under test never looked up; with no site, its apex
  *  answers its context's own 404 — the proof a request was admitted to it. */
 async function catalogOnlyProject(prefix: string) {
-  const slug = `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+  const slug = `${prefix.replaceAll(" ", "-")}-${crypto.randomUUID().slice(0, 8)}`;
   await controlPlaneStub().createProject({ principal: { actor: "admin" } }, { project: slug });
   return { slug, host: `https://${slug}.projects.test/` };
 }
@@ -115,15 +118,18 @@ async function rememberedByAnEarlierIsolate(slug: string) {
 }
 
 /** The control plane Durable Object's `project` read, failing until the row ends (or `end()`):
- *  throwing workerd's opaque internal error, as the outage did, or never answering. The Durable
- *  Object runs in this isolate, so its class's method is replaced where every call finds it. */
-async function failProjectReads(how: "throws" | "hangs") {
+ *  throwing workerd's opaque internal error, as the outage did; cut at the transport (workerd's
+ *  `retryable` stamp, retryable-error.ts); or never answering. The Durable Object runs in this
+ *  isolate, so its class's method is replaced where every call finds it. */
+async function failProjectReads(how: "throws" | "is cut" | "hangs") {
   let answer = () => {};
   const read = await runInDurableObject(controlPlaneStub(), (instance: ControlPlaneDurableObject) =>
     vi
       .spyOn(Object.getPrototypeOf(instance) as ControlPlaneDurableObject, "project")
       .mockImplementation(() => {
         if (how === "throws") throw new Error("internal error; reference = workers-test");
+        if (how === "is cut")
+          throw Object.assign(new Error("Network connection lost."), { retryable: true });
         // the read is synchronous; over RPC a promise is awaited all the same — this one only once
         // the row ends
         return new Promise<null>((resolve) => (answer = () => resolve(null))) as unknown as null;

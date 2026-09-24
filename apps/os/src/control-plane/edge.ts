@@ -12,7 +12,7 @@ import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
-import { isRetryableTransportError } from "../retryable-error.ts";
+import { isDeployReset, isRetryableTransportError } from "../retryable-error.ts";
 import type { ControlPlaneDurableObject } from "./durable-object.ts";
 import type {
   AccessibleRecord,
@@ -49,9 +49,10 @@ export const describeReach = (reach: Reach): string =>
 const READ_TIMEOUT_MS = 3_000;
 
 /** A control-plane READ that did not answer within READ_TIMEOUT_MS, or that failed on the platform's
- *  side: cut at the transport (retryable-error.ts: "Network connection lost.", a Durable Object
- *  reset) or workerd's opaque "internal error; reference = …", what the 2026-09-24 outage threw. A
- *  refusal the catalog coded, or any other throw, is not one and surfaces as what it is. The
+ *  side: cut at the transport ("Network connection lost.", retryable-error.ts) or workerd's opaque
+ *  "internal error; reference = …", what the 2026-09-24 outage threw. A deploy's reset of the
+ *  Durable Object (`isDeployReset`) is our own expected cut, not the platform being down, and a
+ *  refusal the catalog coded or any other throw is not one either: each surfaces as what it is. The
  *  project host's admission models it (worker.ts); everywhere else it surfaces, after 3 s instead of
  *  the platform's 12–15. */
 export class ControlPlaneUnavailableError extends Error {
@@ -131,6 +132,7 @@ export class ControlPlane {
     } catch (error) {
       if (
         error instanceof Error &&
+        !isDeployReset(error) &&
         (isRetryableTransportError(error) ||
           error.message.startsWith("internal error; reference ="))
       )
