@@ -176,7 +176,7 @@ function dressOf(
   const formAction = `form-action 'self' ${formIssuer}`;
   if (issuer === defaultIssuer)
     return {
-      head: `<link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/iterate-logo.svg" type="image/svg+xml">`,
+      head: `<link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/favicon.svg" type="image/svg+xml">`,
       csp: `default-src 'none'; style-src ${issuer}; img-src ${issuer}; ${formAction}; frame-ancestors 'none'`,
       mark: `<img class="issuer-mark" src="${issuer}/iterate-logo.svg" alt="" width="56" height="56">`,
     };

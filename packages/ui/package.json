@@ -32,6 +32,7 @@
     "@codemirror/view": "^6.43.6",
     "@fsegurai/codemirror-theme-bundle": "^6.3.1",
     "@iterate-com/shared": "workspace:*",
+    "@tanstack/react-router": "1.168.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",

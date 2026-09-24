@@ -1,7 +1,8 @@
-import { createRootRoute, HeadContent, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
+import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
+import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
 import css from "../styles.css?url";
 /** What the worker's vars say about this deployment: its PostHog project key (envs.ts, prd only;
  *  `POSTHOG_PROJECT_KEY`) and its dash, where a person revokes a device's token — the worker's
@@ -27,10 +28,7 @@ export const Route = createRootRoute({
       },
       { title: "iterate Kit" },
     ],
-    links: [
-      { rel: "stylesheet", href: css },
-      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
-    ],
+    links: [{ rel: "stylesheet", href: css }],
   }),
   component: Root,
 });
@@ -43,7 +41,7 @@ function Root() {
   return (
     <html lang="en">
       <head>
-        <HeadContent />
+        <EnvironmentHeadContent productionIcon="/favicon.svg" />
       </head>
       <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
         <AppProviders posthogApiKey={posthogProjectKey || undefined}>

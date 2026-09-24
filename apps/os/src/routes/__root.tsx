@@ -1,5 +1,6 @@
-import { createRootRoute, HeadContent, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
+import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
 import { useEffect } from "react";
+import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
 import { getPosthogProjectKey } from "../issuer.functions.ts";
 import css from "../styles.css?url";
 
@@ -11,10 +12,7 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
     ],
-    links: [
-      { rel: "stylesheet", href: css },
-      { rel: "icon", href: "/iterate-logo.svg", type: "image/svg+xml" },
-    ],
+    links: [{ rel: "stylesheet", href: css }],
   }),
   component: RootDocument,
 });
@@ -43,7 +41,7 @@ function RootDocument() {
   return (
     <html lang="en">
       <head>
-        <HeadContent />
+        <EnvironmentHeadContent productionIcon="/iterate-logo.svg" />
       </head>
       <body
         className="min-h-svh bg-background font-sans text-foreground antialiased"

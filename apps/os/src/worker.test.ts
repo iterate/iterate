@@ -508,6 +508,34 @@ describe("public protocol origins", () => {
     expect((await page("/authorize.js")).status).toBe(404);
     expect((await page("/capnweb.js")).status).toBe(404);
   });
+
+  test("/favicon.svg is production's logo, and a preview's purple PR badge", async () => {
+    const assetPaths: string[] = [];
+    const favicon = (origin: string) =>
+      worker.fetch(
+        new Request(`${origin}/favicon.svg`),
+        {
+          ...bindings,
+          ...origins,
+          APP_CONFIG_URLS__OS: origin,
+          ASSETS: {
+            fetch: async (asset: Request) => {
+              assetPaths.push(new URL(asset.url).pathname);
+              return new Response("<svg>the logo</svg>");
+            },
+          },
+        } as unknown as Env,
+        { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+      );
+    expect(await (await favicon("https://os.iterate.com")).text()).toBe("<svg>the logo</svg>");
+    expect(assetPaths).toEqual(["/iterate-logo.svg"]);
+    const preview = await favicon(
+      "https://pr2990-environment-favicons-os-preview.iterate-dev-preview.workers.dev",
+    );
+    expect(preview.headers.get("content-type")).toBe("image/svg+xml");
+    expect(await preview.text()).toMatch(/fill="#7C3AED".*>2990<\/text>/);
+    expect(assetPaths).toEqual(["/iterate-logo.svg"]);
+  });
 });
 
 describe("appConfigOf — once per env object", () => {
