@@ -108,6 +108,7 @@ async function readWindow(
       `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
         headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
         body: JSON.stringify({
           queryId: "prd-fault-alarm",
@@ -163,29 +164,46 @@ async function readWindow(
   // itx-expression fetch's pipe (#2871; the #2880 follow-up measured no effect). It pages only on `/api`
   // itself — the capnweb endpoint, a platform call, not a site visit (`/api/…` is a site's path).
   const unreadBody = "Can't read from request stream after response has been sent";
-  const errorFilters = [
-    { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
-    // A reset someone asked for (`itx.abort()`, apps/os context/built-ins.ts): the runtime
-    // logs `ctx.abort` as an uncatchable error — two lines per reset, one more per socket it
-    // closed (measured on a preview, 2026-09-23) — and the context's own log already records it
-    // as `context/aborted`, attributed. An expected outcome, not a fault.
-    {
-      key: "$metadata.message",
-      operation: "not_includes",
-      value: "itx.abort() reset the context",
-      type: "string",
-    },
-    { key: "$metadata.message", operation: "not_includes", value: unreadBody, type: "string" },
-    // A deploy: the runtime resets every Durable Object on new code and logs it as an error on
-    // each one it caught mid-call (14:32Z 2026-09-23). A request it failed still pages as a 5xx.
-    {
-      key: "$metadata.message",
-      operation: "not_includes",
-      value: "Durable Object reset because its code was updated",
-      type: "string",
-    },
-  ];
-  const [serverErrors, heals, initialErrors, apiUnreadBodyErrors] = await Promise.all([
+  // reportIssue logs an error object without a message. Cloudflare puts it in $metadata.error.
+  // Read the two fields with the same policy, using error only when message is absent or empty.
+  const readErrors = async (
+    key: "$metadata.message" | "$metadata.error",
+    filters: object[] = [],
+  ) => {
+    const common = [
+      { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
+      { key, operation: "neq", value: "", type: "string" },
+      ...filters,
+    ];
+    const [errors, apiUnreadBodyErrors] = await Promise.all([
+      rows(
+        [
+          ...common,
+          ...[
+            "itx.abort() reset the context", // explicitly requested, recorded in the durable log
+            unreadBody,
+            "Durable Object reset because its code was updated", // expected deploy cancellation
+          ].map((value) => ({ key, operation: "not_includes", value, type: "string" })),
+        ],
+        key,
+      ),
+      rows(
+        [
+          ...common,
+          { key, operation: "includes", value: unreadBody, type: "string" },
+          {
+            key: "$workers.event.request.url",
+            operation: "regex",
+            value: "^https?://[^/]+/api(\\?|$)",
+            type: "string",
+          },
+        ],
+        key,
+      ),
+    ]);
+    return [...errors, ...apiUnreadBodyErrors];
+  };
+  const [serverErrors, heals, initialErrors, structuredErrors] = await Promise.all([
     rows(
       [{ key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" }],
       "$workers.event.request.url",
@@ -194,51 +212,61 @@ async function readWindow(
       [{ key: "event", operation: "includes", value: "platform-failure", type: "string" }],
       "name",
     ),
-    rows(errorFilters, "$metadata.message"),
-    rows(
-      [
-        { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
-        { key: "$metadata.message", operation: "includes", value: unreadBody, type: "string" },
-        {
-          key: "$workers.event.request.url",
-          operation: "regex",
-          value: "^https?://[^/]+/api(\\?|$)",
-          type: "string",
-        },
-      ],
-      "$metadata.message",
-    ),
+    readErrors("$metadata.message"),
+    readErrors("$metadata.error", [
+      {
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key: "$metadata.message", operation: "is_null", type: "string" },
+          { key: "$metadata.message", operation: "eq", value: "", type: "string" },
+        ],
+      },
+    ]),
   ]);
   let errors = initialErrors;
   if (errors.length) {
-    const result = z.object({ events: z.object({ events: z.array(WorkerErrorEvent) }) }).parse(
-      await query(
-        "events",
-        [
-          { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
-          {
-            key: "$workers.executionModel",
-            operation: "eq",
-            value: "durableObject",
-            type: "string",
-          },
-        ],
-        {},
-      ),
-    );
-    // A capped read is incomplete evidence: keep the original alarm. Re-count while excluding
-    // only identified summaries; subtracting counts across queries could erase a different error
-    // if the reset arrived in Workers Logs between the count and the evidence read.
-    if (result.events.events.length < 100) {
-      const expected = deployResetSummaries(result.events.events);
-      if (expected.size) {
-        errors = await rows(
+    try {
+      const result = z.object({ events: z.object({ events: z.array(WorkerErrorEvent) }) }).parse(
+        await query(
+          "events",
           [
-            ...errorFilters,
+            { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
+            {
+              key: "$workers.executionModel",
+              operation: "eq",
+              value: "durableObject",
+              type: "string",
+            },
+          ],
+          {},
+        ),
+      );
+      // A capped read is incomplete evidence: keep the original alarm. Re-count while excluding
+      // only identified summaries; subtracting counts across queries could erase a different error
+      // if the reset arrived in Workers Logs between the count and the evidence read.
+      console.log(
+        JSON.stringify({
+          event: "prd-fault-alarm.reset-evidence",
+          count: result.events.events.length,
+          capped: result.events.events.length >= 100,
+        }),
+      );
+      if (result.events.events.length < 100) {
+        const expected = deployResetSummaries(result.events.events);
+        if (expected.size) {
+          errors = await readErrors("$metadata.message", [
             {
               kind: "group",
               filterCombination: "or",
               filters: [
+                { key: "$workers.executionModel", operation: "is_null", type: "string" },
+                {
+                  key: "$workers.executionModel",
+                  operation: "neq",
+                  value: "durableObject",
+                  type: "string",
+                },
                 { key: "$metadata.type", operation: "is_null", type: "string" },
                 { key: "$metadata.requestId", operation: "is_null", type: "string" },
                 {
@@ -255,38 +283,46 @@ async function readWindow(
                 },
               ],
             },
-          ],
-          "$metadata.message",
-        );
-        console.log(
-          JSON.stringify({
-            event: "prd-fault-alarm.deploy-reset-summaries",
-            requestIds: [...expected],
-          }),
-        );
+          ]);
+          console.log(
+            JSON.stringify({
+              event: "prd-fault-alarm.deploy-reset-summaries",
+              requestIds: [...expected],
+            }),
+          );
+        }
       }
+    } catch (error) {
+      // This query can only remove noise. Losing its evidence must never lose an observed fault.
+      console.warn(
+        JSON.stringify({
+          event: "prd-fault-alarm.reset-classification-failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
   return {
     serverErrors,
     heals,
-    errors: [...errors, ...apiUnreadBodyErrors],
+    errors: [...errors, ...structuredErrors],
   };
 }
 
 const WorkerErrorEvent = z.object({
   timestamp: z.number(),
   $metadata: z.object({
-    type: z.string(),
-    requestId: z.string().optional(),
-    message: z.string().optional(),
-    error: z.string().optional(),
+    type: z.string().nullish(),
+    requestId: z.string().nullish(),
+    message: z.string().nullish(),
+    error: z.string().nullish(),
   }),
   $workers: z.object({
-    durableObjectId: z.string().optional(),
-    scriptVersion: z.object({ id: z.string() }).optional(),
-    outcome: z.string().optional(),
-    truncated: z.boolean().optional(),
+    durableObjectId: z.string().nullish(),
+    scriptVersion: z.object({ id: z.string().nullish() }).nullish(),
+    executionModel: z.string().nullish(),
+    outcome: z.string().nullish(),
+    truncated: z.boolean().nullish(),
   }),
 });
 
@@ -295,35 +331,53 @@ const WorkerErrorEvent = z.object({
  *  the latter with its DO, version and exact reset millisecond. Cloudflare can repeat one reset's
  *  requestId on multiple exceptions (2026-09-24 10:30:06.305 and 11:41:21.252), so requestId alone
  *  misses its other cancelled calls. Any unexplained line in that group keeps ALL its summaries;
- *  a missing identity or truncated invocation is not evidence. HTTP 5xx counts are untouched. */
+ *  a missing identity or truncated invocation is not evidence. HTTP 5xx counts are untouched.
+ *  This classifies deploy cancellation, not successful recovery of a background caller. */
 export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[]) {
   const groups = new Map<string, z.infer<typeof WorkerErrorEvent>[]>();
   for (const event of events) {
     const worker = event.$workers;
-    if (!worker.durableObjectId || !worker.scriptVersion?.id) continue;
+    if (
+      worker.executionModel !== "durableObject" ||
+      !worker.durableObjectId ||
+      !worker.scriptVersion?.id
+    )
+      continue;
     const key = JSON.stringify([worker.durableObjectId, worker.scriptVersion.id, event.timestamp]);
     const group = groups.get(key) ?? [];
     group.push(event);
     groups.set(key, group);
   }
-  const expected = new Set<string>();
+  const proven = new Set<z.infer<typeof WorkerErrorEvent>>();
   for (const group of groups.values()) {
     const exceptions = group.filter((event) => event.$metadata.type !== "cf-worker-event");
     if (
-      group.some((event) => event.$workers.truncated) ||
+      group.some((event) => !event.$metadata.type || event.$workers.truncated) ||
       !exceptions.length ||
-      !exceptions.every(
-        (event) =>
-          (event.$metadata.message || event.$metadata.error) ===
-          "Durable Object reset because its code was updated.",
-      )
+      !exceptions.every((event) => {
+        const texts = [event.$metadata.message, event.$metadata.error].filter(Boolean);
+        return (
+          texts.length &&
+          texts.every((text) => text === "Durable Object reset because its code was updated.")
+        );
+      })
     )
       continue;
     for (const event of group) {
       const { type, requestId } = event.$metadata;
       if (type === "cf-worker-event" && event.$workers.outcome === "exception" && requestId)
-        expected.add(requestId);
+        proven.add(event);
     }
+  }
+  const expected = new Set([...proven].map((event) => event.$metadata.requestId!));
+  // A request ID observed on another summary is ambiguous: never exclude that other invocation.
+  for (const event of events) {
+    if (
+      event.$metadata.type === "cf-worker-event" &&
+      event.$metadata.requestId &&
+      !proven.has(event)
+    )
+      expected.delete(event.$metadata.requestId);
   }
   return expected;
 }
