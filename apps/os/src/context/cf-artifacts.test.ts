@@ -49,8 +49,9 @@ test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, 
   expect(await a.create("/repos/config")).toEqual({ created: false });
   expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.repos--config" }); // found — no create
 
+  const callsBeforeGet = calls.length;
   const repo = await a.get("/repos/config");
-  expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.repos--config" });
+  expect(calls.length).toBe(callsBeforeGet); // each verb on the handle takes the binding's handle
   // The handle is an RpcTarget wrapper (so `get(path).createToken(...)` pipelines across /api), and it
   // re-exposes ONLY createToken, acting on the already-prefixed repo…
   expect(repo).toBeInstanceOf(ScopedArtifactRepoRpcTarget);
@@ -58,7 +59,7 @@ test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, 
     plaintext: "read-prj_a.repos--config-60",
   });
   // …names the remote the facet's git client POSTs under (the platform knows account + namespace)…
-  expect(repo.remote()).toBe(
+  expect(await repo.remote()).toBe(
     "https://acct.artifacts.cloudflare.net/git/ns/prj_a.repos--config.git",
   );
   // …while fork is NOT reachable on it (its unprefixed name would escape the project wall).
@@ -103,7 +104,7 @@ test("the '.' delimiter is collision-free for hyphenated project IDs; list filte
   expect((await ab.list()).repos.map((r) => r.path)).toEqual(["/secret"]);
 });
 
-test("every binding handle is released: create, get and createToken leave none live", async () => {
+test("every binding handle is released: create, createToken and remote leave none live", async () => {
   // A handle is a live Workers-RPC stub; one kept (the scoped repo held it, the create probe dropped
   // it) held the root's session to Artifacts, and the root, open until the next deploy (2026-09-23).
   const { namespace } = recordingNamespace();
@@ -124,7 +125,48 @@ test("every binding handle is released: create, get and createToken leave none l
   expect(await repo.createToken("write", 60)).toMatchObject({
     plaintext: "write-prj_a.repos--config-60",
   });
-  expect({ opened, released }).toEqual({ opened: 3, released: 3 }); // probe (found), get, createToken
+  expect(await repo.remote()).toMatch(/prj_a\.repos--config\.git$/);
+  expect({ opened, released }).toEqual({ opened: 3, released: 3 }); // probe (found), createToken, remote
+});
+
+// A repo facet asks `get(path).remote()` and `get(path).createToken(…)` through its context: each is
+// two dispatches (a mid-chain handle, packages/iterate/src/expression.ts), and each dispatch walks
+// `get(path)` again. So `get` itself touches no binding, and each method opens exactly one handle.
+test("get(path) touches no binding; remote() is one get and one info, createToken one get and one mint", async () => {
+  const { namespace } = recordingNamespace(["prj_a.repos--config"]);
+  const calls: string[] = [];
+  const counting: ArtifactsNamespace = {
+    ...namespace,
+    get: async (name) => {
+      calls.push("get");
+      const handle = await namespace.get(name);
+      return {
+        ...handle,
+        info: () => {
+          calls.push("info");
+          return handle.info();
+        },
+        createToken: (scope, ttlSeconds) => {
+          calls.push("createToken");
+          return handle.createToken(scope, ttlSeconds);
+        },
+      };
+    },
+  };
+  const a = scoped(counting, "prj_a");
+  await a.get("/repos/config");
+  await a.get("/repos/config");
+  expect(calls).toEqual([]);
+  await (await a.get("/repos/config")).remote();
+  expect(calls).toEqual(["get", "info"]);
+  calls.length = 0;
+  await (await a.get("/repos/config")).createToken("read", 60);
+  expect(calls).toEqual(["get", "createToken"]);
+  // A repo that does not exist fails at the method, with the binding's own error.
+  await expect((await a.get("/repos/missing")).createToken("read", 60)).rejects.toThrow(
+    /Repository not found/,
+  );
+  await expect((await a.get("/repos/missing")).remote()).rejects.toThrow(/Repository not found/);
 });
 
 // ── the binding's platform failure ── Artifacts API error 10400, "An internal error occurred.", which
@@ -224,17 +266,16 @@ test("a create answered 'already exists' after a 'not found' probe: the repo is 
   });
 });
 
-test("after a platform failure, get, createToken, list and delete each answer on their retry", async () => {
+test("after a platform failure, remote, createToken, list and delete each answer on their retry", async () => {
   const get = flaky("get", [1], ["prj_a.repos--config"]);
   expect(
     await settle(async () => (await scoped(get.namespace, "prj_a").get("/repos/config")).remote()),
   ).toMatchObject({
     value: "https://acct.artifacts.cloudflare.net/git/ns/prj_a.repos--config.git",
-    retries: [{ verb: "get" }],
+    retries: [{ verb: "remote" }],
   });
 
-  // the second `get` is the handle createToken takes
-  const token = flaky("get", [2], ["prj_a.repos--config"]);
+  const token = flaky("get", [1], ["prj_a.repos--config"]);
   expect(
     await settle(async () =>
       (await scoped(token.namespace, "prj_a").get("/repos/config")).createToken("write", 60),
