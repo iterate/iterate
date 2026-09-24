@@ -28,8 +28,10 @@
 //     ITSELF (`runOverduePass`). Re-arming it is not enough: an incarnation the runtime stops
 //     delivering to stays stopped (2026-09-24, a recurring schedule: three re-arms 5 s apart, none
 //     delivered, the held alarm arrived 28.8 s late in the next incarnation). The pass's own
-//     end-of-pass write re-arms whatever is left. A timer is never pending while the actor is
-//     idle: a pending timer holds off eviction, and nothing may keep an idle actor for this.
+//     end-of-pass write re-arms whatever is left; what is left at the SAME instant (a backlog
+//     past one pass's 32) is passed again `ALARM_OVERDUE_AFTER_MS` later, at most
+//     `ALARM_MAX_WATCH_PASSES` times. A timer is never pending while the actor is idle: a pending
+//     timer holds off eviction, and nothing may keep an idle actor for this.
 //   - AT AN INCARNATION'S BIRTH, a stored alarm already overdue is written again for now — a
 //     DIFFERENT time, which the runtime hands its alarm service as a fresh schedule (the stored
 //     time written again is a no-op it never forwards); a fresh incarnation takes the delivery.
@@ -43,9 +45,11 @@
  *  on a preview under load: p50 0 ms, p99 4 ms, max 2.9 s (5,500 bare alarms); a held one is
  *  15–60 s late — 5 s sits clear of both. */
 export const ALARM_OVERDUE_AFTER_MS = 5_000;
-/** Passes the watch runs for ONE armed time in a row — each leaving that same time due — before
- *  it gives up on it and reports it: a pass that makes no progress must not loop every 5 s. */
-export const ALARM_MAX_WATCH_PASSES = 3;
+/** Passes the watch runs for ONE armed time in a row — each leaving that same time due, each
+ *  `ALARM_OVERDUE_AFTER_MS` after the last — before it gives up on it and reports it. A pass drains
+ *  32 due schedules, so 33 or more at one instant legitimately take several; twenty (640 schedules,
+ *  100 s) is past any backlog and bounds a pass that makes no progress at all. */
+export const ALARM_MAX_WATCH_PASSES = 20;
 
 /** What the overdue watch did about an armed alarm the runtime has not delivered. */
 export type OverdueAlarm = {
@@ -72,9 +76,12 @@ type AlarmCoordinatorDeps = {
 
 export class AlarmCoordinator {
   /** What storage holds, as far as this incarnation knows — except after a birth re-arm, which
-   *  wrote `#rearmedAt` aside while this stays the time the sources want. */
+   *  wrote `#storedAside` while this stays the time the sources want. */
   #armedAt: number | null = null;
-  #rearmedAt: number | null = null;
+  #storedAside: number | null = null;
+  /** When the watch last acted on `#armedAt` (a birth re-arm, a pass it ran): its next check is
+   *  `ALARM_OVERDUE_AFTER_MS` after this, never back-to-back. */
+  #lastWatchActAt: number | null = null;
   #passInProgress = false;
   /** When the current pass began, or the last one did — the WAIT_TIMEOUT's story. */
   #lastPassStartedAt: number | null = null;
@@ -117,7 +124,7 @@ export class AlarmCoordinator {
    *  stored time is still there, so the end-of-pass reconcile starts from it — and deletes it when
    *  nothing is left. */
   async pass(work: () => Promise<void>, { delivered }: { delivered: boolean }): Promise<void> {
-    const stored = this.#rearmedAt ?? this.#armedAt;
+    const stored = this.#storedAside ?? this.#armedAt;
     this.#passInProgress = true;
     this.#lastPassStartedAt = Date.now();
     this.#passThrew = false;
@@ -130,11 +137,12 @@ export class AlarmCoordinator {
     } finally {
       this.#passInProgress = false;
       this.#armedAt = delivered ? null : stored;
-      this.#rearmedAt = null;
+      this.#storedAside = null;
+      this.#lastWatchActAt = delivered ? null : Date.now();
     }
-    this.reconcile();
     // A delivered pass is the runtime delivering again: whatever the watch counted is over.
     if (delivered) this.#watchPassesFor = null;
+    this.reconcile();
   }
 
   reconcile() {
@@ -143,7 +151,8 @@ export class AlarmCoordinator {
     // Unchanged — a birth re-arm's aside included: the time the sources want is what it re-armed.
     if (wanted === this.#armedAt) return this.watch();
     this.#armedAt = wanted;
-    this.#rearmedAt = null;
+    this.#storedAside = null;
+    this.#lastWatchActAt = null;
     // The output gate makes a failed storage write fail the invocation.
     void (wanted === null ? this.#deps.deleteAlarm() : this.#deps.setAlarm(wanted));
     this.watch();
@@ -156,7 +165,8 @@ export class AlarmCoordinator {
     const armedAt = this.#armedAt;
     if (armedAt === null || now - armedAt < ALARM_OVERDUE_AFTER_MS) return;
     if (this.#wanted() !== armedAt) return this.reconcile();
-    this.#rearmedAt = now;
+    this.#storedAside = now;
+    this.#lastWatchActAt = now;
     // `now`, never `armedAt`: the stored time written again is a no-op the runtime never forwards.
     // `#armedAt` stays what the sources want, so no reconcile writes it back.
     void this.#deps.setAlarm(now);
@@ -181,7 +191,8 @@ export class AlarmCoordinator {
   }
 
   /** THE WATCH WHILE HELD (the header): the armed alarm still undelivered at its check runs the
-   *  pass here — at most `ALARM_MAX_WATCH_PASSES` in a row for one armed time. */
+   *  pass here — `ALARM_OVERDUE_AFTER_MS` apart, at most `ALARM_MAX_WATCH_PASSES` in a row for one
+   *  armed time. */
   #passIfOverdue(now: number): void {
     const checkAt = this.#overdueCheckAt();
     if (checkAt === null) return;
@@ -217,7 +228,7 @@ export class AlarmCoordinator {
       this.#gaveUpOn === this.#armedAt
     )
       return null;
-    return (this.#rearmedAt ?? this.#armedAt) + ALARM_OVERDUE_AFTER_MS;
+    return Math.max(this.#armedAt, this.#lastWatchActAt ?? 0) + ALARM_OVERDUE_AFTER_MS;
   }
 
   #stopOverdueTimer() {

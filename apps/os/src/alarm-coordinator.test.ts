@@ -135,6 +135,17 @@ test("a watch pass that leaves the SAME time due runs again, at most ALARM_MAX_W
   });
 });
 
+test("a backlog at one instant (33+ schedules; a pass drains 32) is drained by watch passes ALARM_OVERDUE_AFTER_MS apart — never back-to-back into the cap", async () => {
+  const { alarms, passes } = setup([T + 1_000], { held: true });
+  alarms.reconcile();
+  vi.advanceTimersByTime(1_000 + ALARM_OVERDUE_AFTER_MS);
+  await alarms.pass(async () => {}, { delivered: false }); // 32 appended; the 33rd is due at T + 1 s
+  vi.advanceTimersByTime(ALARM_OVERDUE_AFTER_MS - 1);
+  const beforeTheSpacing = passes.count;
+  vi.advanceTimersByTime(1);
+  expect({ beforeTheSpacing, after: passes.count }).toEqual({ beforeTheSpacing: 1, after: 2 });
+});
+
 test("no timer while nothing holds the actor (a pending timer holds off eviction); the first inbound call starts it, the last one's end stops it", () => {
   const holder = { held: false };
   const { alarms, passes } = setup([T + 1_500], holder);
