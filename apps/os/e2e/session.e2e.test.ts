@@ -498,10 +498,11 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
   // 2. THE SOURCE IS THE MODULES, handed over INLINE: hand the code over, run it
   const SRC_MINE = {
     "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class Mine extends WorkerEntrypoint {
   async run() {
-    const itx = await this.env.ITX.get();
-    return \`from-inline:\${(await itx.whoami()).projectId}\`;
+    const { projectId } = await withItx(this.env.ITX, (itx) => itx.whoami());
+    return \`from-inline:\${projectId}\`;
   }
 }`,
   };

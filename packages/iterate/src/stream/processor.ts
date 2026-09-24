@@ -860,7 +860,9 @@ export class ReduceCheckpointTable {
 const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. A
- *  `ProcessorStream` and the itx scope both satisfy it. */
+ *  `ProcessorStream` satisfies it; a facet that is no processor passes one round trip per delta,
+ *  `{ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }` (sdk/index.ts), never a scope it
+ *  holds. */
 export type LiveStateSink = {
   append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;
 };
@@ -875,7 +877,7 @@ export class LiveState<S> {
   #lastSerializedState: S;
   #liveStateRev: number;
   /** THE DELTA APPEND CHAIN — at most one delta append in flight, so commit order = mint order for a
-   *  CROSS-HOP sink: `env.ITX.get().append(e)` mints a FRESH capability per call, so two deltas
+   *  CROSS-HOP sink: `withItx(env.ITX, (itx) => itx.append(e))` mints a FRESH scope per call, so two deltas
    *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
    *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
    *  but it costs every watcher the full seed re-read the deltas exist to avoid. Every delta rides

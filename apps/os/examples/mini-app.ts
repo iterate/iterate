@@ -15,9 +15,10 @@
 // dials over a WebSocket. Persistence is the PROJECT's own itx.kv (this loaded code speaks for the
 // project), so the notes are shared and durable. `RpcTarget`/`WorkerEntrypoint` are the runtime's own
 // (inside a loaded isolate capnweb's RpcTarget IS the native one); `newWorkersRpcResponse` — which
-// serves BOTH the WebSocket upgrade and a one-shot HTTP batch — comes from the injected SDK.
+// serves BOTH the WebSocket upgrade and a one-shot HTTP batch — and `withItx` come from the injected
+// SDK. The API holds no scope for its socket's lifetime: each method is its own `withItx` round trip.
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { newWorkersRpcResponse } from "./processor.js";
+import { newWorkersRpcResponse, withItx, type WithItx } from "./processor.js";
 
 const KEY = "mini-app/notes";
 
@@ -30,19 +31,19 @@ type Note = { id: string; text: string; at: number };
 
 /** The mini-app's capnweb API — the methods the page calls, backed by the project's itx.kv. */
 class Notes extends RpcTarget {
-  readonly #itx: Itx;
-  constructor(itx: Itx) {
+  readonly #withItx: WithItx<Itx>;
+  constructor(withItx: WithItx<Itx>) {
     super();
-    this.#itx = itx;
+    this.#withItx = withItx;
   }
   async list(): Promise<Note[]> {
-    const raw = await this.#itx.kv.get(KEY);
+    const raw = await this.#withItx((itx) => itx.kv.get(KEY));
     return raw ? (JSON.parse(raw) as Note[]) : [];
   }
   async add(text: string): Promise<Note[]> {
     const notes = await this.list();
     notes.unshift({ id: crypto.randomUUID(), text: String(text), at: Date.now() });
-    await this.#itx.kv.put(KEY, JSON.stringify(notes));
+    await this.#withItx((itx) => itx.kv.put(KEY, JSON.stringify(notes)));
     return notes;
   }
 }
@@ -50,7 +51,7 @@ class Notes extends RpcTarget {
 export default class MiniApp extends WorkerEntrypoint<{ ITX: { get(): Itx } }> {
   fetch(request: Request): Response | Promise<Response> {
     if (new URL(request.url).pathname === "/rpc")
-      return newWorkersRpcResponse(request, new Notes(this.env.ITX.get()));
+      return newWorkersRpcResponse(request, new Notes((call) => withItx(this.env.ITX, call)));
     return new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 }

@@ -24,12 +24,11 @@ const ABORTED = "events.iterate.com/context/aborted";
 /** A loaded worker that says whatever the test hands it through its own `env.ITX` — loaded code. */
 const SAY = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class extends WorkerEntrypoint {
   async say(call) {
-    const itx = this.env.ITX.get();
-    try { return { ok: await itx.invoke(call) }; }
+    try { return { ok: await withItx(this.env.ITX, (itx) => itx.invoke(call)) }; }
     catch (e) { return { error: String((e && e.message) || e) }; }
-    finally { itx[Symbol.dispose]?.(); }
   }
 }`,
 };

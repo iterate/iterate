@@ -30,12 +30,14 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
 const DIGEST_MODULES = {
   "cap.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class Digest extends WorkerEntrypoint {
-  async processEventBatch(events, range) {
-    const itx = await this.env.ITX.get();
-    const seen = JSON.parse((await itx.kv.get("digested")) ?? "[]");
-    for (const e of events) seen.push(e.type + "@" + e.offset);
-    await itx.kv.put("digested", JSON.stringify(seen));
+  processEventBatch(events, range) {
+    return withItx(this.env.ITX, async (itx) => {
+      const seen = JSON.parse((await itx.kv.get("digested")) ?? "[]");
+      for (const e of events) seen.push(e.type + "@" + e.offset);
+      await itx.kv.put("digested", JSON.stringify(seen));
+    });
   }
 }
 `,

@@ -1,16 +1,23 @@
-// sdk/record-pipelined-steps.ts — what the SDK's hosts (`StreamProcessorDurableObject.withItx`,
-// `ConfigWorker.processEventBatch`) need to RELEASE a Workers-RPC round trip completely: every call it
-// made, not only the last. No workerd import, so
-// the unit tests run it in node (record-pipelined-steps.test.ts); on native RpcPromises it is proven by
-// every apps/os e2e row that reaches a facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts
-// ("… does not outlive …": a facet that kept one value from its context stayed running, billed).
+// sdk/record-pipelined-steps.ts — `withItx`, THE one way code reaches its context: ONE round trip on
+// `env.ITX`, then RELEASE a Workers-RPC round trip completely — the scope and every call it made, not
+// only the last. Loaded code imports it from "./processor.js" (`withItx(this.env.ITX, (itx) => …)`); the
+// SDK's hosts (`StreamProcessorDurableObject.withItx`, `ConfigWorker.withItx`) delegate to it. No
+// workerd import, so the unit tests run it in node (record-pipelined-steps.test.ts) and the platform
+// bundles it alone for a script's isolate (apps/os `runScriptModule`); on native RpcPromises it is
+// proven by every apps/os e2e row that reaches a facet, and pinned by
+// apps/os/e2e/context-residency.e2e.test.ts ("… does not outlive …": a facet that kept one value from
+// its context stayed running, billed). Lint refuses the raw `env.ITX.get()` (iterate/no-raw-itx-get).
 
 import { releaseRpcSessions } from "../lib.ts";
 
 /** ONE round trip on `entrypoint.get()`, then RELEASE EVERYTHING IT REACHED: the scope and every call
- *  `call` made through it, the last first. A release that throws is reported and the rest still run
- *  (lib.ts `releaseRpcSessions`), so the call's answer stands. */
-export async function callReleasing<Scope, T>(
+ *  `call` made through it or through a handle it awaited, the last first. A release that throws is reported and the rest still run
+ *  (lib.ts `releaseRpcSessions`), so the call's answer stands. Data it answers stays usable; a stub or
+ *  handle it answers is released with the rest, so return data.
+ *
+ *    const { projectSlug } = await withItx(this.env.ITX, (itx) => itx.whoami());
+ */
+export async function withItx<Scope, T>(
   entrypoint: { get(): Scope },
   call: (itx: Scope) => T,
 ): Promise<Awaited<T>> {
@@ -23,12 +30,14 @@ export async function callReleasing<Scope, T>(
   }
 }
 
-/** `stub` as the caller sees it, except that every CALL made through it — at any depth, on the stub or
- *  on a call's result — is pushed onto `steps`, so the caller can dispose each one: a Workers-RPC
- *  call's result is a stub-bearing promise that keeps its session open until disposed, awaited or not.
- *  `then`/`catch`/`finally` and symbol members (`Symbol.dispose`) are the value's own, bound to it,
- *  so awaiting and disposing behave exactly as on the bare stub; an argument that is itself a recorded
- *  value crosses the wire as the stub it wraps. */
+/** `stub` as the caller sees it, except that every CALL made through it — at any depth, on the stub,
+ *  on a call's result, or on the handle a call's result resolves to once awaited — is pushed onto
+ *  `steps`, so the caller can dispose each one: a Workers-RPC call's result is a stub-bearing promise
+ *  that keeps its session open until disposed, awaited or not. Awaiting hands back a handle (a stub
+ *  is callable, in workerd and capnweb alike) recorded and pushed too, and plain data untouched, so
+ *  data still copies across RPC. `catch`/`finally` and symbol members (`Symbol.dispose`) are the
+ *  value's own, bound to it, so disposing behaves exactly as on the bare stub; an argument that is
+ *  itself a recorded value crosses the wire as the stub it wraps. */
 export function recordPipelinedSteps<T>(stub: T, steps: unknown[]): T {
   const wrapped = new WeakMap<object, object>();
   const record = (value: unknown, receiver: unknown): unknown => {
@@ -37,6 +46,21 @@ export function recordPipelinedSteps<T>(stub: T, steps: unknown[]): T {
     const proxy = new Proxy(value, {
       get(target, key) {
         const member: unknown = Reflect.get(target, key);
+        if (key === "then" && typeof member === "function")
+          // `const repo = await itx.repos.get(p); await repo.whoami()`: disposing the step releases
+          // `repo` (workerd disposes a promise's result with it), never `whoami`'s call, and an
+          // awaited property (`await itx.repos`) is no step at all.
+          return (onFulfilled?: unknown, onRejected?: unknown) =>
+            Reflect.apply(member, target, [
+              typeof onFulfilled === "function"
+                ? (answer: unknown) => {
+                    if (typeof answer !== "function") return onFulfilled(answer);
+                    steps.push(answer);
+                    return onFulfilled(record(answer, undefined));
+                  }
+                : onFulfilled,
+              onRejected,
+            ]);
         if (typeof key === "symbol" || key === "then" || key === "catch" || key === "finally")
           return typeof member === "function" ? member.bind(target) : member;
         return record(member, target);

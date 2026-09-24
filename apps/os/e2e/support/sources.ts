@@ -10,10 +10,10 @@ import type { WorkerSource } from "../../src/context/worker-loader.ts";
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
 export const SOURCES: Record<string, WorkerSource> = {
   chatroom: {
-    "cap.js": `import { FacetDurableObject, LiveState } from "./processor.js";
+    "cap.js": `import { FacetDurableObject, LiveState, withItx } from "./processor.js";
 export class ChatroomDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "post", "state"];
-  #chat = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] });
+  #chat = new LiveState({ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }, "chat", { messages: [] });
   post(from, text) {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
     return { ok: true };
@@ -54,6 +54,7 @@ export class KeeperDurableObject extends FacetDurableObject {
   // `retryable: false` ⇒ halt now).
   digest: {
     "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class Digest extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const poison = events.find((e) => e.payload && e.payload.poison);
@@ -61,10 +62,11 @@ export default class Digest extends WorkerEntrypoint {
       throw Object.assign(new Error("digest: refusing poison at offset " + poison.offset), {
         retryable: false, // the stamped-flag doctrine: never-retryable halts NOW, not in 30 min
       });
-    const itx = await this.env.ITX.get();
-    const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
-    await itx.kv.put("digested", String(n));
-    return n;
+    return withItx(this.env.ITX, async (itx) => {
+      const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
+      await itx.kv.put("digested", String(n));
+      return n;
+    });
   }
 }`,
   },

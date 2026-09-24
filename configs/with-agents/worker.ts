@@ -1,36 +1,25 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { ConfigWorker } from "./processor.js";
 import { installAgents } from "./agents.js";
 
-export default class extends WorkerEntrypoint {
-  async processEventBatch(events) {
-    for (const event of events) {
-      if (event.type !== "events.iterate.com/project/created") continue;
-      const itx = this.env.ITX.get();
-      try {
-        const source = await itx.repos.get("/repos/config").readFile("agents.js");
-        if (!source) throw new Error("The agents template is missing agents.js");
-        await installAgents(itx, source);
-      } finally {
-        itx[Symbol.dispose]?.();
-      }
-    }
+export default class extends ConfigWorker {
+  async processEvent({ event, itx }) {
+    if (event.type !== "events.iterate.com/project/created") return;
+    const source = await itx.repos.get("/repos/config").readFile("agents.js");
+    if (!source) throw new Error("The agents template is missing agents.js");
+    await installAgents(itx, source);
   }
   // Every host of the project reaches this fetch. The platform names the host's routing slug in
   // `x-iterate-routing-slug` (`blog` for `blog--<project>.<base>`; absent on the apex): route on it.
   async fetch(request) {
     // The project's ingress routes first (`itx.ingressRoutes`; `iterate tunnel` sets one per tunnel):
     // a matched request goes to its route's target, a private route's anonymous visitor to sign in.
-    const itx = this.env.ITX.get();
-    let route;
-    try {
-      route = await itx.ingressRoutes.match({
+    const route = await this.withItx((itx) =>
+      itx.ingressRoutes.match({
         method: request.method,
         url: request.url,
         headers: request.headers,
-      });
-    } finally {
-      itx[Symbol.dispose]?.();
-    }
+      }),
+    );
     if (route) {
       if (route.authRequirement && !request.headers.get("x-itx-principal"))
         return new Response("Sign in\n", {
@@ -46,7 +35,7 @@ export default class extends WorkerEntrypoint {
     }
     const routingSlug = request.headers.get("x-iterate-routing-slug");
     if (routingSlug === null) {
-      const { projectSlug } = await this.env.ITX.get().whoami();
+      const { projectSlug } = await this.withItx((itx) => itx.whoami());
       return new Response("Homepage of project " + projectSlug + "\n", {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });

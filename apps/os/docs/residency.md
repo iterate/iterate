@@ -9,15 +9,15 @@ Seven mechanisms keep that from happening. Three release Workers-RPC sessions so
 nothing behind that holds an actor. Three are the context's own timers and resets for what it holds
 on purpose or cannot stop others from holding. The last one records whatever the other six missed.
 
-| #   | Mechanism                              | Ends                                                      | Where                                                            | Since                                |
-| --- | -------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------ |
-| 1   | `withItx` records every pipelined step | a facet's hold on its context's values                    | `packages/iterate/src/sdk/index.ts`, `record-pipelined-steps.ts` | #2846, removed #2855, restored #2863 |
-| 2   | `itxAnswerDetachedFromSession`         | a caller's hold on what the context answered              | `src/context/dispatch.ts`, called by the DO's `invoke`           | #2855                                |
-| 3   | `awaitAnswerReleasedIfRejected`        | a rejected call's session                                 | `src/context/dispatch.ts`, called by the step walk               | #2874                                |
-| 4   | The pins' release, 30 s                | borrowed rpc stubs, the library's open sockets            | [`src/context/residency.ts`](../src/context/residency.ts)        | named in #2756                       |
-| 5   | The birth reset                        | unclaimed loaded facets the last incarnation left running | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`     | #2905                                |
-| 6   | The quiet-period sweep, 60 s           | the same facets, while the context is still resident      | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`           | #2905, clock fixed in #2922          |
-| 7   | The residency watchdog, 15 min         | nothing: it records a held context                        | `residency.ts`, `src/context/residency-watchdog.ts`              | #2858                                |
+| #   | Mechanism                              | Ends                                                       | Where                                                                               | Since                                |
+| --- | -------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
+| 1   | `withItx` records every pipelined step | loaded and first-party code's hold on its context's values | `packages/iterate/src/sdk/record-pipelined-steps.ts`, lint `iterate/no-raw-itx-get` | #2846, removed #2855, restored #2863 |
+| 2   | `itxAnswerDetachedFromSession`         | a caller's hold on what the context answered               | `src/context/dispatch.ts`, called by the DO's `invoke`                              | #2855                                |
+| 3   | `awaitAnswerReleasedIfRejected`        | a rejected call's session                                  | `src/context/dispatch.ts`, called by the step walk                                  | #2874                                |
+| 4   | The pins' release, 30 s                | borrowed rpc stubs, the library's open sockets             | [`src/context/residency.ts`](../src/context/residency.ts)                           | named in #2756                       |
+| 5   | The birth reset                        | unclaimed loaded facets the last incarnation left running  | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`                        | #2905                                |
+| 6   | The quiet-period sweep, 60 s           | the same facets, while the context is still resident       | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`                              | #2905, clock fixed in #2922          |
+| 7   | The residency watchdog, 15 min         | nothing: it records a held context                         | `residency.ts`, `src/context/residency-watchdog.ts`                                 | #2858                                |
 
 Mechanisms 4–7 live in one class, `Residency` in [`src/context/residency.ts`](../src/context/residency.ts).
 The context DO forwards its entry points to it and reads its two deadlines back for its one alarm
@@ -25,24 +25,29 @@ The context DO forwards its entry points to it and reads its two deadlines back 
 
 ## What holds a context, and what ends it
 
-| Something holds…                                                     | Example                                                                     | Ended by                                                                            |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| A live value the context answered with                               | a client keeps a `repos.get(path)` handle                                   | 2: the context answers with the expression that names the handle, never a live stub |
-| Data a hop below answered with                                       | a facet keeps `{ a: 1 }` a loaded worker returned through the context       | 2: the context answers with a copy and releases the original                        |
-| A value the walk stepped past                                        | the `repos()` promise of `facet.repos().create(path)`                       | the walk's owner releases it once the answer is in (`releaseRpcSessions`, beside 3) |
-| A call that rejected                                                 | a facet method threw; the promise keeps its session                         | 3: the walk releases the rejected answer                                            |
-| Values a facet got through `withItx` (first-party facets, SDK hosts) | `itx.cd(path)` in `itx.cd(path).append(…)`                                  | 1: `withItx` disposes every call it made, not only the last                         |
-| Values a loaded facet got from `env.ITX` directly                    | a facet that calls `env.ITX.get()` itself and keeps the result              | 5 and 6: an unclaimed loaded facet is reset                                         |
-| A borrowed rpc stub, the library's socket                            | a subscribe callback, an `itx.connectToCapnweb(url)` WebSocket session      | 4: returned or closed 30 s after its last use                                       |
-| Anything else                                                        | a response body still streaming, a leaked session none of the above catches | 7: recorded after 15 quiet minutes, never ended                                     |
+| Something holds…                                                    | Example                                                                      | Ended by                                                                                 |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| A live value the context answered with                              | a client keeps a `repos.get(path)` handle                                    | 2: the context answers with the expression that names the handle, never a live stub      |
+| Data a hop below answered with                                      | a facet keeps `{ a: 1 }` a loaded worker returned through the context        | 2: the context answers with a copy and releases the original                             |
+| A value the walk stepped past                                       | the `repos()` promise of `facet.repos().create(path)`                        | the walk's owner releases it once the answer is in (`releaseRpcSessions`, beside 3)      |
+| A call that rejected                                                | a facet method threw; the promise keeps its session                          | 3: the walk releases the rejected answer                                                 |
+| Values code got through `withItx` (all first-party code, templates) | `itx.cd(path)` in `itx.cd(path).append(…)`                                   | 1: `withItx` disposes every call it made, not only the last, and every handle it awaited |
+| Values a loaded facet got from `env.ITX` directly                   | a project's own facet that calls `env.ITX.get()` itself and keeps the result | 5 and 6: an unclaimed loaded facet is reset                                              |
+| A borrowed rpc stub, the library's socket                           | a subscribe callback, an `itx.connectToCapnweb(url)` WebSocket session       | 4: returned or closed 30 s after its last use                                            |
+| Anything else                                                       | a response body still streaming, a leaked session none of the above catches  | 7: recorded after 15 quiet minutes, never ended                                          |
 
 A facet needs 5 and 6 on top of 1 because the context cannot end a session from its side: the
 facet holds the value. Both reset only a facet called since its last start (its `facet-ran:<name>`
 row, written on its first call of an incarnation): one nobody called is not running. A loaded facet that keeps any value from its `env.ITX` keeps running after
 its context is evicted, billed per instance, and the next incarnation reuses that same instance
-(measured 2026-09-23: 19 minutes and counting, or until the next deploy). First-party facets are
-never reset: they release every round trip through `withItx`, and the `secret` facet pumps a
-proxied socket with no claim. A loaded facet that must outlive the call that started it (an LLM
+(measured 2026-09-23: 19 minutes and counting, or until the next deploy). 5 and 6 are the net for a
+project's own code; first-party code never relies on them. Every first-party facet, worker, config
+template, example and `itx.run` script reaches its context through `withItx` (`this.withItx(fn)`
+on an SDK host, `withItx(this.env.ITX, fn)` from `./processor.js` anywhere else, a `WithItx`
+accessor for an object that needs reach), and lint refuses a raw `env.ITX.get()`
+(`iterate/no-raw-itx-get`, embedded `"cap.js"` modules included) except in the rows that test this
+net. First-party facets are never reset: they release every round trip through `withItx`, and the
+`secret` facet pumps a proxied socket with no claim. A loaded facet that must outlive the call that started it (an LLM
 attempt, its backoff, a live voice dial) holds a claim through `runInBackground`, and a claimed
 facet is never reset.
 
@@ -120,6 +125,8 @@ pages on 5xx, platform-failure heals and errors.
   `src/context/residency-watchdog.test.ts` (the shared rule);
   [`record-pipelined-steps.test.ts`](../../../packages/iterate/src/sdk/record-pipelined-steps.test.ts) (1);
   `src/context/dispatch.test.ts` (2).
+- Lint: [`lint/oxlint-plugin-no-raw-itx-get.test.ts`](../../../lint/oxlint-plugin-no-raw-itx-get.test.ts)
+  decides what `iterate/no-raw-itx-get` refuses, so no first-party code leans on 5 and 6.
 - Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
   `__workers-tests__/facet-birth-reset.test.ts` (5, 6),
   `__workers-tests__/residency-watchdog.test.ts` and `context-abort-and-the-watchdog.test.ts` (7).

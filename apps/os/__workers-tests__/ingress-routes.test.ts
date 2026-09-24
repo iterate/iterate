@@ -153,10 +153,10 @@ test("itx.ingressRoutes.set validates the route before it appends and is idempot
  *  its route through `env.ITX.fetch`, a private route's anonymous visitor gets the sign-in
  *  challenge, anything else is this worker's 404. */
 const SRC_INGRESS_ROUTER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Router extends WorkerEntrypoint {
+  "cap.js": `import { ConfigWorker } from "./processor.js";
+export default class Router extends ConfigWorker {
   async fetch(request) {
-    const route = await this.env.ITX.get().ingressRoutes.match({ method: request.method, url: request.url, headers: request.headers });
+    const route = await this.withItx((itx) => itx.ingressRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
     if (route) {
       if (route.authRequirement && !request.headers.get("x-itx-principal"))
         return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });

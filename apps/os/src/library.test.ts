@@ -251,16 +251,18 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it env.ITX.get() and disposes it", () => {
+test("run: the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip, with withItx alone beside it", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
   expect(module["cap.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
+  expect(module["cap.js"]).toContain('import { withItx } from "./with-itx.js";');
   expect(module["cap.js"]).toContain("const script = (async (itx) => (await itx.whoami()).path);");
   expect(module["cap.js"]).toContain("export default class extends WorkerEntrypoint");
   expect(module["cap.js"]).toContain("async run() {");
-  expect(module["cap.js"]).toContain("const itx = this.env.ITX.get();");
-  expect(module["cap.js"]).toContain("return await Promise.race([");
+  expect(module["cap.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
   expect(module["cap.js"]).toContain("script(itx),");
-  expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
+  expect(module["cap.js"]).not.toContain("ITX.get()");
+  expect(Object.keys(module)).toEqual(["cap.js", "with-itx.js"]);
+  expect(module["with-itx.js"]).toMatch(/as withItx\b/);
 });
 
 test("run: the module's run() races the script against RUN_DEADLINE_MS in its own isolate: a script that never settles is given up on at the deadline — the call ends, the itx is disposed, no timer is left", async () => {
@@ -298,6 +300,42 @@ test("run: the module's run(): a script that finishes (or throws) settles the ca
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("run: the module's run() releases every call the script made through its scope, awaited or not, and hands back its value as JSON", async () => {
+  const released: string[] = [];
+  const itx = {
+    [Symbol.dispose]: () => released.push("scope"),
+    cd: (path: string) =>
+      Object.assign(Promise.resolve({ path, live: () => 1 }), {
+        [Symbol.dispose]: () => released.push(`cd(${path})`),
+      }),
+  };
+  const { run } = await loadedRun(
+    "async (itx) => { itx.cd('/never-awaited'); return await itx.cd('/a'); }",
+    itx,
+  );
+  expect(await run()).toEqual({ path: "/a" }); // the live function dropped, as the log would
+  expect(released).toEqual(["cd(/a)", "cd(/never-awaited)", "scope"]);
+});
+
+test("run: the module's run() releases a handle the script awaited, and the calls it made on that handle", async () => {
+  const released: string[] = [];
+  const disposable = <T extends object>(value: T, name: string) =>
+    Object.assign(value, { [Symbol.dispose]: () => released.push(name) });
+  const handle = disposable(
+    Object.assign(() => undefined, {
+      whoami: () => disposable(Promise.resolve({ path: "/a" }), "whoami"),
+    }),
+    "handle",
+  );
+  const itx = disposable({ cd: () => disposable(Promise.resolve(handle), "cd") }, "scope");
+  const { run } = await loadedRun(
+    "async (itx) => { const a = await itx.cd('/a'); return (await a.whoami()).path; }",
+    itx,
+  );
+  expect(await run()).toBe("/a");
+  expect(released).toEqual(["whoami", "handle", "cd", "scope"]);
 });
 
 test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with no arguments", async () => {
@@ -1083,6 +1121,9 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   // worker would import from the SDK just the same.
   "./repo/contract.ts",
   "./workspace/contract.ts",
+  // The SDK's `withItx` as module TEXT (scripts/build.ts): data a script's isolate imports beside the
+  // script (`runScriptModule`), never code the library runs itself.
+  "./generated/with-itx-module.js",
 ]);
 
 test("the library boundary: library.ts and library/*.ts import only npm packages, the codec, each other, and types", () => {
@@ -1219,23 +1260,34 @@ const settledAt = (offset: number, requestOffset: number, settlement: unknown): 
   path: "/",
 });
 
-/** THE MODULE, RUN: the text the loader gets, imported here as a module with its one import
- *  stood in for (`WorkerEntrypoint`, which only hands `env` over), so its `run()` executes exactly
- *  as written — under fake timers. `disposals()` counts the script's itx being disposed. */
+/** THE MODULE, RUN: the text the loader gets, imported here as a module with its imports stood in
+ *  for (`WorkerEntrypoint`, which only hands `env` over; `./with-itx.js`, the real bundled module), so
+ *  its `run()` executes exactly as written — under fake timers. `disposals()` counts the script's
+ *  scope being released; `itx` stands in for the scope. */
 async function loadedRun(
   script: string,
+  itx: object = {},
 ): Promise<{ run: () => Promise<unknown>; disposals: () => number }> {
   let disposals = 0;
-  const { "cap.js": source } = runScriptModule(script);
-  const standIn = source.replace(
-    'import { WorkerEntrypoint } from "cloudflare:workers";',
-    "class WorkerEntrypoint { constructor(ctx, env) { this.env = env; } }",
-  );
+  const module = runScriptModule(script);
+  const withItxUrl = `data:text/javascript,${encodeURIComponent(module["with-itx.js"])}`;
+  const standIn = module["cap.js"]
+    .replace(
+      'import { WorkerEntrypoint } from "cloudflare:workers";',
+      "class WorkerEntrypoint { constructor(ctx, env) { this.env = env; } }",
+    )
+    .replace('"./with-itx.js"', JSON.stringify(withItxUrl));
   const { default: Entrypoint } = await import(
     /* @vite-ignore */ `data:text/javascript,${encodeURIComponent(standIn)}`
   );
-  const itx = { [Symbol.dispose]: () => (disposals += 1) };
-  const entrypoint = new Entrypoint({}, { ITX: { get: () => itx } });
+  const disposeScope = (itx as Partial<Disposable>)[Symbol.dispose];
+  const scope = Object.assign(itx, {
+    [Symbol.dispose]: () => {
+      disposals += 1;
+      disposeScope?.();
+    },
+  });
+  const entrypoint = new Entrypoint({}, { ITX: { get: () => scope } });
   return { run: () => entrypoint.run(), disposals: () => disposals };
 }
 

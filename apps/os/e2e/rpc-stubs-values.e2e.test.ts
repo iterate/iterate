@@ -5,7 +5,7 @@
 //   • a BARE FUNCTION is a stub (no RpcTarget subclass needed — capnweb passes functions by reference):
 //     client A provides an async fn, client B's `itx.runOnMyComputer('ls', ['-la'])` runs A's function
 //   • a callback passed to a provided RpcTarget's method fires back later in the CALLER's isolate — on
-//     a capnweb client AND from a dynamic worker holding the scope via `env.ITX.get()`
+//     a capnweb client AND from a dynamic worker inside one `withItx(env.ITX, …)` round trip
 //   • rich values through the LONGEST path (client B → capnweb → edge → Workers RPC → context DO → the
 //     rules → `itx.rpcStubs.get` → pager page → the lent Workers-RPC leg → relay → client A, and back):
 //     Dates, bytes, callbacks, an RpcTarget WITH METHODS as an argument, Request in / Response out; and
@@ -54,21 +54,24 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
   });
   await until("capnweb callback fired", () => pinged);
 
-  // ── caller 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
+  // ── caller 2: a DYNAMIC WORKER via withItx(env.ITX, …) — the callback appends to the stream (observable) ──
   const SRC_CONSUMER = {
     "cap.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class Consumer extends WorkerEntrypoint {
-  async run() {
-    // env.ITX.get() is the real scope. Plain dotted access; the callback runs back HERE.
-    const itx = await this.env.ITX.get();
-    await new Promise((resolve) =>
-      itx.demo.timer.callLater(250, async () => {
-        await itx.append({ type: 'pinged-from-worker' }); // AWAIT so it lands before we return
-        resolve();
-      }),
-    );
-    return { ran: true };
+  run() {
+    // withItx hands the real scope. Plain dotted access; the callback runs back HERE, inside the
+    // round trip, which ends once it resolved.
+    return withItx(this.env.ITX, async (itx) => {
+      await new Promise((resolve) =>
+        itx.demo.timer.callLater(250, async () => {
+          await itx.append({ type: 'pinged-from-worker' }); // AWAIT so it lands before we return
+          resolve();
+        }),
+      );
+      return { ran: true };
+    });
   }
 }`,
   };
