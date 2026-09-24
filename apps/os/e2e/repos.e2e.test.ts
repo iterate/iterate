@@ -3,7 +3,7 @@
 // `itx.cfArtifacts`, knows the repo by that same path), addressed as `itx.repos.get(path)` (src/library.ts)
 // and born through the collection, `itx.repos.create(path)` (src/project/collection.ts): it enables the
 // `repo` processor row on that path (a `stream/subscription-configured` fact), lands
-// `repo/create-requested` there and waits for the terminal fact. The processor (src/repo/processor.ts)
+// `repo/create-requested` there and waits for the terminal fact. The processor (src/project/entity-lifecycle.ts)
 // runs the saga from state at head: it provisions the Artifacts repo and lands `repo/created` — the
 // birth certificate, cross-posted to `/`, where the `project` facet (src/project/) folds every
 // certificate into the catalog `itx.repos.list()` reads — or `repo/create-failed` (the error the

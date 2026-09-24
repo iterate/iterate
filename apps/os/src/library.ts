@@ -68,11 +68,15 @@ export interface LibraryRoots {
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
    *  and `create(path)` are the collection's on the `project` facet at `/`. */
-  repos: EntityRoot<RepoFacet>;
+  repos: EntityRoot<
+    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract>
+  >;
   /** A workspace (src/workspace/): the workspace of any context, at most one per path. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the workspace's own events;
    *  `list()` and `create(path)` are the collection's on the `project` facet at `/`. */
-  workspaces: EntityRoot<WorkspaceFacet>;
+  workspaces: EntityRoot<
+    EntityHandle<WorkspaceDurableObject, (typeof workspaceVerbs)[number], typeof WorkspaceContract>
+  >;
   /** THE FILES: project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
    *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
@@ -88,12 +92,18 @@ export interface LibraryRoots {
 
 /** An entity root (`itx.repos`, `itx.workspaces`): `get(path)` the handle, typed as the facet it
  *  dispatches to; `list()`, `create(path)` and `delete(path)` the collection's. */
-type EntityRoot<Facet> = {
-  get(path: string): InvokeHandle & Facet;
+type EntityRoot<Handle> = {
+  get(path: string): InvokeHandle & Handle;
   list(): Promise<{ path: string; createdAt: string }[]>;
   create(path: string): Promise<{ path: string }>;
   /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
   delete(path: string): Promise<{ path: string }>;
+};
+
+/** What an entity handle's dotted members reach: the facet's own `Verbs`, and the typed `append` of
+ *  the entity's events on that context (`entityHandle`). */
+type EntityHandle<Facet, Verbs extends keyof Facet, Contract> = Pick<Facet, Verbs> & {
+  append(...events: EventInput<Contract>[]): Promise<StreamEvent[]>;
 };
 
 /** A stored file as `itx.files` answers it: its path, content type and size. */
@@ -111,17 +121,6 @@ type FileHandle = {
     method?: "GET" | "PUT";
     expiresInSeconds?: number;
   }): Promise<{ url: string; expiresAt: string }>;
-};
-
-/** What a repo handle's dotted members reach: the repo facet's own methods, and the typed `append`
- *  of the repo's events on that context (`entityHandle`). */
-type RepoFacet = Pick<RepoDurableObject, (typeof repoVerbs)[number]> & {
-  append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]>;
-};
-/** What a workspace handle's dotted members reach: the workspace facet's own methods, and the typed
- *  `append` of the workspace's events on that context. */
-type WorkspaceFacet = Pick<WorkspaceDurableObject, (typeof workspaceVerbs)[number]> & {
-  append(...events: EventInput<typeof WorkspaceContract>[]): Promise<StreamEvent[]>;
 };
 
 /** What `buildLibrary` closes over beside `itx`. */
@@ -179,14 +178,8 @@ export function buildLibrary(
         memoized(["capnweb", url, options], options?.transport !== "batch", () =>
           connectToCapnweb(itx, url, options),
         ),
-      repos: entityRoot<RepoFacet>(itx, deps, "repo", "repos", RepoContract),
-      workspaces: entityRoot<WorkspaceFacet>(
-        itx,
-        deps,
-        "workspace",
-        "workspaces",
-        WorkspaceContract,
-      ),
+      repos: entityRoot(itx, deps, "repo", RepoContract),
+      workspaces: entityRoot(itx, deps, "workspace", WorkspaceContract),
       files: {
         get: (path) => fileHandle(itx, path),
         list: async (prefix = "") => {
@@ -414,16 +407,16 @@ const entityPathOf = (caller: Caller, ownPath: string, path: string): string =>
  *  `create(path)` and `delete(path)` one dispatch each on the collection the `project` facet carries
  *  (`projectFacet`): the platform's own `EntityCollectionRpcTarget`, whose verbs answer exactly
  *  these shapes — ours, so the wire's copy is asserted, not re-validated. */
-function entityRoot<Facet>(
+function entityRoot<Handle>(
   itx: LibraryItx,
   deps: LibraryDeps,
   name: "repo" | "workspace",
-  collection: "repos" | "workspaces",
   contract: EntityContract,
-): EntityRoot<Facet> {
+): EntityRoot<Handle> {
+  const collection = `${name}s` as const;
   return {
     get: (path) =>
-      entityHandle(itx, path, name, contract, deps.caller(), deps.path) as InvokeHandle & Facet,
+      entityHandle(itx, path, name, contract, deps.caller(), deps.path) as InvokeHandle & Handle,
     list: () =>
       projectFacet(itx, [[collection], ["list"]]) as Promise<{ path: string; createdAt: string }[]>,
     create: (path) => createEntity(itx, path, collection, deps.caller(), deps.path),

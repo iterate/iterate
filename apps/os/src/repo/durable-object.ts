@@ -3,10 +3,10 @@
 // live in git, in Cloudflare Artifacts, and THIS facet is the only thing that speaks git (git-wire.ts):
 // `itx.cfArtifacts.get(path)` — the binding proxy, addressed by this same path — hands it a token and
 // the remote URL, and every read and write here is git-over-HTTPS from inside the facet. It is also
-// what makes a repo a DOMAIN OBJECT: it hosts the repo processor (processor.ts) — the creation saga
-// `itx.repos.create(path)` opens — every commit through it is a `repo/commit-completed` fact, and every
-// method refuses until the certificate has landed (`state.creation`) and again once deletion has been
-// asked for (`state.deletion`, the saga `itx.repos.delete(path)` opens).
+// what makes a repo a DOMAIN OBJECT: it hosts the entity lifecycle (src/project/entity-lifecycle.ts:
+// the sagas `itx.repos.create(path)` and `itx.repos.delete(path)` open), every commit through it is a
+// `repo/commit-completed` fact, and every method refuses until the certificate has landed and again
+// once deletion has been asked for.
 //
 // SCOPE, deliberately small: branch `main` only (REF); text content only. A read is ONE ls-refs, and
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
@@ -19,6 +19,11 @@ import { z } from "zod";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
+import {
+  assertCreated,
+  EntityLifecycleProcessor,
+  type EntityCreationAndDeletionState,
+} from "../project/entity-lifecycle.ts";
 import {
   AUTHOR,
   REF,
@@ -37,8 +42,7 @@ import {
   type RepoLogEntry,
   type RepoManifest,
 } from "./git-wire.ts";
-import { RepoContract, type CommitCompleted, type RepoState } from "./contract.ts";
-import { RepoProcessor } from "./processor.ts";
+import { RepoContract, type CommitCompleted } from "./contract.ts";
 
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
 const TOKEN_TTL_SECONDS = 300;
@@ -73,14 +77,19 @@ export const repoVerbs = [
 ] as const;
 
 export class RepoDurableObject extends StreamProcessorDurableObject<
-  RepoState,
+  EntityCreationAndDeletionState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
   /** The processor's reads, and the repo's own verbs — what `itx.repos.get(path)` reaches (library.ts). */
   static override publicMethods = [...super.publicMethods, ...repoVerbs];
 
-  processor = new RepoProcessor((call) => this.withItx(call));
+  /** The entity lifecycle (src/project/entity-lifecycle.ts): its sagas provision the Artifacts repo
+   *  (one that exists is fine) and tear it down (false when already gone). */
+  processor = new EntityLifecycleProcessor(RepoContract, (call) => this.withItx(call), {
+    provision: (path) => this.withItx((itx) => itx.cfArtifacts.create(path)),
+    teardown: (path) => this.withItx((itx) => itx.cfArtifacts.delete(path)),
+  });
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and
    *  at `itx.cfArtifacts` (which derives the Artifacts name from it). */
@@ -154,17 +163,10 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (this.#snapshotMemo = { tip, files });
   }
 
-  /** Every verb starts here: a repo whose certificate has not landed refuses, and so does one whose
-   *  deletion has been asked for. Deletion can land at any moment, so the state is read on every
-   *  call (in memory once the facet is caught up). */
+  /** Every verb starts here (`assertCreated`), answering the repo's path. */
   async #created(): Promise<string> {
     const path = await this.#path();
-    const { state } = await this.snapshot();
-    if (state.deletion) throw new Error(`repo ${path}: deleted`);
-    if (state.creation?.status !== "created")
-      throw new Error(
-        `repo ${path}: not created — itx.repos.create(${JSON.stringify(path)}) first`,
-      );
+    assertCreated("repo", path, (await this.snapshot()).state);
     return path;
   }
 

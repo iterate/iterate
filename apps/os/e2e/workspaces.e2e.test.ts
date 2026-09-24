@@ -3,7 +3,7 @@
 // (src/library.ts, nothing appended to get it) and born through the collection,
 // `itx.workspaces.create(path)` (src/project/collection.ts): it enables the `workspace` processor
 // row on that path (a `stream/subscription-configured` fact), lands `workspace/create-requested` there
-// and waits for the terminal fact. The processor (src/workspace/processor.ts) runs the saga from state
+// and waits for the terminal fact. The processor (src/project/entity-lifecycle.ts) runs the saga from state
 // at head — nothing to provision, so it lands `workspace/created`, the birth certificate, on `/` (the
 // catalog `itx.workspaces.list()` reads) and on the path; a create on a created workspace answers at
 // once, appending nothing, and every other method refuses until the certificate. The facet is ONE
