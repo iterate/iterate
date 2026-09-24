@@ -308,6 +308,10 @@ export interface IterateContextApi {
   };
 }
 
+/** What a grant is: a sign-in not yet exchanged, a device's token, a personal access token, or a
+ *  browser or app session. A client labels it for display. */
+export type GrantKind = "pending" | "device" | "personal" | "session";
+
 /** One OAuth grant as `grants.list()` shows it: a session, a connected app, a minted token. */
 export interface GrantRecord {
   id: string;
@@ -315,7 +319,7 @@ export interface GrantRecord {
   logoUri?: string;
   clientDomain?: string;
   name: string;
-  kind: string;
+  kind: GrantKind;
   createdAt: number;
   expiresAt: number | null;
   lastUsedAt: number | null;

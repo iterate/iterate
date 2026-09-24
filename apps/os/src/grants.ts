@@ -6,6 +6,7 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
+import type { GrantRecord } from "iterate/next/api";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
 import type { PlatformAddresses } from "./app-config.ts";
@@ -103,7 +104,7 @@ export class GrantsRpcTarget extends RpcTarget {
       oauthHelpers(env, this.#addresses).listUserGrants(session.sub, { limit: 50, cursor }),
       accountStateOf(env, session.sub),
     ]);
-    const items = page.items.flatMap((grant) => {
+    const items = page.items.flatMap((grant): GrantRecord[] => {
       if (account.endedGrants[grant.id]) return [];
       const metadata = DisplayMetadata.parse(grant.metadata ?? {});
       // The provider stores an unexchanged grant with the code's ten-minute KV TTL.
@@ -116,12 +117,12 @@ export class GrantsRpcTarget extends RpcTarget {
           logoUri: metadata.logoUri,
           clientDomain: metadata.clientDomain,
           kind: !grant.expiresAt
-            ? "Pending sign-in"
+            ? "pending"
             : metadata.tokenKind === "device"
-              ? "Device"
+              ? "device"
               : metadata.tokenKind === "personal"
-                ? "Personal access token"
-                : "Session",
+                ? "personal"
+                : "session",
           createdAt: grant.createdAt * 1000,
           expiresAt,
           lastUsedAt: account.grantUses[grant.id]?.at ?? null,

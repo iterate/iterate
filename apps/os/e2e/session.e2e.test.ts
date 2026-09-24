@@ -302,7 +302,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   using lister = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   const listed = await lister.authenticate({ type: "from-server-cookie" }).grants.list();
   const grant = listed.items.find((item) => item.name === "E2E personal access token");
-  expect(grant?.kind).toBe("Personal access token");
+  expect(grant?.kind).toBe("personal");
   // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
   expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
   // MCP runs on the project root, with the user and grant stamped on the request.
