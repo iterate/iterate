@@ -1,6 +1,12 @@
 import type { WebClient } from "@slack/web-api";
 import { expect, test, vi } from "vitest";
-import { alarm, type FaultReading, renderFaultPage, run } from "./prd-fault-alarm.ts";
+import {
+  alarm,
+  deployResetSummaries,
+  type FaultReading,
+  renderFaultPage,
+  run,
+} from "./prd-fault-alarm.ts";
 import { slackChannelIds } from "./slack.ts";
 
 const quiet: FaultReading = {
@@ -126,6 +132,110 @@ test("a dry run (no Slack client) resolves to the page it would post", async () 
   );
 });
 
+test.for(["GET https://rpc-stub-pager.internal/", "IterateContextDurableObject.jsrpc"])(
+  "deploy reset summaries are classified by DO, version and millisecond: %s",
+  (message) => {
+    expect([...deployResetSummaries(resetPair(message))]).toEqual(["first", "second"]);
+  },
+);
+
+test.for([
+  "no exception",
+  "different object",
+  "different version",
+  "different millisecond",
+  "missing identity",
+  "missing request",
+  "truncated",
+  "another error",
+])("a summary stays an error with incomplete or conflicting evidence: %s", (reason) => {
+  const [exception, , summary] = resetPair();
+  const events = [structuredClone(exception!), structuredClone(summary!)];
+  if (reason === "no exception") events.shift();
+  if (reason === "different object") events[0]!.$workers.durableObjectId = "other";
+  if (reason === "different version") events[0]!.$workers.scriptVersion.id = "other";
+  if (reason === "different millisecond") events[0]!.timestamp++;
+  if (reason === "missing identity") events[0]!.$workers.durableObjectId = "";
+  if (reason === "missing request") events[1]!.$metadata.requestId = "";
+  if (reason === "truncated") events[0]!.$workers.truncated = true;
+  if (reason === "another error")
+    events.push({
+      ...exception!,
+      $metadata: { type: "cf-worker", requestId: "first", message: "Network connection lost." },
+    });
+  expect([...deployResetSummaries(events)]).toEqual([]);
+});
+
+test.for([false, true])(
+  "the alarm removes only proven reset summaries and preserves every 5xx (capped evidence: %s)",
+  async (capped) => {
+    const message = "GET https://rpc-stub-pager.internal/";
+    const fetch = vi.fn(async (_url: string, init: { body: string }) => {
+      const query = JSON.parse(init.body);
+      const groupBy = query.parameters.groupBys?.[0].value;
+      const exclusion = query.parameters.filters.find((f: { kind?: string }) => f.kind === "group");
+      if (query.view === "events") expect(query).toMatchObject({ limit: 100 });
+      if (exclusion)
+        expect(exclusion).toEqual({
+          kind: "group",
+          filterCombination: "or",
+          filters: [
+            { key: "$metadata.type", operation: "is_null", type: "string" },
+            { key: "$metadata.requestId", operation: "is_null", type: "string" },
+            { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+            {
+              key: "$metadata.requestId",
+              operation: "not_in",
+              value: "first,second",
+              type: "string",
+            },
+          ],
+        });
+      const events = capped
+        ? Array.from({ length: 100 }, (_, i) => resetPair()[i % 4])
+        : resetPair();
+      return Response.json({
+        success: true,
+        result:
+          query.view === "events"
+            ? { events: { events } }
+            : {
+                calculations: [
+                  {
+                    aggregates:
+                      groupBy === "name"
+                        ? []
+                        : groupBy === "$workers.event.request.url"
+                          ? [
+                              {
+                                groupKey: "https://docs.iterate.com/_iterate/auth/refresh",
+                                count: 2,
+                              },
+                            ]
+                          : query.parameters.filters.some(
+                                (f: { operation: string }) => f.operation === "regex",
+                              )
+                            ? []
+                            : [{ groupKey: message, count: 1 }],
+                  },
+                ],
+              },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+      expect(result).toContain("2 5xx responses: docs.iterate.com 2");
+      // The initial count contains only a genuine error; resets arrive between queries.
+      // Subtracting two resets from that count would incorrectly silence this window.
+      expect(result).toContain(`1 errors: ${message} 1`);
+      expect(fetch).toHaveBeenCalledTimes(capped ? 5 : 6);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
 /** The page for `reading` (quiet elsewhere) in the half hour to `now`. */
 function page(reading: Partial<FaultReading>) {
   return renderFaultPage({ ...quiet, ...reading }, now);
@@ -134,8 +244,17 @@ function page(reading: Partial<FaultReading>) {
 /** A Workers Logs API that answers each query with `answer(the field it groups by)`. */
 function workersLogs(answer: (groupBy: string) => unknown) {
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
-    const query = JSON.parse(init.body) as { parameters: { groupBys: { value: string }[] } };
-    return new Response(JSON.stringify(answer(query.parameters.groupBys[0]!.value)));
+    const query = JSON.parse(init.body) as {
+      view: string;
+      parameters: { groupBys?: { value: string }[] };
+    };
+    return new Response(
+      JSON.stringify(
+        query.view === "events"
+          ? { success: true, result: { events: { events: [] } } }
+          : answer(query.parameters.groupBys![0]!.value),
+      ),
+    );
   });
   vi.stubGlobal("fetch", fetch);
   return {
@@ -182,4 +301,30 @@ function fakeSlack(messages: Array<{ ts: string; bot_id: string | undefined; tex
     },
   } as unknown as WebClient;
   return { client, posts };
+}
+
+// Production 2026-09-24: two pager calls at 11:41:21.252Z, and two jsrpc calls at
+// 10:30:06.305Z. In both pairs Cloudflare copied one requestId onto both reset lines.
+function resetPair(message = "GET https://rpc-stub-pager.internal/") {
+  const worker = { durableObjectId: "context", scriptVersion: { id: "version" }, truncated: false };
+  const exception = {
+    timestamp: 1790250081252,
+    $metadata: {
+      type: "cf-worker",
+      requestId: "first",
+      message: "Durable Object reset because its code was updated.",
+    },
+    $workers: worker,
+  };
+  const summary = {
+    ...exception,
+    $metadata: { type: "cf-worker-event", requestId: "first", message },
+    $workers: { ...worker, outcome: "exception" },
+  };
+  return [
+    exception,
+    exception,
+    summary,
+    { ...summary, $metadata: { ...summary.$metadata, requestId: "second" } },
+  ];
 }
