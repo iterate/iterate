@@ -361,7 +361,7 @@ test("an authentication timeout closes the transport without an unhandled RPC re
       baseUrl: `http://localhost:${address.port}`,
       auth: { type: "bearer", token: "stalled" },
     });
-    const rejected = expect(pending).rejects.toThrow("OS Next authentication timed out");
+    const rejected = expect(pending).rejects.toThrow("OS Next authentication: no answer in 20s");
     await entered.promise;
     await vi.advanceTimersByTimeAsync(20_000);
     await rejected;

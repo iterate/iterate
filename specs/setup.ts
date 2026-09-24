@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { deployedTarget } from "../apps/os/e2e/support/deployed-target.ts";
 import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
 

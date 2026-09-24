@@ -1,5 +1,5 @@
 import type { IngressRouting } from "iterate/next/project-ingress";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export const OsPlaywrightAuthEnv = z.object({
   /** OS admin bearer (`secrets.adminBearer`) used to create fixture projects through /api. */

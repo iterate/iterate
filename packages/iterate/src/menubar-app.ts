@@ -12,15 +12,11 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { CONFIG_DIR } from "./config.ts";
 import { run } from "./run-command.ts";
 
-const CONFIG_DIR = join(
-  process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
-  "iterate",
-);
 const BUILD_DIR = join(CONFIG_DIR, "menubar-build");
 const APP_PATH = join(BUILD_DIR, "Iterate.app");
 const SOURCES = [
