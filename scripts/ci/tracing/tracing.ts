@@ -216,7 +216,7 @@ export function assembleTrace(
   }
   for (const job of workflow.jobs) {
     const key = jobKeyInWorkflow(job.jobKey);
-    const name = ({ deploy: "Deploy", e2e: "E2E" } as Record<string, string>)[key] || key;
+    const name = jobLabels.get(key) || key;
     const attempts = job.attempts.filter(
       (attempt) =>
         attempt.startedAt &&
@@ -492,6 +492,14 @@ export function stepCommands(source: string) {
   return commands;
 }
 
+/**
+ * The jobs a workflow's `trace` job needs: the ones its trace covers. A job outside them (Main OS
+ * e2e's delete and alert) can still be running while the trace job collects.
+ */
+export function tracedJobs(source: string) {
+  return TraceJob.parse(parse(source)).jobs.trace.needs;
+}
+
 export async function renderTrace(trace: ReturnType<typeof assembleTrace>) {
   const template = await readFile(new URL("./viewer.html", import.meta.url), "utf8");
   // Escaping '<' prevents test names containing </script> from executing as HTML.
@@ -613,6 +621,14 @@ function hash(value: string, length: number) {
 
 const SourceWorkflow = z.object({
   jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
+});
+const jobLabels = new Map([
+  ["parent", "Preview parent"],
+  ["deploy", "Deploy"],
+  ["e2e", "E2E"],
+]);
+const TraceJob = z.object({
+  jobs: z.object({ trace: z.object({ needs: z.array(z.string()).min(1) }) }),
 });
 const Step = z.object({
   id: z.string().optional(),

@@ -5,6 +5,7 @@ import { parse as parseYaml } from "yaml";
 
 /** The parts of .depot/workflows/main-os-e2e.yml these tests read. */
 type MainWorkflow = {
+  env?: Record<string, string>;
   on: { push?: { branches?: string[]; paths?: string[] } };
   concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: Record<
@@ -13,13 +14,20 @@ type MainWorkflow = {
       if?: string;
       needs?: string | string[];
       concurrency?: { group: string; "cancel-in-progress": boolean };
-      steps?: Array<{ run?: string; env?: Record<string, string> }>;
+      steps?: Array<{
+        id?: string;
+        name?: string;
+        run?: string;
+        uses?: string;
+        with?: Record<string, string>;
+        env?: Record<string, string>;
+      }>;
     }
   >;
 };
 
 const main = readWorkflow("main-os-e2e.yml") as MainWorkflow;
-const preview = readWorkflow("preview-os.yml") as {
+const preview = readWorkflow("preview-os.yml") as MainWorkflow & {
   on: { pull_request: { paths: string[] } };
 };
 
@@ -69,6 +77,35 @@ test("pages on main's change of state, never for a run cancelled by hand", () =>
   expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
   expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e", "delete"]);
   expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
+});
+
+// docs/ci-traces.md: main is traced as a PR preview is, and nothing that follows e2e waits for it.
+test("the CI trace covers the parent, deploy and e2e, beside delete and alert", () => {
+  expect(main.env).toMatchObject({
+    BASH_ENV: "${{ github.workspace }}/scripts/ci/tracing/shell.sh",
+    CI_TRACE_ENABLED: "1",
+  });
+  expect(
+    main.jobs.e2e?.steps?.find((step) => step.run === "doppler run -- pnpm preview e2e"),
+  ).toMatchObject({ id: "e2e" });
+  expect(main.jobs.trace).toMatchObject({ needs: ["parent", "deploy", "e2e"], if: "always()" });
+  const waitingForTrace = Object.entries(main.jobs).filter(([, job]) =>
+    [job.needs].flat().includes("trace"),
+  );
+  expect(waitingForTrace).toEqual([]);
+});
+
+test("main's trace job collects, uploads and posts exactly as a PR preview's does", () => {
+  // Only the checkout differs: main's pushed commit, a PR's head.
+  const afterCheckout = (workflow: MainWorkflow) =>
+    (workflow.jobs.trace?.steps || []).filter((step) => step.uses !== "actions/checkout@v4");
+  expect(afterCheckout(main)).toEqual(afterCheckout(preview));
+});
+
+// A re-run of the trace job alone traces the same execution, so it uploads under the same name.
+test("a re-run of the trace job replaces its trace upload and still posts the statuses", () => {
+  const upload = main.jobs.trace?.steps?.find((step) => step.name === "Upload the CI trace");
+  expect(upload?.with).toMatchObject({ overwrite: true });
 });
 
 function readWorkflow(file: string): unknown {

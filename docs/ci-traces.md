@@ -1,14 +1,45 @@
 # Interactive CI traces
 
-The Preview OS workflow's `trace` job (`.depot/workflows/preview-os.yml`)
-collects a trace once its `deploy` and `e2e` jobs have settled, whatever their
-outcome. `scripts/ci/tracing/cli.ts current` reads the run from Depot and writes
-`trace.html` and `trace.json`; the job uploads them as the
-`public-ci-trace-<workflow>-<execution>` artifact (kept 30 days), and
-`cli.ts publish` posts the **CI trace** commit status (`statuses: write`) with
-the time to green or red, linked to the job on Depot, where the artifact
-downloads. Download it and open `trace.html`. The trace job itself and the
-PR-close deletion are left out of the trace.
+The Preview OS workflow (`.depot/workflows/preview-os.yml`) and Main OS e2e
+(`.depot/workflows/main-os-e2e.yml`) each end in a `trace` job. It runs once the
+jobs it `needs` have settled, whatever their outcome: Preview OS's `deploy` and
+`e2e`, main's `parent`, `deploy` and `e2e` (main's `delete` and `alert` run
+beside it and wait for none of it). `scripts/ci/tracing/cli.ts current` reads
+the run from Depot and writes `trace.html` and `trace.json` for exactly those
+jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`
+artifact (kept 30 days). Then `cli.ts publish` finds that artifact and the e2e
+job's `public-playwright-report` in Depot and posts two commit statuses
+(`statuses: write`), each linking the report in the viewer below:
+
+- **CI trace**: success with the time to green, failure with the time to red,
+  or error when the run has no verdict (cancelled).
+- **Playwright report**: success whenever the e2e job uploaded one.
+
+A status means the report exists; the run's own checks carry the verdict.
+Neither workflow is a required check, and nothing waits for the trace job: the
+next push's Preview OS deploy waits only for the PR's previous run to finish.
+
+## The viewer
+
+`apps/ci-reports` is a Worker at
+`https://ci-reports.iterate-dev-preview.workers.dev` (dev/preview account,
+deployed by `deploy-ci-reports.yml`). `/<artifact-id>/` opens a public Depot
+artifact of `iterate/iterate`: `trace.html` for a CI trace, the root
+`index.html` for a Playwright report, the only file of a one-file artifact, or a
+generated listing. `/<artifact-id>/<file>` serves that ZIP entry; append
+`?download` to download it instead. Only artifacts named `public-…` are served.
+
+It reads the artifact through Depot's API with the organization token CI
+telemetry uses (Doppler `_shared/preview`, shipped as the Worker's
+`DEPOT_CI_TELEMETRY_TOKEN` secret), and fetches only the ZIP directory and the
+requested entry with range reads, so opening one page of a large report does
+not download its traces. Each response's CSP confines the page to its own
+artifact's path. Misha built it for the `iterate/config` project, where each
+artifact had its own `*.iterate.app` origin; it went with that project in #2837,
+and came back here on one workers.dev origin, one path per artifact. Links expire
+with the artifact's 30-day retention.
+
+## What the trace shows
 
 The report shows the workflow, its jobs, each job's Setup and Test phases, the
 measured shell steps, and individual Playwright attempts and Vitest tests.
@@ -58,6 +89,11 @@ The collector keeps only `@@ci-trace` lines from the logs: trace artifacts
 contain timings, status, source names and locations. No raw logs, exception
 payloads, credentials or signed URLs are copied. Reports are public, like this
 repository, and return 404 once the artifact expires or is deleted.
+
+A Playwright report is public too, and a failed spec's trace in it records
+that test's browser traffic against its preview: the throwaway test users'
+sessions on that preview, which main deletes after the run and a PR's preview
+deletes when the PR closes.
 
 ## Replay
 
