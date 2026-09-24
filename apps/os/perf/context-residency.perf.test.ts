@@ -11,7 +11,7 @@
 //
 // OPT-IN, the crash hunt's way (e2e/isolate-ceilings-deployed.e2e.test.ts): `RUN_RESIDENCY_TIMING=1`,
 // or the soak's `residency-timing` input (.depot/workflows/os-e2e-soak.yml), which runs them after
-// every e2e run. The latency guard (.depot/workflows/os-latency.yml) runs this lane every 3 hours and
+// every e2e run. The latency guard (.depot/workflows/os-latency.yml) runs this suite every 3 hours and
 // reads any row that fails for anything but a budget as a broken probe; these rows sample the
 // platform, so they stay out of it. Unlike the budgets beside them, they run CONCURRENTLY with each
 // other: they measure how long an actor lives, not how fast a call is, and in order they would take

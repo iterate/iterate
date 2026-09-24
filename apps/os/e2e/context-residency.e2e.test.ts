@@ -412,7 +412,7 @@ test("a careless loaded facet the last call left running is no longer running a 
 // HTTP, MCP, a claim, an alarm pass — never on loaded code's own calls, which count only while in
 // flight. A careless facet that calls its own context every few seconds keeps that context resident,
 // so no birth would ever reset it; it is reset in place a quiet minute after the last outside call.
-// That outside HTTP restarts the clock is decided in the Workers lane
+// That outside HTTP restarts the clock is decided in the Workers suite
 // (__workers-tests__/facet-birth-reset.test.ts); that a context under 5 s of traffic keeps one
 // instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
 // plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
@@ -444,7 +444,7 @@ test("a careless loaded facet calling its own context every 5 s is no longer run
 // env.ITX answer and beats a timer into its own storage; its claim holds past the first sweep and is
 // released at 70 s, so the sweep the release armed stops it at ~130 s. A release that armed nothing
 // would leave it beating until this row's call at 180 s. That the claimed facet ran on through the
-// first sweep, and that the release arms the next, the Workers lane decides; how long it ran is
+// first sweep, and that the release arms the next, the Workers suite decides; how long it ran is
 // printed here and timed in the opt-in perf file.
 
 test("a careless facet whose claim ends is no longer running a quiet minute and a half after the release, though the sweep ran while the claim held it", async () => {

@@ -1,5 +1,5 @@
 // e2e/support/residency-facets.ts — THE LOADED FACETS the residency rows host, shared by the two
-// lanes that run them: e2e/context-residency.e2e.test.ts asserts what the platform code decides
+// suites that run them: e2e/context-residency.e2e.test.ts asserts what the platform code decides
 // (a reset, recorded or not, and whether a facet is still running at the end), and the opt-in
 // perf/context-residency.perf.test.ts times what Cloudflare decides (how long a facet the context no
 // longer holds keeps running, whether a context stays resident under traffic). Each facet writes
