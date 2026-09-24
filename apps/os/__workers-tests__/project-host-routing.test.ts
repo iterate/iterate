@@ -2,7 +2,12 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { fakeCloudflareCustomHostnames, ORIGIN, publishConfigWorker, SRC_ECHO_APP } from "./support.ts";
+import {
+  fakeCloudflareCustomHostnames,
+  ORIGIN,
+  publishConfigWorker,
+  SRC_ECHO_APP,
+} from "./support.ts";
 const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
 
 const echoConfigWorker = ["itx", "workers", ["get", { source: SRC_ECHO_APP }]];
