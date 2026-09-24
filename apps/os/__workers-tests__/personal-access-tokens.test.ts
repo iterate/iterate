@@ -8,11 +8,8 @@ import { appSession } from "iterate/app-server";
 import type { PersonalAccessTokenMinted } from "../src/account/contract.ts";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { accountStateOf, authorizationForToken } from "../src/oauth.ts";
-import {
-  indexPersonalAccessToken,
-  newPersonalAccessToken,
-  personalAccessTokenHash,
-} from "../src/personal-access-token.ts";
+import { sha256Hex } from "../src/caller.ts";
+import { indexPersonalAccessToken, newPersonalAccessToken } from "../src/personal-access-token.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
   adminSession,
@@ -71,7 +68,7 @@ test("a personal access token is the person's one bearer at /api, at /mcp and on
   const state = await accountStateOf(env, user.id);
   expect(state.personalAccessTokens[id]).toMatchObject({
     name: "My script",
-    hash: await personalAccessTokenHash(token),
+    hash: await sha256Hex(token),
     email,
     projects: [covered.id],
     expiresAt: null,
@@ -160,7 +157,7 @@ test("a personal access token is the person's one bearer at /api, at /mcp and on
   await landKey(user.id, {
     id: mismatched.id,
     name: "Another key's hash",
-    hash: await personalAccessTokenHash(token),
+    hash: await sha256Hex(token),
     email,
     projects: [covered.id],
     expiresAt: null,
@@ -204,7 +201,7 @@ test("a personal access token is the person's one bearer at /api, at /mcp and on
   });
   // the ACCOUNT is the truth: an index entry that outlived the end (a failed clean-up, KV's
   // propagation) admits nothing
-  await index(user.id, id, await personalAccessTokenHash(token));
+  await index(user.id, id, await sha256Hex(token));
   expect(await mcp(token, "tools/list", {})).toMatchObject({ status: 401 });
   expect(await host(covered.slug, token)).toMatchObject({ status: 401 });
   expect(refusals).toHaveBeenCalledWith({

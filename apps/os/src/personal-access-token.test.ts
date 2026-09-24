@@ -5,7 +5,6 @@ import {
   isPersonalAccessToken,
   newPersonalAccessToken,
   parsePersonalAccessToken,
-  personalAccessTokenHash,
 } from "./personal-access-token.ts";
 
 const userId = `user_${"0123456789abcdef".repeat(2)}`;
@@ -18,7 +17,6 @@ test("a new key: the scannable format, its id and user readable back, its SHA-25
   expect(isPersonalAccessToken(token)).toBe(true);
   expect(parsePersonalAccessToken(token)).toEqual({ userId, id });
   expect(hash).toBe(createHash("sha256").update(token).digest("hex"));
-  expect(await personalAccessTokenHash(token)).toBe(hash);
   // the checksum is zlib's CRC32 of everything before it, in six base62 digits
   const checksum = [...token.slice(-6)].reduce(
     (value, digit) =>

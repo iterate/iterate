@@ -1,8 +1,8 @@
 // caller.ts — how the platform attributes a call: the `Caller` the edge admits and carries through
 // every dispatch, the headers it forwards a caller in, `stampCaller` (the attribution an event is
-// stored with), the signed-claims codec (the login flow's cookie, signed file URLs, secret-OAuth
-// state) and the admin secret's compare. Only this worker sets or reads any of it; what user code
-// sees of a caller is the SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
+// stored with), and the token crypto, WebCrypto only: the signed-claims codec, `sha256Hex` and
+// `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
+// SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
 import type { Principal } from "iterate/principal";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
@@ -71,7 +71,8 @@ export function stampCaller<E extends { source?: Record<string, unknown> }>(
 }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const base64url = (bytes: Uint8Array): string =>
+/** Bytes as base64url, unpadded. */
+export const base64url = (bytes: Uint8Array): string =>
   btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
@@ -87,7 +88,7 @@ const bytesFromBase64url = (text: string): Uint8Array<ArrayBuffer> =>
     (c) => c.charCodeAt(0),
   );
 
-async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<CryptoKey> {
+async function hmacKey(secret: string, usage: "sign" | "verify") {
   return crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
@@ -137,24 +138,29 @@ export async function verifyClaims(token: string, secret: string): Promise<unkno
 const sha256 = async (text: string): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
 
-/** Whether two digests are the same bytes — every byte compared, no early exit, so neither a
- *  matching prefix nor its length leaks by timing. */
-const digestsEqual = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false;
+/** The SHA-256 of `text`, hex: what the platform keeps of a random token (an invitation link, a
+ *  personal access token, a mailed code), and a secret derived from `secrets.key` under a label
+ *  (app-config.ts `sessionSigningSecretOf`, test-link.ts). */
+export const sha256Hex = async (text: string): Promise<string> =>
+  Array.from(await sha256(text), (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/** Whether two secrets are the same, in time that depends on neither where they differ nor how
+ *  long they are: both are SHA-256 hashed and every byte of the digests compared, no early exit.
+ *  An XOR loop, not Workers' `crypto.subtle.timingSafeEqual`, which node (the unit tests) lacks. */
+export async function secretsEqual(a: string, b: string): Promise<boolean> {
+  const [left, right] = await Promise.all([sha256(a), sha256(b)]);
   let difference = 0;
-  for (let i = 0; i < a.length; i++) difference |= a[i]! ^ b[i]!;
+  for (let i = 0; i < left.length; i++) difference |= left[i]! ^ right[i]!;
   return difference === 0;
-};
+}
 
 /** The principal the admin secret grants — `{ actor: "admin" }`, every project — when `candidate`
  *  IS `secret` (`APP_CONFIG_ADMIN_API_SECRET`: at `authenticate({ type: "admin-secret" })`, and as
- *  a bearer on `/api` — oauth.ts refuses it at `/mcp`), else null. Both are SHA-256 hashed and the digests compared in
- *  constant time. A blank secret matches nothing. */
+ *  a bearer on `/api` — oauth.ts refuses it at `/mcp`), else null, by `secretsEqual`. A blank
+ *  secret matches nothing. */
 export async function verifyAdminSecret(
   candidate: string,
   secret: string,
 ): Promise<{ actor: "admin" } | null> {
-  if (!secret) return null;
-  const [candidateDigest, secretDigest] = await Promise.all([sha256(candidate), sha256(secret)]);
-  return digestsEqual(candidateDigest, secretDigest) ? { actor: "admin" } : null;
+  return secret && (await secretsEqual(candidate, secret)) ? { actor: "admin" } : null;
 }

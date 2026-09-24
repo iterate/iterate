@@ -18,7 +18,7 @@ import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
-import { verifyAdminSecret, type Caller } from "./caller.ts";
+import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
@@ -825,7 +825,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const token = mintInvitationToken();
     const invitation = await sessionInput.controlPlane.createInvitation(caller, organizationId, {
-      tokenHash: await hashInvitationToken(token),
+      tokenHash: await sha256Hex(token),
       role: data.role,
       emailHint: data.emailHint,
       expiresAt: Date.now() + data.expiresInDays * 86_400_000,
@@ -862,7 +862,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     if (reach !== "every" && !("userId" in reach))
       throw codedError("FORBIDDEN", "A user session is required to read an invitation.");
     return this.#session.input.controlPlane.getInvitation(
-      await hashInvitationToken(z.string().min(1).parse(token)),
+      await sha256Hex(z.string().min(1).parse(token)),
       reach === "every" ? null : reach.userId,
     );
   }
@@ -877,7 +877,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const { input: sessionInput, caller } = this.#session;
     const { invitation, userId, role, accepted } = await sessionInput.controlPlane.acceptInvitation(
       caller,
-      await hashInvitationToken(z.string().min(1).parse(token)),
+      await sha256Hex(z.string().min(1).parse(token)),
     );
     // landed again on a retry by the same person: the fold absorbs both, and `role` is the
     // membership as it stands, so a promotion since is never rewound
@@ -1098,18 +1098,6 @@ const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
 void _iterateApi;
 
 /** An invitation link's secret: 32 random bytes, base64url — the one path segment of
- *  `/invitations/<token>`, unguessable. The control plane keeps only `hashInvitationToken`'s
- *  digest, so a read of its database opens no organization. */
-function mintInvitationToken(): string {
-  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-}
-
-/** The SHA-256 of an invitation token, hex: the control plane's lookup key (`token_hash`). A
- *  plain digest suffices — the token is 256 random bits, nothing to stretch. */
-async function hashInvitationToken(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+ *  `/invitations/<token>`, unguessable. The control plane keeps only its `sha256Hex` (`token_hash`),
+ *  so a read of its database opens no organization; a plain digest suffices for 256 random bits. */
+const mintInvitationToken = () => base64url(crypto.getRandomValues(new Uint8Array(32)));

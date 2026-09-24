@@ -17,7 +17,6 @@ import {
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
   assertSecretPath,
-  constantTimeEquals,
   hmacSha256Hex,
   normalizeSecretRecord,
   originPinned,
@@ -240,16 +239,12 @@ test.each([
 
 // ── the pin ── never empty: a secret goes to its origins and nowhere else.
 // ── the verify operation ── `verifySecretHmac(material, { payload, signature, field? })`: one bit out.
-test("hmacSha256Hex agrees with node's HMAC over a string and over bytes; constantTimeEquals compares whole strings", async () => {
+test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async () => {
   const oracle = (key: string, payload: string | Uint8Array) =>
     createHmac("sha256", key).update(payload).digest("hex");
   expect(await hmacSha256Hex("whsec_k", "1700000000.{}")).toBe(oracle("whsec_k", "1700000000.{}"));
   const bytes = new TextEncoder().encode("raw body ☃");
   expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
-  expect(await constantTimeEquals("abc", "abc")).toBe(true);
-  expect(await constantTimeEquals("abc", "abd")).toBe(false);
-  expect(await constantTimeEquals("abc", "ab")).toBe(false);
-  expect(await constantTimeEquals("", "")).toBe(true);
 });
 
 test("secretMaterialStringOf: the whole string, or one string field of an object; an object with no field, a field on a string (JSON or not), a non-string field and an empty string are no key", () => {
