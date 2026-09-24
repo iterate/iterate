@@ -4,9 +4,18 @@
 //
 //   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
 //   pnpm e2e:soak --runs 100 --preview soak-mine     (the preview's URL; WORKER_BASE_URL wins)
+//   pnpm e2e:soak --runs 10 --fresh-previews soak-fresh-<tag>
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
 // e2e/support/global-setup.ts reads them out of it.
+//
+// THE FIRST MINUTES OF A PREVIEW (`--fresh-previews <prefix>`): each run deploys a brand-new Worker
+// Preview `<prefix>-<n>` (scripts/preview.ts deploy --apps none, its readiness gate included), runs
+// the e2e project against it at once, and deletes it — the shape of main's e2e run, a `main-<sha>`
+// preview per push, which a soak preview redeployed in place never has (2026-09-24: bursts of
+// `internal error; reference = …` on brand-new previews only, scripts/preview-readiness.ts). A
+// deploy that fails is counted and named, never a skipped run. No perf run in this mode: the
+// budgets measure a warm worker.
 //
 // Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json, then
 // the perf project (the latency and throughput budgets, perf/**) to output/soak/perf-<n>.json — after
@@ -31,22 +40,30 @@ function parseArgs(argv: string[]) {
   let runs = 100;
   let filter: string | undefined;
   let preview: string | undefined;
+  let freshPreviews: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--runs") runs = Number(argv[++i]);
     else if (argv[i] === "--filter") filter = argv[++i];
     else if (argv[i] === "--preview") preview = argv[++i];
+    else if (argv[i] === "--fresh-previews") freshPreviews = argv[++i];
     else throw new Error(`unknown argument ${argv[i]}`);
   }
   if (!Number.isInteger(runs) || runs < 1) throw new Error("--runs must be a positive integer");
-  return { runs, filter, preview };
+  if (freshPreviews && (preview || process.env.WORKER_BASE_URL))
+    throw new Error("--fresh-previews deploys its own worker: no --preview or WORKER_BASE_URL");
+  return { runs, filter, preview, freshPreviews };
 }
 
-const { runs, filter, preview } = parseArgs(process.argv.slice(2));
-// An explicit WORKER_BASE_URL wins; otherwise the named preview (os-e2e-soak.yml deploys it first).
-process.env.WORKER_BASE_URL ||= preview ? previewUrl(resolvePreviewName({ name: preview })) : "";
-if (!process.env.WORKER_BASE_URL)
-  throw new Error("WORKER_BASE_URL or --preview is required: the soak runs against a deployment");
-console.log(`soaking ${process.env.WORKER_BASE_URL}`);
+const { runs, filter, preview, freshPreviews } = parseArgs(process.argv.slice(2));
+if (!freshPreviews) {
+  // An explicit WORKER_BASE_URL wins; otherwise the named preview (os-e2e-soak.yml deploys it first).
+  process.env.WORKER_BASE_URL ||= preview ? previewUrl(resolvePreviewName({ name: preview })) : "";
+  if (!process.env.WORKER_BASE_URL)
+    throw new Error(
+      "WORKER_BASE_URL, --preview or --fresh-previews is required: the soak runs against a deployment",
+    );
+  console.log(`soaking ${process.env.WORKER_BASE_URL}`);
+}
 mkdirSync(OUT, { recursive: true });
 const { E2E_REAL_MODELS: _stripped, ...runEnv } = process.env;
 
@@ -72,7 +89,11 @@ type VitestJson = {
  *  tally said 1/100 for a row that had failed 3 first attempts). Otherwise the `e2e:run` and
  *  `perf:run` scripts' argv, minus the reporters: vitest adds repeated `--reporter` flags together,
  *  and the retry-telemetry one would record flakes on every run. */
-function soakRun(project: "e2e" | "perf", file: string): number | undefined {
+function soakRun(
+  project: "e2e" | "perf",
+  file: string,
+  workerBaseUrl = process.env.WORKER_BASE_URL,
+): number | undefined {
   const result = spawnSync(
     "pnpm",
     [
@@ -90,7 +111,11 @@ function soakRun(project: "e2e" | "perf", file: string): number | undefined {
       // a filter that names only e2e files leaves the perf project nothing to run
       ...(filter ? [filter, "--passWithNoTests"] : []),
     ],
-    { cwd: ROOT, env: runEnv, stdio: ["ignore", "ignore", "inherit"] },
+    {
+      cwd: ROOT,
+      env: { ...runEnv, WORKER_BASE_URL: workerBaseUrl },
+      stdio: ["ignore", "ignore", "inherit"],
+    },
   );
   if (!existsSync(file)) {
     console.error(`${path.basename(file)}: vitest wrote no report (exit ${result.status})`);
@@ -133,7 +158,13 @@ function soakRun(project: "e2e" | "perf", file: string): number | undefined {
 // Each lane's wall time on its own: `wall` stays the e2e suite's, comparable with a CI e2e job's.
 const wall: number[] = [];
 const perfWall: number[] = [];
+const deployFailures: { run: number; preview: string; status: number | null }[] = [];
 for (let n = 1; n <= runs; n++) {
+  if (freshPreviews) {
+    // the name scripts/preview.ts will give it, so the URL below is the one it deploys
+    freshPreviewRun(n, resolvePreviewName({ name: `${freshPreviews}-${n}` }));
+    continue;
+  }
   let started = Date.now();
   const failedNow = soakRun("e2e", path.join(OUT, `run-${n}.json`));
   wall.push(Date.now() - started);
@@ -157,12 +188,15 @@ const rows = [...tally.entries()].map(([title, e]) => ({
 }));
 writeFileSync(
   path.join(OUT, "summary.json"),
-  JSON.stringify({ runs, wallMs: wall, perfWallMs: perfWall, rows }, null, 2),
+  JSON.stringify({ runs, wallMs: wall, perfWallMs: perfWall, deployFailures, rows }, null, 2),
 );
+if (freshPreviews)
+  console.log(
+    `\n${runs} brand-new preview(s); ${deployFailures.length} deploy(s) failed${deployFailures.map((failure) => `\n  run ${failure.run}: ${failure.preview} (exit ${failure.status})`).join("")}`,
+  );
 const flaky = rows.filter((r) => r.failed > 0).sort((a, b) => b.failed - a.failed);
 console.log(
-  `\n${runs} run(s); e2e wall p50 ${(wall.sort((a, b) => a - b)[Math.floor(wall.length / 2)]! / 1000).toFixed(0)} s, ` +
-    `perf wall p50 ${(perfWall.sort((a, b) => a - b)[Math.floor(perfWall.length / 2)]! / 1000).toFixed(0)} s`,
+  `\n${runs} run(s); e2e wall p50 ${p50Seconds(wall)}, perf wall p50 ${p50Seconds(perfWall)}`,
 );
 console.log(
   flaky.length ? `${flaky.length} row(s) failed at least once:` : "every row passed every time",
@@ -175,3 +209,36 @@ const slow = rows
   .slice(0, 5);
 console.log("slowest rows (max ms):");
 for (const r of slow) console.log(`  ${r.maxMs}  ${r.file}  ${r.title.slice(0, 100)}`);
+
+/** One `--fresh-previews` run: a brand-new preview, the e2e project against it, the preview deleted
+ *  whatever happened. The deploy's and the delete's output stream through. */
+function freshPreviewRun(n: number, preview: string) {
+  const pnpmPreview = (command: string, ...args: string[]) =>
+    spawnSync("pnpm", ["preview", command, "--name", preview, ...args], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["ignore", "inherit", "inherit"],
+    }).status;
+  try {
+    const deployed = pnpmPreview("deploy", "--apps", "none");
+    if (deployed !== 0) {
+      deployFailures.push({ run: n, preview, status: deployed });
+      console.log(`run ${n}/${runs}: ${preview} did not deploy (exit ${deployed})`);
+      return;
+    }
+    const started = Date.now();
+    const failedNow = soakRun("e2e", path.join(OUT, `run-${n}.json`), previewUrl(preview));
+    wall.push(Date.now() - started);
+    console.log(
+      `run ${n}/${runs}: ${preview} e2e ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow ?? "?"} failed`,
+    );
+  } finally {
+    const deleted = pnpmPreview("delete");
+    if (deleted !== 0) console.warn(`run ${n}/${runs}: deleting ${preview} exited ${deleted}`);
+  }
+}
+
+function p50Seconds(ms: number[]) {
+  if (ms.length === 0) return "n/a";
+  return `${(ms.toSorted((a, b) => a - b)[Math.floor(ms.length / 2)]! / 1000).toFixed(0)} s`;
+}

@@ -8,6 +8,9 @@
 # suite, so two soaks of one preview measure each other's deploys (2026-09-24: a full-suite soak of
 # main redeployed `soak` ten minutes into two agents.e2e soaks of a fix branch, which then soaked
 # main's worker). Delete a named preview when done: `pnpm --dir apps/os preview delete --name <preview>`.
+# THE FIRST MINUTES OF A PREVIEW: --input fresh-previews=true deploys a brand-new preview for every
+# run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — main's
+# e2e shape, a `main-<sha>` preview per push. Dispatch several at once for more previews per hour.
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
 # difference), and CI is the environment whose flakes matter. It never pays for a model: the
 # real-model rows run only in os-real-model.yml (docs/testing.md#real-model-rows).
@@ -37,6 +40,11 @@ on:
         required: false
         type: string
         default: ""
+      fresh-previews:
+        description: "true: every run deploys a brand-new preview, runs e2e against it and deletes it (no perf)"
+        required: false
+        type: string
+        default: "false"
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
@@ -63,7 +71,7 @@ jobs:
       # `soak` worker three merges older failed one row in every run of a hundred). An explicit
       # worker-base-url is soaked as given.
       - name: Deploy the soak preview from this ref
-        if: inputs.worker-base-url == ''
+        if: inputs.worker-base-url == '' && inputs.fresh-previews != 'true'
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -82,7 +90,11 @@ jobs:
           PREVIEW: ${{ inputs.preview }}
           RUNS: ${{ inputs.runs }}
           FILTER: ${{ inputs.filter }}
-        run: doppler run -- pnpm e2e:soak --runs "$RUNS" --preview "$PREVIEW" ${FILTER:+--filter "$FILTER"}
+          # one prefix per dispatch, so dispatches running side by side never share a preview
+          FRESH_PREVIEWS: ${{ inputs.fresh-previews == 'true' && format('sf-{0}', github.run_id) || '' }}
+        run: |
+          if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS"); else target=(--preview "$PREVIEW"); fi
+          doppler run -- pnpm e2e:soak --runs "$RUNS" "${target[@]}" ${FILTER:+--filter "$FILTER"}
       - name: Upload the per-run reports and the summary
         if: always()
         uses: actions/upload-artifact@v4

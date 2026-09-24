@@ -1,7 +1,8 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { openSocketWithRetry } from "./socket.ts";
 
-test("a connection that fails twice and opens on the third attempt resolves after two waits", async () => {
+test("openSocketWithRetry: a connection that fails twice and opens on the third attempt resolves after two waits, one warn each", async () => {
+  using warn = captureWarn();
   const waits: number[] = [];
   const Socket = fakeSocketClass(2);
   const socket = await openSocketWithRetry("wss://example.test/api", {
@@ -12,11 +13,28 @@ test("a connection that fails twice and opens on the third attempt resolves afte
     },
   });
   expect(socket).toBeInstanceOf(Socket);
-  expect(Socket.constructions()).toBe(3);
-  expect(waits).toEqual([10, 20]);
+  expect({ constructions: Socket.constructions(), waits }).toEqual({
+    constructions: 3,
+    waits: [10, 20],
+  });
+  expect(warn).toMatchObject({
+    calls: [
+      {
+        event: "client.platform-failure-socket-open",
+        url: "wss://example.test/api",
+        attempt: 1,
+        attempts: 4,
+        retryInMs: 10,
+        message:
+          'WebSocket connection failed: closed 1006 "edge said no" before it opened (Received network error or non-101 status code.)',
+      },
+      { attempt: 2, retryInMs: 20 },
+    ],
+  });
 });
 
-test("a connection that never opens rejects after the last attempt, with every wait spent", async () => {
+test("openSocketWithRetry: a connection that never opens rejects after the last attempt with its close code and cause, every wait spent", async () => {
+  using warn = captureWarn();
   const waits: number[] = [];
   const Socket = fakeSocketClass(Infinity);
   await expect(
@@ -27,19 +45,29 @@ test("a connection that never opens rejects after the last attempt, with every w
         waits.push(ms);
       },
     }),
-  ).rejects.toThrow("WebSocket connection failed.");
-  expect(Socket.constructions()).toBe(3);
-  expect(waits).toEqual([1, 2]);
+  ).rejects.toThrow(
+    'WebSocket connection failed: closed 1006 "edge said no" before it opened (Received network error or non-101 status code.)',
+  );
+  expect({ constructions: Socket.constructions(), waits, warns: warn.calls.length }).toEqual({
+    constructions: 3,
+    waits: [1, 2],
+    warns: 2,
+  });
 });
 
-test("a connection that opens first time makes one attempt and no wait", async () => {
+test("openSocketWithRetry: a connection that opens first time makes one attempt, no wait and no warn", async () => {
+  using warn = captureWarn();
   const Socket = fakeSocketClass(0);
   await openSocketWithRetry("wss://example.test/api", { WebSocket: Socket, delaysMs: [1] });
-  expect(Socket.constructions()).toBe(1);
+  expect({ constructions: Socket.constructions(), warns: warn.calls.length }).toEqual({
+    constructions: 1,
+    warns: 0,
+  });
 });
 
-/** A WebSocket that fails its first `failures` constructions (a `close` before `open`) and opens
- *  every one after — what a flapping connection looks like from the page. */
+/** A WebSocket that fails its first `failures` constructions — an `error` carrying undici's reason,
+ *  then a `close` 1006 before `open`, the way Node's WebSocket fails a refused upgrade — and opens
+ *  every one after: what a flapping connection looks like from the page. */
 function fakeSocketClass(failures: number) {
   let constructions = 0;
   class FakeWebSocket extends EventTarget {
@@ -51,9 +79,34 @@ function fakeSocketClass(failures: number) {
       super();
       this.url = url;
       constructions += 1;
-      const outcome = constructions <= failures ? "close" : "open";
-      queueMicrotask(() => this.dispatchEvent(new Event(outcome)));
+      const fails = constructions <= failures;
+      queueMicrotask(() => {
+        if (!fails) return this.dispatchEvent(new Event("open"));
+        this.dispatchEvent(
+          Object.assign(new Event("error"), {
+            error: new TypeError("Received network error or non-101 status code."),
+          }),
+        );
+        this.dispatchEvent(
+          Object.assign(new Event("close"), {
+            code: 1006,
+            reason: "edge said no",
+            wasClean: false,
+          }),
+        );
+      });
     }
   }
   return FakeWebSocket as unknown as typeof WebSocket & { constructions(): number };
+}
+
+/** console.warn captured for one test, restored on dispose; `calls` are the first arguments. */
+function captureWarn() {
+  const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  return {
+    get calls() {
+      return spy.mock.calls.map(([first]) => first);
+    },
+    [Symbol.dispose]: () => spy.mockRestore(),
+  };
 }

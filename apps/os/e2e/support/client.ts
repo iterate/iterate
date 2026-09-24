@@ -141,9 +141,36 @@ export const enterTestTransports = (): void =>
  *  .projects.get(ctx)` is the itx. For flows that need the session itself (its identity, its
  *  `[Symbol.dispose]`). */
 export function session(): any {
-  const s = newWebSocketRpcSession(wsApi());
+  const ws = new WebSocket(wsApi());
+  explainSocketFailure(ws);
+  const s = newWebSocketRpcSession(ws as any);
   openTransports().sessions.push(s);
   return s;
+}
+
+/** capnweb folds every lost socket into one "WebSocket connection failed." (its transport's `error`
+ *  listener). This says which it was, beside the failure in the log: an upgrade the edge refused
+ *  (undici fails the connection with "Received network error or non-101 status code.") or an open
+ *  socket lost later, and when. Only an abnormal end fires `error` (undici fires it when no Close
+ *  frame was received); a disposed session's clean close stays silent. */
+function explainSocketFailure(ws: WebSocket) {
+  const created = Date.now();
+  let openedAfterMs: number | undefined;
+  ws.addEventListener("open", () => (openedAfterMs = Date.now() - created), { once: true });
+  ws.addEventListener(
+    "error",
+    (event) => {
+      const cause = (event as ErrorEvent).error;
+      console.warn({
+        event: "e2e.websocket-failed",
+        url: ws.url,
+        openedAfterMs,
+        failedAfterMs: Date.now() - created,
+        reason: cause instanceof Error ? cause.message : String(cause),
+      });
+    },
+    { once: true },
+  );
 }
 
 /** A normal OAuth client supplies its bearer before the public WebSocket opens. */
