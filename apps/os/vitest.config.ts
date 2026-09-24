@@ -46,8 +46,9 @@ const onUnhandledError = (error: unknown): boolean | void => {
  *  row that waits a real deadline started after ninety seconds of short files and the run ended at
  *  170 s instead of its floor (measured 2026-09-21). These files start in slot one, longest first;
  *  everything else follows vitest's own order, which runs every unit file before the first workers
- *  file. `pnpm test` (unit + workers, 3 slots in CI), 2026-09-24: oauth's 30 s re-check rows 128 s,
- *  the facet-push watchdog 60 s, the memory children ~35 s; alarm-and-pins (42 s) needs no head start.
+ *  file. `pnpm test` (unit + workers, 3 slots in CI), 2026-09-24: oauth's 30 s re-check rows 128 s
+ *  (the run's floor), the facet-push watchdog 62 s, the CPU-bound memory children 20 s beside those
+ *  two idle waits; alarm-and-pins (42 s, fixed sub-second waits) starts in the first free slot.
  *  `pnpm e2e`, with rows concurrent (deployed): context-watchdog's two eviction windows 37 s (it
  *  started 13 s in behind the first sixteen files), session's 30 s grant re-check 34 s, the dormant
  *  deadline 24 s, the 144 MiB file's sequential rows, the slow client's upload 10–15 s. A file that
