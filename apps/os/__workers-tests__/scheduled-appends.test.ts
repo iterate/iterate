@@ -2,7 +2,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-facet.ts";
-import { owedAlarm, stub, releasePins, until } from "./support.ts";
+import { stub, releasePins, until } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";
 
@@ -301,16 +301,12 @@ test("a cold context SUPERSEDES a stale physical alarm nothing durable wants: it
   await evictDurableObject(s);
   await s.invoke("itx.schedules.list()");
   // The stale time is gone at once (the constructor's reconcile); what may stand is a later one, the
-  // residency watchdog's.
-  const alarm = await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm());
+  // wake's own delivery, until it acks.
+  const alarmNow = () =>
+    runInDurableObject(s, async (_instance, state) => state.storage.getAlarm());
+  const alarm = await alarmNow();
   expect(alarm === null || alarm > deadline).toBe(true);
-  await until(
-    "no alarm owed",
-    async () =>
-      owedAlarm(
-        await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm()),
-      ) === null,
-  );
+  await until("no alarm", async () => (await alarmNow()) === null);
 });
 
 async function fire(ctx: string, now = Date.parse(at)) {
