@@ -2,10 +2,9 @@
 // is replaced: a real deployed WebSocket fixture speaks the small GPT-Live audio protocol below.
 // This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution,
 // delegated scripts and audio in both directions. It does not test the model, microphones or speakers.
-import { build } from "esbuild";
 import { expect } from "vitest";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
-import { createVoiceInstall } from "../scripts/build-voice-install.ts";
+import { bundleVoiceSources, createVoiceInstall } from "../scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../voice/install.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
 import { openItx, readAll, runId, until } from "../../os/e2e/support/client.ts";
@@ -103,22 +102,7 @@ export default class extends WorkerEntrypoint {
       ],
     ]);
 
-    const bundles = await Promise.all(
-      ["voice-agent.ts", "voice-delegate.ts", "worker.ts"].map(async (file) => {
-        const result = await build({
-          entryPoints: [new URL(`../voice/${file}`, import.meta.url).pathname],
-          bundle: true,
-          write: false,
-          format: "esm",
-          platform: "neutral",
-          target: "es2022",
-          loader: { ".md": "text" },
-          external: ["./processor.js", "cloudflare:workers"],
-        });
-        return result.outputFiles[0]!.text;
-      }),
-    );
-    const [voice, delegate, worker] = bundles as [string, string, string];
+    const { voiceAgent: voice, voiceDelegate: delegate, worker } = await bundleVoiceSources();
     const liveUrl = "https://api.openai.com/v1/live/sessions";
     expect(voice.split(liveUrl)).toHaveLength(2);
     const fixtureVoice = voice.replace(liveUrl, providerUrl);

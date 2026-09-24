@@ -5,18 +5,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { buildAgentRuntime } from "./build-runtime.ts";
 
-/** Build the same hosted processors the devices call, with immutable project KV keys. */
-export async function buildVoiceInstall() {
-  const assets = new URL("../voice/assets/", import.meta.url);
-  const css = await readFile(new URL("pixel-font.css", assets), "utf8");
-  const font = await readFile(new URL("press-start-2p-ascii.woff2", assets));
-  const fontUrl = 'url("./press-start-2p-ascii.woff2")';
-  if (!css.includes(fontUrl)) throw new Error("Screen font CSS has no local font URL to embed");
-  const fontCss = css.replace(
-    fontUrl,
-    `url("data:font/woff2;base64,${Buffer.from(font).toString("base64")}")`,
-  );
-  const bundles = await Promise.all(
+/** The three voice bundles as the installer ships them; the deployed voice e2e test loads the same. */
+export async function bundleVoiceSources(): Promise<{
+  voiceAgent: string;
+  voiceDelegate: string;
+  worker: string;
+}> {
+  const [voiceAgent, voiceDelegate, worker] = await Promise.all(
     ["voice-agent.ts", "voice-delegate.ts", "worker.ts"].map(async (file) => {
       const result = await build({
         entryPoints: [new URL(`../voice/${file}`, import.meta.url).pathname],
@@ -34,10 +29,22 @@ export async function buildVoiceInstall() {
       return code;
     }),
   );
+  return { voiceAgent: voiceAgent!, voiceDelegate: voiceDelegate!, worker: worker! };
+}
+
+/** Build the same hosted processors the devices call, with immutable project KV keys. */
+export async function buildVoiceInstall() {
+  const assets = new URL("../voice/assets/", import.meta.url);
+  const css = await readFile(new URL("pixel-font.css", assets), "utf8");
+  const font = await readFile(new URL("press-start-2p-ascii.woff2", assets));
+  const fontUrl = 'url("./press-start-2p-ascii.woff2")';
+  if (!css.includes(fontUrl)) throw new Error("Screen font CSS has no local font URL to embed");
+  const fontCss = css.replace(
+    fontUrl,
+    `url("data:font/woff2;base64,${Buffer.from(font).toString("base64")}")`,
+  );
   return createVoiceInstall({
-    voiceAgent: bundles[0]!,
-    voiceDelegate: bundles[1]!,
-    worker: bundles[2]!,
+    ...(await bundleVoiceSources()),
     fontCss,
     agentsRuntime: await buildAgentRuntime(),
   });
