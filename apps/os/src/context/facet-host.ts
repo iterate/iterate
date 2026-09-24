@@ -2,10 +2,11 @@
 // A facet is materialized from its startup memo (`facet:<name>` in kv) under a loaded identity whose
 // change restarts it in place, called under a watchdog, its answer copied out and the result object
 // disposed. The claims hosted processors make on the context's alarm (`processors.claim`) live here
-// with the backoff ladder of failed revives; the DO's alarm pass calls `reviveDueClaims`. A facet
-// the platform stops is started again at once, and a birth starts the ones the last incarnation
-// called (FACET_START_WATCHDOG_MS). The DO wires the deps and forwards; nothing here reaches past
-// `ctx.facets`, `ctx.storage.kv`, `ctx.exports`, `ctx.blockConcurrencyWhile` and what it is handed.
+// with the backoff ladder of failed revives, and a birth makes the first-party ones it inherits
+// due; the DO's alarm pass calls `reviveDueClaims`. A facet the platform stops is started again at
+// once, and a birth starts the ones the last incarnation called (FACET_START_WATCHDOG_MS). The DO
+// wires the deps and forwards; nothing here reaches past `ctx.facets`, `ctx.storage.kv`,
+// `ctx.exports`, `ctx.blockConcurrencyWhile` and what it is handed.
 //
 // TWO WAYS INTO A FACET, one call beneath both. A caller's itx expression reaches one only through
 // `handle` — what `itx.facets.get` hands out — whose every walk is checked against the methods the
@@ -98,8 +99,8 @@ const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
  *  context that evicted on time (~10 s) is woken fresh by it, and that birth does the reset; a
  *  context still resident does it in place. Past the ~10 s eviction and the pins' 30 s release, so a
  *  used context costs ONE extra alarm wake per quiet period — and a facet the last call left running
- *  is billed about a minute, not until the residency watchdog's 15 (measured 2026-09-23: a careless
- *  loaded facet billed 60 s of every minute until that wake). */
+ *  is billed about a minute, not until its context's next wake (measured 2026-09-23: a careless
+ *  loaded facet billed 60 s of every minute until then). */
 export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
 
 /** Each first-party facet's `publicMethods`, read off its class (the class is minted from
@@ -183,7 +184,7 @@ export class FacetHost {
   readonly #facetRecoveryByName = new Map<string, Promise<void>>();
   /** Facet work in flight: the test-only release (`abortLiveFacetsWhenIdle`) respects it — aborting a
    *  facet mid-REDUCE is exactly the stall a reduce would have to repair from the log, never cause it —
-   *  and the residency watchdog and the unclaimed-facet sweep read it through `snapshot()`. */
+   *  and the unclaimed-facet sweep reads it through `snapshot()`. */
   #facetWorkInFlight = 0;
   /** THE CLAIMS of hosted processors on this context's alarm (`processors.claim`): name → the time
    *  a `revive()` is owed by. A kv row each, so a claim outlives the incarnation that made it —
@@ -216,13 +217,26 @@ export class FacetHost {
 
   constructor(deps: FacetHostDeps) {
     this.#deps = deps;
-    // A claim row's value is the epoch-ms `at` this host wrote in `#claimFacetAlarm` (kv types it
-    // as unknown): read back as the number it was stored as.
-    for (const [key, at] of deps.ctx.storage.kv.list({ prefix: "facet-claim:" }))
-      this.#facetClaims.set(key.slice("facet-claim:".length), at as number);
-    // Same for the revive-failure ladder (`#facetReviveFailed` wrote it as a number).
+    // The revive-failure ladder (`#facetReviveFailed` wrote each rung as a number).
     for (const [key, n] of deps.ctx.storage.kv.list({ prefix: "facet-claim-failures:" }))
       this.#facetReviveFailures.set(key.slice("facet-claim-failures:".length), n as number);
+    // A claim row's value is the epoch-ms `at` this host wrote in `#claimFacetAlarm` (kv types it as
+    // unknown). A FIRST-PARTY facet's claim the last incarnation left is DUE AT THIS BIRTH: those
+    // facets are SDK engines, whose claim always covers an attempt in flight, and that attempt ran in
+    // an incarnation that is over — evicted, or replaced under its calls by the platform
+    // (project/collection.ts TERMINAL_WAIT_SLICE_MS) — so work that died with it would wait out the
+    // rest of REVIVE_AFTER_MS for nothing. A revive that finds the attempt still running (a facet can
+    // outlive its context's incarnation) claims again, later (the engine's rule 3). A loaded facet's
+    // claim is its author's "revive me by `at`", kept as written (a careless one claims to stay
+    // running and answers no revive), and so is a claim on the ladder of failed revives, which keeps
+    // its backoff. In memory only: the birth writes nothing before it has started its facets, and
+    // its first reconcile arms the alarm.
+    const bornAt = Date.now();
+    for (const [key, at] of deps.ctx.storage.kv.list({ prefix: "facet-claim:" })) {
+      const name = key.slice("facet-claim:".length);
+      const dueAtBirth = firstPartyFacetClassOf(name) && !this.#facetReviveFailures.has(name);
+      this.#facetClaims.set(name, dueAtBirth ? Math.min(at as number, bornAt) : (at as number));
+    }
   }
 
   /** The claims on the context's alarm, earliest first: the coordinator's third deadline source

@@ -400,8 +400,9 @@ invariants:
   each preview up again right before deleting it, and a GitHub lookup that
   failed never makes a preview stale.
 - **Nothing to contend for.** There is no pool, so there is no queue, no
-  resting slot and no reclaim. Concurrency is per PR and never cancelled: a
-  half-applied preview is worse than a slow one.
+  resting slot and no reclaim. Concurrency is per PR: a push cancels the PR's
+  run in progress, and the next run redeploys the whole preview, which repairs
+  a deploy cut short.
 - **Everything is attributable and visible.** The PR body names the preview,
   its deployment and a Cloudflare dashboard link; the workflow logs narrate
   each operation; `pnpm preview sweep --dry-run` prints what the sweep would

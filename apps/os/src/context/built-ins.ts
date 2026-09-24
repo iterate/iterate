@@ -1043,10 +1043,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           )) as Response;
         } catch (error) {
           // A tunnel whose laptop is gone: its lent stub is offline, or the lend ended and the rule
-          // naming it went with it. The upstream's absence, never a platform fault.
+          // naming it went with it. The upstream's absence, never a platform fault: a 502, logged
+          // at info and never reported. The prd fault alarm (scripts/ci/prd-fault-alarm.ts) drops
+          // the 502 summaries in this line's ray; the header names the route to a client.
           const code = errorCode(error);
-          if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH")
-            return new Response(`${ingressRouteName} is not connected\n`, { status: 502 });
+          if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH") {
+            console.info({ event: "ingress-route.target-offline", ingressRouteName, code });
+            return new Response(`${ingressRouteName} is not connected\n`, {
+              status: 502,
+              headers: { "x-iterate-ingress-route-offline": ingressRouteName },
+            });
+          }
           throw error;
         }
       },
@@ -1245,27 +1252,64 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
           // refused before a source expression runs or anything loads.
           assertLoadedCodePlacement("workers.get", { projectId, path });
-          const { load } = await prepareConfinedWorker({
-            env,
-            deployId: deps.deployId,
-            platformOrigin: deps.platformOrigin(),
-            itxEntrypoint: deps.itxEntrypoint(),
-            kind: "worker",
-            owner: iterateContextName,
-            source: spec.source,
-            cacheKey: spec.cacheKey,
-            invoke: deps.invoke,
-            where: "workers.get",
-          });
-          const entrypoint = load().getEntrypoint(
-            spec.className,
-            spec.props === undefined ? undefined : { props: spec.props },
-            // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
-          ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
-          const fn = entrypoint[method];
-          if (typeof fn !== "function")
-            throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-          return Reflect.apply(fn, entrypoint, args);
+          // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
+          // names: a cached entry that answers V8's clone-version text answers it to every call
+          // under that loader id, and `itx.abort()` does not change the id (prd, garple.com,
+          // 2026-09-24 20:47Z: every page 500 until a redeploy). A call that meets it retires the
+          // identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is replayed on it
+          // once only when a replay cannot do anything twice: a GET or HEAD with no body. A request
+          // body may have been read and an RPC method may have run, so those still fail, and the
+          // next call heals.
+          const isCloneVersionFailure = (error: unknown): error is Error =>
+            error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+          const attempt = async () => {
+            const { load, retire } = await prepareConfinedWorker({
+              env,
+              deployId: deps.deployId,
+              platformOrigin: deps.platformOrigin(),
+              itxEntrypoint: deps.itxEntrypoint(),
+              kind: "worker",
+              owner: iterateContextName,
+              source: spec.source,
+              cacheKey: spec.cacheKey,
+              invoke: deps.invoke,
+              where: "workers.get",
+            });
+            try {
+              const entrypoint = load().getEntrypoint(
+                spec.className,
+                spec.props === undefined ? undefined : { props: spec.props },
+                // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
+              ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
+              const fn = entrypoint[method];
+              if (typeof fn !== "function")
+                throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
+              return await Reflect.apply(fn, entrypoint, args);
+            } catch (error) {
+              if (isCloneVersionFailure(error)) retire();
+              throw error;
+            }
+          };
+          try {
+            return await attempt();
+          } catch (error) {
+            if (!isCloneVersionFailure(error)) throw error;
+            const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
+            const replayable =
+              request?.body === null && (request.method === "GET" || request.method === "HEAD");
+            console.warn({
+              event: replayable
+                ? "workers.platform-failure-retry"
+                : "workers.platform-failure-retire",
+              namespace: "iterate-context",
+              name: iterateContextName,
+              method,
+              requestMethod: request?.method,
+              message: error.message,
+            });
+            if (!replayable) throw error;
+            return await attempt();
+          }
         }),
     },
     ...deps.library, // THE LIBRARY (library.ts), built and owned by the DO

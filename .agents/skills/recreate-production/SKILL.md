@@ -50,9 +50,7 @@ then `verify-structure`. Lift the pause once verification passes.
 
 A rerun of `apply` resets the project to its archive: the config tree (files added since are
 deleted), every archived secret's value, and the members. Inside the restore window that only
-finishes what was cut off. Never rerun it on a live deployment hours later. To land projects on
-their organization's record after the fact (the dash's project lists), use
-`project-seed land-projects`, which changes nothing else.
+finishes what was cut off. Never rerun it on a live deployment hours later.
 
 ## Restore
 

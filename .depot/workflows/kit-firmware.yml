@@ -83,15 +83,15 @@ jobs:
     strategy:
       fail-fast: false # one broken board never blocks the others' releases
       matrix: ${{ fromJSON(needs.plan-firmware.outputs.matrix) }}
+    # Node 24 and ESP-IDF, nothing else (build-esp-idf-image.yml)
     runs-on:
       size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+      image: 0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           persist-credentials: false
           ref: ${{ github.sha }}
       # The image carries ESP-IDF (scripts/depot-ci/esp-idf.sh, the pin); a leg downloads it only

@@ -40,6 +40,12 @@ import {
  * suites on main pushes needs only to be listed.
  */
 export const SUITE_WORKFLOWS = ["Test", "Preview OS", "Main OS e2e"];
+/** Where one run leaves its fold for the next: the workflow's `name:`, its artifact, the file in it. */
+export const stateArtifact = {
+  workflow: "Flake dashboard",
+  artifact: "flake-dashboard-state",
+  file: "state.json",
+};
 /** Depot lists at most 200 workflows per query; the schedule runs far more often than that fills. */
 const WORKFLOW_LIMIT = "200";
 /** How long the writer remembers a workflow after Depot last listed it. */
@@ -283,9 +289,7 @@ async function main() {
 async function readPreviousState(): Promise<WriterState | undefined> {
   const state = await newestArtifactFile({
     repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
-    workflow: "Flake dashboard",
-    artifact: "flake-dashboard-state",
-    file: "state.json",
+    ...stateArtifact,
   });
   return state ? WriterState.parse(JSON.parse(state)) : undefined;
 }

@@ -102,8 +102,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: >-
           pnpm tsx scripts/ci/main-e2e-alert.ts judge --dir test-results/ci-telemetry/raw
-          --suite "real-model e2e" --title-prefix "REAL:"
-          ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}
+          --suite "real-model e2e" --title-prefix "REAL:" --ref "${{ github.ref }}"
       - name: Keep the telemetry
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,5 +1,5 @@
 // scripts/ci/os-latency-guard.ts — THE LATENCY GUARD'S JUDGE (.depot/workflows/os-latency.yml, every
-// 3 hours and on main pushes, against main redeployed to a preview that nothing else touches). It reads
+// 3 hours, against main redeployed to a preview that nothing else touches). It reads
 // one run of apps/os's perf suite — Vitest's JSON report, where each row left its raw samples on its
 // meta (apps/os/perf/record.ts) — and judges every metric's median against two lines:
 //   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and
@@ -17,17 +17,21 @@
 // hours later), GREEN once when every red metric stayed under its lines two runs in a row. A page
 // leaves the run green: a scheduled run reports on main's head, where red reads as "this commit
 // broke". A BROKEN PROBE fails the run instead: a row that failed for anything but a budget, a metric
-// no row recorded, no report.
+// no row recorded, no report — unless the platform broke it (PLATFORM_FAILURES below): ONE row that
+// a platform failure broke, and that did not break in the run before, is RECORDED — a warning, a
+// line of the step summary and a PostHog event (`os latency probe broken`) — and the run stays green.
+// The same probe broken two runs in a row, two probes broken in one run, or anything else, fails it.
+// Recorded or red, every broken probe is on the step summary and in PostHog.
 //
 // The memory between runs is the previous main run's `os-latency-state` artifact (depot.ts
 // `saveNewestArtifactFile`, `stateArtifact` below): the last 20 main runs' medians, what each
-// crossed, and which metrics are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
+// crossed and which probes broke, and which metrics are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
 // pages whatever crossed in this run alone, marked 🧪 and mentioning nobody, and keeps no state.
 //
 //   pnpm tsx scripts/ci/os-latency-guard.ts previous-state --out <state.json>
 //   pnpm tsx scripts/ci/os-latency-guard.ts judge --report <vitest.json> [--state <state.json>] \
 //     [--state-out <next.json>] --run <id> --ref <git ref> --trigger <event> [--budget-scale 0.01] [--dry-run]
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -93,15 +97,38 @@ export const GuardState = z.object({
         .pipe(z.partialRecord(MetricName, z.number())),
       /** The measured metrics that crossed a line. */
       over: KnownMetrics,
+      /** The probes that broke, recorded or not: a probe broken again in the next run is red. */
+      broken: z.array(z.string()).default([]),
     }),
   ),
   red: KnownMetrics,
 });
 export type GuardState = z.output<typeof GuardState>;
 
+/** What a perf row leaves on its meta (apps/os/perf/record.ts `TaskMeta`): its samples, and, when
+ *  it failed, the causes and lost sockets behind the failure (perf/setup.ts) and the push row's
+ *  subscribe round trips. */
+const RowMeta = z.object({
+  latency: z.partialRecord(MetricName, z.array(z.number())).optional(),
+  failure: z
+    .object({
+      causes: z.array(z.string()),
+      socketsLost: z.array(
+        z.object({
+          openedAfterMs: z.number().optional(),
+          failedAfterMs: z.number(),
+          reason: z.string(),
+        }),
+      ),
+    })
+    .optional(),
+  subscribeBatchMs: z.array(z.number()).optional(),
+});
+type RowMeta = z.infer<typeof RowMeta>;
+
 /** The parts of Vitest's JSON report (`--reporter=json`) the guard reads: every row's status, its
- *  failure messages and the samples perf/record.ts left on its meta; a file that failed to load has
- *  a `failed` status and a message, and no rows. */
+ *  failure messages and what perf/record.ts left on its meta; a file that failed to load has a
+ *  `failed` status and a message, and no rows. */
 const VitestReport = z.object({
   testResults: z.array(
     z.object({
@@ -113,35 +140,158 @@ const VitestReport = z.object({
           fullName: z.string(),
           status: z.string(),
           failureMessages: z.array(z.string()).nullish(),
-          meta: z
-            .object({ latency: z.partialRecord(MetricName, z.array(z.number())).optional() })
-            .optional(),
+          meta: RowMeta.optional(),
         }),
       ),
     }),
   ),
 });
 
-/** Each metric's samples, and every way the probe broke: a file that did not load, a row that
+/** THE PLATFORM'S FAILURES: what a row can break on only because Cloudflare, or the network between
+ *  the runner and it, failed the row — never on anything our code decides. Each was a red run of
+ *  main on 2026-09-24, one row each, every budget fine, and the row green on the next run. */
+const PLATFORM_FAILURES = {
+  /** undici's fetch rejects with exactly this only when no HTTP response came at all. Main
+   *  927f7a835: `read ECONNRESET` on the MCP row's first call, and Workers Logs had no `/mcp`
+   *  request from it. */
+  "connection-reset": "a fetch got no HTTP response: the connection to the edge failed",
+  /** capnweb's word for a socket that ended with no Close frame; our Worker closes one with a code
+   *  and a reason ("Peer closed WebSocket: 3000 …"). Main 6c4bd2319: 3 of 5 sockets idle 15 s were
+   *  lost on their next message, their invocations missing from Workers Logs, the account's other
+   *  previews losing sockets in the same seconds. A crash of our own Worker looks the same from the
+   *  client: the two-runs-in-a-row rule is what catches that. */
+  "socket-lost": "a WebSocket ended with no Close frame: the edge dropped it",
+  /** A wait for pushes that timed out while the row's own subscribes stalled past EDGE_STALL_MS
+   *  (~0.1 s a batch normally). Main a8e6c6525: Cloudflare moved traffic out of IAD, every round
+   *  trip between the edge and the Durable Object stalled ~3 s, and lends the pushes paged for came
+   *  back past their 10 s timeout, the pushes lost (apps/os/src/context/rpc-stubs.ts). */
+  "edge-stall": "pushes never came while the edge's round trips to the Durable Object stalled",
+} as const;
+export type PlatformFailure = keyof typeof PLATFORM_FAILURES;
+/** A subscribe batch this slow, at the median, is the platform stalling: ~0.1 s normally, 3.0–3.2 s
+ *  on 2026-09-24. */
+const EDGE_STALL_MS = 1_000;
+
+/** Which platform failure broke a row, from one of its failure messages (the error and its stack)
+ *  and what the row left on its meta; undefined for any other failure. Pure. */
+function platformFailure(message: string, meta: RowMeta | undefined): PlatformFailure | undefined {
+  const firstLine = message.split("\n", 1)[0]!.trim();
+  if (firstLine === "TypeError: fetch failed") return "connection-reset";
+  if (firstLine === "Error: WebSocket connection failed.") return "socket-lost";
+  const subscribeBatchMs = meta?.subscribeBatchMs ?? [];
+  if (
+    firstLine.startsWith("Error: until(") &&
+    subscribeBatchMs.length > 0 &&
+    summarize(subscribeBatchMs).p50 >= EDGE_STALL_MS
+  )
+    return "edge-stall";
+  return undefined;
+}
+
+/** One way the probe broke. */
+export type BrokenProbe = {
+  /** The row's full name, a file that did not load, or a metric no row recorded: the same probe
+   *  names the same thing from run to run. */
+  probe: string;
+  /** Its failure's first line. */
+  error: string;
+  /** The platform failure that broke it, when that is all that did. */
+  platform?: PlatformFailure;
+  /** What the row reported beside its failure: its errors' causes, the sockets it lost, its
+   *  subscribe round trips. */
+  evidence?: string;
+  /** The report file it is in: a metric no row recorded is this row's breakage when it is this
+   *  file's (perf/latency.ts `file`). */
+  file?: string;
+};
+
+/** Each metric's samples, and every way a row or file broke: a file that did not load, a row that
  *  failed for anything but a budget. Pure. */
 export function readReport(report: z.infer<typeof VitestReport>) {
   const samples: Partial<Record<LatencyMetricName, number[]>> = {};
-  const broken: string[] = [];
+  const broken: BrokenProbe[] = [];
   for (const file of report.testResults) {
     if (file.status === "failed" && file.assertionResults.length === 0)
-      broken.push(`${file.name}: ${file.message || "failed to load"}`);
+      broken.push({ probe: file.name, file: file.name, error: file.message || "failed to load" });
     for (const row of file.assertionResults) {
       Object.assign(samples, row.meta?.latency);
-      const messages = row.failureMessages || [];
-      const budgetOnly =
-        messages.length > 0 && messages.every((message) => message.includes(BUDGET_MISSED));
-      if (row.status === "failed" && !budgetOnly)
-        broken.push(
-          `${row.fullName}: ${messages.find((message) => !message.includes(BUDGET_MISSED)) || row.status}`,
-        );
+      const failures = (row.failureMessages || []).filter(
+        (message) => !message.includes(BUDGET_MISSED),
+      );
+      const budgetOnly = failures.length === 0 && (row.failureMessages || []).length > 0;
+      if (row.status !== "failed" || budgetOnly) continue;
+      const platform = failures.map((message) => platformFailure(message, row.meta));
+      broken.push({
+        probe: row.fullName,
+        file: file.name,
+        error: failures[0]?.split("\n", 1)[0]!.trim() || row.status,
+        platform: platform.every(Boolean) ? platform[0] : undefined,
+        evidence: evidenceOf(row.meta),
+      });
     }
   }
   return { samples, broken };
+}
+
+/** What a failed row reported beside its failure, in words, or undefined for nothing. Pure. */
+function evidenceOf(meta: RowMeta | undefined) {
+  const lost = meta?.failure?.socketsLost ?? [];
+  const failedAfter = lost.map((socket) => socket.failedAfterMs);
+  const neverOpened = lost.filter((socket) => socket.openedAfterMs === undefined).length;
+  const parts = [
+    meta?.failure?.causes.length && `caused by ${meta.failure.causes.join(" ← ")}`,
+    lost.length &&
+      `${lost.length} socket${lost.length === 1 ? "" : "s"} lost with no Close frame ${format(Math.min(...failedAfter))}–${format(Math.max(...failedAfter))} ms after the dial${neverOpened ? ` (${neverOpened} never opened)` : ""}`,
+    meta?.subscribeBatchMs?.length &&
+      `subscribe round trips ${meta.subscribeBatchMs.map(format).join(", ")} ms`,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : undefined;
+}
+
+/** Every broken row and file, then every metric no row recorded — unless a row or file of its own
+ *  perf file broke, which left it unrecorded: that is one breakage, not two. Pure. */
+export function brokenProbes(broken: BrokenProbe[], readings: Reading[]): BrokenProbe[] {
+  const unrecorded = readings
+    .filter((reading) => reading.missing)
+    .map((reading) => reading.metric)
+    .filter(
+      (metric) => !broken.some((probe) => probe.file?.endsWith(`/${LATENCY_METRICS[metric].file}`)),
+    );
+  return [...broken, ...unrecorded.map((metric) => ({ probe: metric, error: "not recorded" }))];
+}
+
+/** Each broken probe's verdict: RECORDED when it is the run's only broken probe, a platform failure
+ *  broke it, and it did not break in the run before (`previous`, the last main run the state
+ *  remembers); otherwise RED, `redBecause` saying why. Pure. */
+export function judgeBroken(
+  broken: BrokenProbe[],
+  previous: GuardState["runs"][number] | undefined,
+) {
+  return broken.map((probe) => {
+    const redBecause = !probe.platform
+      ? "not a platform failure"
+      : broken.length > 1
+        ? `one of ${broken.length} broken probes in this run`
+        : previous?.broken.includes(probe.probe)
+          ? "broken in the run before too"
+          : undefined;
+    return { ...probe, redBecause };
+  });
+}
+export type BrokenVerdict = ReturnType<typeof judgeBroken>[number];
+
+/** A broken probe's line in the step summary and the log. Pure. */
+export function brokenLine(probe: BrokenVerdict) {
+  const what = [
+    `${probe.probe}: ${probe.error}`,
+    probe.platform && `${probe.platform}, ${PLATFORM_FAILURES[probe.platform]}`,
+    probe.evidence,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+  return probe.redBecause
+    ? `RED, ${probe.redBecause}: ${what}`
+    : `RECORDED, broken by the platform: ${what}. The run stays green; broken again in the next run, it is red.`;
 }
 
 /** Every metric of this run against its budget (times `scale`) and the baseline `history` gives it;
@@ -238,12 +388,17 @@ export function transition(input: {
 }
 
 /** This run as the state remembers it. Pure. */
-export function rememberRun(readings: Reading[], run: { sha: string; run: string; at: string }) {
+export function rememberRun(
+  readings: Reading[],
+  run: { sha: string; run: string; at: string },
+  broken: BrokenProbe[],
+) {
   const measured = readings.filter((reading): reading is Measured => !reading.missing);
   return {
     ...run,
     judged: Object.fromEntries(measured.map((reading) => [reading.metric, reading.value])),
     over: measured.filter((reading) => reading.over).map((reading) => reading.metric),
+    broken: broken.map((probe) => probe.probe),
   };
 }
 
@@ -297,12 +452,44 @@ export function renderPage(input: {
     .join("\n");
 }
 
+type EventContext = {
+  sha: string;
+  run: string;
+  ref: string;
+  trigger: string;
+  testRun: boolean;
+  at: string;
+};
+
+/** One PostHog event per broken probe (`os latency probe broken`), recorded or red: how often the
+ *  platform breaks which probe, and how. Deduplicated per run attempt. Pure. */
+export function brokenEvents(broken: BrokenVerdict[], context: EventContext) {
+  return broken.map((probe) =>
+    systemEvent(
+      "os latency probe broken",
+      `os-latency:${context.run}:broken:${probe.probe}`,
+      "os-latency-guard",
+      {
+        probe: probe.probe,
+        error: probe.error,
+        platform_failure: probe.platform || null,
+        verdict: probe.redBecause ? "red" : "recorded",
+        red_because: probe.redBecause || null,
+        evidence: probe.evidence || null,
+        sha: context.sha,
+        run: context.run,
+        ref: context.ref,
+        trigger: context.trigger,
+        test_run: context.testRun,
+      },
+      context.at,
+    ),
+  );
+}
+
 /** One PostHog event per measured metric and percentile (p50, p95, max): low-cardinality — the
  *  metric names are LATENCY_METRICS' — and deduplicated per run attempt. Pure. */
-export function latencyEvents(
-  readings: Reading[],
-  context: { sha: string; run: string; ref: string; trigger: string; testRun: boolean; at: string },
-) {
+export function latencyEvents(readings: Reading[], context: EventContext) {
   return readings
     .filter((reading): reading is Measured => !reading.missing)
     .flatMap((reading) =>
@@ -332,7 +519,9 @@ export function latencyEvents(
     );
 }
 
-async function judge(options: {
+/** Judge one run of the perf suite: log every metric, page on a change of state, keep the state,
+ *  send PostHog its events, and throw when the probe is broken in a way that turns the run red. */
+export async function judge(options: {
   report: string;
   state?: string;
   stateOut?: string;
@@ -349,18 +538,20 @@ async function judge(options: {
       : { schemaVersion: 1, runs: [], red: [] };
   const report = existsSync(options.report)
     ? readReport(VitestReport.parse(JSON.parse(readFileSync(options.report, "utf8"))))
-    : { samples: {}, broken: [`no report at ${options.report}: the perf suite did not run`] };
+    : {
+        samples: {},
+        broken: [{ probe: options.report, error: "no report: the perf suite did not run" }],
+      };
   const readings = judgeRun({
     samples: report.samples,
     history: state.runs,
     scale: options.budgetScale,
   });
-  const missing = readings.filter((reading) => reading.missing).map((reading) => reading.metric);
-  const broken = [...report.broken, ...missing.map((metric) => `${metric}: not recorded`)];
+  const broken = judgeBroken(brokenProbes(report.broken, readings), state.runs.at(-1));
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const subject = execFileSync("git", ["log", "-1", "--format=%s"], { encoding: "utf8" }).trim();
   const at = new Date().toISOString();
-  const run = rememberRun(readings, { sha, run: options.run, at });
+  const run = rememberRun(readings, { sha, run: options.run, at }, broken);
   for (const reading of readings)
     if (!reading.missing)
       console.log(
@@ -393,11 +584,23 @@ async function judge(options: {
       red: outcome.next?.red,
       turnedRed: outcome.turnedRed,
       cleared: outcome.cleared,
-      broken,
+      broken: broken.map(({ probe, platform, redBecause }) => ({ probe, platform, redBecause })),
     }),
   );
   if (page) console.log(`\n${page}\n`);
   else console.log("latency: no change of state, nothing to page");
+  // Every broken probe on the job's summary, whatever its verdict, and a recorded one as a warning
+  // too: nothing else marks its run.
+  if (broken.length > 0 && process.env.GITHUB_STEP_SUMMARY)
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### Broken latency probes\n\n${broken.map((probe) => `- ${brokenLine(probe)}\n`).join("")}`,
+    );
+  for (const probe of broken)
+    if (!probe.redBecause)
+      console.log(
+        `::warning title=Latency probe broken by the platform::${escapeData(brokenLine(probe))}`,
+      );
 
   // The order is the state's: the page first, since a red it records must have been posted (a page
   // that could not post leaves the state as it was, so the next run owes it again); then the state,
@@ -411,14 +614,15 @@ async function judge(options: {
     mkdirSync(dirname(options.stateOut), { recursive: true });
     writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
   }
-  const events = latencyEvents(readings, {
+  const context = {
     sha,
     run: options.run,
     ref: options.ref,
     trigger: options.trigger,
     testRun,
     at,
-  });
+  };
+  const events = [...latencyEvents(readings, context), ...brokenEvents(broken, context)];
   if (options.dryRun) console.log(`dry run: ${events.length} PostHog events and the page not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
   else
@@ -426,14 +630,20 @@ async function judge(options: {
       apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
       host: "https://eu.i.posthog.com",
     });
-  if (broken.length > 0)
+  const red = broken.filter((probe) => probe.redBecause);
+  if (red.length > 0)
     throw new Error(
-      `the latency probe is broken:\n${broken.map((line) => `  ${line}`).join("\n")}`,
+      `the latency probe is broken:\n${red.map((probe) => `  ${brokenLine(probe)}`).join("\n")}`,
     );
 }
 
 function format(value: number) {
   return Math.round(value).toLocaleString("en-US");
+}
+
+/** A workflow command's data: its own `%` and line breaks escaped as the syntax asks. */
+function escapeData(text: string) {
+  return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
 if (isMainModule(import.meta.url)) {

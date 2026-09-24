@@ -105,13 +105,15 @@ preview as it is deployed, named by PR number or, without `--pr`, by its name (`
 one Main OS e2e keeps). CI does the same without redeploying:
 
 ```sh
-depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref main \
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref ci-soak/<name> \
   --input pull-request-number=<number> --input action=test
-depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref main \
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref ci-soak/<name> \
   --input preview-name=main --input action=e2e
 ```
 
-`action=test` runs both suites, `e2e` or `specs` one of them; dispatch one alone from `--ref main`
+`action=test` runs both suites, `e2e` or `specs` one of them. Dispatch from a scratch branch cut
+from main ([Run CI without a PR](../../docs/depot-ci.md#run-ci-without-a-pr)), never from main,
+whose head would carry the result, and one suite alone never from the PR's branch
 ([why](../../docs/depot-ci.md#run-the-suites-against-a-deployed-preview)). `reset` destroys that
 preview's state before redeploying; `delete` removes it. CI publishes URLs and operation links in
 the PR body, under a status line (deploying, deployed, deploy failed, with the CI job) and a line

@@ -1,15 +1,97 @@
-// context/residency.test.ts — `Residency` against fake deps and a fake clock: which activity moves
-// which quiet clock, what the alarm pass then does, and when the pins' timer releases. The one
-// decision both quiet deadlines share is tabled on its own (residency-watchdog.test.ts); the same
-// mechanisms inside workerd: __workers-tests__/residency-watchdog.test.ts, facet-birth-reset.test.ts,
+// context/residency.test.ts — `Residency` against fake deps and a fake clock: the sweep's one
+// decision as a table, which activity moves its quiet clock, what the alarm pass then does, and when
+// the pins' timer releases. The same mechanisms inside workerd: __workers-tests__/facet-birth-reset.test.ts,
 // alarm-and-pins.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS as SWEEP } from "./facet-host.ts";
-import { Residency } from "./residency.ts";
-import { RESIDENCY_WATCHDOG_WINDOW_MS as W } from "./residency-watchdog.ts";
+import { Residency, decideQuietDeadline, type QuietDeadlineDecision } from "./residency.ts";
 
 const T = Date.parse("2030-01-01T00:00:00Z");
+
+test.each<{
+  row: string;
+  armedFor: number | null;
+  now: number;
+  lastCallEndedAt: number | null;
+  workInFlight: number;
+  expected: QuietDeadlineDecision;
+}>([
+  {
+    row: "a fresh incarnation armed nothing: its armer was evicted, the wake does nothing",
+    armedFor: null,
+    now: T + SWEEP,
+    lastCallEndedAt: null,
+    workInFlight: 0,
+    expected: { action: "none" },
+  },
+  {
+    row: "a fresh incarnation with a call in flight still does nothing",
+    armedFor: null,
+    now: T + SWEEP,
+    lastCallEndedAt: T,
+    workInFlight: 3,
+    expected: { action: "none" },
+  },
+  {
+    row: "not yet due (an earlier deadline woke the alarm): the deadline stands",
+    armedFor: T + SWEEP,
+    now: T + SWEEP - 1,
+    lastCallEndedAt: T,
+    workInFlight: 0,
+    expected: { action: "none" },
+  },
+  {
+    row: "work in flight at the deadline: a whole window from now",
+    armedFor: T + SWEEP,
+    now: T + SWEEP,
+    lastCallEndedAt: T,
+    workInFlight: 1,
+    expected: { action: "rearm", at: T + 2 * SWEEP },
+  },
+  {
+    row: "activity ended inside the window: re-armed a window after it",
+    armedFor: T + SWEEP,
+    now: T + SWEEP,
+    lastCallEndedAt: T + 20_000,
+    workInFlight: 0,
+    expected: { action: "rearm", at: T + 20_000 + SWEEP },
+  },
+  {
+    row: "activity ended one millisecond inside the window: still re-armed",
+    armedFor: T + SWEEP,
+    now: T + SWEEP,
+    lastCallEndedAt: T + 1,
+    workInFlight: 0,
+    expected: { action: "rearm", at: T + 1 + SWEEP },
+  },
+  {
+    row: "quiet exactly one window, nothing in flight: due",
+    armedFor: T + SWEEP,
+    now: T + SWEEP,
+    lastCallEndedAt: T,
+    workInFlight: 0,
+    expected: { action: "due", idleSince: T },
+  },
+  {
+    row: "a late alarm (retries, a busy machine): due from the last activity's end",
+    armedFor: T + SWEEP,
+    now: T + 3 * SWEEP,
+    lastCallEndedAt: T + 10_000,
+    workInFlight: 0,
+    expected: { action: "due", idleSince: T + 10_000 },
+  },
+  {
+    row: "no activity has ended and none is in flight: the arming instant starts the quiet window",
+    armedFor: T + SWEEP,
+    now: T + SWEEP,
+    lastCallEndedAt: null,
+    workInFlight: 0,
+    expected: { action: "due", idleSince: T },
+  },
+])("the sweep's rule: $row", ({ expected, ...input }) => {
+  expect(decideQuietDeadline({ ...input, windowMs: SWEEP })).toEqual(expected);
+});
 
 test.for<{
   name: string;
@@ -17,13 +99,13 @@ test.for<{
   midway: (fixture: ReturnType<typeof residencyFixture>) => void;
   expected: {
     resets: number;
-    deadlines: { residencyWatchdog: number | null; unclaimedFacetSweep: number | null };
+    deadlines: { unclaimedFacetSweep: number | null };
   };
 }>([
   {
     name: "sweep: nothing since the facet was materialized — reset at the deadline, disarmed",
     midway: () => {},
-    expected: { resets: 1, deadlines: { residencyWatchdog: null, unclaimedFacetSweep: null } },
+    expected: { resets: 1, deadlines: { unclaimedFacetSweep: null } },
   },
   {
     name: "sweep: a call from outside ended midway — re-armed a window after it",
@@ -31,13 +113,7 @@ test.for<{
       residency.inboundCallStarted();
       residency.inboundCallEnded(false);
     },
-    expected: {
-      resets: 0,
-      deadlines: {
-        residencyWatchdog: T + SWEEP / 2 + W,
-        unclaimedFacetSweep: T + SWEEP / 2 + SWEEP,
-      },
-    },
+    expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + SWEEP / 2 + SWEEP } },
   },
   {
     name: "sweep: a call from loaded code ended midway — reset anyway (#2922)",
@@ -45,44 +121,29 @@ test.for<{
       residency.inboundCallStarted();
       residency.inboundCallEnded(true);
     },
-    expected: {
-      resets: 1,
-      deadlines: { residencyWatchdog: T + SWEEP / 2 + W, unclaimedFacetSweep: null },
-    },
+    expected: { resets: 1, deadlines: { unclaimedFacetSweep: null } },
   },
   {
     name: "sweep: a claim or a working alarm pass midway — re-armed a window after it",
     midway: ({ residency }) => residency.outsideActivityEnded(),
-    expected: {
-      resets: 0,
-      deadlines: { residencyWatchdog: null, unclaimedFacetSweep: T + SWEEP / 2 + SWEEP },
-    },
+    expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + SWEEP / 2 + SWEEP } },
   },
   {
     name: "sweep: an inbound call still in flight — a whole window from the pass",
     midway: ({ residency }) => residency.inboundCallStarted(),
-    expected: {
-      resets: 0,
-      deadlines: { residencyWatchdog: T + SWEEP / 2 + W, unclaimedFacetSweep: T + 2 * SWEEP },
-    },
+    expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + 2 * SWEEP } },
   },
   {
     name: "sweep: a pin call still in flight — a whole window from the pass",
     midway: ({ residency }) => residency.pinCallStarted(),
-    expected: {
-      resets: 0,
-      deadlines: { residencyWatchdog: null, unclaimedFacetSweep: T + 2 * SWEEP },
-    },
+    expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + 2 * SWEEP } },
   },
   {
     name: "sweep: a script run still in flight — a whole window from the pass",
     midway: ({ state }) => {
       state.scriptRunsInFlight = 1;
     },
-    expected: {
-      resets: 0,
-      deadlines: { residencyWatchdog: null, unclaimedFacetSweep: T + 2 * SWEEP },
-    },
+    expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + 2 * SWEEP } },
   },
 ])("$name", async ({ midway, expected }) => {
   const fixture = residencyFixture();
@@ -97,18 +158,17 @@ test.for<{
   }).toEqual(expected);
 });
 
-test("watchdog: armed by the first inbound call, one alarm write per window", () => {
+test("sweep: armed when a loaded facet is materialized, one alarm write per quiet period; an inbound call arms nothing", () => {
   const fixture = residencyFixture();
   fixture.residency.inboundCallInOneTurn();
+  fixture.residency.armUnclaimedFacetSweep();
   vi.setSystemTime(T + 1_000);
+  fixture.residency.armUnclaimedFacetSweep();
   fixture.residency.inboundCallInOneTurn();
   expect({
     reconciles: fixture.reconciles.count,
     deadlines: fixture.residency.deadlines(),
-  }).toEqual({
-    reconciles: 1,
-    deadlines: { residencyWatchdog: T + W, unclaimedFacetSweep: null },
-  });
+  }).toEqual({ reconciles: 1, deadlines: { unclaimedFacetSweep: T + SWEEP } });
 });
 
 test("the alarm's overdue watch hears when the first inbound call starts and the last one settles, never between", () => {
@@ -122,57 +182,6 @@ test("the alarm's overdue watch hears when the first inbound call starts and the
   expect({ heldChanges: fixture.heldChanges, held: fixture.residency.holdsResident() }).toEqual({
     heldChanges: [true, false, true, false],
     held: false,
-  });
-});
-
-test("watchdog: a quiet window records the incarnation once, and never arms again", async () => {
-  const fixture = residencyFixture();
-  fixture.state.liveFacetNames = ["agent"];
-  fixture.residency.inboundCallInOneTurn();
-  vi.setSystemTime(T + W);
-  await fixture.residency.alarmPassStarted(Date.now());
-  fixture.residency.inboundCallInOneTurn();
-  expect({
-    appended: fixture.appended,
-    warned: fixture.warn.mock.calls,
-    deadlines: fixture.residency.deadlines(),
-  }).toEqual({
-    appended: [
-      [
-        {
-          type: "events.iterate.com/context/held-resident-while-idle",
-          payload: {
-            incarnation: 7,
-            idleSince: new Date(T).toISOString(),
-            idleForMs: W,
-            liveFacets: ["agent"],
-            borrowedRpcStubs: 0,
-            rpcStubPagers: 0,
-            webSockets: 0,
-            libraryHoldsSocket: false,
-          },
-        },
-      ],
-    ],
-    warned: [
-      [
-        {
-          event: "context.held-resident-while-idle",
-          namespace: "iterate-context",
-          name: "project.iterate/",
-          durableObjectId: "context-id",
-          incarnation: 7,
-          idleSince: new Date(T).toISOString(),
-          idleForMs: W,
-          liveFacets: ["agent"],
-          borrowedRpcStubs: 0,
-          rpcStubPagers: 0,
-          webSockets: 0,
-          libraryHoldsSocket: false,
-        },
-      ],
-    ],
-    deadlines: { residencyWatchdog: null, unclaimedFacetSweep: null },
   });
 });
 
@@ -261,31 +270,23 @@ test("birth reset: nothing reset adds nothing to the wake record", async () => {
 function residencyFixture() {
   vi.useFakeTimers({ now: T });
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   onTestFinished(() => {
     vi.useRealTimers();
     log.mockRestore();
-    warn.mockRestore();
   });
   const state = {
     borrowed: false,
     scriptRunsInFlight: 0,
-    liveFacetNames: [] as string[],
     unclaimedLoadedFacets: ["site"],
   };
   const facetResets: string[][] = [];
-  const appended: unknown[] = [];
   const reconciles = { count: 0 };
   const released = { count: 0 };
   const heldChanges: boolean[] = [];
   const residency = new Residency({
     name: "project.iterate/",
-    ctx: {
-      id: { toString: () => "context-id" },
-      getWebSockets: () => [],
-    } as unknown as DurableObjectState,
     facetHost: {
-      snapshot: () => ({ facetWorkInFlight: 0, liveFacetNames: state.liveFacetNames }),
+      snapshot: () => ({ facetWorkInFlight: 0, liveFacetNames: [] }),
       resetUnclaimedLoadedFacets: async () => {
         facetResets.push(state.unclaimedLoadedFacets);
         return state.unclaimedLoadedFacets;
@@ -297,19 +298,9 @@ function residencyFixture() {
       returnBorrowedRpcStubs: () => {
         released.count += 1;
       },
-      rpcStubTransportState: () => ({
-        borrowedRpcStubs: 0,
-        rpcStubPagers: 0,
-        rpcStubPagesInFlight: 0,
-        dormant: true,
-      }),
     },
     library: { holdsOpenSocket: () => false, releaseConnections: () => {} },
     scriptRunsInFlight: () => state.scriptRunsInFlight,
-    incarnation: () => 7,
-    append: (events) => {
-      appended.push(events);
-    },
     reconcileAlarm: () => {
       reconciles.count += 1;
     },
@@ -317,5 +308,5 @@ function residencyFixture() {
       heldChanges.push(residency.holdsResident());
     },
   });
-  return { residency, state, facetResets, appended, reconciles, released, heldChanges, log, warn };
+  return { residency, state, facetResets, reconciles, released, heldChanges, log };
 }

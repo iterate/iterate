@@ -50,6 +50,7 @@ import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.
 import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  FETCH_UPGRADE_RESUMABLE_HEADER,
   ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionFetchCall,
   RpcStubFetchServer,
@@ -61,7 +62,7 @@ import {
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
-import { ALARM_MAX_WATCH_PASSES, AlarmCoordinator } from "./alarm-coordinator.ts";
+import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
 import { secretPathsReferenced } from "./secrets.ts";
@@ -117,17 +118,12 @@ export type AlarmTrace = {
     deliveryOmitted: number;
     /** The hosted processors holding a claim (`processors.claim`): a revive owed by `at`. */
     claims: { name: string; at: number }[];
-    /** The residency watchdog's deadline — in memory, so null in a fresh incarnation. */
-    residencyWatchdog: number | null;
-    /** The unclaimed-facet sweep's deadline — in memory, like the watchdog's. */
+    /** The unclaimed-facet sweep's deadline — in memory, so null in a fresh incarnation. */
     unclaimedFacetSweep: number | null;
   };
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
   dueSchedules?: number;
-  /** On `alarm-fired`: the runtime held this alarm past its time, and the overdue watch ran the
-   *  pass itself (alarm-coordinator.ts). */
-  overdueWatch?: true;
   facetWorkInFlight: number;
   /** Names, at most 32. */
   liveFacets: string[];
@@ -192,7 +188,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
   /** context/rpc-stubs.ts — wired to `fetch` and the two WebSocket handlers below. */
-  readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx);
+  readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
+    deployId: this.#appConfig.deployId,
+    path: this.#durableObjectAddress.path,
+  });
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
@@ -307,7 +306,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#stream.appendBirthRecord();
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
-      // source wants (the last incarnation's watchdog or sweep) is superseded instead.
+      // source wants (the last incarnation's sweep) is superseded instead.
       this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
   }
@@ -345,8 +344,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,
    *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
-   *  `request` wake record — in that order, so the watchdog is armed before the wake's commit
-   *  reconciles the alarm. */
+   *  `request` wake record. */
   #inboundRequestInOneTurn(): void {
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
@@ -529,7 +527,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
    *  delivery) keeps caller attribution and committed effects and records no wake (it runs inside
    *  an incarnation a request or alarm already woke) — nor is it an inbound call to the residency
-   *  watchdog; the caller defaults to the one already in AsyncLocalStorage, so a loopback's
+   *  clocks; the caller defaults to the one already in AsyncLocalStorage, so a loopback's
    *  appends stay attributed. */
   readonly #localContext: ReachableContext = {
     fetch: (request) => this.#serveFetch(request),
@@ -714,52 +712,36 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ...Object.values(this.#residency.deadlines()),
     ],
     held: () => this.#residency.holdsResident(),
-    // The watch's own pass runs as the runtime's delivery would: under no caller (the timer fires in
-    // whatever call armed it, and an append must never be stamped as that caller's).
-    runOverduePass: () =>
-      void this.#callerStorage
-        .exit(() => this.#alarmPass({ delivered: false }))
-        .catch((error) =>
-          // The runtime reports a delivered pass that throws; this one is the watch's to report. Its
-          // alarm stays stored: the runtime's delivery, when it comes, is the retry.
-          reportIssue("iterate-context.overdue-pass", error, {
-            name: this.#durableObjectAddress.name,
-          }),
-        ),
-    // The platform fault the watch works around (alarm-coordinator.ts): a re-arm or a pass of its own
-    // is a warn the prd fault alarm counts; a give-up is an error — nothing here acts again for it.
-    onOverdue: ({ armedAt, overdueMs, action }) => {
+    // The platform fault the watch works around (alarm-coordinator.ts): a re-arm is a warn the prd
+    // fault alarm counts, and its telemetry pin (PINNED_WORKAROUNDS) waits out; a give-up is an
+    // error — nothing here acts again for it.
+    onOverdue: ({ armedAt, overdueMs, action, rearms }) => {
       const detail = {
         name: this.#durableObjectAddress.name,
         armedAt: new Date(armedAt).toISOString(),
         overdueMs,
+        rearms,
       };
       if (action === "give-up")
         reportIssue(
           "iterate-context.alarm-overdue",
           new Error(
-            `the alarm armed for ${detail.armedAt} is still due ${overdueMs} ms past its time after ${ALARM_MAX_WATCH_PASSES} passes of the overdue watch`,
+            `the alarm armed for ${detail.armedAt} is still due ${overdueMs} ms past its time after ${ALARM_MAX_REARMS} re-arms of the overdue watch`,
           ),
           detail,
         );
       else
         console.warn({
-          event:
-            action === "pass"
-              ? "iterate-context.platform-failure-alarm-pass"
-              : "iterate-context.platform-failure-alarm-rearm",
+          event: "iterate-context.platform-failure-alarm-rearm",
           namespace: "iterate-context",
-          message:
-            action === "pass"
-              ? "the runtime held an armed alarm past its time; this context ran the pass itself"
-              : "the runtime held an armed alarm past its time; re-armed it for now",
+          message: "the runtime held an armed alarm past its time; re-armed it for now",
           ...detail,
         });
     },
   });
 
   /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the residency watchdog and the unclaimed-facet sweep are this incarnation's alone. */
+   *  claims; the unclaimed-facet sweep is this incarnation's alone. */
   #durableAlarmDeadlines(): (number | null)[] {
     return [
       this.#stream.nextScheduledAppendAt(),
@@ -786,19 +768,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     loadedFacetMaterialized: () => this.#residency.armUnclaimedFacetSweep(),
   });
 
-  // ── RESIDENCY (context/residency.ts): the pins' release, the watchdog, the sweep, the birth reset ──
+  // ── RESIDENCY (context/residency.ts): the pins' release, the sweep, the birth reset ──
 
-  // Annotated because TypeScript cannot infer it: its `incarnation` reads `#stream`, whose
+  // Annotated because TypeScript cannot infer it: its `facetHost` holds `#stream`, whose
   // `wakeRecordDetail` reads this field back (TS7022).
   readonly #residency: Residency = new Residency({
     name: this.#durableObjectAddress.name,
-    ctx: this.ctx,
     facetHost: this.#facetHost,
     rpcStubs: this.#rpcStubs,
     library: this.#library,
     scriptRunsInFlight: () => this.#scriptRunsInFlight.size,
-    incarnation: () => this.#stream.storage.incarnation,
-    append: (events) => this.#appendAndRunCommittedEffects(events),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     inboundCallsHeldChanged: () => this.#alarmCoordinator.watch(),
   });
@@ -806,7 +785,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #traceAlarm(
     reason: AlarmTrace["reason"],
     before: number | null,
-    extra: Pick<AlarmTrace, "error" | "dueSchedules" | "overdueWatch"> = {},
+    extra: Pick<AlarmTrace, "error" | "dueSchedules"> = {},
   ) {
     const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
@@ -890,122 +869,101 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
    *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
    *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. The residency watchdog and the unclaimed-facet sweep are decided first in
-   *  every pass; a wake with nothing durable due is theirs alone and does nothing else. */
+   *  from what is left. The unclaimed-facet sweep is decided first in every pass; a wake with
+   *  nothing durable due is the sweep's alone and does nothing else. */
   async alarm(): Promise<void> {
-    await this.#alarmPass({ delivered: true });
-  }
-
-  /** The passes, ONE AT A TIME: the runtime's delivery (`alarm()`) and the overdue watch's own pass
-   *  (alarm-coordinator.ts), which may meet when the runtime delivers a held alarm late. */
-  #alarmPasses: Promise<unknown> = Promise.resolve();
-  #alarmPass({ delivered }: { delivered: boolean }): Promise<void> {
-    const pass = this.#alarmPasses.then(() => this.#runAlarmPass({ delivered }));
-    this.#alarmPasses = pass.catch(() => {});
-    return pass;
-  }
-
-  async #runAlarmPass({ delivered }: { delivered: boolean }): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
-    // THE WATCHDOG'S OR THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
+    // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
     if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
-      await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt), {
-        delivered,
-      });
+      await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
     }
     try {
-      await this.#alarmCoordinator.pass(
-        async () => {
-          await this.#residency.alarmPassStarted(wokeAt);
-          // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
-          // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
-          // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
-          this.#stream.appendWakeRecord("alarm");
-          // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
-          // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
-          const now = Date.now();
-          const due = Object.values(this.#stream.coreReducedState.schedules)
-            .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
-            .sort(
-              (a, b) =>
-                Date.parse(a.nextAt) - Date.parse(b.nextAt) ||
-                a.scheduledAtOffset - b.scheduledAtOffset,
-            )
-            .slice(0, 32);
-          this.#traceAlarm("alarm-fired", fired, {
-            dueSchedules: due.length,
-            ...(!delivered && { overdueWatch: true }),
-          });
-          for (const row of due) {
-            if (this.#stream.coreReducedState.paused) break;
-            if (
-              this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-              row.scheduledAtOffset
-            )
-              continue;
-            const payload = {
-              key: row.key,
-              scheduledAtOffset: row.scheduledAtOffset,
-              at: row.nextAt,
-            };
-            try {
-              this.#appendAndRunCommittedEffects([
-                ...row.events.map((event) => ({
-                  ...event,
-                  source: {
-                    schedule: {
-                      ...payload,
-                      ...((row.source?.processor || row.source?.principal) && {
-                        definedBy: {
-                          ...(row.source?.processor && { processor: row.source.processor }),
-                          ...(row.source?.principal && { principal: row.source.principal }),
-                        },
-                      }),
-                    },
+      await this.#alarmCoordinator.pass(async () => {
+        await this.#residency.alarmPassStarted(wokeAt);
+        // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
+        // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
+        // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
+        this.#stream.appendWakeRecord("alarm");
+        // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
+        // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
+        const now = Date.now();
+        const due = Object.values(this.#stream.coreReducedState.schedules)
+          .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
+          .sort(
+            (a, b) =>
+              Date.parse(a.nextAt) - Date.parse(b.nextAt) ||
+              a.scheduledAtOffset - b.scheduledAtOffset,
+          )
+          .slice(0, 32);
+        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length });
+        for (const row of due) {
+          if (this.#stream.coreReducedState.paused) break;
+          if (
+            this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+            row.scheduledAtOffset
+          )
+            continue;
+          const payload = {
+            key: row.key,
+            scheduledAtOffset: row.scheduledAtOffset,
+            at: row.nextAt,
+          };
+          try {
+            this.#appendAndRunCommittedEffects([
+              ...row.events.map((event) => ({
+                ...event,
+                source: {
+                  schedule: {
+                    ...payload,
+                    ...((row.source?.processor || row.source?.principal) && {
+                      definedBy: {
+                        ...(row.source?.processor && { processor: row.source.processor }),
+                        ...(row.source?.principal && { principal: row.source.principal }),
+                      },
+                    }),
                   },
-                })),
-                { type: "events.iterate.com/stream/append-schedule-completed", payload },
-              ]);
-              console.log({
-                event: "scheduled-append.completed",
-                namespace: "iterate-context",
-                ...payload,
-                count: row.events.length,
-                latenessMs: now - Date.parse(row.nextAt),
-              });
-            } catch (error) {
-              // If the commit succeeded but a subsequent effect threw, preserve the completion and let
-              // the platform retry recovery. Otherwise park this definition visibly, without a loop.
-              if (
-                this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
-                this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-                  row.scheduledAtOffset
-              ) {
-                reportIssue("scheduled-append.effect-failed", error, payload);
-                throw error;
-              }
-              this.#appendAndRunCommittedEffects([
-                {
-                  type: "events.iterate.com/stream/append-schedule-failed",
-                  payload: { ...payload, error: String(error).slice(0, 2000) },
                 },
-              ]);
-              reportIssue("scheduled-append.failed", error, payload);
+              })),
+              { type: "events.iterate.com/stream/append-schedule-completed", payload },
+            ]);
+            console.log({
+              event: "scheduled-append.completed",
+              namespace: "iterate-context",
+              ...payload,
+              count: row.events.length,
+              latenessMs: now - Date.parse(row.nextAt),
+            });
+          } catch (error) {
+            // If the commit succeeded but a subsequent effect threw, preserve the completion and let
+            // the platform retry recovery. Otherwise park this definition visibly, without a loop.
+            if (
+              this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
+              this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+                row.scheduledAtOffset
+            ) {
+              reportIssue("scheduled-append.effect-failed", error, payload);
+              throw error;
             }
+            this.#appendAndRunCommittedEffects([
+              {
+                type: "events.iterate.com/stream/append-schedule-failed",
+                payload: { ...payload, error: String(error).slice(0, 2000) },
+              },
+            ]);
+            reportIssue("scheduled-append.failed", error, payload);
           }
-          // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
-          // the deadline it leaves is the one derived below.
-          await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-          // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
-          // revive may make is the one derived below.
-          await this.#facetHost.reviveDueClaims();
-        },
-        { delivered },
-      );
+        }
+        // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
+        // the deadline it leaves is the one derived below.
+        await this.#subscriptionDelivery.deliverEveryCursorSubscription();
+        // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
+        // revive may make is the one derived below.
+        await this.#facetHost.reviveDueClaims();
+      });
     } catch (error) {
       this.#traceAlarm("alarm-abandoned", fired, { error: String(error).slice(0, 256) });
       throw error;
@@ -1015,8 +973,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** DO-only, for the tests that run inside workerd (`__workers-tests__/support.ts` `owedAlarm`): the
-   *  deadlines on the one alarm that are this incarnation's alone and owe nothing — the residency
-   *  watchdog's and the unclaimed-facet sweep's. */
+   *  deadline on the one alarm that is this incarnation's alone and owes nothing — the
+   *  unclaimed-facet sweep's. */
   inMemoryAlarmDeadlines(): (number | null)[] {
     return Object.values(this.#residency.deadlines());
   }
@@ -1098,8 +1056,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── native fetch: the rpc-stub pager, an `x-itx-expression` fetch, egress ──
 
-  /** Ends when the Response is handed back — a body still streaming after that is not counted, so
-   *  a stream longer than the watchdog's window is recorded as held. */
+  /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
     this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
@@ -1262,6 +1219,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const headers = new Headers(request.headers);
     stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
+    headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);

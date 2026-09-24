@@ -15,6 +15,13 @@ resource leaks.
   fault logs a warn whose `event` is `<area>.platform-failure-<action>`: the
   [prd fault alarm](../scripts/ci/prd-fault-alarm.ts) pages on bursts of those,
   on any os-prd 5xx, and on error bursts.
+- A workaround for an upstream defect (a library, Cloudflare, a vendor) stays
+  only while a [`createFailing`](testing.md#pinned-bugs-createfailingtest--not-bare-testfails)
+  test pins the defect, so the pin goes red once upstream fixes it. The
+  exception is a defect too rare to reproduce in a test, such as the held
+  Durable Object alarm ([alarm-coordinator.ts](../apps/os/src/alarm-coordinator.ts)).
+  Its heal's absence from prd is the pin: `PINNED_WORKAROUNDS` in the prd fault
+  alarm posts once after 28 days without it.
 - A healthy request is not enough if it leaves corrupt, stalled, or divergent
   state behind. Verify the resulting state and the relevant production-shaped
   telemetry.

@@ -19,6 +19,7 @@
 // (first-party-facets.ts): ordinary bundled worker code, reached as `itx.facets.get("workspace")`
 // (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/durable-object.ts";
 import {
@@ -90,11 +91,15 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** The entity lifecycle (src/project/entity-lifecycle.ts), with nothing to provision: the overlay
    *  is this facet's own storage, born with it and deleted with it. */
-  processor = new EntityLifecycleProcessor(WorkspaceContract, (call) => this.withItx(call));
+  processor = new EntityLifecycleProcessor(
+    WorkspaceContract,
+    (call) => this.withItx(call),
+    () => this.#path,
+  );
 
-  #pathRead?: string;
-  async #path(): Promise<string> {
-    return (this.#pathRead ??= (await this.withItx((itx) => itx.whoami())).path);
+  /** The workspace's path: the context's name in this facet's props, so no call reads it. */
+  get #path(): string {
+    return DurableObjectNameCodec.parse(this.ctx.props.iterateContextName).path;
   }
 
   // ── the overlay: this facet's own SQLite, one row per touched path — content, or a whiteout (`deleted`) ──
@@ -128,7 +133,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** Every verb starts here (`assertCreated`). */
   async #created(): Promise<void> {
-    assertCreated("workspace", await this.#path(), (await this.snapshot()).state);
+    assertCreated("workspace", this.#path, (await this.snapshot()).state);
   }
 
   /** The mount table: every repo in the project catalog at its OWN path. */

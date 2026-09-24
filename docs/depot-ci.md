@@ -19,8 +19,7 @@ replays.
 - A merge to main just deploys: each app's deploy workflow finishes in about two minutes, and
   runs only when the merge touches what that app ships ([Which main pushes deploy](#which-main-pushes-deploy)).
 - Main OS e2e (its preview redeployed in place, then e2e) may run in parallel, but nothing waits
-  on it; so does the latency guard (`os-latency.yml`), on a preview of its own
-  ([Main OS e2e keeps one preview](#main-os-e2e-keeps-one-preview)).
+  on it ([Main OS e2e keeps one preview](#main-os-e2e-keeps-one-preview)).
 - No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
   (Durable Object cost, prd faults) in a scheduled alarm (`do-duration-probe.yml`,
   `prd-fault-alarm.yml`), not in a gate on the merge path.
@@ -50,7 +49,9 @@ replays.
 - Workflow files: `.depot/workflows/*.yml`
 - CI scripts: `scripts/ci/*.ts`
 - Custom image:
-  `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`
+  `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`;
+  Kit Firmware's build legs run on their own,
+  `0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24`
 - `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
   credentials live in Doppler; GitHub supplies a short-lived job token.
 - Non-secret variables are managed with `depot ci vars`.
@@ -70,32 +71,33 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 
 ## Workflows
 
-| File                         | Runs on                                                  | What it does                                                                                            |
-| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `lint-typecheck.yml`         | PR, main push, dispatch                                  | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                  |
-| `test.yml`                   | PR, main push                                            | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
-| `loc-report.yml`             | PR, dispatch                                             | The LOC table in the PR body                                                                            |
-| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed            | The Slack PR update and the daily PR dashboard                                                          |
-| `preview-os.yml`             | Every PR, dispatch                                       | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
-| `preview-delete.yml`         | Such a PR closing, dispatch                              | Deletes the PR's preview                                                                                |
-| `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                   |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, trace, alert     |
-| `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                  |
-| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
-| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                |
-| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image))                                                      |
-| `do-duration-probe.yml`      | Hourly, dispatch                                         | Durable Object cost alarm for both Cloudflare accounts                                                  |
-| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                        |
-| `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                      |
-| `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
-| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
-| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
-| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records and row costs into [#2580](https://github.com/iterate/iterate/issues/2580)      |
-| `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
-| `pr-ttg.yml`                 | Hourly, dispatch                                         | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
-| `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                   |
-| `shadcn-drift.yml`           | PR touching the vendored shadcn files, dispatch          | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)          |
-| `shadcn-upstream.yml`        | Daily, dispatch                                          | Posts to #ci when shadcn's registry moves past packages/ui's vendored files                             |
+| File                         | Runs on                                             | What it does                                                                                            |
+| ---------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `lint-typecheck.yml`         | PR, main push, dispatch                             | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                  |
+| `test.yml`                   | PR, main push                                       | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
+| `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                                            |
+| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                                          |
+| `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
+| `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                                                |
+| `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews and orphaned preview resources                                                   |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, trace, alert     |
+| `deploy-os.yml`              | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                                                  |
+| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
+| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                                                |
+| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch | Bakes the CI image ([Custom Image](#custom-image)) when the live image's stamp is stale                 |
+| `build-esp-idf-image.yml`    | Main push touching `esp-idf.sh`, weekly, dispatch   | Bakes Kit Firmware's legs' image: Node 24 and ESP-IDF ([Kit firmware releases](#kit-firmware-releases)) |
+| `do-duration-probe.yml`      | Hourly, dispatch                                    | Durable Object cost alarm for both Cloudflare accounts                                                  |
+| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                          | Reads production's Workers Logs and pages #error-pulse on faults                                        |
+| `os-crash-hunt.yml`          | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                                      |
+| `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
+| `os-latency.yml`             | Every 3 hours, dispatch                             | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
+| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch    | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
+| `flake-dashboard.yml`        | Hourly, dispatch                                    | Folds the flake records and row costs into [#2580](https://github.com/iterate/iterate/issues/2580)      |
+| `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                                                |
+| `pr-ttg.yml`                 | Hourly, dispatch                                    | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
+| `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                                   |
+| `shadcn-drift.yml`           | PR touching the vendored shadcn files, dispatch     | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)          |
+| `shadcn-upstream.yml`        | Daily, dispatch                                     | Posts to #ci when shadcn's registry moves past packages/ui's vendored files                             |
 
 Each file's header comment and `on:` block are the details.
 
@@ -134,7 +136,7 @@ Fetch logs and diagnostics:
 depot ci logs <attempt-id> --org 0p91s0lz49
 depot ci logs <job-id> --org 0p91s0lz49 --follow
 depot ci metrics --run <run-id> --org 0p91s0lz49
-depot ci diagnose <run-id> --org 0p91s0lz49
+depot ci diagnose --run <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
 
@@ -243,16 +245,129 @@ Agents babysitting a PR: the wait-loop rules (gate on the head commit's
 check-runs, Bugbot's check-run and unresolved threads, a push obsoletes every
 monitor) are in [Pull requests](pull-requests.md#agent-wait-loops-gate-on-the-head-commits-check-runs).
 
-## Run A Workflow From Your Checkout
+## Run CI without a PR
 
-`depot ci run` runs a workflow through Depot using your local checkout. If you
-have local changes, Depot uploads them as a patch and applies them in the CI
-sandbox.
+Never open a pull request only to run CI, and never run CI on main's commit.
+Push a scratch branch and run against its head. `depot ci run` runs any
+workflow file, whatever its `on:` (Test has no `workflow_dispatch`).
+`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Every
+check lands on the scratch commit, and no PR body changes unless a Preview OS
+dispatch names a PR.
+
+Auth: `depot login`, or the organization token from Doppler:
 
 ```bash
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml --job test
+export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
 ```
+
+The scratch branch is main plus an empty commit (or the commit to soak), pushed
+under its local name:
+
+```bash
+git fetch origin main
+git worktree add -b ci-soak/<name> ../ci-soak-<name> origin/main
+cd ../ci-soak-<name>
+git commit --allow-empty -m "ci soak <name>"
+git push -u origin HEAD        # also creates the local origin/ci-soak/<name>
+
+depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml
+depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
+  --ref ci-soak/<name> --input runs=20 --input preview=soak-<name>
+```
+
+When done: `git push origin --delete ci-soak/<name>`, remove the worktree, and
+delete any preview the soak named (`pnpm --dir apps/os preview delete --name soak-<name>`).
+
+### The commit a run reports on
+
+`depot ci run` diffs the working tree against a base: the local
+`origin/<branch>` when it exists, else the merge base with `origin/main`
+([depot/cli `findMergeBase`](https://github.com/depot/cli/blob/v2.102.13/pkg/cmd/ci/run.go)).
+With no difference the run is `HEAD`; with one, the run is the base commit and
+the job applies the difference as a patch. Every check lands on that commit:
+
+- Nothing unpushed or uncommitted on a branch pushed under its own name:
+  `HEAD`, and the command prints no `Base:` line.
+- Changes on such a branch: `Base: origin/<branch>`, and the pushed commit gets
+  the checks. Use this to try a workflow edit without pushing it.
+- A branch with no local `origin/<branch>` (unpushed, pushed under another
+  name, or a detached `HEAD`): `Base: origin/main`, and the checks land on
+  main's commit. Stop and push the branch under its own name. On 2026-09-24
+  such a run posted a red Lint and Typecheck on main's head, `a8e6c6525`.
+- A clean `main`: main's head, and the job gets `GITHUB_REF=refs/heads/main`
+  (run `40b7c4vnsn`). It then shares main's concurrency groups, `test-main`
+  and `lint-typecheck-main`, whose `cancel-in-progress` can cancel main's own
+  run.
+
+`depot ci dispatch --ref <branch>` runs and reports on the branch's head. With
+`--ref main`, that is main's head.
+
+Before a second run, see where the first one's checks went:
+
+```bash
+gh api "repos/iterate/iterate/commits/$(git rev-parse HEAD)/check-runs" --jq '.check_runs[].name'
+```
+
+GitHub shows the scratch commit's latest check per job name, not one per run,
+so count a soak in Depot.
+
+### What the jobs see
+
+Probed on 2026-09-24 from a scratch branch with CLI 2.102.12 and 2.102.13
+(runs `xdhdqwvpzg`, `n1vsn3klvq` and `8q19nfxf4n`):
+
+|                                                     | `depot ci run`                      | `depot ci dispatch --ref ci-soak/<name>`                                         |
+| --------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
+| `github.event_name`                                 | `api`                               | `workflow_dispatch`                                                              |
+| `github.ref` / `ref_name`                           | empty                               | `refs/heads/ci-soak/<name>` / `ci-soak/<name>`                                   |
+| `github.sha`                                        | the commit above                    | the branch's head                                                                |
+| `github.event`                                      | `repository` only                   | `inputs`, `ref`, `repository`, `workflow`                                        |
+| `inputs.*`                                          | empty: defaults are not applied     | as given, else the defaults                                                      |
+| Which workflows                                     | any file, local or committed        | `workflow_dispatch` ones, read from the branch (one only the branch has too)     |
+| `if: github.event_name == 'pull_request'` jobs      | skipped                             | skipped                                                                          |
+| Group `x-${{ head_ref \|\| ref_name \|\| run_id }}` | the run id: N runs run side by side | `x-ci-soak/<name>`: with `cancel-in-progress`, a dispatch cancels the one before |
+
+A dispatch of `test.yml` fails with `Workflow 'test.yml' not found or does not
+have workflow_dispatch trigger`. Preview OS under `ci run` skips every job,
+since its jobs need a pull request or a dispatch's inputs: dispatch it. LOC
+report under `ci run` prints its table (`No pull request context`) and writes
+no body. Downstream a scratch run is an ordinary one: the flake dashboard folds
+a Test run's flake records (it lists workflows by name), the hourly telemetry
+sync sends the run to PostHog with trigger `api` or `workflow_dispatch`, and
+test evidence goes to R2 under `trust=pr`. PR time to green reads pull requests
+only.
+
+### Soak: N runs, then read them
+
+Test or Lint and Typecheck: N `depot ci run`s side by side. Three Test runs of
+one scratch commit (`wxfblqgbr8`, `mdkbdk6tzb`, `whmht81htk`) ran side by side
+and each finished in 2 to 2.5 minutes. The e2e suite: `os-e2e-soak.yml`'s `runs` input, not N
+dispatches. Preview OS dispatches that name no PR share one concurrency group,
+`preview-os-none`, where a newer pending run replaces an older one.
+
+```bash
+for i in $(seq 10); do
+  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml | awk '/^Run:/ {print $2}'
+done | tee soak-runs.txt
+
+# the tally; --name takes the workflow's name: ("Lint and Typecheck"). Rerun until none is queued or running.
+depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name Test \
+  --sha "$(git rev-parse HEAD)" -n 200 --output json \
+  --status queued --status running --status finished --status failed --status cancelled |
+  jq -r 'group_by(.status)[] | "\(.[0].status) \(length)"'
+
+# one run: its failure groups, its attempts, then an attempt's log and more
+depot ci diagnose --run <run-id> --org 0p91s0lz49
+depot ci status <run-id> --org 0p91s0lz49
+depot ci logs <attempt-id> --org 0p91s0lz49
+depot ci summary <attempt-id> --org 0p91s0lz49      # Test: where its R2 evidence went
+depot ci metrics --run <run-id> --org 0p91s0lz49
+depot ci artifacts list <run-id> --org 0p91s0lz49   # flake records, telemetry
+```
+
+These commands read a `ci run` run as they read any other. The one difference
+is that `status` and `artifacts list` name its jobs `_inline_0.yaml:<job>`.
 
 Use SSH for interactive debugging of a single job:
 
@@ -293,13 +408,13 @@ without redeploying it; `e2e` and `specs` run one of them. Name the preview by
 e2e keeps), and they run the dispatched ref's suite:
 
 ```bash
-# both suites against PR 1234's preview
+# both suites against PR 1234's preview, from a scratch branch cut from main
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow preview-os.yml --ref main \
+  --workflow preview-os.yml --ref ci-soak/<name> \
   --input pull-request-number=1234 --input action=test
 # E2E tests alone, main's suite against main's preview
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow preview-os.yml --ref main \
+  --workflow preview-os.yml --ref ci-soak/<name> \
   --input preview-name=main --input action=e2e
 # Browser specs alone, a branch's specs against a preview by name
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
@@ -310,8 +425,13 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 A dispatch posts its checks on its ref's head commit, replacing that commit's
 checks of the same name, and GitHub counts a job it skips as passing. So a
 dispatch of one suite from a PR's branch marks the PR's other suite skipped,
-green, on the PR's head: dispatch a PR's suite alone with `--ref main`, which
-tests that PR's tree all the same, and from a branch run `test` or `deploy`.
+green, on the PR's head: dispatch a PR's suite alone from a scratch branch cut
+from main ([Run CI without a PR](#run-ci-without-a-pr)), which tests that PR's
+tree all the same, and from the PR's branch run `test` or `deploy`. Not from
+`--ref main`: that posts the suite's result on main's head. Such a dispatch
+(`f6qx3gjvlq`, PR #3090's specs) put its checks on the scratch commit and none
+on the PR's head. It still updated the suite's line in the PR body and posted
+the CI trace and Playwright report statuses on the PR's head.
 A preview by name may be redeployed under the dispatch by its own workflow
 (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview
 specs` do the same ([apps/os/README.md](../apps/os/README.md)).
@@ -340,7 +460,8 @@ fails its `Check the project hosts` step. Check the hosts from `main` by hand:
 
 1. Edit `.depot/workflows/<name>.yml`.
 2. If a step needs real logic, add or update a script under `scripts/ci`.
-3. Validate the workflow locally with `depot ci run`.
+3. Validate the workflow with `depot ci run` from a scratch branch
+   ([Run CI without a PR](#run-ci-without-a-pr)).
 4. Watch the PR checks in GitHub or with the `watch` commands above.
 
 Prefer small YAML wrappers around scripts. For example:
@@ -386,8 +507,7 @@ freshness:
   two at once would redeploy it under each other's tests, and every started run
   reaches a verdict. Pushes that land meanwhile collapse to the newest pending
   run. The latency guard (`os-latency.yml`, group `os-latency`, preview
-  `latency`) is built the same way for the same reason, and cutting a
-  measurement short at every merge would starve it. So is the real-model suite
+  `latency`) is built the same way for the same reason. So is the real-model suite
   (`os-real-model.yml`, group `os-real-model`, preview `real-model`).
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
@@ -431,25 +551,33 @@ newest `kit-firmware/<device>/<version>` release, and each one builds in its own
 nothing, runs only `gh` and `jq` on the legs' artifacts, and creates releases only
 on main, where it then downloads every new file through `k.iterate.com` and
 compares the bytes. Deploy Kit builds no firmware. The ESP-IDF pin lives in
-`scripts/depot-ci/esp-idf.sh` and in each target's `dependencies.lock`. The CI
-image carries that ESP-IDF, so a leg downloads none of it: `esp-idf.sh ensure`
-checks the image's receipt against the script and installs from the network,
-with a warning, only while they differ (a pull request that changes the script,
-or main until the image bake that change triggers finishes). The legs still
-fetch each target's managed components. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
+`scripts/depot-ci/esp-idf.sh` and in each target's `dependencies.lock`. The legs
+run on an image of their own, `iterate-esp-idf-ci:node24`, holding only Node 24
+and that ESP-IDF (`build-esp-idf-image.yml` bakes it when the script changes on
+main, and weekly), so a leg downloads none of it and the shared image is 3.9 GB
+smaller. `esp-idf.sh ensure` checks the image's receipt against the script and
+installs from the network, with a warning, only while they differ (a pull
+request that changes the script, or main until the image bake that change
+triggers finishes). The legs still fetch each target's managed components.
+Plan, Publish and the failure notice run on the shared image. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
 
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
-It contains Node, pnpm, workspace dependencies, Doppler CLI, the preview
-browser, and Kit Firmware's ESP-IDF ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
+It contains Node, pnpm, workspace dependencies, Doppler CLI and the preview
+browser; Kit Firmware's ESP-IDF has an image of its own ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `8x32`, or `16x64` from measured workload demand. Deploy preview, E2E tests
 and Browser specs each run on `4x16`, the two suites on runners of their own.
 The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
-rebuild as drift repair. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
+rebuild as drift repair. A push's run first checks the live image on `2x8`:
+when the commit's fingerprint (below) equals the image's own stamp, as after a
+`package.json` edit outside the install fields or a revert, it bakes nothing,
+because every bake leaves the next jobs paging in a new image. The schedule and
+a dispatch always bake, and runs for one tag go one at a time, so a push's check
+reads the image the bake before it published. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
 Lint and Typecheck, OS crash hunt and OS e2e soak jobs run
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
@@ -487,7 +615,7 @@ false hit. The `image-tag` dispatch input allows isolated experiment images.
 The fingerprint includes the lockfile, manifests (including new/deleted ones;
 only their install fields, so editing a package's `test` script does not force a
 reinstall), workspace config, pnpm hook, npm config, patches, local file dependency sources,
-bake script, verifier, checkout path, Node version, OS/architecture and install
+bake script and workflow, verifier, checkout path, Node version, OS/architecture and install
 configuration environment. Reuse also checks pnpm's installed metadata and the
 workspace module directory listings. New workspace lifecycle scripts disable
 reuse; the current root `is-ci || husky` prepare is a no-op in CI.
@@ -519,10 +647,14 @@ can two workflows that name the same group: Depot wakes "a peer workflow in the
 same concurrency group" when the slot frees
 ([Depot's orchestrator](https://depot.dev/blog/building-ci-with-durable-lambda)),
 as GitHub does. For the Preview OS workflow, a manual dispatch, an automatic PR
-run and the Preview delete run for the same PR share `preview-os-<pr>` with
-`cancel-in-progress: false`: neither cancels the running one, but a newer
-pending run replaces an older pending one, so a dispatch queued behind a push
-can silently disappear. When validating previews, use one path at a time.
+run and the Preview delete run for the same PR share `preview-os-<pr>`. Only a
+push cancels the run in progress (`cancel-in-progress` is true for
+`pull_request` alone), whether a push's or a dispatch's run: its verdict would
+be out of date, Depot starts none of the cancelled run's `always()` jobs, and
+the next run redeploys the whole preview, which repairs a deploy cut short. A
+dispatch or a delete cancels nothing, but a newer pending run replaces an older
+pending one, so a dispatch queued behind a push can silently disappear. When
+validating previews, use one path at a time.
 
 `depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
 jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
@@ -751,13 +883,14 @@ and OTLP JSON export.
 `pr-ttg.yml` runs `scripts/ci/pr-ttg-guard.ts` every hour. It reads from
 Depot's API how long each pull request push waited for its checks: Lint and
 Typecheck, Test, and Preview OS. The wait runs from the run's creation (about
-the push) to the end of the last check, the Preview OS trace job included:
+the push) to the end of the last check, Preview OS's at its last job before the
+CI trace, which only reports:
 
 - **Time to green**: the pushes whose checks all passed on their first
   execution.
 - **Time to first verdict**: every push, red ones and re-run ones at their
-  first execution's end, so flakes count. A push whose Test or Lint was
-  cancelled because the PR's next push superseded it is left out.
+  first execution's end, so flakes count. A push whose Test, Lint or Preview
+  OS was cancelled because the PR's next push superseded it is left out.
 
 Pushes are split by what their Preview OS E2E tests job ran, which its suite
 summary names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow

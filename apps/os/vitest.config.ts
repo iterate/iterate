@@ -55,8 +55,7 @@ const onUnhandledError = (error: unknown): boolean | void => {
  *  35 s (one row, measured at 3 slots), the CPU-bound memory children 20 s beside those idle waits;
  *  alarm-and-pins (42 s, fixed sub-second waits) starts in the first free slot, at 23 s, and ends a
  *  second before the watchdog.
- *  `pnpm e2e`, with rows concurrent (deployed): context-watchdog's two eviction windows 37 s (it
- *  started 13 s in behind the first sixteen files), session's 30 s grant re-check 34 s, the dormant
+ *  `pnpm e2e`, with rows concurrent (deployed): session's 30 s grant re-check 34 s, the dormant
  *  deadline 24 s, the 144 MiB file's sequential rows, the slow client's upload 10–15 s. A file that
  *  stops being long drops off this list. */
 const LONG_POLES = [
@@ -67,7 +66,6 @@ const LONG_POLES = [
   "__workers-tests__/oauth-recheck-revoked.test.ts",
   "__workers-tests__/oauth-recheck-membership.test.ts",
   "src/stream/memory-budget.test.ts",
-  "e2e/context-watchdog.e2e.test.ts",
   "e2e/session.e2e.test.ts",
   "e2e/scheduled-appends-dormant.e2e.test.ts",
   "e2e/isolate-ceilings-deployed.e2e.test.ts",
@@ -189,7 +187,8 @@ export default defineConfig({
           environment: "node",
           include: ["perf/**/*.perf.test.ts"],
           globalSetup: ["./e2e/support/global-setup.ts"],
-          setupFiles: ["./e2e/support/setup.ts"],
+          // perf/setup.ts: what a failed row leaves for the latency guard beside its message
+          setupFiles: ["./e2e/support/setup.ts", "./perf/setup.ts"],
           testTimeout: 240_000,
           hookTimeout: 120_000,
           // ALONE ON THE WIRE: one file at a time, and `perf:run` passes no `--sequence.concurrent`,

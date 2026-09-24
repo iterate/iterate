@@ -37,7 +37,7 @@
 import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
+import { adminCredentials, openSession, publishConfigWorker, until } from "./support.ts";
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
 
@@ -83,6 +83,43 @@ test("lent-stub WebSocket fetch: the eyeball's upgrade on the project host gets 
   });
   expect(echo).toBe("live-echo:ping");
   // …and a clean close (no dangling pumps holding the session open).
+  eyeball.close(1000, "done");
+});
+
+// ─────────────── a context reset: the visitor's socket outlives the context's sockets ───────────────
+
+// Every deploy resets every Durable Object for its new code, and a reset cuts every socket the
+// context holds — the eyeball's and the upgrade leg (prd 2026-09-24: a tunnel's Vite HMR socket
+// closed 1006 at each deploy, ~5 an hour, and the page reloaded). The edge holds the visitor's socket
+// and the relay the provider's; both re-dial the context and resume (context/fetch-upgrade-splice.ts).
+// `itx.abort()` is the same reset on demand: "GOES: … every socket on the context".
+test("a lent-stub WebSocket outlives a context reset (what every deploy does): the visitor's socket stays open, and frames sent across the reset arrive once, in order", async () => {
+  const project = "ws101-reset";
+  const itx = await createProject(project);
+  await itx.provide("itx.wsdev", new LiveSite());
+  await publishConfigWorker(itx, ["itx", "wsdev"]);
+  const res = await exports.default.fetch(`https://wsdev--${project}.projects.test/`, {
+    headers: { Upgrade: "websocket" },
+  });
+  expect(res).toMatchObject({ status: 101 });
+  expect(res.headers.has("x-itx-fetch-upgrade-resume")).toBe(false);
+  const eyeball = res.webSocket;
+  if (!eyeball) throw new Error("101 without a webSocket");
+  const received: string[] = [];
+  let closed: string | null = null;
+  eyeball.addEventListener("message", (ev) => received.push(String(ev.data)));
+  eyeball.addEventListener("close", (ev) => (closed = `${ev.code} ${ev.reason}`));
+  eyeball.accept();
+  eyeball.send("before");
+  await until("the echo before the reset", () => received.length === 1);
+  await itx.abort("a deploy's reset, on demand");
+  eyeball.send("across");
+  eyeball.send("after");
+  await until("the echoes after the reset", () => received.length === 3, 20_000);
+  expect({ received, closed }).toEqual({
+    received: ["live-echo:before", "live-echo:across", "live-echo:after"],
+    closed: null,
+  });
   eyeball.close(1000, "done");
 });
 

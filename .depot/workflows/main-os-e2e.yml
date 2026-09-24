@@ -429,5 +429,4 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           NEEDS: ${{ toJSON(needs) }}
         run: >-
-          pnpm tsx scripts/ci/main-e2e-alert.ts alert
-          ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}
+          pnpm tsx scripts/ci/main-e2e-alert.ts alert --ref "${{ github.ref }}"

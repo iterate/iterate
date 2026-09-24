@@ -5,6 +5,7 @@
 // `expect.soft`, so a row that misses one budget still records every other metric it measures.
 
 import { expect, type TestContext } from "vitest";
+import type { SocketLost } from "../e2e/support/client.ts";
 import {
   BUDGET_MISSED,
   budgetLine,
@@ -18,6 +19,20 @@ declare module "vitest" {
   interface TaskMeta {
     /** Every metric this row recorded: its raw samples, by name (perf/latency.ts). */
     latency?: Partial<Record<LatencyMetricName, number[]>>;
+    /** What a row that FAILED leaves beside its failure message (perf/setup.ts), which is all
+     *  Vitest's JSON report keeps of an error: the latency guard tells a platform failure from ours
+     *  by it. */
+    failure?: {
+      /** The code of each cause behind the row's errors (or its message, with none): `fetch
+       *  failed` says only that no response came, its cause says `ECONNRESET`. */
+      causes: string[];
+      /** Every socket the row lost with no close frame (e2e/support/client.ts `socketsLost`). */
+      socketsLost: SocketLost[];
+    };
+    /** The push row's subscribe round trips, one per batch (e2e/support/push-load.ts), kept before
+     *  its warm ping: a ping that then never reached every callback reads as the platform's stall
+     *  only when these stalled too. */
+    subscribeBatchMs?: number[];
   }
 }
 

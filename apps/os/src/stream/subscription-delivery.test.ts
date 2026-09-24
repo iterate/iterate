@@ -1481,7 +1481,6 @@ function incarnation(
     deleteAlarm: async () => void deletes.push(1),
     deadlines: () => [delivery.deadlines()[0]?.at ?? null],
     held: () => false,
-    runOverduePass: () => {},
     onOverdue: () => {},
   });
   const stream = new Stream({
@@ -1524,8 +1523,7 @@ function incarnation(
     deletes,
     evaluated,
     /** An alarm pass, as the DO runs it: the stream-kept cursors under the coordinator's hold. */
-    pass: () =>
-      coordinator.pass(() => delivery.deliverEveryCursorSubscription(), { delivered: true }),
+    pass: () => coordinator.pass(() => delivery.deliverEveryCursorSubscription()),
   };
 }
 

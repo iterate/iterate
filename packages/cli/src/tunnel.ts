@@ -226,6 +226,15 @@ export async function runTunnel(input: {
   const ingressRouteName = `tunnel-${routingSlug}`;
   const target = `itx.tunnels.${routingSlug}`;
   using project = await input.connection.session.projects.get(input.project);
+  const url = await project.url({ routingSlug });
+  const basePath = new URL(url).pathname;
+  // Under paths routing the tunnel shares the platform's origin, so its pages are served sandboxed
+  // with an opaque origin: their subresource requests carry no cookie and a private route turns
+  // every one of them away. Refused before anything is lent or set.
+  if (basePath !== "/" && !input.public)
+    throw new Error(
+      `Private tunnels need their own origin; this deployment serves projects under paths (${url}). Use --public, or give the deployment a domain (subdomain routing).`,
+    );
   // A host another route already takes is someone else's: refuse, never take it over. A tunnel of
   // the same name (a restart, another terminal) is taken over.
   const taken = (await project.ingressRoutes.list()).find(
@@ -255,22 +264,22 @@ export async function runTunnel(input: {
     authRequirement: input.public ? null : { visitors: "project-members" },
   });
   try {
-    const url = await project.url({ routingSlug });
-    emit({ type: "live", url, routingSlug, ingressRouteName, public: Boolean(input.public) });
-    console.error(
-      `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
-    );
-    const basePath = new URL(url).pathname;
-    if (basePath !== "/")
-      console.error(
-        `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
-      );
+    // Listening before the URL is out: until a listener is installed the OS's default action ends
+    // the process at once, so a Ctrl-C right after `live` would leave the route standing.
     let stop: () => void = () => {};
     const stopped = new Promise<"stopped">((resolve) => {
       stop = () => resolve("stopped");
     });
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
+    emit({ type: "live", url, routingSlug, ingressRouteName, public: Boolean(input.public) });
+    console.error(
+      `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
+    );
+    if (basePath !== "/")
+      console.error(
+        `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
+      );
     try {
       const outcome = await Promise.race([stopped, input.connection.closed]);
       if (outcome !== "stopped")

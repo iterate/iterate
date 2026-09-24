@@ -521,7 +521,8 @@ export class SubscriptionDelivery {
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, and a
         // stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign heal-by-pull case
-        // (the row stays until its last pager closes); anything else is a real drop worth a line.
+        // (the row stays until its last pager closes; a page that timed out is logged where it
+        // timed out, context/rpc-stubs.ts); anything else is a real drop worth a line.
         const chars = serializedChars(events);
         if (!this.#deliveryCharsInFlight.tryTake(chars)) {
           console.warn({

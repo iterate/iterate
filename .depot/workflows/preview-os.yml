@@ -37,15 +37,19 @@
 # its preview by pull-request-number or, without one, by preview-name (`exp-jonas`,
 # or CI's own `main`), and runs the suite from the dispatched ref. A dispatch posts its checks on the
 # ref's head commit, replacing that commit's checks of the same name, and a job it skips counts as
-# passing there: dispatch e2e or specs alone with `--ref main`, never on a PR's branch.
+# passing there: dispatch e2e or specs alone from a scratch branch cut from main, never on a PR's
+# branch or main, whose head would carry the result (docs/depot-ci.md#run-ci-without-a-pr).
 # slow-rows = run | skip overrides what the PR's paths and label say about the rows tagged `slow`:
 # `--input action=e2e --input slow-rows=run` runs them against the live preview.
 # apps = all | auto | none (the apps on top: dash, agents, notes, voice, kit). Pull-request runs use
 # all so every client is usable against the platform preview; auto remains available for a faster
 # targeted manual redeploy once the clients are already present.
 #
-# Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
-# preview-delete.yml takes the same group, so a PR's delete waits for its deploy and tests to settle.
+# Concurrency per PR. The PR's next push cancels the run in progress, in whatever job, since its
+# verdict would be out of date; Depot starts none of the cancelled run's `always()` jobs, and the next
+# run redeploys the whole preview, which repairs a deploy cut short. A dispatch cancels nothing: it
+# queues behind the run in progress. preview-delete.yml takes the same group and cancels nothing, so a
+# PR's delete waits for its deploy and tests to settle.
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
@@ -94,7 +98,7 @@ on:
 
 concurrency:
   group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
@@ -476,7 +480,7 @@ jobs:
   # green (the last test job's success) or to red (the first failed job), and "Playwright report",
   # the Browser specs job's HTML report. After the three settle, whatever their outcome; never when
   # none ran, nor for a PR that changes no preview path. Main OS e2e has the same job
-  # (scripts/ci/main-os-e2e-workflow.test.ts keeps them alike).
+  # (scripts/ci/depot-workflows.test.ts keeps them alike).
   trace:
     name: CI trace
     needs: [deploy, e2e, specs]

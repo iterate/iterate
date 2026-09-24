@@ -13,9 +13,12 @@
 // (no telemetry, a runner that did not finish, one of its rows not run) is a BROKEN PROBE: it fails
 // the job that judges it and pages nothing.
 //
+// Only a run on main pages (`--ref`, the run's git ref): the channel's last page is main's state, and
+// a run off main, or a dry run, prints the page it would post.
+//
 //   pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir <telemetry> [--suite <name> --tag <tag>]
-//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert [--dry-run]
-//   pnpm tsx scripts/ci/main-e2e-alert.ts judge --dir <telemetry> --suite <name> (--tag <tag> | --title-prefix <prefix>) [--dry-run]
+//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert --ref <ref> [--dry-run]
+//   pnpm tsx scripts/ci/main-e2e-alert.ts judge --dir <telemetry> --suite <name> (--tag <tag> | --title-prefix <prefix>) --ref <ref> [--dry-run]
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -256,9 +259,11 @@ if (isMainModule(import.meta.url)) {
       suite: { type: "string" },
       tag: { type: "string" },
       "title-prefix": { type: "string" },
+      ref: { type: "string" },
       "dry-run": { type: "boolean", default: false },
     },
   });
+  const dryRun = values["dry-run"] || values.ref !== "refs/heads/main";
   const rows: SuiteRows | undefined = values.tag
     ? { tag: values.tag }
     : values["title-prefix"]
@@ -270,13 +275,13 @@ if (isMainModule(import.meta.url)) {
   const done =
     positionals[0] === "failing-rows" && values.dir && suiteWhole
       ? failingRows(values.dir, suite)
-      : positionals[0] === "alert"
-        ? alert(values["dry-run"])
-        : positionals[0] === "judge" && values.dir && suite
-          ? judge(values.dir, suite, values["dry-run"])
+      : positionals[0] === "alert" && values.ref
+        ? alert(dryRun)
+        : positionals[0] === "judge" && values.dir && suite && values.ref
+          ? judge(values.dir, suite, dryRun)
           : Promise.reject(
               new Error(
-                "usage: main-e2e-alert.ts failing-rows --dir <dir> [--suite <name> --tag <tag>] | alert [--dry-run] | judge --dir <dir> --suite <name> (--tag <tag> | --title-prefix <prefix>) [--dry-run]",
+                "usage: main-e2e-alert.ts failing-rows --dir <dir> [--suite <name> --tag <tag>] | alert --ref <ref> [--dry-run] | judge --dir <dir> --suite <name> (--tag <tag> | --title-prefix <prefix>) --ref <ref> [--dry-run]",
               ),
             );
   done.catch((error: unknown) => {

@@ -13,6 +13,12 @@ test("omitting a template seeds the minimal project without an agent or lifecycl
   expect(fixture.downloadTemplate).not.toHaveBeenCalled();
   expect(fixture.itx.append).not.toHaveBeenCalled();
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
+  // The seed is committed at once: an unborn `main` is its own check (`parent: null`), so no read of
+  // the tip comes first, and the manifest is read from the commit just pushed.
+  expect(fixture.repo.tip).not.toHaveBeenCalled();
+  expect(fixture.repo.readFile).toHaveBeenCalledExactlyOnceWith("iterate.json", {
+    commitOid: "b".repeat(40),
+  });
 });
 
 test("copies the pinned subdirectory into a fresh root commit and subscribes before project/created", async () => {
@@ -67,18 +73,34 @@ test("copies the pinned subdirectory into a fresh root commit and subscribes bef
     }),
   );
   expect(fixture.repo.commitFiles).toHaveBeenCalledTimes(1);
-  // Recovery after a successful commit lost its acknowledgement must preserve the tree.
+  // Recovery after a successful commit lost its acknowledgement must preserve the tree: the born
+  // `main` refuses the second seed, and its tip is the project's config.
+  const seeded = fixture.files();
   await create(fixture, reference);
-  expect(fixture.downloadTemplate).toHaveBeenCalledTimes(1);
-  expect(fixture.repo.commitFiles).toHaveBeenCalledTimes(1);
+  expect(fixture.repo.commitFiles).toHaveBeenCalledTimes(2);
+  await expect(fixture.repo.commitFiles.mock.results[1]!.value).rejects.toThrow(/refused/);
+  expect(fixture.files()).toBe(seeded);
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
 test("a nonempty config repo keeps the project's edits even when a new template is requested", async () => {
-  const fixture = project({ "worker.ts": "my edited worker" });
+  const fixture = project({ "worker.ts": "my edited worker" }, async () => [
+    { path: "worker.ts", content: worker },
+  ]);
   await create(fixture, reference);
   expect(fixture.files()).toEqual({ "worker.ts": "my edited worker" });
-  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
+  await expect(fixture.repo.commitFiles.mock.results[0]!.value).rejects.toThrow(/refused/);
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
+});
+
+test("a template that cannot be downloaded is no failure when main is born: its tip is the project's config", async () => {
+  const fixture = project({ "worker.ts": "my edited worker" }, async () => {
+    throw new Error("GitHub unavailable");
+  });
+  await create(fixture, reference);
   expect(fixture.repo.commitFiles).not.toHaveBeenCalled();
+  expect(fixture.files()).toEqual({ "worker.ts": "my edited worker" });
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
 test.for([
@@ -101,13 +123,14 @@ test.for([
   });
 });
 
-test("a commit that lands between the saga's read and its seed is the project's config: the seed is refused, never pushed on top of it", async () => {
+test("a commit that lands before the seed is the project's config: the seed is refused, never pushed on top of it", async () => {
   const fixture = project();
-  // The read finds `main` unborn; the project's caller writes its config repo before the seed lands
-  // (`create` answers before the certificate) — the voice delegation's website edit, 2026-09-24.
-  fixture.repo.tip.mockImplementationOnce(async () => {
+  // The project's caller writes its config repo before the seed lands (`create` answers before the
+  // certificate) — the voice delegation's website edit, 2026-09-24.
+  const seed = fixture.repo.commitFiles.getMockImplementation()!;
+  fixture.repo.commitFiles.mockImplementationOnce(async (input) => {
     fixture.commitFromOutside({ "worker.ts": "the agent's edit" });
-    return null;
+    return seed(input);
   });
   await create(fixture);
   expect(fixture.repo.commitFiles).toHaveBeenCalledExactlyOnceWith(

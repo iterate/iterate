@@ -88,11 +88,24 @@ export async function ephemeralFlood(itx: any, total = 2000): Promise<Flood> {
 /** `count` live callbacks `fan-<i>` consuming only `ping` (so the setup subscribes never fan out N²
  *  deliveries), subscribed 25 at a time, then a warm ping that pages every lent stub in — cold
  *  materialization is not the fan-out cost. Then round by round (2, 3, …): `ping(round)` is ONE
- *  append, `delivered(round)` resolves once all `count` callbacks have it. */
-export async function pushSubscribers(itx: any, count: number) {
+ *  append, `delivered(round)` resolves once all `count` callbacks have it.
+ *
+ *  `onSubscribed` hears each batch's subscribe round trip before the warm ping. A live push is
+ *  best-effort: a lent stub the Durable Object paged for and did not get within its 10 s loses that
+ *  push (context/rpc-stubs.ts logs `rpc-stub-page-timed-out`), and these callbacks never read back
+ *  what they missed. On 2026-09-24 (main a8e6c6525) Cloudflare moved traffic out of IAD, every
+ *  round trip between the edge and the Durable Object stalled ~3 s, each batch took 3.0–3.2 s where
+ *  it takes ~0.1 s, and 33 of 200 callbacks never had the warm ping. */
+export async function pushSubscribers(
+  itx: any,
+  count: number,
+  onSubscribed?: (batchMs: number[]) => void,
+) {
   const counts = new Array<number>(count).fill(0);
   let received = 0;
+  const subscribeBatchMs: number[] = [];
   for (let base = 0; base < count; base += 25) {
+    const started = performance.now();
     await Promise.all(
       Array.from({ length: Math.min(25, count - base) }, (_, j) => {
         const i = base + j;
@@ -106,12 +119,18 @@ export async function pushSubscribers(itx: any, count: number) {
         });
       }),
     );
+    subscribeBatchMs.push(Math.round(performance.now() - started));
   }
+  onSubscribed?.(subscribeBatchMs);
   const ping = (round: number) => itx.append({ type: "ping", payload: { round } });
   const tWarm = Date.now();
   await ping(1);
   // paging 200 lent stubs in took over 30 s once in a hundred soak runs (2026-09-22, run 55)
-  await until("warm round complete", () => received >= count, 60_000);
+  await until("warm round complete", () => received >= count, 60_000).catch((error: Error) => {
+    throw new Error(
+      `${error.message}: ${received} of ${count} callbacks had the warm ping; the subscribes took ${subscribeBatchMs.join(", ")} ms a batch of 25`,
+    );
+  });
   return {
     coldWallMs: Date.now() - tWarm,
     counts,
