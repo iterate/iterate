@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
+// CI repro for #2971: the PR's check, called from the old call site.
+import { assertFreshInstall as assertFreshInstallByContent } from "./preview-config.ts";
 import { osEnvs, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
@@ -546,13 +548,7 @@ async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
 /** A laptop deploy bundles whatever node_modules holds, so a lockfile newer than the install would
  *  ship stale dependencies: pnpm-lock.yaml newer than node_modules → stop. CI installs first. */
 function assertFreshInstall() {
-  const root = path.resolve(ROOT, "../..");
-  const lockfile = statSync(path.join(root, "pnpm-lock.yaml")).mtimeMs;
-  const installed = statSync(path.join(root, "node_modules", ".modules.yaml"), {
-    throwIfNoEntry: false,
-  })?.mtimeMs;
-  if (installed === undefined || lockfile > installed)
-    throw new Error("pnpm-lock.yaml is newer than node_modules: run `pnpm install` first");
+  assertFreshInstallByContent(path.resolve(ROOT, "../.."));
 }
 
 /** The OS's own preview, from an OS build already made — its Artifacts namespace, its config

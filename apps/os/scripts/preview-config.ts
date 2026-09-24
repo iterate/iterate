@@ -1,10 +1,12 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
 // preview's name (`pr<n>-<branch slug>`, cloudflare-os's), the parent it branches from (envs.ts
 // `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
-// change touches, the PR body's managed section, and the config `wrangler preview` reads — a
-// transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs`.
+// change touches, the PR body's managed section, the config `wrangler preview` reads — a
+// transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs` —
+// and whether node_modules was installed from the checkout's lockfile.
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { osEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
@@ -93,6 +95,21 @@ export function previewUrl(previewName: string) {
   return `https://${previewName}-${host}`;
 }
 
+/** An app on top's preview URL, `https://<name>-<its parent's workers.dev host>` — known before
+ *  anything deploys, by the same rule as apps/os's `previewUrl`. */
+export const appPreviewUrl = (app: StartApp, previewName: string) =>
+  `https://${previewName}-${new URL(app.envs.preview!.baseUrl).hostname}`;
+
+/** The apps a run previews, by name, at their preview URLs: every link between this preview's
+ *  apps — the dash the OS preview's landing page names (`APP_CONFIG_URLS__DASH`), and each app
+ *  preview's `ITERATE_APP_ORIGINS` (scripts/lib/start-app.ts: the dash's directory of apps, Kit's
+ *  link to the sessions in the dash). An app the run does not deploy (`--apps auto|none`) is named
+ *  nowhere: a link leads into this PR's preview or does not exist, never to production, where a
+ *  preview's projects do not. */
+export function appPreviewOrigins(apps: StartApp[], previewName: string) {
+  return Object.fromEntries(apps.map((app) => [app.name, appPreviewUrl(app, previewName)]));
+}
+
 /** Every preview-owned resource is `<worker>-<preview>-<binding>`, the name wrangler's preview
  *  auto-provisioning gives the KV namespaces and the R2 bucket; the Artifacts namespace follows it
  *  by hand. */
@@ -168,7 +185,7 @@ export function renderPullRequestSection(input: {
   testedCommit?: string;
 }) {
   return [
-    `### os-next preview: \`${input.previewName}\``,
+    `### OS preview: \`${input.previewName}\``,
     "",
     `**${input.url}** · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
     "",
@@ -264,4 +281,35 @@ export function writePreviewWranglerConfig(input: { previewName: string; dashOri
     `${JSON.stringify(previewWranglerConfig({ template: built, ...input }), null, 2)}\n`,
   );
   return fileURLToPath(configUrl);
+}
+
+/** A deploy bundles whatever node_modules holds, so an install older than pnpm-lock.yaml would ship
+ *  stale dependencies. pnpm keeps the lockfile it installed from as node_modules/.pnpm/lock.yaml:
+ *  the same bytes prove the install current, whatever the mtimes say. They say the wrong thing in
+ *  CI: checking out the PR head, then the PR merged into main, rewrites pnpm-lock.yaml with
+ *  main's content and a new mtime, and scripts/depot-ci/dependencies.mjs rightly reuses the
+ *  image's node_modules baked from that same lockfile (2026-09-24, four Preview OS deploys failed
+ *  on identical content). Only when the content differs does the laptop rule decide: a lockfile
+ *  newer than node_modules/.modules.yaml means `pnpm install` has not run since it changed. */
+export function assertFreshInstall(root: string) {
+  const lockfile = readFileSync(path.join(root, "pnpm-lock.yaml"));
+  const installedLockfile = readOptional(path.join(root, "node_modules", ".pnpm", "lock.yaml"));
+  if (installedLockfile?.equals(lockfile)) return;
+  const lockfileTime = statSync(path.join(root, "pnpm-lock.yaml")).mtimeMs;
+  const installTime = statSync(path.join(root, "node_modules", ".modules.yaml"), {
+    throwIfNoEntry: false,
+  })?.mtimeMs;
+  if (installTime === undefined || lockfileTime > installTime)
+    throw new Error(
+      `pnpm-lock.yaml is newer than node_modules and ${installedLockfile ? "differs from" : "has no copy in"} node_modules/.pnpm/lock.yaml: run \`pnpm install\` first`,
+    );
+}
+
+function readOptional(file: string) {
+  try {
+    return readFileSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
