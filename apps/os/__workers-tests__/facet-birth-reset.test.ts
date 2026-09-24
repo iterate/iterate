@@ -289,6 +289,16 @@ test("a claim's release arms the sweep again: a facet the sweep spared while it 
   expect(await s.invoke(["itx", "facets", ["get", "busy"], ["hello"]])).not.toBe(before);
 });
 
+test("a first-party facet's release arms no sweep: the sweep never resets one, so its finished work leaves the context owing no alarm", async () => {
+  const s = stub("prj_facet_sweep_first_party_release");
+  await s.invoke(["itx", "processors", ["claim", "project", Date.now() + 10 * 60_000]]);
+  await s.invoke(["itx", "processors", ["claim", "project", null]], [], {
+    principal: null,
+    app: true,
+  });
+  expect(await alarmOf(s)).toBeNull();
+});
+
 function alarmOf(s: ReturnType<typeof stub>): Promise<number | null> {
   return runInDurableObject(s, (_instance, state) => state.storage.getAlarm());
 }

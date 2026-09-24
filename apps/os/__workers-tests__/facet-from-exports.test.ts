@@ -46,6 +46,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
         workspaces: {},
         secrets: {},
         configRepoTip: null,
+        publishedCommitOid: null,
         hostnames: {},
       },
     },

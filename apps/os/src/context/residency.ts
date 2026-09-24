@@ -181,7 +181,7 @@ export class Residency {
     return { unclaimedFacetSweep: this.#unclaimedFacetSweepArmedFor };
   }
 
-  /** A loaded facet was materialized, or a claim released: the sweep is owed once this context has
+  /** A loaded facet was materialized, or its claim released: the sweep is owed once this context has
    *  been quiet for `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`. Armed when none is: one alarm write per
    *  quiet period. */
   armUnclaimedFacetSweep(): void {

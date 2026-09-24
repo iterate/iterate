@@ -31,7 +31,7 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "9",
+  version: "10",
   description:
     "The project: where its own creation stands, its custom hostnames, and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -60,6 +60,11 @@ export const ProjectContract = defineProcessorContract({
       .object({ commitOid: z.string().min(1), offset: z.number().int().positive() })
       .nullable()
       .default(null),
+    /** The config repo's commit the apex was last pointed at: the latest `project/ingress-configured`
+     *  whose target is the one the processor writes for a commit (processor.ts
+     *  `configRepoIngressTarget`). The publication the tip owes is done once this is the tip's
+     *  commit. A target set by hand, or none, leaves it as it was. Null until the first. */
+    publishedCommitOid: z.string().min(1).nullable().default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
      *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
      *  observation (null until provisioned), and the last failure's words. */
@@ -123,6 +128,11 @@ export const ProjectContract = defineProcessorContract({
         requestOffset: z.number().int().positive(),
       }),
     },
+    "events.iterate.com/project/ingress-configured": {
+      description:
+        "Where the project's apex points: an itx expression, or null for nowhere. The core's control event: the append validates it and the core's reduce serves the apex from it (stream/core-processor.ts). The saga points it at the seed commit and the processor at every later commit of the config repo, each append keyed by its commit.",
+      payloadSchema: z.object({ target: z.array(z.unknown()).nullable() }),
+    },
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them.
   processorDeps: [RepoContract, WorkspaceContract, SecretContract],
@@ -141,6 +151,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
     "events.iterate.com/repo/commit-completed",
+    "events.iterate.com/project/ingress-configured",
   ],
   emits: [
     "events.iterate.com/project/created",

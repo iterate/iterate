@@ -5,7 +5,9 @@
 // e2e/session.e2e.test.ts.
 
 import { expect, test } from "vitest";
+import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
+import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { ProjectProcessor } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
 
@@ -23,6 +25,7 @@ const empty: ProjectState = {
   workspaces: {},
   secrets: {},
   configRepoTip: null,
+  publishedCommitOid: null,
   hostnames: {},
 };
 
@@ -62,6 +65,17 @@ const reduceRows: {
     state: { ...empty, configRepoTip: { commitOid: "ccc", offset: 3 } },
   },
   {
+    name: "the apex pointed at a config-repo commit publishes that commit — the saga's seed, then each later tip; a target set by hand, one that only looks like a commit's, or none, publishes nothing and keeps the last",
+    events: [
+      ingressAt(configRepoTarget("aaa")),
+      ingressAt(configRepoTarget("bbb")),
+      ingressAt(["itx", "workers", ["get", { source: { "cap.js": "export default {}" } }]]),
+      ingressAt(["itx", "workers", ["get", { source: { "cap.js": "" }, cacheKey: "ccc" }]]),
+      ingressAt(null),
+    ],
+    state: { ...empty, publishedCommitOid: "bbb" },
+  },
+  {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
     events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
     state: {
@@ -70,6 +84,7 @@ const reduceRows: {
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       secrets: {},
       configRepoTip: null,
+      publishedCommitOid: null,
       hostnames: {},
     },
   },
@@ -240,6 +255,39 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
   expect(appended).toHaveLength(2);
+});
+
+// Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
+// facet runs the at-head pass over its checkpointed state: the state, not this incarnation's memory,
+// says whether the tip is published. The state learns it from the processor's own event as the
+// context's append boundary stores it (`normalizeControlEvent`).
+test("ProjectProcessor — a tip the state does not hold published is published; a fresh incarnation over the state that reduced that append appends nothing and starts no background work, so it claims nothing", async () => {
+  const appended: StreamEventInput[] = [];
+  let background = 0;
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as StreamEventInput[]));
+    return [];
+  };
+  const runInBackground = (work: () => Promise<unknown>) => {
+    background += 1;
+    void work();
+  };
+  deliver(
+    processorWithoutHostnames(),
+    { ...empty, configRepoTip: tip("aaa", 1) },
+    append,
+    runInBackground,
+  );
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["project/ingress-configured:aaa"]);
+  const state = reduceProcessor(processorWithoutHostnames(), [
+    committed("/repos/config", "aaa"),
+    normalizeControlEvent(appended[0]!, "/"),
+  ]);
+  expect(state).toEqual({ ...empty, configRepoTip: tip("aaa", 1), publishedCommitOid: "aaa" });
+  deliver(processorWithoutHostnames(), state, append, runInBackground);
+  await settle();
+  expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
 });
 
 // THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
@@ -434,6 +482,25 @@ function secretDeleted(path: string) {
 
 const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
 
+/** The target the processor points the apex at for a config-repo commit, spelled out. */
+function configRepoTarget(commitOid: string) {
+  return [
+    "itx",
+    "workers",
+    [
+      "get",
+      {
+        source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
+        cacheKey: commitOid,
+      },
+    ],
+  ];
+}
+
+function ingressAt(target: unknown[] | null) {
+  return { type: "events.iterate.com/project/ingress-configured", payload: { target } };
+}
+
 function hostname(verb: "add-requested" | "remove-requested") {
   return {
     type: `events.iterate.com/project/hostname-${verb}`,
@@ -477,6 +544,7 @@ const deliver = (
   processor: ProjectProcessor,
   state: ProjectState,
   append: (...events: unknown[]) => Promise<unknown>,
+  runInBackground: (work: () => Promise<unknown>) => void = (work) => void work(),
 ) =>
   processor.processEvent({
     event: null,
@@ -485,5 +553,5 @@ const deliver = (
     delivery: { caughtUp: true },
     append: append as never,
     blockProcessorWhile: () => {},
-    runInBackground: (work) => void work(),
+    runInBackground,
   });
