@@ -16,10 +16,9 @@
 //   2. `organization` — an organization's own context, `global:/organizations/<id>`, and nowhere
 //      else: session.ts `foldPlatformFacts` (created, renamed, deleted, a project created in it) and
 //      the organization's secrets catalog (built-ins.ts `ownerRootFacet`).
-//   3. `project`, `ingress-routes` — a project's root `/`, and nowhere else: its creation saga
-//      (session.ts `projects.create`), the entity collections (library.ts `projectFacet`), the
-//      project's secrets catalog (built-ins.ts `ownerRootFacet`) and its ingress routes (built-ins.ts
-//      `itx.ingressRoutes`).
+//   3. `project` — a project's root `/`, and nowhere else: its creation saga (session.ts
+//      `projects.create`), the entity collections (library.ts `projectFacet`) and the project's
+//      secrets catalog (built-ins.ts `ownerRootFacet`).
 //   4. `secret` — `/secrets/<name>` directly under its owner's root, the one context `itx.secrets`
 //      and egress resolve a secret to (built-ins.ts `onSecretContext`, the DO's `#egress`): a
 //      project's `/secrets/<name>`, a user's `global:/users/<id>/secrets/<name>`, an organization's
@@ -61,10 +60,6 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
   },
   // 3.
   project: {
-    where: 'a project\'s root, "/"',
-    mayBeHostedOn: ({ projectId, path }) => projectId !== GLOBAL_PROJECT_ID && path === "/",
-  },
-  "ingress-routes": {
     where: 'a project\'s root, "/"',
     mayBeHostedOn: ({ projectId, path }) => projectId !== GLOBAL_PROJECT_ID && path === "/",
   },

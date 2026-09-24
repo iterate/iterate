@@ -157,7 +157,6 @@ export { BrowserSession } from "iterate/app-session";
 export { AccountDurableObject } from "./account/durable-object.ts";
 export { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
-export { IngressRoutesDurableObject } from "./ingress-routes/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
 export { SecretDurableObject } from "./secret/durable-object.ts";

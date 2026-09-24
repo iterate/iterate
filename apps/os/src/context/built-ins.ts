@@ -53,11 +53,10 @@ import {
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import {
   IngressRouteConfiguredPayload,
-  IngressRoutesContract,
+  matchIngressRoute,
   type IngressRoute,
-  type IngressRoutesState,
-} from "../ingress-routes/contract.ts";
-import { matchIngressRoute } from "../ingress-routes/processor.ts";
+  type IngressRouteTable,
+} from "../ingress-routes.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
@@ -243,7 +242,7 @@ export interface BuiltInScope extends LibraryRoots {
      *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
   };
-  /** THE INGRESS ROUTES (src/ingress-routes/): named rules on the project's root `/` saying which
+  /** THE INGRESS ROUTES (src/ingress-routes.ts): named rules on the project's root `/` saying which
    *  requests on the project's hosts go to which itx expression — `iterate tunnel`'s lent stub, a
    *  facet, a loaded worker. `set(name, route)` validates the route and appends
    *  `ingress-route/configured` on `/` (`null` deletes it; the same route again appends nothing);
@@ -521,6 +520,9 @@ interface BuildBuiltInsDeps {
     list(): ScheduledAppend[];
   };
   rewriteRules: BuiltInScope["rewriteRules"];
+  /** The route table in this context's core state (stream/core-processor.ts `ingressRoutes`) —
+   *  `itx.ingressRoutes` reads it on a project's root. */
+  ingressRoutes: () => IngressRouteTable;
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
   /** The facet host's entry, verbatim (accepted trade: a busy stateful facet pins its stream), and the
@@ -651,8 +653,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       { name: string }[]
     >;
 
-  /** `itx.ingressRoutes` is the project root's: its facts land on `/`, where the `ingress-routes`
-   *  facet keeps the table. */
+  /** `itx.ingressRoutes` is the project root's: its facts land on `/`, whose core state is the table. */
   const assertOnProjectRoot = (verb: string) => {
     if (projectId === GLOBAL_PROJECT_ID || path !== "/")
       throw codedError(
@@ -660,16 +661,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         `itx.ingressRoutes.${verb}: a project's ingress routes live on its root "/" — reach them there, itx.cd("/").ingressRoutes`,
       );
   };
-  /** The route table: empty while no route was ever set (no `ingress-routes` row, so no facet is
-   *  hosted for a project without routes), else the facet's snapshot, caught up through the log. */
-  const ingressRoutesTable = async (): Promise<IngressRoutesState["ingressRoutes"]> => {
-    if (!deps.subscriptions.get(IngressRoutesContract.slug)) return {};
-    // The facet is the platform's own IngressRoutesDurableObject; its snapshot's state is the
-    // contract's parsed shape — ours, so asserted.
-    const { state } = (await deps.callFacetAsPlatform(IngressRoutesContract.slug, [
-      ["snapshot"],
-    ])) as { state: IngressRoutesState };
-    return state.ingressRoutes;
+  /** The route by name — an own key of the table only (a DNS label may be `constructor`). */
+  const ingressRouteNamed = (ingressRouteName: string) => {
+    const table = deps.ingressRoutes();
+    return Object.hasOwn(table, ingressRouteName) ? table[ingressRouteName] : undefined;
   };
 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
@@ -961,7 +956,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         if (!parsed.success) throw refusal(z.prettifyError(parsed.error));
         const payload = parsed.data;
         // IDEMPOTENT: the route as it stands appends nothing.
-        const current = (await ingressRoutesTable())[ingressRouteName];
+        const current = ingressRouteNamed(ingressRouteName);
         if (
           !payload.requestMatcher
             ? !current
@@ -982,35 +977,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               )
         )
           return { ingressRouteName };
-        // The processor row (idempotent), consuming this one fact: the root log is busy, and the
-        // facet reduces nothing else.
-        await ownContext().invoke(
-          [
-            "itx",
-            "builtins",
-            "processors",
-            [
-              "enable",
-              IngressRoutesContract.slug,
-              { consumes: [...IngressRoutesContract.consumes] },
-            ],
-          ],
-          [],
-          hopCaller(),
-        );
-        const [configured] = await append({
-          type: "events.iterate.com/ingress-route/configured",
-          payload,
-        });
-        // Read-your-writes: the next `match` (the very next request) sees this route.
-        await deps.callFacetAsPlatform(IngressRoutesContract.slug, [
-          ["waitUntilProcessed", { offset: configured!.offset }],
-        ]);
+        // Read-your-writes by construction: the core reduce folds the fact in the commit that
+        // appends it, so the next `match` (the very next request) sees this route.
+        await append({ type: "events.iterate.com/ingress-route/configured", payload });
         return { ingressRouteName };
       },
       list: async () => {
         assertOnProjectRoot("list");
-        return Object.entries(await ingressRoutesTable())
+        return Object.entries(deps.ingressRoutes())
           .map(([ingressRouteName, route]) => ({ ingressRouteName, ...route }))
           .sort(
             (a, b) => b.priority - a.priority || (a.ingressRouteName < b.ingressRouteName ? -1 : 1),
@@ -1018,14 +992,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
       match: async (request) => {
         assertOnProjectRoot("match");
-        return matchIngressRoute(await ingressRoutesTable(), {
+        return matchIngressRoute(deps.ingressRoutes(), {
           url: request.url,
           headers: new Headers(request.headers),
         });
       },
       fetch: async (ingressRouteName, request) => {
         assertOnProjectRoot("fetch");
-        const route = (await ingressRoutesTable())[ingressRouteName];
+        const route = ingressRouteNamed(ingressRouteName);
         if (!route)
           return new Response(`no ingress route ${JSON.stringify(ingressRouteName)}\n`, {
             status: 404,

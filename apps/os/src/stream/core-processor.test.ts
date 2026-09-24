@@ -10,6 +10,7 @@
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
   reduceCoreEvent,
@@ -17,6 +18,7 @@ import {
   type CoreState,
   normalizeControlEvent,
 } from "./core-processor.ts";
+import { Stream } from "./stream.ts";
 import { nodeSqliteStream } from "./test-support.ts";
 
 // ── the contract ──
@@ -28,6 +30,7 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
     itxExpressionRewriteRules: {},
     subscriptions: {},
     ingressTarget: null,
+    ingressRoutes: {},
     schedules: {},
     scriptRuns: {},
   });
@@ -234,6 +237,97 @@ test("ingress target: an ephemeral configuration cannot be published", () => {
       "/",
     ),
   ).toThrow("must be durable");
+});
+
+// ── the ingress routes — ingress-route/configured, folded by src/ingress-routes.ts ──
+
+const routeType = "events.iterate.com/ingress-route/configured";
+const blogRoute = {
+  ingressRouteName: "tunnel-blog",
+  requestMatcher: { routingSlug: "blog" },
+  target: ["itx", "tunnels", "blog"],
+};
+
+test("ingress routes: a fact sets its route at its offset and a null matcher deletes it; deleting a route that is not there, or an ephemeral fact, keeps the state", () => {
+  const set = reduceAll([at(4, routeType, blogRoute)]);
+  expect(set).toEqual(
+    expect.objectContaining({
+      ingressRoutes: {
+        "tunnel-blog": {
+          requestMatcher: { routingSlug: "blog" },
+          target: ["itx", "tunnels", "blog"],
+          authRequirement: null,
+          priority: 0,
+          configuredOffset: 4,
+        },
+      },
+    }),
+  );
+  const deleted = { ingressRouteName: "tunnel-blog", requestMatcher: null };
+  expect(reduceAll([at(5, routeType, deleted)], set)).toEqual(
+    expect.objectContaining({ ingressRoutes: {} }),
+  );
+  expect(
+    reduceCoreEvent({
+      event: at(5, routeType, { ...deleted, ingressRouteName: "gone" }),
+      state: set,
+    }),
+  ).toBeUndefined();
+  expect(
+    reduceCoreEvent({
+      event: { ...at(5, routeType, blogRoute), ephemeral: true },
+      state: CoreContract.initialState(),
+    }),
+  ).toBeUndefined();
+});
+
+test("ingress routes: a malformed fact already in the log (appended while the table was a facet, which checked nothing at append) is skipped by the reduce, never thrown", () => {
+  const badUrl = {
+    ...blogRoute,
+    ingressRouteName: "bad-url",
+    requestMatcher: { url: { pathname: "(" } },
+  };
+  const state = reduceCoreEventBatch(
+    [at(1, routeType, badUrl), at(2, routeType, blogRoute)],
+    CoreContract.initialState(),
+    onError,
+  );
+  expect(Object.keys(state.ingressRoutes)).toEqual(["tunnel-blog"]);
+});
+
+test("ingress routes: the append boundary parses the fact and refuses a malformed or ephemeral one", () => {
+  expect(normalizeControlEvent({ type: routeType, payload: blogRoute }, "/")).toEqual({
+    type: routeType,
+    payload: blogRoute,
+  });
+  for (const payload of [
+    {},
+    { ...blogRoute, ingressRouteName: "Tunnel_Blog" },
+    { ingressRouteName: "no-target", requestMatcher: {} },
+    { ...blogRoute, requestMatcher: { url: { pathname: "(" } } },
+    { ...blogRoute, requestMatcher: { method: "GET" } },
+  ])
+    expect(() => normalizeControlEvent({ type: routeType, payload }, "/")).toThrow();
+  expect(() =>
+    normalizeControlEvent({ type: routeType, payload: blogRoute, ephemeral: true }, "/"),
+  ).toThrow("must be durable");
+});
+
+test("ingress routes: a root whose core checkpoint predates the table (13.0.0, when a facet kept it) re-reduces its log on the next wake, and keeps the routes it set", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
+  const before = new Stream(deps);
+  before.append(normalizeControlEvent({ type: routeType, payload: blogRoute }, "/"));
+  const { ingressRoutes: _notYetInCore, ...stateAt13 } = before.coreReducedState;
+  before.storage.reduceCheckpoints.write(
+    CoreContract.slug,
+    { reducerVersion: "13.0.0", reducedThroughOffset: before.highestDurableOffset() },
+    stateAt13,
+    true,
+  );
+  expect(new Stream(deps).coreReducedState.ingressRoutes).toMatchObject({
+    "tunnel-blog": { target: ["itx", "tunnels", "blog"], configuredOffset: 1 },
+  });
 });
 
 // ── the rewrite-rule table — a MAP by match ──
