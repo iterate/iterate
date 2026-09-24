@@ -53,8 +53,6 @@ const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
 /** The most attempts — claims and failures counted together — one cursor row gets on one batch
  *  before it halts. */
 const CURSOR_DELIVERY_MAX_ATTEMPTS = 15;
-/** The retry ladder's top rung: 1s·2ⁿ stops growing here. */
-const CURSOR_DELIVERY_MAX_BACKOFF_MS = 30 * 60_000;
 
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
@@ -974,8 +972,8 @@ export class SubscriptionDelivery {
               return;
             }
             const backoff =
-              Math.min(1000 * 2 ** (attempt - 1), CURSOR_DELIVERY_MAX_BACKOFF_MS) *
-              (0.8 + Math.random() * 0.4);
+              // 1s·2ⁿ, topped at half an hour
+              Math.min(1000 * 2 ** (attempt - 1), 30 * 60_000) * (0.8 + Math.random() * 0.4);
             const nextAttemptAtMs = Date.now() + Math.round(backoff);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);

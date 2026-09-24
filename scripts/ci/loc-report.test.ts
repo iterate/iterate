@@ -165,6 +165,8 @@ test.for([
   { path: "specs/os/auth.spec.ts", group: "Tests" },
   { path: "apps/os/__workers-tests__/support.ts", group: "Tests" },
   { path: "apps/agents/__workers-tests__/agent-revive.test.ts", group: "Tests" },
+  { path: "apps/os/src/stream/memory-budget.test-support.ts", group: "Tests" },
+  { path: "apps/os/src/stream/test-support.ts", group: "Tests" },
   { path: "apps/os/src/worker.ts", group: "Product" },
 ])("$path counts as $group", ({ path, group }) => {
   const file = {

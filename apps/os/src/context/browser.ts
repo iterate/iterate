@@ -55,20 +55,6 @@ export async function unwrapBrowserRunQuickAction(
   return envelope;
 }
 
-/** Browser Run's own timeout (`{"code":6002,"message":"A timeout was reached. …","detail":"Promise
- *  timed out"}`) on a page that is INLINE HTML: nothing remote to wait for, so the timeout is the
- *  service's (a browser it could not start or drive in time), never the page's. A `url` page's
- *  timeout may be that site's and is not classified as the platform's. */
-function isBrowserRunPlatformTimeout(error: unknown, options: CfBrowserQuickActionOptions) {
-  return (
-    "html" in options &&
-    /"code":6002\b/.test(String((error as { message?: unknown })?.message ?? error))
-  );
-}
-
-/** How long a quick action waits before its one retry after Browser Run's own timeout. */
-const PLATFORM_FAILURE_RETRY_DELAY_MS = 1000;
-
 /** Cloudflare Browser Run binding exposed through itx. */
 export function cfBrowser(binding: BrowserRun) {
   return {
@@ -104,14 +90,18 @@ export function cfBrowser(binding: BrowserRun) {
       try {
         return await attempt();
       } catch (error) {
-        if (!isBrowserRunPlatformTimeout(error, options)) throw error;
+        const message = String((error as { message?: unknown })?.message ?? error);
+        // Browser Run's own timeout (`{"code":6002,"message":"A timeout was reached. …"}`) on INLINE
+        // HTML: nothing remote to wait for, so the timeout is the service's, never the page's. A `url`
+        // page's timeout may be that site's and is not retried.
+        if (!("html" in options && /"code":6002\b/.test(message))) throw error;
         console.warn({
           event: "browser.platform-failure-retry",
           namespace: "iterate-context",
           action,
-          message: String((error as { message?: unknown })?.message ?? error),
+          message,
         });
-        await new Promise((resolve) => setTimeout(resolve, PLATFORM_FAILURE_RETRY_DELAY_MS));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         return await attempt();
       }
     },

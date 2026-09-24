@@ -398,10 +398,6 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
  *  through its link, is the child's `./x`), else this one (`ownPath`). */
 const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
 
-/** An entity's absolute path: `path` resolved against the caller's originating context. */
-const entityPathOf = (caller: Caller, ownPath: string, path: string): string =>
-  resolveContextPath(originOf(caller, ownPath), path);
-
 /** An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
  *  dispatches to — the note above `entityHandle` says why the assertion is safe), `list()`,
  *  `create(path)` and `delete(path)` one dispatch each on the collection the `project` facet carries
@@ -419,40 +415,32 @@ function entityRoot<Handle>(
       entityHandle(itx, path, name, contract, deps.caller(), deps.path) as InvokeHandle & Handle,
     list: () =>
       projectFacet(itx, [[collection], ["list"]]) as Promise<{ path: string; createdAt: string }[]>,
-    create: (path) => createEntity(itx, path, collection, deps.caller(), deps.path),
+    // THE CREATION, from the caller's context: the path resolved against it, and the CREATOR — the
+    // caller's originating context, which the platform stamped, never an argument. The collection's
+    // saga on the `project` facet writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new
+    // context with `<entity>/create-requested`, before the certificate (itx-expression-rewriting.ts
+    // rule 3: everything the new context does not claim, its creator answers). A created entity
+    // answers at once, and nothing re-points it.
+    create: async (path) => {
+      const creator = originOf(deps.caller(), deps.path);
+      const absolute = resolveContextPath(creator, path);
+      // A context never creates its own ancestor: the link it would write there points back down at
+      // itself — a two-context cycle — and a child never holds more than its creator.
+      if (creator !== absolute && creator.startsWith(absolute === "/" ? "/" : `${absolute}/`))
+        throw codedError(
+          "FORBIDDEN",
+          `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
+        );
+      return projectFacet(itx, [[collection], ["create", absolute, { creator }]]) as Promise<{
+        path: string;
+      }>;
+    },
     delete: async (path) =>
       projectFacet(itx, [
         [collection],
-        ["delete", entityPathOf(deps.caller(), deps.path, path)],
+        ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
       ]) as Promise<{ path: string }>,
   };
-}
-
-/** THE CREATION, from the caller's context: the path resolved against it, and the CREATOR — the
- *  collection's saga on the `project` facet writes the parent link `itx ⇒ itx.builtins.cd(creator)`
- *  on the new context with `<entity>/create-requested`, before the certificate
- *  (itx-expression-rewriting.ts rule 3: everything the new context does not claim, its creator
- *  answers). A created entity answers at once, and nothing re-points it. */
-async function createEntity(
-  itx: LibraryItx,
-  path: string,
-  collection: "repos" | "workspaces",
-  caller: Caller,
-  ownPath: string,
-): Promise<{ path: string }> {
-  const creator = originOf(caller, ownPath);
-  const absolute = resolveContextPath(creator, path);
-  // A context never creates its own ancestor: the link it would write there points back down at
-  // itself — a two-context cycle — and a child never holds more than its creator.
-  if (creator !== absolute && creator.startsWith(absolute === "/" ? "/" : `${absolute}/`))
-    throw codedError(
-      "FORBIDDEN",
-      `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
-    );
-  // The creator is the caller's originating context, which the platform stamped — never an argument.
-  return projectFacet(itx, [[collection], ["create", absolute, { creator }]]) as Promise<{
-    path: string;
-  }>;
 }
 
 // THE LIBRARY'S HOPS ARE ADDRESSING, spelled at the fixed point (`itx.builtins.cd`): a physical grant
@@ -494,7 +482,7 @@ function entityHandle(
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.builtins.cd(entityPathOf(caller, ownPath, path));
+    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;

@@ -135,20 +135,11 @@ const isRepoNotFound = (error: unknown): boolean =>
 /** The TTL of the probe token `create` mints to learn whether a repo exists. */
 const PROBE_TOKEN_TTL_SECONDS = 60;
 
-/** The binding's platform failure — Artifacts API error 10400, "An internal error occurred." On
- *  2026-09-23 (20:35–20:42 UTC) it answered create, get, list and delete on and off, each fine a
- *  moment later; a project's birth failed on it ("repo /repos/config: creation failed"). */
-const isArtifactsPlatformFailure = (error: unknown): boolean =>
-  /An internal error occurred|\b10400\b/.test(
-    String((error as { message?: unknown })?.message ?? error),
-  );
-
-/** How long a verb waits before its one retry after a platform failure. */
-const PLATFORM_FAILURE_RETRY_DELAY_MS = 1000;
-
-/** A verb, and ONE retry of it after the binding's platform failure, a second later — logged as
- *  `cfartifacts.platform-failure-retry` (scripts/ci/prd-fault-alarm.ts pages on a burst). A second
- *  failure, and every other failure, surfaces as what it is. Only for a verb that is safe to run
+/** A verb, and ONE retry of it a second later after the binding's platform failure — Artifacts API
+ *  error 10400, "An internal error occurred." (on 2026-09-23, 20:35–20:42 UTC, it answered create,
+ *  get, list and delete on and off, each fine a moment later; a project's birth failed on it) —
+ *  logged as `cfartifacts.platform-failure-retry` (scripts/ci/prd-fault-alarm.ts pages on a burst).
+ *  A second failure, and every other failure, surfaces as what it is. Only for a verb that is safe to run
  *  twice: a read, a token, a delete (a second one answers "not found"), a create that checks first
  *  (`attempt`'s `isRetry`). */
 async function retryingOnePlatformFailure<T>(
@@ -159,15 +150,16 @@ async function retryingOnePlatformFailure<T>(
   try {
     return await attempt(false);
   } catch (error) {
-    if (!isArtifactsPlatformFailure(error)) throw error;
+    const message = String((error as { message?: unknown })?.message ?? error);
+    if (!/An internal error occurred|\b10400\b/.test(message)) throw error;
     console.warn({
       event: "cfartifacts.platform-failure-retry",
       namespace: "iterate-context",
       name,
       verb,
-      message: String((error as { message?: unknown })?.message ?? error),
+      message,
     });
-    await new Promise((resolve) => setTimeout(resolve, PLATFORM_FAILURE_RETRY_DELAY_MS));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     return await attempt(true);
   }
 }

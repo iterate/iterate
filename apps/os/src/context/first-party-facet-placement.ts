@@ -24,7 +24,7 @@
 //      project's `/secrets/<name>`, a user's `global:/users/<id>/secrets/<name>`, an organization's
 //      `global:/organizations/<id>/secrets/<name>`. The global root owns no secrets.
 //   5. `repo`, `workspace` — any context of a project: `itx.repos.create(path)` and
-//      `itx.workspaces.create(path)` take any path (library.ts `createEntity`; `/repos/<name>` is a
+//      `itx.workspaces.create(path)` take any path (library.ts `entityRoot`; `/repos/<name>` is a
 //      convention, not a rule). Never the global namespace.
 //   6. Loaded code — a facet or processor of any other name, hosted from the source its spec names,
 //      and a stateless worker, `itx.workers.get({ source })` (which `itx.run` loads its script
