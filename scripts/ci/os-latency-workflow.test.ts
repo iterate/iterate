@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { matchesGlob, resolve } from "node:path";
+import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { stateArtifact } from "./os-latency-guard.ts";
@@ -9,7 +9,6 @@ type LatencyWorkflow = {
   name: string;
   on: {
     schedule?: { cron: string }[];
-    push?: { branches?: string[]; paths?: string[] };
     workflow_dispatch?: { inputs?: Record<string, unknown> };
   };
   concurrency: { group: string; "cancel-in-progress": boolean };
@@ -25,34 +24,13 @@ type LatencyWorkflow = {
 };
 
 const latency = readWorkflow("os-latency.yml") as LatencyWorkflow;
-const deployOs = readWorkflow("deploy-os.yml") as { on: { push: { paths: string[] } } };
 
-test("runs on a schedule, on every main push that could change the platform's speed, and on dispatch; one run at a time, never cut short", () => {
+// Not on a push: depot-workflows.test.ts holds every scheduled workflow to its schedule and dispatch.
+test("runs every 3 hours and on dispatch; one run at a time, never cut short", () => {
   expect(latency).toMatchObject({
     on: { schedule: [{ cron: expect.stringMatching(/^\d+ \*\/3 \* \* \*$/) }] },
     concurrency: { group: "os-latency", "cancel-in-progress": false },
   });
-  expect(latency.on.push?.branches).toEqual(["main"]);
-  const paths = latency.on.push?.paths ?? [];
-  // everything that deploys the Worker, plus the perf suite and the guard itself
-  for (const file of [
-    "apps/os/src/worker.ts",
-    "apps/os/src/control-plane/catalog.ts",
-    "configs/default/AGENTS.md",
-    "packages/iterate/src/stream/processor.ts",
-    "packages/ui/src/button.tsx",
-    "envs.ts",
-    "pnpm-lock.yaml",
-    "apps/os/perf/latency.ts",
-    "apps/os/perf/project-creation.perf.test.ts",
-    "apps/os/e2e/support/client.ts",
-    "scripts/ci/os-latency-guard.ts",
-    ".depot/workflows/os-latency.yml",
-  ])
-    expect(triggers(paths, file), `${file} runs the guard`).toBe(true);
-  for (const file of deployOs.on.push.paths.filter((path) => !path.startsWith("!")))
-    if (file !== ".depot/workflows/deploy-os.yml")
-      expect(paths, `deploy-os.yml deploys for ${file}`).toContain(file);
   expect(latency.on.workflow_dispatch?.inputs).toHaveProperty("budget-scale");
 });
 
@@ -98,14 +76,4 @@ function readWorkflow(file: string): unknown {
 
 function runs(jobId: string): string[] {
   return (latency.jobs[jobId]?.steps || []).map((step) => step.run || "");
-}
-
-/** GitHub's `paths` filter: the last pattern a file matches decides, and a `!` pattern excludes. */
-function triggers(paths: string[], file: string) {
-  let included = false;
-  for (const pattern of paths) {
-    const negated = pattern.startsWith("!");
-    if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
-  }
-  return included;
 }

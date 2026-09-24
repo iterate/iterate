@@ -26,7 +26,7 @@ const pxt90nlfvh: RunMetrics = {
   ],
 };
 
-test("a green push's time to green runs from the run's creation to its last check's end, trace included", () => {
+test("a green push's time to green runs from the run's creation to its last check's end", () => {
   expect(
     measurePush({
       metrics: pxt90nlfvh,
@@ -44,6 +44,65 @@ test("a green push's time to green runs from the run's creation to its last chec
     seconds: 316,
   });
 });
+
+// Depot's GetRunMetrics for run l9b40r65b2 (PR #3094) and v7gm132nt1 (PR #3009, whose e2e failed
+// and passed on a re-run), cut to the fields the guard reads.
+test.each<{
+  metrics: RunMetrics;
+  firstExecutions: Parameters<typeof measurePush>[0]["firstExecutions"];
+  expected: object;
+}>([
+  {
+    metrics: {
+      run: {
+        runId: "l9b40r65b2",
+        ref: "refs/pull/3094/merge",
+        createdAt: "2026-09-24T19:56:00.152Z",
+      },
+      workflows: [
+        workflow("fn4fhm8q96", "Lint and Typecheck", "finished", "2026-09-24T19:57:04.915Z"),
+        workflow("xh81bck8bm", "Test", "finished", "2026-09-24T19:58:40.106Z"),
+        previewOs("26hmfc2c77", "finished", "2026-09-24T20:02:19.475Z", {
+          deploy: ["2026-09-24T19:57:40.086Z"],
+          e2e: ["2026-09-24T20:01:31.057Z"],
+          specs: ["2026-09-24T19:59:19.763Z"],
+          trace: ["2026-09-24T20:02:11.591Z"],
+        }),
+      ],
+    },
+    firstExecutions: {},
+    // E2E tests' end, 48 s before the trace's
+    expected: { outcome: "green", seconds: 330.9 },
+  },
+  {
+    metrics: {
+      run: {
+        runId: "v7gm132nt1",
+        ref: "refs/pull/3009/merge",
+        createdAt: "2026-09-24T11:37:49.951Z",
+      },
+      workflows: [
+        workflow("jkmnhnhp8z", "Lint and Typecheck", "finished", "2026-09-24T11:38:23.614Z"),
+        workflow("v5lv047b1c", "Test", "finished", "2026-09-24T11:41:01.194Z"),
+        previewOs("2lprg4f8q9", "finished", "2026-09-24T11:47:33.757Z", {
+          deploy: ["2026-09-24T11:39:25.275Z"],
+          e2e: ["2026-09-24T11:42:46.744Z", "2026-09-24T11:47:18.153Z"],
+          trace: ["2026-09-24T11:43:00.575Z", "2026-09-24T11:47:31.889Z"],
+        }),
+      ],
+    },
+    firstExecutions: { "2lprg4f8q9": { status: "failed", finishedAt: "2026-09-24T11:43:01Z" } },
+    // the first E2E tests attempt's end, before its trace and the re-run
+    expected: { outcome: "red", seconds: 296.8 },
+  },
+])(
+  "Preview OS reaches its verdict at its last job but the CI trace: $metrics.run.runId",
+  ({ metrics, firstExecutions, expected }) => {
+    expect(
+      measurePush({ metrics, firstExecutions, nextRunAt: undefined, summary: {} }),
+    ).toMatchObject(expected);
+  },
+);
 
 test.each([
   { summary: { slowRows: "skipped" as const }, e2e: "slow-rows-skipped" },
@@ -331,6 +390,24 @@ test("the state round-trips through its schema", () => {
 
 function workflow(workflowId: string, name: string, status: string, finishedAt: string) {
   return { workflow: { workflowId, name, status, finishedAt }, jobs: [{ attempts: [{}] }] };
+}
+
+/** A Preview OS workflow whose jobs (by their key in preview-os.yml) ended each attempt at `ends`. */
+function previewOs(
+  workflowId: string,
+  status: string,
+  finishedAt: string,
+  ends: Record<string, string[]>,
+): RunMetrics["workflows"][number] {
+  return {
+    workflow: { workflowId, name: "Preview OS", status, finishedAt },
+    jobs: Object.entries(ends).map(([job, attempts]) => ({
+      job: { jobKey: `preview-os.yml:${job}`, status: "finished" },
+      attempts: attempts.map((end, index) => ({
+        attempt: { attempt: index + 1, finishedAt: end },
+      })),
+    })),
+  };
 }
 
 function withWorkflow(

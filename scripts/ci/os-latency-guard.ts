@@ -1,5 +1,5 @@
 // scripts/ci/os-latency-guard.ts — THE LATENCY GUARD'S JUDGE (.depot/workflows/os-latency.yml, every
-// 3 hours and on main pushes, against main redeployed to a preview that nothing else touches). It reads
+// 3 hours, against main redeployed to a preview that nothing else touches). It reads
 // one run of apps/os's perf suite — Vitest's JSON report, where each row left its raw samples on its
 // meta (apps/os/perf/record.ts) — and judges every metric's median against two lines:
 //   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and

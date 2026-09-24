@@ -679,12 +679,11 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
-// only runs on its schedule carries that job as a skipped check. Five workflows run the same jobs
+// only runs on its schedule carries that job as a skipped check. Four workflows run the same jobs
 // on every trigger: the two image bakes (a push to main bakes as the schedule does, the preview
 // image's once a check finds its stamp stale), Kit Firmware, whose daily run re-plans every board
-// so a failed publish is repaired without a firmware push, the latency guard, which measures a
-// main push as it measures main every 3 hours, and the real-model suite, which runs a main push to
-// the agents runtime as it runs main daily.
+// so a failed publish is repaired without a firmware push, and the real-model suite, which runs a
+// main push to the agents runtime as it runs main daily.
 test.for(
   depotWorkflowFiles.filter(
     (file) =>
@@ -693,7 +692,6 @@ test.for(
         ".depot/workflows/build-preview-ci-image.yml",
         ".depot/workflows/build-esp-idf-image.yml",
         ".depot/workflows/kit-firmware.yml",
-        ".depot/workflows/os-latency.yml",
         ".depot/workflows/os-real-model.yml",
       ].includes(file),
   ),

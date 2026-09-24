@@ -8,8 +8,8 @@
 #
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
-# answer can change; the script tries the registry three times before it fails. Upstream moving
-# with no pull request in sight is the daily report's job (shadcn-upstream.yml).
+# answer can change; a registry blip fails it once, and a re-run asks again. Upstream moving with no
+# pull request in sight is the daily report's job (shadcn-upstream.yml).
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): none.
 name: shadcn drift
