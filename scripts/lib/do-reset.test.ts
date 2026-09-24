@@ -243,7 +243,9 @@ test("retires a preview parent's own classes, not its Worker Previews' namespace
     }
     if (path === "/containers/applications") return [];
     if (path === "/workers/scripts/os") {
-      deployedMetadata = JSON.parse(String((init?.body as FormData).get("metadata")));
+      const body = init?.body;
+      if (!(body instanceof FormData)) throw new Error("expected a FormData worker upload");
+      deployedMetadata = JSON.parse(String(body.get("metadata")));
       return undefined;
     }
     throw new Error(`unexpected Cloudflare request: ${path}`);
