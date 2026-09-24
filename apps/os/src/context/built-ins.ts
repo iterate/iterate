@@ -13,7 +13,6 @@
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
-import { stampCaller, type Caller } from "../caller.ts";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   print,
@@ -22,7 +21,6 @@ import {
   type ItxExpressionStep,
   InvokeHandle,
 } from "iterate/expression";
-import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import type {
   CollectSecretInput,
   CollectSecretLink,
@@ -34,6 +32,7 @@ import type {
   WaitForEventFilter,
 } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -51,6 +50,7 @@ import {
 } from "../secrets.ts";
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,

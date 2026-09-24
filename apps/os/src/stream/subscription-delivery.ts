@@ -34,10 +34,10 @@
 // recent-ephemerals ring (stream.ts), so it sees whatever the ring still holds when its loop reads.
 
 import type { ItxExpression } from "iterate/expression";
-import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
 import { errorCode, reportIssue, withTimeout } from "iterate/lib";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
+import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
 import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
 import { RECENT_EPHEMERALS_BUDGET_CHARS, type Stream, type SubscriptionCursor } from "./stream.ts";
 

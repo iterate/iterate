@@ -6,15 +6,15 @@
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import { codedError, errorCode } from "iterate/lib";
+import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
+import type { StreamEventInput } from "iterate/stream/processor";
+import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
-import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
-import type { StreamEventInput } from "iterate/stream/processor";
-import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { isRetryableTransportError } from "../retryable-error.ts";
 

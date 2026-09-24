@@ -35,7 +35,10 @@ import {
   InvokeHandle,
   normalizedItxExpression,
 } from "iterate/expression";
-import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
+import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
+import { projectUrlOf } from "iterate/project-ingress";
+import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -43,10 +46,7 @@ import {
   stampCaller,
   type Caller,
 } from "./caller.ts";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
-import { projectUrlOf } from "iterate/project-ingress";
-import { RunRequested, type RunSettlement } from "iterate/stream/run";
+import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
 import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,

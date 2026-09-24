@@ -22,7 +22,6 @@
 
 import { codedError, errorCode, reportIssue } from "iterate/lib";
 import type { ItxExpressionInput } from "iterate/expression";
-import type { Caller } from "../caller.ts";
 import type { StreamPage, WaitForEventFilter } from "iterate/api";
 import {
   idempotencyConflictMessage,
@@ -32,6 +31,7 @@ import {
   ReduceCheckpointTable,
   type SqlStorageHandle,
 } from "iterate/stream/processor";
+import type { Caller } from "../caller.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,

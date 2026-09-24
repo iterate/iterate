@@ -237,6 +237,32 @@
       "rules": {
         "no-restricted-imports": "off"
       }
+    },
+    {
+      "files": [
+        "packages/iterate/**",
+        "packages/cli/**",
+        "packages/ui/**",
+        "apps/agents/**",
+        "apps/dash/**",
+        "apps/notes/**",
+        "apps/voice/**",
+        "apps/kit/**",
+        "apps/spa/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)os/src/",
+                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in apps/os (docs/2026-09-24-sdk-platform-line.md)."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

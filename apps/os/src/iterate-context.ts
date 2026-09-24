@@ -30,14 +30,14 @@ import {
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
 } from "iterate/expression";
+import type { IterateContextApi } from "iterate/api";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   materializeItxHandleReference,
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
 } from "./context/dispatch.ts";
-import type { IterateContextApi } from "iterate/api";
 import type { Caller } from "./caller.ts";
-import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,

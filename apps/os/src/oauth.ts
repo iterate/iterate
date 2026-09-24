@@ -9,8 +9,8 @@ import {
 import { z } from "zod";
 import { reportIssue } from "iterate/lib";
 import { OAuthScope, OAuthScopes } from "iterate/oauth-scopes";
-import { verifyAdminSecret } from "./caller.ts";
 import type { Principal } from "iterate/principal";
+import { verifyAdminSecret } from "./caller.ts";
 import type { Env, Handler } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";

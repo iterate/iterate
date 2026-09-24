@@ -27,11 +27,11 @@
 
 import { expect, test, vi } from "vitest";
 import { print, type ItxExpression } from "iterate/expression";
-import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
 import { codedError } from "iterate/lib";
 import type { StreamEvent, ScannedRange } from "iterate/stream/processor";
-import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
+import { AlarmCoordinator } from "../alarm-coordinator.ts";
+import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
 import {
   RECENT_EPHEMERALS_BUDGET_CHARS,
   Stream,
