@@ -2,11 +2,8 @@
 // might contain, and the lines the rule reports. Each row runs the real oxlint binary on a temp
 // file outside Git, where grandfatherRule exempts nothing.
 
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
+import { createOxlintFixture } from "./oxlint-fixture.ts";
 
 test.for([
   {
@@ -78,45 +75,11 @@ test.for([
     reportedLines: [1, 2, 3],
   },
 ])("$rule reports only the lines it names", ({ rule, source, reportedLines }) => {
-  using fixture = createOxlintFixture(rule);
-  fixture.write(`${source.join("\n")}\n`);
-  expect(fixture.reportedLines()).toEqual(reportedLines);
+  using fixture = createOxlintFixture({ rules: { [`iterate/${rule}`]: "error" } });
+  fixture.write("input.test.ts", `${source.join("\n")}\n`);
+  const reported = fixture
+    .diagnostics(["input.test.ts"])
+    .filter((diagnostic) => diagnostic.code === `iterate(${rule})`)
+    .map((diagnostic) => diagnostic.labels[0]!.span.line);
+  expect(reported.sort((a, b) => a - b)).toEqual(reportedLines);
 });
-
-const repoRoot = resolve(import.meta.dirname, "..");
-
-/** A temp project with the real plugin and one rule armed, linted by the real oxlint binary. */
-function createOxlintFixture(rule: string) {
-  const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-test-style-"));
-  const configPath = join(root, ".oxlintrc.json");
-  writeFileSync(
-    configPath,
-    JSON.stringify({
-      categories: { correctness: "off" },
-      jsPlugins: [join(repoRoot, "lint", "oxlint-plugin-iterate.ts")],
-      rules: { [`iterate/${rule}`]: "error" },
-    }),
-  );
-  return {
-    [Symbol.dispose]() {
-      rmSync(root, { force: true, recursive: true });
-    },
-    write(contents: string) {
-      writeFileSync(join(root, "input.test.ts"), contents);
-    },
-    reportedLines() {
-      const result = spawnSync(
-        join(repoRoot, "node_modules", ".bin", "oxlint"),
-        ["input.test.ts", "--config", configPath, "--threads", "1", "--format", "json"],
-        { cwd: root, encoding: "utf8" },
-      );
-      const { diagnostics } = JSON.parse(result.stdout) as {
-        diagnostics: { code: string; labels: { span: { line: number } }[] }[];
-      };
-      return diagnostics
-        .filter((diagnostic) => diagnostic.code === `iterate(${rule})`)
-        .map((diagnostic) => diagnostic.labels[0]!.span.line)
-        .sort((a, b) => a - b);
-    },
-  };
-}
