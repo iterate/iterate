@@ -2,11 +2,13 @@
 // push to main deploys a throwaway preview, runs the e2e suite, the browser specs and the residency
 // gate against it, and deletes it. This posts to #error-pulse only when main CHANGES state: once when
 // it goes red (naming the failed jobs and the failing rows), once when it is green again. A red that
-// stays red, and every green, post nothing. The last page in the channel is the state: nothing
-// long-lived is kept anywhere else.
+// stays red, and every green, post nothing. Main's state is its last FINISHED run of the same
+// workflow — the check runs Depot posts on each earlier main commit — so a workflow's first run,
+// with no finished run before it, is no change of state and posts nothing.
 //
 //   pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
-//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert [--label "main e2e"] [--dry-run]
+//   NEEDS='${{ toJSON(needs) }}' GITHUB_TOKEN=… GITHUB_REPOSITORY=… pnpm tsx scripts/ci/main-e2e-alert.ts \
+//     alert --workflow "Main OS e2e" [--label "main e2e"] [--dry-run]
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -16,11 +18,6 @@ import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
 
 export type MainE2eState = "green" | "red";
-
-/** A page's first words, per run (`--label`: "main e2e", "main e2e on the prd account"): how
- *  the next run of the same label finds the last one. */
-const red = (label: string) => `🔴 ${label} red`;
-const green = (label: string) => `🟢 ${label} green again`;
 
 /** The run's verdict from its jobs' results: red on any failure, green when every job succeeded, and
  *  none at all when a job was cancelled (a newer push superseded the run) or nothing failed but not
@@ -48,23 +45,43 @@ export function mainE2eFailingRows(artifacts: TestTelemetryArtifact[]): string[]
   return [...new Set(rows)];
 }
 
-/** The state the channel last announced: the newest of this alert's pages, else green. Pure. */
-export function previousMainE2eState(
-  messages: { text?: string; bot_id?: string }[],
-  label: string,
-): MainE2eState {
-  const last = messages.find(
-    (message) =>
-      message.bot_id &&
-      (message.text?.startsWith(`${red(label)} `) || message.text?.startsWith(`${green(label)} `)),
+/** One check run on a commit, as GitHub lists it: Depot names each `<workflow> / <job name>`. */
+export type CommitCheckRun = {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+};
+
+/** The verdict of one earlier main commit's run of `workflow`, from its check runs: the latest
+ *  attempt of each job, the alert job itself and skipped jobs aside, through mainE2eVerdict. None
+ *  when the workflow did not run there, is still running, or was superseded. Pure. */
+export function mainE2eVerdictOfCommit(
+  checkRuns: CommitCheckRun[],
+  workflow: string,
+): MainE2eState | undefined {
+  const latest = new Map<string, CommitCheckRun>();
+  for (const run of checkRuns)
+    if (run.name.startsWith(`${workflow} / `) && run.name !== `${workflow} / alert`)
+      if (run.id > (latest.get(run.name)?.id ?? -1)) latest.set(run.name, run);
+  const jobs = [...latest.values()];
+  if (jobs.some((run) => run.status !== "completed")) return undefined;
+  const results = Object.fromEntries(
+    jobs
+      .filter((run) => run.conclusion !== "skipped")
+      .map((run) => [
+        run.name,
+        run.conclusion === "success" || run.conclusion === "cancelled" ? run.conclusion : "failure",
+      ]),
   );
-  return last?.text?.startsWith(`${red(label)} `) ? "red" : "green";
+  return mainE2eVerdict(results);
 }
 
-/** The page for a change of state, or null. Pure. */
+/** The page for a change of state, or null. `previous` is main's last finished run's verdict, or
+ *  undefined when there was none: a first run changes no state. Pure. */
 export function mainE2ePage(input: {
   label: string;
-  previous: MainE2eState;
+  previous: MainE2eState | undefined;
   verdict: MainE2eState | undefined;
   commitSha: string;
   commitSubject: string;
@@ -72,15 +89,15 @@ export function mainE2ePage(input: {
   failingRows: string[];
   runUrl?: string;
 }): string | null {
-  if (!input.verdict || input.verdict === input.previous) return null;
+  if (!input.verdict || !input.previous || input.verdict === input.previous) return null;
   const commit = `\`${input.commitSha.slice(0, 9)}\` (${input.commitSubject})`;
   const link = input.runUrl ? `<${input.runUrl}|the run>` : "";
   if (input.verdict === "green")
-    return [`${green(input.label)} at ${commit}`, link].filter(Boolean).join("\n");
+    return [`🟢 ${input.label} green again at ${commit}`, link].filter(Boolean).join("\n");
   const shown = input.failingRows.slice(0, 8);
   return [
     // the mention is Jonas (./slack.ts)
-    `${red(input.label)} at ${commit} <@U067G4QRFK2>`,
+    `🔴 ${input.label} red at ${commit} <@U067G4QRFK2>`,
     `• failed: ${input.failedJobs.join(", ") || "a job"}`,
     shown.length > 0 &&
       `• failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,
@@ -96,7 +113,47 @@ const Needs = z.record(
   z.object({ result: z.string(), outputs: z.record(z.string(), z.string()).optional() }),
 );
 
-async function alert(label: string, dryRun: boolean): Promise<void> {
+/** GitHub's REST API with the job's token. */
+async function github<T>(route: string): Promise<T> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GITHUB_TOKEN is required");
+  const response = await fetch(`https://api.github.com${route}`, {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "user-agent": "main-e2e-alert",
+    },
+  });
+  if (!response.ok) throw new Error(`GitHub GET ${route} failed with ${response.status}`);
+  return (await response.json()) as T;
+}
+
+/** Main's state before `commitSha`: the verdict of the newest of the 30 commits before it whose run
+ *  of `workflow` finished, or undefined when none did. */
+async function previousMainE2eState(
+  workflow: string,
+  commitSha: string,
+): Promise<MainE2eState | undefined> {
+  const repository = process.env.GITHUB_REPOSITORY;
+  if (!repository) throw new Error("GITHUB_REPOSITORY is required");
+  const commits = await github<{ sha: string }[]>(
+    `/repos/${repository}/commits?sha=${commitSha}&per_page=31`,
+  );
+  for (const { sha } of commits.filter((commit) => commit.sha !== commitSha)) {
+    const { check_runs } = await github<{ check_runs: CommitCheckRun[] }>(
+      `/repos/${repository}/commits/${sha}/check-runs?per_page=100`,
+    );
+    const verdict = mainE2eVerdictOfCommit(check_runs, workflow);
+    if (verdict) {
+      console.log(`${workflow}: main's last finished run was ${verdict}, at ${sha.slice(0, 9)}`);
+      return verdict;
+    }
+  }
+  console.log(`${workflow}: no finished run in the 30 commits before this one`);
+  return undefined;
+}
+
+async function alert(workflow: string, label: string, dryRun: boolean): Promise<void> {
   const needs = Needs.parse(JSON.parse(process.env.NEEDS || "{}"));
   const results = Object.fromEntries(
     Object.entries(needs).map(([job, need]) => [job, need.result]),
@@ -109,14 +166,7 @@ async function alert(label: string, dryRun: boolean): Promise<void> {
   const commitSubject = execFileSync("git", ["log", "-1", "--format=%s"], {
     encoding: "utf8",
   }).trim();
-  const slack = getSlackClient();
-  const channel = slackChannelIds["#error-pulse"];
-  const history = await slack.conversations.history({
-    channel,
-    oldest: String(Date.now() / 1000 - 7 * 86_400),
-    limit: 999,
-  });
-  const previous = previousMainE2eState(history.messages || [], label);
+  const previous = await previousMainE2eState(workflow, commitSha);
   const page = mainE2ePage({
     label,
     previous,
@@ -132,7 +182,11 @@ async function alert(label: string, dryRun: boolean): Promise<void> {
   console.log(JSON.stringify({ results, verdict, previous, failingRows }));
   if (!page) return console.log(`${label}: no change of state, nothing to post`);
   console.log(page);
-  if (!dryRun) await slack.chat.postMessage({ channel, text: page });
+  if (!dryRun)
+    await getSlackClient().chat.postMessage({
+      channel: slackChannelIds["#error-pulse"],
+      text: page,
+    });
 }
 
 function failingRows(directory: string): void {
@@ -156,14 +210,15 @@ if (isMainModule(import.meta.url)) {
   const [command, ...rest] = process.argv.slice(2);
   const option = (name: string) => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined);
   const directory = option("--dir");
+  const workflow = option("--workflow");
   const done =
     command === "failing-rows" && directory
       ? Promise.resolve(failingRows(directory))
-      : command === "alert"
-        ? alert(option("--label") || "main e2e", rest.includes("--dry-run"))
+      : command === "alert" && workflow
+        ? alert(workflow, option("--label") || "main e2e", rest.includes("--dry-run"))
         : Promise.reject(
             new Error(
-              "usage: main-e2e-alert.ts failing-rows --dir <dir> | alert [--label <label>] [--dry-run]",
+              "usage: main-e2e-alert.ts failing-rows --dir <dir> | alert --workflow <name> [--label <label>] [--dry-run]",
             ),
           );
   done.catch((error: unknown) => {

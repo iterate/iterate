@@ -82,7 +82,11 @@ test("pages on main's change of state, never for a superseded run", () => {
     "residency",
     "delete",
   ]);
-  expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
+  // main's state is the workflow's own last finished run, read from the check runs it posted
+  expect(runs("alert")).toContain(
+    'pnpm tsx scripts/ci/main-e2e-alert.ts alert --workflow "Main OS e2e"',
+  );
+  expect(readWorkflowName("main-os-e2e.yml")).toBe("Main OS e2e");
 });
 
 test("the prd account's run is the same run on the one throwaway parent, the platform alone", () => {
@@ -91,13 +95,20 @@ test("the prd account's run is the same run on the one throwaway parent, the pla
   const step = (jobId: string, command: string) =>
     prdAccount.jobs[jobId]?.steps?.find((candidate) => candidate.run === command);
   expect(step("deploy", "doppler run -- pnpm preview deploy")?.env?.PREVIEW_APPS).toBe("none");
+  // a cancelled run's delete is cancelled with it: the next run deletes its preview first
+  const deploySteps = (prdAccount.jobs.deploy?.steps || []).map((candidate) => candidate.run);
+  expect(deploySteps.indexOf("doppler run -- pnpm preview delete-superseded")).toBeGreaterThan(-1);
+  expect(deploySteps.indexOf("doppler run -- pnpm preview delete-superseded")).toBeLessThan(
+    deploySteps.indexOf("doppler run -- pnpm preview deploy"),
+  );
   expect(step("e2e", "doppler run -- pnpm preview e2e")).toBeDefined();
   expect(step("residency", "doppler run -- pnpm preview residency")).toBeDefined();
   expect(prdAccount.jobs.delete?.if).toBe("always() && github.event_name != 'schedule'");
   expect(prdAccount.jobs.residency?.if).toBe(main.jobs.residency?.if);
   expect(prdAccount.jobs.alert?.steps?.at(-1)?.run).toBe(
-    'pnpm tsx scripts/ci/main-e2e-alert.ts alert --label "main e2e on the prd account"',
+    'pnpm tsx scripts/ci/main-e2e-alert.ts alert --workflow "Main OS e2e on the prd account" --label "main e2e on the prd account"',
   );
+  expect(readWorkflowName("main-os-e2e-prd-account.yml")).toBe("Main OS e2e on the prd account");
   // the nightly backstop sweeps the prd account parent's leftovers
   expect(prdAccount.on.schedule).toHaveLength(1);
   expect(prdAccount.jobs.sweep?.if).toBe("github.event_name == 'schedule'");
@@ -112,4 +123,9 @@ function readWorkflow(file: string): unknown {
 
 function runs(jobId: string): string[] {
   return (main.jobs[jobId]?.steps || []).map((step) => step.run || "");
+}
+
+/** The workflow's `name:`, the prefix of every check run it posts (`<name> / <job>`). */
+function readWorkflowName(file: string): string {
+  return (readWorkflow(file) as { name: string }).name;
 }

@@ -3,7 +3,8 @@ import {
   mainE2eFailingRows,
   mainE2ePage,
   mainE2eVerdict,
-  previousMainE2eState,
+  mainE2eVerdictOfCommit,
+  type CommitCheckRun,
 } from "./main-e2e-alert.ts";
 
 test.each<{ results: Record<string, string>; verdict: string | undefined }>([
@@ -45,6 +46,9 @@ test.each([
   { previous: "green", verdict: "green", pages: null },
   { previous: "green", verdict: undefined, pages: null },
   { previous: "red", verdict: undefined, pages: null },
+  // a workflow's first run, with no finished run before it, is no change of state
+  { previous: undefined, verdict: "red", pages: null },
+  { previous: undefined, verdict: "green", pages: null },
 ] as const)(
   "main was $previous, this run is $verdict → pages $pages",
   ({ previous, verdict, pages }) => {
@@ -87,35 +91,64 @@ test("a red page names the commit, the failed jobs and the failing rows, and men
   );
 });
 
-test.each([
-  { messages: [], state: "green" },
-  { messages: [{ bot_id: "B", text: "🔴 main e2e red at `x`" }], state: "red" },
+test.each<{ case: string; runs: string[]; verdict: string | undefined }>([
   {
-    messages: [
-      { bot_id: "B", text: "🟢 main e2e green again at `y`" },
-      { bot_id: "B", text: "🔴 main e2e red at `x`" },
-    ],
-    state: "green",
+    case: "every job succeeded",
+    runs: ["deploy success", "e2e success", "residency success", "delete success"],
+    verdict: "green",
   },
-  // another label's pages (the prd account's run) are not this label's state
   {
-    messages: [
-      { bot_id: "B", text: "🔴 main e2e on the prd account red at `z`" },
-      { bot_id: "B", text: "🟢 main e2e green again at `y`" },
-    ],
-    state: "green",
+    case: "e2e failed",
+    runs: ["deploy success", "e2e failure", "residency success", "delete success"],
+    verdict: "red",
   },
-  // other bots' pages and people's replies are not this alert's state
   {
-    messages: [
-      { bot_id: "B", text: "🚨 prd fault page: …" },
-      { text: "🟢 main e2e green again, says a person" },
-      { bot_id: "B", text: "🔴 main e2e red at `x`" },
-    ],
-    state: "red",
+    case: "timed out counts as failed",
+    runs: ["deploy success", "e2e timed_out", "delete success"],
+    verdict: "red",
   },
-])("the channel's newest main e2e page is the state: $state", ({ messages, state }) => {
-  expect(previousMainE2eState(messages, "main e2e")).toBe(state);
+  // f3772a0 on 2026-09-23: e2e failed, then a newer push cancelled the rest
+  {
+    case: "superseded after a failure",
+    runs: ["deploy success", "e2e failure", "residency cancelled", "delete cancelled"],
+    verdict: undefined,
+  },
+  { case: "still running", runs: ["deploy success", "e2e in_progress"], verdict: undefined },
+  { case: "the workflow did not run on that commit", runs: [], verdict: undefined },
+  // the alert's own job and the nightly sweep's skip are not the run's result
+  {
+    case: "alert and a skipped job aside",
+    runs: ["deploy success", "e2e success", "delete success", "alert failure", "sweep skipped"],
+    verdict: "green",
+  },
+  // a retried job: its latest attempt is the result
+  {
+    case: "a job retried to green",
+    runs: ["deploy success", "e2e failure", "e2e success", "delete success"],
+    verdict: "green",
+  },
+])("an earlier main commit's run, $case → $verdict", ({ runs, verdict }) => {
+  const checkRuns: CommitCheckRun[] = runs.map((run, index) => {
+    const [job, state] = run.split(" ") as [string, string];
+    const completed = state !== "in_progress";
+    return {
+      id: index + 1,
+      name: `Main OS e2e / ${job}`,
+      status: completed ? "completed" : state,
+      conclusion: completed ? state : null,
+    };
+  });
+  // another workflow's check runs on the same commit are not this one's
+  checkRuns.push(
+    {
+      id: 100,
+      name: "Main OS e2e on the prd account / e2e",
+      status: "completed",
+      conclusion: "failure",
+    },
+    { id: 101, name: "Test / test", status: "completed", conclusion: "failure" },
+  );
+  expect(mainE2eVerdictOfCommit(checkRuns, "Main OS e2e")).toBe(verdict);
 });
 
 test("failing rows are the unexpected (Playwright) or failed (vitest) tests, once each", () => {
