@@ -76,9 +76,8 @@ type AlarmCoordinatorDeps = {
 
 export class AlarmCoordinator {
   /** What storage holds, as far as this incarnation knows — except after a birth re-arm, which
-   *  wrote `#storedAside` while this stays the time the sources want. */
+   *  wrote `now` while this stays the time the sources want. */
   #armedAt: number | null = null;
-  #storedAside: number | null = null;
   /** When the watch last acted on `#armedAt` (a birth re-arm, a pass it ran): its next check is
    *  `ALARM_OVERDUE_AFTER_MS` after this, never back-to-back. */
   #lastWatchActAt: number | null = null;
@@ -137,7 +136,6 @@ export class AlarmCoordinator {
       this.#passInProgress = false;
       if (delivered) {
         this.#armedAt = null;
-        this.#storedAside = null;
         this.#lastWatchActAt = null;
       } else {
         // The runtime spent nothing: storage still holds what it held (a birth re-arm's aside
@@ -156,7 +154,6 @@ export class AlarmCoordinator {
     // Unchanged — a birth re-arm's aside included: the time the sources want is what it re-armed.
     if (wanted === this.#armedAt) return this.watch();
     this.#armedAt = wanted;
-    this.#storedAside = null;
     this.#lastWatchActAt = null;
     // The output gate makes a failed storage write fail the invocation.
     void (wanted === null ? this.#deps.deleteAlarm() : this.#deps.setAlarm(wanted));
@@ -170,7 +167,6 @@ export class AlarmCoordinator {
     const armedAt = this.#armedAt;
     if (armedAt === null || now - armedAt < ALARM_OVERDUE_AFTER_MS) return;
     if (this.#wanted() !== armedAt) return this.reconcile();
-    this.#storedAside = now;
     this.#lastWatchActAt = now;
     // `now`, never `armedAt`: the stored time written again is a no-op the runtime never forwards.
     // `#armedAt` stays what the sources want, so no reconcile writes it back.
