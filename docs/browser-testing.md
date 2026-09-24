@@ -78,8 +78,9 @@ attachment the default.
 
 The automated browser suite is `pnpm spec` from the repository root: one root
 `playwright.config.ts`, the specs under `specs/` (see `specs/AGENTS.md`). It
-starts a local Worker by default. Set `DEMO_BASE_URL` and the target's test
-credentials (`LOGIN_PASSWORD`, `ADMIN_API_SECRET`) to run against an existing
+starts a local Worker by default. Set `DEMO_BASE_URL` and run under the
+target's Doppler config (`doppler run --project project-worker --config
+<preview|prd>`, which supplies its `APP_CONFIG`) to run against an existing
 deployment. Recorded demos for PRs: `VIDEO_MODE=1 pnpm spec -g <name>` — see
 [Pull requests](pull-requests.md#video) and [Testing](testing.md).
 
