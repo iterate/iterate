@@ -13,8 +13,8 @@ import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts"
 // edge is Cloudflare's ~10 s idle eviction; 20 s keeps twice that. 22 s sleep.
 //
 // KNOWN FLAKE, THE PLATFORM'S: the runtime sometimes holds an armed alarm past its time
-// (src/alarm-coordinator.ts, the overdue watch; 2026-09-24 on PR #2950's preview this row's deadline
-// fired 20.7 s late, and in soak qvs7pzv6rq 3.6 s late, delivered the instant the reconnect arrived).
+// (src/alarm-coordinator.ts, the overdue watch; on previews on 2026-09-24 this row's deadline fired
+// 3.6 s and 20.7 s late, delivered the instant the reconnect arrived).
 // A resident actor's watch re-arms it at 5 s; this row's actor is evicted on purpose, so nothing
 // watches its alarm until the reconnect, and a batch the reconnect's own incarnation commits voids
 // the proof of dormancy. The pattern is exactly that case, proven, not presumed: the batch committed
@@ -22,8 +22,8 @@ import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts"
 // pass whose alarm trace says it was armed for exactly this deadline. A pass armed for anything
 // else, or no batch at all, is a real failure.
 // 70 s: the 22 s sleep and the checks, plus a stall BEFORE the first call reaches the context — a
-// fresh project's creation took ~23 s in 2 of 105 soak runs (cxqxfzpv5f, pd5152kz34, 2026-09-24;
-// the residual-timeouts cause, measured by its own rows), which is not this row's subject.
+// fresh project's creation took ~23 s in 2 of 105 soak runs (2026-09-24), which is not this row's
+// subject.
 const platformHeldTheAlarm = createFlake(
   test,
   /the platform held this deadline's alarm \d+ ms past its time/,
