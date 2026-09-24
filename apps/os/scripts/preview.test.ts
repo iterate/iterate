@@ -7,16 +7,22 @@ import {
   appPreviewOrigins,
   assertFreshInstall,
   changedApps,
+  configTemplateNames,
   isDurableObjectClassNotExportedError,
+  lastLines,
   MAX_PREVIEW_NAME_LENGTH,
   previewNameOfResource,
   previewPullRequestNumber,
   previewResourceName,
   previewWranglerConfig,
+  renderPreviewStatus,
   renderPullRequestSection,
   resolvePreviewName,
   slugifyPreviewName,
+  splicePreviewStatus,
   splicePullRequestBody,
+  templateQuickLaunches,
+  type PreviewStatus,
 } from "./preview-config.ts";
 
 describe("the preview name (cloudflare-os: pr<n>-<branch slug>)", () => {
@@ -53,9 +59,19 @@ describe("the preview name (cloudflare-os: pr<n>-<branch slug>)", () => {
   });
 });
 
+const JOB = "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a";
+const DASH = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
+const deployed: PreviewStatus = {
+  state: "deployed",
+  commit: "ccccccccc0123456789",
+  runUrl: JOB,
+  at: new Date("2026-09-24T10:32:17Z"),
+};
+
 describe("the PR body's managed section", () => {
   const section = renderPullRequestSection({
     previewName: "pr123-feature-foo",
+    status: deployed,
     url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
     deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
@@ -77,12 +93,13 @@ describe("the PR body's managed section", () => {
     );
     expect(section).toContain("https://github.com/iterate/iterate/blob/main/apps/os/README.md");
     expect(section).not.toContain("depot ci dispatch");
-    expect(section).not.toContain("Built and tested from");
+    expect(section).not.toContain("Deployed from");
   });
 
-  test("names the commit the run tested when the workflow resolved one", () => {
+  test("names the commit the run deployed when the workflow resolved one; e2e is the status line's", () => {
     const withCommit = renderPullRequestSection({
       previewName: "pr123-feature-foo",
+      status: deployed,
       url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
       deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
       dashboardUrl: "https://dash.cloudflare.com/x",
@@ -91,17 +108,22 @@ describe("the PR body's managed section", () => {
         "the merge commit `ccccccccc`: this PR's head `bbbbbbbbb` merged into main at `aaaaaaaaa`",
     });
     expect(withCommit).toContain(
-      "Built and tested from the merge commit `ccccccccc`: this PR's head `bbbbbbbbb` merged into main at `aaaaaaaaa`.",
+      "Deployed from the merge commit `ccccccccc`: this PR's head `bbbbbbbbb` merged into main at `aaaaaaaaa`.",
     );
+    expect(withCommit).not.toContain("tested");
   });
 
-  test("on a PR the heading and every app carry a one-click `Sign in ↗`, and the section says as whom", () => {
+  test("on a PR the heading, every app and every config template carry a one-click `Sign in ↗`, and the section says as whom", () => {
     const dash = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
     const notes = "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev";
     const os = "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev";
     const signIn = {
       heading: `${os}/.auth/test-link?t=heading`,
       apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
+      templates: [
+        { name: "default", link: `${os}/.auth/test-link?t=default`, fromHead: "bbbbbbbbb0123456" },
+        { name: "with-agents", link: `${os}/.auth/test-link?t=with-agents` },
+      ],
       email: "pr123@preview.iterate.test",
       project: "pr123",
       seeded: true,
@@ -109,6 +131,7 @@ describe("the PR body's managed section", () => {
     const render = (seeded: boolean) =>
       renderPullRequestSection({
         previewName: "pr123-feature-foo",
+        status: deployed,
         url: os,
         deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
         dashboardUrl: "https://dash.cloudflare.com/x",
@@ -121,12 +144,18 @@ describe("the PR body's managed section", () => {
     expect(render(true)).toMatchInlineSnapshot(`
       "### OS preview: \`pr123-feature-foo\`
 
+      <!-- os-preview-status:begin -->
+      Status: **deployed** on \`ccccccccc\` · [CI job ↗](https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a) · updated 2026-09-24 10:32 UTC
+      <!-- os-preview-status:end -->
+
       **https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
 
       | App on top, signed in against this preview | | |
       | --- | --- | --- |
       | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
       | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+
+      New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
 
       \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
 
@@ -157,6 +186,167 @@ describe("the PR body's managed section", () => {
     expect(splicePullRequestBody("", "s")).toBe(
       "<!-- os-preview:begin -->\ns\n<!-- os-preview:end -->\n",
     );
+  });
+});
+
+// ── the status line, nested in the managed section ──
+
+test.for<{ name: string; status: Partial<PreviewStatus>; expected: string }>([
+  {
+    name: "deploying",
+    status: { state: "deploying" },
+    expected: `Status: **deploying** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+  },
+  {
+    name: "deployed",
+    status: { state: "deployed" },
+    expected: `Status: **deployed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+  },
+  {
+    name: "e2e passed",
+    status: { state: "e2e passed" },
+    expected: `Status: **e2e passed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+  },
+  {
+    name: "e2e failed names the suites",
+    status: { state: "e2e failed", failedSuites: ["vitest e2e", "pnpm spec"] },
+    expected: `Status: **e2e failed** on \`ccccccccc\` (vitest e2e, pnpm spec) · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+  },
+  {
+    name: "from a laptop there is no CI job to link",
+    status: { state: "deploying", runUrl: undefined },
+    expected: "Status: **deploying** on `ccccccccc` · updated 2026-09-24 10:32 UTC",
+  },
+  {
+    name: "deploy failed: the summary, the output's tail folded, the links below called the last good deploy's",
+    status: {
+      state: "deploy failed",
+      error: `wrangler preview failed with exit code 1\n\x1b[31m${numberedLines(1, 60)}\x1b[0m`,
+    },
+    expected: [
+      `Status: **deploy failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+      "",
+      "The links below, if any, are the last successful deploy's.",
+      "",
+      "`wrangler preview failed with exit code 1`",
+      "",
+      "<details><summary>Error output (tail)</summary>",
+      "",
+      "```",
+      numberedLines(21, 60),
+      "```",
+      "",
+      "</details>",
+    ].join("\n"),
+  },
+  {
+    name: "a fence in the output gets a longer fence; a backtick in the summary cannot close its code span",
+    status: { state: "e2e failed", error: "`build` failed\n```\nsyntax error\n```" },
+    expected: [
+      `Status: **e2e failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+      "",
+      "`'build' failed`",
+      "",
+      "<details><summary>Error output (tail)</summary>",
+      "",
+      "````",
+      "```\nsyntax error\n```",
+      "````",
+      "",
+      "</details>",
+    ].join("\n"),
+  },
+])("the status line: $name", ({ status, expected }) => {
+  expect(renderPreviewStatus({ ...deployed, ...status })).toBe(expected);
+});
+
+test("the status splice rewrites the status line alone: the author's text and the rest of the section stay byte for byte", () => {
+  const author = "What this PR does.\n\n";
+  const outro = "\n\nReviewer notes below.\n";
+  const body = `${author}${splicePullRequestBody("", deployedSection()).trimEnd()}${outro}`;
+  const after = splicePreviewStatus(body, { ...deployed, state: "deploy failed", error: "boom" });
+  const statusBlock = /<!-- os-preview-status:begin -->[\s\S]*?<!-- os-preview-status:end -->/;
+  expect(after.replace(statusBlock, "")).toBe(body.replace(statusBlock, ""));
+  expect(after).toContain(
+    `<!-- os-preview-status:begin -->\nStatus: **deploy failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC\n\nThe links below, if any, are the last successful deploy's.\n\n\`boom\`\n<!-- os-preview-status:end -->`,
+  );
+  expect(after).not.toContain("**deployed**");
+  expect(splicePreviewStatus(after, deployed)).toBe(body);
+});
+
+test("the status splice puts a status line at the top of a section written without one", () => {
+  const before = "Intro.\n\n<!-- os-preview:begin -->\nold\n<!-- os-preview:end -->\n";
+  expect(splicePreviewStatus(before, { ...deployed, state: "e2e passed", runUrl: undefined })).toBe(
+    "Intro.\n\n<!-- os-preview:begin -->\n<!-- os-preview-status:begin -->\nStatus: **e2e passed** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-status:end -->\nold\n<!-- os-preview:end -->\n",
+  );
+});
+
+test("the status splice makes a body without a section (the first deploy failed) the status line alone", () => {
+  expect(
+    splicePreviewStatus("What this PR does.", {
+      ...deployed,
+      state: "deploying",
+      runUrl: undefined,
+    }),
+  ).toBe(
+    "What this PR does.\n\n<!-- os-preview:begin -->\n<!-- os-preview-status:begin -->\nStatus: **deploying** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-status:end -->\n<!-- os-preview:end -->\n",
+  );
+});
+
+test("lastLines keeps the tail and strips colour codes", () => {
+  expect(lastLines("a\nb\n\x1b[1;31mc\x1b[0m\n\n", 2)).toBe("b\nc");
+});
+
+// ── template quick-launch links: the Dash's New project sheet, one click ──
+
+test("every configs-next directory is a config template", () => {
+  expect(configTemplateNames(path.resolve(import.meta.dirname, "../../.."))).toEqual(
+    expect.arrayContaining(["default", "with-agents"]),
+  );
+});
+
+test.for([
+  {
+    name: "a template this PR changes is the PR head's copy, an unchanged one its name",
+    changedPaths: ["configs-next/default/AGENTS.md", "configs-next/with-agents-v2/x.md"],
+    expected: [
+      {
+        name: "default",
+        fromHead: "bbbbbbbbb0123456",
+        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs-next%2Fdefault`,
+      },
+      { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
+    ],
+  },
+  {
+    name: "a PR that changes no template links each by name",
+    changedPaths: ["apps/os/src/worker.ts", "configs-next/README.md"],
+    expected: [
+      { name: "default", next: `${DASH}/projects?new=1&template=default` },
+      { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
+    ],
+  },
+])("template quick-launch: $name", ({ changedPaths, expected }) => {
+  expect(
+    templateQuickLaunches({
+      dashUrl: DASH,
+      templates: ["default", "with-agents"],
+      changedPaths,
+      headSha: "bbbbbbbbb0123456",
+    }),
+  ).toEqual(expected);
+});
+
+test("template quick-launch: the Dash reads the PR head's reference back out of the link", () => {
+  const [link] = templateQuickLaunches({
+    dashUrl: DASH,
+    templates: ["default"],
+    changedPaths: ["configs-next/default/AGENTS.md"],
+    headSha: "bbbbbbbbb0123456",
+  });
+  expect(Object.fromEntries(new URL(link!.next).searchParams)).toEqual({
+    new: "1",
+    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs-next/default",
   });
 });
 
@@ -370,4 +560,21 @@ function freshInstallCheck(input: { lockfile: [string, Date]; installed?: [strin
     }
   }
   return () => assertFreshInstall(root);
+}
+
+/** `line <from>` … `line <to>`, one per line: a command's output. */
+function numberedLines(from: number, to: number) {
+  return Array.from({ length: to - from + 1 }, (_, index) => `line ${from + index}`).join("\n");
+}
+
+/** A deployed section with no apps and no sign-in: what a status splice lands in. */
+function deployedSection() {
+  return renderPullRequestSection({
+    previewName: "pr123-feature-foo",
+    status: deployed,
+    url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
+    deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+    dashboardUrl: "https://dash.cloudflare.com/x",
+    apps: [],
+  });
 }

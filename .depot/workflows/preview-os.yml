@@ -5,9 +5,10 @@
 #                       the head alone when the PR conflicts, scripts/ci/preview-tested-commit.ts)
 #                       as a preview named `pr<n>-<branch slug>` of the parent worker
 #                       os-preview, and writes the URL, the tested commit and the operations
-#                       into the PR body
+#                       into the PR body, under a status line: deploying, deployed or deploy failed
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
-#                       then their test telemetry and flake records as artifacts
+#                       the status line rewritten to e2e passed or e2e failed, then their test
+#                       telemetry and flake records as artifacts
 #   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
 #                       artifact plus the "CI trace" and "Playwright report" commit statuses, which
 #                       open them in the ci-reports viewer
@@ -160,6 +161,8 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'all' }}
           PREVIEW_TESTED_COMMIT: ${{ steps.tested.outputs.description }}
+          # the PR head, which a template-changing PR's quick-launch links read the template at
+          PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
         run: doppler run -- pnpm preview "$ACTION"
 
   # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
