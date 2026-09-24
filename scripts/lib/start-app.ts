@@ -6,8 +6,7 @@
  * `startAppWorkerConfig`, and its package scripts run `startAppCli`, whose commands keep the old
  * scripts' names:
  *
- *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts),
- *                              or the app's own (kit)
+ *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts)
  *   ensure-resources           the proxied DNS record for a custom-domain baseUrl (dash, kit); a
  *                              workers.dev baseUrl has no zone in the account, so it only warns
  *   erase-data                 nothing to erase — these apps own no server data; the line says where it lives
@@ -46,9 +45,6 @@ export interface StartApp {
   envs: Record<string, StartAppEnv>;
   /** erase-data's whole output: the app owns no server data, and this says where the data lives instead. */
   nothingToErase: string;
-  /** The app's own deploy, when it ships more than its build (kit: the firmware binaries); without
-   *  one, `deploy` below. */
-  deploy?: (options: { env?: string }) => Promise<void>;
 }
 
 /** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
@@ -321,7 +317,7 @@ export function startAppCli(app: StartApp) {
     router: t.router({
       deploy: t.procedure
         .input(z.object({ env: env.optional() }))
-        .handler(({ input }) => (app.deploy ? app.deploy(input) : deploy(app, input))),
+        .handler(({ input }) => deploy(app, input)),
       ensureResources: t.procedure
         .input(z.object({ env: env.optional() }))
         .handler(({ input }) => ensureResources(app, input)),

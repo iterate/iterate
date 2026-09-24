@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { firmwareCatalog, supportedBoardProofTargets } from "./catalog.ts";
+import { firmwareCatalog } from "./catalog.ts";
 
 test("the catalog lists the seven boards Kit releases, each once", () => {
   const ids = firmwareCatalog.map((device) => device.id);
@@ -27,10 +27,4 @@ test.for(firmwareCatalog)("$id has its own target and device directories", ({ ta
     existsSync(join(firmware, "targets", target)),
     existsSync(join(firmware, "devices", target)),
   ]).toEqual([true, true]);
-});
-
-test("the catalog is the source for installer and proof identities", () => {
-  expect(supportedBoardProofTargets.map((board) => board.name)).toEqual(
-    firmwareCatalog.map((device) => device.id),
-  );
 });

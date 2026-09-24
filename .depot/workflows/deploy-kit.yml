@@ -13,6 +13,8 @@ on:
       - envs.ts
       - scripts/lib/**
       - apps/kit/**
+      # firmware ships as GitHub releases (kit-firmware.yml)
+      - "!apps/kit/firmware/**"
       - packages/ui/**
       - apps/agents/**
       - packages/iterate/**
@@ -30,9 +32,9 @@ on:
 jobs:
   deploy:
     runs-on:
-      size: 4x16
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,37 +47,12 @@ jobs:
         run: doppler setup --config prd --project kit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Install ESP-IDF 5.4.2
-        env:
-          IDF_PATH: /tmp/esp-idf
-          IDF_TOOLS_PATH: /tmp/.espressif
-        run: |-
-          set -euo pipefail
-          git clone --depth 1 --recursive --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
-          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0"
-          "$IDF_PATH/install.sh" esp32s3
-          source "$IDF_PATH/export.sh"
-          idf.py --version
-      - name: Build Kit firmware releases
-        working-directory: apps/kit
-        env:
-          IDF_PATH: /tmp/esp-idf
-          IDF_TOOLS_PATH: /tmp/.espressif
-        run: |-
-          set -euo pipefail
-          source "$IDF_PATH/export.sh"
-          pnpm run firmware:release
       - name: Deploy apps/kit
         id: deploy
         working-directory: apps/kit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          IDF_PATH: /tmp/esp-idf
-          IDF_TOOLS_PATH: /tmp/.espressif
-        run: |-
-          set -euo pipefail
-          source "$IDF_PATH/export.sh"
-          doppler run -- pnpm run-script deploy
+        run: doppler run -- pnpm run-script deploy
       # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
       # (deploy-os-next.yml says why `always()`).
       - name: Notify Slack

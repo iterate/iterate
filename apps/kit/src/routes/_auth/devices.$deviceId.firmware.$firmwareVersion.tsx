@@ -24,12 +24,13 @@ import { FirmwareInstallButton } from "../../components/firmware-install-button.
 import {
   DEFAULT_DEVICE_ID,
   DEFAULT_FIRMWARE_VERSION,
+  FIRMWARE_REPOSITORY,
   findFirmwareDevice,
-  firmwareCatalog,
-  resolveFirmwareRelease,
+  firmwareReleaseTag,
 } from "../../firmware/catalog.ts";
 import { deviceVendors } from "../../firmware/device-client.ts";
 import type { DeviceConfiguration } from "../../firmware/config-image.ts";
+import { selectFirmware } from "../../firmware/releases.ts";
 
 export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwareVersion")({
   beforeLoad: ({ params }) => {
@@ -43,20 +44,17 @@ export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwar
         },
       });
     }
-    if (
-      params.firmwareVersion !== DEFAULT_FIRMWARE_VERSION &&
-      !resolveFirmwareRelease(device, params.firmwareVersion)
-    ) {
-      throw redirect({
-        to: "/devices/$deviceId/firmware/$firmwareVersion",
-        params: {
-          deviceId: device.id,
-          firmwareVersion: DEFAULT_FIRMWARE_VERSION,
-        },
-      });
-    }
+    return { device };
   },
-  loader: async ({ context }) => ({ projects: await context.api.projects.list() }),
+  // In the browser (`_auth` is `ssr: false`), which lists the releases itself (releases.ts). A
+  // version that is not released stays in the URL and shows as the picker's problem, not a redirect.
+  loader: async ({ context, params }) => {
+    const [projects, firmware] = await Promise.all([
+      context.api.projects.list(),
+      selectFirmware(context.device, params.firmwareVersion, fetch),
+    ]);
+    return { projects, firmware };
+  },
   component: KitPage,
 });
 
@@ -66,26 +64,26 @@ const horizontalFieldClassName =
 function KitPage() {
   const params = Route.useParams();
   const navigate = Route.useNavigate();
-  const { api, info, deviceSession } = Route.useRouteContext();
-  const { projects } = Route.useLoaderData();
+  const { api, info, deviceSession, device } = Route.useRouteContext();
+  const { projects, firmware } = Route.useLoaderData();
   const formRef = useRef<HTMLFormElement>(null);
   const [wifiSsid, setWifiSsid] = useState("");
   const [wifiPassword, setWifiPassword] = useState("");
   const [projectId, setProjectId] = useState(projects[0]?.id || "");
-  // beforeLoad redirects unknown IDs; the fallback also keeps hook order
-  // stable during the redirect render.
-  const device = findFirmwareDevice(params.deviceId) || firmwareCatalog[0]!;
-
-  const release = resolveFirmwareRelease(device, params.firmwareVersion) || device.releases[0]!;
+  const newest = firmware.versions[0];
   const versionItems = [
-    {
-      label: `Latest (${device.releases[0]?.version || release.version})`,
-      value: DEFAULT_FIRMWARE_VERSION,
-    },
-    ...device.releases.map((candidate) => ({
-      label: candidate.version,
-      value: candidate.version,
-    })),
+    { label: newest ? `Latest (${newest})` : "Latest", value: DEFAULT_FIRMWARE_VERSION },
+    ...firmware.versions.map((version) => ({ label: version, value: version })),
+    // the Select shows only listed values, so an unreleased version in the URL is listed as such
+    ...(params.firmwareVersion === DEFAULT_FIRMWARE_VERSION ||
+    firmware.versions.includes(params.firmwareVersion)
+      ? []
+      : [
+          {
+            label: `${params.firmwareVersion} (not published)`,
+            value: params.firmwareVersion,
+          },
+        ]),
   ];
   const projectItems = projects.map((project) => ({ label: project.slug, value: project.id }));
   const preparationKey = JSON.stringify([projectId, device.id]);
@@ -207,6 +205,25 @@ function KitPage() {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+              {firmware.manifest ? (
+                <FieldDescription>
+                  {firmware.version !== newest && (
+                    <>Older releases may not work with the current platform. </>
+                  )}
+                  {/* a new tab keeps the Wi-Fi and the prepared token on this page */}
+                  <a
+                    href={`https://github.com/${FIRMWARE_REPOSITORY}/releases/tag/${firmwareReleaseTag(device.id, firmware.version)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Release notes
+                  </a>
+                </FieldDescription>
+              ) : (
+                <p role="alert" data-type="error" className="text-sm text-destructive">
+                  {firmware.problem}
+                </p>
+              )}
             </FieldContent>
           </Field>
 
@@ -316,19 +333,19 @@ function KitPage() {
           )}
           <div className="grid sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4">
             <div className="flex flex-col gap-2 sm:col-start-2">
-              {configuration ? (
+              {configuration && firmware.manifest ? (
                 <FirmwareInstallButton
-                  key={`${device.id}:${release.version}`}
+                  key={`${device.id}:${firmware.version}`}
                   configuration={configuration}
                   device={device}
                   formRef={formRef}
-                  release={release}
+                  manifest={firmware.manifest}
                 />
               ) : (
                 <Button
                   className="w-full"
                   type="button"
-                  disabled={preparing || projects.length === 0}
+                  disabled={preparing || projects.length === 0 || !firmware.manifest}
                   aria-busy={preparing}
                   onClick={async () => {
                     if (!formRef.current?.reportValidity()) return;

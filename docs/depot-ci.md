@@ -326,20 +326,19 @@ freshness:
   Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout,
   the deploy script's readiness probes, the host check (≤ 60 s for `/version`
   to name the new version, then four tries of each production project host)
-  and its Slack notice, all in the one job. Deploy Kit also gets 30, the other
-  client deploys 15–20.
+  and its Slack notice, all in the one job. The client deploys get 15–20.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
   on `8x32` (parallel oxlint/typecheck/format check/knip). Unit tests use `4x16` — measured
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
   lint is the common trigger for no-log `Sandbox terminated before worker
-reported completion` on main. Deploy OS and Deploy Kit use `4x16`; the client
-  deploys (Dash, Agents, Notes, Voice, SPA, dummy-petshop), Main OS e2e's
+reported completion` on main. Deploy OS uses `4x16`; the client
+  deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop), Main OS e2e's
   delete and alert jobs, and the jobs that only call APIs (LOC report, PR
   dashboard, Release) use `2x8`. Re-check with `depot ci metrics --run <run-id>`
   before increasing a size.
 
-These defaults keep a normal all-app main push to 36 requested vCPUs (lint 8,
-test 4, Deploy OS 4, Deploy Kit 4, 2 for each of the six client deploys, and 4
+These defaults keep a normal all-app main push to 34 requested vCPUs (lint 8,
+test 4, Deploy OS 4, 2 for each of the seven client deploys, and 4
 for Main OS e2e, whose parent, deploy and e2e jobs run one after another; its
 delete and alert jobs follow them), without reducing the parallel lint lane that
 uses the larger machine. The sizing pass that set them cut the then-larger
@@ -359,8 +358,9 @@ builder change). Its Plan job picks the boards whose inputs changed since their
 newest `kit-firmware/<device>/<version>` release, and each one builds in its own
 2x8 leg. Publish is the workflow's only job with `contents: write`; it checks out
 nothing, runs only `gh` and `jq` on the legs' artifacts, and creates releases only
-on main. The ESP-IDF pin lives in `kit-firmware.yml` and in each target's
-`dependencies.lock`. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
+on main, where it then downloads every new file through `k.iterate.com` and
+compares the bytes. Deploy Kit builds no firmware. The ESP-IDF pin lives in
+`kit-firmware.yml` and in each target's `dependencies.lock`. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
 
 ## Custom Image
 
