@@ -91,9 +91,7 @@ it("records the first failed attempt when a retry passes", async () => {
       state: "passed",
       errors: [{ message: "Network connection\n lost" }],
     }),
-    annotations: () => [
-      { type: "e2e-phase", message: '{"name":"probe eviction","durationMs":20000}' },
-    ],
+    annotations: () => [{ type: "note", message: "probe eviction" }],
   };
   const testModule = {
     moduleId: "/repo/network.e2e.test.ts",
@@ -146,13 +144,8 @@ it("records the first failed attempt when a retry passes", async () => {
       expectedState: "passed",
       configuredTimeoutMs: 30_000,
       tags: ["network"],
-      annotations: [
-        {
-          type: "e2e-phase",
-          description: '{"name":"probe eviction","durationMs":20000}',
-        },
-      ],
-      phases: [{ name: "probe eviction", durationMs: 20000 }],
+      annotations: [{ type: "note", description: "probe eviction" }],
+      phases: [],
       firstFailure: "Network connection lost",
     }),
   ]);

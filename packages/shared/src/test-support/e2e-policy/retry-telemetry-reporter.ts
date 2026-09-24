@@ -10,22 +10,8 @@ import {
   type TestTelemetryArtifact,
   type TestTelemetryContext,
   type ModuleTelemetryRecord,
-  type TestTelemetryError,
-  type TestTelemetryPhase,
   type TestTelemetryRecord,
 } from "../ci-telemetry.ts";
-
-/** A JSON-safe diagnostic retained from a test attempt. */
-export type { TestTelemetryError };
-
-/** A named operation recorded by a test through a Vitest `e2e-phase` annotation. */
-export type { TestTelemetryPhase };
-
-/** One final Vitest test result, including timing that explains its wall time. */
-export type { TestTelemetryRecord };
-
-/** Per-file Vitest startup/import/test timing. */
-export type { ModuleTelemetryRecord };
 
 interface ReportedTestCase {
   id?: string;
@@ -88,7 +74,7 @@ type ReporterDefaults = { testKind?: "unit" | "integration" | "e2e"; lane?: stri
 /**
  * Vitest's built-in JSON reporter omits retry counts and the timing split we
  * need to diagnose slow e2e. This reporter therefore records every test,
- * test hooks, explicit phases, and module startup/import time. A named file
+ * test hooks, and module startup/import time. A named file
  * lets preview render its retry summary immediately; CI's artifact directory
  * retains the same record for the always-running finalizer.
  */
@@ -325,7 +311,7 @@ export class RetryTelemetryReporter {
               Math.round(durationMs - hooks.beforeEach - hooks.afterEach),
             ),
             attempts: [],
-            phases: parseTelemetryPhases(annotations),
+            phases: [],
             errors,
             ...(firstFailure && { firstFailure }),
           });
@@ -425,28 +411,6 @@ function optionalIsoTime<Key extends string>(key: Key, value: number | undefined
   return value === undefined
     ? {}
     : ({ [key]: new Date(value).toISOString() } as Record<Key, string>);
-}
-
-function parseTelemetryPhases(
-  annotations: ReadonlyArray<{ type: string; message: string }>,
-): TestTelemetryPhase[] {
-  return annotations.flatMap((annotation) => {
-    if (annotation.type !== "e2e-phase") return [];
-    try {
-      const parsed = JSON.parse(annotation.message) as Record<string, unknown>;
-      if (typeof parsed.name !== "string" || typeof parsed.durationMs !== "number") return [];
-      return [
-        {
-          name: parsed.name,
-          durationMs: Math.round(parsed.durationMs),
-          ...(typeof parsed.category === "string" && { category: parsed.category }),
-          ...(typeof parsed.startedAt === "string" && { startedAt: parsed.startedAt }),
-        },
-      ];
-    } catch {
-      return [];
-    }
-  });
 }
 
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
