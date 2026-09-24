@@ -652,11 +652,11 @@ static uint32_t count_flag_divergence(
  * only through its pupil cell. Both directions are proven here. With authored
  * lid/pupil layers (this synthetic atlas has them), enabling a flag changes
  * rendered pixels somewhere inside one blink/gaze window. With the layers
- * emptied to the exact shape today's pipeline-published atlases have — eyes
+ * emptied to the exact shape today's committed atlases have — eyes
  * baked into each bank's base cell, lid cell_count zero, pupils CELL_NONE —
- * the same flags change nothing. That inertness is why the sprite pipeline
- * only emits AUTO_BLINK for characters that authored a blink rig, and never
- * emits IDLE_SACCADES; the doze face's shut eyes come from the sleepy
+ * the same flags change nothing. That inertness is why the atlases set
+ * AUTO_BLINK only for characters that authored a blink rig, and never set
+ * IDLE_SACCADES; the doze face's shut eyes come from the sleepy
  * expression bank, not from this blink machinery.
  */
 static void test_idle_motion_needs_layers_not_just_flags(void)

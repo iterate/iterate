@@ -6,15 +6,6 @@
 #include "driver/i2s_std.h"
 #include "iterate/kit/voice_playout.h"
 
-/* This diagnostic is a build artifact, never a runtime voice mode.
- * Keep the condition here so a board build and its health document have one
- * unambiguous meaning, while ordinary builds compile to the normal path. */
-#ifdef CONFIG_ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT
-#define ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED 1
-#else
-#define ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED 0
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
