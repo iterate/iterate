@@ -8,15 +8,19 @@
 //
 // Every scenario runs ROUNDS times and its budget holds for the MEDIAN round: a regression moves
 // every round, one platform stall moves one (a whole round 10× slower than the next, seen on
-// 2026-09-24). Every round's numbers are printed. The budgets are the e2e rows' old ones.
+// 2026-09-24). Every round's numbers are printed and recorded (perf/record.ts), and the scheduled
+// latency guard judges them too. The budgets are the e2e rows' old ones (perf/latency.ts `push.*`).
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "../e2e/support/client.ts";
 import { ephemeralFlood, fanProbes, pushSubscribers } from "../e2e/support/push-load.ts";
+import { recordLatency } from "./record.ts";
 
 const ROUNDS = 5;
 
-test("ephemeral flood: p50 latency under 500 ms, p95 under 1.5 s, over 1000 events/s end to end", async () => {
+test("ephemeral flood: p50 latency under 500 ms, p95 under 1.5 s, over 1000 events/s end to end", async ({
+  task,
+}) => {
   const floods = [];
   for (let round = 1; round <= ROUNDS; round++) {
     // a fresh context each round, so no round inherits the last one's subscriber or log
@@ -25,12 +29,26 @@ test("ephemeral flood: p50 latency under 500 ms, p95 under 1.5 s, over 1000 even
     expect(flood.seqs).toHaveLength(flood.total);
     floods.push(flood);
   }
-  expect(median(floods.map((f) => f.latencyMs.p50))).toBeLessThan(500);
-  expect(median(floods.map((f) => f.latencyMs.p95))).toBeLessThan(1500);
-  expect(median(floods.map((f) => f.endToEndEventsPerSecond))).toBeGreaterThan(1000);
+  recordLatency(
+    task,
+    "push.flood.p50",
+    floods.map((f) => f.latencyMs.p50),
+  );
+  recordLatency(
+    task,
+    "push.flood.p95",
+    floods.map((f) => f.latencyMs.p95),
+  );
+  recordLatency(
+    task,
+    "push.flood.throughput",
+    floods.map((f) => f.endToEndEventsPerSecond),
+  );
 }, 120_000);
 
-test("200 push subscribers: one append reaches all 200 in under 2 s, and a whoami during it takes under 1.5 s", async () => {
+test("200 push subscribers: one append reaches all 200 in under 2 s, and a whoami during it takes under 1.5 s", async ({
+  task,
+}) => {
   const itx = openItx(freshCtx("fan200"));
   const fan = await pushSubscribers(itx, 200);
   const wallMs: number[] = [];
@@ -47,11 +65,13 @@ test("200 push subscribers: one append reaches all 200 in under 2 s, and a whoam
     );
   }
   expect(fan.counts.every((c) => c === 1 + ROUNDS)).toBe(true);
-  expect(median(wallMs)).toBeLessThan(2000);
-  expect(median(whoamiMs)).toBeLessThan(1500);
+  recordLatency(task, "push.fan200.all", wallMs);
+  recordLatency(task, "push.fan200.whoami", whoamiMs);
 }, 180_000);
 
-test("50 userspace processors: one append reaches all 50 in under 5 s, and a whoami during it takes under 1.5 s", async () => {
+test("50 userspace processors: one append reaches all 50 in under 5 s, and a whoami during it takes under 1.5 s", async ({
+  task,
+}) => {
   const itx = openItx(freshCtx("fan50"));
   const probes = await fanProbes(itx, 50);
   const wallMs: number[] = [];
@@ -67,14 +87,9 @@ test("50 userspace processors: one append reaches all 50 in under 5 s, and a who
       `[round ${round}] 50 processors reached offset ${offset} in ${wallMs.at(-1)!.toFixed(0)}ms, whoami ${whoamiMs.at(-1)!.toFixed(0)}ms`,
     );
   }
-  expect(median(wallMs)).toBeLessThan(5000);
-  expect(median(whoamiMs)).toBeLessThan(1500);
+  recordLatency(task, "push.fan50.all", wallMs);
+  recordLatency(task, "push.fan50.whoami", whoamiMs);
 }, 240_000);
-
-/** The middle value of `xs`: the round a budget is held to. */
-function median(xs: number[]): number {
-  return xs.toSorted((a, b) => a - b)[Math.floor(xs.length / 2)]!;
-}
 
 /** `ms` of `call`, started now. */
 async function timed(call: () => Promise<unknown>): Promise<number> {

@@ -1,3 +1,9 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
 /** Iterate's Depot organization, which runs every workflow in .depot/workflows (docs/depot-ci.md). */
 export const DEPOT_ORG = "0p91s0lz49";
 
@@ -76,4 +82,123 @@ export async function depotCiApi(
     });
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
+}
+
+/** The Depot CLI (`depot <args> --org <iterate>`). CI passes the organization token as DEPOT_TOKEN
+ *  (Doppler _shared/preview `DEPOT_CI_TELEMETRY_TOKEN`); a laptop uses the CLI's own login. */
+export async function depotCli(args: string[]) {
+  return promisify(execFileCallback)("depot", [...args, "--org", DEPOT_ORG], {
+    maxBuffer: 50 * 1024 * 1024,
+  });
+}
+
+/** The Depot CLI's `--output json` answer. */
+export async function depotCliJson<T>(args: string[]): Promise<T> {
+  const { stdout } = await depotCli([...args, "--output", "json"]);
+  return JSON.parse(stdout) as T;
+}
+
+/**
+ * `file` inside the newest `artifact` a finished or failed run of `workflow` (its `name:`) uploaded,
+ * as text — how a scheduled job hands its state to its next run (the flake dashboard's fold, the
+ * latency guard's baseline) — or undefined when none of its last 20 runs kept one. A failed run
+ * counts: a job that keeps its state before it fails still handed it on.
+ */
+export async function newestArtifactFile(input: {
+  repository: string;
+  workflow: string;
+  artifact: string;
+  file: string;
+}) {
+  const runs = await depotCliJson<{ run_id: string; workflow_id: string; created_at: string }[]>([
+    "ci",
+    "workflow",
+    "list",
+    "--repo",
+    input.repository,
+    "--name",
+    input.workflow,
+    "--status",
+    "finished",
+    "--status",
+    "failed",
+    "-n",
+    "20",
+  ]);
+  for (const run of runs.toSorted((a, b) => b.created_at.localeCompare(a.created_at))) {
+    const { artifacts } = await depotCliJson<{
+      artifacts: { artifact_id: string; workflow_id: string; name: string }[];
+    }>(["ci", "artifacts", "list", run.run_id]);
+    const artifact = artifacts.find(
+      (candidate) => candidate.workflow_id === run.workflow_id && candidate.name === input.artifact,
+    );
+    if (!artifact) continue;
+    const directory = await mkdtemp(join(tmpdir(), `${input.artifact}-`));
+    try {
+      const zip = join(directory, "artifact.zip");
+      await depotCli(["ci", "artifacts", "download", artifact.artifact_id, "--output-file", zip]);
+      const { [input.file]: bytes } = await unzip(new Uint8Array(await readFile(zip)));
+      if (!bytes)
+        throw new Error(`${input.artifact} ${artifact.artifact_id} holds no ${input.file}`);
+      return new TextDecoder().decode(bytes);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Minimal zip reader on the runtime's own DecompressionStream — deliberately
+ * not a dependency. The format surface is narrow by construction: one
+ * producer (GitHub's artifact service), a 5MB size cap upstream, and reading
+ * via the central directory (sizes come from there, so streaming-writer data
+ * descriptors don't matter). No zip64 — impossible under the size cap — and
+ * anything unexpected throws, which ingestion treats as a logged drop.
+ */
+export async function unzip(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // The end-of-central-directory record sits at the tail, behind an optional
+  // comment (max 64KB): scan backwards for its signature.
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("not a zip: no end-of-central-directory record");
+  const entryCount = view.getUint16(eocd + 10, true);
+  const files: Record<string, Uint8Array> = {};
+  let offset = view.getUint32(eocd + 16, true);
+  for (let i = 0; i < entryCount; i++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) {
+      throw new Error("corrupt zip: bad central directory entry signature");
+    }
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+    const name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
+    // The local header's name/extra lengths can differ from the central
+    // directory's, so the data offset comes from the local header itself.
+    const localNameLength = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    // slice (not subarray): a copy backed by a plain ArrayBuffer, which both
+    // the DOM and Workers Response typings accept without assertions.
+    const data = bytes.slice(dataStart, dataStart + compressedSize);
+    if (method === 0) {
+      files[name] = data;
+    } else if (method === 8) {
+      const inflated = new Response(data).body!.pipeThrough(new DecompressionStream("deflate-raw"));
+      files[name] = new Uint8Array(await new Response(inflated).arrayBuffer());
+    } else {
+      throw new Error(`unsupported zip compression method ${method} for ${name}`);
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return files;
 }

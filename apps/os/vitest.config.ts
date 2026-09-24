@@ -15,7 +15,8 @@
 //               TEST. A file whose rows genuinely need an order says so itself (`test.sequential` rows)
 //   • perf    — the latency and throughput BUDGETS (perf/**/*.perf.test.ts) over the same client and
 //               worker as e2e, measured ALONE: files one at a time, rows in order, never beside the
-//               e2e run (in it, 16 files share the worker and a latency measures their contention)
+//               e2e run (in it, 16 files share the worker and a latency measures their contention);
+//               the latency guard (.depot/workflows/os-latency.yml) runs it on a schedule
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples

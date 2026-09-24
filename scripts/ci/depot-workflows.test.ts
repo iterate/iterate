@@ -178,6 +178,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "apps/os/__workers-tests__/support.ts",
     "apps/os/bench/api.bench.ts",
     "apps/os/perf/push-delivery.perf.test.ts",
+    "apps/os/perf/latency.ts",
     "apps/os/scripts/preview.ts",
     "apps/os/scripts/preview-config.ts",
     "apps/os/scripts/e2e-soak.ts",
@@ -561,9 +562,10 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
-// only runs on its schedule carries that job as a skipped check. Two workflows run the same jobs
-// on every trigger: the image bake (its push to main runs the same bake), and Kit Firmware,
-// whose daily run re-plans every board so a failed publish is repaired without a firmware push.
+// only runs on its schedule carries that job as a skipped check. Three workflows run the same jobs
+// on every trigger: the image bake (its push to main runs the same bake), Kit Firmware, whose
+// daily run re-plans every board so a failed publish is repaired without a firmware push, and the
+// latency guard, which measures a main push as it measures main every 3 hours.
 test.for(
   depotWorkflowFiles.filter(
     (file) =>
@@ -571,6 +573,7 @@ test.for(
       ![
         ".depot/workflows/build-preview-ci-image.yml",
         ".depot/workflows/kit-firmware.yml",
+        ".depot/workflows/os-latency.yml",
       ].includes(file),
   ),
 )("%s runs only on its schedule or on request", (file) => {

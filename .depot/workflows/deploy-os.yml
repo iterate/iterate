@@ -16,14 +16,15 @@ on:
       - .depot/workflows/deploy-os.yml
       - apps/os/**
       # Never in the Worker or its deploy: the app's docs (not public/setup-prompt.md, which prd
-      # serves), its tests and benches, and the preview and soak scripts. Preview OS and Main OS
-      # e2e still run for them.
+      # serves), its tests, benches and perf lane, and the preview and soak scripts. Preview OS and
+      # Main OS e2e still run for them.
       - "!apps/os/*.md"
       - "!apps/os/docs/**"
       - "!apps/os/e2e/**"
       - "!apps/os/**/*.test.ts"
       - "!apps/os/__workers-tests__/**"
       - "!apps/os/bench/**"
+      - "!apps/os/perf/**"
       - "!apps/os/scripts/preview*.ts"
       - "!apps/os/scripts/e2e-soak.ts"
       - configs/**
