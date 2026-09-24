@@ -1261,16 +1261,14 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
 
   test("a facet row is never a claim — on a fresh incarnation too: its target RESOLVES to a facet before anything is evaluated, so a commit to it arms nothing", async () => {
     const first = stuckFacetRig();
-    first.release();
-    await drainDeliveries();
+    await first.release();
     const second = stuckFacetRig(first);
     second.stream.append({ type: "blob", payload: { blob: "x" } });
     expect(second.delivery.deadlines()).toEqual([]);
     await drainDeliveries();
     expect(second.delivery.deadlines()).toEqual([]);
     expect({ alarms: second.alarms, deletes: second.deletes }).toEqual({ alarms: [], deletes: [] });
-    second.release();
-    await drainDeliveries();
+    await second.release();
   });
 
   test("the claim written before a call outlives an eviction mid-call: it is the next incarnation's first deadline, and the batch is delivered again from the cursor", async () => {
