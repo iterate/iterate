@@ -328,7 +328,7 @@ test("a use is a fact: an egress through a secret appends `secret/used` on the s
 // DEPLOYED ONLY (measured 2026-09-21): the local worker under wrangler cannot make an OUTBOUND
 // WebSocket upgrade — its terminal fetch answers `TypeError: fetch failed` — while the deployed worker
 // and the workers lane (vitest-pool-workers, workerd's own fetch) can; the local proof of the same
-// path is __workers-tests__/secret-facet-proxies-a-socket.test.ts.
+// path, against an in-process fake shop, is __workers-tests__/secret-facet-proxies-a-socket.test.ts.
 deployedOnly(
   "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door dialled from a NESTED context (`/agents/dialler`), whose egress forwards the upgrade to /secrets/shop and its facet substitutes the bearer, dials, and hands the 101 back; the capnweb call answers over it; the use is a fact on the secret's path with status 101",
   async () => {
