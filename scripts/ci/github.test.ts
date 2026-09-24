@@ -60,10 +60,34 @@ test("never asks a POST again: a 5xx may have landed, and a repeat would create 
   using fixture = githubAnswering(unexpectedError());
 
   await expect(
-    fixture.github.rest.repos.createCommitStatus({ ...repo, sha: "abc", state: "success" }),
+    fixture.github.rest.issues.createComment({ ...repo, issue_number: 2899, body: "once" }),
   ).rejects.toMatchObject({ status: 500 });
   expect(fixture.fetch).toHaveBeenCalledOnce();
   expect(fixture.warn).not.toHaveBeenCalled();
+});
+
+test("asks a commit status again after GitHub's 503: the latest status per context is what shows", async () => {
+  using fixture = githubAnswering(
+    json(503, { message: "No server is currently available to service your request." }),
+    json(201, { state: "success", context: "CI trace" }),
+  );
+
+  const { data } = await fixture.github.rest.repos.createCommitStatus({
+    ...repo,
+    sha: "3d07bb2cd50ffc58baed40e590440ff6dd014fb9",
+    state: "success",
+    context: "CI trace",
+  });
+
+  expect(data).toMatchObject({ state: "success", context: "CI trace" });
+  expect(fixture.fetch).toHaveBeenCalledTimes(2);
+  expect(fixture.warn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      route: "POST /repos/{owner}/{repo}/statuses/{sha}",
+      status: 503,
+      attempt: 1,
+    }),
+  );
 });
 
 test("never asks again after a 4xx: it is GitHub's answer about the request", async () => {
