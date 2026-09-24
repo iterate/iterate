@@ -60,15 +60,15 @@ To bump the CLI, change the `shadcn` pin in `package.json` and refresh. To vendo
 
 ### Where the local changes went
 
-| Was in                    | Now                                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------------------- |
-| button: hover title       | Each icon-size `Button` passes `title`; `iterate/icon-button-has-hover-text` requires it at the call site |
-| sheet: full width (#1883) | The `SheetContent` call site passes `data-[side=right]:w-full`                                            |
-| sidebar: close (#1984)    | `SidebarNav` in `app-shell.tsx`: a same-tab link click closes the phone's sheet (shadcn-ui/ui#5561)       |
-| command: ⌘K look (#2991)  | `app-shell-palette.tsx`: the classNames it passes, and its own search row over cmdk's input               |
-| sonner: light only        | `AppProviders` renders `<Toaster theme="light" />`; `toast` is imported from `sonner`                     |
-| dialog, sheet: close      | Upstream's: an sr-only "Close"                                                                            |
-| breadcrumb, label         | Upstream's                                                                                                |
+| Was in                    | Now                                                                                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| button: hover title       | Each icon-size `Button` passes `title`; `iterate/icon-button-has-hover-text` requires it at the call site                                                                                  |
+| sheet: full width (#1883) | The `SheetContent` call site passes `data-[side=right]:w-full`; the phone's sidebar sheet, which the vendored `Sidebar` renders with no className, gets it from a rule in `globals.css`    |
+| sidebar: close (#1984)    | `SidebarNav` in `app-shell.tsx`: a same-tab link click closes the phone's sheet (shadcn-ui/ui#5561)                                                                                        |
+| command: ⌘K look (#2991)  | `app-shell-palette.tsx`: the classNames it passes, its own search row over cmdk's input, and Dialog's parts instead of `CommandDialog` (whose title sits outside the popup, on every page) |
+| sonner: light only        | `AppProviders` renders `<Toaster theme="light" />`; `toast` is imported from `sonner`                                                                                                      |
+| dialog, sheet: close      | Upstream's: an sr-only "Close"                                                                                                                                                             |
+| breadcrumb, label         | Upstream's                                                                                                                                                                                 |
 
 ## AI Elements
 
