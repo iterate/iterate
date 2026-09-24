@@ -41,7 +41,7 @@ is the entire runtime-specific binding around the shared client.
 | Validation           | **Zod** — a live-state seed and a `/.auth/*` answer are parsed, never cast                                  |
 | Auth (identity)      | The SDK's OAuth client: `appAuth` + `BrowserSession` on the server, `info.scopes` in the page               |
 
-**Light mode only**, in every app and page: no dark palette, theme provider or `dark:` class. Strip them from anything shadcn generates. `dark:` never matches: `@iterate-com/ui/globals.css` switches it off.
+**Light mode only**, in every app and page: no dark palette, theme provider or `dark:` class. Strip them from anything shadcn generates ([refreshing a shadcn component](../packages/ui/AGENTS.md)). `dark:` never matches: `@iterate-com/ui/globals.css` switches it off.
 
 The backend surface is the platform's one API — declared in
 [`packages/iterate/src/api.ts`](../packages/iterate/src/api.ts) (never
