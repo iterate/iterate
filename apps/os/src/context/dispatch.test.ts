@@ -252,8 +252,7 @@ test.each<[string, () => unknown, ItxExpression, unknown[], ItxExpression]>([
   [
     // prd 2026-09-23: a root session held one for 24 min, `remote`/`createToken` called on it live
     "the scoped Artifacts repo `cfArtifacts.get(path)` answers",
-    () =>
-      new ScopedArtifactRepoRpcTarget({} as ArtifactsNamespace, "repos--x", "https://git/x.git"),
+    () => new ScopedArtifactRepoRpcTarget({} as ArtifactsNamespace, "repos--x"),
     ["itx", "cfArtifacts", ["get", "/repos/x"]],
     [],
     ["itx", "cfArtifacts", ["get", "/repos/x"]],

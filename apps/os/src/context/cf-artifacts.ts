@@ -53,16 +53,16 @@ interface ArtifactListResult {
  *  account and namespace; the repo facet does not. It holds the repo's NAME, never the binding's
  *  handle: a handle is a live Workers-RPC stub, and one kept here held this actor's session to
  *  Artifacts — and the actor — open until the next deploy (2026-09-23). Each verb takes a handle and
- *  releases it (`withArtifactRepoHandle`). */
+ *  releases it (`withArtifactRepoHandle`), so each verb is one `namespace.get` and one call on it.
+ *  Building it touches no binding: an itx chain `get(path).createToken(…)` walks `get(path)` once per
+ *  dispatch, and a mid-chain handle is two dispatches (packages/iterate/src/expression.ts). */
 export class ScopedArtifactRepoRpcTarget extends RpcTarget {
   readonly #namespace: ArtifactsNamespace;
   readonly #name: string;
-  readonly #remote: string;
-  constructor(namespace: ArtifactsNamespace, name: string, remote: string) {
+  constructor(namespace: ArtifactsNamespace, name: string) {
     super();
     this.#namespace = namespace;
     this.#name = name;
-    this.#remote = remote;
   }
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
     return retryingOnePlatformFailure("createToken", this.#name, () =>
@@ -72,10 +72,13 @@ export class ScopedArtifactRepoRpcTarget extends RpcTarget {
     );
   }
   /** `https://<account>.artifacts.cloudflare.net/git/<namespace>/<project>.<name>.git` (the binding's
-   *  own word) — what a git client POSTs `git-upload-pack` / `git-receive-pack` under, the token as
-   *  the basic-auth password. */
-  remote(): string {
-    return this.#remote;
+   *  own word, its handle's `info()`) — what a git client POSTs `git-upload-pack` /
+   *  `git-receive-pack` under, the token as the basic-auth password. */
+  async remote(): Promise<string> {
+    const { remote } = await retryingOnePlatformFailure("remote", this.#name, () =>
+      withArtifactRepoHandle(this.#namespace, this.#name, (handle) => handle.info()),
+    );
+    return remote;
   }
 }
 
@@ -181,7 +184,8 @@ async function retryingOnePlatformFailure<T>(
 export interface ArtifactsScope {
   /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
   create(path: string): Promise<{ created: boolean }>;
-  /** The repo's handle — `createToken(scope, ttlSeconds)` and `remote()`. */
+  /** The repo's handle — `createToken(scope, ttlSeconds)` and `remote()`. A repo that does not exist
+   *  fails at those, with the binding's own error. */
   get(path: string): Promise<ScopedArtifactRepoRpcTarget>;
   /** This project's repos, as paths (one page of the binding's unfiltered list). */
   list(options?: { limit?: number; cursor?: string }): Promise<{
@@ -237,13 +241,7 @@ export function projectScopedArtifacts(input: {
         }
       });
     },
-    get: async (path) => {
-      const name = boundName(path);
-      const { remote } = await retryingOnePlatformFailure("get", name, () =>
-        withArtifactRepoHandle(input.namespace, name, (handle) => handle.info()),
-      );
-      return new ScopedArtifactRepoRpcTarget(input.namespace, name, remote);
-    },
+    get: async (path) => new ScopedArtifactRepoRpcTarget(input.namespace, boundName(path)),
     list: async (options) => {
       const page = await retryingOnePlatformFailure("list", prefix, () =>
         input.namespace.list(options),

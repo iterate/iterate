@@ -63,6 +63,8 @@ export type RepoLogEntry = {
   parents: string[];
 };
 type Transport = ReturnType<typeof createGitWireTransport>;
+/** A git token as this facet keeps it: reused until `until` (epoch ms) minus the margin. */
+type StoredToken = { token: string; until: number };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
@@ -114,28 +116,47 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return DurableObjectNameCodec.parse(this.ctx.props.iterateContextName).path;
   }
 
-  /** The remote the proxy names for this path — fixed for the repo's life; read once per incarnation. */
+  // THE GIT CREDENTIALS live in this facet's own storage, not only in memory: a context is evicted
+  // soon after it goes idle (apps/os/docs/residency.md), and each fresh incarnation would otherwise
+  // ask the proxy again — two dispatches a request, through the context to the root and out to
+  // Artifacts. Writes are `allowUnconfirmed`: a credential lost with an unconfirmed write is only
+  // asked for again, and the git request after it is not held behind the write. No public method
+  // reads these keys; storage trace spans never carry values; the storage goes with the facet when
+  // the repo is deleted.
+
+  /** The remote the proxy names for this path — fixed for the repo's life, so asked once and kept
+   *  (`git-remote`). */
   #remoteRead?: string;
   async #remote(): Promise<string> {
+    this.#remoteRead ||= await this.ctx.storage.get<string>("git-remote");
     if (this.#remoteRead) return this.#remoteRead;
     const path = this.#path;
-    return (this.#remoteRead = await this.withItx((itx) => itx.cfArtifacts.get(path).remote()));
+    const remote = await this.withItx((itx) => itx.cfArtifacts.get(path).remote());
+    await this.ctx.storage.put("git-remote", remote, { allowUnconfirmed: true });
+    return (this.#remoteRead = remote);
   }
 
-  /** One token per scope, minted by the proxy and reused within its life (minus the margin): a read
-   *  is then one ls-refs, not a mint and an ls-refs. A repo that does not exist fails HERE with the
-   *  binding's own error — after `create()` that is an outage, never "no files". */
-  #tokens: Partial<Record<"read" | "write", { token: string; until: number }>> = {};
+  /** One token per scope, minted by the proxy and reused within its life (minus the margin), kept
+   *  (`git-token:<scope>`) so the next incarnation reuses it too: a read is then one ls-refs, not a
+   *  mint and an ls-refs. Its life counts from before the mint was asked, so it never outlives the
+   *  real one. A repo that does not exist fails its read — at the mint with the binding's own
+   *  error, or at the git request with a kept token — after `create()` that is an outage, never "no
+   *  files". */
+  #tokens: Partial<Record<"read" | "write", StoredToken>> = {};
   async #transport(scope: "read" | "write"): Promise<Transport> {
-    const cached = this.#tokens[scope];
-    if (cached && Date.now() < cached.until - TOKEN_REUSE_MARGIN_MS)
-      return createGitWireTransport({ remote: await this.#remote(), token: cached.token });
+    const key = `git-token:${scope}`;
+    const known = (this.#tokens[scope] ||= await this.ctx.storage.get<StoredToken>(key));
+    if (known && Date.now() < known.until - TOKEN_REUSE_MARGIN_MS)
+      return createGitWireTransport({ remote: await this.#remote(), token: known.token });
     const path = this.#path;
+    const asked = Date.now();
     const [remote, minted] = await Promise.all([
       this.#remote(),
       this.withItx((itx) => itx.cfArtifacts.get(path).createToken(scope, TOKEN_TTL_SECONDS)),
     ]);
-    this.#tokens[scope] = { token: minted.plaintext, until: Date.now() + TOKEN_TTL_SECONDS * 1000 };
+    const token = { token: minted.plaintext, until: asked + TOKEN_TTL_SECONDS * 1000 };
+    this.#tokens[scope] = token;
+    await this.ctx.storage.put(key, token, { allowUnconfirmed: true });
     return createGitWireTransport({ remote, token: minted.plaintext });
   }
 
