@@ -16,7 +16,7 @@ on:
       - apps/agents/**
       - envs.ts
       - scripts/lib/**
-      - configs-next/**
+      - configs/**
       - packages/iterate/**
       - packages/ui/**
       - packages/shared/**

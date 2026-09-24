@@ -299,7 +299,7 @@ test("lastLines keeps the tail and strips colour codes", () => {
 
 // ── template quick-launch links: the Dash's New project sheet, one click ──
 
-test("every configs-next directory is a config template", () => {
+test("every configs/ directory is a config template", () => {
   expect(configTemplateNames(path.resolve(import.meta.dirname, "../../.."))).toEqual(
     expect.arrayContaining(["default", "with-agents"]),
   );
@@ -308,19 +308,19 @@ test("every configs-next directory is a config template", () => {
 test.for([
   {
     name: "a template this PR changes is the PR head's copy, an unchanged one its name",
-    changedPaths: ["configs-next/default/AGENTS.md", "configs-next/with-agents-v2/x.md"],
+    changedPaths: ["configs/default/AGENTS.md", "configs/with-agents-v2/x.md"],
     expected: [
       {
         name: "default",
         fromHead: "bbbbbbbbb0123456",
-        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs-next%2Fdefault`,
+        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs%2Fdefault`,
       },
       { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
     ],
   },
   {
     name: "a PR that changes no template links each by name",
-    changedPaths: ["apps/os/src/worker.ts", "configs-next/README.md"],
+    changedPaths: ["apps/os/src/worker.ts", "configs/README.md"],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
       { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
@@ -341,12 +341,12 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
   const [link] = templateQuickLaunches({
     dashUrl: DASH,
     templates: ["default"],
-    changedPaths: ["configs-next/default/AGENTS.md"],
+    changedPaths: ["configs/default/AGENTS.md"],
     headSha: "bbbbbbbbb0123456",
   });
   expect(Object.fromEntries(new URL(link!.next).searchParams)).toEqual({
     new: "1",
-    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs-next/default",
+    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs/default",
   });
 });
 

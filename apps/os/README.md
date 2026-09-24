@@ -98,7 +98,7 @@ The [engineering invariant](../../docs/engineering-invariants.md) defines the re
 
 `session.projects.create()` starts a durable project-creation saga. Each project has a config
 repository; commits to `/repos/config` publish the pinned `worker.ts` revision. The optional
-`configs-next/with-agents` template adds userspace agents. See [project creation](docs/project-creation.md).
+`configs/with-agents` template adds userspace agents. See [project creation](docs/project-creation.md).
 
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or
 a processor's row). A caller reaches a facet by itx expression only through the methods its class

@@ -26,7 +26,7 @@ on:
       - "!apps/os/bench/**"
       - "!apps/os/scripts/preview*.ts"
       - "!apps/os/scripts/e2e-soak.ts"
-      - configs-next/**
+      - configs/**
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**

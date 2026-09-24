@@ -30,7 +30,7 @@ import {
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
 import { installAgents } from "../../../runtime/install.ts";
-import agentRuntime from "../../../../../configs-next/with-agents/agents.js?raw";
+import agentRuntime from "../../../../../configs/with-agents/agents.js?raw";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";

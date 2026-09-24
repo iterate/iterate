@@ -47,7 +47,7 @@ const shell = getRouteApi("/_auth");
 export const Route = createFileRoute("/_auth/projects/")({
   validateSearch: z.object({
     new: z.literal(1).optional().catch(undefined),
-    // a configs-next template by name (`with-agents`), or a `github:` reference for the custom field
+    // a `configs/` template by name (`with-agents`), or a `github:` reference for the custom field
     template: z.string().optional().catch(undefined),
   }),
   loader: async ({ context }) => ({ templateOptions: await context.api.projects.templates() }),
@@ -176,7 +176,7 @@ function NewProjectForm({
   setPending,
   onCreated,
 }: {
-  /** `?template=`: a configs-next template's name, or a `github:` reference */
+  /** `?template=`: a `configs/` template's name, or a `github:` reference */
   initialTemplate: string | undefined;
   /** the tree's organizations — the first is the default; may still be filling in */
   orgs: { id: string; name: string }[];
@@ -357,7 +357,7 @@ function NewProjectForm({
 }
 
 /** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
- *  a name is the built-in whose path is `configs-next/<name>` — `default`, and a name that is none,
+ *  a name is the built-in whose path is `configs/<name>` — `default`, and a name that is none,
  *  is Minimal (the default files). */
 function templateFields(
   template: string | undefined,
@@ -365,8 +365,7 @@ function templateFields(
 ): { template: string; customTemplate: string } {
   if (template?.startsWith("github:")) return { template: "custom", customTemplate: template };
   const builtIn = options.find(
-    (option) =>
-      parseConfigRepoTemplateReference(option.reference).path === `configs-next/${template}`,
+    (option) => parseConfigRepoTemplateReference(option.reference).path === `configs/${template}`,
   );
   return { template: builtIn?.reference || "", customTemplate: "" };
 }

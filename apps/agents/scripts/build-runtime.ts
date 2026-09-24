@@ -32,7 +32,7 @@ export async function buildAgentRuntime(): Promise<string> {
   );
 }
 if (process.argv[1]?.endsWith("build-runtime.ts")) {
-  const path = new URL("../../../configs-next/with-agents/agents.js", import.meta.url).pathname;
+  const path = new URL("../../../configs/with-agents/agents.js", import.meta.url).pathname;
   const source = await buildAgentRuntime();
   if (process.argv.includes("--check")) {
     if ((await readFile(path, "utf8")) !== source)

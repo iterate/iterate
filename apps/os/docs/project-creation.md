@@ -8,7 +8,7 @@ The project processor creates `/repos/config`, then seeds it only when `main` is
 may be a public GitHub repository or subdirectory. Its ref is resolved to a commit before the
 request is recorded, so recovery always uses the same source. Templates must contain `worker.ts`;
 the built-in minimal template is used when none is supplied. Built-in choices come from
-[configs-next](../../../configs-next/README.md).
+[configs](../../../configs/README.md).
 
 If the seed includes `iterate.json`, its `events` list configures the initial userspace
 subscription before `project/created`. The optional agents template installs that subscription;

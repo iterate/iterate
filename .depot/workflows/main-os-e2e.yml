@@ -41,7 +41,7 @@ on:
       - .depot/workflows/preview-os.yml
       - .depot/workflows/main-os-e2e.yml
       - apps/os/**
-      - configs-next/**
+      - configs/**
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
