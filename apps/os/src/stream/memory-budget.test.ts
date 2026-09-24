@@ -5,9 +5,9 @@
 // Local workerd enforces no memory limit, so that child is the only local instrument; the deployed
 // twin is e2e/isolate-ceilings-deployed.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
 //
-// `test.fails` is the house convention for a known-red proof: the lane stays green, and flipping a
-// row back to `test` is how a fix is proven — every row here was born red (BUILD-LOG 2026-09-04
-// records what each died of) and flipped as its fix landed. The CONTROL rows are the same workload
+// `test.fails` is the house convention for a known-red proof: the suite stays green, and flipping a
+// row back to `test` is how a fix is proven — every row here was born red and flipped as its fix
+// landed. The CONTROL rows are the same workload
 // at a small size, so a red pin is the size and nothing else.
 
 import { spawnSync } from "node:child_process";
@@ -63,7 +63,7 @@ const expectSurvived = (run: ScenarioRun, what: string) =>
 const LOG_144_MIB = { eventCount: 24, eventChars: 6 * MiB };
 const CONTROL = { eventCount: 12, eventChars: 64 * 1024 };
 
-// ── the read door ──
+// ── reads ──
 
 test("control: a client pages a 12 × 64 KiB log within the budget", { timeout: 60_000 }, () => {
   const run = runScenario("read-whole-log", CONTROL);
@@ -88,8 +88,7 @@ test(
 // client-behaviour limit (a client only resets its OWN DO; the durable log survives; it
 // reconnects) — deliberately not defended, to keep `read()` synchronous. The reproduction and
 // the full rationale (why okay, how it would be fixed) live in the deployed e2e:
-// stream-uncontrolled-degradation CONCURRENT READERS (test.fails). The local heap-harness twin
-// was removed with the read-admission ceiling it existed to prove.
+// e2e/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS (test.fails).
 // ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
 
 test("control: a facet catches up over a 12 × 64 KiB log", { timeout: 60_000 }, () => {
@@ -134,10 +133,10 @@ test(
   },
 );
 
-// ── the append door ──
+// ── appends ──
 
 test(
-  "append: one event past the platform ceiling is refused at the door with EVENT_TOO_LARGE",
+  "append: one event past the platform ceiling is refused on append with EVENT_TOO_LARGE",
   { timeout: 60_000 },
   () => {
     const run = runScenario("append-oversize", { eventChars: 9 * MiB });
@@ -146,12 +145,11 @@ test(
   },
 );
 
-// ═══ THE HUNT, round 2 (2026-09-04): the next ways in, each born red. A `test.fails` row's comment
-// says what it dies of — `oom` (the child hit the heap limit) or a named fact — so flipping it to
-// `test` is the proof of its fix. The CONTROL rows beside them bound the same path at a size that
-// survives. ═══
+// ═══ A `test.fails` row's comment says what it dies of — `oom` (the child hit the heap limit) or a
+// named fact — so flipping it to `test` is the proof of its fix. The CONTROL rows beside them bound
+// the same path at a size that survives. ═══
 
-// ── the append door: the idempotent retry, and the echo ──
+// ── appends: the idempotent retry, and the echo ──
 
 /** The largest legal keyed retry: 4 events at the ceiling is 32 MiB of args, the RPC cap. */
 const RETRY_4_AT_CEILING = { eventCount: 4, eventChars: 8 * MiB - 256 };
@@ -194,7 +192,7 @@ test.fails(
 // and wake rejects at once, without re-reading the log (the parent's delivery loop halts the row on
 // the same stamp). BORN RED twice: first as a TORN checkpoint (the cursor landed, the state did not,
 // the next incarnation silently skipped 33 events — the one-row checkpoint), then as a wedge that
-// re-read and re-reduced on every push and wake (the latch). BUILD-LOG 2026-09-04.
+// re-read and re-reduced on every push and wake (the latch).
 test(
   "accumulating reducer: a state past the checkpoint cell ceiling is refused coded, the checkpoint stays consistent, and the refusal is latched — no re-read per wake",
   { timeout: 60_000 },
@@ -378,7 +376,7 @@ const runCoreRowsUntilCellCap = () =>
 // ~17,000 subscription rows (~123 chars each) fill the core checkpoint cell; the configure that
 // would grow it past the ceiling is refused CODED — REDUCE_CHECKPOINT_TOO_LARGE, inside the commit's
 // transaction, nothing written — where it was BORN RED as the platform's raw, uncoded SQLITE_TOOBIG
-// (flipped with the one-row checkpoint, BUILD-LOG 2026-09-04). A shrink still lands; one configure
+// (flipped with the one-row checkpoint). A shrink still lands; one configure
 // at this size costs ~50 ms (the O(rows) spread plus the core live-state diff).
 test(
   "core rows: ~17,000 subscription rows fill the core checkpoint cell — the next configure is refused coded, REDUCE_CHECKPOINT_TOO_LARGE, nothing written",
@@ -394,9 +392,9 @@ test(
 // A core-version bump re-reduces every configure inside the DO constructor. BORN RED (the
 // `rereduceMs` fact): each configure spread the whole subscriptions table — O(rows²), 25 s for
 // 17,000 rows on this laptop, past the 30 s CPU limit on an edge core (≈ half as fast), and the next
-// wake ran the same constructor: a reboot loop. FLIPPED by `reduceCoreEventBatch`
-// (v4 §2.1): a table is copied once per 500-event page, not once per event. The bound stays 15 s for
-// the reason above; the fixed cost is well under a second.
+// wake ran the same constructor: a reboot loop. FLIPPED by `reduceCoreEventBatch`: a table is
+// copied once per 500-event page, not once per event. The bound stays 15 s for the reason above;
+// the fixed cost is well under a second.
 test(
   "core re-reduce: a core-version bump over 17,000 rows re-reduces in the constructor in O(rows) per page — under the 15 s that would be a reboot loop against the CPU limit",
   { timeout: 110_000 },
@@ -433,9 +431,9 @@ test.fails(
 
 // Dies of: oom — before any Stream code runs. One 8 MiB body of nested empty arrays (1,677,640 ×
 // `[[]]`, 8,388,273 chars: under the ceiling, under the RPC cap) needs ~150 MiB to deserialize;
-// the size door never gets to measure it. The stand-in for the DO deserializing the RPC args.
+// the append size check never gets to measure it. The stand-in for the DO deserializing the RPC args.
 test.fails(
-  "append door: one legal 8 MiB object-dense event needs ~150 MiB to deserialize — the size door never runs",
+  "append: one legal 8 MiB object-dense event needs ~150 MiB to deserialize — the append size check never runs",
   { timeout: 60_000 },
   () => {
     const run = runScenario("read-object-dense-page", {

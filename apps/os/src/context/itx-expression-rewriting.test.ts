@@ -8,7 +8,6 @@
 // `itx.builtins.rpcStubs`), and the reduce as the DO runs it — the rules are `core` state, reduced
 // from the log.
 import { describe, expect, test } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
 import {
   parse,
   parseItxExpressionPrefix,
@@ -18,8 +17,8 @@ import {
   InvokeHandle,
 } from "iterate/next/expression";
 import type { RewriteRuleListEntry } from "iterate/next/api";
-import { CoreContract, normalizeControlEvent, reduceCoreEvent } from "../stream/core-processor.ts";
-import { memoryStream } from "../stream/test-support.ts";
+import { normalizeControlEvent } from "../stream/core-processor.ts";
+import { nodeSqliteStream } from "../stream/test-support.ts";
 import {
   ItxExpressionResolver,
   type ItxExpressionRewriteRule,
@@ -392,6 +391,18 @@ describe("resolveItxExpression — the call that runs", () => {
     expect(() => resolveItxExpression(neverRead, parse("itx.kv.get('k')"), ROOT)).toThrow(
       /the table was read/,
     );
+  });
+
+  test("a singular worker name has no implicit platform resolution", () => {
+    const target: ItxExpression = ["itx", "workers", ["get", { source: { "cap.js": "source" } }]];
+    expect(() => resolveItxExpression(() => [], ["itx", "worker", "fetch"], ROOT)).toThrow(
+      "no rewrite rule matches",
+    );
+    expect(resolveItxExpression(() => [], target, ROOT).at(-1)).toEqual([
+      "itx",
+      "builtins",
+      ...target.slice(1),
+    ]);
   });
 });
 
@@ -926,22 +937,11 @@ const fakeBuiltIns = () => {
 };
 
 const setup = () => {
-  const { stream, events } = memoryStream();
-  const core = { reduce: reduceCoreEvent, contract: CoreContract }; // the DO's inline reduce, as functions
+  const { stream, events } = nodeSqliteStream();
   const builtIns = fakeBuiltIns();
-  // INLINE, exactly like the DO: the rules are core state, reduced from the durable log per call —
-  // and, as in Stream.#reduceEventsIntoCoreReducedState, a malformed control event is skipped
-  // (reported), never wedging the stream.
-  const rewriteRules = (): ItxExpressionRewriteRule[] =>
-    Object.values(
-      events.reduce((st, e) => {
-        try {
-          return core.reduce({ event: e, state: st }) ?? st;
-        } catch {
-          return st;
-        }
-      }, core.contract.initialState()).itxExpressionRewriteRules,
-    );
+  // The rules are the real Stream's core state, as the DO reads them: a malformed control event is
+  // skipped (reported) by Stream.#reduceEventsIntoCoreReducedState, never wedging the stream.
+  const rewriteRules = () => Object.values(stream.coreReducedState.itxExpressionRewriteRules);
   // The fake `itx.builtins.rpcStubs` BUILT-IN — the physical registry behind a lent stub, keyed by the
   // opaque rpcStubKey, exactly like the DO's RpcStubDirectory. _lend/_recall simulate a lend / a final
   // recall. A rule names an entry through the pure-data target `itx.builtins.rpcStubs.get('<key>')`;
@@ -983,16 +983,14 @@ const setup = () => {
   /** The edge's `provide(match, expression | null)`: build the ONE event, append it. A refusal throws
    *  at the door — nothing is appended. */
   const rewrite = (match: ItxExpressionInput, target: ItxExpressionInput | null) =>
-    (
-      stream.append(
-        normalizeControlEvent(
-          {
-            type: "events.iterate.com/itx/rewrite-rule-configured",
-            payload: { match: match, target: target },
-          },
-          "/",
-        ),
-      ) as StreamEvent[]
+    stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: match, target: target },
+        },
+        "/",
+      ),
     )[0];
   /** The edge's `provide(match, stub)`, spelled out: lend under the key (= the match), configure the
    *  pure-data rule naming the PHYSICAL registry. */
@@ -1009,16 +1007,14 @@ const setup = () => {
     resolve: (call: ItxExpressionInput) => resolver.resolve(call).map((step) => print(step)),
     rewrite,
     remove: (match: ItxExpressionInput) =>
-      (
-        stream.append(
-          normalizeControlEvent(
-            {
-              type: "events.iterate.com/itx/rewrite-rule-configured",
-              payload: { match: match, target: restoreRuleTarget(match) },
-            },
-            "/",
-          ),
-        ) as StreamEvent[]
+      stream.append(
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: { match: match, target: restoreRuleTarget(match) },
+          },
+          "/",
+        ),
       )[0],
     provide,
     _lend: (rpcStubKey: string, stub: unknown) => lentRpcStubs.set(rpcStubKey, stub),

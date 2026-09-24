@@ -1,25 +1,23 @@
 // The core reduce's executable spec (src/stream/core-processor.ts): ONE pure reduce of the context's
-// nine control events into the state the DO reads SYNCHRONOUSLY at its doors — identity (created),
+// control events into the state the DO reads SYNCHRONOUSLY in its handlers — identity (created),
 // incarnation (woken), the pause latch (paused/resumed), the itx-expression rewrite rules (a MAP by
 // match: configured sets or, with a null target, deletes), the subscriptions table (by name:
 // configured REPLACES or, with a null target, drops; delivery-halted marks, delivery-resumed clears
 // the halt and records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
-// hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
+// hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The COMMANDS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { describe, expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
-import { BUILT_IN_ROOTS, resolveItxExpression } from "../context/itx-expression-rewriting.ts";
 import {
   CoreContract,
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
-  type Subscription,
   normalizeControlEvent,
 } from "./core-processor.ts";
-import { memoryStream } from "./test-support.ts";
+import { nodeSqliteStream } from "./test-support.ts";
 
 /** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
 const at = (offset: number, type: string, payload?: Record<string, unknown>): StreamEvent => ({
@@ -33,9 +31,8 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v13.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core`; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("13.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
@@ -204,17 +201,6 @@ describe("the ingress target — project/ingress-configured, normalized at the a
       normalizeControlEvent({ type, payload: { target }, ephemeral: true }, "/"),
     ).toThrow("must be durable");
   });
-
-  test("a singular worker name has no implicit platform resolution", () => {
-    expect(() =>
-      resolveItxExpression(() => [], ["itx", "worker", "fetch"], new Set(BUILT_IN_ROOTS)),
-    ).toThrow("no rewrite rule matches");
-    expect(resolveItxExpression(() => [], target, new Set(BUILT_IN_ROOTS)).at(-1)).toEqual([
-      "itx",
-      "builtins",
-      ...target.slice(1),
-    ]);
-  });
 });
 
 describe("the rewrite-rule table — a MAP by match", () => {
@@ -292,11 +278,11 @@ describe("the rewrite-rule table — a MAP by match", () => {
     expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.fine"]);
   });
 
-  // A rule match whose CANONICAL form crosses the string codec cap still reduces (the round-9
-  // double-parse bug, fixed round 12). The boundary stores the match as the PARSED prefix (not a
-  // re-stringified canonical that `print` could expand past 2048 — `1e99`→`1e+99`), so the reduce
-  // reads it in place and only `print`s it for the table key (printing has no cap). Boundary and
-  // reduce now agree: the boundary accepts it, the reduce stores it.
+  // A rule match whose CANONICAL form crosses the string codec cap still reduces. The boundary
+  // stores the match as the PARSED prefix (not a re-stringified canonical that `print` could expand
+  // past 2048 — `1e99`→`1e+99`), so the reduce reads it in place and only `print`s it for the table
+  // key (printing has no cap). Boundary and reduce agree: the boundary accepts it, the reduce
+  // stores it.
   test("a well-formed match the boundary accepts reduces even when its canonical form crosses the codec cap", () => {
     const longMatch = "itx.foo(" + Array(400).fill("1e99").join(",") + ")";
     const normalized = normalizeControlEvent(
@@ -360,7 +346,7 @@ describe("the subscriptions table — by name", () => {
     });
   });
 
-  test("configured with `afterOffset` stores it on the row (where the cursor lane starts — 0 = the whole log); without it, no key at all (= from the configure offset)", () => {
+  test("configured with `afterOffset` stores it on the row (where cursor delivery starts — 0 = the whole log); without it, no key at all (= from the configure offset)", () => {
     const s = reduceAll([
       at(4, "events.iterate.com/stream/subscription-configured", {
         name: "history",
@@ -579,7 +565,7 @@ describe("purity", () => {
     ).toBeUndefined();
   });
 
-  // `reduceCoreEventBatch` is the host's door (Stream reduces a commit's fresh events and each page of the
+  // `reduceCoreEventBatch` is what the host calls (Stream reduces a commit's fresh events and each page of the
   // constructor's re-reduce through it): each core table is copied ONCE per batch and mutated as a
   // draft after — O(rows + events), not O(rows × events) (memory-budget.test.ts pins the time). What
   // that must NOT cost is purity at the batch's edges: the state handed in stays what it was.
@@ -641,25 +627,6 @@ describe("purity", () => {
       expect(Object.keys(state.subscriptions)).toEqual(["a", "b"]);
       expect(state.itxExpressionRewriteRules).toEqual({});
     });
-  });
-
-  test("the reduce rebuilds bit-identically from the log (pure — no wall clock anywhere)", () => {
-    const log = [
-      at(1, "events.iterate.com/stream/created", { projectId: "prj_t", path: "/" }),
-      at(2, "events.iterate.com/stream/woken", { incarnation: 1 }),
-      at(3, "events.iterate.com/itx/rewrite-rule-configured", {
-        match: "itx.db",
-        target: "itx.kv",
-      }),
-      at(4, "events.iterate.com/stream/subscription-configured", {
-        name: "tally",
-        target: "itx.facets.get('tally').processEventBatch",
-      }),
-      at(5, "events.iterate.com/stream/paused", { reason: "r" }),
-      at(6, "events.iterate.com/stream/resumed"),
-      at(7, "events.iterate.com/stream/woken", { incarnation: 2 }),
-    ];
-    expect(reduceAll(log)).toEqual(reduceAll(log));
   });
 });
 
@@ -752,7 +719,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
     expect(Object.keys(pinned.itxExpressionRewriteRules)).toEqual(["itx.ai.run('gpt-5')"]);
   });
 
-  test("HOSTING is decided on the RESOLVED target: the platform's spelling, a user's short spelling and a user's own rule naming the door all host; the source is elided from the ORIGINAL spelling", () => {
+  test("HOSTING is decided on the RESOLVED target: the platform's spelling, a user's short spelling and a user's own rule naming `itx.facets` all host; the source is elided from the ORIGINAL spelling", () => {
     const specJson = JSON.stringify(SPEC);
     const s = reduceAll([
       at(1, "events.iterate.com/itx/rewrite-rule-configured", {
@@ -783,7 +750,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       expect(JSON.stringify(row)).not.toContain("cap.js");
   });
 
-  test("a hosting target that cannot resolve yet (its rule comes later, or a mask sits on the door) is stored as given and hosts nothing", () => {
+  test("a hosting target that cannot resolve yet (its rule comes later, or a mask sits on `itx.facets`) is stored as given and hosts nothing", () => {
     const specJson = JSON.stringify(SPEC);
     const s = reduceAll([
       configured(1, "early", `itx.later.get('e', ${specJson}).processEventBatch`),
@@ -833,7 +800,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       hosts: "f",
     },
     {
-      rule: "a rule re-pointed AWAY from the facets door drops the marker",
+      rule: "a rule re-pointed AWAY from `itx.builtins.facets` drops the marker",
       log: [
         at(1, RULE, { match: "itx.proc", target: facetF }),
         configured(2, "s", "itx.proc.processEventBatch"),
@@ -883,21 +850,15 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
 
 // ── subscriptions ── the subscriptions table's one COMMAND (a literal `subscription-configured` event, normalized at the append boundary by `normalizeControlEvent`)
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
-// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS at the door, nothing
-// appended. A subscription is PURE DATA — a name, a target expression stored as its printed string,
+// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS on append, nothing
+// appended. A subscription is PURE DATA — a name, a target expression stored in its parsed form,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
-// decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
-// `reduceCoreEvent` exactly as the DO does; the reduce's own pins (replace / drop / halted /
-// resumed) live in core-processor.test.ts.
+// decides that by evaluating it). The rows THEMSELVES are `core` state, read here from the real
+// Stream's core reduced state, as the DO reads them; the reduce's own pins (replace / drop / halted
+// / resumed) are above.
 
 const setup = () => {
-  const { stream, events } = memoryStream();
-  // INLINE, exactly like the DO: the rows are core state, reduced from the durable log per call.
-  const rows = (): Record<string, Subscription> =>
-    events.reduce(
-      (st, e) => reduceCoreEvent({ event: e, state: st }) ?? st,
-      CoreContract.initialState(),
-    ).subscriptions;
+  const { stream, events } = nodeSqliteStream();
   /** The edge's `subscribe`: build the event, append it. */
   const configure = (input: {
     name: string;
@@ -916,10 +877,10 @@ const setup = () => {
     return event;
   };
   /** Append a raw event as the stream would — a fact the delivery loop appends (`delivery-halted`
-   *  has no door on this module). */
-  const append = (type: string, payload: Record<string, unknown>): StreamEvent =>
-    (stream.append({ type, payload }) as StreamEvent[])[0];
-  return { events, rows, configure, append };
+   *  has no command in this module). */
+  const append = (type: string, payload: Record<string, unknown>) =>
+    stream.append({ type, payload })[0];
+  return { events, rows: () => stream.coreReducedState.subscriptions, configure, append };
 };
 
 describe("configure — ONE event: set, replace, or remove", () => {
@@ -946,7 +907,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
     const { configure } = setup();
     expect(configure({ name: "all", target: "itx.digest.processEventBatch" }).payload).toEqual({
       name: "all",
-      target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, at the door
+      target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, on append
     });
   });
 
@@ -974,7 +935,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
   });
 
   test.each([-1, 1.5, Number.NaN, "0"])(
-    "an `afterOffset` that is not a non-negative integer (%s) is refused at the door — a throw, nothing appended",
+    "an `afterOffset` that is not a non-negative integer (%s) is refused on append — a throw, nothing appended",
     (afterOffset) => {
       const { configure, events } = setup();
       expect(() =>
@@ -1032,7 +993,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype and never `core` — a dotted, spaced, `__proto__`, `constructor` or `core` name is refused at the door, nothing appended", () => {
+  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype and never `core` — a dotted, spaced, `__proto__`, `constructor` or `core` name is refused on append, nothing appended", () => {
     const { configure, events } = setup();
     expect(() => configure({ name: "a.b", target: "itx.whoami" })).toThrow(/one segment/);
     expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);

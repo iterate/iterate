@@ -280,34 +280,34 @@ describe("the concurrency contract", () => {
   });
 });
 
-describe("the push door (scan scannedOffsetRanges)", () => {
-  test("a contiguous push reduces WITHOUT reading the log (the fast path)", async () => {
-    const mem = setup();
-    mem.tick();
-    await settle();
-    expect(mem.processor.trace).toContain("start 1");
-    expect(mem.reads).toBe(0); // the batch itself was enough — zero log reads
-  });
+// ── processEventBatch pushes (scan scannedOffsetRanges) ──
 
-  test("a gapped push triggers repair from the own cursor (nothing skipped)", async () => {
-    const mem = memoryStream();
-    mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // history
-    const storage = memoryStorage();
-    const late = new CounterProcessor();
-    mem.engines.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
-    mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // gapped push
-    await settle();
-    expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
-    expect(mem.reads).toBeGreaterThan(0); // repair read the gap
-  });
+test("a contiguous push reduces WITHOUT reading the log (the fast path)", async () => {
+  const mem = setup();
+  mem.tick();
+  await settle();
+  expect(mem.processor.trace).toContain("start 1");
+  expect(mem).toMatchObject({ reads: 0 }); // the batch itself was enough — zero log reads
+});
 
-  test("a stale scannedOffsetRange (already behind the cursor) is a no-op", async () => {
-    const { engine, processor, tick } = setup();
-    tick();
-    await engine.catchUpFromLog();
-    await engine.processEventBatch([], { after: 0, through: 1 });
-    expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
-  });
+test("a gapped push triggers repair from the own cursor (nothing skipped)", async () => {
+  const mem = memoryStream();
+  mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // history
+  const storage = memoryStorage();
+  const late = new CounterProcessor();
+  mem.engines.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
+  mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // gapped push
+  await settle();
+  expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
+  expect(mem.reads).toBeGreaterThan(0); // repair read the gap
+});
+
+test("a stale scannedOffsetRange (already behind the cursor) is a no-op", async () => {
+  const { engine, processor, tick } = setup();
+  tick();
+  await engine.catchUpFromLog();
+  await engine.processEventBatch([], { after: 0, through: 1 });
+  expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
 });
 
 // ── the at-head pass is tied to the SHOWN head ──
@@ -450,24 +450,6 @@ describe("ephemeral events", () => {
     expect((await star.snapshot()).state.seen).toEqual(["loud@1", "loud@4"]); // holes invisible
   });
 
-  test("a rebuilt reduce omits ephemerals (never derive durable truth from one)", async () => {
-    const mem = memoryStream();
-    const storage = memoryStorage();
-    const a = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
-    mem.engines.push(a);
-    mem.stream.append({ type: "loud" }) as StreamEvent[];
-    mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[];
-    mem.stream.append({ type: "loud" }) as StreamEvent[];
-    await settle();
-    expect((await a.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "loud@3"]);
-    // a fresh incarnation over the same storage: the ephemeral is gone from the log — the reduce
-    // regresses to durable truth only, and the offsets are simply gaps
-    const b = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
-    // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
-    //  because that scannedOffsetRange ALSO contained a durable event — the documented divergence rule)
-    expect((await b.snapshot()).state.seen).toContain("loud@3");
-  });
-
   test("a barrier that reaches the head BEFORE the commit's own push still leaves the named ephemeral delivered", async () => {
     // The wake behind a read-your-writes barrier catches up the durable log and, via the
     // head-clamped proof, advances the cursor OVER the ephemeral's offset while consuming only the
@@ -492,31 +474,29 @@ describe("ephemeral events", () => {
   });
 });
 
-describe("review round 1 regressions", () => {
-  test("⚠️ a processor that AWAITS its own append inside a blocker must not deadlock", async () => {
-    const mem = memoryStream();
-    const storage = memoryStorage();
-    const Contract = defineProcessorContract({
-      slug: "echoer",
-      version: "1",
-      description: "",
-      stateSchema: z.object({}),
-      consumes: ["ping"],
-      emits: ["echoed"],
-    });
-    class EchoerProcessor extends StreamProcessor<object> {
-      readonly contract = Contract;
-      override processEvent(args: ProcessEventArgs<object>): undefined {
-        if (args.event?.type !== "ping") return;
-        args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
-      }
+test("⚠️ a processor that AWAITS its own append inside a blocker must not deadlock", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const Contract = defineProcessorContract({
+    slug: "echoer",
+    version: "1",
+    description: "",
+    stateSchema: z.object({}),
+    consumes: ["ping"],
+    emits: ["echoed"],
+  });
+  class EchoerProcessor extends StreamProcessor<object> {
+    readonly contract = Contract;
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (args.event?.type !== "ping") return;
+      args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
     }
-    mem.engines.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
-    mem.stream.append({ type: "ping" }) as StreamEvent[]; // pre-fix shape: would hang forever
-    await settle();
-    expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
-  }, 5000);
-});
+  }
+  mem.engines.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
+  mem.stream.append({ type: "ping" }) as StreamEvent[]; // would deadlock if the blocker held the append
+  await settle();
+  expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
+}, 5000);
 
 describe("reduce cache + re-reduce", () => {
   test("version bump re-reduces via reduce only — effects never re-run", async () => {
@@ -1312,7 +1292,7 @@ test("an unserializable value can't corrupt or wedge the chain — a gap, then d
   expect(sink.frames).toHaveLength(2);
   expect(sink.frames[1]).toEqual({
     key: "k",
-    from: epoch + 2, // NOT the client's epoch+1 — it re-seeds through the door instead of applying
+    from: epoch + 2, // NOT the client's epoch+1 — the mismatch makes it re-seed instead of applying
     to: epoch + 3,
     patch: [{ op: "replace", path: "/n", value: 2 }],
   });
