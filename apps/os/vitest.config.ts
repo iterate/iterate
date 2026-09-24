@@ -73,7 +73,7 @@ export default defineConfig({
           name: "unit",
           include: ["src/**/*.test.ts", "examples/**/*.test.ts", "scripts/*.test.ts"],
           // The edge and DO modules reach the control plane, whose OAuth provider imports
-          // cloudflare:workers; inlined so the alias below (and older files' `vi.mock`) covers it.
+          // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
         },
         // A module whose only platform dependency is a base class loads in node through this shim,

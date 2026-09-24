@@ -2,16 +2,7 @@
 // classes' own lists: a facet class, a walk a caller spells on it (relative to the facet), and
 // whether the walk reaches the facet or is refused FORBIDDEN. The same rules end to end, through a
 // person who signed in, are __workers-tests__/facet-public-methods.test.ts.
-import { expect, test, vi } from "vitest";
-
-vi.mock("cloudflare:workers", () => ({
-  RpcTarget: class {},
-  DurableObject: class {},
-  WorkerEntrypoint: class {},
-  RpcStub: class {},
-  RpcPromise: class {},
-  RpcProperty: class {},
-}));
+import { expect, test } from "vitest";
 import { parse } from "iterate/next/expression";
 import { errorCode } from "iterate/next/lib";
 import { FacetDurableObject, StreamProcessorDurableObject } from "iterate/next/sdk";

@@ -21,10 +21,6 @@ test("fetch expression headers preserve Unicode worker source through the HTTP B
   expect(JSON.parse(headers.get("x-itx-expression")!)).toEqual(expression);
 });
 
-// LentRpcStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —
-// mock JUST the base class (a no-op shell); the relay's own logic runs unmodified.
-vi.mock("cloudflare:workers", () => ({ RpcTarget: class {} }));
-
 // ── rpc stub directory ── the borrowed table's one lifetime rule beyond lend/return:
 // A BROKEN STUB IS DROPPED (v4 §2.7). workerd stamps `retryable: true` on a call that failed at the
 // transport (DISCONNECTED — "Network connection lost.", a DO reset), and a stub whose transport is

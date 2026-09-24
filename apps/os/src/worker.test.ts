@@ -6,17 +6,6 @@
 
 import { describe, expect, test, vi } from "vitest";
 
-// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
-// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
-// (no-op shells); the module's own logic runs unmodified.
-vi.mock("cloudflare:workers", () => ({
-  RpcTarget: class {},
-  DurableObject: class {},
-  WorkerEntrypoint: class {},
-  RpcStub: class {},
-  RpcPromise: class {},
-  RpcProperty: class {},
-}));
 // Routing is under test here; Start's generated server entry is exercised by the built-Worker and
 // browser suites, where its Vite virtual modules exist.
 vi.mock("@tanstack/react-start/server-entry", () => ({
