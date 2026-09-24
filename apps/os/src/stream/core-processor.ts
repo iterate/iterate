@@ -29,9 +29,8 @@
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
 // it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
-// validation, and `append` refuses them. No stored row predates its event's normalization, but for
-// one type: a project root's log keeps the `ingress-route/configured` facts appended while the route
-// table was a facet of its own, so that fold parses what it reads (src/ingress-routes.ts).
+// validation, and `append` refuses them. The route fold parses what it reads all the same
+// (src/ingress-routes.ts): one route that does not compile must never break every request's `match`.
 
 import {
   itxExpressionStepName,

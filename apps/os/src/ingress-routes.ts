@@ -114,9 +114,8 @@ export type IngressRoute = IngressRouteTable[string] & { ingressRouteName: strin
  *  core-version bump re-reduces a root's routes in the DO constructor in O(routes). A copy per fact
  *  is O(routes²): 14,000 routes took ~25 s on a laptop, a reboot loop against the CPU limit, and
  *  ~0.1 s as a draft (measured 2026-09-24). A malformed payload is skipped, never thrown: the
- *  append boundary refuses one, but a root's log keeps the facts appended while the table was a
- *  facet of its own, which checked nothing at append — and one route that does not compile must
- *  not break every request's match. */
+ *  append boundary refuses one, and a fold that meets one anyway must not let a route that does
+ *  not compile break every request's match. */
 export function reduceIngressRouteConfigured(
   table: IngressRouteTable,
   event: { offset: number; payload?: unknown },
