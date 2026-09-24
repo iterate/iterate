@@ -43,10 +43,9 @@ function CommandDialog({
   return (
     <Dialog {...props}>
       <DialogContent
-        // Inherit DialogContent's true center (`top-1/2 left-1/2 -translate-*`).
-        // A prior `top-1/3 translate-y-0` Spotlight offset stacked with the
-        // large ⌘K height (`sm:h-[66svh]`) and pinned the palette to the
-        // bottom of the viewport.
+        // Upstream pins the dialog at `top-1/3`; here it keeps DialogContent's
+        // centre and the caller places it (the AppShell palette passes
+        // `top-[12svh] translate-y-0`).
         className={cn("overflow-hidden p-0", className)}
         showCloseButton={showCloseButton}
       >
