@@ -292,13 +292,14 @@ test("organizations.createInvitation hands an owner a single-use link: a second 
     role: "member",
     since: expect.any(String),
   });
-  expect(await record(organization)).toMatchObject({
+  const joinedRecord = await record(organization);
+  expect(joinedRecord).toMatchObject({
     members: {
       [ownerId]: { role: "owner", since: expect.any(String) },
       [guestId]: { role: "member", since: expect.any(String) },
     },
-    invitations: {},
   });
+  expect(Object.keys(joinedRecord.invitations)).toEqual([]);
   // SINGLE USE: a third person is refused and joins nothing
   expect((await late.organizations.invitation(invitation.token))?.status).toBe("accepted");
   const refused = await rejection(
@@ -313,7 +314,7 @@ test("organizations.createInvitation hands an owner a single-use link: a second 
   const withdrawn = await owner.organizations.createInvitation(org.id, { role: "owner" });
   expect((await record(organization)).invitations).toHaveProperty(withdrawn.id);
   await owner.organizations.revokeInvitation(org.id, { invitationId: withdrawn.id });
-  expect((await record(organization)).invitations).toEqual({});
+  expect(Object.keys((await record(organization)).invitations)).toEqual([]);
   expect((await late.organizations.invitation(withdrawn.token))?.status).toBe("revoked");
   expect(
     errorCode(
