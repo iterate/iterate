@@ -4,8 +4,8 @@
 # reviewed, where a new commit keeps the history. Rebasing stays allowed, because updating a PR branch
 # (the rebase-pr skill, `git pull` with pull.rebase) is how agents keep work current.
 #
-# packages/cli/src/coding-agent.ts is the one list of agent markers, shared with the iterate CLI
-# and lint-staged.config.cjs. Git runs hooks from the root of the working tree
+# packages/cli/src/coding-agent.ts is the one list of agent markers, shared with the iterate CLI.
+# Git runs hooks from the root of the working tree
 # (https://git-scm.com/docs/githooks#_description), so the relative import resolves.
 committer=$(node --input-type=module -e 'import { isCodingAgent } from "./packages/cli/src/coding-agent.ts"; console.log(isCodingAgent(process.env) ? "agent" : "person")') || exit 1
 [ "$committer" = "person" ] && exit 0

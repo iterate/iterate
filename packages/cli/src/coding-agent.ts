@@ -1,8 +1,8 @@
 /**
  * Whether a coding agent, not a person, is running this process. The one list of agent markers for
- * the iterate CLI (no browser opens, no prompts), lint-staged.config.cjs (typecheck, test and lint on
- * every commit) and .husky/prepare-commit-msg (no `git commit --amend`). The last two load this file
- * with Node's own type stripping, so it stays import-free erasable TypeScript.
+ * the iterate CLI (no browser opens, no prompts) and .husky/prepare-commit-msg (no
+ * `git commit --amend`). The hook loads this file with Node's own type stripping, so it stays
+ * import-free erasable TypeScript.
  *
  * - Claude Code sets CLAUDE_CODE_CHILD_SESSION=1 in the processes its tool calls and hooks spawn.
  *   Not CLAUDECODE: Claude Code's IDE extensions also set that in the integrated terminal a person
