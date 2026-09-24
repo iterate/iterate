@@ -558,9 +558,9 @@ async function deployOsPreview(
     );
   }
   // apps/os's smoke is `/version` naming the new deployment (src/worker.ts), asked every 5 s. Not
-  // sooner: the readiness gate starts when it passes, and an in-place redeploy's old version
-  // still answers then. Asked every 0.5 s, the gate missed in its first two rounds on 3 of 7
-  // in-place redeploys, against 4 of 49 at 5 s, costing more than the smoke saved (#3035).
+  // sooner: it hands straight on to the readiness gate, and an in-place redeploy's old version
+  // still answers for seconds after. Asked every 0.5 s it saved at most ~3.5 s, and the gate then
+  // missed in its first two rounds on 3 of 7 in-place redeploys (#3035).
   await traceOperation("Smoke /version", () =>
     smokeResponse(
       `${url}/version`,
