@@ -11,7 +11,8 @@ let VoiceWorker: any;
 
 beforeAll(async () => {
   // Deployed facets receive processor.js from the runtime. Supply just the
-  // ConfigWorker environment here and exercise the actual bundled worker.
+  // ConfigWorker environment and the SDK's `z` here and exercise the actual
+  // bundled worker.
   const bundle = await build({
     entryPoints: [new URL("./worker.ts", import.meta.url).pathname],
     bundle: true,
@@ -28,7 +29,9 @@ beforeAll(async () => {
             namespace: "test-runtime",
           }));
           builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
-            contents: "export class ConfigWorker { constructor(env) { this.env = env; } }",
+            contents:
+              'export class ConfigWorker { constructor(env) { this.env = env; } } export { z } from "zod";',
+            resolveDir: new URL(".", import.meta.url).pathname,
           }));
         },
       },

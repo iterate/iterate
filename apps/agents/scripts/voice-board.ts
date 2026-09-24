@@ -1,4 +1,4 @@
-// scripts/voice-board.ts — prove a physical board end to end on os-next, out loud, through real air.
+// scripts/voice-board.ts — prove a physical board end to end on the platform, out loud, through real air.
 //
 // The board holds its own session to the worker and lent its capabilities on the project root
 // (`itx.clients.<device_name>`, underscores for anything that is not an identifier character). This

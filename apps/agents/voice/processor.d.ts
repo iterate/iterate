@@ -1,4 +1,4 @@
-// Types for the SDK module os-next injects as "./processor.js" into every loaded isolate that
-// imports it (src/context/worker-loader.ts). The runtime module is the `iterate/next/sdk` bundle
-// (scripts/vite-plugin-processor-sdk.ts); this shim lets the example typecheck against the same surface.
+// Types for the SDK module apps/os injects as "./processor.js" into every loaded isolate that
+// imports it (apps/os/src/context/worker-loader.ts). The runtime module is the `iterate/next/sdk`
+// bundle; this shim types this app's loaded voice code against `iterate/next/sdk`.
 export * from "iterate/next/sdk";
