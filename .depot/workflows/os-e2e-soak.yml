@@ -9,7 +9,8 @@
 # main redeployed `soak` ten minutes into two agents.e2e soaks of a fix branch, which then soaked
 # main's worker). Delete a named preview when done: `pnpm --dir apps/os preview delete --name <preview>`.
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
-# difference), and CI is the environment whose flakes matter.
+# difference), and CI is the environment whose flakes matter. It never pays for a model: the
+# real-model rows run only in os-real-model.yml (docs/testing.md#real-model-rows).
 name: OS e2e soak
 permissions:
   contents: read

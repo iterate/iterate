@@ -14,9 +14,10 @@
 // output/soak/summary.json plus the table below, both projects' rows together. Runs are sequential —
 // the point is to see the suite as CI sees it, not to load the worker a hundredfold.
 //
-// E2E_SOAK=1 is set for every run: a row that spends a shared paid budget runs once per CI run and
-// never here (agents-deployed.e2e.test.ts: the preview AI Gateway's $30-a-day spend limit, which
-// back-to-back soak runs spent on 2026-09-24 and every CI run's model rows then hit).
+// A soak never pays for a model: E2E_REAL_MODELS is stripped from every run, so the real-model rows
+// skip (`realModelOnly`). On 2026-09-24 back-to-back soaks spent the preview account's AI Gateway cap
+// and every PR's preview e2e went red; the daily os-real-model.yml is those rows' lane
+// (docs/testing.md#real-model-rows).
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -47,6 +48,7 @@ if (!process.env.WORKER_BASE_URL)
   throw new Error("WORKER_BASE_URL or --preview is required: the soak runs against a deployment");
 console.log(`soaking ${process.env.WORKER_BASE_URL}`);
 mkdirSync(OUT, { recursive: true });
+const { E2E_REAL_MODELS: _stripped, ...runEnv } = process.env;
 
 const tally = new Map<
   string,
@@ -88,7 +90,7 @@ function soakRun(project: "e2e" | "perf", file: string): number | undefined {
       // a filter that names only e2e files leaves the perf project nothing to run
       ...(filter ? [filter, "--passWithNoTests"] : []),
     ],
-    { cwd: ROOT, env: { ...process.env, E2E_SOAK: "1" }, stdio: ["ignore", "ignore", "inherit"] },
+    { cwd: ROOT, env: runEnv, stdio: ["ignore", "ignore", "inherit"] },
   );
   if (!existsSync(file)) {
     console.error(`${path.basename(file)}: vitest wrote no report (exit ${result.status})`);

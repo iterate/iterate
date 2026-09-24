@@ -1,0 +1,137 @@
+# THE REAL-MODEL LANE for apps/os and the agents runtime: once a day, on every main push that changes
+# how an agent calls its model, and on dispatch, deploy a THROWAWAY Worker Preview of main named
+# `real-model-<run id>-<attempt>`, run the rows titled `REAL:` against real models (OpenAI's astra on
+# Cloudflare's billing, the default model, and Workers AI), judge the run, then DELETE the preview.
+#
+# Every other lane (PR previews, Main OS e2e, the soak) runs those turns against a fake provider and
+# spends nothing: one AI Gateway spend cap covers the preview account, and on 2026-09-24 a day of soaks
+# spent it and turned every PR's preview e2e red (docs/testing.md#real-model-rows). A run here costs
+# about $0.06.
+#
+# The judge (scripts/ci/os-real-model-alert.ts) pages Slack #error-pulse on a change of state only: red
+# once, green again once, with the channel's last page as its state, the way Main OS e2e pages. A page
+# leaves the run green; a BROKEN PROBE (the deploy, no report, the REAL: rows not run) fails the run. A
+# run off main never pages: it prints what it would post.
+#
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-real-model.yml --ref <branch>
+#
+# Depot registers the schedule and the push trigger once this file is on the default branch.
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN only.
+
+name: OS real model
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # Daily, off the other schedules' minutes (:07/:22/:37/:52, :13, :29, :41, 3:17).
+    - cron: "47 5 * * *"
+  push:
+    branches: [main]
+    # How an agent calls its model: the default model, the request, the byte transport, and this lane.
+    paths:
+      - .depot/workflows/os-real-model.yml
+      - scripts/ci/os-real-model-alert.ts
+      - apps/agents/runtime/**
+      - apps/agents/e2e/agents-default-model.e2e.test.ts
+  workflow_dispatch:
+
+concurrency:
+  group: os-real-model
+  cancel-in-progress: false
+
+env:
+  # One name per run attempt: a re-run never recreates the name just deleted. apps/os/scripts/preview.ts
+  # reads it; preview-sweep.ts `supersededMainPreviews` knows its shape.
+  PREVIEW_NAME: real-model-${{ github.run_id }}-${{ github.run_attempt }}
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  real-model:
+    name: real-model
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # A run cancelled by hand has its delete cancelled with it: every other `real-model-<run>-<attempt>`
+      # goes first.
+      - name: Delete superseded runs' previews
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm preview delete-superseded
+      - name: Deploy a throwaway preview of this commit
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_APPS: none
+        run: doppler run -- pnpm preview deploy
+      # The files that hold the REAL: rows, opted in. A failed row is the judge's verdict, so it does
+      # not stop the job here. Credentials: the preview's parent's APP_CONFIG (e2e/support/global-setup.ts).
+      - name: Run the real-model rows
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          E2E_REAL_MODELS: "1"
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |-
+          export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
+          doppler run -- pnpm exec vitest run --configLoader runner --project e2e --sequence.concurrent \
+            --reporter=default --reporter=json --outputFile.json=output/real-model-report.json \
+            agents-default-model ai-root-shadow-and-fable \
+            || echo "the real-model rows exited $?: the judge decides"
+      - name: Judge, page #error-pulse on a change of state
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: >-
+          pnpm tsx scripts/ci/os-real-model-alert.ts --report apps/os/output/real-model-report.json
+          ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-real-model-report
+          path: apps/os/output/real-model-report.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  # ALWAYS, cancelled included: the preview, its Artifacts namespace, KV namespaces and R2 bucket.
+  delete:
+    name: delete
+    needs: real-model
+    if: always()
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Delete the throwaway preview and everything it created
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm preview delete
