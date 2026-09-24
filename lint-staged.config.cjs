@@ -5,13 +5,10 @@ try {
   // no problem
 }
 
-// Stricter checks for coding agents: Claude Code sets `CLAUDECODE=1` (not `CLAUDE_CODE`), OpenCode
-// sets OPENCODE/OPENCODE_SESSION, others set AGENT=1.
-const isAgent =
-  process.env.AGENT === "1" ||
-  process.env.OPENCODE === "1" ||
-  !!process.env.OPENCODE_SESSION ||
-  !!process.env.CLAUDECODE;
+// Stricter checks for coding agents. The one list of agent markers is the iterate CLI's; Node loads
+// the .ts file with its built-in type stripping.
+const { isCodingAgent } = require("./packages/iterate/src/coding-agent.ts");
+const isAgent = isCodingAgent(process.env);
 
 /** @type {import('lint-staged').Configuration} */
 const baseConfig = {

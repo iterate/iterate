@@ -10,6 +10,7 @@ import { os } from "@orpc/server";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
 import { connectOsNext } from "./next-node.ts";
+import { isCodingAgent } from "./coding-agent.ts";
 import type { SessionCredentials } from "./next/api.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
@@ -25,14 +26,7 @@ import {
   type StoredSession,
 } from "./config.ts";
 
-// Claude Code sets `CLAUDECODE=1`, not a bare `CLAUDE_CODE`; keep both spellings (as
-// lint-staged.config.cjs does).
-const isAgent =
-  process.env.AGENT === "1" ||
-  process.env.OPENCODE === "1" ||
-  Boolean(process.env.OPENCODE_SESSION) ||
-  Boolean(process.env.CLAUDE_CODE) ||
-  Boolean(process.env.CLAUDECODE);
+const isAgent = isCodingAgent(process.env);
 let configFlagOverride: string | undefined;
 const consumeCliStringFlag = (flagName: string): string | undefined => {
   const args = process.argv.slice(2);

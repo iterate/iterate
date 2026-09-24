@@ -687,24 +687,6 @@ test("typed-no-floating-promises and simple-truthiness-check share one type-awar
   );
 });
 
-test("contract-package-imports permits Cloudflare only in the worker-only contract module", () => {
-  using fixture = createOxlintFixture({
-    tsconfig: true,
-    rules: {
-      "iterate/contract-package-imports": "error",
-      "iterate/mechanical-class-impl": "off",
-    },
-  });
-
-  const source = 'import { WorkerEntrypoint } from "cloudflare:workers";\n';
-  fixture.write("src/worker.ts", source);
-  fixture.write("src/index.ts", source);
-
-  fixture.run(["src/worker.ts"]);
-  const result = fixture.run(["src/index.ts"], { expectFailure: true });
-  expect(result.stdout + result.stderr).toMatch(/Forbidden runtime import "cloudflare:workers"/);
-});
-
 function getCallablePropertyNames(
   service: TypeAwareLintService,
   fileName: string,

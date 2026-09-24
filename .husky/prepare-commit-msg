@@ -1,47 +1,63 @@
 #!/bin/sh
 
-# Block AI agents from rewriting git history
-# See: https://git-scm.com/docs/githooks#_prepare_commit_msg
+# Coding agents may not `git commit --amend`: an amend rewrites a commit that may already be pushed or
+# reviewed, where a new commit keeps the history. Rebasing stays allowed, because updating a PR branch
+# (the rebase-pr skill, `git pull` with pull.rebase) is how agents keep work current.
 #
-# $2 is the commit source: message, template, merge, squash, or commit
-# "commit" means -c, -C, or --amend was used. $3 is the commit SHA.
-# - git commit --amend: $3 is HEAD (rewriting history - blocked)
-# - git commit -c <sha>: $3 is <sha> (reusing message for NEW commit - allowed)
-# - git commit -C <sha>: $3 is <sha> (reusing message for NEW commit - allowed)
+# packages/iterate/src/coding-agent.ts is the one list of agent markers, shared with the iterate CLI
+# and lint-staged.config.cjs. Git runs hooks from the root of the working tree
+# (https://git-scm.com/docs/githooks#_description), so the relative import resolves.
+committer=$(node --input-type=module -e 'import { isCodingAgent } from "./packages/iterate/src/coding-agent.ts"; console.log(isCodingAgent(process.env) ? "agent" : "person")') || exit 1
+[ "$committer" = "person" ] && exit 0
+
+# $2 is the commit message's source and $3 a commit: `git commit --amend` passes "commit HEAD", while
+# -c/-C <commit> reuse a message for a new commit and pass <commit> as typed, so `-C HEAD` is blocked
+# too; name the commit by its sha (https://git-scm.com/docs/githooks#_prepare_commit_msg).
+# `--amend -m` passes "message" and no commit, so for it read the arguments of the git process that
+# runs this hook: the nearest ancestor that is git, past husky's `sh` wrappers. Only that one, since
+# a shell further up may mention `--amend` in text that is not the commit.
 #
-# Check all known agent env vars for robustness
-if [ "$AGENT" = "1" ] || [ "$OPENCODE" = "1" ] || [ -n "$OPENCODE_SESSION" ] || [ -n "$CLAUDE_CODE" ]; then
-  # Detect --amend: $2=commit && $3=HEAD (without -m), or check COMMIT_EDITMSG
-  is_amend=""
-  if [ "$2" = "commit" ] && [ "$3" = "HEAD" ]; then
-    is_amend="yes"
-  elif grep -q "^# This is a combination of" "$1" 2>/dev/null; then
-    # Squash commit during rebase
-    is_amend="yes"
-  fi
-  
-  # For --amend -m, walk up process tree looking for git commit --amend
-  pid=$$
-  while [ "$pid" != "1" ] && [ -n "$pid" ]; do
-    cmd=$(ps -o args= -p "$pid" 2>/dev/null || true)
-    if echo "$cmd" | grep -q "git.*commit.*--amend"; then
-      is_amend="yes"
-      break
+# ps joins git's arguments with spaces, so a message given to -m is indistinguishable from options
+# after it: scan the options after `commit` only up to the first one that takes a value (short
+# clusters with m/F/c/C/t, like `-am`, and the long forms). `git commit -m msg --amend` therefore
+# gets through; `--amend -m msg`, the usual order, does not. Git accepts unambiguous abbreviations,
+# so `--am` through `--amend` all count (https://git-scm.com/docs/gitcli#_abbreviating_long_options).
+amend_before_message() {
+  set -f
+  after_commit=""
+  for arg in $1; do
+    if [ -z "$after_commit" ]; then
+      [ "$arg" = "commit" ] && after_commit="yes"
+      continue
     fi
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    case "$arg" in
+      --am | --ame | --amen | --amend) return 0 ;;
+      -- | --message* | --file* | --reuse-message* | --reedit-message* | --template* | --fixup* | --squash*) return 1 ;;
+      --*) ;;
+      -*[mFcCt]*) return 1 ;;
+    esac
   done
-  
-  if [ "$is_amend" = "yes" ]; then
-    echo "ERROR: AI agents are not allowed to use --amend (rewrites history)"
-    echo "Create a new commit instead."
-    echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
-    exit 1
-  fi
-  # Use git rev-parse to handle worktrees correctly (where .git is a file, not a dir)
-  git_dir=$(git rev-parse --git-dir 2>/dev/null)
-  if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ]; then
-    echo "ERROR: AI agents are not allowed to rebase (rewrites history)"
-    echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
-    exit 1
-  fi
+  return 1
+}
+
+is_amend=""
+if [ "$2" = "commit" ] && [ "$3" = "HEAD" ]; then
+  is_amend="yes"
+fi
+pid=$PPID
+while [ -z "$is_amend" ] && [ -n "$pid" ] && [ "$pid" != "1" ]; do
+  args=$(ps -o args= -p "$pid")
+  case "$args" in
+    git\ * | */git\ *)
+      amend_before_message "$args" && is_amend="yes"
+      break
+      ;;
+  esac
+  pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+done
+
+if [ "$is_amend" = "yes" ]; then
+  echo "ERROR: AI agents are not allowed to use --amend (rewrites history)"
+  echo "Create a new commit instead."
+  exit 1
 fi
