@@ -47,6 +47,12 @@ It fails when a named listing fills its 200 without reaching two hours before
 the window (the longest a push, pull-request or scheduled workflow runs;
 `os-e2e-soak` is dispatch-only).
 
+**Late re-runs are not reported.** A re-run keeps its workflow's original
+creation time, and Depot's listings offer no update or finish time to list by,
+so a re-run started more than two hours after its workflow was created sends
+no events. Finding those would mean fetching every workflow a re-run could come
+from, every hour.
+
 | Event                      | One per                                                  | Timestamp  |
 | -------------------------- | -------------------------------------------------------- | ---------- |
 | `ci workflow run finished` | settled workflow execution (a re-run is a new execution) | its finish |

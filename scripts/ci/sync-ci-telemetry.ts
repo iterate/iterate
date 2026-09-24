@@ -363,6 +363,12 @@ async function scheduledWindow(
  * paging, so the sync lists each workflow on main by name; a listing that fills its 200 without
  * reaching back far enough fails the sync. One unnamed listing adds workflows that exist only on a
  * branch.
+ *
+ * A re-run started more than `longestWorkflowMs` after its workflow was created is not reported.
+ * Depot keeps the workflow's original `createdAt` for a re-run, and neither `ListWorkflows` nor
+ * `ListRuns` exposes an update or finish time to list by
+ * (https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto), so finding one would mean
+ * fetching every workflow of the horizon it could come from, every hour.
  */
 async function candidateRuns(
   depot: (method: string, body: object) => Promise<unknown>,
