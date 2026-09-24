@@ -285,7 +285,7 @@ export class FacetHost {
    *  (`#call`); its storage and startup memo stay. A facet not running this incarnation has nothing
    *  to reset — it is started all the same, and the fact still lands. The core reduce is no facet; a
    *  name never hosted here is NO_FACET. */
-  abort(name: string, reason: string | undefined): Promise<void> {
+  async abort(name: string, reason: string | undefined): Promise<void> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee
     if (typeof name !== "string")
       throw new Error("itx.facets.abort(name, reason?): name the facet");
@@ -296,7 +296,7 @@ export class FacetHost {
     if (firstPartyFacetClassOf(name))
       assertFacetPlacement(name, { projectId: this.#deps.projectId, path: this.#deps.path });
     else this.#facetStartupMemoFor(name, undefined);
-    return this.#restart(name, () => {
+    await this.#restart(name, () => {
       const generation = this.#facetGeneration(name);
       this.#abortFacetIfRunning(name, `facet "${name}" aborted${reason ? `: ${reason}` : ""}`);
       this.#liveFacetNames.delete(name);
@@ -326,7 +326,7 @@ export class FacetHost {
     const reset = ran.filter(
       (name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name),
     );
-    await Promise.all(
+    const started = await Promise.all(
       ran.map((name) =>
         reset.includes(name)
           ? this.#restart(name, () =>
@@ -335,9 +335,12 @@ export class FacetHost {
           : this.#start(name),
       ),
     );
-    // A claimed one still runs: its row stays for the birth or the sweep after its claim.
-    for (const name of ran)
-      if (!this.#facetClaims.has(name)) this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
+    // A claimed one still runs, and one whose start failed is owed a start by the next birth or
+    // sweep: their rows stay.
+    ran.forEach((name, i) => {
+      if (started[i] && !this.#facetClaims.has(name))
+        this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
+    });
     return reset;
   }
 
@@ -350,17 +353,18 @@ export class FacetHost {
     const reset = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
       key.slice("facet-ran:".length),
     ).filter((name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name));
-    await Promise.all(
+    const started = await Promise.all(
       reset.map((name) =>
         this.#restart(name, () =>
           this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context quiet"),
         ),
       ),
     );
-    for (const name of reset) {
+    reset.forEach((name, i) => {
+      if (!started[i]) return; // its start failed: its row stays, a start still owed
       this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
       this.#ranThisIncarnation.delete(name);
-    }
+    });
     return reset;
   }
 
@@ -378,20 +382,21 @@ export class FacetHost {
    *  books beside it) and a `#start` right after it, both under `blockConcurrencyWhile`, so no other
    *  event commits in between (FACET_START_WATCHDOG_MS). Never throws: a callback that throws there
    *  resets the object. */
-  #restart(name: string, abort: () => void): Promise<void> {
+  #restart(name: string, abort: () => void): Promise<boolean> {
     return this.#deps.ctx.blockConcurrencyWhile(async () => {
       abort();
       this.#liveFacetNames.delete(name);
-      await this.#start(name);
+      return this.#start(name);
     });
   }
 
   /** THE PLATFORM'S START of a facet: materialized — a loaded one's new identity recorded only once
    *  it started, so nothing is written before — and called once, `listPublicMethods`, which a class
    *  that is no SDK shell refuses only after it started. Arms no sweep: the platform's start is no
-   *  use. A start that fails leaves the facet stopped, and is logged; the platform defect at facet
-   *  start (`isFacetStartPlatformFailure`) as such. Never throws. */
-  async #start(name: string): Promise<void> {
+   *  use. The platform defect at facet start (`isFacetStartPlatformFailure`) is recovered as a
+   *  call's is. A start that still fails leaves the facet stopped, is logged, and answers false:
+   *  its `facet-ran` row stays for the next birth or sweep to start it. Never throws. */
+  async #start(name: string): Promise<boolean> {
     const steps: ItxExpression = [["listPublicMethods"]];
     const startedIfRefused = (error: unknown) => {
       if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
@@ -424,8 +429,10 @@ export class FacetHost {
       }
     };
     try {
-      // The whole start, its source resolved included, under the watchdog: a birth waits on it.
+      // The whole start, its source resolved included, under the watchdog: a birth waits on it (a
+      // start the watchdog gave up on runs on, and is not counted as a start).
       await withTimeout(start(), FACET_START_WATCHDOG_MS, `facet "${name}" start`);
+      return true;
     } catch (error) {
       console.warn({
         event: isFacetStartPlatformFailure(error)
@@ -435,6 +442,7 @@ export class FacetHost {
         name,
         message: String(error instanceof Error ? error.message : error).slice(0, 512),
       });
+      return false;
     }
   }
 

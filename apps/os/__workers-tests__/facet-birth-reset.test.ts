@@ -89,6 +89,42 @@ test("a birth resets only the facets the last incarnation called: one no call re
   ]);
 });
 
+/** A loaded class whose constructor throws until the time `failStartsFor(ms)` set in its own storage. */
+const fragile = {
+  source: {
+    "cap.js": /* js */ `import { FacetDurableObject } from "./processor.js";
+export class FragileDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "failStartsFor", "hello"];
+  constructor(ctx, env) {
+    super(ctx, env);
+    if (Date.now() < (ctx.storage.kv.get("fail-until") ?? 0)) throw new Error("not now");
+  }
+  failStartsFor(ms) { this.ctx.storage.kv.put("fail-until", Date.now() + ms); }
+  hello() { return "hello"; }
+}`,
+  },
+  className: "FragileDurableObject",
+};
+
+test("a birth whose start of a facet fails keeps the facet's facet-ran row, and the next birth that starts it drops it", async () => {
+  const ctx = "prj_facet_birth_start_fails";
+  const s = stub(ctx);
+  const ran = () =>
+    runInDurableObject(s, (_instance, state) => state.storage.kv.get("facet-ran:fragile"));
+  const rebirth = async () => {
+    await releasePins(ctx);
+    await evictDurableObject(s);
+    await s.invoke(["itx", ["whoami"]]);
+  };
+  await s.invoke(["itx", "facets", ["get", "fragile", fragile], ["failStartsFor", 3_000]]);
+  const failingUntil = Date.now() + 3_000;
+  await rebirth();
+  expect(await ran()).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, failingUntil - Date.now() + 100));
+  await rebirth();
+  expect(await ran()).toBeUndefined();
+});
+
 test("a context still resident a quiet period after it materialized a loaded facet resets its unclaimed ones in place, on the alarm, and spares a claimed one", async () => {
   const ctx = "prj_facet_quiet_sweep";
   const s = stub(ctx);
