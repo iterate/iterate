@@ -9,7 +9,8 @@ end and the relay's live state on screen.
 
 ## Shape
 
-- `src/server.ts` — the Notes app's server entry verbatim: `appAuth` (the OAuth client in a
+- `src/server.ts` — the same server entry as Notes and Dash (only the client name and the
+  landing-redirect comment differ): `appAuth` (the OAuth client in a
   `BrowserSession` durable object), static assets, then TanStack Start.
 - `src/routes/_auth/projects.$slug.tsx` — the one page. `useLiveState` from `iterate/next/react` subscribes to the
   relay's `voice-agent` live view (phase, answering, transcript, last end) on the call's context.
@@ -31,7 +32,7 @@ the app connects to, a self-hosted one included.
 ```bash
 pnpm --filter @iterate-com/voice dev          # against ITERATE_ORIGIN in .dev.vars
 pnpm --filter @iterate-com/voice test         # the PCM helpers
-pnpm --filter @iterate-com/voice deploy -- --env prd
+pnpm --dir apps/voice run deploy --env prd
 ```
 
 Deployment configuration lives in `envs.ts` (`voiceEnvs`), secrets in the Doppler project `voice`.

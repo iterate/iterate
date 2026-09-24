@@ -8,7 +8,7 @@ and storage; this app owns the agent catalog, lifecycle, model loop, sandbox set
 - `runtime/` — the collection and agent processors, loaded through the public `iterate/next/sdk`.
 - `voice/` — the voice relay, delegate, screen renderer and their tests.
 - `scripts/` — runtime bundling and voice call/device tools.
-- `e2e/` and `__workers-tests__/` — integration tests using os-next's generic worker harness.
+- `e2e/` and `__workers-tests__/` — integration tests using apps/os's generic worker harness.
 
 Choose **With agents** when creating a project, or open this app on a minimal project and click
 **Install agents**. Installation stores the runtime in project KV, enables the catalog processor,

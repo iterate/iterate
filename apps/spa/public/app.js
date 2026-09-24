@@ -5,7 +5,7 @@
 import { newWebSocketRpcSession } from "@iterate-com/capnweb";
 import { beginLogin, currentSession, finishLogin, freshAccessToken, logout } from "./oauth.js";
 
-// Which platform: `?issuer=http://localhost:8797` for a local os-next, remembered; else production.
+// Which platform: `?issuer=http://localhost:8788` for a local apps/os, remembered; else production.
 const issuer =
   new URL(location.href).searchParams.get("issuer") ||
   localStorage.getItem("iterate-spa:issuer") ||
