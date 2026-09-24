@@ -20,7 +20,7 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm typecheck`                         | Every tracked TypeScript file but the configs-next templates (JavaScript)    |
 | `pnpm lint`                              | Source lint and applicable repository rules                                  |
 | `pnpm format:check`                      | Formatting                                                                   |
-| `pnpm knip`                              | Unused files, exports and dependencies (OS, Kit, shared, UI, SDK/CLI)        |
+| `pnpm knip`                              | Unused files, exports and dependencies in every workspace                    |
 | `pnpm test`                              | Workspace unit tests, including OS unit and Workers projects                 |
 | `pnpm e2e`                               | OS integration suite; local Worker unless a deployed target is configured    |
 | `pnpm spec`                              | Root browser specs: one project per app host, plus the issuer at phone width |

@@ -109,7 +109,7 @@ export async function createSessionFixture(
  * page does (`login.password`), and the issuer's session cookie lands in the page's browser
  * context. The sign-in page itself is the subject of specs/os/issuer-pages.spec.ts.
  */
-export async function mintIterateSession(input: {
+async function mintIterateSession(input: {
   baseUrl: string;
   email: string;
   page: Page;

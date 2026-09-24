@@ -34,5 +34,3 @@ export function readOsPlaywrightAuthConfig() {
     osBaseUrl: env.OS_BASE_URL,
   };
 }
-
-export type OsPlaywrightAuthConfig = ReturnType<typeof readOsPlaywrightAuthConfig>;

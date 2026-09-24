@@ -1,5 +1,6 @@
 {
-  "include": ["**/*.ts", "../playwright.config.ts"],
+  // The repo-root config files have no program of their own.
+  "include": ["**/*.ts", "../playwright.config.ts", "../knip.ts"],
   "compilerOptions": {
     "target": "ES2024",
     "module": "ESNext",

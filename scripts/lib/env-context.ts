@@ -171,7 +171,7 @@ export function assertProvisioned(name: string, resources: Record<string, string
 }
 
 /** Download a Doppler config's secrets as a plain object. */
-export function loadDopplerSecrets(project: string, config: string): Record<string, string> {
+function loadDopplerSecrets(project: string, config: string): Record<string, string> {
   const result = spawnSync(
     "doppler",
     [
