@@ -63,6 +63,13 @@ export function resourceScope(projectId: string, path: string): ResourceScope {
   };
 }
 
+/** The ancestors a context announces itself to (`context/child-created`), root first: `/a/b/c`
+ *  → `/`, `/a`, `/a/b`; `/` has none. */
+export function ancestorPathsOf(path: string): string[] {
+  const segments = resolveContextPath("/", path).split("/").filter(Boolean);
+  return segments.map((_, index) => `/${segments.slice(0, index).join("/")}`);
+}
+
 /** A context's path relative to its owner's root (`resourceScope`) — what a secret's placeholder
  *  spells: `/secrets/shop` for a project's `/secrets/shop` and a user's `/users/<id>/secrets/shop`
  *  alike. */
