@@ -146,6 +146,22 @@ test("a backlog at one instant (33+ schedules; a pass drains 32) is drained by w
   expect({ beforeTheSpacing, after: passes.count }).toEqual({ beforeTheSpacing: 1, after: 2 });
 });
 
+test("a watch pass after a birth re-arm keeps the armed time: a deadline still due is not written back, and the next pass waits its ALARM_OVERDUE_AFTER_MS", async () => {
+  const { alarms, writes, passes } = setup([T - ALARM_OVERDUE_AFTER_MS], { held: true });
+  alarms.restore(T - ALARM_OVERDUE_AFTER_MS);
+  alarms.rearmIfOverdue(T); // writes T aside
+  vi.advanceTimersByTime(ALARM_OVERDUE_AFTER_MS);
+  await alarms.pass(async () => {}, { delivered: false }); // the backlog at the held time remains
+  vi.advanceTimersByTime(ALARM_OVERDUE_AFTER_MS - 1);
+  const beforeTheSpacing = passes.count;
+  vi.advanceTimersByTime(1);
+  expect({ writes, beforeTheSpacing, after: passes.count }).toEqual({
+    writes: [T],
+    beforeTheSpacing: 1,
+    after: 2,
+  });
+});
+
 test("no timer while nothing holds the actor (a pending timer holds off eviction); the first inbound call starts it, the last one's end stops it", () => {
   const holder = { held: false };
   const { alarms, passes } = setup([T + 1_500], holder);

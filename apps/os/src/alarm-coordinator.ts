@@ -121,10 +121,9 @@ export class AlarmCoordinator {
    *  runtime deletes it) and arms what is left; a pass that threw leaves it stored for the runtime's
    *  retries (2s·2ⁿ, six tries, then deleted) — the next reconcile arms whatever is wanted, the same
    *  time included. A pass the WATCH ran (`delivered: false`) spent nothing of the runtime's: the
-   *  stored time is still there, so the end-of-pass reconcile starts from it — and deletes it when
-   *  nothing is left. */
+   *  armed time is still stored, so the end-of-pass reconcile starts from it — writing what is
+   *  left, deleting it when nothing is, and leaving a time still due to the next spaced check. */
   async pass(work: () => Promise<void>, { delivered }: { delivered: boolean }): Promise<void> {
-    const stored = this.#storedAside ?? this.#armedAt;
     this.#passInProgress = true;
     this.#lastPassStartedAt = Date.now();
     this.#passThrew = false;
@@ -136,9 +135,15 @@ export class AlarmCoordinator {
       throw error;
     } finally {
       this.#passInProgress = false;
-      this.#armedAt = delivered ? null : stored;
-      this.#storedAside = null;
-      this.#lastWatchActAt = delivered ? null : Date.now();
+      if (delivered) {
+        this.#armedAt = null;
+        this.#storedAside = null;
+        this.#lastWatchActAt = null;
+      } else {
+        // The runtime spent nothing: storage still holds what it held (a birth re-arm's aside
+        // included), and the time armed stays the one to compare with what is wanted now.
+        this.#lastWatchActAt = Date.now();
+      }
     }
     // A delivered pass is the runtime delivering again: whatever the watch counted is over.
     if (delivered) this.#watchPassesFor = null;
