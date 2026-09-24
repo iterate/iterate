@@ -23,6 +23,10 @@ export const FlakeSuiteSummary = z
     // the dashboard downgrades an artifact whose record lines do not add up to it.
     unknownFlakeCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
+    // The preview e2e suite only: whether it ran its rows tagged `slow`, which a PR that touches
+    // none of their code skips. Absent from summaries written before the tag existed, when every
+    // row ran. scripts/ci/pr-ttg-guard.ts splits the PR time to green on it.
+    slowRows: z.enum(["ran", "skipped"]).optional(),
     diagnostics: z.array(z.string()),
     runUrl: z.url(),
   })

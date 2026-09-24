@@ -5,6 +5,7 @@ import { join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
+import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -326,6 +327,10 @@ test.each([
     file: ".depot/workflows/kit-firmware.yml",
     permissions: { contents: "read" },
   },
+  {
+    file: ".depot/workflows/pr-ttg.yml",
+    permissions: { contents: "read" },
+  },
 ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra permission must fail
   expect(loadWorkflow(file).permissions).toEqual(permissions);
@@ -429,6 +434,39 @@ test("writes the flake dashboard with the Depot telemetry token and keeps its st
     with: expect.objectContaining({ path: "test-results/flake-dashboard/state.json" }),
   });
   expect(steps.indexOf(writer!)).toBeLessThan(steps.indexOf(keep!));
+});
+
+test("the PR time-to-green guard measures hourly with the Depot telemetry token and keeps its own state", () => {
+  const workflow = loadWorkflow(".depot/workflows/pr-ttg.yml") as Workflow & { name: string };
+  const steps = workflow.jobs.measure?.steps ?? [];
+  const measure = steps.find((step) => step.run?.includes("scripts/ci/pr-ttg-guard.ts measure"));
+  const keep = steps.find((step) => step.with?.name === prTtgState.artifact);
+
+  expect(workflow).toMatchObject({
+    name: prTtgState.workflow,
+    on: { schedule: [{ cron: expect.stringMatching(/^\d+ \* \* \* \*$/) }] },
+  });
+  expect(measure?.run).toContain(
+    "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
+  );
+  expect(measure?.run).toContain(
+    "pr-ttg-guard.ts previous-state --out test-results/pr-ttg/previous.json",
+  );
+  expect(measure?.run).toContain("--state test-results/pr-ttg/previous.json");
+  expect(measure?.run).toContain(`--state-out test-results/pr-ttg/${prTtgState.file}`);
+  expect(keep).toMatchObject({
+    if: "always()",
+    uses: "actions/upload-artifact@v4",
+    with: expect.objectContaining({ path: `test-results/pr-ttg/${prTtgState.file}` }),
+  });
+  expect(steps.indexOf(measure!)).toBeLessThan(steps.indexOf(keep!));
+});
+
+test("the PR time-to-green guard's checks are workflows by their names", () => {
+  const names = depotWorkflowFiles.map(
+    (file) => (loadWorkflow(file) as Workflow & { name?: string }).name,
+  );
+  for (const check of CHECKS) expect(names, check).toContain(check);
 });
 
 // ── Depot validation capacity ──
