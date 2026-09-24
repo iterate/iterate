@@ -48,7 +48,7 @@ import {
 import type { RewriteRuleListEntry, StreamPage } from "iterate/next/api";
 import { projectUrlOf } from "iterate/next/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/next/stream/run";
-import { normalizeControlEvent } from "./stream/core-processor.ts";
+import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   ITX_PLATFORM_ORIGIN_HEADER,
@@ -57,10 +57,11 @@ import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
+  stampCallerHeaders,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
-import { STREAM_ALARM_TRACE_EVENT, Stream, type ReachableContext } from "./stream/stream.ts";
+import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
@@ -1348,9 +1349,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  either way (measured: __workers-tests__/secret-facet-proxies-a-socket.test.ts). */
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
-    headers.delete(ITX_PRINCIPAL_HEADER);
-    headers.delete(ITX_GRANT_HEADER);
-    headers.delete(ITX_CALLER_PATH_HEADER);
+    stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);

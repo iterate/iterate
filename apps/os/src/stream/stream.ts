@@ -33,7 +33,12 @@ import {
   type SqlStorageHandle,
 } from "iterate/next/stream/processor";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
-import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
+import {
+  CoreContract,
+  PLATFORM_ONLY_EVENT_TYPES,
+  reduceCoreEventBatch,
+  type CoreState,
+} from "./core-processor.ts";
 
 /** THE APPEND CEILING on one serialized body, in JS chars (`JSON.stringify(body).length` — the one
  *  O(1) size JS has; V8 serializes a string at 1–2 bytes per char). Workers RPC caps ONE message at
@@ -56,30 +61,21 @@ const READ_PAGE_MAX_EVENTS = 1000;
  *  that can return nothing else (subscription-delivery.ts). */
 export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
-/** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
- *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
-export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
-
-/** What a PAUSED stream still accepts: the platform's own records and the pause/resume pair itself
- *  (it must always accept its own resume). */
+/** What a PAUSED stream still accepts: the platform's own records (a paused stream still records
+ *  its wake, its delivery ladder still ends, its alarm passes stay observable) and the pause/resume
+ *  pair itself (it must always accept its own resume). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
-  "events.iterate.com/stream/created",
-  "events.iterate.com/stream/woken",
+  ...PLATFORM_ONLY_EVENT_TYPES,
   "events.iterate.com/stream/paused",
   "events.iterate.com/stream/resumed",
   // a reset's record (`itx.abort`, `itx.facets.abort`) — a paused context must still be resettable
   "events.iterate.com/context/aborted",
   "events.iterate.com/context/facet-aborted",
   "events.iterate.com/stream/append-schedule-cancelled",
-  // the delivery loop's own record of a halted row — a paused stream's ladder must still end
-  "events.iterate.com/stream/subscription-delivery-halted",
   // the runner's own record of a run's end — a paused stream must still close a script it started
   "events.iterate.com/context/run-settled",
   // the residency watchdog's record (context/residency-watchdog.ts) — a paused context is billed too
   "events.iterate.com/context/held-resident-while-idle",
-  // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
-  // inspect a paused context's current incarnation.
-  STREAM_ALARM_TRACE_EVENT,
 ]);
 
 /** One waiting waitForEvent caller. In-memory only — an eviction drops waiters, and that is FINE:

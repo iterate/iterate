@@ -279,6 +279,16 @@ test("the configured header bearer is the same administrator at both protocols",
   expect(global.body.result.content[0]).toMatchObject({
     text: 'FORBIDDEN: project "global": the deployment-global namespace is no project',
   });
+  // nor is a global owner subtree's resource id: it would share that user's kv and secrets
+  await expect(root.projects.get("global--users--u1")).rejects.toThrow(
+    /global namespace's resource prefix/,
+  );
+  const owner = await tool(adminSecret, "run", {
+    project: "global--users--u1",
+    script: "async (itx) => itx.whoami()",
+  });
+  expect(owner.body.result).toMatchObject({ isError: true });
+  expect(owner.body.result.content[0].text).toMatch(/global namespace's resource prefix/);
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });

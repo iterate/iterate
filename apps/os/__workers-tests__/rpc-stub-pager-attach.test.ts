@@ -20,11 +20,13 @@ import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/next/stream/processor";
+import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import {
   encodeRpcStubPagerAttachRequest,
+  ITX_EXPRESSION_FETCH_HEADER,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "../src/context/rpc-stubs.ts";
-import { adminCredentials, Echo, openSession, stub, until } from "./support.ts";
+import { adminCredentials, Echo, openSession, SRC_ECHO_APP, stub, until } from "./support.ts";
 
 /** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):
  *  the header IS the attach request — the key and the events that name it. */
@@ -75,6 +77,68 @@ test("a malformed pager header is a 400; a well-formed one attaches the pager AN
     context: "/",
   });
   ok.webSocket!.close(1000, "test done");
+});
+
+test("a session's terminal fetch cannot smuggle a pager attach: its stamp (stampCallerHeaders) strips the DO's protocol headers, so the Request reaches the capability it names and appends nothing", async () => {
+  const itx = await (
+    await openSession()
+  )
+    .authenticate(adminCredentials())
+    .projects.get("prj_pager_smuggle");
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const response: Response = await itx.apps.echo.fetch(
+    new Request("https://echo.internal/", {
+      headers: {
+        [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
+          rpcStubKey: "itx.smuggled",
+          appendEvents: [{ type: "smuggled" }],
+        }),
+      },
+    }),
+  );
+  expect(response).toMatchObject({ status: 200 });
+  expect(await response.json()).toMatchObject({ app: "echo" });
+  expect(await itx.rpcStubs.list()).not.toContain("itx.smuggled");
+  const { events } = (await itx.invoke("itx.readEvents(0)")) as { events: { type: string }[] };
+  expect(events.map((event) => event.type)).not.toContain("smuggled");
+});
+
+test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach either: ItxEntrypoint.fetch stamps the same way, though no app header closes the DO's pager gate for it", async () => {
+  const ctx = "prj_pager_smuggle_platform";
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const response = await runInDurableObject(stub(ctx), async (_instance, state) => {
+    const { exports } = state as unknown as {
+      exports: {
+        ItxEntrypoint(opts: {
+          props: { iterateContextName: string; platformOrigin: null; platform: true };
+        }): Fetcher;
+      };
+    };
+    const loaded = exports.ItxEntrypoint({
+      props: {
+        iterateContextName: DurableObjectNameCodec.parse(ctx).name,
+        platformOrigin: null,
+        platform: true,
+      },
+    });
+    const answer = await loaded.fetch(
+      new Request("https://echo.internal/", {
+        headers: {
+          [ITX_EXPRESSION_FETCH_HEADER]: "itx.apps.echo",
+          [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
+            rpcStubKey: "itx.smuggled",
+            appendEvents: [{ type: "smuggled" }],
+          }),
+        },
+      }),
+    );
+    return { status: answer.status, body: await answer.json() };
+  });
+  expect(response).toMatchObject({ status: 200, body: { app: "echo" } });
+  expect(await itx.rpcStubs.list()).not.toContain("itx.smuggled");
+  const { events } = (await itx.invoke("itx.readEvents(0)")) as { events: { type: string }[] };
+  expect(events.map((event) => event.type)).not.toContain("smuggled");
 });
 
 test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, and leaves no socket, no presence, no rule; after resume the same attach lands", async () => {

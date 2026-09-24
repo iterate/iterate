@@ -190,6 +190,7 @@ test.each([
   "woken",
   "subscription-delivery-halted",
   "subscription-delivery-resumed",
+  "trace/alarm",
 ])("runtime control %s cannot be scheduled", (type) => {
   const input = scheduled();
   expect(() =>

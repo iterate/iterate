@@ -275,8 +275,7 @@ export class SubscriptionDelivery {
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
           // retry armed — without this it would wait for the next matching commit).
           // A halted FACET row resumes by catching up from the log itself; a cursor row from its cursor.
-          // The resumed payload is not validated on append: a missing or non-string name looks up
-          // no row and breaks.
+          // The payload passed normalizeControlEvent on append, which parsed the name.
           const name = (event.payload as { name: string }).name;
           const row = rows[name];
           if (!row) break;

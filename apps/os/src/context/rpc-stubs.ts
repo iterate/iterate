@@ -6,6 +6,13 @@
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import { codedError, errorCode } from "iterate/next/lib";
+import {
+  ITX_APP_HEADER,
+  ITX_CALLER_PATH_HEADER,
+  ITX_GRANT_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  type Caller,
+} from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
@@ -708,6 +715,33 @@ export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
  *  before this is set. */
 export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
 
+/** THE CALLER ON A FETCH HOP: every header the context DO's `fetch` trusts as the platform's — the
+ *  caller's (principal, grant, originating path, app, platform origin) and the DO's own protocol
+ *  (the pager attach, which appends past every table, and the fetch-upgrade leg) — replaced on
+ *  `headers` by `caller`'s (`null`: none, for a Request leaving the platform). Every hop that
+ *  forwards a Request stamps through here, so a Request's own copy of any of them never survives.
+ *  Not an `x-itx-*` prefix sweep like the edge's (worker.ts): the edge's hop count must ride the
+ *  Request an app forwards, and a loaded worker's self-addressed `x-itx-expression` must reach the
+ *  DO. */
+export function stampCallerHeaders(headers: Headers, caller: Caller | null): void {
+  for (const name of [
+    ITX_PRINCIPAL_HEADER,
+    ITX_GRANT_HEADER,
+    ITX_CALLER_PATH_HEADER,
+    ITX_APP_HEADER,
+    ITX_PLATFORM_ORIGIN_HEADER,
+    RPC_STUB_PAGER_WEBSOCKET_HEADER,
+    FETCH_UPGRADE_SOCKET_HEADER,
+  ])
+    headers.delete(name);
+  if (!caller) return;
+  if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
+  if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
+  if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);
+  if (caller.app) headers.set(ITX_APP_HEADER, "1");
+  if (caller.platformOrigin) headers.set(ITX_PLATFORM_ORIGIN_HEADER, caller.platformOrigin);
+}
+
 /** JSON in an HTTP header must be ASCII: inline worker source may contain any Unicode text.
  * Keep ordinary JSON on the wire so existing expression readers can parse it unchanged. */
 export function encodeFetchExpression(expression: ItxExpression): string {
@@ -792,7 +826,7 @@ export function terminalFetchOf(
 // sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
-export const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
+const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the

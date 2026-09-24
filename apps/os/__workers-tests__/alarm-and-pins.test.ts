@@ -38,7 +38,7 @@ import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
+import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
 import {
   adminCredentials,
   Echo,
