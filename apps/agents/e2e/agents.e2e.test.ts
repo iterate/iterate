@@ -473,12 +473,11 @@ test("interrupted: the person's next words cut the running answer short — sett
   await operatorPrompt(agent);
   await configureModel(support);
   await agent.message("Tell me everything.");
-  await until("the request is in flight", async () =>
-    (await readAll(support)).some(
-      (e) => e.type === "events.iterate.com/agent/llm-request-requested",
-    ),
-  );
-  await sleep(500); // the runner has dialed the model
+  // The interrupt lands MID-CALL: the fake holds the first request, so the runner is awaiting its
+  // 8 s answer. The request's own event is not enough: an interrupt that reaches the agent before
+  // its runner dialed cancels a request the fake never saw, and the next request takes the fake's
+  // first, 8 s answer (2 of 60 soak runs failed so on #3030 when this waited a fixed 500 ms).
+  await until("the runner has dialed the model", () => (ai.calls.length > 0 ? true : undefined));
   // The interrupt: a developer item from the person, its policy the cancellation.
   await support.append({
     type: "events.iterate.com/agent/context-added",
