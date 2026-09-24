@@ -64,5 +64,50 @@ export const assistantWords = (log: { type: string; payload?: unknown }[]) =>
     .filter((p) => p.role === "assistant")
     .map((p) => p.content);
 
+/** The AI Gateway's refusal once a spend limit rule has used its budget: HTTP 429, code 2045,
+ *  "Spend limit exceeded: rule '<id>' (cost limit … per …s, sliding)". */
+const SPEND_CAP = /\b2045\b|spend limit exceeded/i;
+
+/** The context's log once the assistant has answered. It fails at once, never at the two-minute
+ *  bound, when the answer cannot come: a request refused by the AI Gateway's spend cap fails naming
+ *  the cap (no retry inside a row outlasts a 24-hour window, and a spent budget must not read as a
+ *  flake: 2026-09-24), and an agent that paused (the model refused every attempt) fails with the last
+ *  refusal. A timeout names the last failed request. */
+export async function answeredLog(context: unknown, label: string): Promise<any[]> {
+  let lastFailure: string | undefined;
+  const outcome = await until(
+    label,
+    async () => {
+      const log = await readAll(context);
+      if (assistantWords(log).length > 0) return { log };
+      const failures = log
+        .filter((e) => e.type === "events.iterate.com/agent/llm-request-settled")
+        .map((e) => e.payload.result)
+        .filter((result) => result.status === "failed")
+        .map((result): string => result.errorMessage);
+      lastFailure = failures.at(-1) ?? lastFailure;
+      const capped = failures.find((message) => SPEND_CAP.test(message));
+      if (capped) return { capped };
+      const paused = log.find((e) => e.type === "events.iterate.com/agent/paused");
+      return paused ? { paused: String(paused.payload.reason) } : undefined;
+    },
+    120_000,
+  ).catch((error: unknown) => {
+    const timedOut = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      lastFailure ? `${timedOut}; the last failed request: ${lastFailure}` : timedOut,
+    );
+  });
+  if ("capped" in outcome)
+    throw new Error(
+      `the AI Gateway's spend cap refused the model request, so this row cannot pass until the cap's window frees budget or its limit is raised (docs/testing.md#real-model-rows): ${outcome.capped}`,
+    );
+  if ("paused" in outcome)
+    throw new Error(
+      `the agent paused without answering (${outcome.paused}); the model's last refusal: ${lastFailure || "none"}`,
+    );
+  return outcome.log;
+}
+
 export const RED_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mP4z8AARAwQCgAf7gP9Y167WwAAAABJRU5ErkJggg==";

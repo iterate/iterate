@@ -17,6 +17,14 @@ export const projectHostsAreLocal = (): boolean => LOCAL_HOSTNAMES.has(worker().
 /** `test`, skipped against the local worker — for what only a real deployment can prove (Artifacts,
  *  the real AI binding, an app's fetch back into its own host). The ONE gate; never copy the regex. */
 export const deployedOnly = test.skipIf(projectHostsAreLocal());
+/** `deployedOnly`, and OPT-IN (`E2E_REAL_MODELS=1`): a row that pays for a real model inference.
+ *  Only the daily real-model lane (os-real-model.yml) sets it. PR and main e2e runs, and the soak,
+ *  answer the model with a fake instead: one AI Gateway spend cap covers the whole preview account,
+ *  and on 2026-09-24 a day of soaks spent it and every PR's preview e2e went red
+ *  (docs/testing.md#real-model-rows). */
+export const realModelOnly = test.skipIf(
+  projectHostsAreLocal() || process.env.E2E_REAL_MODELS !== "1",
+);
 /** `test`, skipped against a DEPLOYED worker — for rows that lend the fake git remote
  *  (support/fake-git-server.ts, listening on THIS machine's 127.0.0.1): the repo facet fetches its
  *  remote over the worker's egress, and a deployed worker cannot reach a loopback address (the

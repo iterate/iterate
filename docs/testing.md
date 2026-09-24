@@ -114,9 +114,10 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | Kit host         | `pnpm --dir apps/kit firmware:test:host` (needs cmake)             | `apps/kit/firmware/tests/`                                                                                    | Depot **Test** workflow, every PR (its own step after `pnpm test`)                                                                           | Firmware logic compiled for the host and run under CTest.                                                                                                                                                                                       |
 | Kit ESP builds   | `node apps/kit/scripts/firmware-release.ts build …`                | `apps/kit/firmware/targets/`, `apps/kit/scripts/firmware-release.ts`                                          | **Kit Firmware** workflow, firmware PRs and main (not required)                                                                              | Builds each changed board with ESP-IDF (active), checks its flash layout, its inputs and an unchanged tree; main publishes the releases.                                                                                                        |
 | Dummy petshop    | `pnpm test` (its unit suite)                                       | `apps/dummy-petshop/src/`                                                                                     | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                                                       | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                                                     |
-| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)         | `apps/os/scripts/e2e-soak.ts`                                                                                 | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                           | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time.                                                                                                      |
+| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)         | `apps/os/scripts/e2e-soak.ts`                                                                                 | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                           | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time; never a real model.                                                                                  |
 | Perf budgets     | `pnpm --dir apps/os perf` (`WORKER_BASE_URL`)                      | `apps/os/perf/*.perf.test.ts`, every metric and budget in `apps/os/perf/latency.ts`                           | The latency guard below; every soak run, after the e2e suite                                                                                 | Latency and throughput budgets over the same client and worker, measured alone: files one at a time, rows in order, each budget on the median of its rounds (p95 where a run has dozens).                                                       |
 | Latency guard    | Dispatch `os-latency.yml` (`--input budget-scale=0.01` test-pages) | `.depot/workflows/os-latency.yml`, `scripts/ci/os-latency-guard.ts`                                           | **OS latency**, every 3 hours and every main push to the Worker's paths, beside everything (nothing waits on it); pages #error-pulse         | The perf lane against a throwaway preview of main of its own: every metric to PostHog (`os latency measured`), paged red once when it crossed its budget or a sharp regression on its rolling baseline two runs in a row, green once when back. |
+| Real model       | Dispatch `os-real-model.yml`                                       | `REAL:` rows (`realModelOnly`), `.depot/workflows/os-real-model.yml`, `scripts/ci/os-real-model-alert.ts`     | **OS real model**, daily and every main push to the agents runtime, on a throwaway preview; pages #error-pulse                               | The turns every other lane gives a fake provider, against real models: OpenAI's astra (the default) and Workers AI accept the request and answer. [Real-model rows](#real-model-rows).                                                          |
 | Crash hunt       | `RUN_ISOLATE_CRASH_HUNT=1 pnpm e2e isolate-ceilings`               | `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts`                                                           | Nightly against prd (`os-crash-hunt.yml`); opt-in rows, so the preview run stays deterministic                                               | Drives one context's Durable Object up to and past its isolate ceiling on purpose.                                                                                                                                                              |
 | Bench            | `pnpm --dir apps/os bench` (`BENCH_OUT=<file.json>`)               | `apps/os/bench/`                                                                                              | **Manual**                                                                                                                                   | Latency scenarios over the same client and worker, files one at a time.                                                                                                                                                                         |
 
@@ -138,8 +139,8 @@ Any suite a CI lane does not run in full is a wiring bug unless the table names
 its manual status. A test that genuinely cannot run against a given target
 carries an explicit in-code skip with a named guard and a comment saying why,
 so exclusion is always visible where the test lives: `deployedOnly`,
-`localOnly` and `deployedSubdomainsOnly` in `apps/os/e2e/support/project-host.ts`
-are the one gate each ("never copy the regex").
+`localOnly`, `deployedSubdomainsOnly` and `realModelOnly` in
+`apps/os/e2e/support/project-host.ts` are the one gate each ("never copy the regex").
 
 Smoke-testing a deployment: `apps/os/scripts/deploy.ts` probes the deployment
 it just made (`/version`), the preview deploy waits for `/version` to name the
@@ -226,17 +227,11 @@ bespoke runner.
 | Surface      | in-process / workerd / itx API / browser          | which lane you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)                | works today    |
 | Speed        | fast / slow-by-contract                           | per-test `{ timeout }`; the long poles start first (`LONG_POLES` in `apps/os/vitest.config.ts`, hand-maintained from observed seconds) | works today    |
 | Determinism  | deterministic / retry-absorbed                    | `retry: CI ? 1 : 0` + retry telemetry — a nondeterministic test that retries is visible, never silent                                  | works today    |
-| Cost         | free / pays for LLM turns                         | **gap** — no story pays for LLM turns today (every lane uses the fake model), and nothing would mark one that did                      | proposal below |
+| Cost         | free / pays for model inference                   | `realModelOnly` (opt-in `E2E_REAL_MODELS=1`, `REAL:` titles); other lanes fake the provider ([real-model rows](#real-model-rows))      | works today    |
 | Remote reach | hermetic / hits a deployment / hits a third party | **partial** — `deployedOnly` / `localOnly` gate deployment reach; third-party reach is a deployed fixture (`PETSHOP_BASE_URL`)         | proposal below |
 
-Draft proposal for the two gaps, keeping vanilla CLIs:
+Draft proposal for the remaining gap, keeping vanilla CLIs:
 
-- Put the **cost** dimension in the filename, the same way lanes already
-  live there: `*.llm.e2e.test.ts` for tests that pay for model turns.
-  Filename dimensions compose with plain vitest filtering
-  (`pnpm e2e llm`), grep, and the sequencer — no runner machinery. A
-  guard test can then enforce the budget structurally: files
-  NOT tagged `.llm.` must not import the agent-turn helpers.
 - Keep **third-party reach** on environment presence (the doppler-native
   control we already have); it composes with per-env secrets and skips
   cleanly when a config lacks the integration.
@@ -251,14 +246,48 @@ path runs for real above it — the rewrite rules, the call chain, the result �
 with the test scripting each response (Misha's test on the real root,
 `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts`). Locally the real binding
 is never called; against a deployed worker the file's last row runs one real
-inference. Reach for a paid `.llm.` test only when the point IS real-model
+inference. Reach for a `realModelOnly` row only when the point IS real-model
 integration.
 
-Open questions for the next grilling round: is the filename the right home
-for cost (vs a lint-enforced import rule alone)? Should third-party reach
+Open questions for the next grilling round: should third-party reach
 be visible in filenames too, or is env-gating enough? Does "slow" deserve
 a filename marker so the sequencer stops needing hand-maintained observed
 seconds?
+
+## Real-model rows
+
+An agent's turn goes to a real model only in the daily real-model lane. Every
+other lane (PR previews, Main OS e2e, local runs, the soak) plays the provider
+with a fake: the test shadows the agent's `itx.ai`
+(`support.provide("itx.ai", fake)`), so the whole deployed runtime still runs
+above it (the turn loop, the attachment turned into a vision input, the byte
+transport, the chunk windows, the settlement and the context report), the fake
+asserts what the runtime asked for (the model, the Responses API request, the
+image part, the AI Gateway options), and nothing is spent.
+
+- **Why.** Every model call on the preview account goes through one AI Gateway,
+  `default`, whose spend limit rules include a gateway-wide daily cap
+  (`iterate-gateway-daily`, a sliding 24 hours). A request past it answers
+  HTTP 429 with code 2045, "Spend limit exceeded". On 2026-09-24 a day of
+  100-run soaks spent the cap (1,164 astra turns, about $30), and from then on
+  every PR's preview e2e timed out on the two default-model rows.
+- **What runs where.** `apps/agents/e2e/agents-default-model.e2e.test.ts` runs
+  the default model's turn and its vision turn against the fake in every lane.
+  Its `REAL:` rows (the same two turns on OpenAI's astra, and a pinned Workers
+  AI model seeing the image) and the `REAL:` row of
+  `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts` are `realModelOnly`: they
+  run only with `E2E_REAL_MODELS=1`, which only `os-real-model.yml` sets, once a
+  day and on main pushes to `apps/agents/runtime/**`. The soak strips the
+  variable.
+- **What it costs.** An astra turn is about $0.026 (about 2,100 input tokens,
+  most of them the system prompt), so a real-model run is about $0.06: about
+  $0.06 a day, plus about $0.06 per main push to the agents runtime. The Workers
+  AI rows cost fractions of a cent and do not pass the gateway.
+- **When the cap is spent anyway.** A real-model row fails at once, naming the
+  cap and the gateway's message (`answeredLog` in `apps/agents/e2e/fixtures.ts`),
+  instead of timing out: exhaustion is not a flake, and no retry inside a row
+  outlasts the window. The gateway's logs
+  (`GET /accounts/<id>/ai-gateway/gateways/default/logs`) show what spent it.
 
 ## Running a lane against an environment
 
@@ -322,6 +351,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `VOICE_BASE_URL`                              | The preview script, or you                                  | The Voice deployment the `voice` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
 | `DASH_BASE_URL`                               | The preview script, or you                                  | The Dash deployment the Notes session specs sign in to, to end a Notes session                                                                    | Unset → skipped locally, a failure in CI    |
 | `RUN_ISOLATE_CRASH_HUNT`                      | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
+| `E2E_REAL_MODELS`                             | The real-model lane (`os-real-model.yml`)                   | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
 | `BENCH_OUT`                                   | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                            | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
 | `TEST_TELEMETRY_ARTIFACT_FILE`                | You                                                         | Optional named immediate canonical JSON copy                                                                                                      | Unset → no immediate copy                   |

@@ -200,6 +200,12 @@ test.each<[string, string[], string, string[]]>([
     ["latency-94096387667921-1"],
   ],
   [
+    "the real-model lane's, beside the guard's and Main OS e2e's",
+    ["real-model-940963876-1", "real-model-940963877-1", "latency-940963877-1", "main-44db0e6"],
+    "real-model-940963877-1",
+    ["real-model-940963876-1"],
+  ],
+  [
     "Main OS e2e's beside the guard's",
     ["latency-44db0e6", "main-44db0e6"],
     "main-7ea6741",

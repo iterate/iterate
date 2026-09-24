@@ -6,14 +6,14 @@
 // (`fillItxExpressionHoles`) is the caller's input — spliced as an argument, the one argument when nested, its fields
 // merged by `...@` under the template's own keys (a pinned gateway model cannot be talked out of).
 // Locally the real binding is never called: every call lands on the fake. Against the deployed worker
-// (WORKER_BASE_URL not local) the last test asks the real binding for `models()` and runs ONE
-// inference through `itx.fable`.
+// (WORKER_BASE_URL not local) with E2E_REAL_MODELS=1, the daily real-model lane, the last test asks
+// the real binding for `models()` and runs ONE inference through `itx.fable`.
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, rejection, until } from "./support/client.ts";
-import { deployedOnly } from "./support/project-host.ts";
+import { realModelOnly } from "./support/project-host.ts";
 
 const MODEL = "@cf/meta/llama-3.2-1b-instruct";
 
@@ -135,9 +135,10 @@ test("the door end to end: `@` is refused in a match, in a call, and outside a t
   expect(errorCode(await rejection(itx.fable({ prompt: "hi" })))).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
-// DEPLOYED-TARGET MODE only (support/global-setup.ts): a local boot never calls the real binding.
-deployedOnly(
-  "DEPLOYED: the real binding answers models(); the dream runs ONE real inference through `itx.fable`",
+// DEPLOYED-TARGET MODE only (support/global-setup.ts): a local boot never calls the real binding. A paid
+// inference, so only the daily real-model lane runs it (docs/testing.md#real-model-rows).
+realModelOnly(
+  "REAL: the real binding answers models(); the dream runs ONE real inference through `itx.fable`",
   async () => {
     const ctx = freshCtx("ai-real");
     const itx = openItx(ctx);

@@ -3,7 +3,7 @@
 // deletes it. This posts to #error-pulse only when main CHANGES state: once when it goes red (naming
 // the failed jobs and the failing rows), once when it is green again. A red that stays red, and every
 // green, post nothing. The last page in the channel is the state: nothing long-lived is kept anywhere
-// else.
+// else. The daily real-model lane pages the same way under its own name (scripts/ci/os-real-model-alert.ts).
 //
 //   pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
 //   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert [--dry-run]
@@ -16,11 +16,12 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 
-type MainE2eState = "green" | "red";
+export type MainE2eState = "green" | "red";
 
-/** A page's first words: how the next run finds the last one. */
-const RED = "🔴 main e2e red";
-const GREEN = "🟢 main e2e green again";
+/** A lane's page's first words: how the next run finds the last one. `main e2e` unless named. */
+const MAIN_LANE = "main e2e";
+const red = (lane: string) => `🔴 ${lane} red`;
+const green = (lane: string) => `🟢 ${lane} green again`;
 
 /** The run's verdict from its jobs' results: red when a job failed or was cancelled, green when every
  *  job succeeded, and none when nothing failed but not everything ran. A cancelled job hit its
@@ -50,18 +51,22 @@ export function mainE2eFailingRows(artifacts: TestTelemetryArtifact[]): string[]
   return [...new Set(rows)];
 }
 
-/** The state the channel last announced: the newest of this alert's pages, else green. Pure. */
-export function previousMainE2eState(messages: { text?: string; bot_id?: string }[]): MainE2eState {
+/** The state the channel last announced: the newest of this lane's pages, else green. Pure. */
+export function previousMainE2eState(
+  messages: { text?: string; bot_id?: string }[],
+  lane = MAIN_LANE,
+): MainE2eState {
   const last = messages.find(
     (message) =>
       message.bot_id &&
-      (message.text?.startsWith(`${RED} `) || message.text?.startsWith(`${GREEN} `)),
+      (message.text?.startsWith(`${red(lane)} `) || message.text?.startsWith(`${green(lane)} `)),
   );
-  return last?.text?.startsWith(`${RED} `) ? "red" : "green";
+  return last?.text?.startsWith(`${red(lane)} `) ? "red" : "green";
 }
 
 /** The page for a change of state, or null. Pure. */
 export function mainE2ePage(input: {
+  lane?: string;
   previous: MainE2eState;
   verdict: MainE2eState | undefined;
   commitSha: string;
@@ -71,12 +76,14 @@ export function mainE2ePage(input: {
   runUrl?: string;
 }): string | null {
   if (!input.verdict || input.verdict === input.previous) return null;
+  const lane = input.lane || MAIN_LANE;
   const commit = `\`${input.commitSha.slice(0, 9)}\` (${input.commitSubject})`;
   const link = input.runUrl ? `<${input.runUrl}|the run>` : "";
-  if (input.verdict === "green") return [`${GREEN} at ${commit}`, link].filter(Boolean).join("\n");
+  if (input.verdict === "green")
+    return [`${green(lane)} at ${commit}`, link].filter(Boolean).join("\n");
   const shown = input.failingRows.slice(0, 8);
   return [
-    `${RED} at ${commit} ${onCallMention}`,
+    `${red(lane)} at ${commit} ${onCallMention}`,
     `• failed: ${input.failedJobs.join(", ") || "a job"}`,
     shown.length > 0 &&
       `• failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,
@@ -92,15 +99,15 @@ const Needs = z.record(
   z.object({ result: z.string(), outputs: z.record(z.string(), z.string()).optional() }),
 );
 
-async function alert(dryRun: boolean): Promise<void> {
-  const needs = Needs.parse(JSON.parse(process.env.NEEDS || "{}"));
-  const results = Object.fromEntries(
-    Object.entries(needs).map(([job, need]) => [job, need.result]),
-  );
-  const verdict = mainE2eVerdict(results);
-  const failingRows = z
-    .array(z.string())
-    .parse(JSON.parse(needs.e2e?.outputs?.["failing-rows"] || "[]"));
+/** Page #error-pulse when `lane` changed state since its last page there: the channel's history
+ *  (a week of it) is the only state kept. The page names this checkout's HEAD. */
+export async function pageOnChangeOfState(input: {
+  lane: string;
+  verdict: MainE2eState | undefined;
+  failedJobs: string[];
+  failingRows: string[];
+  dryRun: boolean;
+}): Promise<void> {
   const commitSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const commitSubject = execFileSync("git", ["log", "-1", "--format=%s"], {
     encoding: "utf8",
@@ -112,20 +119,39 @@ async function alert(dryRun: boolean): Promise<void> {
     oldest: String(Date.now() / 1000 - 7 * 86_400),
     limit: 999,
   });
-  const previous = previousMainE2eState(history.messages || []);
+  const previous = previousMainE2eState(history.messages || [], input.lane);
   const page = mainE2ePage({
+    lane: input.lane,
     previous,
-    verdict,
+    verdict: input.verdict,
     commitSha,
     commitSubject,
-    failedJobs: mainE2eFailedJobs(results),
-    failingRows,
+    failedJobs: input.failedJobs,
+    failingRows: input.failingRows,
     runUrl: process.env.DEPOT_JOB_URL,
   });
-  console.log(JSON.stringify({ results, verdict, previous, failingRows }));
-  if (!page) return console.log("main e2e: no change of state, nothing to post");
+  console.log(JSON.stringify({ lane: input.lane, verdict: input.verdict, previous }));
+  if (!page) return console.log(`${input.lane}: no change of state, nothing to post`);
   console.log(page);
-  if (!dryRun) await slack.chat.postMessage({ channel, text: page });
+  if (!input.dryRun) await slack.chat.postMessage({ channel, text: page });
+}
+
+async function alert(dryRun: boolean): Promise<void> {
+  const needs = Needs.parse(JSON.parse(process.env.NEEDS || "{}"));
+  const results = Object.fromEntries(
+    Object.entries(needs).map(([job, need]) => [job, need.result]),
+  );
+  const failingRows = z
+    .array(z.string())
+    .parse(JSON.parse(needs.e2e?.outputs?.["failing-rows"] || "[]"));
+  console.log(JSON.stringify({ results, failingRows }));
+  await pageOnChangeOfState({
+    lane: MAIN_LANE,
+    verdict: mainE2eVerdict(results),
+    failedJobs: mainE2eFailedJobs(results),
+    failingRows,
+    dryRun,
+  });
 }
 
 function failingRows(directory: string): void {
