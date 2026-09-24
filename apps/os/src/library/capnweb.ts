@@ -162,10 +162,10 @@ class EgressBatchTransport implements RpcTransport {
       return sendBatch(batch);
     })();
   }
-  async send(message: string): Promise<void> {
+  async send(message: string) {
     if (this.#messagesToSend !== null) this.#messagesToSend.push(message);
   }
-  async receive(): Promise<string> {
+  async receive() {
     const received = await this.#answersReceived;
     const message = received.shift();
     // oxlint-disable-next-line iterate/simple-truthiness-check -- receive() is capnweb's RpcTransport contract: shift() returning undefined is the "batch drained" signal (throw), distinct from a frame value

@@ -116,7 +116,7 @@
     "iterate/prefer-logical-and-spread": "error",
     "iterate/simple-truthiness-check": "error",
     "iterate/typed-no-floating-promises": "error",
-    "iterate/mechanical-class-impl": "off",
+    "iterate/mechanical-class-impl": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [
