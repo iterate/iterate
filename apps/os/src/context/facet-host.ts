@@ -45,7 +45,6 @@ import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
   assertFacetSourceWithinCeiling,
-  facetLoaderOwner,
   facetSpecOf,
   prepareConfinedWorker,
   type FacetSpec,
@@ -657,7 +656,7 @@ export class FacetHost {
         platformOrigin: this.#deps.platformOrigin(),
         itxEntrypoint: this.#deps.itxEntrypoint(),
         kind: "facet",
-        owner: facetLoaderOwner(this.#deps.iterateContextName, memo.className),
+        owner: [this.#deps.iterateContextName, memo.className],
         source: memo.source,
         cacheKey: memo.cacheKey,
         invoke: (call) => this.#deps.invoke(call),

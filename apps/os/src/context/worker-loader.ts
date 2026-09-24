@@ -30,16 +30,6 @@ import {
 } from "iterate/next/expression";
 import PROCESSOR_SDK_MODULE from "../generated/processor-sdk.js";
 
-/** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
- *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
- *  split — context "/x:y"+class "Door" and context "/x"+class "y:Door" both became
- *  "…/x:y:Door", a SHARED loader cacheKey = silent cross-context authority transfer (the isolate's
- *  whole world is the host stub baked in at first materialization). Length-prefixing the context
- *  makes the split unambiguous regardless of `:` in either half. (worker-loader.test.ts) */
-export function facetLoaderOwner(iterateContextName: string, discriminator: string): string {
-  return `${iterateContextName.length}#${iterateContextName}#${discriminator}`;
-}
-
 /** A worker's MODULES, module name → code. `"cap.js"` is the main module. */
 export type WorkerModules = Record<string, string>;
 /** A worker/facet SOURCE: the modules, literally — or an itx expression that PRODUCES them (a
@@ -139,8 +129,11 @@ type PrepareConfinedWorkerOptions = {
   /** `worker` = a stateless isolate (`itx.workers.get`); `facet` = a durable class hosted as a facet
    *  (`itx.facets.get`). A CLOSED union so a new cacheKey family is a deliberate type change. */
   kind: "worker" | "facet";
-  /** The owning context (a facet's owner is composed collision-free by `facetLoaderOwner`). */
-  owner: string;
+  /** The owning context's name — for a facet, the pair (context name, className). Either way it is
+   *  ONE element of the JSON-array loader id, so a ":" in either half cannot alias another owner:
+   *  context "/x:y" + class "Door" and context "/x" + class "y:Door" stay two identities
+   *  (worker-loader.test.ts). */
+  owner: string | readonly [iterateContextName: string, className: string];
   source: WorkerSource;
   cacheKey?: WorkerCacheKey;
   /** Evaluate a producer expression through the owning context's dispatch — inside `getCode`, so
@@ -200,11 +193,12 @@ export async function prepareConfinedWorker(
       return requireMainModule(typeof produced === "string" ? { "cap.js": produced } : produced);
     };
   }
-  // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: an owner or a
-  //    caller's cacheKey may itself contain ":", and a joined string would let two different
-  //    (owner, key) pairs name ONE isolate — the cross-context authority transfer `facetLoaderOwner`
-  //    exists to prevent, reopened one field over. Changing the spelling restarts every facet once
-  //    on its next wake (a new restart marker), storage surviving — the same as a deploy does.
+  // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: a context name,
+  //    a class name or a caller's cacheKey may itself contain ":", and a joined string would let two
+  //    different owners name ONE isolate — a silent cross-context authority transfer, since the
+  //    isolate's whole world is the host stub baked in at first materialization. Changing the
+  //    spelling restarts every facet once on its next wake (a new restart marker), storage
+  //    surviving — the same as a deploy does.
   const loaderIdBase = JSON.stringify([
     opts.kind,
     opts.deployId,
