@@ -135,6 +135,25 @@ static void clipping_and_clock_wrap_remain_bounded(void) {
   }
 }
 
+/* A board that will refuse a press pulses red, so a ring alone can say so. */
+static void offline_is_a_slow_red_pulse(void) {
+  const struct iterate_kit_conversation_visual_state offline = {
+    .network = ITERATE_KIT_NETWORK_OFFLINE,
+  };
+  struct iterate_kit_conversation_ring animation = {0};
+  struct iterate_kit_rgb8 pixels[12];
+  unsigned int dimmest = UINT32_MAX, brightest = 0U;
+  for (uint32_t ms = 0U; ms < 2500U; ms += 50U) {
+    iterate_kit_conversation_ring_animate(&animation, &offline, ms, pixels);
+    for (unsigned int i = 0U; i < 12U; ++i) {
+      assert(pixels[i].red > 0U && pixels[i].green == 0U && pixels[i].blue == 0U);
+    }
+    if (pixels[0].red < dimmest) dimmest = pixels[0].red;
+    if (pixels[0].red > brightest) brightest = pixels[0].red;
+  }
+  assert(brightest >= dimmest + 8U);
+}
+
 int main(void) {
   ready_is_a_still_faint_white_ring();
   capture_stays_visible_before_connection_and_between_words();
@@ -142,5 +161,6 @@ int main(void) {
   closed_capture_and_ended_calls_discard_audio_history();
   exceptional_states_clear_audio_and_stay_unambiguous();
   clipping_and_clock_wrap_remain_bounded();
+  offline_is_a_slow_red_pulse();
   return 0;
 }

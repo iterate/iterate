@@ -5,7 +5,7 @@ size: medium
 
 # Kit boards say when they can't get online
 
-**Status:** implementation done, waiting on CI's ESP builds and a real-hardware check. Done: firmware change on every board, three spoken clips, host tests (loop, core, board table, Mac transport) and a live Mac-transport run against bad hosts. Missing: ESP-IDF compile of the ESP-only code (CI's Kit Firmware job; no ESP-IDF here), and Misha flashing a HA Voice PE with a wrong Wi-Fi password.
+**Status:** implementation done and CI-built; waiting on a real-hardware check. Done: firmware change on every board, three spoken clips, host tests (loop, core, board table, lights, Mac transport), a live Mac-transport run against bad hosts, and all 7 ESP boards compiled by CI's Kit Firmware job. Missing: Misha flashing a HA Voice PE with a wrong Wi-Fi password (steps in the PR body).
 
 ## Problem
 
@@ -71,4 +71,5 @@ Made by the agent while fleshing this out; review these first.
 - Spoken words changed from the first draft for `no-internet`: "Joined the Wi-Fi, but couldn't connect to the internet." reads as the middle rung of the other two.
 - The boot notice is skipped when the loop restarted itself (`iterate_kit_platform_last_restart_note()` is non-empty): a board offline for good restarts every 7 minutes (`ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS`), and would otherwise announce itself to an empty room each time.
 - A deleted preview (`pr1-deleted-os-preview.iterate-dev-preview.workers.dev/api`) answers the WebSocket upgrade with HTTP 404, confirmed with curl; `os.iterate.com/api` without a token answers 401. Both are `no-iterate`.
-- Flash: the three clips are 368 KB of PCM. Smallest headroom is M5StickS3 (2 MiB app slot, 1.37 MB image).
+- Flash: the three clips are 368 KB of PCM. M5StickS3, the tightest, went from 1.37 MB to 1.74 MB of its 2 MiB app slot (CI: `0x58360 bytes (17%) free`).
+- A mutation check left a stale `voice_loop.o`: the restoring `cp` landed in the same second as the mutated build, so make kept the mutated object and the next full run failed. `touch` the source after restoring.

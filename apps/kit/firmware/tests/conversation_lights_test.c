@@ -330,6 +330,20 @@ static void a_rung_is_only_reached_when_everything_below_it_is(void) {
   assert(iterate_kit_reach_from(true, false, true) == ITERATE_KIT_REACH_API);
 }
 
+/* Offline is red where connecting is amber: the device gave up saying "soon". */
+static void offline_turns_the_network_sector_red(void) {
+  const struct iterate_kit_conversation_visual_state offline = {
+    .network = ITERATE_KIT_NETWORK_OFFLINE,
+  };
+  const struct iterate_kit_conversation_visual_state connecting = {
+    .network = ITERATE_KIT_NETWORK_CONNECTING,
+  };
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  iterate_kit_conversation_lights_render(&offline, pixels);
+  for (unsigned int i = 0U; i < 3U; ++i) assert(is_colour(&pixels[i], 36U, 0U, 0U));
+  assert(!iterate_kit_conversation_lights_equal(&offline, &connecting));
+}
+
 int main(void) {
   renders_one_shared_three_sector_grammar();
   distinguishes_listening_silence_from_idle();
@@ -344,5 +358,6 @@ int main(void) {
   a_press_lights_the_microphone_before_the_call_exists();
   a_device_that_is_speaking_shows_no_microphone_level();
   media_coming_up_does_not_claim_the_microphone();
+  offline_turns_the_network_sector_red();
   return 0;
 }

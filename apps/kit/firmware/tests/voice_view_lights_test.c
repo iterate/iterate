@@ -13,6 +13,11 @@ struct voice_lights_case {
 int main(void) {
   const struct voice_lights_case cases[] = {
     {{0}, {.network = ITERATE_KIT_NETWORK_CONNECTING}},
+    /* No mount for long enough that a press is refused: the ring says offline. */
+    {{.connectivity = ITERATE_KIT_CONNECTIVITY_NO_WIFI},
+     {.network = ITERATE_KIT_NETWORK_OFFLINE}},
+    {{.connectivity = ITERATE_KIT_CONNECTIVITY_CONNECTING},
+     {.network = ITERATE_KIT_NETWORK_CONNECTING}},
     /* Idle direct-stream boards are ready after their project mount. */
     {{.api_ready = true, .link_ready = true},
      {.network = ITERATE_KIT_NETWORK_CONNECTED, .reach = ITERATE_KIT_REACH_API,
