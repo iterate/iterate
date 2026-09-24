@@ -1043,10 +1043,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           )) as Response;
         } catch (error) {
           // A tunnel whose laptop is gone: its lent stub is offline, or the lend ended and the rule
-          // naming it went with it. The upstream's absence, never a platform fault.
+          // naming it went with it. The upstream's absence, never a platform fault: a 502, logged
+          // at info and never reported. The prd fault alarm (scripts/ci/prd-fault-alarm.ts) drops
+          // the 502 summaries in this line's ray; the header names the route to a client.
           const code = errorCode(error);
-          if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH")
-            return new Response(`${ingressRouteName} is not connected\n`, { status: 502 });
+          if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH") {
+            console.info({ event: "ingress-route.target-offline", ingressRouteName, code });
+            return new Response(`${ingressRouteName} is not connected\n`, {
+              status: 502,
+              headers: { "x-iterate-ingress-route-offline": ingressRouteName },
+            });
+          }
           throw error;
         }
       },

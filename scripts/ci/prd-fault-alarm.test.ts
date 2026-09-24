@@ -75,7 +75,7 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(8);
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(9);
   expect(slack).toMatchObject({ posts: [] });
 });
 
@@ -357,7 +357,7 @@ test("a reset-only window goes quiet after the re-count and posts nothing", asyn
   const slack = fakeSlack();
   await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(11);
+  expect(logs.fetch).toHaveBeenCalledTimes(12);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -559,6 +559,48 @@ test.for(["message", "error"])(
   },
 );
 
+// A killed `iterate tunnel` leaves its ingress route answering 502 "<route> is not connected"; every
+// hop logs a 502 summary, all in the ray of the route's `ingress-route.target-offline` info line.
+test("a tunnel's not-connected 502s, every hop of them, page nothing", async () => {
+  await using _logs = queryableWorkersLogs(targetOfflineRequest("vite-ping"));
+  await expect(summary()).resolves.toBe("prd is quiet");
+});
+
+test.for([
+  ["a 500 in the offline request's ray", { status: 500 }, "4 5xx responses: blog--p.iterate.app 4"],
+  ["a 502 in another ray", { rayId: "other" }, "4 5xx responses: blog--p.iterate.app 4"],
+  ["a 502 without a ray", { rayId: undefined }, "4 5xx responses: blog--p.iterate.app 4"],
+  [
+    "an exception in the offline request's ray",
+    { type: "cf-worker", message: "boom", status: undefined },
+    "4 errors: boom 4",
+  ],
+] as const)("%s still pages", async ([, change, line]) => {
+  await using _logs = queryableWorkersLogs([
+    ...targetOfflineRequest("vite-ping"),
+    ...targetOfflineRequest("vite-ping", change).slice(1),
+  ]);
+  expect(await summary()).toContain(line);
+});
+
+test.for(["capped", "failed"])(
+  "a %s read of the offline rays keeps every 502 paging",
+  async (reason) => {
+    const events = [
+      ...targetOfflineRequest("vite-ping"),
+      ...(reason === "capped"
+        ? Array.from({ length: 2000 }, (_, i) => targetOfflineRequest(`t${i}`)[0]!)
+        : []),
+    ];
+    await using _logs = queryableWorkersLogs(events, (query) => {
+      if (reason === "failed" && JSON.stringify(query.parameters.groupBys).includes("rayId"))
+        throw new Error("network failed");
+    });
+    using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await summary()).toContain("4 5xx responses: blog--p.iterate.app 4");
+  },
+);
+
 /** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
 function page(reading: Partial<FaultReading>) {
   return triageIncidents({ ...quiet, ...reading }, window, null).page?.text ?? null;
@@ -636,7 +678,7 @@ async function runAt(
   day = "2026-09-23",
 ) {
   await using _cloudflare = workersLogs(answer);
-  return alarm({
+  return await alarm({
     window: logWindow(new Date(`${day}T${hhmm}:00Z`), state),
     state,
     cloudflare: credentials,
@@ -790,4 +832,41 @@ function failedDocsRequest() {
       },
     },
   }));
+}
+
+/** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the route's info line
+ *  in the context DO, then a 502 summary from each hop — the project host's Worker, the DO's fetch,
+ *  the config worker's ItxEntrypoint and the DO's fetch again — each with its own requestId and all
+ *  in `rayId`. `change` alters the four summaries. */
+function targetOfflineRequest(
+  rayId: string,
+  change: { status?: number; rayId?: string; type?: string; message?: string } = {},
+) {
+  const url = "https://blog--p.iterate.app/__vite_ping";
+  const summaryRayId = "rayId" in change ? change.rayId : rayId;
+  return [
+    {
+      timestamp: 42,
+      event: "ingress-route.target-offline",
+      $metadata: { type: "cf-worker", level: "info", requestId: `${rayId}-inner-do`, rayId },
+      $workers: { executionModel: "durableObject", event: { request: { url } } },
+    },
+    ...["stateless", "durableObject", "stateless", "durableObject"].map((executionModel, hop) => ({
+      timestamp: 42,
+      $metadata: {
+        type: change.type || "cf-worker-event",
+        requestId: `${rayId}-${hop}`,
+        rayId: summaryRayId,
+        message: change.message || `GET ${url}`,
+      },
+      $workers: {
+        executionModel,
+        outcome: "ok",
+        event: {
+          request: { url },
+          response: "status" in change ? { status: change.status } : { status: 502 },
+        },
+      },
+    })),
+  ];
 }

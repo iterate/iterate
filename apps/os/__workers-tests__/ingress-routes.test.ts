@@ -86,9 +86,13 @@ test("a config worker routes by `itx.ingressRoutes.match` to a lent stub: HTTP, 
   await expect
     .poll(async () => {
       const gone = await exports.default.fetch(`https://blog--${project}.projects.test/`);
-      return { status: gone.status, text: await gone.text() };
+      return {
+        status: gone.status,
+        offline: gone.headers.get("x-iterate-ingress-route-offline"),
+        text: await gone.text(),
+      };
     })
-    .toEqual({ status: 502, text: "tunnel-blog is not connected\n" });
+    .toEqual({ status: 502, offline: "tunnel-blog", text: "tunnel-blog is not connected\n" });
 
   // deleted: the host is the config worker's own again
   await itx.ingressRoutes.set("tunnel-blog", null);
