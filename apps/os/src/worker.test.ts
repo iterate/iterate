@@ -440,7 +440,7 @@ describe("public protocol origins", () => {
     expect((await page("/oauth2/auth?client_id=x", crossSite)).status).toBe(403);
     // the public files beside the pages, and nothing else
     expect((await page("/issuer.css")).status).toBe(200);
-    expect((await page("/client-logos/browser-extension.svg")).status).toBe(200);
+    expect(await page("/client-logos/browser-extension.svg")).toMatchObject({ status: 200 });
     expect((await page("/authorize.js")).status).toBe(404);
     expect((await page("/capnweb.js")).status).toBe(404);
   });
