@@ -1,4 +1,5 @@
 import { insufficientScope, OAuthResourceServer } from "@cloudflare/workers-oauth-provider";
+import { reportIssue } from "iterate/lib";
 import { platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import type { Env, Handler } from "./env.ts";
 import {
@@ -74,8 +75,16 @@ function resourceServer(
       authorization_servers: [addresses.platformOrigin],
       scopes_supported: ["iterate"],
     },
-    // The library calls it with this server's own canonical resource.
-    validateToken: (env) => (canonical, token) => validateToken(env, addresses, canonical, token),
+    // The library calls it with this server's own canonical resource, and answers a throw with a
+    // bare 503 that names no cause: the cause is reported here.
+    validateToken: (env) => async (canonical, token) => {
+      try {
+        return await validateToken(env, addresses, canonical, token);
+      } catch (error) {
+        reportIssue("oauth.token-validation-failed", error, { resource: canonical });
+        throw error;
+      }
+    },
     handler: {
       fetch(request, env, ctx) {
         if (!ctx.auth.scope.includes("iterate")) return insufficientScope(ctx.auth, ["iterate"]);
