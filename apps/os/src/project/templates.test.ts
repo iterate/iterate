@@ -101,8 +101,61 @@ test.for([
   });
 });
 
+test("a commit that lands between the saga's read and its seed is the project's config: the seed is refused, never pushed on top of it", async () => {
+  const fixture = project();
+  // The read finds `main` unborn; the project's caller writes its config repo before the seed lands
+  // (`create` answers before the certificate) — the voice delegation's website edit, 2026-09-24.
+  fixture.repo.tip.mockImplementationOnce(async () => {
+    fixture.commitFromOutside({ "worker.ts": "the agent's edit" });
+    return null;
+  });
+  await create(fixture);
+  expect(fixture.repo.commitFiles).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ parent: null }),
+  );
+  expect(fixture.files()).toEqual({ "worker.ts": "the agent's edit" });
+  expect(fixture).toMatchObject({
+    order: ["events.iterate.com/project/ingress-configured", "events.iterate.com/project/created"],
+  });
+  expect(fixture.append).toHaveBeenCalledWith(
+    expect.objectContaining({
+      payload: {
+        target: [
+          "itx",
+          "workers",
+          [
+            "get",
+            {
+              source: [
+                "itx",
+                "repos",
+                ["get", "/repos/config"],
+                ["modules", { commitOid: "c".repeat(40) }],
+              ],
+              cacheKey: "c".repeat(40),
+            },
+          ],
+        ],
+      },
+    }),
+    expect.objectContaining({ type: "events.iterate.com/project/created" }),
+  );
+});
+
+test("a seed that fails and leaves main unborn is one durable failure", async () => {
+  const fixture = project();
+  fixture.repo.commitFiles.mockRejectedValueOnce(new Error("Artifacts answered 500"));
+  await create(fixture);
+  expect(fixture.files()).toBeUndefined();
+  expect(fixture.append).toHaveBeenCalledExactlyOnceWith({
+    type: "events.iterate.com/project/create-failed",
+    payload: { error: "Artifacts answered 500" },
+  });
+});
+
 /** A project whose config repo holds `existing` (none: `main` is unborn), with a fake template
- *  download answering `download`. */
+ *  download answering `download`. A commit through the facet lands `b…`; `commitFromOutside` lands
+ *  `c…`, as another caller's would. */
 function project(
   existing?: Record<string, string>,
   download: () => Promise<Array<{ path: string; content: string }>> = async () => {
@@ -110,14 +163,26 @@ function project(
   },
 ) {
   let files = existing;
+  let tipOid = "b".repeat(40);
   const order: string[] = [];
   const repo = {
-    tip: vi.fn(async () => (files ? "b".repeat(40) : null)),
-    commitFiles: vi.fn(async ({ changes }: { changes: { path: string; content: string }[] }) => {
-      files = Object.fromEntries(changes.map((file) => [file.path, file.content]));
-      return { commitOid: "b".repeat(40) };
-    }),
+    tip: vi.fn(async (): Promise<string | null> => (files ? tipOid : null)),
+    commitFiles: vi.fn(
+      async (input: { changes: { path: string; content: string }[]; parent?: string | null }) => {
+        const tip = files ? tipOid : null;
+        if ("parent" in input && input.parent !== tip)
+          throw new Error(`the commit was refused: main is at ${tip}, not at ${input.parent}`);
+        const { changes } = input;
+        files = Object.fromEntries(changes.map((file) => [file.path, file.content]));
+        tipOid = "b".repeat(40);
+        return { commitOid: tipOid };
+      },
+    ),
     readFile: vi.fn(async (path: string) => files?.[path] ?? null),
+  };
+  const commitFromOutside = (changed: Record<string, string>) => {
+    files = { ...files, ...changed };
+    tipOid = "c".repeat(40);
   };
   const itx = {
     repos: { create: vi.fn(async () => {}), get: () => repo },
@@ -129,7 +194,7 @@ function project(
     order.push(...events.map((event) => event.type));
   });
   const downloadTemplate = vi.fn(download);
-  return { repo, itx, append, order, downloadTemplate, files: () => files };
+  return { repo, itx, append, order, downloadTemplate, commitFromOutside, files: () => files };
 }
 
 async function create(fixture: ReturnType<typeof project>, template?: string) {

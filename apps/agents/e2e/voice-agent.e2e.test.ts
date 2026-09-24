@@ -126,7 +126,7 @@ export default class extends WorkerEntrypoint {
     const streamPath = "/agents/voice/e2e";
     const activation = "voice-e2e";
     const call = root.cd(streamPath);
-    const received: { type: string; payload: Record<string, unknown> }[] = [];
+    const received: { type: string; payload: Record<string, unknown>; createdAt?: string }[] = [];
     await call.subscribe({
       name: "device",
       consumes: ["*", `${T}spk-frame`],
@@ -206,6 +206,7 @@ export default class extends WorkerEntrypoint {
       // Seven real sandbox scripts: candidate probe, commit, then live verification.
       // The former six-step cap discarded that last check after changing the site.
       const websiteAsked = received.length;
+      const websiteAskedAt = Date.now();
       await call.append({
         type: `${T}delegation-requested`,
         payload: {
@@ -219,25 +220,55 @@ export default class extends WorkerEntrypoint {
       });
       const isWebsiteAnswer = (event: (typeof received)[number]) =>
         event.type === `${T}commentary` && event.payload.delegationId === "website";
-      // a wait that runs out names what the delegation said so far (which of its scripts it was on)
-      const websiteAnswer = (
-        await untilValue(
-          "verified website edit",
+      // What the delegation said so far, a short line an event, each at its time since the request:
+      // a wait that runs out names the script it was on, and a wrong answer names what it was given.
+      const websiteSteps = (events: typeof received) => {
+        const asked = events.slice(websiteAsked);
+        const t0 = Date.parse(String(asked[0]?.createdAt));
+        return asked
+          .filter((event) => !event.type.endsWith("-frame") && event.type !== `${T}thinking`)
+          .map((event) => {
+            const { role, content } = event.payload as { role?: string; content?: unknown };
+            const said =
+              typeof content === "string"
+                ? content.replace(/^<codemode[^>]*>\n|^Script result:\n/, "")
+                : JSON.stringify(event.payload);
+            return `+${Date.parse(String(event.createdAt)) - t0}ms ${event.type.replace(T, "").replace("events.iterate.com/agent/", "")} ${role || ""} ${said.slice(0, 64)}`;
+          });
+      };
+      // THE WAIT IS FOR PROGRESS, a step at a time (docs/testing.md: waits are progress-based): the
+      // delegation is eight model turns and seven sandbox scripts in a row, each several Durable
+      // Object hops, and the platform delivers some hops late. In the 2026-09-24 soaks (Workers
+      // traces) a subrequest between two contexts of one project, both in IAD, reached its target
+      // 3.1–3.2 s after it left, again and again in one run; three runs of sixty timed out while
+      // still stepping, 3.4–8.9 s a step, with every step answered. So 20 s bounds A STEP — a
+      // delegation that stops still fails 20 s after its last step, naming it — and the whole edit
+      // has a backstop of 40 s (the slowest of those runs needed about 30).
+      const stepMs = 20_000;
+      const wholeMs = 40_000;
+      const steps = (events: typeof received) =>
+        events
+          .slice(websiteAsked)
+          .filter(
+            (event) =>
+              event.type === `${T}thinking` ||
+              event.type === "events.iterate.com/agent/context-added",
+          ).length;
+      let websiteAnswer: (typeof received)[number] | undefined;
+      for (let seen = 0; !websiteAnswer; ) {
+        const left = wholeMs - (Date.now() - websiteAskedAt);
+        const events = await untilValue(
+          left <= stepMs
+            ? `verified website edit — the whole edit within ${wholeMs}ms`
+            : `verified website edit — its next step within ${stepMs}ms (${seen} step events so far)`,
           async () => received,
-          (events) => events.some(isWebsiteAnswer),
-          {
-            describe: (events) =>
-              events
-                .slice(websiteAsked)
-                .filter((event) => !event.type.endsWith("-frame"))
-                .map(
-                  (event) =>
-                    `${event.type.replace(T, "")} ${JSON.stringify(event.payload).slice(0, 200)}`,
-                ),
-          },
-        )
-      ).find(isWebsiteAnswer)!;
-      expect(websiteAnswer.payload).toMatchObject({
+          (events) => events.some(isWebsiteAnswer) || steps(events) > seen,
+          { timeoutMs: Math.min(stepMs, left), describe: websiteSteps },
+        );
+        websiteAnswer = events.find(isWebsiteAnswer);
+        seen = steps(events);
+      }
+      expect(websiteAnswer.payload, JSON.stringify(websiteSteps(received), null, 1)).toMatchObject({
         content: "The horse joke is live on your website.",
       });
       const published = await fetch(websiteUrl);

@@ -326,6 +326,7 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
     expect(await repo.tip()).toBeNull(); // unborn main
     const first = await repo.commitFiles({
       message: "first",
+      parent: null, // lands: main is unborn
       changes: [
         { path: "worker.ts", content: "export default 1;\n" },
         { path: "notes/log.md", content: "# log\n" },
@@ -333,6 +334,26 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
     });
     expect(first).toMatchObject({ changedPaths: ["worker.ts", "notes/log.md"] });
     expect(await repo.tip()).toBe(first.commitOid);
+    // A commit that names a parent main has moved from is refused before anything is pushed or
+    // appended: the project's seed (`parent: null`, project/processor.ts) never lands on top of a
+    // commit its unborn read did not see.
+    expect(
+      (
+        await rejection(
+          repo.commitFiles({
+            message: "seed",
+            parent: null,
+            changes: [{ path: "worker.ts", content: "export default 2;\n" }],
+          }),
+        )
+      ).message,
+    ).toContain(
+      `the commit was refused: main is at ${first.commitOid}, not at the parent it names`,
+    );
+    expect(await repo.tip()).toBe(first.commitOid);
+    expect(
+      (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED),
+    ).toHaveLength(1);
     expect(await repo.readFile("notes/log.md")).toBe("# log\n");
     expect(await repo.listFiles()).toEqual({
       commitOid: first.commitOid,
