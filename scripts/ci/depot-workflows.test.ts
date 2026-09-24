@@ -5,6 +5,7 @@ import { join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
+import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
@@ -640,12 +641,14 @@ test("every unit-test workspace writes the canonical telemetry artifact", () => 
     return [packageJson.name];
   });
 
+  // The finalizer reads the list from the checkout (a PR's workflow file is its merge ref's,
+  // its checkout its head), by the same rule this test applies.
   const finalizer = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find((step) =>
     step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
   );
-  expect(finalizer?.env?.TEST_TELEMETRY_EXPECTED_WORKSPACES?.split(",").sort()).toEqual(
-    expectedWorkspaces.sort(),
-  );
+  expect(finalizer?.run).toContain("--expect-unit-workspaces");
+  expect(finalizer?.env?.TEST_TELEMETRY_EXPECTED_WORKSPACES).toBeUndefined();
+  expect(unitTestWorkspaces(repoRoot).sort()).toEqual(expectedWorkspaces.sort());
 });
 
 test.each([
