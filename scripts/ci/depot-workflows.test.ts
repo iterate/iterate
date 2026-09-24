@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
+import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -461,6 +462,34 @@ test("the PR time-to-green guard measures hourly with the Depot telemetry token 
     with: expect.objectContaining({ path: `test-results/pr-ttg/${prTtgState.file}` }),
   });
   expect(steps.indexOf(measure!)).toBeLessThan(steps.indexOf(keep!));
+});
+
+test("the prd fault alarm reads its previous state, keeps it only on main, and uploads it", () => {
+  const workflow = loadWorkflow(".depot/workflows/prd-fault-alarm.yml") as Workflow & {
+    name: string;
+  };
+  const steps = workflow.jobs.alarm?.steps ?? [];
+  const read = steps.find((step) => step.run?.includes("prd-fault-alarm.ts previous-state"));
+  const alarm = steps.find((step) => step.run?.includes("prd-fault-alarm.ts run"));
+  const keep = steps.find((step) => step.with?.name === prdFaultAlarmState.artifact);
+
+  expect(workflow).toMatchObject({ name: prdFaultAlarmState.workflow });
+  expect(read?.run).toContain(
+    "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
+  );
+  expect(alarm?.run).toContain("--state test-results/prd-fault-alarm/previous.json");
+  expect(alarm?.run).toContain(
+    `github.ref == 'refs/heads/main' && '--state-out test-results/prd-fault-alarm/${prdFaultAlarmState.file}'`,
+  );
+  expect(keep).toMatchObject({
+    if: "always()",
+    uses: "actions/upload-artifact@v4",
+    with: expect.objectContaining({
+      path: `test-results/prd-fault-alarm/${prdFaultAlarmState.file}`,
+    }),
+  });
+  expect(steps.indexOf(read!)).toBeLessThan(steps.indexOf(alarm!));
+  expect(steps.indexOf(alarm!)).toBeLessThan(steps.indexOf(keep!));
 });
 
 test("the PR time-to-green guard's checks are workflows by their names", () => {

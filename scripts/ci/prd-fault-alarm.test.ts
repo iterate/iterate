@@ -1,11 +1,13 @@
 import type { WebClient } from "@slack/web-api";
 import { expect, test, vi } from "vitest";
 import {
+  type AlarmState,
   alarm,
   deployResetSummaries,
   type FaultReading,
-  renderFaultPage,
+  logWindow,
   run,
+  triageIncidents,
 } from "./prd-fault-alarm.ts";
 import { slackChannelIds } from "./slack.ts";
 
@@ -15,7 +17,9 @@ const quiet: FaultReading = {
   errors: [],
 };
 const now = new Date("2026-09-23T07:30:00Z");
+const window = { from: new Date("2026-09-23T07:00:00Z"), to: now };
 const credentials = { accountId: "account", apiToken: "token" };
+const channel = slackChannelIds["#error-pulse"];
 
 test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed references", () => {
   // A sample of 07:00–07:30Z that day (`run --at 2026-09-23T07:30:00Z --dry-run`).
@@ -38,11 +42,12 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
       ],
     }),
   ).toMatchInlineSnapshot(`
-    "🚨 prd fault page: os-prd, 30 min to 07:30 UTC <@U067G4QRFK2>
+    "🚨 prd fault page: os-prd, 07:00–07:30 UTC <@U067G4QRFK2>
     • 13 5xx responses: garple.com 7, lispwoso.com 6
     • 1815 platform-failure heals: project 1279, repo 536
     • 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2
-    <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>"
+    <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>
+    No state from the last run: an incident already paged pages again."
   `);
 });
 
@@ -65,11 +70,11 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
     success: false,
     errors: [{ code: 10000, message: "Authentication error" }],
   }));
-  const slack = fakeSlack([]);
-  await expect(
-    alarm({ now, windowEnd: now, cloudflare: credentials, slack: () => slack.client }),
-  ).rejects.toThrow('Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]');
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(6);
+  const slack = fakeSlack();
+  await expect(summary(() => slack.client)).rejects.toThrow(
+    'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
+  );
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(7);
   expect(slack).toMatchObject({ posts: [] });
 });
 
@@ -83,53 +88,145 @@ test("a run that cannot read prd fails: no Cloudflare credentials", async () => 
   expect(cloudflare.fetch).not.toHaveBeenCalled();
 });
 
-// A page is the alarm and the run ends green; the page repeats at most hourly.
-test.for([
-  { name: "a quiet prd: no page", serverErrors: 0, history: [], posted: false },
-  { name: "no page in the last hour: pages", serverErrors: 1, history: [], posted: true },
-  {
-    name: "paged half an hour ago: stays quiet",
-    serverErrors: 1,
-    history: [{ at: "2026-09-23T07:00:05Z", bot_id: "B1" }],
-    posted: false,
-  },
-  {
-    name: "paged over an hour ago: pages again",
-    serverErrors: 1,
-    history: [{ at: "2026-09-23T06:25:05Z", bot_id: "B1" }],
-    posted: true,
-  },
-  {
-    name: "a person quoting a page is not one",
-    serverErrors: 1,
-    history: [{ at: "2026-09-23T07:00:05Z", bot_id: undefined }],
-    posted: true,
-  },
-])("a run that reads prd resolves: $name", async (row) => {
-  await using _cloudflare = workersLogs(serverErrorsOnly(row.serverErrors));
-  const slack = fakeSlack(
-    row.history.map((message) => ({
-      ts: String(Date.parse(message.at) / 1000),
-      bot_id: message.bot_id,
-      text: ":rotating_light: prd fault page: os-prd, 30 min to 07:00 UTC",
-    })),
-  );
-  const expected = row.serverErrors
-    ? page({ serverErrors: [["https://lispwoso.com/", row.serverErrors]] })
-    : "os-prd is quiet";
-  await expect(
-    alarm({ now, windowEnd: now, cloudflare: credentials, slack: () => slack.client }),
-  ).resolves.toBe(expected);
-  expect(slack).toMatchObject({
-    posts: row.posted ? [{ channel: slackChannelIds["#error-pulse"], text: expected }] : [],
+// Each fault is an incident: a new one pages, its repeats go into that page's thread.
+test("a quiet prd posts nothing and the next run reads on from where this one stopped", async () => {
+  await using _cloudflare = workersLogs(serverErrorsOnly(0));
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack);
+  expect(run1).toMatchObject({ summary: "os-prd is quiet", next: { incidents: {} } });
+  expect(slack).toMatchObject({ posts: [] });
+  expect(logWindow(new Date("2026-09-23T07:45:00Z"), run1.next)).toEqual({
+    from: new Date("2026-09-23T07:28:00Z"),
+    to: new Date("2026-09-23T07:43:00Z"),
   });
+});
+
+test.for([
+  ["no state: the last half hour", null, "07:13"],
+  ["a stale state: the last day at most", "2026-09-20T00:00:00Z", "2026-09-22T07:43"],
+] as const)("a run reads %s", ([, readUntil, from]) => {
+  const state = readUntil && { readUntil, incidents: {} };
+  expect(logWindow(new Date("2026-09-23T07:45:00Z"), state).from.toISOString()).toContain(from);
+});
+
+test("a new 5xx pages; its repeats reply in the page's thread without mentioning anyone", async () => {
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(2));
+  expect(slack).toMatchObject({
+    posts: [
+      {
+        channel,
+        text: [
+          "🚨 prd fault page: os-prd, 06:58–07:28 UTC <@U067G4QRFK2>",
+          "• 1 5xx responses: lispwoso.com 1",
+          "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>",
+          "No state from the last run: an incident already paged pages again.",
+        ].join("\n"),
+      },
+      {
+        channel,
+        thread_ts: "1.0",
+        reply_broadcast: false,
+        text: "still failing, 07:28–07:43 UTC\n• 2 more 5xx responses: lispwoso.com (3 in all)",
+      },
+    ],
+  });
+  expect(run2.next).toMatchObject({
+    incidents: {
+      "5xx responses: lispwoso.com": {
+        thread: "1.0",
+        lastSeen: "2026-09-23T07:43:00.000Z",
+        count: 3,
+        told: 1,
+      },
+    },
+  });
+});
+
+// Until 2026-09-24 a page held every page for an hour, while each run read only the half hour
+// before it: a different 500 in that hour was never posted.
+test("a different 5xx during an open incident pages at once", async () => {
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  await runAt("07:45", run1.next, slack, (groupBy) =>
+    groupBy === "$workers.event.request.url"
+      ? {
+          success: true,
+          result: {
+            calculations: [{ aggregates: [{ groupKey: "https://garple.com/", count: 1 }] }],
+          },
+        }
+      : serverErrorsOnly(1)(groupBy),
+  );
+  expect(slack.posts).toHaveLength(2);
+  expect(slack.posts[1]).toMatchObject({
+    channel,
+    text: expect.stringMatching(
+      /^🚨 prd fault page: os-prd, 07:28–07:43 UTC <@U067G4QRFK2>\n• 1 5xx responses: garple.com 1\n/,
+    ),
+  });
+  expect(slack.posts[1]).not.toHaveProperty("thread_ts");
+});
+
+test("an incident that grows tenfold is broadcast to the channel with a mention", async () => {
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(9));
+  await runAt("08:00", run2.next, slack, serverErrorsOnly(1));
+  expect(slack.posts.slice(1)).toEqual([
+    {
+      channel,
+      thread_ts: "1.0",
+      reply_broadcast: true,
+      text: "🚨 grew tenfold, 07:28–07:43 UTC <@U067G4QRFK2>\n• 9 more 5xx responses: lispwoso.com (10 in all)",
+    },
+    {
+      channel,
+      thread_ts: "1.0",
+      reply_broadcast: false,
+      text: "still failing, 07:43–07:58 UTC\n• 1 more 5xx responses: lispwoso.com (11 in all)",
+    },
+  ]);
+});
+
+test("an incident unseen for a day is closed: its return pages as new", async () => {
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const nextDay = { ...run1.next, readUntil: "2026-09-24T07:28:00Z" };
+  const run2 = await runAt("07:30", nextDay, slack, serverErrorsOnly(1), "2026-09-24");
+  expect(slack.posts.map((post) => post.thread_ts)).toEqual([undefined, undefined]);
+  expect(slack.posts[1]!.text).toMatch(/Repeats go in this thread\.$/);
+  expect(run2.next).toMatchObject({
+    incidents: {
+      "5xx responses: lispwoso.com": {
+        thread: "2.0",
+        lastSeen: "2026-09-24T07:28:00.000Z",
+        count: 1,
+        told: 1,
+      },
+    },
+  });
+});
+
+test("5xx responses the URL rows miss page as unknown", async () => {
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1, 2));
+  expect(run1.summary).toContain("• 3 5xx responses: unknown 2, lispwoso.com 1");
+});
+
+test("heals page only in a burst, or as an incident already open", () => {
+  const opened = triageIncidents({ ...quiet, heals: [["repo", 10]] }, window, null);
+  const state = { readUntil: now.toISOString(), incidents: opened.incidents };
+  expect(triageIncidents({ ...quiet, heals: [["repo", 1]] }, window, state).replies).toHaveLength(
+    1,
+  );
+  expect(triageIncidents({ ...quiet, heals: [["project", 1]] }, window, state).page).toBeNull();
 });
 
 test("a dry run (no Slack client) resolves to the page it would post", async () => {
   await using _cloudflare = workersLogs(serverErrorsOnly(1));
-  await expect(alarm({ now, windowEnd: now, cloudflare: credentials, slack: null })).resolves.toBe(
-    page({ serverErrors: [["https://lispwoso.com/", 1]] }),
-  );
+  await expect(summary()).resolves.toBe(page({ serverErrors: [["https://lispwoso.com/", 1]] }));
 });
 
 test.for(["GET https://rpc-stub-pager.internal/", "IterateContextDurableObject.jsrpc"])(
@@ -182,12 +279,10 @@ test.for([
 
 test("a reset-only window goes quiet after the re-count and posts nothing", async () => {
   await using logs = queryableWorkersLogs(resetPair());
-  const slack = fakeSlack([]);
-  await expect(
-    alarm({ now, windowEnd: now, cloudflare: credentials, slack: () => slack.client }),
-  ).resolves.toBe("os-prd is quiet");
+  const slack = fakeSlack();
+  await expect(summary(() => slack.client)).resolves.toBe("os-prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(9);
+  expect(logs.fetch).toHaveBeenCalledTimes(10);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -204,7 +299,7 @@ test("a fresh error sharing the pager URL and every HTTP 5xx survive reset class
     },
     ...failedDocsRequest(),
   ]);
-  const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+  const result = await summary();
   expect(result).toContain("2 5xx responses: docs.iterate.com 2");
   expect(result).toContain(
     "3 errors: POST https://docs.iterate.com/_iterate/auth/refresh 2, GET https://rpc-stub-pager.internal/ 1",
@@ -226,14 +321,14 @@ test("resets arriving between the count and evidence read never subtract away a 
   await using _logs = queryableWorkersLogs(events, (query) => {
     if (query.view === "events") events.push(...resetPair());
   });
-  const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+  const result = await summary();
   expect(result).toContain("1 errors: GET https://rpc-stub-pager.internal/ 1");
 });
 
 test("a full evidence page keeps the alarm and reports the cap", async () => {
   await using _logs = queryableWorkersLogs(Array.from({ length: 25 }, () => resetPair()).flat());
   using log = vi.spyOn(console, "log");
-  const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+  const result = await summary();
   expect(result).toContain("50 errors: GET https://rpc-stub-pager.internal/ 50");
   expect(log).toHaveBeenCalledWith(
     JSON.stringify({ event: "prd-fault-alarm.reset-evidence", count: 100, capped: true }),
@@ -254,13 +349,8 @@ test.for(["network", "HTML", "API", "schema", "re-count"])(
         return Response.json({ success: true, result: { events: { events: [{}] } } });
     });
     using warn = vi.spyOn(console, "warn");
-    const slack = fakeSlack([]);
-    const result = await alarm({
-      now,
-      windowEnd: now,
-      cloudflare: credentials,
-      slack: () => slack.client,
-    });
+    const slack = fakeSlack();
+    const result = await summary(() => slack.client);
     expect(result).toContain("2 5xx responses: docs.iterate.com 2");
     expect(result).toContain("4 errors:");
     expect(slack).toMatchObject({
@@ -284,9 +374,7 @@ test("null optional evidence fields do not prevent classification of complete re
   }));
   await using _logs = queryableWorkersLogs(events);
   using warn = vi.spyOn(console, "warn");
-  await expect(alarm({ now, windowEnd: now, cloudflare: credentials, slack: null })).resolves.toBe(
-    "os-prd is quiet",
-  );
+  await expect(summary()).resolves.toBe("os-prd is quiet");
   expect(warn).not.toHaveBeenCalled();
 });
 
@@ -298,7 +386,7 @@ test("null identities leave ambiguous summaries visible without treating the pay
     })),
   );
   using warn = vi.spyOn(console, "warn");
-  const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+  const result = await summary();
   expect(result).toContain("2 errors: GET https://rpc-stub-pager.internal/ 2");
   expect(warn).not.toHaveBeenCalled();
 });
@@ -315,12 +403,12 @@ test.for(["different time", "missing identity", "another worker"])(
 );
 
 test("a stateless summary with a reset's request ID is never excluded from the count", async () => {
-  const summary = resetPair()[2]!;
+  const stateless = resetPair()[2]!;
   await using _logs = queryableWorkersLogs([
     ...resetPair(),
-    { ...summary, $workers: { ...summary.$workers, executionModel: "stateless" } },
+    { ...stateless, $workers: { ...stateless.$workers, executionModel: "stateless" } },
   ]);
-  const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+  const result = await summary();
   expect(result).toContain("1 errors: GET https://rpc-stub-pager.internal/ 1");
 });
 
@@ -334,7 +422,7 @@ test.for([undefined, null, "", "Network connection lost."])(
         $workers: {},
       },
     ]);
-    const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+    const result = await summary();
     expect(result).toContain("1 errors: Network connection lost. 1");
   },
 );
@@ -352,7 +440,7 @@ test("the 11:52 window retains the structured delivery failure while removing th
       },
     },
   ]);
-  const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+  const result = await summary();
   expect(result).toContain("1 errors: Network connection lost. 1");
   expect(result).not.toContain("rpc-stub-pager.internal");
 });
@@ -372,9 +460,7 @@ test.for(["message", "error"])(
         $workers: {},
       })),
     );
-    await expect(
-      alarm({ now, windowEnd: now, cloudflare: credentials, slack: null }),
-    ).resolves.toBe("os-prd is quiet");
+    await expect(summary()).resolves.toBe("os-prd is quiet");
   },
 );
 
@@ -391,20 +477,25 @@ test.for(["message", "error"])(
         $workers: { event: { request: { url: "https://os.iterate.com/api?session=1" } } },
       },
     ]);
-    const result = await alarm({ now, windowEnd: now, cloudflare: credentials, slack: null });
+    const result = await summary();
     expect(result).toContain(
       "1 errors: Can't read from request stream after response has been sent. 1",
     );
   },
 );
 
-/** The page for `reading` (quiet elsewhere) in the half hour to `now`. */
+/** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
 function page(reading: Partial<FaultReading>) {
-  return renderFaultPage({ ...quiet, ...reading }, now);
+  return triageIncidents({ ...quiet, ...reading }, window, null).page?.text ?? null;
+}
+
+/** What one run without state over the half hour to `now` posts (or would post). */
+async function summary(slack: (() => WebClient) | null = null) {
+  return (await alarm({ window, state: null, cloudflare: credentials, slack })).summary;
 }
 
 /** A Workers Logs API that answers each query with `answer(the field it groups by)`. */
-function workersLogs(answer: (groupBy: string) => unknown) {
+function workersLogs(answer: (groupBy: string | undefined) => unknown) {
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
     const query = JSON.parse(init.body) as {
       view: string;
@@ -414,7 +505,7 @@ function workersLogs(answer: (groupBy: string) => unknown) {
       JSON.stringify(
         query.view === "events"
           ? { success: true, result: { events: { events: [] } } }
-          : answer(query.parameters.groupBys![0]!.value),
+          : answer(query.parameters.groupBys?.[0]?.value),
       ),
     );
   });
@@ -428,15 +519,17 @@ function workersLogs(answer: (groupBy: string) => unknown) {
   };
 }
 
-/** A prd whose only signal is `count` 5xx responses from lispwoso.com. */
-function serverErrorsOnly(count: number) {
-  return (groupBy: string) => ({
+/** A prd whose only signal is `count` 5xx responses from lispwoso.com, `unlogged` more without
+ *  a URL. Without a group, the one query that counts is the 5xx total. */
+function serverErrorsOnly(count: number, unlogged = 0) {
+  return (groupBy: string | undefined) => ({
     success: true,
     result: {
       calculations: [
         {
-          aggregates:
-            groupBy === "$workers.event.request.url" && count
+          aggregates: !groupBy
+            ? [{ count: count + unlogged }]
+            : groupBy === "$workers.event.request.url" && count
               ? [{ groupKey: "https://lispwoso.com/", count }]
               : [],
         },
@@ -445,24 +538,35 @@ function serverErrorsOnly(count: number) {
   });
 }
 
-/** A WebClient stand-in: serves `messages` as the channel history (honouring `oldest`, as Slack
- *  does) and records every post. */
-function fakeSlack(messages: Array<{ ts: string; bot_id: string | undefined; text: string }>) {
-  const posts: unknown[] = [];
+/** A WebClient stand-in recording every post; the Nth post's ts is "N.0". */
+function fakeSlack() {
+  const posts: Record<string, unknown>[] = [];
   const client = {
-    conversations: {
-      history: async (args: { oldest: string }) => ({
-        messages: messages.filter((message) => Number(message.ts) >= Number(args.oldest)),
-      }),
-    },
     chat: {
-      postMessage: async (args: unknown) => {
+      postMessage: async (args: Record<string, unknown>) => {
         posts.push(args);
-        return { ok: true, ts: "999.0" };
+        return { ok: true, ts: `${posts.length}.0` };
       },
     },
   } as unknown as WebClient;
   return { client, posts };
+}
+
+/** One run at `hhmm` on `day` after `state`, Workers Logs answering with `answer`. */
+async function runAt(
+  hhmm: string,
+  state: AlarmState | null,
+  slack: ReturnType<typeof fakeSlack>,
+  answer = serverErrorsOnly(0),
+  day = "2026-09-23",
+) {
+  await using _cloudflare = workersLogs(answer);
+  return alarm({
+    window: logWindow(new Date(`${day}T${hhmm}:00Z`), state),
+    state,
+    cloudflare: credentials,
+    slack: () => slack.client,
+  });
 }
 
 // Production 2026-09-24: two pager calls at 11:41:21.252Z, and two jsrpc calls at
@@ -527,9 +631,15 @@ function queryableWorkersLogs(
         success: true,
         result: { events: { events: selected.slice(0, query.limit) } },
       });
+    const groupBy = query.parameters.groupBys?.[0]?.value;
+    if (!groupBy)
+      return Response.json({
+        success: true,
+        result: { calculations: [{ aggregates: [{ count: selected.length }] }] },
+      });
     const counts = new Map<string, number>();
     for (const event of selected) {
-      const value = logField(event, query.parameters.groupBys![0]!.value);
+      const value = logField(event, groupBy);
       if (typeof value === "string") counts.set(value, (counts.get(value) || 0) + 1);
     }
     return Response.json({

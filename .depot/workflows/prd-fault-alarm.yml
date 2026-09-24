@@ -1,14 +1,21 @@
-# Prd fault alarm: every 15 minutes, reads the last half hour of os-prd's
-# Workers Logs and pages Slack #error-pulse (a top-level message mentioning
-# Jonas, at most hourly) on any 5xx, a burst of platform-failure heals, or any
-# error. The page is the alarm: the run goes red only when it could not read
-# the logs or post to Slack, because a scheduled run reports on main's head
-# commit, where red reads as "this commit broke". Why and thresholds:
-# scripts/ci/prd-fault-alarm.ts. Depot registers the schedule once this file is
-# on the default branch.
+# Prd fault alarm: every 15 minutes, reads os-prd's Workers Logs since the last run and pages Slack
+# #error-pulse on any 5xx, a burst of platform-failure heals, or any error. Each fault is an
+# incident: a new one pages at the top level mentioning Jonas, its repeats reply in that page's
+# thread. The page is the alarm: the run goes red only when it could not read the logs or post to
+# Slack, because a scheduled run reports on main's head commit, where red reads as "this commit
+# broke". Why and thresholds: scripts/ci/prd-fault-alarm.ts. Depot registers the schedule once this
+# file is on the default branch.
+#
+# Its memory (where the next read starts, the open incidents' threads) is its own
+# `prd-fault-alarm-state` artifact, read back by the next run with the Depot organization token from
+# Doppler _shared/preview. Only a run on main keeps it. A run that cannot read it reads the last
+# half hour and pages everything as new: a repeat, never a miss.
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
 
 name: Prd fault alarm (Depot CI)
+
+permissions:
+  contents: read
 
 on:
   schedule:
@@ -22,22 +29,39 @@ concurrency:
 jobs:
   alarm:
     name: Prd fault alarm
-    runs-on: depot-ubuntu-24.04
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
         with:
+          clean: false
           ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install
-      - name: Install Doppler CLI
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Read the previous run's state
         run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; sleep 5; done
-          doppler --version
+          export DEPOT_TOKEN
+          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" &&
+            pnpm tsx scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
+            echo "::warning::no previous state: this run pages every fault as new"
       - name: Read os-prd's logs, page on a fault
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+        run: >-
+          doppler run --project os --config prd --
+          pnpm tsx scripts/ci/prd-fault-alarm.ts run
+          --state test-results/prd-fault-alarm/previous.json
+          ${{ github.ref == 'refs/heads/main' && '--state-out test-results/prd-fault-alarm/state.json' || '' }}
+      # The alarm writes the state after its posts, so a run that failed to post keeps none and the
+      # next one reads its window again.
+      - name: Keep the state for the next run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prd-fault-alarm-state
+          path: test-results/prd-fault-alarm/state.json
+          if-no-files-found: ignore
+          overwrite: true
