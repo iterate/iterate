@@ -50,6 +50,11 @@ import { RECENT_EPHEMERALS_BUDGET_CHARS, type Stream, type SubscriptionCursor } 
  *  durable mark claims the alarm — by the time it fires the call has acked (the cursor row is
  *  written) or failed (the ladder took over), and an eviction in between leaves the alarm behind. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
+/** The most attempts — claims and failures counted together — one cursor row gets on one batch
+ *  before it halts. */
+const CURSOR_DELIVERY_MAX_ATTEMPTS = 15;
+/** The retry ladder's top rung: 1s·2ⁿ stops growing here. */
+const CURSOR_DELIVERY_MAX_BACKOFF_MS = 30 * 60_000;
 
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
@@ -631,6 +636,26 @@ export class SubscriptionDelivery {
     });
   }
 
+  /** Halt a CURSOR row: its cursor first spends the claim or rung it carries (attempt 0, no retry
+   *  time), so a resume starts a fresh ladder — then the halted fact (`#haltRow`). A row replaced
+   *  while the attempt ran is left alone: the replacement's cursor is not this batch's. */
+  #haltCursorRow(
+    name: string,
+    row: Subscription,
+    cursor: SubscriptionCursor,
+    attempts: number,
+    error: unknown,
+  ): void {
+    if (
+      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
+      row.configuredAtOffset
+    )
+      return;
+    const { nextAttemptAtMs: _spent, ...settled } = cursor;
+    this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
+    this.#haltRow(name, row.configuredAtOffset, cursor.confirmedOffset, attempts, error);
+  }
+
   /** The memo of the evaluated target head (`evaluatedTargetHead` says what invalidates it). */
   async #evaluateTargetHeadForRow(
     name: string,
@@ -765,13 +790,12 @@ export class SubscriptionDelivery {
         const behindTheDurableMark = cursor.confirmedOffset < this.#stream.highestDurableOffset();
         if (behindTheDurableMark) {
           const attempt = cursor.attempt + 1;
-          if (attempt > 15) {
-            const { nextAttemptAtMs: _spent, ...settled } = cursor;
-            this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
-            this.#haltRow(
+          // Every earlier attempt died without an ack or a failure: no (MAX+1)th claim is made.
+          if (attempt > CURSOR_DELIVERY_MAX_ATTEMPTS) {
+            this.#haltCursorRow(
               name,
-              row.configuredAtOffset,
-              cursor.confirmedOffset,
+              row,
+              cursor,
               cursor.attempt,
               new Error(
                 `${cursor.attempt} deliveries of this batch ended without an ack or a failure (the context died mid-call)`,
@@ -828,13 +852,7 @@ export class SubscriptionDelivery {
           } catch (error) {
             // A row this subscription can never read past (EVENT_UNREADABLE) is a refusal that
             // can only repeat: halt now, as the ladder's end would — never a retry into it.
-            this.#haltRow(
-              name,
-              row.configuredAtOffset,
-              cursor.confirmedOffset,
-              cursorBeforeAttempt.attempt + 1,
-              error,
-            );
+            this.#haltCursorRow(name, row, cursor, cursorBeforeAttempt.attempt + 1, error);
             return;
           }
           // Ephemerals the ring let go of before this row read them are lost to it (nothing
@@ -952,15 +970,13 @@ export class SubscriptionDelivery {
             // The rung is written on the SAME attempt the claim was (one bump per attempt).
             const attempt = cursorBeforeAttempt.attempt + 1;
             // A failure that can only repeat halts now, not in half an hour.
-            if (deterministicFailure(error) || attempt >= 15) {
-              // The halted cursor claims no retry time: a resume starts a fresh ladder.
-              const { nextAttemptAtMs: _spent, ...settled } = cursor;
-              this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
-              this.#haltRow(name, row.configuredAtOffset, cursor.confirmedOffset, attempt, error);
+            if (deterministicFailure(error) || attempt >= CURSOR_DELIVERY_MAX_ATTEMPTS) {
+              this.#haltCursorRow(name, row, cursor, attempt, error);
               return;
             }
             const backoff =
-              Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4);
+              Math.min(1000 * 2 ** (attempt - 1), CURSOR_DELIVERY_MAX_BACKOFF_MS) *
+              (0.8 + Math.random() * 0.4);
             const nextAttemptAtMs = Date.now() + Math.round(backoff);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);

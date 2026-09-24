@@ -1515,7 +1515,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
     }
   });
 
-  test("a row an unreadable event stops is HALTED, not retried into forever", async () => {
+  test("a row an unreadable event stops is HALTED, not retried into forever, and its persisted cursor keeps no claim", async () => {
     const first = parkedSinkRig();
     const [ping] = first.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await drainDeliveries(); // in flight; the claim is written
@@ -1532,6 +1532,11 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
     expect(second.pushes).toEqual([]);
     expect(second.stream.coreReducedState.subscriptions.s.halted).toMatchObject({ attempts: 2 });
     expect(second.delivery.deadlines()).toEqual([]);
+    // The halt spends the claim it was made under, as the ladder's own halts do: a resume starts a
+    // fresh ladder from the persisted cursor.
+    expect(second.stream.storage.listSubscriptionCursors()).toEqual([
+      ["s", { confirmedOffset: claim.confirmedOffset, attempt: 0 }],
+    ]);
     // The claim was the one alarm armed; the pass spent it and nothing re-arms.
     expect(second.alarms).toEqual([claim.nextAttemptAtMs]);
     expect(second.coordinator.snapshot().armedAt).toBeNull();
@@ -1552,7 +1557,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
     expect(second.alarms).toEqual([]);
   });
 
-  test("a HALTED row owes nothing — even one whose persisted cursor still carries the retry time that halted it", async () => {
+  test("a HALTED row owes nothing, even if its persisted cursor carries a retry time", async () => {
     const first = incarnation(() => undefined);
     first.stream.append(
       normalizeControlEvent(
@@ -1563,7 +1568,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
         "/",
       ),
     );
-    // A cursor as an earlier build persisted it at the halt: attempt 0, a past retry time kept.
+    // deadlines() skips a halted row, so a retry time left in its cursor is never a claim.
     first.stream.storage.writeSubscriptionCursor("s", {
       confirmedOffset: 1,
       attempt: 0,
