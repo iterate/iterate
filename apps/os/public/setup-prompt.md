@@ -1,64 +1,163 @@
-# Set up Iterate for me
+# Self-host iterate OS on a personal Cloudflare account
 
-You are helping a person deploy **Iterate** into their own Cloudflare account and start using it:
-one Cloudflare Worker that makes each project a programmable workspace, with one MCP server (`/mcp`)
-whose one tool, `run`, evaluates an `async (itx) => …` script against a project. Work through these
-steps in order, and stop to wait for the person wherever a step says so.
+A recipe for a coding agent. If you were asked to set someone up with iterate.com, or with a
+self-hosted iterate, follow it.
 
-## 1. Deploy it
+End state: `https://iterate.<subdomain>.workers.dev/mcp` is a working remote MCP server in the user's
+agents. iterate OS (`apps/os` in https://github.com/iterate/iterate) is one Worker: sign-in and
+OAuth, `/mcp` (one tool, `run({ project, script })`, which evaluates `async (itx) => …` against a
+project), and a Durable Object per project.
 
-Requirements: a Cloudflare account on the **Workers Paid** plan (the Worker declares paid-plan limits
-and binds Browser Run and the Worker Loader), Node and pnpm, and `openssl`. No domain is needed.
+Work in the directory you were started in.
+
+Whenever the user has to act somewhere else (the browser, or e.g. typing `/mcp` into their client), end
+your turn or wait on a background command. Don't ask a blocking question: it takes over their prompt
+box.
+
+One browser flow at a time, in order: the dash sign-in and project (step 6) finishes before any
+client's OAuth (step 8) starts. Every one of them shows the same iterate sign-in and consent pages,
+so say which flow a page is for when you open it.
+
+## Requirements
+
+- **Workers Paid**: the config declares paid-plan limits.
+- **R2** enabled.
+- **Artifacts** (closed beta): every project's code lives in an Artifacts git repo. Without access,
+  deploy fails with `10015`. Strip the binding and the deploy succeeds: sign-in and MCP work, but
+  project creation fails with
+  `repo /repos/config: creation failed — Cannot read properties of undefined (reading 'get')`.
+
+## 1. Build
 
 ```bash
-git clone https://github.com/iterate/iterate && cd iterate
-pnpm install
+git clone --depth 1 https://github.com/iterate/iterate   # gitignored
+cd iterate && pnpm install
 CLOUDFLARE_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
-npx wrangler login                             # opens the browser; the person picks the account
 ```
 
-Ask the person to choose a sign-in password before the next step. Do not invent one for them, and
-never paste secrets into the chat: write the file, deploy, delete the file.
+## 2. Log in
+
+- Always run `wrangler login`, even if wrangler already shows a login: you can't know which account
+  the user wants. Run it with `--browser=false` in the background and `open` the URL. The user signs
+  into the dash as the right Cloudflare user, picks the account on Cloudflare's consent page and
+  clicks Allow. So don't ask which account up front. The login command exits once they're done, and
+  `wrangler whoami` then shows the account. Ask only if it shows several.
+- Use `pnpm exec wrangler` from `iterate/apps/os`, always with `--config dist/server/wrangler.json`.
+  Without it, wrangler picks whichever config the last build pointed it at, and iterate's own
+  configs pin iterate's `account_id`.
+
+## 3. Check the account (before deploying)
+
+Use the token from `wrangler auth token` against
+`https://api.cloudflare.com/client/v4/accounts/<id>`:
+
+- `GET /workers/subdomain`: the origin is `https://iterate.<subdomain>.workers.dev`.
+- `GET /r2/buckets` must succeed. If not, the user enables R2 in the dash.
+- `GET /artifacts/namespaces`: `10004 Access denied by feature gate` means no access. The access
+  form is https://forms.gle/DwBoPRa3CWQ8ajFp7 (name, account ID, use case, Workers Paid y/n, repo
+  count; approval takes 2–4 weeks). Hand the user a prefilled link
+  (`viewform?usp=pp_url&entry.<id>=…`); they submit it. Until access is granted, projects won't
+  work. Deploy anyway only if the user wants to: delete `artifacts` from `dist/server/wrangler.json`
+  after every build.
+- Workers Paid can't be checked with these scopes. A successful deploy proves it.
+
+## 4. Secrets
+
+Write `.secrets` (gitignored, mode 600) and keep it. It's the only copy of these values.
+
+```
+APP_CONFIG={"login":{"password":"<generated, alphanumeric>"},"secrets":{"adminBearer":"<openssl rand -hex 32>"}}
+APP_CONFIG_SECRETS__KEY=<openssl rand -hex 32>
+```
+
+- `password`: anyone who has it can sign in as any email they type.
+- `adminBearer`: operator access to every project over `/mcp`. You use it to verify.
+- The key encrypts project secrets at rest; losing it loses them.
+
+Never print these in chat. When the user needs the password, copy it (it's JSON inside a dotenv
+line): `sed -n 's/^APP_CONFIG=//p' .secrets | jq -j .login.password | pbcopy`. Then tell them it's on
+their clipboard, and that it came from `.secrets` (give its absolute path) so they can find it later.
+
+## 5. Deploy
 
 ```bash
-cat > .secrets <<EOF
-APP_CONFIG={"login":{"password":"<the password they chose>"}}
-APP_CONFIG_SECRETS__KEY=$(openssl rand -hex 32)
-EOF
-npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .secrets
-rm .secrets
+pnpm exec wrangler deploy --config dist/server/wrangler.json --secrets-file /abs/path/to/.secrets
 ```
 
-The first deploy creates the two KV namespaces and the R2 bucket by name and prints
-the Worker's URL — `https://iterate.<their-subdomain>.workers.dev`, `<origin>` below. Tell the person
-to keep a copy of `APP_CONFIG_SECRETS__KEY` somewhere safe: it encrypts their projects' secrets at rest.
+The first deploy creates the KV namespaces and R2 bucket by name. If a deploy fails
+after that, the next one fails with `10014 ... already exists`: delete the empty `iterate-itx-kv` /
+`iterate-oauth-kv` and retry. To update: `git pull`, rebuild, deploy. Without `--secrets-file` the
+existing secrets are kept.
 
-## 2. Sign in
+The deploy doesn't create the Artifacts namespace the config names (`iterate-repos`), and the
+Worker's binding doesn't either, whatever Cloudflare's docs say. Without it, project creation fails
+with `repo /repos/config: creation failed — Namespace is not active`. So create it before anyone
+signs in (it's a no-op if `GET /artifacts/namespaces/iterate-repos` already finds it):
 
-Ask the person to open `<origin>` and sign in with their email and the password. Anyone who knows the
-password can sign in as the email they type: the password is the membership, the email is the name
-tag. Their first sign-in creates an organization and a project on the consent page.
-
-## 3. Connect over MCP
-
-Add `<origin>/mcp` to your MCP client as a remote server. It signs in through the same page. Most
-clients only load servers at startup, so the person may need to restart the client or open a new
-chat before the `run` tool appears — say so, and wait for them.
-
-Once `run` is there, prove the connection with one script:
-
-```js
-async (itx) => ({ who: await itx.whoami(), url: await itx.url() });
+```bash
+curl -X POST https://api.cloudflare.com/client/v4/accounts/<id>/artifacts/namespaces \
+  -H "Authorization: Bearer $(pnpm exec wrangler auth token --config dist/server/wrangler.json | tail -1)" \
+  -H 'content-type: application/json' -d '{"namespace":"iterate-repos"}'
 ```
 
-It answers with the project's id and slug and its public URL under `<origin>/projects/<slug>/`.
+## 6. First sign-in and project
 
-## 4. Hand over the dash
+Signing in at the origin creates nothing: the organization and project are created on the consent
+page, when an app connects. So send the user to the dash's connect page,
+`https://dash.iterate.com/.auth/connect?issuer=<origin>` (the origin's landing page links there too).
+They click Continue, sign in with any email and the password, then name the organization and project
+on the consent page. Wait for them, then find the slug yourself with the admin bearer (from
+`iterate/apps/os`, where the SDK resolves). Ask only if there are several:
 
-Projects, organizations, sessions and personal access tokens are managed in the dash, an app iterate
-hosts that connects to any iterate platform. Send the person to
-`https://dash.iterate.com/.auth/connect?issuer=<origin>` — the page names their platform's host and
-asks before connecting the browser to it.
+```bash
+ADMIN_BEARER=<adminBearer> pnpm exec tsx --eval 'import("iterate/node").then(async ({ connectIterate }) => {
+  const c = await connectIterate({ baseUrl: process.argv[1], auth: { type: "admin-secret", secret: process.env.ADMIN_BEARER } });
+  console.log((await c.session.projects.list()).map((p) => p.slug).join("\n")); process.exit(0); })' <origin>
+```
 
-Docs: `apps/os/SELF-HOSTING.md` and `apps/os/README.md` in the repository.
-Source, and where to start if something breaks: https://github.com/iterate/iterate
+The project row exists even when Artifacts is missing and project creation failed.
+
+Every iterate app link you give the user carries the issuer:
+`https://<app>/.auth/connect?issuer=<origin, URL-encoded>`. A bare `https://dash.iterate.com` (or
+voice, …) signs in to iterate's hosted platform instead. The dash's sidebar links to the other apps
+drop the issuer too, so don't send the user through them.
+
+## 7. Verify
+
+`/mcp` is stateless streamable HTTP. With the admin bearer, `project` is required:
+
+```bash
+jq -nc --arg s 'async (itx) => ({ who: await itx.whoami(), files: await itx.repos.get("/repos/config").listFiles() })' \
+  '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"run",arguments:{project:"<slug>",script:$s}}}' |
+curl -s <origin>/mcp -H "Authorization: Bearer $ADMIN_BEARER" -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' -d @-
+```
+
+Expect the project's id, slug and URL, plus the config repo's files. `repo /repos/config: not created`
+means project creation failed. Check the project's page in the dash for the reason. For `Namespace
+is not active`, create the namespace (step 5), then have the user create the project again from the
+dash's projects page. That starts a new attempt.
+
+## 8. Connect the user's agents
+
+- Register `<origin>/mcp` as a remote HTTP MCP server in the client you are running in, and only
+  that one, e.g. Claude Code:
+  `claude mcp add --transport http -s user iterate-<subdomain> <origin>/mcp`. Don't set up the
+  user's other clients; the final message tells them how.
+- Registering may open the sign-in page by itself (e.g. `codex mcp add` does). If it does, don't also
+  `open` it or run a separate login command: that pops open the same page twice and confuses the user.
+- The user signs the client in through the browser (any email plus the password). E.g. in Claude
+  Code: `/mcp`, pick the server, authenticate; after that, `claude mcp list`/`codex mcp list` shows it as connected.
+- Then try the server's `run` tool in this session straight away. Some hosts attach a newly added
+  server once it's signed in (e.g. Claude Desktop's Code tab does), so look for it among your tools
+  (e.g. Claude Code's deferred tools). Call it with `async (itx) => itx.whoami()`: no `project`
+  needed when the token reaches one project. If the tool isn't there, the client only loads servers
+  at startup. Tell the user to start a new session and ask it to run the same check.
+- Finish with one message that has some things to get started with (for links, show them in full so the user gets familiar with them):
+  - `<origin>/mcp` (remote HTTP) for other clients, where the password lives, and that each client signs in the same way;
+  - the dash: `https://dash.iterate.com/.auth/connect?issuer=<origin>`;
+  - voice: `https://voice.iterate.com/.auth/connect?issuer=<origin>`, to talk to the project from
+    the laptop mic. The page installs the voice agent itself, asking for an OpenAI key the first
+    time.
+
+Google, Cloudflare or email-code sign-in, and custom domains: `apps/os/SELF-HOSTING.md`.
