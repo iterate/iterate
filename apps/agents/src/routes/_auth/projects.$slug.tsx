@@ -24,6 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
@@ -32,7 +33,6 @@ import { installAgents } from "../../../runtime/install.ts";
 import agentRuntime from "../../../../../configs-next/with-agents/agents.js?raw";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
-import { LiveStateValue } from "../../components/live-state-value.tsx";
 import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";

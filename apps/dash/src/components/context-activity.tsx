@@ -7,8 +7,8 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useIterateContext, type IterateContextHandle } from "iterate/next/react";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import type { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
+import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import { factRenderers } from "../lib/fact-renderers.tsx";
-import { LiveStateValue } from "./live-state-value.tsx";
 
 export type ActivityItx = IterateContextHandle & {
   processors: IterateContextHandle["processors"] & {
