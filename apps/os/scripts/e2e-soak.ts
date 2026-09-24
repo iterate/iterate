@@ -150,7 +150,7 @@ function soakRun(
   // must say WHAT failed while it runs, not only how many (the reports arrive with the artifact).
   for (const { file: failedFile, row } of failed)
     console.log(
-      `  ✗ ${failedFile} › ${row.fullName.slice(0, 120)}\n      ${(row.failureMessages?.[0] ?? "").split("\n")[0]!.slice(0, 400)}`,
+      `  ✗ ${failedFile} › ${row.fullName.slice(0, 120)}\n      ${firstLine(row.failureMessages?.[0] ?? "")}`,
     );
   return failed.length;
 }
@@ -241,4 +241,14 @@ function freshPreviewRun(n: number, preview: string) {
 function p50Seconds(ms: number[]) {
   if (ms.length === 0) return "n/a";
   return `${(ms.toSorted((a, b) => a - b)[Math.floor(ms.length / 2)]! / 1000).toFixed(0)} s`;
+}
+
+/** A failure message's first line. Vitest's own test timeout reports a stack whose first line is
+ *  `Error: STACK_TRACE_ERROR` (@vitest/runner makeTimeoutError copies the registration's stack and
+ *  its replace leaves that line — 4.1.10), so that line is said as what it means. */
+function firstLine(message: string): string {
+  const line = message.split("\n")[0]!.slice(0, 400);
+  return line === "Error: STACK_TRACE_ERROR"
+    ? "the test hit its own timeout (vitest reports that as Error: STACK_TRACE_ERROR)"
+    : line;
 }
