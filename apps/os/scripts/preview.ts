@@ -544,8 +544,7 @@ async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
 }
 
 /** A laptop deploy bundles whatever node_modules holds, so a lockfile newer than the install would
- *  ship stale dependencies: pnpm-lock.yaml newer than node_modules → stop. CI installs first.
- *  (CI repro for #2971, run 2: this branch predates main's last lockfile change, d39c921c1.) */
+ *  ship stale dependencies: pnpm-lock.yaml newer than node_modules → stop. CI installs first. */
 function assertFreshInstall() {
   const root = path.resolve(ROOT, "../..");
   const lockfile = statSync(path.join(root, "pnpm-lock.yaml")).mtimeMs;
