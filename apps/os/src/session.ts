@@ -14,7 +14,7 @@ import {
 } from "@iterate-com/shared/config-repo-template/reference";
 import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import type { IterateApi } from "iterate/next/api";
-import { codedError } from "iterate/next/lib";
+import { codedError, reportIssue } from "iterate/next/lib";
 import { OAuthScope } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
@@ -39,6 +39,7 @@ import { type ControlPlane, describeReach, type Reach } from "./control-plane/ed
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OrganizationRole } from "./organization/contract.ts";
 import type { AppConfig } from "./app-config.ts";
+import { isRetryableTransportError } from "./retryable-error.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
@@ -235,7 +236,10 @@ export async function appendPlatformFacts(
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
  *  sign-ins, mints and consents; the organization's creation, rename, deletion and membership
- *  changes. A fact lost to an eviction is a gap in the record, never a failed action. */
+ *  changes. A lost fact is a gap in the record, never a failed action. A deploy resetting the
+ *  owner's Durable Object cuts in-flight appends at the transport (retryable-error.ts) — expected on
+ *  every deploy under traffic, so a warning; any other failure is reported, as oauth.ts reports a
+ *  grant use it could not record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
@@ -243,7 +247,24 @@ export function publishPlatformFacts(
   caller: Caller,
 ): void {
   input.waitUntil(
-    appendPlatformFacts(input.contextNamespace, owner, facts, caller).catch(() => undefined),
+    appendPlatformFacts(input.contextNamespace, owner, facts, caller).catch((error) => {
+      const attributes = {
+        path: ownerAddress(owner).path,
+        types: [facts]
+          .flat()
+          .map((fact) => fact.type)
+          .join(","),
+      };
+      if (isRetryableTransportError(error)) {
+        console.warn({
+          event: "session.platform-fact-cut",
+          ...attributes,
+          message: String(error),
+        });
+        return;
+      }
+      reportIssue("session.platform-fact-not-recorded", error, attributes);
+    }),
   );
 }
 
