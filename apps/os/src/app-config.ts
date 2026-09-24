@@ -28,6 +28,7 @@ import {
   type IngressRouting,
   type ProjectAddress,
 } from "iterate/project-ingress";
+import { sha256Hex } from "./caller.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "./test-link.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
@@ -452,14 +453,7 @@ const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();
 export function sessionSigningSecretOf(config: AppConfig): Promise<string> {
   let secret = sessionSigningSecretByConfig.get(config);
   if (!secret) {
-    secret = crypto.subtle
-      .digest(
-        "SHA-256",
-        new TextEncoder().encode(`iterate-session-signing:${config.secrets.key.exposeSecret()}`),
-      )
-      .then((digest) =>
-        Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
-      );
+    secret = sha256Hex(`iterate-session-signing:${config.secrets.key.exposeSecret()}`);
     sessionSigningSecretByConfig.set(config, secret);
   }
   return secret;

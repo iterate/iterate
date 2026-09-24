@@ -14,6 +14,7 @@
 // The shapes a caller sees — the material, the client-auth method and the refresh strategy — are the
 // SDK's (`iterate/api`, where the dash and every client read them).
 import type { ClientAuth, SecretMaterial, SecretRefresh } from "iterate/api";
+import { secretsEqual } from "./caller.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
@@ -283,26 +284,6 @@ export async function hmacSha256Hex(key: string, payload: string | Uint8Array): 
   return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** Constant-time equality of two strings: HMAC both under one
- *  throwaway key and compare the fixed-length digests with no early exit, so neither content nor
- *  LENGTH shapes the timing — the candidate comes from an unauthenticated caller. */
-export async function constantTimeEquals(expected: string, candidate: string): Promise<boolean> {
-  // a symmetric algorithm mints one key, not a pair — the union in the types is for RSA/EC
-  const key = (await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ])) as CryptoKey;
-  const encoder = new TextEncoder();
-  const [a, b] = (
-    await Promise.all([
-      crypto.subtle.sign("HMAC", key, encoder.encode(expected)),
-      crypto.subtle.sign("HMAC", key, encoder.encode(candidate)),
-    ])
-  ).map((digest) => new Uint8Array(digest));
-  let difference = 0;
-  for (let i = 0; i < a!.length; i += 1) difference |= a![i]! ^ b![i]!;
-  return difference === 0;
-}
-
 /** THE VERIFY OPERATION, pure: does `signature` (hex, either case) equal the HMAC-SHA256 of `payload`
  *  under the key `material` holds (at `field`)? One bit out; the key never leaves the caller. A
  *  material with no key at the field verifies nothing. */
@@ -314,7 +295,7 @@ export async function verifySecretHmac(
   if (!key) return false;
   const signature = input.signature.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(signature)) return false;
-  return constantTimeEquals(await hmacSha256Hex(key, input.payload), signature);
+  return secretsEqual(await hmacSha256Hex(key, input.payload), signature);
 }
 
 /** A secret is sent to its pinned origins ONLY — a mis-typed URL cannot mail a credential to a

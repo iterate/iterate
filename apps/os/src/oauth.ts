@@ -12,7 +12,7 @@ import { z } from "zod";
 import { reportIssue } from "iterate/lib";
 import { OAuthScope, OAuthScopes } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
-import { verifyAdminSecret } from "./caller.ts";
+import { secretsEqual, sha256Hex, verifyAdminSecret } from "./caller.ts";
 import type { Env } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
@@ -23,8 +23,6 @@ import { providerStore } from "./oauth-store.ts";
 import {
   isPersonalAccessToken,
   parsePersonalAccessToken,
-  personalAccessTokenHash,
-  personalAccessTokenHashMatches,
   personalAccessTokenIndexed,
 } from "./personal-access-token.ts";
 
@@ -379,7 +377,7 @@ async function personalAccessTokenAdmission(
 > {
   const named = parsePersonalAccessToken(token);
   if (!named) return { ok: false, reason: "token_unknown_or_expired" };
-  const hash = await personalAccessTokenHash(token);
+  const hash = await sha256Hex(token);
   // THE INDEX FIRST (personal-access-token.ts): a key it does not hold is refused on one KV read, so
   // a forged key dials no Durable Object, neither a stranger's (which would be created) nor a real
   // person's (whose account every one of their grants reads).
@@ -387,7 +385,7 @@ async function personalAccessTokenAdmission(
     return { ok: false, reason: "token_unknown_or_expired" };
   const account = await accountStateOf(env, named.userId);
   const key = account.personalAccessTokens[named.id];
-  if (!key || !personalAccessTokenHashMatches(hash, key.hash))
+  if (!key || !(await secretsEqual(hash, key.hash)))
     return { ok: false, reason: "token_unknown_or_expired" };
   const expiresAt = key.expiresAt ?? Infinity;
   if (expiresAt <= Date.now()) return { ok: false, reason: "token_unknown_or_expired" };

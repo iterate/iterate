@@ -1,12 +1,12 @@
 // test-link.ts — THE ONE-CLICK SIGN-IN LINK of a per-PR preview (and local dev): a signed URL that
 // signs the browser in to the issuer as one reserved test address and sends it on, so a reviewer
 // opens a PR's Dash from the PR body without typing an email or a password. It restores #2485's
-// preview `Login ↗` for the in-worker issuer. Pure — WebCrypto and nothing else — so
+// preview `Login ↗` for the in-worker issuer. Pure — caller.ts's WebCrypto codec — so
 // scripts/preview.ts mints with the very code the worker verifies with (worker.ts
 // `/.auth/test-link`, issuer-session.ts `testLinkResponse`).
 //
-// The token is `base64url(JSON claims).base64url(HMAC-SHA256)`. Why it is not a standing
-// credential:
+// The token is caller.ts `signClaims`' `base64url(JSON claims).base64url(HMAC-SHA256)`. Why it is
+// not a standing credential:
 //   • OFF unless `login.testLink` is configured, which app-config.ts refuses unless `urls.os` is a
 //     workers.dev or localhost origin — prd can never turn it on; only previewWranglerConfig (the
 //     config `wrangler preview` reads, never deploy.ts's) and local dev set it.
@@ -17,6 +17,8 @@
 //     preview, and the link with it, is deleted when the PR closes.
 //   • every claim is under the MAC: nobody edits the link into another person, another `next` or
 //     another client list.
+
+import { sha256Hex, signClaims, verifyClaims } from "./caller.ts";
 
 /** Where the worker redeems a link, beside `/version` on the platform origin. */
 export const TEST_LINK_PATH = "/.auth/test-link";
@@ -48,8 +50,7 @@ type TestLinkClaims = {
   exp: number;
 };
 
-/** Mint a link's token (`?t=` on `TEST_LINK_PATH`). `key` is the deployment's `secrets.key`: the
- *  HMAC key derives from it under its own label, so the raw key is never reused. */
+/** Mint a link's token (`?t=` on `TEST_LINK_PATH`). `key` is the deployment's `secrets.key`. */
 export async function mintTestLink(input: {
   key: string;
   audience: string;
@@ -66,13 +67,7 @@ export async function mintTestLink(input: {
     clients: input.clients,
     exp: input.expiresAt,
   };
-  const payload = base64url(new TextEncoder().encode(JSON.stringify(claims)));
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    await hmacKeyOf(input.key),
-    new TextEncoder().encode(payload),
-  );
-  return `${payload}.${base64url(new Uint8Array(signature))}`;
+  return signClaims(claims, await signingSecretOf(input.key));
 }
 
 /** THE REDEMPTION DECISION, pure: what `GET /.auth/test-link?t=` answers before any effect. 404
@@ -93,19 +88,12 @@ export async function redeemTestLink(
 > {
   if (!deployment.testLink) return { status: 404, message: "Not found" };
   const refuse = (message: string) => ({ status: 403 as const, message });
-  const [payload, signature, ...rest] = (token || "").split(".");
-  if (!payload || !signature || rest.length) return refuse("This sign-in link is malformed.");
-  const bytes = fromBase64url(signature);
-  const valid =
-    bytes &&
-    (await crypto.subtle.verify(
-      "HMAC",
-      await hmacKeyOf(deployment.key),
-      bytes,
-      new TextEncoder().encode(payload),
-    ));
-  if (!valid) return refuse("This sign-in link's signature is not valid here.");
-  const claims = JSON.parse(new TextDecoder().decode(fromBase64url(payload)!)) as TestLinkClaims;
+  // verified under this deployment's own secret, so the claims are ones `mintTestLink` wrote
+  const claims = (await verifyClaims(
+    token || "",
+    await signingSecretOf(deployment.key),
+  )) as TestLinkClaims | null;
+  if (!claims) return refuse("This sign-in link's signature is not valid here.");
   if (claims.v !== 1) return refuse("This sign-in link is of an unknown version.");
   if (claims.aud !== deployment.platformOrigin)
     return refuse(`This sign-in link is for ${claims.aud}, not this deployment.`);
@@ -140,30 +128,6 @@ function isLinkedOrigin(value: string, platformOrigin: string) {
   return ["localhost", "127.0.0.1"].includes(url.hostname);
 }
 
-/** The HMAC key: SHA-256 of `iterate-test-link:<secrets.key>` — the key under its own label, as
- *  app-config.ts `sessionSigningSecretOf` derives the session-signing secret under another. */
-async function hmacKeyOf(key: string) {
-  const derived = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`iterate-test-link:${key}`),
-  );
-  return crypto.subtle.importKey("raw", derived, { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-    "verify",
-  ]);
-}
-
-function base64url(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-}
-
-/** null for anything that is not base64url. */
-function fromBase64url(text: string) {
-  // a length ≡ 1 (mod 4) is no whole byte: `atob` would throw on it
-  if (!/^[A-Za-z0-9_-]*$/.test(text) || text.length % 4 === 1) return null;
-  const binary = atob(text.replaceAll("-", "+").replaceAll("_", "/"));
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
-}
+/** The signing secret: `secrets.key` under its own label, SHA-256, hex — as app-config.ts
+ *  `sessionSigningSecretOf` derives the session's under another, so the raw key is never reused. */
+const signingSecretOf = (key: string) => sha256Hex(`iterate-test-link:${key}`);

@@ -15,6 +15,7 @@ import { codedError, cookieValueOf, reportIssue } from "iterate/lib";
 import type { Env } from "./env.ts";
 import { EMAIL_NOT_ALLOWED_MESSAGE, emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf } from "./app-config.ts";
+import { secretsEqual, sha256Hex } from "./caller.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
@@ -35,25 +36,6 @@ type Challenge = z.infer<typeof Challenge>;
 const key = (id: string) => `login-code:${id}`;
 /** RFC 2606 / 6761 names — no mailbox there ever exists. */
 const reservedDomain = /@(example\.(com|net|org)|[^@]+\.(test|example|invalid|localhost))$/i;
-
-async function sha256(text: string): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
-}
-
-async function hashOf(id: string, code: string): Promise<string> {
-  return Array.from(await sha256(`${id}:${code}`), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-}
-
-/** Whether two secrets are the same, in time that does not depend on where they differ: both are
- *  hashed (fixed length) and the digests compared byte by byte, every byte. */
-async function secretsEqual(candidate: string, secret: string): Promise<boolean> {
-  const [a, b] = await Promise.all([sha256(candidate), sha256(secret)]);
-  let difference = 0;
-  for (let i = 0; i < a.length; i += 1) difference |= a[i]! ^ b[i]!;
-  return difference === 0;
-}
 
 /** The address as the control plane keys it: trimmed, lowercased, an email at all, and one the
  *  deployment's `login.allowedEmails` admits. */
@@ -175,7 +157,7 @@ export async function startLoginCode(
   const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
   await putChallenge(env, id, {
     email: address,
-    hash: await hashOf(id, code),
+    hash: await sha256Hex(`${id}:${code}`),
     tries: 0,
     expiresAt: Date.now() + LIFETIME_MS,
   });
@@ -215,7 +197,7 @@ export async function finishLoginCode(
   if (!found) return { error: "That code has expired. Enter your email again.", restart: true };
   const { id, challenge } = found;
   const entered = code.replace(/\D/g, "");
-  const right = entered.length === 6 && (await hashOf(id, entered)) === challenge.hash;
+  const right = entered.length === 6 && (await sha256Hex(`${id}:${entered}`)) === challenge.hash;
   if (!right) {
     // the fifth wrong try ends the challenge
     if (challenge.tries + 1 >= 5) {
