@@ -151,6 +151,61 @@ test("a context still resident a quiet period after it materialized a loaded fac
   await s.invoke(["itx", "processors", ["claim", "busy", null]]);
 });
 
+test("the sweep's alarm an evicted incarnation left wakes a fresh one that appends nothing, and re-derives only the durable deadlines", async () => {
+  const ctx = "prj_facet_sweep_fresh_wake";
+  const s = stub(ctx);
+  const t0 = Date.now();
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  await s.invoke(["itx", "facets", ["get", "plain", spec], ["hello"]]); // arms the sweep
+  // A durable deadline ten minutes out: the sweep's alarm is the earlier one.
+  const later = t0 + 10 * 60_000;
+  await s.invoke([
+    "itx",
+    "schedules",
+    [
+      "set",
+      { key: "later", when: { at: new Date(later).toISOString() }, events: [{ type: "later" }] },
+    ],
+  ]);
+  expect(await alarmOf(s)).toBe(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  const before = await durableEvents(s);
+  const incarnation = await incarnationOf(s);
+  await releasePins(ctx);
+  await evictDurableObject(s);
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  expect(await alarmOf(s)).toBe(later);
+  // The wake appended nothing: the one new event is the wake record of the read below — this
+  // incarnation's first inbound call, so its reason is "request" — naming the facet its birth reset.
+  const appended = (await durableEvents(s)).slice(before.length);
+  expect(appended.map((event) => [event.type, event.payload])).toEqual([
+    [
+      "events.iterate.com/stream/woken",
+      { incarnation: incarnation + 1, reason: "request", facetsReset: ["plain"] },
+    ],
+  ]);
+});
+
+test("the sweep's alarm an evicted incarnation left, with nothing durable, leaves no alarm", async () => {
+  const ctx = "prj_facet_sweep_fresh_wake_empty";
+  const s = stub(ctx);
+  const t0 = Date.now();
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  await s.invoke(["itx", "facets", ["get", "plain", spec], ["hello"]]);
+  expect(await alarmOf(s)).toBe(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  await releasePins(ctx);
+  await evictDurableObject(s);
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  expect(await alarmOf(s)).toBeNull();
+});
+
 test("a call from loaded code counts while in flight but never restarts the sweep's quiet clock: the unclaimed facet is reset a quiet period after the last OUTSIDE call", async () => {
   const ctx = "prj_facet_sweep_outside_clock";
   const s = stub(ctx);
@@ -233,3 +288,19 @@ test("a claim's release arms the sweep again: a facet the sweep spared while it 
   // The instance the claim kept running is gone: a fresh one answers.
   expect(await s.invoke(["itx", "facets", ["get", "busy"], ["hello"]])).not.toBe(before);
 });
+
+function alarmOf(s: ReturnType<typeof stub>): Promise<number | null> {
+  return runInDurableObject(s, (_instance, state) => state.storage.getAlarm());
+}
+
+async function durableEvents(s: ReturnType<typeof stub>): Promise<StreamEvent[]> {
+  return ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events;
+}
+
+function incarnationOf(s: ReturnType<typeof stub>): Promise<number> {
+  return runInDurableObject(s, (_instance, state) =>
+    Number(
+      state.storage.sql.exec("SELECT value FROM stream_meta WHERE key = 'incarnation'").one().value,
+    ),
+  );
+}

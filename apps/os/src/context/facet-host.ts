@@ -99,8 +99,8 @@ const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
  *  context that evicted on time (~10 s) is woken fresh by it, and that birth does the reset; a
  *  context still resident does it in place. Past the ~10 s eviction and the pins' 30 s release, so a
  *  used context costs ONE extra alarm wake per quiet period — and a facet the last call left running
- *  is billed about a minute, not until the residency watchdog's 15 (measured 2026-09-23: a careless
- *  loaded facet billed 60 s of every minute until that wake). */
+ *  is billed about a minute, not until its context's next wake (measured 2026-09-23: a careless
+ *  loaded facet billed 60 s of every minute until then). */
 export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
 
 /** Each first-party facet's `publicMethods`, read off its class (the class is minted from
@@ -184,7 +184,7 @@ export class FacetHost {
   readonly #facetRecoveryByName = new Map<string, Promise<void>>();
   /** Facet work in flight: the test-only release (`abortLiveFacetsWhenIdle`) respects it — aborting a
    *  facet mid-REDUCE is exactly the stall a reduce would have to repair from the log, never cause it —
-   *  and the residency watchdog and the unclaimed-facet sweep read it through `snapshot()`. */
+   *  and the unclaimed-facet sweep reads it through `snapshot()`. */
   #facetWorkInFlight = 0;
   /** THE CLAIMS of hosted processors on this context's alarm (`processors.claim`): name → the time
    *  a `revive()` is owed by. A kv row each, so a claim outlives the incarnation that made it —

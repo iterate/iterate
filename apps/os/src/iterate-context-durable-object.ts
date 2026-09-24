@@ -118,9 +118,7 @@ export type AlarmTrace = {
     deliveryOmitted: number;
     /** The hosted processors holding a claim (`processors.claim`): a revive owed by `at`. */
     claims: { name: string; at: number }[];
-    /** The residency watchdog's deadline — in memory, so null in a fresh incarnation. */
-    residencyWatchdog: number | null;
-    /** The unclaimed-facet sweep's deadline — in memory, like the watchdog's. */
+    /** The unclaimed-facet sweep's deadline — in memory, so null in a fresh incarnation. */
     unclaimedFacetSweep: number | null;
   };
   durableHead: number;
@@ -311,7 +309,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#stream.appendBirthRecord();
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
-      // source wants (the last incarnation's watchdog or sweep) is superseded instead.
+      // source wants (the last incarnation's sweep) is superseded instead.
       this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
   }
@@ -349,8 +347,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,
    *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
-   *  `request` wake record — in that order, so the watchdog is armed before the wake's commit
-   *  reconciles the alarm. */
+   *  `request` wake record. */
   #inboundRequestInOneTurn(): void {
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
@@ -533,7 +530,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
    *  delivery) keeps caller attribution and committed effects and records no wake (it runs inside
    *  an incarnation a request or alarm already woke) — nor is it an inbound call to the residency
-   *  watchdog; the caller defaults to the one already in AsyncLocalStorage, so a loopback's
+   *  clocks; the caller defaults to the one already in AsyncLocalStorage, so a loopback's
    *  appends stay attributed. */
   readonly #localContext: ReachableContext = {
     fetch: (request) => this.#serveFetch(request),
@@ -763,7 +760,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
 
   /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the residency watchdog and the unclaimed-facet sweep are this incarnation's alone. */
+   *  claims; the unclaimed-facet sweep is this incarnation's alone. */
   #durableAlarmDeadlines(): (number | null)[] {
     return [
       this.#stream.nextScheduledAppendAt(),
@@ -790,19 +787,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     loadedFacetMaterialized: () => this.#residency.armUnclaimedFacetSweep(),
   });
 
-  // ── RESIDENCY (context/residency.ts): the pins' release, the watchdog, the sweep, the birth reset ──
+  // ── RESIDENCY (context/residency.ts): the pins' release, the sweep, the birth reset ──
 
-  // Annotated because TypeScript cannot infer it: its `incarnation` reads `#stream`, whose
+  // Annotated because TypeScript cannot infer it: its `facetHost` holds `#stream`, whose
   // `wakeRecordDetail` reads this field back (TS7022).
   readonly #residency: Residency = new Residency({
     name: this.#durableObjectAddress.name,
-    ctx: this.ctx,
     facetHost: this.#facetHost,
     rpcStubs: this.#rpcStubs,
     library: this.#library,
     scriptRunsInFlight: () => this.#scriptRunsInFlight.size,
-    incarnation: () => this.#stream.storage.incarnation,
-    append: (events) => this.#appendAndRunCommittedEffects(events),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     inboundCallsHeldChanged: () => this.#alarmCoordinator.watch(),
   });
@@ -894,8 +888,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
    *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
    *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. The residency watchdog and the unclaimed-facet sweep are decided first in
-   *  every pass; a wake with nothing durable due is theirs alone and does nothing else. */
+   *  from what is left. The unclaimed-facet sweep is decided first in every pass; a wake with
+   *  nothing durable due is the sweep's alone and does nothing else. */
   async alarm(): Promise<void> {
     await this.#alarmPass({ delivered: true });
   }
@@ -911,7 +905,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async #runAlarmPass({ delivered }: { delivered: boolean }): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
-    // THE WATCHDOG'S OR THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
+    // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
@@ -1019,8 +1013,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** DO-only, for the tests that run inside workerd (`__workers-tests__/support.ts` `owedAlarm`): the
-   *  deadlines on the one alarm that are this incarnation's alone and owe nothing — the residency
-   *  watchdog's and the unclaimed-facet sweep's. */
+   *  deadline on the one alarm that is this incarnation's alone and owes nothing — the
+   *  unclaimed-facet sweep's. */
   inMemoryAlarmDeadlines(): (number | null)[] {
     return Object.values(this.#residency.deadlines());
   }
@@ -1102,8 +1096,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── native fetch: the rpc-stub pager, an `x-itx-expression` fetch, egress ──
 
-  /** Ends when the Response is handed back — a body still streaming after that is not counted, so
-   *  a stream longer than the watchdog's window is recorded as held. */
+  /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
     this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
