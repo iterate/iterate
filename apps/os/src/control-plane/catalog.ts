@@ -168,6 +168,20 @@ export class ControlPlaneDatabase {
       "SELECT id, slug, org_id AS orgId FROM projects ORDER BY slug",
     );
   }
+  /** Up to `limit` projects after `id`, by id: the last-known copies' backfill (durable-object.ts). */
+  projectsAfter(id: string, limit: number): ProjectRecord[] {
+    return this.#rows<ProjectRecord>(
+      "SELECT id, slug, org_id AS orgId FROM projects WHERE id > ? ORDER BY id LIMIT ?",
+      id,
+      limit,
+    );
+  }
+  /** Every hostname a project holds. */
+  hostnames(): string[] {
+    return this.#rows<{ hostname: string }>("SELECT hostname FROM project_hostnames").map(
+      (row) => row.hostname,
+    );
+  }
   /** The first of `hostnames` a project holds, and that project — the edge's lookup for a host no
    *  static rule names, over iterate/project-ingress `customHostnameCandidatesOf` in its order. */
   projectByHostname(
