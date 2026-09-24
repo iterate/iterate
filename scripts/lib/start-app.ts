@@ -19,7 +19,7 @@ import { agentsEnvs, dashEnvs, kitEnvs, notesEnvs, osEnvs, voiceEnvs } from "../
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
-import { OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
+import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
 export interface StartAppEnv extends DeployableEnv {
@@ -87,7 +87,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
   return {
     name: env?.workerName ?? app.name,
     main: "src/server.ts",
-    compatibility_date: "2026-09-01",
+    compatibility_date: COMPATIBILITY_DATE,
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object" as const, storage: "sqlite" as const } },
