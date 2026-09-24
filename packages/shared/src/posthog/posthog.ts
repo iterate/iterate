@@ -1,24 +1,11 @@
-/**
- * Only production deployments report to PostHog — previews, local dev, and CI
- * produce noise that costs real ingestion money. The environment identifier is
- * the deployed worker name from envs.ts (`os-prd`, `semaphore-prd`,
- * `os-preview-3`); local dev has none. Every PostHog client gates its egress
- * on this one predicate so application code stays unaware of the policy.
- */
-export function shouldSendPosthogEvents(environment: string | undefined): boolean {
-  return environment === "prd" || Boolean(environment?.endsWith("-prd"));
-}
-
-export interface ProxyPosthogRequestOptions {
+/** Forward a browser SDK request under `proxyPrefix` to PostHog's EU region: the SDK's assets to the
+ *  asset host, everything else to ingest without this app's cookies. */
+export async function proxyPosthogRequest(options: {
   request: Request;
   proxyPrefix: string;
-  apiHost?: string;
-  assetHost?: string;
-}
-
-export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): Promise<Response> {
-  const apiHost = options.apiHost || "eu.i.posthog.com";
-  const assetHost = options.assetHost || "eu-assets.i.posthog.com";
+}): Promise<Response> {
+  const apiHost = "eu.i.posthog.com";
+  const assetHost = "eu-assets.i.posthog.com";
   const url = new URL(options.request.url);
   const posthogPath = url.pathname.slice(options.proxyPrefix.length);
   const isAsset = posthogPath.startsWith("/static/") || posthogPath.startsWith("/array/");

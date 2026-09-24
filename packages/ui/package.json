@@ -4,7 +4,6 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    "./apps/config": "./src/apps/config.tsx",
     "./apps/providers": "./src/apps/providers.tsx",
     "./globals.css": "./src/styles/globals.css",
     "./styles.css": "./src/styles/globals.css",
