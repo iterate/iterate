@@ -10,7 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import {
-  E2E_BUDGET_EXEMPTIONS,
   E2E_CI_RETRIES,
   E2E_ROW_TIMEOUT_CEILING_MS,
   E2E_SLEEP_CEILING_MS,
@@ -80,15 +79,6 @@ test(`no e2e row that runs on every PR waits longer than ${E2E_SLEEP_CEILING_MS 
     violations,
     `Poll for the condition instead (\`until\`, \`expect.poll\`). A row that must wait out real platform time is a "slow" row (docs/testing.md#the-row-budget):\n${violations.join("\n")}`,
   ).toEqual([]);
-});
-
-test("every exempt title names one row that runs on every PR and is not tagged slow", () => {
-  const stale = Object.keys(E2E_BUDGET_EXEMPTIONS).flatMap((title) => {
-    const matching = scan.rows.filter((row) => row.title === title && row.onPrs);
-    if (matching.length !== 1) return [`${matching.length} rows titled: ${title}`];
-    return matching[0]!.slow ? [`tagged slow, so it needs no exemption: ${title}`] : [];
-  });
-  expect(stale).toEqual([]);
 });
 
 // A PR runs the rows tagged slow when it changes a file of SLOW_ROW_PATHS (apps/os/scripts/slow-rows.ts),
@@ -170,7 +160,7 @@ function timeoutViolations(rows: E2eRow[], defaultTimeoutMs: number) {
 function waitViolations(scanned: ReturnType<typeof scanE2eRows>) {
   return [
     ...scanned.rows.flatMap((row) =>
-      !row.onPrs || row.slow || E2E_BUDGET_EXEMPTIONS[row.title]
+      !row.onPrs || row.slow
         ? []
         : row.sleeps.map((sleep) => `${sleep.at} waits ${sleep.ms / 1000} s — ${row.title}`),
     ),

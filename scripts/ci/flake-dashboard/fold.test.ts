@@ -1,5 +1,4 @@
 import { deflateRawSync } from "node:zlib";
-import { E2E_BUDGET_EXEMPTIONS } from "@iterate-com/shared/test-support/e2e-policy";
 import { expect, test } from "vitest";
 import { FlakeDashboardState, flakeEventTypes, type FlakeDashboardEvent } from "./contract.ts";
 import {
@@ -700,7 +699,6 @@ test("a folded state survives the JSON round trip the writer's state artifact ma
 
 test("the Cost section prices each suite's rows: percentiles, marginal wall, retries, PR failures and proposals", async () => {
   const h = makeHarness();
-  const exempt = Object.keys(E2E_BUDGET_EXEMPTIONS)[0]!;
   const row = (name: string, startMs: number, durationMs: number, extra = {}) => ({
     name,
     outcome: "pass" as const,
@@ -724,7 +722,7 @@ test("the Cost section prices each suite's rows: percentiles, marginal wall, ret
         branch: n === 4 ? "main" : "some-pr",
         tests: [
           row("a quiet minute", 13_000, 181_000),
-          row(exempt, 13_000, 61_000),
+          row("a row just past the budget", 13_000, 61_000),
           row("a slow row", 13_000, 400_000, { tags: ["slow"] }),
           row("a flaky row", 13_000, 3_000, {
             outcome: "fail",
@@ -746,14 +744,13 @@ test("the Cost section prices each suite's rows: percentiles, marginal wall, ret
     body
       .split("\n")
       .filter(
-        (line) =>
-          line.endsWith("proposal") || / \| (—|exempt|make faster.*|tagged `slow`)$/u.test(line),
+        (line) => line.endsWith("proposal") || / \| (—|make faster.*|tagged `slow`)$/u.test(line),
       ),
   ).toEqual([
     "row | p50 | p95 | marginal | retries | PR failures | proposal",
     "a slow row | 400.0 s | 400.0 s | 219.0 s | 0 | 0 | tagged `slow`",
     "a quiet minute | 181.0 s | 181.0 s | — | 0 | 0 | make faster, or tag `slow`",
-    `${exempt} | 61.0 s | 61.0 s | — | 0 | 0 | exempt`,
+    "a row just past the budget | 61.0 s | 61.0 s | — | 0 | 0 | make faster, or tag `slow`",
     "a sometimes slow row | < 10.0 s | 12.0 s | — | 0 | 0 | —",
     "a flaky row | 3.0 s | 3.0 s | — | 4 | 1 | —",
   ]);

@@ -28,10 +28,10 @@
 // (#2939, #2899), a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while
 // the control plane stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
 //
-// The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow` and
-// skip the PRs that change none of their code (docs/testing.md#slow-rows): they run on a PR that
-// changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, on every main push, and every
-// 2 hours against main (os-slow-e2e.yml).
+// The three careless rows wait out real quiet minutes (110–180 s), and the claimed-work row a claim's
+// alarm (60 s), so they are tagged `slow` and skip the PRs that change none of their code
+// (docs/testing.md#slow-rows): they run on a PR that changes a file of `SLOW_ROW_PATHS` or carries
+// the `slow-e2e` label, on every main push, and every 2 hours against main (os-slow-e2e.yml).
 import { expect, test } from "vitest";
 import {
   adminCredentials,
@@ -498,39 +498,43 @@ test(
 // (#2921 lost one mid-attempt with no reset of ours); that the attempt finishes on the instance
 // that started it is Cloudflare's to keep, printed here and timed in the opt-in perf file.
 
-test("a facet's claimed background work finishes across its context's incarnations, and no birth resets the claimed facet", async () => {
-  const ctx = freshCtx("residency_claimed");
-  const itx = openItx(ctx);
-  await itx.processors.enable("sleeper", {
-    source: SLEEPER_SOURCE,
-    className: "SleeperDurableObject",
-  });
-  const started = await facetStartedAt(itx.facets.get("sleeper"));
-  const [sleep45] = await itx.append({ type: "sleep", payload: { ms: 45_000 } });
-  disposeSessions();
-  await sleep(60_000); // no request meanwhile: a poll would keep the context resident
-  const slept = await until(
-    "the background sleep's append",
-    async () => (await readAll(openItx(ctx))).find((e: any) => e.type === "slept"),
-    30_000,
-  );
-  const woken = (await readAll(openItx(ctx))).filter(
-    (e: any) =>
-      e.type === "events.iterate.com/stream/woken" &&
-      e.offset > sleep45.offset &&
-      e.offset < slept.offset,
-  );
-  console.log(
-    `[residency] ${woken.length} wake(s) mid-sleep; slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
-  );
-  // The claim's alarm woke the context mid-sleep (20 s in, the context idle since the append), and
-  // every birth mid-sleep spared the claimed facet — a birth names what it reset on its wake record.
-  expect(woken.length, JSON.stringify(woken)).toBeGreaterThanOrEqual(1);
-  expect(
-    woken.filter((e: any) => e.payload.facetsReset?.includes("sleeper")),
-    JSON.stringify(woken),
-  ).toEqual([]);
-}, 120_000);
+test(
+  "a facet's claimed background work finishes across its context's incarnations, and no birth resets the claimed facet",
+  { tags: ["slow"], timeout: 120_000 },
+  async () => {
+    const ctx = freshCtx("residency_claimed");
+    const itx = openItx(ctx);
+    await itx.processors.enable("sleeper", {
+      source: SLEEPER_SOURCE,
+      className: "SleeperDurableObject",
+    });
+    const started = await facetStartedAt(itx.facets.get("sleeper"));
+    const [sleep45] = await itx.append({ type: "sleep", payload: { ms: 45_000 } });
+    disposeSessions();
+    await sleep(60_000); // no request meanwhile: a poll would keep the context resident
+    const slept = await until(
+      "the background sleep's append",
+      async () => (await readAll(openItx(ctx))).find((e: any) => e.type === "slept"),
+      30_000,
+    );
+    const woken = (await readAll(openItx(ctx))).filter(
+      (e: any) =>
+        e.type === "events.iterate.com/stream/woken" &&
+        e.offset > sleep45.offset &&
+        e.offset < slept.offset,
+    );
+    console.log(
+      `[residency] ${woken.length} wake(s) mid-sleep; slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
+    );
+    // The claim's alarm woke the context mid-sleep (20 s in, the context idle since the append), and
+    // every birth mid-sleep spared the claimed facet — a birth names what it reset on its wake record.
+    expect(woken.length, JSON.stringify(woken)).toBeGreaterThanOrEqual(1);
+    expect(
+      woken.filter((e: any) => e.payload.facetsReset?.includes("sleeper")),
+      JSON.stringify(woken),
+    ).toEqual([]);
+  },
+);
 
 // ── A REFUSAL DOES NOT HOLD THE CONTEXT ──
 // A Workers-RPC call that THREW keeps its session to the callee open until the caller disposes its

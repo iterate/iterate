@@ -33,10 +33,7 @@ afterAll(() => disposeFileSessions());
 // timeout it cannot read.
 beforeEach(({ task }) => {
   if (!process.env.E2E_SLOW_ROWS || task.file.projectName !== "e2e") return;
-  const ceilingMs = e2eRowTimeoutCeilingMs({
-    title: task.name,
-    slow: task.tags?.includes("slow") ?? false,
-  });
+  const ceilingMs = e2eRowTimeoutCeilingMs({ slow: task.tags?.includes("slow") ?? false });
   if (task.timeout > ceilingMs)
     throw new Error(
       `this row's timeout is ${task.timeout / 1000} s, over its ${ceilingMs / 1000} s ceiling: make it faster, or tag it "slow" if it waits out real platform time (docs/testing.md#the-row-budget)`,
