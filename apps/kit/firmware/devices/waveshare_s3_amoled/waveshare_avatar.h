@@ -98,52 +98,6 @@ void waveshare_avatar_note_abandoned(void);
 /** Enter or leave the user-facing listening pose, which keeps the mouth shut. */
 void waveshare_avatar_set_listening(bool listening);
 
-/*
- * Optional remote visemes: mouth shapes computed from the same PCM and
- * scheduled against local playout positions in each answer. The shared
- * animator uses the local envelope when remote shapes are absent or expire.
- *
- * Everything below runs on the APP TASK (the stream callbacks and the tick
- * both live there), so the bookkeeping needs no atomics; the only values that
- * cross tasks are the ones already inside the shared animator's seqlock.
- */
-
-/**
- * A viseme change from the stream: `offset_samples` positions it within
- * `answer`, in 16 kHz samples from that answer's first sample. APP TASK ONLY.
- */
-void waveshare_avatar_note_viseme(
-    uint32_t answer, uint32_t offset_samples,
-    uint8_t viseme, uint8_t confidence);
-
-/**
- * Speaker PCM was ACCEPTED into the playout path for `answer`. APP TASK ONLY,
- * from the speaker callback, after classification — never for ignored frames.
- *
- * This is what lets the release side know, later, which answer's samples it
- * is feeding the analyzer: acceptance and release cross two buffers (the
- * StreamBuffer and the avatar ring) in strict FIFO order, so counting
- * accepted samples per answer here and released samples in the tick is
- * enough to line the two up without tagging every sample.
- */
-void waveshare_avatar_note_accepted(uint32_t answer, size_t samples);
-
-/**
- * Throw away the mouth track. APP TASK ONLY, from the abandon funnel: the
- * audio those shapes belonged to is being discarded, so the shapes must go
- * with it — a mouth saying words nobody will hear is the exact lie this
- * whole lane exists to avoid. Also resets the accepted/released ledgers, so
- * the next answer's offsets start clean.
- */
-void waveshare_avatar_viseme_reset(void);
-
-/**
- * A call became live / ended. APP TASK ONLY. Gates the envelope's mouth off
- * for the duration (the viseme lane owns it) and back on after; call end
- * also drops any pending mouth track.
- */
-void waveshare_avatar_set_call_active(bool active);
-
 /**
  * Render one 160x120 RGB565 frame. LVGL TASK ONLY.
  *

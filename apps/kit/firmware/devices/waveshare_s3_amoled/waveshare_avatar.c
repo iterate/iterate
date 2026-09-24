@@ -8,7 +8,6 @@
 #include "iterate/kit/avatar/face_avatar_registry.h"
 #include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
-#include "iterate/kit/avatar/face_viseme_queue.h"
 
 static const char tag[] = "waveshare-face";
 
@@ -86,31 +85,6 @@ static struct {
   /* CONSUMER only. */
   uint32_t abandon_applied;
   uint32_t last_release_ms;
-
-  /*
-   * --- The viseme lane. APP TASK ONLY, all of it. ---
-   *
-   * Acceptance (the speaker callback) and release (the tick) are separated by
-   * two FIFO buffers, so which answer a released sample belongs to is
-   * recovered by ledger: `answer_starts` records where each answer began in
-   * the accepted stream, and the release counter walks past those marks in
-   * the same order the audio does. An abandon resets the whole ledger — the
-   * audio it described is gone, and the next answer starts the count clean.
-   */
-  face_viseme_queue_t viseme_queue;
-  struct {
-    uint32_t answer;
-    uint32_t start_offset;
-  } answer_starts[8];
-  uint8_t answer_start_count;
-  bool has_accepted_answer;
-  uint32_t last_accepted_answer;
-  uint32_t accepted_samples;
-  uint32_t released_samples;
-  bool has_playing_answer;
-  uint32_t playing_answer;
-  uint32_t playing_answer_start;
-  bool call_active;
 
   /* The last pose the renderer managed to read; kept for a raced snapshot. */
   face_pose_t pose;
@@ -190,37 +164,8 @@ static void release_keeping(uint32_t keep) {
       batch[index] = face.heard[(face.heard_read + index) & HEARD_MASK];
     }
     face.heard_read += batched;
-    face.released_samples += batched;
     face_animator_push_pcm(&face.animator, batch, (size_t)batched);
     available -= batched;
-  }
-}
-
-/**
- * Apply whatever part of the mouth track playout has now reached. APP TASK,
- * from the tick, after every release.
- */
-static void drain_viseme_track(void) {
-  face_viseme_change_t change;
-
-  while (face.answer_start_count > 0U &&
-         face.answer_starts[0].start_offset <= face.released_samples) {
-    face.has_playing_answer = true;
-    face.playing_answer = face.answer_starts[0].answer;
-    face.playing_answer_start = face.answer_starts[0].start_offset;
-    memmove(&face.answer_starts[0], &face.answer_starts[1],
-            (size_t)(face.answer_start_count - 1U) *
-                sizeof(face.answer_starts[0]));
-    face.answer_start_count -= 1U;
-  }
-  if (!face.has_playing_answer) return;
-  if (face_viseme_queue_advance(
-          &face.viseme_queue,
-          face.playing_answer,
-          face.released_samples - face.playing_answer_start,
-          &change)) {
-    face_animator_apply_viseme(&face.animator, change.viseme,
-                               change.confidence);
   }
 }
 
@@ -334,7 +279,6 @@ void waveshare_avatar_tick(void) {
           face.last_release_ms, (uint32_t)HELD_TOO_LONG_MS)) {
     release_keeping(0U);
   }
-  drain_viseme_track();
   if (heard_available() > 0U) return;
   /*
    * The ring is empty and the speaker has stopped. Silence is pushed rather
@@ -345,67 +289,6 @@ void waveshare_avatar_tick(void) {
   if (!elapsed_at_least(face.last_write_ms, (uint32_t)SILENCE_AFTER_MS)) return;
   face_animator_push_pcm(
       &face.animator, silence, sizeof(silence) / sizeof(silence[0]));
-}
-
-/* --- viseme lane: app task only (see header) ------------------------------- */
-
-void waveshare_avatar_note_viseme(
-    uint32_t answer, uint32_t offset_samples,
-    uint8_t viseme, uint8_t confidence) {
-  if (!face.ready || !face.call_active) return;
-  (void)face_viseme_queue_push(
-      &face.viseme_queue, answer, offset_samples, viseme, confidence);
-}
-
-void waveshare_avatar_note_accepted(uint32_t answer, size_t samples) {
-  if (!face.ready || samples == 0U) return;
-  if (!face.has_accepted_answer || answer != face.last_accepted_answer) {
-    if (face.answer_start_count >=
-        sizeof(face.answer_starts) / sizeof(face.answer_starts[0])) {
-      /*
-       * Eight answers queued and none released is not a real call any more;
-       * dropping the OLDEST keeps the marks for audio that can still play.
-       */
-      memmove(&face.answer_starts[0], &face.answer_starts[1],
-              (size_t)(face.answer_start_count - 1U) *
-                  sizeof(face.answer_starts[0]));
-      face.answer_start_count -= 1U;
-    }
-    face.answer_starts[face.answer_start_count].answer = answer;
-    face.answer_starts[face.answer_start_count].start_offset =
-        face.accepted_samples;
-    face.answer_start_count += 1U;
-    face.has_accepted_answer = true;
-    face.last_accepted_answer = answer;
-  }
-  face.accepted_samples += (uint32_t)samples;
-}
-
-void waveshare_avatar_viseme_reset(void) {
-  if (!face.ready) return;
-  face_viseme_queue_reset(&face.viseme_queue);
-  face.answer_start_count = 0U;
-  face.has_accepted_answer = false;
-  face.accepted_samples = 0U;
-  face.released_samples = 0U;
-  face.has_playing_answer = false;
-  face_animator_clear_viseme(&face.animator);
-}
-
-void waveshare_avatar_set_call_active(bool active) {
-  if (!face.ready || face.call_active == active) return;
-  face.call_active = active;
-  /*
-   * THE ENVELOPE KEEPS THE MOUTH. Handing it to the external viseme track
-   * for the call's duration meant the mouth moved only as fast as the
-   * 10 Hz runtime-state poll delivered shapes — a handful per answer next
-   * to the CoreS3's fifty envelope frames a second, and a person reads
-   * that as a worse robot, not a different lane. The delay line already
-   * feeds this animator the PCM the hardware actually played, which is the
-   * same mouth the CoreS3 wears; the viseme queue stays wired and inert
-   * unless a stream certificate turns `visemes` back on.
-   */
-  if (!active) waveshare_avatar_viseme_reset();
 }
 
 void waveshare_avatar_set_listening(bool listening) {

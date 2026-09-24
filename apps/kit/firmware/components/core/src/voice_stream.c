@@ -498,7 +498,7 @@ enum capnweb_status iterate_kit_voice_stream_bind(
   int key_length;
   enum capnweb_status status;
   uint32_t next_epoch;
-  if (voice_stream == NULL || voice_stream->face_poll_pending ||
+  if (voice_stream == NULL ||
       (voice_stream->state != ITERATE_KIT_VOICE_STREAM_IDLE &&
        voice_stream->state != ITERATE_KIT_VOICE_STREAM_CLOSED) ||
       !valid_stream_options(options) || stream == NULL || subscription == NULL ||
@@ -696,116 +696,6 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
         voice_stream->options.now_ms(voice_stream->options.clock_context);
   } else {
     ++voice_stream->frame_send_failures;
-  }
-  return status;
-}
-
-/* --- the face, pulled out of the processor's own runtime bag ------------- */
-
-/*
- * A PLAIN METHOD NAME ON THE CONVERSATION'S CONTEXT, exactly like
- * `setupVoiceAgent` on the project root. The OS has no
- * `getProcessorRuntimeState` built-in; anything that is not a built-in resolves
- * through the context's rewrite rules, so the voice worker owns this name the
- * same way it owns setup. The device keeps the call and the reply shape and
- * expresses no opinion about which worker answers.
- *
- * It is armed only on a board with a mouth (`observe_answer`), so a deployment
- * whose worker has not claimed the name yet costs the HAVPE nothing.
- */
-static const char *const runtime_state_path[] = {"getProcessorRuntimeState"};
-
-/**
- * `{ snapshot, runtime }`, and `runtime.face` is what this is for.
- *
- * `face` is NULL until the mouth has first moved, which is the normal state at
- * the opening of every answer — so a missing field is not a failure and is not
- * counted as one.
- */
-static void face_poll_completed(
-    void *context, const struct capnweb_result *result) {
-  const struct iterate_kit_voice_stream_face_request *const request = context;
-  struct iterate_kit_voice_stream *const voice_stream = request != NULL ? request->voice_stream : NULL;
-  struct capnweb_value runtime_bag = {0};
-  struct capnweb_value face = {0};
-  struct capnweb_value field = {0};
-  int64_t answer = 0;
-  int64_t playout_samples = 0;
-  int64_t viseme = 0;
-  int64_t confidence = 0;
-  int64_t at = 0;
-
-  if (voice_stream == NULL || !voice_stream->face_poll_pending ||
-      request->subscription_epoch != voice_stream->subscription_epoch) return;
-  voice_stream->face_poll_pending = false;
-  if (result->kind != CAPNWEB_RESULT_VALUE || result->status != CAPNWEB_OK) {
-    return;
-  }
-  if (!capnweb_value_object_get(&result->value, "runtime", &runtime_bag) ||
-      !capnweb_value_object_get(&runtime_bag, "face", &face)) {
-    return;
-  }
-  if (!capnweb_value_object_get(&face, "answer", &field) ||
-      !capnweb_value_get_int64(&field, &answer) ||
-      !capnweb_value_object_get(&face, "playoutSamples", &field) ||
-      !capnweb_value_get_int64(&field, &playout_samples) ||
-      !capnweb_value_object_get(&face, "viseme", &field) ||
-      !capnweb_value_get_int64(&field, &viseme) ||
-      !capnweb_value_object_get(&face, "at", &field) ||
-      !capnweb_value_get_int64(&field, &at)) {
-    return;
-  }
-  /* Confidence is the one field the classifier may legitimately omit. */
-  if (capnweb_value_object_get(&face, "confidence", &field)) {
-    (void)capnweb_value_get_int64(&field, &confidence);
-  }
-  if (answer < 0 || playout_samples < 0 || viseme < 0 || viseme > 14 ||
-      at <= 0) {
-    return;
-  }
-  /*
-   * THE SAME SHAPE COMES BACK UNTIL THE MOUTH MOVES, because this is state and
-   * not an event stream. Forwarding it every poll would feed the avatar's
-   * queue ten identical changes a second and make its ledger count shapes that
-   * never happened.
-   */
-  if ((uint64_t)at == voice_stream->last_face_at_ms) return;
-  voice_stream->last_face_at_ms = (uint64_t)at;
-  ++voice_stream->face_updates;
-  if (voice_stream->options.on_face != NULL) {
-    voice_stream->options.on_face(
-        voice_stream->options.downlink_context,
-        (uint32_t)answer,
-        (uint32_t)playout_samples,
-        (uint8_t)viseme,
-        confidence < 0 ? 0U : (uint8_t)(confidence > 255 ? 255 : confidence));
-  }
-}
-
-enum capnweb_status iterate_kit_voice_stream_poll_face(
-    struct iterate_kit_voice_stream *voice_stream) {
-  static const char args[] = "[{\"name\":\"voice-agent\"}]";
-  enum capnweb_status status;
-  if (voice_stream == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
-  if (voice_stream->state != ITERATE_KIT_VOICE_STREAM_READY ||
-      voice_stream->stream == NULL || !voice_stream->stream->has_capability ||
-      voice_stream->face_poll_pending) {
-    return CAPNWEB_E_STATE;
-  }
-  status = capnweb_session_call_path(
-      voice_stream->stream->session,
-      voice_stream->stream->capability,
-      runtime_state_path,
-      sizeof(runtime_state_path) / sizeof(runtime_state_path[0]),
-      args,
-      sizeof(args) - 1U,
-      face_poll_completed,
-      &voice_stream->face_request);
-  if (status == CAPNWEB_OK) {
-    voice_stream->face_request.voice_stream = voice_stream;
-    voice_stream->face_request.subscription_epoch = voice_stream->subscription_epoch;
-    voice_stream->face_poll_pending = true;
-    ++voice_stream->face_polls;
   }
   return status;
 }
