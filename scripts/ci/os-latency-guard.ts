@@ -206,22 +206,25 @@ function regressionLineOf(
 }
 
 /** The state after this run and the page it owes, if any. A metric turns red when it crossed a line
- *  in this run AND the one before; a red one clears when it was measured under its lines in both.
+ *  in this run AND the last run that measured it; a red one clears when it was measured under its
+ *  lines in both.
  *  `red` pages the metrics that just turned; `green` pages once nothing is red any more. Pure. */
 export function transition(input: {
   state: GuardState;
   readings: Reading[];
   run: GuardState["runs"][number];
 }) {
-  const previous = input.state.runs.at(-1);
-  const overBefore = new Set(previous?.over);
+  // "the run before" is the newest run that measured the metric: a run whose row broke says
+  // nothing about it, so it neither breaks a streak of crossings nor one of runs under the lines
+  const before = (metric: LatencyMetricName) =>
+    input.state.runs.findLast((run) => run.judged[metric] !== undefined);
   const measuredUnder = (run: GuardState["runs"][number] | undefined, metric: LatencyMetricName) =>
     run?.judged[metric] !== undefined && !run.over.includes(metric);
   const turnedRed = input.run.over.filter(
-    (metric) => overBefore.has(metric) && !input.state.red.includes(metric),
+    (metric) => before(metric)?.over.includes(metric) && !input.state.red.includes(metric),
   );
   const cleared = input.state.red.filter(
-    (metric) => measuredUnder(input.run, metric) && measuredUnder(previous, metric),
+    (metric) => measuredUnder(input.run, metric) && measuredUnder(before(metric), metric),
   );
   const red = [...input.state.red.filter((metric) => !cleared.includes(metric)), ...turnedRed];
   const next: GuardState = {

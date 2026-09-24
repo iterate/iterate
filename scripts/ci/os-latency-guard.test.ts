@@ -212,6 +212,19 @@ test("a metric turns red when it crossed in two runs in a row, and pages once", 
   expect(fourth).toMatchObject({ page: null, turnedRed: [], cleared: [] });
 });
 
+test("a run whose row broke neither breaks a streak of crossings nor completes one", () => {
+  const crossed: GuardState = { schemaVersion: 1, runs: [stateRun("r1", ["sign-in"])], red: [] };
+  // r2 measured nothing of sign-in (its row broke)
+  const broken = transition({
+    state: crossed,
+    readings: [],
+    run: stateRun("r2", [], ["mcp.call"]),
+  });
+  expect(broken).toMatchObject({ page: null, next: { red: [] } });
+  const again = transition({ state: broken.next, readings: [], run: stateRun("r3", ["sign-in"]) });
+  expect(again).toMatchObject({ page: "red", turnedRed: ["sign-in"] });
+});
+
 test("a red metric clears after two measured runs under its lines; green pages once nothing is red", () => {
   const red: GuardState = {
     schemaVersion: 1,
@@ -228,16 +241,11 @@ test("a red metric clears after two measured runs under its lines; green pages o
     run: stateRun("r4", [], ["mcp.call"]),
   });
   expect(partly).toMatchObject({ page: null, cleared: ["mcp.call"], next: { red: ["sign-in"] } });
-  const measured = transition({
+  // under again: with r3, its last measured run, that is two in a row
+  const green = transition({
     state: partly.next,
     readings: [],
     run: stateRun("r5", [], [...both]),
-  });
-  expect(measured).toMatchObject({ page: null, cleared: [], next: { red: ["sign-in"] } });
-  const green = transition({
-    state: measured.next,
-    readings: [],
-    run: stateRun("r6", [], [...both]),
   });
   expect(green).toMatchObject({ page: "green", cleared: ["sign-in"], next: { red: [] } });
 });
