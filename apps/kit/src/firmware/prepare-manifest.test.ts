@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { firmwareManifest } from "../../scripts/firmware-release.ts";
 import { DEFAULT_DEVICE_ID, findFirmwareDevice } from "./catalog.ts";
 import type { DeviceConfiguration } from "./config-image.ts";
-import { loadFirmwareManifest, prepareInstallManifest } from "./prepare-manifest.ts";
+import { loadFirmwareManifest, prepareInstall } from "./prepare-manifest.ts";
 
 const release = { deviceId: "test-device", version: "000001-2026-01-01-abcdef0" };
 const releaseManifest = {
@@ -136,47 +136,45 @@ test("loadFirmwareManifest: loads what apps/kit/scripts/firmware-release.ts publ
   });
 });
 
-test("prepareInstallManifest: adds the install's configuration image under the device's name", async () => {
+test("prepareInstall: adds the install's configuration image under the device's name, until disposed", async () => {
   stubKitPage();
   const nativeFetch = globalThis.fetch;
-  const createObjectUrl = vi.spyOn(URL, "createObjectURL");
   const manifest = await loadFirmwareManifest(release, serving(releaseManifest));
-  expect(createObjectUrl).not.toHaveBeenCalled();
 
-  const installManifestUrl = prepareInstallManifest(
+  const install = prepareInstall(
     manifest,
-    { id: "test-device", target: "test", name: "Renamed device", description: "" },
+    { id: "test-device", target: "test", name: "Renamed device", description: "", startCall: "" },
     configuration,
   );
 
-  const installManifest = (await (await nativeFetch(installManifestUrl)).json()) as {
-    builds: { parts: { path: string }[] }[];
-  };
-  expect(installManifest).toEqual({
-    name: "Renamed device",
-    version: release.version,
-    new_install_prompt_erase: true,
-    new_install_improv_wait_time: 0,
-    builds: [
-      {
-        chipFamily: "ESP32-S3",
-        parts: [
-          ...manifest.builds[0]!.parts,
-          { path: expect.stringMatching(/^blob:/), offset: 0x9000 },
-        ],
-      },
-    ],
+  expect(install).toMatchObject({
+    manifest: {
+      name: "Renamed device",
+      version: release.version,
+      builds: [
+        {
+          chipFamily: "ESP32-S3",
+          parts: [
+            ...manifest.builds[0]!.parts,
+            { path: expect.stringMatching(/^blob:/), offset: 0x9000 },
+          ],
+        },
+      ],
+    },
   });
-  const image = await (await nativeFetch(installManifest.builds[0]!.parts[2]!.path)).arrayBuffer();
+  const imageUrl = install.manifest.builds[0]!.parts[2]!.path;
+  const image = await (await nativeFetch(imageUrl)).arrayBuffer();
   expect(new TextDecoder().decode(image.slice(0, 8))).toBe("ITERKIT1");
   expect(image).toMatchObject({ byteLength: 0x1000 });
+
+  install[Symbol.dispose]();
+  await expect(nativeFetch(imageUrl)).rejects.toThrow();
 });
 
 /** The page the loader runs on; the Kit vitest config unstubs it after each test. */
 function stubKitPage() {
   vi.stubGlobal("window", {
     location: { href: "https://k.iterate.com/devices/test-device/firmware/latest" },
-    addEventListener: vi.fn(),
   });
 }
 

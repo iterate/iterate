@@ -13,8 +13,11 @@ directly over USB.
 Choose your board at `k.iterate.com`, then click **Log in with iterate**. Consent
 shows that board's name and vendor icon; choose its project and authorize access.
 Each setup starts a unique OAuth client before consent, including two boards of
-the same model. After sign-in, enter Wi-Fi, click **Prepare device**, then **Flash
-device**. **Set up another device** returns to the public selector and starts fresh
+the same model. After sign-in, pick the project, enter Wi-Fi (2.4 GHz) and click **Flash
+device**. A dialog prepares the project, says which serial port to pick, flashes with
+esp-web-tools' `flash` (`src/firmware/flash-device.ts`), then says how to start a call on that
+board (`startCall` in `src/firmware/catalog.ts`). The browser's password manager can keep the
+Wi-Fi. **Set up another device** returns to the public selector and starts fresh
 consent; it never silently changes the authorized model.
 
 A board can belong to another iterate platform, a self-hosted one included: open
@@ -23,8 +26,8 @@ iterate's own zones, and its discovery document names it), then the selector's b
 **Log in with &lt;its host&gt;** and consent happens there. The board is flashed with that
 platform's address. **Set up another device** keeps the platform.
 
-Prepare installs voice when missing and asks for an OpenAI API key if the project
-has none. It verifies voice health before minting a ten-year token scoped to the
+Preparing installs voice when missing. The form asks for an OpenAI API key as soon as the
+picked project turns out to have none. It verifies voice health before minting a ten-year token scoped to the
 chosen project, under the same OAuth client that was authorized. Existing voice
 services, secrets and project websites are preserved. Immutable voice files live
 under `kit/voice/` in project KV; the `itx.voice` mount is published only after all
