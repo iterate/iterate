@@ -1,51 +1,11 @@
 /**
  * Unit tests for the pet shop's MCP endpoint (GET|POST /mcp), driven in plain
  * Node against the real route handler over the streamable-HTTP transport that
- * createMcpHandler produces. Same fakes as worker.test.ts (in-memory storage
- * behind the state DO, cloudflare:workers shim). Hermetic — no network.
+ * createMcpHandler produces, over the test/shop.ts in-memory storage fake and
+ * the cloudflare:workers shim. Hermetic — no network.
  */
 import { describe, expect, test } from "vitest";
-import { seedPets } from "./pets.ts";
-import { randomSealKey } from "./seal.ts";
-import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, PetshopStateDurableObject } from "./state.ts";
-import { handlePetshopRequest, type PetshopDeps } from "./worker.ts";
-
-const ORIGIN = "https://petshop.example";
-
-/** A shop over the real state class + in-memory storage; returns its path-driven handler. */
-function makeShop() {
-  const blobs = new Map<string, unknown>();
-  const storage = {
-    get: async (key: string) => structuredClone(blobs.get(key)),
-    put: async (key: string, value: unknown) => void blobs.set(key, structuredClone(value)),
-  };
-  const deps: PetshopDeps = {
-    state: new PetshopStateDurableObject({ storage } as unknown as DurableObjectState, {}),
-    sealKey: randomSealKey(),
-    pets: seedPets(),
-  };
-  return (path: string, init?: RequestInit) =>
-    handlePetshopRequest(new Request(`${ORIGIN}${path}`, init), deps);
-}
-
-type Shop = ReturnType<typeof makeShop>;
-
-async function accessToken(shop: Shop): Promise<string> {
-  const authorize = await shop(
-    `/oauth/authorize?client_id=${DEFAULT_CLIENT_ID}&redirect_uri=${encodeURIComponent(`${ORIGIN}/cb`)}&approve=1&user=Jonas`,
-  );
-  const code = new URL(authorize.headers.get("location") ?? "").searchParams.get("code") ?? "";
-  const token = await shop("/oauth/token", {
-    method: "POST",
-    headers: { authorization: `Basic ${btoa(`${DEFAULT_CLIENT_ID}:${DEFAULT_CLIENT_SECRET}`)}` },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: `${ORIGIN}/cb`,
-    }),
-  });
-  return (await token.json<{ access_token: string }>()).access_token;
-}
+import { accessToken, makeShop, type Shop } from "./test/shop.ts";
 
 /** The JSON-RPC result of one /mcp exchange, whether the transport answered in JSON or SSE. */
 async function mcp(
@@ -53,7 +13,7 @@ async function mcp(
   token: string,
   message: { id: number; method: string; params?: unknown },
 ): Promise<{ result?: Record<string, any>; error?: { message: string } }> {
-  const response = await shop("/mcp", {
+  const response = await shop.call("/mcp", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -120,7 +80,7 @@ describe("mcp endpoint", () => {
 
   test("401 without a bearer token", async () => {
     const shop = makeShop();
-    const response = await shop("/mcp", {
+    const response = await shop.call("/mcp", {
       method: "POST",
       headers: {
         "content-type": "application/json",
