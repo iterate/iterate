@@ -410,6 +410,10 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
  *  through its link, is the child's `./x`), else this one (`ownPath`). */
 const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
 
+/** An entity's absolute path: `path` resolved against the caller's originating context. */
+const entityPathOf = (caller: Caller, ownPath: string, path: string): string =>
+  resolveContextPath(originOf(caller, ownPath), path);
+
 /** An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
  *  dispatches to — the note above `entityHandle` says why the assertion is safe), `list()`,
  *  `create(path)` and `delete(path)` one dispatch each on the collection the `project` facet carries
@@ -431,7 +435,7 @@ function entityRoot<Facet>(
     delete: async (path) =>
       projectFacet(itx, [
         [collection],
-        ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
+        ["delete", entityPathOf(deps.caller(), deps.path, path)],
       ]) as Promise<{ path: string }>,
   };
 }
@@ -502,7 +506,7 @@ function entityHandle(
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
+    const context = await itx.builtins.cd(entityPathOf(caller, ownPath, path));
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;

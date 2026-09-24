@@ -137,10 +137,10 @@ export function parseCommit(payload: Uint8Array): {
 
 /**
  * A minimal git protocol-v2 wire client for the Artifacts git endpoint —
- * exactly what the repo facet's one-file read/write (repo/durable-object.ts) needs, nothing more: `ls-refs`
- * for ONE branch tip (`tipOf`), a shallow `fetch` of the tip's snapshot
- * (`fetchObjects`), `receive-pack` for one commit (`push`), and the object/pack
- * codecs between.
+ * what the repo facet's reads and commits (repo/durable-object.ts) need,
+ * nothing more: `ls-refs` for ONE branch tip (`tipOf`), a shallow `fetch` of
+ * the tip's snapshot (`fetchObjects`), `receive-pack` for one commit (`push`),
+ * and the object/pack codecs between.
  *
  * The endpoint ("gitty/1.0") was probed empirically; the load-bearing
  * behaviors this module relies on:

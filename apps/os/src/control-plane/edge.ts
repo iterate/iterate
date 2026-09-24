@@ -58,9 +58,9 @@ export class ControlPlane {
    *
    *  A BROKEN STUB is replaced (retryable-error.ts): a deploy resetting this Durable Object for its
    *  new code cuts the call at the transport, and the stub that threw fails every later call the
-   *  same way. A holder that
-   *  outlives one call (rpc.ts: one per socket, for its whole life) would otherwise stay broken
-   *  until it closed; the call that failed still throws, and the next one reaches the new object. */
+   *  same way. A holder that outlives one call (rpc.ts: one per socket, for its whole life) would
+   *  otherwise stay broken until it closed; the call that failed still throws, and the next one
+   *  reaches the new object. */
   async #call<T>(method: string, ...args: unknown[]): Promise<T> {
     const stub = this.#stub as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
     try {

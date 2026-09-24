@@ -83,7 +83,8 @@ export function normalizeSecretRecord(
     );
   let refresh: SecretRefresh | null = null;
   if (options?.refresh) {
-    // The one place a strategy kind (`SecretRefreshKind`, secret/contract.ts) is admitted from untyped input.
+    // The one place a strategy kind (`SecretRefreshKind`, secret/contract.ts) is admitted from
+    // untyped input.
     const parsedKind = isRecord(options.refresh)
       ? SecretRefreshKind.safeParse(options.refresh.kind)
       : undefined;
