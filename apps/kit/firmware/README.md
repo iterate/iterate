@@ -189,6 +189,23 @@ At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
 mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
 failures.
 
+### When a board can't get online
+
+Each transport reports how far its newest attempt got
+(`iterate_kit_itx_transport_network_stage`): no IP lease, an IP lease but no
+answer from the OS host, or an answer that refused the upgrade (a deleted
+preview answers 404) or never mounted. After 15 s without a mount the voice
+loop turns that into a verdict (`components/core/include/iterate/kit/connectivity.h`):
+`no-wifi`, `no-internet` or `no-iterate`. While offline a press starts no call;
+the board speaks the reason instead ("Couldn't join the Wi-Fi network…",
+"Joined the Wi-Fi, but couldn't connect to the internet.", "Connected to the
+internet, but couldn't reach iterate."), and a press made while still
+connecting ends with the reason rather than "Call ended." A fresh boot also
+says it once unprompted; a boot that followed the loop's own restart waits for
+a press. Rings pulse red and screens show the reason as the status line. The
+clips are `assets/sounds/offline_*.wav`; `tools/make-sounds.py` says how they
+were made.
+
 The device dials `wss://<os base url host>/api` — the OS's public endpoint — with
 the blob's key as `Authorization: Bearer` on the upgrade: a personal access
 token the Kit page minted for the person who set the device up, scoped to the

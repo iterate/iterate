@@ -212,9 +212,57 @@ static void peer_close_reconnects_with_new_generation(void) {
          ITERATE_KIT_OK);
 }
 
+/*
+ * WHO FAILED: THE NETWORK OR ITERATE. No answer to the upgrade means DNS, TCP
+ * or TLS failed; any answer, even a refusal (a deleted preview's 404), means
+ * the network worked. The voice loop tells a person which one it was.
+ */
+static void a_refused_upgrade_is_told_apart_from_an_unreachable_host(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  assert(iterate_kit_itx_transport_network_stage(&fixture.transport) ==
+         ITERATE_KIT_NETWORK_STAGE_REACHING_HOST);
+
+  iterate_kit_fake_posix_websocket_set_open_result(
+      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED);
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(iterate_kit_itx_transport_network_stage(&fixture.transport) ==
+         ITERATE_KIT_NETWORK_STAGE_REACHING_HOST);
+
+  iterate_kit_fake_posix_websocket_set_open_answer(
+      "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n");
+  fixture.transport.websocket_retry.ready_at_us = fixture.now_us;
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(iterate_kit_itx_transport_network_stage(&fixture.transport) ==
+         ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE);
+
+  /* Back to no answer at all: the newest attempt decides. */
+  iterate_kit_fake_posix_websocket_set_open_answer("");
+  fixture.transport.websocket_retry.ready_at_us = fixture.now_us;
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(iterate_kit_itx_transport_network_stage(&fixture.transport) ==
+         ITERATE_KIT_NETWORK_STAGE_REACHING_HOST);
+
+  /* An accepted upgrade is iterate's to finish: the mount is what is pending. */
+  iterate_kit_fake_posix_websocket_set_open_result(
+      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY);
+  fixture.transport.websocket_retry.ready_at_us = fixture.now_us;
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(fixture.transport.socket_connected);
+  assert(iterate_kit_itx_transport_network_stage(&fixture.transport) ==
+         ITERATE_KIT_NETWORK_STAGE_REACHING_ITERATE);
+  assert(iterate_kit_itx_transport_stop(&fixture.transport) ==
+         ITERATE_KIT_OK);
+}
+
 int main(void) {
   stalled_open_times_out_and_recovers();
   ready_step_that_crosses_deadline_times_out();
   peer_close_reconnects_with_new_generation();
+  a_refused_upgrade_is_told_apart_from_an_unreachable_host();
   return 0;
 }

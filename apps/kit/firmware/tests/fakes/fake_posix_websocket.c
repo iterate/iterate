@@ -5,6 +5,7 @@
 static bool peer_close_queued;
 static enum iterate_kit_posix_websocket_open_result open_result =
     ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
+static const char *open_answer = "";
 
 void iterate_kit_fake_posix_websocket_queue_peer_close(void) {
   peer_close_queued = true;
@@ -13,6 +14,10 @@ void iterate_kit_fake_posix_websocket_queue_peer_close(void) {
 void iterate_kit_fake_posix_websocket_set_open_result(
     enum iterate_kit_posix_websocket_open_result result) {
   open_result = result;
+}
+
+void iterate_kit_fake_posix_websocket_set_open_answer(const char *answer) {
+  open_answer = answer;
 }
 
 enum iterate_kit_status iterate_kit_posix_websocket_client_prepare(
@@ -26,6 +31,7 @@ enum iterate_kit_status iterate_kit_posix_websocket_client_prepare(
   client->initialized = true;
   peer_close_queued = false;
   open_result = ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
+  open_answer = "";
   return ITERATE_KIT_OK;
 }
 
@@ -37,6 +43,9 @@ iterate_kit_posix_websocket_client_open(
   }
   client->upgraded =
       open_result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
+  /* The real client keeps the answer it read, NUL-terminated, until close. */
+  client->response_size = strlen(open_answer);
+  memcpy(client->response, open_answer, client->response_size + 1U);
   return open_result;
 }
 
@@ -79,6 +88,7 @@ void iterate_kit_posix_websocket_client_close(
     struct iterate_kit_posix_websocket_client *client) {
   if (client != NULL) {
     client->upgraded = false;
+    client->response_size = 0U;
   }
 }
 

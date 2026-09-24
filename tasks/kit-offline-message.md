@@ -5,7 +5,7 @@ size: medium
 
 # Kit boards say when they can't get online
 
-**Status:** mostly done. Firmware change, clips and host tests are in; the loop test proves boot notice, refused press, early end and quiet after the loop's own restart. Missing: Mac board run against a real unreachable host / deleted preview, README paragraph, real-hardware check (Misha).
+**Status:** implementation done, waiting on CI's ESP builds and a real-hardware check. Done: firmware change on every board, three spoken clips, host tests (loop, core, board table, Mac transport) and a live Mac-transport run against bad hosts. Missing: ESP-IDF compile of the ESP-only code (CI's Kit Firmware job; no ESP-IDF here), and Misha flashing a HA Voice PE with a wrong Wi-Fi password.
 
 ## Problem
 
@@ -62,8 +62,8 @@ Made by the agent while fleshing this out; review these first.
 - [x] ring + diagnostic lights: offline look _(`ITERATE_KIT_NETWORK_OFFLINE`; ring pulses red, grid's network sector red, screen chase red)_
 - [x] three WAVs rendered and committed; `make-sounds.py` docstring says how _(gpt-4o-mini-tts/marin, speech loudness matched to call_ended.wav, checked by transcribing with whisper-1)_
 - [x] host test driving the loop: boot with no Wi-Fi → spoken `no-wifi` at 15 s; a press → refused, spoken again; a press while connecting → ended early when the verdict turns; online → a press starts a call _(tests/voice_loop_offline_test.c, plus `after-own-restart`; mutation-checked)_
-- [ ] Mac board proof: `iterate-kit-mac` against an unreachable host and a deleted preview prints the verdicts
-- [ ] firmware README: a paragraph on the offline verdicts
+- [x] ~~Mac board proof: `iterate-kit-mac` against an unreachable host and a deleted preview prints the verdicts~~ Mac transport proof instead _(`iterate-kit-mac` blocks in CoreAudio waiting for a microphone permission this session can't grant; a throwaway probe ran the real darwin transport against a deleted preview → `no-iterate` (HTTP 404), `127.0.0.1:9` and a `.invalid` domain → `no-internet`; the classification is also unit-tested in darwin_itx_transport_test.c)_
+- [x] firmware README: a paragraph on the offline verdicts _("When a board can't get online")_
 - [ ] PR body: real-hardware steps for Misha (HA Voice PE, wrong Wi-Fi password)
 
 ## Implementation notes
