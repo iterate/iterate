@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { PLATFORM_FAILURE_DELAYS_MS, retryPlatformFailures } from "./platform-retry.ts";
+import {
+  PLATFORM_FAILURE_DELAYS_MS,
+  retryPlatformFailures,
+} from "@iterate-com/shared/platform-retry";
 
 /** Iterate's Depot organization, which runs every workflow in .depot/workflows (docs/depot-ci.md). */
 export const DEPOT_ORG = "0p91s0lz49";
@@ -37,9 +40,10 @@ export async function mapConcurrent<Input, Output>(
  *
  * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx, or whose
  * connection fails, is asked again after each of `delaysMs`, with a `depot.platform-failure-retry`
- * warn per repeat (platform-retry.ts). A 4xx is an answer about the request and fails at once, as
- * does any other method (Connect sends every call as a POST, so only the name says it changes
- * nothing). A single 500 on GetJobAttemptLogs is enough to fail a trace job without the repeat.
+ * warn per repeat (`retryPlatformFailures`). A 4xx is an answer about the request and fails at
+ * once, as does any other method (Connect sends every call as a POST, so only the name says it
+ * changes nothing). A single 500 on GetJobAttemptLogs is enough to fail a trace job without the
+ * repeat.
  */
 export async function depotCiApi(
   method: string,

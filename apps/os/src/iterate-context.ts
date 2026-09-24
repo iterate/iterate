@@ -20,16 +20,19 @@
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
+import { z } from "zod";
 import { codedError, resolveContextPath } from "iterate/lib";
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
+  itxExpressionStepName,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
 } from "iterate/expression";
+import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { IterateContextApi } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -56,9 +59,49 @@ import {
   type DurableObjectAddress,
 } from "./context/paths.ts";
 import { SessionTeardown } from "./session.ts";
+import { isPlatformFailure } from "./retryable-error.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
+
+/** The reads a platform failure may send twice, by the names of their steps after `itx` (and any
+ *  `builtins` or `cd(path)` before them): each changes nothing, so a second run answers as the first
+ *  would have. A call is judged as the caller spelled it: a context's own row that redirects one of
+ *  these names to a write is its owner's to keep safe to repeat. */
+const READ_CALLS: ReadonlySet<string> = new Set([
+  "whoami",
+  "readEvents",
+  "waitForEvent",
+  "kv.get",
+  "kv.list",
+  "rewriteRules.list",
+  "subscriptions.list",
+  "processors.list",
+  "repos.list",
+  ...["tip", "readFile", "readModules", "modules", "listFiles", "log"].map(
+    (verb) => `repos.get.${verb}`,
+  ),
+  "workspaces.list",
+  ...["mounts", "readFile", "readBase", "listAllFiles", "gitStatus", "gitLog"].map(
+    (verb) => `workspaces.get.${verb}`,
+  ),
+]);
+
+/** An event the log answers with itself when it lands twice (stream/stream.ts). */
+const KeyedEvent = z.object({ idempotencyKey: z.string().min(1) });
+
+/** Whether running `itxExpression` twice is running it once: a read (`READ_CALLS`), or an append
+ *  whose every event carries an idempotency key. A call with live args (a Request, a callback) is
+ *  neither. */
+function isIdempotentItxCall(itxExpression: ItxExpression, args: unknown[]): boolean {
+  if (args.length > 0) return false;
+  let steps = itxExpression.slice(itxExpression[1] === "builtins" ? 2 : 1);
+  while (Array.isArray(steps[0]) && steps[0][0] === "cd") steps = steps.slice(1);
+  const [call] = steps;
+  if (steps.length === 1 && Array.isArray(call) && call[0] === "append")
+    return call.length > 1 && call.slice(1).every((event) => KeyedEvent.safeParse(event).success);
+  return READ_CALLS.has(steps.map(itxExpressionStepName).join("."));
+}
 
 /** What `provide` hands back: dispose it — or let the session end — and the act is un-done (a lent
  *  stub recalled, a rule or deny removed while the row is still its own). The caller already holds
@@ -139,14 +182,34 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** Dispatch on the DO under this context's caller — the one place the edge dispatches. A handle the
    *  DO names by expression (context/dispatch.ts) becomes a handle of THIS edge object: every dotted call on
    *  it is one whole expression back through `invoke`, so what the client holds is an object of this
-   *  stateless worker, and no session onto the actor outlives a call. */
+   *  stateless worker, and no session onto the actor outlives a call.
+   *
+   *  A call the platform failed (retryable-error.ts `isPlatformFailure`: the transport cut, the
+   *  object reset by its storage) is sent ONCE more, on a fresh stub, when running it twice is
+   *  running it once (`isIdempotentItxCall`), logged as `itx.platform-failure-retry`; a second
+   *  failure, and every other call's, is the caller's. */
   async #invokeOnDurableObject(
     itxExpression: ItxExpression,
     args: unknown[] = [],
   ): Promise<unknown> {
-    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
-    // whatever expression the caller spelled, so `unknown` is the honest contract here.
-    const result = (await this.#durableObject.invoke(itxExpression, args, this.#caller)) as unknown;
+    const result = await retryPlatformFailures(
+      // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
+      // whatever expression the caller spelled, so `unknown` is the honest contract here.
+      async () => (await this.#durableObject.invoke(itxExpression, args, this.#caller)) as unknown,
+      {
+        event: "itx.platform-failure-retry",
+        delaysMs: isIdempotentItxCall(itxExpression, args) ? [0] : [],
+        platformFailure: (error) =>
+          isPlatformFailure(error)
+            ? {
+                name: itxExpression.map(itxExpressionStepName).join("."),
+                projectId: this.#durableObjectAddress.projectId,
+                path: this.#durableObjectAddress.path,
+                message: String(error),
+              }
+            : undefined,
+      },
+    );
     return materializeItxHandleReference(result, (expression) => this.invoke(expression));
   }
 
