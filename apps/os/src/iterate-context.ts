@@ -34,19 +34,13 @@ import {
   registerRpcSessionBrand,
 } from "iterate/next/expression";
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
-import {
-  ITX_APP_HEADER,
-  ITX_CALLER_PATH_HEADER,
-  ITX_GRANT_HEADER,
-  ITX_PRINCIPAL_HEADER,
-  type Caller,
-} from "iterate/next/principal";
+import type { Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
-  ITX_PLATFORM_ORIGIN_HEADER,
   encodeFetchExpression,
+  stampCallerHeaders,
   terminalFetchOf,
   lendRpcStubOverPager,
   type ClientRpcStub,
@@ -212,19 +206,8 @@ export class IterateContextRpcTarget extends RpcTarget {
     const terminalFetch = terminalFetchOf(itxExpression, args);
     if (terminalFetch) {
       const headers = new Headers(terminalFetch.request.headers);
+      stampCallerHeaders(headers, this.#caller); // the stamp is this session's, never the Request's own
       headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
-      headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
-      headers.delete(ITX_GRANT_HEADER);
-      headers.delete(ITX_PLATFORM_ORIGIN_HEADER); // likewise the platform origin: this holder's, never the Request's
-      if (this.#caller.principal)
-        headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
-      if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
-      headers.delete(ITX_CALLER_PATH_HEADER);
-      if (this.#caller.path) headers.set(ITX_CALLER_PATH_HEADER, this.#caller.path);
-      headers.delete(ITX_APP_HEADER); // likewise this handle's, never the Request's own
-      if (this.#caller.app) headers.set(ITX_APP_HEADER, "1");
-      if (this.#caller.platformOrigin)
-        headers.set(ITX_PLATFORM_ORIGIN_HEADER, this.#caller.platformOrigin);
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
@@ -540,19 +523,15 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     // A loaded worker speaks for the project, never for a person: the principal and grant headers
     // are the edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
     const headers = new Headers(request.headers);
-    headers.delete(ITX_PRINCIPAL_HEADER);
-    headers.delete(ITX_GRANT_HEADER);
-    headers.delete(ITX_APP_HEADER);
-    headers.delete(ITX_CALLER_PATH_HEADER);
-    headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
-    if (!this.ctx.props.platform) {
-      // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
-      // table (no `itx.fetch` row below the owner root, no egress); a self-addressed `env.ITX.fetch`
-      // keeps its expression and runs as app code like any other.
-      headers.set(ITX_APP_HEADER, "1");
-      if (!headers.has(ITX_EXPRESSION_FETCH_HEADER))
-        headers.set(ITX_EXPRESSION_FETCH_HEADER, "itx.fetch");
-    }
+    stampCallerHeaders(headers, {
+      principal: null,
+      ...(!this.ctx.props.platform && { app: true as const }),
+    });
+    // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
+    // table (no `itx.fetch` row below the owner root, no egress); a self-addressed `env.ITX.fetch`
+    // keeps its expression and runs as app code like any other.
+    if (!this.ctx.props.platform && !headers.has(ITX_EXPRESSION_FETCH_HEADER))
+      headers.set(ITX_EXPRESSION_FETCH_HEADER, "itx.fetch");
     return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
       new Request(request, { headers }),
     );

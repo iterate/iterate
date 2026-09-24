@@ -13,14 +13,7 @@
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
 import { z } from "zod";
-import {
-  ITX_APP_HEADER,
-  ITX_CALLER_PATH_HEADER,
-  ITX_GRANT_HEADER,
-  ITX_PRINCIPAL_HEADER,
-  stampCaller,
-  type Caller,
-} from "iterate/next/principal";
+import { stampCaller, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
   print,
@@ -63,10 +56,8 @@ import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.t
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
-  ITX_PLATFORM_ORIGIN_HEADER,
-  RPC_STUB_PAGER_WEBSOCKET_HEADER,
-  FETCH_UPGRADE_SOCKET_HEADER,
   encodeFetchExpression,
+  stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
 import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
@@ -945,28 +936,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // The caller crosses with the call — the sibling runs it under the same Caller, so an event
         // appended there is attributed too — stamped with the context it originated at (once, at the
         // first hop) so a relative path there still means the caller's.
+        const hopCaller = { ...caller, path: base };
         const terminalFetch = terminalFetchOf(["itx", ...itxExpressionSteps], []);
         if (terminalFetch) {
           // A socket-bearing Response must cross a native fetch, never Workers RPC.
           const headers = new Headers(terminalFetch.request.headers);
-          for (const name of [
-            ITX_PRINCIPAL_HEADER,
-            ITX_GRANT_HEADER,
-            ITX_APP_HEADER,
-            ITX_PLATFORM_ORIGIN_HEADER,
-            RPC_STUB_PAGER_WEBSOCKET_HEADER,
-            FETCH_UPGRADE_SOCKET_HEADER,
-          ])
-            headers.delete(name);
+          stampCallerHeaders(headers, hopCaller);
           headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
-          headers.set(ITX_CALLER_PATH_HEADER, caller.path || path);
-          if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
-          if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
-          if (caller.app) headers.set(ITX_APP_HEADER, "1");
-          if (caller.platformOrigin) headers.set(ITX_PLATFORM_ORIGIN_HEADER, caller.platformOrigin);
           return context.fetch(new Request(terminalFetch.request, { headers }));
         }
-        const hopCaller = { ...caller, path: caller.path || path };
         // The sibling names a handle by expression (expression.ts): this context mints its own over the
         // sibling's stub, so a handle held here is one whole call per verb, never a session held open.
         return Promise.resolve(context.invoke(["itx", ...itxExpressionSteps], [], hopCaller)).then(

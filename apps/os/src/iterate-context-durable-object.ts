@@ -57,6 +57,7 @@ import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
+  stampCallerHeaders,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
@@ -1348,9 +1349,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  either way (measured: __workers-tests__/secret-facet-proxies-a-socket.test.ts). */
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
-    headers.delete(ITX_PRINCIPAL_HEADER);
-    headers.delete(ITX_GRANT_HEADER);
-    headers.delete(ITX_CALLER_PATH_HEADER);
+    stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
