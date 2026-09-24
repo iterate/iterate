@@ -3,19 +3,19 @@
 // `liveSnapshot`) catch up from the log unless the reduce has provably reached the head it was
 // SHOWN (iterate/stream/processor.ts). A push shows a head; a facet a row pushes is also told so as
 // it starts (`fedByPushes` in its props, context/facet-host.ts), so the head its first catch-up read
-// counts as shown too. Without that word, a facet no commit it consumes has reached this
-// incarnation re-reads its log through the context on every read, and every
-// `itx.ingressRoutes.match` (every request to a project host whose config worker routes) pays an
-// ItxEntrypoint `readEvents` round trip. A processor NO row pushes still reads every time: a read
-// is the only way it learns of an event.
+// counts as shown too. Without that word, a facet whose row consumes a few types of a busy log
+// (`consumes`, as a voice delegate's or a user processor's row does) and that no commit it consumes
+// has reached this incarnation re-reads its log through the context on every read: an
+// ItxEntrypoint `readEvents` round trip on every `snapshot`. A row that consumes every durable
+// event (the platform's own processors) pushes its facet each commit and never paid it. A
+// processor NO row pushes still reads every time: a read is the only way it learns of an event.
 //
 // Pinned in the `workers` project: it needs the real facet host, a loaded SDK facet and its props.
 // Run:
 //   pnpm exec vitest run --project workers __workers-tests__/idle-facet-reads-its-log-once.test.ts
 
-import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { adminCredentials, openSession, publishConfigWorker, stub, until } from "./support.ts";
+import { stub, until } from "./support.ts";
 
 test("a processor a row pushes, read between commits it does not consume, reads its log once; one appended after is applied before the next read", async () => {
   const ctx = "prj_idle_facet_reads_once";
@@ -62,47 +62,6 @@ test("a processor no row pushes reads its log on every read — the host's word 
   });
 });
 
-test("a routed project host's requests read the ingress routes table without a log catch-up: a reborn facet catches up once, then its reduce stays put while other events land", async () => {
-  const project = "idle-ingress-routes";
-  const itx = await (
-    await openSession()
-  )
-    .authenticate(adminCredentials())
-    .projects.create({ project });
-  await itx.ingressRoutes.set("api", {
-    requestMatcher: { url: { pathname: "/api/*" } },
-    target: "itx.api",
-  });
-  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_MATCH_ONLY_ROUTER }]]);
-  const routesFacet = () =>
-    itx.invoke("itx.facets.get('ingress-routes').snapshot()") as Promise<{
-      offset: number;
-      state: { ingressRoutes: Record<string, unknown> };
-    }>;
-  // A fresh incarnation of the facet, as after every eviction: no push has reached it since, and
-  // none will while no route changes — its first read catches it up.
-  await itx.facets.abort("ingress-routes", "a fresh incarnation");
-  const { offset: routeOffset } = await routesFacet();
-  const answers: string[] = [];
-  for (let i = 0; i < 5; i++) {
-    await itx.append({ type: "test/noise" }); // the busy root log
-    const response = await exports.default.fetch(`https://${project}.projects.test/api/pets`);
-    answers.push(await response.text());
-  }
-  // Every request matched through the table, and none of them caught the facet up past the route.
-  expect({ answers, reducedThrough: (await routesFacet()).offset }).toEqual({
-    answers: Array.from({ length: 5 }, () => "matched api\n"),
-    reducedThrough: routeOffset,
-  });
-  // A route set afterwards is pushed as it commits (and `set` waits for it): the next request sees it.
-  await itx.ingressRoutes.set("home", {
-    requestMatcher: { url: { pathname: "/" } },
-    target: "itx.home",
-  });
-  const home = await exports.default.fetch(`https://${project}.projects.test/`);
-  expect(await home.text()).toBe("matched home\n");
-});
-
 /** A tally of `test/counted` events whose host counts its round trips to its context. The
  *  projection is constant, so no live-state delta rides the scope and it runs no background work:
  *  every round trip it makes is a catch-up's read of the log. */
@@ -136,18 +95,6 @@ export class CountingTallyDurableObject extends StreamProcessorDurableObject {
 `,
   },
   className: "CountingTallyDurableObject",
-};
-
-/** A config worker that answers which route `itx.ingressRoutes.match` found — the template's call
- *  (configs/default/worker.ts), with no forward. */
-const SRC_MATCH_ONLY_ROUTER = {
-  "cap.js": `import { ConfigWorker } from "./processor.js";
-export default class Router extends ConfigWorker {
-  async fetch(request) {
-    const route = await this.withItx((itx) => itx.ingressRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
-    return new Response(route ? \`matched \${route.ingressRouteName}\\n\` : "no route\\n");
-  }
-}`,
 };
 
 /** The counting tally facet `name` on context `ctx`, by itx expression — `spec` hosts it. */
