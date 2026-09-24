@@ -51,6 +51,11 @@ failed or was cancelled, and **Time to red** from the first failed job attempt
 in the run; recovered test or job attempts do not count. Missing failure timing uses a
 labelled upper bound.
 
+This is the Preview OS or Main OS e2e workflow's own time to green. How long a
+PR push waits for every check, Lint and Test included, is measured hourly across
+all pushes by the PR time to green guard
+([Depot CI](depot-ci.md#pr-time-to-green)), from the same clock.
+
 Elapsed metrics start at the run's creation, so they include time waiting to
 start. A striped **Workflow queue** row appears first, measured from Depot
 execution `createdAt` to `startedAt`; Depot does not say why a run queued, so

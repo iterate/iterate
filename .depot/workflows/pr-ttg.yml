@@ -1,0 +1,73 @@
+# PR TIME TO GREEN (scripts/ci/pr-ttg-guard.ts): every hour, how long each pull request push waited
+# for its checks (Lint and Typecheck, Test, and Preview OS when it ran), read from Depot's API and
+# split by what the Preview OS e2e job ran. Each push is a PostHog event (`pr checks settled`), and
+# Slack #error-pulse is paged on a change of state: red once when the pushes that skipped the slow
+# e2e rows took a median over 165 s or a p90 over 200 s across the last 24 hours (at least 20 of
+# them), green once when both are back under. Those lines are defaults for the owner to confirm. A
+# page leaves the run green; a run that could not read Depot fails.
+#
+# Its memory is its own `pr-ttg-state` artifact, which the next run reads back (Depot organization
+# token from Doppler _shared/preview). Test a branch, and the Slack hookup, by dispatching it:
+# test-page=true posts this run's numbers marked 🧪 TEST RUN, mentioning nobody. A test page, or any
+# run off main, keeps no state and sends nothing to PostHog.
+#
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow pr-ttg.yml \
+#     --ref <branch> --input test-page=true
+#
+# Depot registers the schedule once this file is on the default branch.
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN only.
+name: PR time to green
+permissions:
+  contents: read
+on:
+  schedule:
+    # Hourly, off the other schedules' minutes (:07/:22/:37/:52, :13, :29, :41).
+    - cron: "47 * * * *"
+  workflow_dispatch:
+    inputs:
+      test-page:
+        description: true = post this run's numbers to #error-pulse as a 🧪 test page; no state kept
+        required: false
+        type: string
+        default: "false"
+concurrency:
+  group: pr-ttg
+  cancel-in-progress: false
+jobs:
+  measure:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # The Depot token reads the runs through the API and the previous state through the Depot CLI;
+      # the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
+      - name: Measure, page #error-pulse on a change of state
+        run: |-
+          set -euo pipefail
+          export DEPOT_TOKEN
+          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          pnpm tsx scripts/ci/pr-ttg-guard.ts previous-state --out test-results/pr-ttg/previous.json
+          pnpm tsx scripts/ci/pr-ttg-guard.ts measure \
+            --ref "${{ github.ref }}" \
+            --state test-results/pr-ttg/previous.json \
+            --state-out test-results/pr-ttg/state.json \
+            ${{ inputs.test-page == 'true' && '--test-page' || '' }}
+      # The guard writes the state only on a real run on main: after its page, before PostHog.
+      - name: Keep the state for the next run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-ttg-state
+          path: test-results/pr-ttg/state.json
+          if-no-files-found: ignore
+          overwrite: true

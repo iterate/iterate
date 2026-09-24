@@ -91,6 +91,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state          |
 | `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                    |
 | `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
+| `pr-ttg.yml`                 | Hourly, dispatch                                         | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
 | `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                   |
 
 Each file's header comment and `on:` block are the details.
@@ -630,6 +631,39 @@ re-posts both statuses at the new uploads. A dispatch with `action=e2e` runs
 its own trace job. See
 [CI traces](./ci-traces.md) for the timing model, the viewer, replay commands
 and OTLP JSON export.
+
+## PR time to green
+
+`pr-ttg.yml` runs `scripts/ci/pr-ttg-guard.ts` every hour. It reads from
+Depot's API how long each pull request push waited for its checks: Lint and
+Typecheck, Test, and Preview OS when the push touched the preview's paths. The
+wait runs from the run's creation (about the push) to the end of the last
+check, the Preview OS trace job included:
+
+- **Time to green**: the pushes whose checks all passed on their first
+  execution.
+- **Time to first verdict**: every push, red ones and re-run ones at their
+  first execution's end, so flakes count. A push whose Test or Lint was
+  cancelled because the PR's next push superseded it is left out.
+
+Pushes are split by what their Preview OS e2e job ran, which its suite summary
+names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow rows
+skipped, every row (including summaries written before the `slow` tag, when
+every row ran), no summary (e2e never ran), and no Preview OS. The job log
+prints each group's p50 and p90 over the last 24 hours and 7 days, and the
+share of Preview OS pushes that ran the slow rows. Each push is a PostHog event,
+`pr checks settled`.
+
+The guard pages #error-pulse on a change of state: red once when the pushes
+that skipped the slow rows took a p50 over 165 s or a p90 over 200 s across the
+last 24 hours, judged from 20 such pushes up; green once when both are back
+under. These lines are defaults for the owner to confirm (`LINES` in the
+script). Its state is its own `pr-ttg-state` artifact. Dispatch it with
+`--input test-page=true` to post its numbers as a 🧪 test page that mentions
+nobody and keeps no state.
+
+The CI trace's time to green ([CI traces](ci-traces.md)) is one workflow's; this
+is the push's, across every check.
 
 ## Browser reports from artifacts
 
