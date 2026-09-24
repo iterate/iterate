@@ -127,13 +127,15 @@ test.each([
     e2e: "failure",
     ok: false,
   },
+  // a dispatch with no pull request number tests nothing; its gate lands on the dispatched ref's
+  // head, where a green one would stand in for that pull request's own
   {
     event: "workflow_dispatch",
     changes: "skipped",
     touched: "",
     deploy: "skipped",
     e2e: "skipped",
-    ok: true,
+    ok: false,
   },
   { event: "push", changes: "skipped", touched: "", deploy: "skipped", e2e: "skipped", ok: false },
 ])(

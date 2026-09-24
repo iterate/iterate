@@ -611,6 +611,10 @@ The workflows are ready for it:
   deploy or e2e directly would not work: GitHub counts a job skipped by its `if` as
   passing, so a failed deploy would pass a skipped e2e
   ([GitHub: skipped but required checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks)).
+- A Preview OS dispatch posts its checks on the dispatched ref's head, where they
+  count toward that PR's required checks like its own run's. So a dispatch's gate
+  is green only when its e2e ran and passed; one that names no pull request tests
+  nothing and is red.
 - No `push` workflow runs on a queue branch: every `push` trigger names `main`.
 
 Whether main requires the queue, and which checks it requires, is the "Required

@@ -82,9 +82,10 @@ export function touchesPreview(files: string[]) {
  *   merge_group        green: the pull request's own gate was green before it could join the queue,
  *                      and the queue re-runs Lint and Typecheck and Test on the group
  *                      (docs/depot-ci.md#merge-queue)
- *   workflow_dispatch  the dispatched operation: green when e2e succeeded, or when nothing was asked
- *                      of either job (no pull request number); red when deploy failed or e2e did not
- *                      succeed after running or being asked for
+ *   workflow_dispatch  green only when the dispatched e2e ran and succeeded. A dispatch posts its checks
+ *                      on the dispatched ref's head, where they count toward a pull request's required
+ *                      checks like its own run's, so a dispatch that tested nothing (no pull request
+ *                      number) is red, never a green gate over a red or unfinished e2e
  * A job result is GitHub's `needs.<job>.result`: success, failure, cancelled or skipped.
  */
 export function previewVerdict(input: {
@@ -116,7 +117,7 @@ export function previewVerdict(input: {
   if (event === "workflow_dispatch") {
     if (e2e === "success") return { ok: true, reason: "the dispatched e2e run passed" };
     if (deploy === "skipped" && e2e === "skipped")
-      return { ok: true, reason: "the dispatch asked neither job to run" };
+      return { ok: false, reason: "the dispatch named no pull request, so nothing was tested" };
     return { ok: false, reason: `deploy ${deploy}, e2e ${e2e}` };
   }
   return { ok: false, reason: `Preview OS does not run on ${event}` };
