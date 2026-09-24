@@ -27,9 +27,6 @@ import { Tools } from "./support/targets.ts";
 
 const HELD = "events.iterate.com/context/held-resident-while-idle";
 const WOKEN = "events.iterate.com/stream/woken";
-const incarnations = (events: any[]): number[] =>
-  events.filter((event) => event.type === WOKEN).map((event) => event.payload.incarnation);
-
 test("an armed watchdog does not hold an idle context: evicted in every idle, and its alarm fired in none", async () => {
   const itx = openItx(freshCtx("watchdog_idle"));
   await itx.whoami(); // arms the watchdog
@@ -88,7 +85,7 @@ test.skipIf(projectHostsAreLocal() || process.env.RUN_RESIDENCY_WATCHDOG_WINDOW 
       ).toBeGreaterThanOrEqual(RESIDENCY_WATCHDOG_WINDOW_MS / 4_000);
       const records = heldEvents.filter((event) => event.type === HELD);
       expect(records).toHaveLength(1);
-      expect(records[0].payload.incarnation).toBe(incarnations(heldEvents)[0]);
+      expect(records[0].payload).toMatchObject({ incarnation: incarnations(heldEvents)[0] });
       expect(records[0].payload.idleForMs).toBeGreaterThanOrEqual(RESIDENCY_WATCHDOG_WINDOW_MS);
       // THE CONTROL: evicted ~10 s after its call; the watchdog's alarm woke a fresh incarnation
       // that appended nothing — the read's incarnation is two past the first, with no record.
@@ -100,3 +97,6 @@ test.skipIf(projectHostsAreLocal() || process.env.RUN_RESIDENCY_WATCHDOG_WINDOW 
     }
   },
 );
+
+const incarnations = (events: any[]): number[] =>
+  events.filter((event) => event.type === WOKEN).map((event) => event.payload.incarnation);

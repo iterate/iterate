@@ -80,8 +80,10 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   // `hostedFacet` marker with the class instead.
   expect(await processorNames(itx)).toEqual(["tally"]);
   const row = (await subscriptions(itx)).find((r: { name: string }) => r.name === "tally");
-  expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, minus the source
-  expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject", restarts: 0 });
+  expect(row).toMatchObject({
+    target: "itx.builtins.facets.get('tally').processEventBatch", // the platform's spelling, minus the source
+    hostedFacet: { name: "tally", className: "TallyDurableObject", restarts: 0 },
+  });
   expect(row.cursor).toBeUndefined();
 });
 
@@ -130,6 +132,7 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
   const sb = await itx.invoke("itx.facets.get('tally').snapshot()");
   expect(sb.state?.counts?.[RULE_CONFIGURED]).toBe(3);
   expect(sb.offset).toBeGreaterThanOrEqual(7);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a count only one processor has is a different reduce
   expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log
 
   // the subscriptions table lists both processors (rows whose target is a facet's processEventBatch)
@@ -223,7 +226,7 @@ test("the raw event-sourced door agrees with the verb — a hand-appended subscr
     const s: any = await tallySnapshot(itx).catch(() => undefined); // NO_FACET while it materializes
     return s && s.offset >= mark.offset && s;
   });
-  expect(snap.state.counts.mark).toBe(1);
+  expect(snap.state.counts).toMatchObject({ mark: 1 });
 });
 
 test("processors.enable('tally') from two sessions concurrently: one effective lineage, exact counts, the table lists tally once", async () => {
@@ -247,8 +250,9 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   });
   // one lineage: bit-exact counts (a doubled drive or a second lineage would overcount; a
   // dropped one would undercount)
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra count is a second lineage
   expect(snap.state.counts).toEqual(expected);
-  expect(snap.state.counts.seen).toBe(3);
+  expect(snap.state.counts).toMatchObject({ seen: 3 });
 });
 
 test("re-enable while WARM with the same spec appends NOTHING (idempotent at the door) and never corrupts the reduce (no reset, no double-count)", async () => {
@@ -261,7 +265,7 @@ test("re-enable while WARM with the same spec appends NOTHING (idempotent at the
     const s: any = await tallySnapshot(itx);
     return s.offset >= head1 && s;
   });
-  expect(s1.state.counts.mark).toBe(2);
+  expect(s1.state.counts).toMatchObject({ mark: 2 });
 
   const configuredEvents = async () =>
     (await readAll(itx)).filter(
@@ -278,8 +282,9 @@ test("re-enable while WARM with the same spec appends NOTHING (idempotent at the
     const s: any = await tallySnapshot(itx);
     return s.offset >= head2 && s;
   });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra count is a lineage the re-enable kept
   expect(s2.state.counts).toEqual(expected); // exact — the re-enable neither reset nor doubled
-  expect(s2.state.counts.mark).toBe(3);
+  expect(s2.state.counts).toMatchObject({ mark: 3 });
 });
 
 test("double-enable then ONE processors.disable disables it (same name REPLACES — there is no enablement stack to clear)", async () => {
@@ -329,7 +334,7 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
   ]);
   const snap: any = await tallySnapshot(itx);
   expect(snap.offset).toBeGreaterThanOrEqual(m.offset);
-  expect(snap.state.counts.mark).toBe(2);
+  expect(snap.state.counts).toMatchObject({ mark: 2 });
 });
 
 // ── the row's removal IS the disablement ──
@@ -355,7 +360,7 @@ test("the raw event agrees with processors.disable — a hand-appended subscript
     const s: any = await tallySnapshot(itx).catch(() => undefined);
     return s && s.offset >= mark.offset && s;
   });
-  expect(rebuilt.state.counts.mark).toBe(1);
+  expect(rebuilt.state.counts).toMatchObject({ mark: 1 });
 });
 
 // ── policy as a facet processor: the breaker pauses the stream ──
@@ -378,7 +383,9 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   );
   expect(burst).toHaveLength(8); // the burst itself was admitted — policy reads the REDUCE, after the commit
   const paused = await itx.waitForEvent({ type: PAUSED, afterOffset: 0, timeoutMs: 20_000 });
-  expect(paused.payload).toEqual({ reason: "breaker: durable events exceeded the bucket" });
+  expect(paused).toMatchObject({
+    payload: { reason: "breaker: durable events exceeded the bucket" },
+  });
   // provenance: the engine stamps every processor emit with its slug — the log says WHO paused it
   expect(paused.source?.processor).toMatchObject({ slug: "breaker", version: "1.0.0" });
   expect(paused.source?.processor?.whileProcessing?.type).toBe("burst");
@@ -390,7 +397,9 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(err.message).toContain("stream paused: breaker: durable events exceeded the bucket");
   // the core snapshot shows the same truth
   const core = await itx.invoke("itx.facets.get('core').snapshot()");
-  expect(core.state.paused).toEqual({ reason: "breaker: durable events exceeded the bucket" });
+  expect(core.state).toMatchObject({
+    paused: { reason: "breaker: durable events exceeded the bucket" },
+  });
 
   // the operator's recovery is a plain control append — resume always lands on a paused stream
   await itx.append({ type: "events.iterate.com/stream/resumed" });

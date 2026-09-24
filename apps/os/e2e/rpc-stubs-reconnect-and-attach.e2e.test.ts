@@ -187,18 +187,6 @@ createFailing(
 
 const ATTACHED = "events.iterate.com/rpc-stub/attached";
 
-/** A live watcher of presence: the ephemeral `rpc-stub/attached` events, WITH their offsets. */
-async function watchAttached(ctx: string) {
-  const observer = openItx(ctx);
-  const seen = collector();
-  await observer.subscribe({ name: "presence-watch", target: seen.fn, consumes: [ATTACHED] });
-  const attachedOffsetOf = (rpcStubKey: string): number | undefined =>
-    seen.invocations
-      .flatMap((i) => i.events)
-      .find((e) => e.type === ATTACHED && e.payload?.rpcStubKey === rpcStubKey)?.offset;
-  return { observer, attachedOffsetOf };
-}
-
 test("provide(match, stub): the rule is appended INSIDE the pager attach â€” its offset is below the key's rpc-stub/attached", async () => {
   const ctx = freshCtx("attach-rule");
   const { observer, attachedOffsetOf } = await watchAttached(ctx);
@@ -272,3 +260,15 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED â
   await itx.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
 });
+
+/** A live watcher of presence: the ephemeral `rpc-stub/attached` events, WITH their offsets. */
+async function watchAttached(ctx: string) {
+  const observer = openItx(ctx);
+  const seen = collector();
+  await observer.subscribe({ name: "presence-watch", target: seen.fn, consumes: [ATTACHED] });
+  const attachedOffsetOf = (rpcStubKey: string): number | undefined =>
+    seen.invocations
+      .flatMap((i) => i.events)
+      .find((e) => e.type === ATTACHED && e.payload?.rpcStubKey === rpcStubKey)?.offset;
+  return { observer, attachedOffsetOf };
+}

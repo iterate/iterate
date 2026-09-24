@@ -43,13 +43,6 @@ import {
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
-/** The handle still answers after the actor was evicted underneath it — never a dead-stub error. */
-const stillAnswers = (call: () => Promise<unknown>) =>
-  call().then(
-    () => "answered",
-    (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  );
-
 test("control: a session holding only the context handle is evicted between idle reads", async () => {
   const itx = openItx(freshCtx("residency_control"));
   await itx.whoami();
@@ -104,18 +97,6 @@ test("a run whose script returned a live value does not keep its context residen
 // e2e run created stayed billed for hours, 2026-09-21/22); the context now ends that session with
 // the call. What `withItx` leaves undisposed keeps the FACET running instead, so it releases every
 // call (the rows at the bottom).
-/** A repo born through the collection and read through its facet, then the client's session closed:
- *  what stays behind is the platform's own doing, not a handle this test holds. */
-async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: string }> {
-  const ctx = freshCtx(prefix);
-  const path = freshRepoPath("residency");
-  const itx = openItx(ctx);
-  expect(await itx.repos.create(path)).toEqual({ path });
-  expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via withItx
-  disposeSessions();
-  return { ctx, path };
-}
-
 test("a repo read through its facet does not keep its own context resident", async () => {
   const { ctx, path } = await repoBornAndRead("residency_facet");
   const itx = openItx(ctx);
@@ -203,18 +184,6 @@ export class CarelessHolderDurableObject extends FacetDurableObject {
   }
 }`,
 };
-const carelessHolder = (itx: any, method: string, ...args: unknown[]) =>
-  itx.invoke([
-    "itx",
-    "facets",
-    [
-      "get",
-      "careless",
-      { source: CARELESS_HOLDER_SOURCE, className: "CarelessHolderDurableObject" },
-    ],
-    [method, ...args],
-  ]);
-
 test("a facet keeping a loaded worker's data answer its context handed through keeps neither the context nor itself running", async () => {
   const itx = openItx(freshCtx("residency_careless_data"));
   expect(await carelessHolder(itx, "keepData", DATA_WORKER_SOURCE)).toBe('{"a":1}');
@@ -268,7 +237,7 @@ test("the LiveState sink that never releases env.ITX keeps neither the context n
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   const again = await chatroom("state");
   expect(Math.floor(again.rev / 4096)).toBeGreaterThan(started);
-  expect(again.state).toEqual({ messages: [] }); // in memory, as it always was: gone with the instance
+  expect(again).toMatchObject({ state: { messages: [] } }); // in memory, as it always was: gone with the instance
 }, 90_000);
 
 // The Keeper (support/sources.ts) stashes its `env.ITX` in its own storage and calls through the
@@ -283,7 +252,7 @@ test("a facet calling through a stashed env.ITX does not outlive its context", a
       [method],
     ]);
   expect(await keeper("stash")).toEqual({ stashed: true });
-  expect((await keeper("useStashed")).projectId).toEqual(expect.any(String));
+  expect(await keeper("useStashed")).toMatchObject({ projectId: expect.any(String) });
   const started = await keeper("started");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await keeper("started")).toBeGreaterThan(started);
@@ -317,10 +286,6 @@ deployedOnly(
 // on previews of main: after one page load a website project's `/` and `/repos/config` were billed
 // every minute with no request until the next deploy; both rows below failed there, the facets'
 // births unchanged across three evictions, and pass once `withItx` releases every call.
-
-/** When the facet started — the construction time its live state's revision counts from. */
-const facetStartedAt = async (facet: any): Promise<number> =>
-  Math.floor((await facet.liveSnapshot()).rev / 4096);
 
 test("a website project's facets do not outlive their contexts after a page load", async () => {
   const slug = freshDnsSafeProjectSlug("residency-site");
@@ -663,3 +628,38 @@ async function wakesAcrossIdles(itx: any): Promise<number> {
   const events = await idleAcrossEvictions(itx);
   return events.filter((event) => event.type === "events.iterate.com/stream/woken").length;
 }
+
+/** The handle still answers after the actor was evicted underneath it — never a dead-stub error. */
+const stillAnswers = (call: () => Promise<unknown>) =>
+  call().then(
+    () => "answered",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+
+/** A repo born through the collection and read through its facet, then the client's session closed:
+ *  what stays behind is the platform's own doing, not a handle this test holds. */
+async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: string }> {
+  const ctx = freshCtx(prefix);
+  const path = freshRepoPath("residency");
+  const itx = openItx(ctx);
+  expect(await itx.repos.create(path)).toEqual({ path });
+  expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via withItx
+  disposeSessions();
+  return { ctx, path };
+}
+
+const carelessHolder = (itx: any, method: string, ...args: unknown[]) =>
+  itx.invoke([
+    "itx",
+    "facets",
+    [
+      "get",
+      "careless",
+      { source: CARELESS_HOLDER_SOURCE, className: "CarelessHolderDurableObject" },
+    ],
+    [method, ...args],
+  ]);
+
+/** When the facet started — the construction time its live state's revision counts from. */
+const facetStartedAt = async (facet: any): Promise<number> =>
+  Math.floor((await facet.liveSnapshot()).rev / 4096);

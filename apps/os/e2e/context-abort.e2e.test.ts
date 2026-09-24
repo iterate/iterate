@@ -21,10 +21,6 @@ import { oauthSession } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
 const ABORTED = "events.iterate.com/context/aborted";
-/** One `stream/woken` per incarnation: the count is how many times the context started. */
-const wakes = (events: { type: string }[]) =>
-  events.filter((event) => event.type === "events.iterate.com/stream/woken").length;
-
 /** A loaded worker that says whatever the test hands it through its own `env.ITX` — loaded code. */
 const SAY = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -110,6 +106,7 @@ test("cd(path).abort() resets that context only — through the root's own cd to
   await child.whoami();
   expect(wakes(await readAll(child))).toBe(childWakes + 1);
   // The edge's own `cd` addresses the child directly: the same reset, with no hop to name.
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a direct abort names no reason and no caller hop
   expect((await child.abort()).payload).toEqual({});
   await child.whoami();
   expect(wakes(await readAll(child))).toBe(childWakes + 2);
@@ -222,3 +219,7 @@ test("a rewrite rule masks abort like any name, a jail's bare null takes both ve
     payload: { reason: "physical" },
   });
 });
+
+/** One `stream/woken` per incarnation: the count is how many times the context started. */
+const wakes = (events: { type: string }[]) =>
+  events.filter((event) => event.type === "events.iterate.com/stream/woken").length;

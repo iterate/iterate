@@ -37,7 +37,7 @@ subdomainsOnly(
     // platform origin on a name the platform never chose) and no Durable Object is ever named or
     // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/context/paths.test.ts.
     const answer = await fetchProjectHost(`site--prj_evil.${ingressHostname()}`, "/w?repo=x");
-    expect(answer.status, answer.text).toBe(421);
+    expect(answer, answer.text).toMatchObject({ status: 421 });
     expect(answer.text).toContain("not a project host");
   },
 );
@@ -58,7 +58,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
       ),
     ),
   ]);
-  expect((raced as any[])[0].type).toBe("self-ping");
+  expect((raced as any[])[0]).toMatchObject({ type: "self-ping" });
   const page = await itx.invoke(["itx", ["readEvents", 0, 50]]);
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
@@ -80,38 +80,6 @@ test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", a
 });
 
 // ── the natural dotted client surface ──
-
-/** Attach a slack bridge to `ctx` and hand back an ordinary second client: provider session +
- *  consumer session over the same context. The bridge is a LIVE rpc stub lent under the key
- *  `itx.slack` with the rewrite rule `itx.slack ⇒ itx.rpcStubs.get('itx.slack')` — so every other
- *  client just speaks `itx.slack.chat.…`. */
-async function slackRig(ctx: string) {
-  const slack = new SlackReplayTarget();
-  await openItx(ctx).provide("itx.slack", slack);
-  const itx = openItx(ctx);
-  // Sanity through the EXPLICIT door — the rule rewrites before any dotted attempt.
-  await until("slack rule rewrites via the explicit door", async () => {
-    const posted: any = await itx.invoke([
-      "itx",
-      "slack",
-      "chat",
-      ["postMessage", { channel: "#sanity", text: "rig up" }],
-    ]);
-    return posted?.ok === true;
-  });
-  slack.calls.length = 0; // the sanity call is rig noise, not test data
-  return { itx, slack };
-}
-
-/** Lend a live Tools stub behind the rule `itx.<name>` and wait until it answers via the STRING door. */
-async function liveRig(ctx: string, name: string) {
-  const itx = openItx(ctx);
-  await openItx(ctx).provide(`itx.${name}`, new Tools(name));
-  await until(`lent stub 'itx.${name}' answers via the string door`, async () => {
-    return (await itx.invoke(`itx.${name}.hello()`)) === `hello-from-${name}`;
-  });
-  return itx;
-}
 
 test("explicit door: invoke(['itx', ['whoami']]) answers (the half the dotted surface sugars)", async () => {
   const ctx = freshCtx("door");
@@ -252,6 +220,39 @@ test("reserved segments are hidden at EVERY depth: transport words never dispatc
 
   // NOTHING dispatched: no probe committed an event (head unmoved) and tally never ticked.
   expect(await readHead(itx)).toBe(head);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a count the baseline lacks is a probe that dispatched
   expect(snap.state.counts).toEqual(baseline.state.counts);
   expect(snap.state.counts["resv-mark"]).toBe(1);
 });
+
+/** Attach a slack bridge to `ctx` and hand back an ordinary second client: provider session +
+ *  consumer session over the same context. The bridge is a LIVE rpc stub lent under the key
+ *  `itx.slack` with the rewrite rule `itx.slack ⇒ itx.rpcStubs.get('itx.slack')` — so every other
+ *  client just speaks `itx.slack.chat.…`. */
+async function slackRig(ctx: string) {
+  const slack = new SlackReplayTarget();
+  await openItx(ctx).provide("itx.slack", slack);
+  const itx = openItx(ctx);
+  // Sanity through the EXPLICIT door — the rule rewrites before any dotted attempt.
+  await until("slack rule rewrites via the explicit door", async () => {
+    const posted: any = await itx.invoke([
+      "itx",
+      "slack",
+      "chat",
+      ["postMessage", { channel: "#sanity", text: "rig up" }],
+    ]);
+    return posted?.ok === true;
+  });
+  slack.calls.length = 0; // the sanity call is rig noise, not test data
+  return { itx, slack };
+}
+
+/** Lend a live Tools stub behind the rule `itx.<name>` and wait until it answers via the STRING door. */
+async function liveRig(ctx: string, name: string) {
+  const itx = openItx(ctx);
+  await openItx(ctx).provide(`itx.${name}`, new Tools(name));
+  await until(`lent stub 'itx.${name}' answers via the string door`, async () => {
+    return (await itx.invoke(`itx.${name}.hello()`)) === `hello-from-${name}`;
+  });
+  return itx;
+}

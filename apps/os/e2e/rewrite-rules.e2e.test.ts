@@ -44,19 +44,6 @@ import {
 
 // ── the reserved root ──
 
-/** A whole context's worth of capability, lent live (a plain object would ride by VALUE; a stub must
- *  be an RpcTarget or a bare function). */
-class Override extends RpcTarget {
-  readonly seen: unknown[] = [];
-  anything(...events: unknown[]) {
-    this.seen.push(...events);
-    return "captured";
-  }
-  kv() {
-    return "the override";
-  }
-}
-
 // A dead stub's un-set removes what NAMES its key, decided against a frozen table
 // (context/itx-expression-rewriting.test.ts) — so a user's alias to the shadowed root survives, in
 // either configuration order, and resolves to the platform row beneath once the fake is gone.
@@ -237,7 +224,7 @@ test("A BARE `itx` ROW WITH A TARGET at a child: a live capability answers every
   expect(await root.cd("/x").whoami()).toEqual({ projectId: ctx, path: "/x" });
   // a name nothing implicit claims goes to the stub — at a child that includes every project root
   expect(await root.cd("/x").anything({ type: "t", payload: { n: 2 } })).toBe("captured");
-  expect(live.seen).toEqual([{ type: "t", payload: { n: 2 } }]);
+  expect(live).toMatchObject({ seen: [{ type: "t", payload: { n: 2 } }] });
   expect(await root.cd("/x").kv()).toBe("the override"); // `kv` is no context root: the row answers
   // an EXPRESSION-side cd from the root goes through /x's rows too
   expect(await root.invoke("itx.cd('/x').anything(3)")).toBe("captured");
@@ -338,11 +325,9 @@ test("itx.llm.run('special') rewrites past the plain itx.llm.run rule; pinned ar
   expect(Object.keys(snap.state.itxExpressionRewriteRules)).toEqual(
     expect.arrayContaining(["itx.llm.run('special')", "itx.llm.run('live')"]),
   );
-  expect(snap.state.itxExpressionRewriteRules["itx.llm.run('special')"].match).toEqual([
-    "itx",
-    "llm",
-    ["run", "special"],
-  ]);
+  expect(snap.state.itxExpressionRewriteRules["itx.llm.run('special')"]).toMatchObject({
+    match: ["itx", "llm", ["run", "special"]],
+  });
   // un-setting by the canonical pinned spelling deletes exactly that rule; the plain rule (less specific,
   // `pickItxExpressionRewriteRule`) matches the call from now on
   await itx.provide("itx.llm.run('special')", null);
@@ -439,3 +424,16 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
   expect(errorCode(missErr)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(await itx.rewriteRules.get("itx.broken")).toBeNull();
 });
+
+/** A whole context's worth of capability, lent live (a plain object would ride by VALUE; a stub must
+ *  be an RpcTarget or a bare function). */
+class Override extends RpcTarget {
+  readonly seen: unknown[] = [];
+  anything(...events: unknown[]) {
+    this.seen.push(...events);
+    return "captured";
+  }
+  kv() {
+    return "the override";
+  }
+}

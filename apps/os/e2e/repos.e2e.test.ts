@@ -58,7 +58,7 @@ test("itx.repos.create(path) lands the request and the certificate on the repo's
   );
 
   expect(await itx.repos.create("/repos/config")).toEqual({ path: "/repos/config" });
-  expect(artifacts.created).toEqual(["/repos/config"]); // by its path
+  expect(artifacts).toMatchObject({ created: ["/repos/config"] }); // by its path
   const own = await readAll(itx.cd("/repos/config"));
   expect(repoFactTypes(own)).toEqual(["repo/create-requested", "repo/created"]);
   // The processor row `create` enabled, on the path, named after the facet.
@@ -92,7 +92,7 @@ test("itx.repos.create(path) lands the request and the certificate on the repo's
   // Any path can host a repo — /repos/ is the convention, not a rule.
   await itx.cd("/vendor/lib").provide("itx.cfArtifacts", artifacts);
   expect(await itx.repos.create("/vendor/lib")).toEqual({ path: "/vendor/lib" });
-  expect(artifacts.created).toEqual(["/repos/config", "/vendor/lib"]);
+  expect(artifacts).toMatchObject({ created: ["/repos/config", "/vendor/lib"] });
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual([
     "/repos/config",
     "/vendor/lib",
@@ -158,7 +158,7 @@ localOnly(
       changedPaths: ["worker.ts"],
     });
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 1;\n" }); // the remote agrees
-    expect(artifacts.snapshots).toBe(0);
+    expect(artifacts).toMatchObject({ snapshots: 0 });
     const fact = {
       path: "/repos/config",
       commitOid: first.commitOid,
@@ -192,7 +192,7 @@ localOnly(
     expect((await rejection(repo.modules({ main: "missing.js" }))).message).toMatch(
       /no file at "missing.js" to be the main module/,
     );
-    expect(artifacts.snapshots).toBe(1);
+    expect(artifacts).toMatchObject({ snapshots: 1 });
 
     // A push from OUTSIDE the facet moves the tip: the next read sees it, with ONE more fetch.
     const outside = await artifacts.pushFromOutside("/repos/config", {
@@ -204,7 +204,7 @@ localOnly(
       paths: ["b.txt", "worker.ts"],
     });
     expect(await repo.readFile("b.txt")).toBe("b");
-    expect(artifacts.snapshots).toBe(2);
+    expect(artifacts).toMatchObject({ snapshots: 2 });
 
     // A batch through the facet: deletes before writes. The commit fetches the tip it builds on (the
     // tree its changes apply to) and drops the memo, so the next read fetches the NEW tip; the read
@@ -216,16 +216,16 @@ localOnly(
         { path: "worker.ts", delete: true },
       ],
     });
-    expect(second.changedPaths).toEqual(["worker.ts", "c.txt"]);
-    expect(second.commitOid).toBe(artifacts.remoteTip("/repos/config"));
-    expect(artifacts.snapshots).toBe(3);
+    expect(second).toMatchObject({ changedPaths: ["worker.ts", "c.txt"] });
+    expect(second).toMatchObject({ commitOid: artifacts.remoteTip("/repos/config") });
+    expect(artifacts).toMatchObject({ snapshots: 3 });
     expect(await repo.listFiles()).toEqual({
       commitOid: second.commitOid,
       paths: ["b.txt", "c.txt"],
     });
     expect(await repo.readFile("worker.ts")).toBeNull();
     expect(await repo.readFile("c.txt")).toBe("c");
-    expect(artifacts.snapshots).toBe(4);
+    expect(artifacts).toMatchObject({ snapshots: 4 });
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "b.txt": "b", "c.txt": "c" });
     // log is its own shallow fetch, that deep — newest first, the outside commit in its place.
     expect((await repo.log()).map((c: RepoLogEntry) => c.message)).toEqual([
@@ -297,7 +297,7 @@ localOnly(
     const lost = artifacts.remoteTip("/repos/config");
     await itx.append({ type: "events.iterate.com/stream/resumed" });
     const fourth = await repo.writeFile("worker.ts", "export default 4;\n");
-    expect(fourth.changedPaths).toEqual(["worker.ts"]);
+    expect(fourth).toMatchObject({ changedPaths: ["worker.ts"] });
     expect((await facts(itx)).map((f) => f.commitOid)).toEqual([
       first.commitOid,
       healed.commitOid,
@@ -322,7 +322,7 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
       "repo/create-requested",
       "repo/created",
     ]);
-    expect((await itx.cfArtifacts.list()).repos).toEqual([{ path: "/repos/config" }]);
+    expect(await itx.cfArtifacts.list()).toMatchObject({ repos: [{ path: "/repos/config" }] });
     expect(await repo.tip()).toBeNull(); // unborn main
     const first = await repo.commitFiles({
       message: "first",
@@ -331,7 +331,7 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
         { path: "notes/log.md", content: "# log\n" },
       ],
     });
-    expect(first.changedPaths).toEqual(["worker.ts", "notes/log.md"]);
+    expect(first).toMatchObject({ changedPaths: ["worker.ts", "notes/log.md"] });
     expect(await repo.tip()).toBe(first.commitOid);
     expect(await repo.readFile("notes/log.md")).toBe("# log\n");
     expect(await repo.listFiles()).toEqual({
@@ -369,7 +369,7 @@ localOnly(
     expect(await repo.tip()).toBeNull(); // alive: the verbs answer (an unborn main)
 
     expect(await itx.repos.delete("/repos/gone")).toEqual({ path: "/repos/gone" });
-    expect(artifacts.deleted).toEqual(["/repos/gone"]); // the Artifacts repo went, by its path
+    expect(artifacts).toMatchObject({ deleted: ["/repos/gone"] }); // the Artifacts repo went, by its path
     const own = await readAll(itx.cd("/repos/gone"));
     expect(repoFactTypes(own)).toEqual([
       "repo/create-requested",
@@ -405,7 +405,7 @@ localOnly(
     // deleted repo is not re-creatable.
     expect(await itx.repos.delete("/repos/gone")).toEqual({ path: "/repos/gone" });
     expect(await readAll(itx.cd("/repos/gone"))).toHaveLength(own.length);
-    expect(artifacts.deleted).toEqual(["/repos/gone"]);
+    expect(artifacts).toMatchObject({ deleted: ["/repos/gone"] });
     expect((await rejection(itx.repos.create("/repos/gone"))).message).toMatch(
       /repo \/repos\/gone: deleted — not re-creatable/,
     );

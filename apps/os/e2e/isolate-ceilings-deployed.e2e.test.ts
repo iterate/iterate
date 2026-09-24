@@ -34,7 +34,7 @@
 // Every reset arrives as `Durable Object's isolate exceeded its memory limit and was reset.` with
 // `.overloaded` + `.durableObjectReset` stamped, and the ctx recovers on the very next call.
 
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import { freshCtx, openItx, rejection } from "./support/client.ts";
 import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
@@ -57,29 +57,19 @@ const crashHunt = test.skipIf(
 
 const EVENT_COUNT = 24;
 const EVENT_CHARS = 6 * MiB;
-/** The seeded blob for event `n` — deterministic, so a read-back can be checked byte for byte. */
-const blobFor = (n: number): string => String.fromCharCode(97 + (n % 26)).repeat(EVENT_CHARS);
-
-let seededCtx: string;
-let seededOffsets: number[] = [];
-
-beforeAll(async () => {
-  seededCtx = freshCtx("membudget");
-  const itx = openItx(seededCtx);
-  seededOffsets = [];
-  for (let n = 0; n < EVENT_COUNT; n++) {
-    const [event] = await itx.append({ type: "blob", payload: { n, blob: blobFor(n) } });
-    seededOffsets.push(event.offset as number);
-  }
-}, 600_000);
+/** The seed's own budget (up to 10 minutes for 144 MiB of appends) on top of a read-driven row's. The
+ *  first of those rows to run pays it; `seededLog()` hands the others the same context. */
+const SEEDED_ROW_TIMEOUT = 600_000 + 300_000;
+let seed: Promise<{ ctx: string; offsets: number[] }> | undefined;
 
 // ── the memory pins ──
 
 test.sequential(
   "read: a client pages a 144 MiB log — every page fits the isolate and the RPC cap, every body byte-identical",
-  { timeout: 300_000 },
+  { timeout: SEEDED_ROW_TIMEOUT },
   async () => {
-    const itx = openItx(seededCtx);
+    const seeded = await seededLog();
+    const itx = openItx(seeded.ctx);
     const seen = new Map<number, string>();
     let pages = 0;
     for (let after = 0; ; ) {
@@ -90,43 +80,12 @@ test.sequential(
       if (page.scannedThroughOffset <= after) break;
       after = page.scannedThroughOffset;
     }
-    expect([...seen.keys()].sort((a, b) => a - b)).toEqual(seededOffsets);
+    expect([...seen.keys()].sort((a, b) => a - b)).toEqual(seeded.offsets);
     for (let n = 0; n < EVENT_COUNT; n++)
-      expect(seen.get(seededOffsets[n]) === blobFor(n), `event ${n} byte-identical`).toBe(true);
+      expect(seen.get(seeded.offsets[n]) === blobFor(n), `event ${n} byte-identical`).toBe(true);
     expect(pages).toBeGreaterThan(1); // the server decided the page size, not the caller's limit
   },
 );
-
-// ── the crash hunt's helpers and INLINE fixture sources ──
-
-/** Retry a call while the platform answers "Durable Object is overloaded. Requests queued for too
- *  long." — its backpressure after a burst (a queue draining), never a reset and never poisoning; any
- *  other failure propagates at once. Bounded: ~15 s. */
-async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {
-  const deadline = Date.now() + 15_000;
-  for (;;) {
-    try {
-      return await call();
-    } catch (error) {
-      if (!/overloaded|queued for too long/i.test(String((error as Error)?.message ?? error)))
-        throw error;
-      if (Date.now() > deadline) throw error;
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-}
-
-/** Read one context to its durable head, paging by the server's byte budget. */
-async function pageToHead(itx: any): Promise<number> {
-  let after = 0;
-  let pages = 0;
-  for (;;) {
-    const page = await itx.invoke(["itx", ["readEvents", after, 500]]);
-    pages++;
-    if (page.scannedThroughOffset <= after) return pages;
-    after = page.scannedThroughOffset;
-  }
-}
 
 // ── INLINE fixture sources ──
 
@@ -179,17 +138,19 @@ export default class Oomer extends WorkerEntrypoint {
 // count; it is not a `.fails` pin, because a flip here would signal luck, never a ceiling.
 crashHunt(
   "CONCURRENT READERS (accepted limit): 24 sessions paging one 144 MiB log at once may reset the DO — the per-read byte budget bounds one read, not their sum; the ctx recovers on the next call",
-  { timeout: 300_000 },
+  { timeout: SEEDED_ROW_TIMEOUT },
   async () => {
+    const { ctx: seededCtx } = await seededLog();
     const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
     const results = await Promise.all(readers.map((itx) => settle(pageToHead(itx))));
     const resetErrors = results.flatMap((r) => (!r.ok && isDurableObjectReset(r.e) ? [r.e] : []));
     // RECOVERY (runs first, every time): the durable log survives the reset — a single fresh reader
     // still pages the seeded ctx to head. This is why the limit is acceptable, and it must hold.
     const recovered = await settle(pageToHead(openItx(seededCtx)));
-    expect(recovered.ok, "the seeded ctx must recover after the storm and still page to head").toBe(
-      true,
-    );
+    expect(
+      recovered,
+      "the seeded ctx must recover after the storm and still page to head",
+    ).toMatchObject({ ok: true });
     // The reset count is REPORTED, never asserted (the block above): the platform decides it.
     console.log(
       `[concurrent readers] ${resetErrors.length}/24 readers reset the DO${resetErrors.length ? `: ${String(resetErrors[0]?.message ?? "")}` : ""}`,
@@ -199,9 +160,9 @@ crashHunt(
 
 test.sequential(
   "facet catch-up: a processor enabled over a 144 MiB log reduces every event through its loopback read",
-  { timeout: 300_000 },
+  { timeout: SEEDED_ROW_TIMEOUT },
   async () => {
-    const itx = openItx(seededCtx);
+    const itx = openItx((await seededLog()).ctx);
     await enableFixtureProcessor(itx, "user-tally"); // consumes "*": counts committed events by type
     const snapshot = await itx.invoke("itx.facets.get('user-tally').snapshot()");
     expect(snapshot.state?.counts?.blob).toBe(EVENT_COUNT);
@@ -222,7 +183,7 @@ test.sequential(
     expect(errorCode(error)).toBe("EVENT_TOO_LARGE");
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
     const [next] = await itx.append({ type: "after" });
-    expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
+    expect(next).toMatchObject({ offset: marker.offset + 1 }); // the refused batch burned no offset, wrote nothing
   },
 );
 
@@ -337,7 +298,7 @@ crashHunt(
     });
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await settle(itx.invoke("itx.facets.get('hoarder').snapshot()"));
-      expect(r.ok, `snapshot attempt ${attempt} unexpectedly succeeded`).toBe(false);
+      expect(r, `snapshot attempt ${attempt} unexpectedly succeeded`).toMatchObject({ ok: false });
       expect(errorCode((r as { e: any }).e)).toBe("REDUCE_CHECKPOINT_TOO_LARGE"); // ours, coded — no raw SQLITE_TOOBIG
       expect(String((r as { e: any }).e?.message)).toMatch(
         /over the .*ceiling of one storage cell/,
@@ -361,7 +322,7 @@ deployedOnly.sequential(
     const r = await settle(
       itx.invoke(["itx", "workers", ["get", { source: OOMER_SOURCE }], ["oom"]]),
     );
-    expect(r.ok).toBe(false);
+    expect(r).toMatchObject({ ok: false });
     const e = (r as { e: any }).e;
     expect(e?.overloaded === true || /exceeded memory limit/i.test(String(e?.message))).toBe(true);
     expect(isDurableObjectReset(e)).toBe(false); // the loaded isolate died, not the parent DO
@@ -370,3 +331,56 @@ deployedOnly.sequential(
     expect(ev.offset).toBeGreaterThan(0);
   },
 );
+
+/** The seeded blob for event `n` — deterministic, so a read-back can be checked byte for byte. */
+function blobFor(n: number): string {
+  return String.fromCharCode(97 + (n % 26)).repeat(EVENT_CHARS);
+}
+
+/** The ONE seeded 144 MiB context every read-driven row shares (24 × 6 MiB, more than the isolate),
+ *  seeded by whichever of those rows runs first and reused by the rest — they are sequential, so the
+ *  first caller's promise is the only seed. A row run on its own (`-t`) seeds it itself. */
+function seededLog(): Promise<{ ctx: string; offsets: number[] }> {
+  seed ||= (async () => {
+    const ctx = freshCtx("membudget");
+    const itx = openItx(ctx);
+    const offsets: number[] = [];
+    for (let n = 0; n < EVENT_COUNT; n++) {
+      const [event] = await itx.append({ type: "blob", payload: { n, blob: blobFor(n) } });
+      offsets.push(event.offset as number);
+    }
+    return { ctx, offsets };
+  })();
+  return seed;
+}
+
+// ── helpers ──
+
+/** Retry a call while the platform answers "Durable Object is overloaded. Requests queued for too
+ *  long." — its backpressure after a burst (a queue draining), never a reset and never poisoning; any
+ *  other failure propagates at once. Bounded: ~15 s. */
+async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!/overloaded|queued for too long/i.test(String((error as Error)?.message ?? error)))
+        throw error;
+      if (Date.now() > deadline) throw error;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
+/** Read one context to its durable head, paging by the server's byte budget. */
+async function pageToHead(itx: any): Promise<number> {
+  let after = 0;
+  let pages = 0;
+  for (;;) {
+    const page = await itx.invoke(["itx", ["readEvents", after, 500]]);
+    pages++;
+    if (page.scannedThroughOffset <= after) return pages;
+    after = page.scannedThroughOffset;
+  }
+}

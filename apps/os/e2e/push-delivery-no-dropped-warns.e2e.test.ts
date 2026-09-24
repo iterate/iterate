@@ -3,14 +3,15 @@
 // RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's
 // cold catch-up would heal a dropped push before a snapshot could tell). Logs are worker-global, so
-// this file boots its OWN worker (support/own-worker.ts) and every row is `test.sequential`: a
-// sibling running at the same time would write into the very log these rows count. Every other e2e
-// file speaks to the shared worker through support/client.ts, its rows concurrent.
+// every row boots its OWN worker (support/own-worker.ts; `await using worker = await ownWorker()`,
+// stopped when the row ends) and counts only that worker's log. The rows stay `test.sequential`, so
+// one extra workerd at a time runs beside the shared one. Every other e2e file speaks to the shared
+// worker through support/client.ts, its rows concurrent.
 
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import {
   collector,
   durableCountsByType,
@@ -29,29 +30,18 @@ import { projectHostsAreLocal } from "./support/project-host.ts";
 import { E2E_ADMIN_API_SECRET } from "./support/worker-config.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
-let worker: OwnWorker;
 const localSequential = test.skipIf(!projectHostsAreLocal()).sequential;
-beforeAll(async () => {
-  if (!projectHostsAreLocal()) return;
-  worker = await startOwnWorker();
-}, 120_000);
-afterAll(async () => {
-  await worker?.stop();
-});
-
-const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length;
-/** Every delivery-side error line the loop can emit: a dropped push, a dispatch issue. */
-const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.(deliver|cursor)|NO_FACET/g;
-const deliveryErrors = () => countMatches(worker.logs(), DELIVERY_ERRORS);
 
 localSequential(
   "enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit",
+  { timeout: 120_000 }, // the row's own worker boot on top of the lane's minute
   async () => {
+    await using worker = await ownWorker();
     // Identity is `ctx.props`, minted at materialization — there is no configure window in which the
     // enablement commit's drive could reach a facet that does not know itself yet.
     const itx = await worker.itx(freshCtx("quietenable"));
     await sleep(400); // let stragglers flush before the baseline
-    const before = deliveryErrors();
+    const before = deliveryErrors(worker);
     await enableFixtureProcessor(itx, "tally");
     const head = await readHead(itx);
     const snap: any = await until("tally at head", async () => {
@@ -61,13 +51,15 @@ localSequential(
     // Only the explicitly enabled tally is subscribed.
     expect(snap.state.counts["events.iterate.com/stream/subscription-configured"]).toBe(1);
     await sleep(400);
-    expect(deliveryErrors() - before).toBe(0);
+    expect(deliveryErrors(worker) - before).toBe(0);
   },
 );
 
 localSequential(
   "disable mid-drive: appends survive, no ongoing error storm, re-enable rebuilds an exact reduce",
+  { timeout: 120_000 }, // the row's own worker boot on top of the lane's minute
   async () => {
+    await using worker = await ownWorker();
     const itx = await worker.itx(freshCtx("middrive"));
     await enableFixtureProcessor(itx, "tally");
     await itx.append({ type: "warm" }); // one delivery so the facet exists
@@ -85,10 +77,10 @@ localSequential(
     // post-disable traffic must not keep erroring into the dead facet: in-flight pushes may log a
     // bounded burst at the disable moment, but NOTHING new may appear afterwards
     await sleep(500);
-    const beforeErrors = deliveryErrors();
+    const beforeErrors = deliveryErrors(worker);
     for (let i = 0; i < 10; i++) await itx.append({ type: "post", payload: { i } });
     await sleep(700);
-    expect(deliveryErrors()).toBe(beforeErrors); // no NEW delivery errors
+    expect(deliveryErrors(worker)).toBe(beforeErrors); // no NEW delivery errors
 
     // re-enable: a CLEAN reduce — exact counts over the whole durable log, nothing doubled, nothing
     // inherited from the dead lineage (disable deleted the facet, storage included).
@@ -99,37 +91,17 @@ localSequential(
       const s: any = await tallySnapshot(itx).catch(() => undefined);
       return s && s.offset >= head && s;
     });
+    // oxlint-disable-next-line iterate/prefer-object-property-match -- an exact reduce: a count inherited from the dead lineage must fail
     expect(snap.state.counts).toEqual(expected);
-    expect(snap.state.counts.burst).toBe(10);
-    expect(snap.state.counts.post).toBe(10);
+    expect(snap.state.counts).toMatchObject({ burst: 10, post: 10 });
   },
 );
 
-/** A WebSocket client whose raw TCP socket we can STOP READING (the browser/undici WebSocket hides
- *  it): the `ws` package, resolved through wrangler's dependency tree because this package keeps no
- *  direct dep on it. Pausing `_socket` closes the TCP window, so every server→client send buffers
- *  inside workerd — the client-controllable choke point of the delivery transport. capnweb interops
- *  with a `ws` WebSocket directly (its transport needs only binaryType/readyState/
- *  addEventListener/send, and `ws` speaks all four). */
-type StallableWebSocket = {
-  _socket: { pause(): void; resume(): void };
-  readyState: number;
-  send(data: string): void;
-  close(): void;
-  /** Hard TCP destroy — no close handshake (which a paused peer could never read anyway). */
-  terminate(): void;
-  addEventListener(type: string, fn: (ev: unknown) => void): void;
-};
-function stallableWebSocket(url: string): StallableWebSocket {
-  const req = createRequire(import.meta.url);
-  const wranglerDir = dirname(req.resolve("wrangler/package.json"));
-  const { WebSocket: WsWebSocket } = req(req.resolve("ws", { paths: [wranglerDir] }));
-  return new WsWebSocket(url) as StallableWebSocket;
-}
-
 localSequential(
   "MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd — the DO drops pushes past its in-flight budget instead, the stub stays online, and a real socket close drops its stub instantly and removes the row",
+  { timeout: 55_000 + 60_000 }, // the flood's budget, plus the row's own worker boot
   async () => {
+    await using worker = await ownWorker();
     // The loop's design comment (subscription-delivery.ts): a push is fire-and-forget; the socket
     // buffer is the only queue. Ran to ground against local workerd: 60.0MiB of payload flooded into
     // a TCP-paused subscriber produces NO close and NO RPC_STUB_OFFLINE — workerd buffers the outgoing
@@ -236,5 +208,43 @@ localSequential(
     expect(droppedWarns()).toBe(droppedAfterFlood); // nothing new: no push to a dead stub, no warn
     expect(await subscriptions(itx)).toEqual([]);
   },
-  55_000,
 );
+
+/** A worker booted for one row; disposing it stops the worker (and the sessions it minted). */
+async function ownWorker(): Promise<OwnWorker & AsyncDisposable> {
+  const worker = await startOwnWorker();
+  return Object.assign(worker, { [Symbol.asyncDispose]: () => worker.stop() });
+}
+
+function countMatches(text: string, re: RegExp): number {
+  return (text.match(re) ?? []).length;
+}
+
+/** Every delivery-side error line the loop can emit: a dropped push, a dispatch issue. */
+const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.(deliver|cursor)|NO_FACET/g;
+
+function deliveryErrors(worker: OwnWorker): number {
+  return countMatches(worker.logs(), DELIVERY_ERRORS);
+}
+
+/** A WebSocket client whose raw TCP socket we can STOP READING (the browser/undici WebSocket hides
+ *  it): the `ws` package, resolved through wrangler's dependency tree because this package keeps no
+ *  direct dep on it. Pausing `_socket` closes the TCP window, so every server→client send buffers
+ *  inside workerd — the client-controllable choke point of the delivery transport. capnweb interops
+ *  with a `ws` WebSocket directly (its transport needs only binaryType/readyState/
+ *  addEventListener/send, and `ws` speaks all four). */
+type StallableWebSocket = {
+  _socket: { pause(): void; resume(): void };
+  readyState: number;
+  send(data: string): void;
+  close(): void;
+  /** Hard TCP destroy — no close handshake (which a paused peer could never read anyway). */
+  terminate(): void;
+  addEventListener(type: string, fn: (ev: unknown) => void): void;
+};
+function stallableWebSocket(url: string): StallableWebSocket {
+  const req = createRequire(import.meta.url);
+  const wranglerDir = dirname(req.resolve("wrangler/package.json"));
+  const { WebSocket: WsWebSocket } = req(req.resolve("ws", { paths: [wranglerDir] }));
+  return new WsWebSocket(url) as StallableWebSocket;
+}

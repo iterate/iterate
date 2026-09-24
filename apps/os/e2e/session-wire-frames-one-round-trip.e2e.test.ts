@@ -44,88 +44,6 @@ type InstrumentedWire = {
   flushOutbound: () => void;
 };
 
-const kindOf = (data: string): string => {
-  try {
-    const parsed = JSON.parse(data);
-    return Array.isArray(parsed) ? String(parsed[0]) : typeof parsed;
-  } catch {
-    return "unparseable";
-  }
-};
-
-/** A capnweb session over a WebSocket WE instrumented: `send` is wrapped (outbound frames are
- *  recorded at the moment they actually hit the socket — capnweb queues sends until open, so
- *  recording at ws.send is wire-truthful), and our "message" listener registers BEFORE capnweb's
- *  so inbound frames are recorded at arrival. */
-function wireSession(): InstrumentedWire {
-  const frames: WireFrame[] = [];
-  let seq = 0;
-  const record = (dir: "out" | "in", data: unknown) => {
-    const text = String(data);
-    frames.push({ dir, kind: kindOf(text), data: text, seq: seq++, atMs: Date.now() });
-  };
-  const stall = { active: false, held: [] as unknown[] };
-  let realSend!: (data: never) => void;
-  const { session, ws } = rawSession((ws) => {
-    realSend = ws.send.bind(ws);
-    (ws as unknown as { send: (d: unknown) => void }).send = (data: unknown) => {
-      if (stall.active) {
-        stall.held.push(data);
-        return;
-      }
-      record("out", data);
-      realSend(data as never);
-    };
-    ws.addEventListener("message", (ev) => record("in", (ev as MessageEvent).data));
-  });
-  const wire: InstrumentedWire = {
-    session,
-    ws,
-    frames,
-    mark: () => frames.length,
-    since: (mark: number) => frames.slice(mark),
-    stallOutbound: () => {
-      stall.active = true;
-    },
-    flushOutbound: () => {
-      stall.active = false;
-      for (const data of stall.held.splice(0)) {
-        record("out", data);
-        realSend(data as never);
-      }
-    },
-  };
-  return wire;
-}
-
-/** Frame census: {"out:push": n, "in:resolve": m, ...} — the pinnable shape. */
-const tally = (frames: WireFrame[]): Record<string, number> => {
-  const t: Record<string, number> = {};
-  for (const f of frames) t[`${f.dir}:${f.kind}`] = (t[`${f.dir}:${f.kind}`] ?? 0) + 1;
-  return t;
-};
-
-/** THE pipelining assertion: within `frames`, every REQUEST-BEARING outbound frame (push/pull)
- *  precedes the first inbound frame — one contiguous outbound burst, then answers. Trailing
- *  outbound `release` frames are cleanup, not round trips. Round trips == 1 by construction:
- *  one burst, one answer wave. */
-function expectOneRoundTrip(frames: WireFrame[], label: string): void {
-  const firstIn = frames.find((f) => f.dir === "in");
-  expect(firstIn, `${label}: expected at least one inbound frame`).toBeDefined();
-  const requestFrames = frames.filter(
-    (f) => f.dir === "out" && (f.kind === "push" || f.kind === "pull"),
-  );
-  expect(
-    requestFrames.length,
-    `${label}: expected at least one outbound request frame`,
-  ).toBeGreaterThan(0);
-  const late = requestFrames.filter((f) => f.seq > firstIn!.seq);
-  expect(
-    late.map((f) => f.data),
-    `${label}: outbound push/pull AFTER the first inbound frame = a second round trip`,
-  ).toEqual([]);
-}
-
 // ═══════════════════════════════ 1. PIPELINING of itx expressions on stubs ═══════════════════════════════
 
 test("pipelining: authenticate(credentials).projects.get(ctx).invoke(whoami) with zero awaits = ONE round trip", async () => {
@@ -222,7 +140,7 @@ test("frames per call: ONE settled invoke = exactly 2 outbound (push+pull) + 1 i
   await sleep(200);
   const mark = w.mark();
   const who: any = await itx.invoke(["itx", ["whoami"]]);
-  expect(who.path).toBe("/");
+  expect(who).toMatchObject({ path: "/" });
   const t = tally(w.since(mark));
   expect(t["out:push"]).toBe(1);
   expect(t["out:pull"]).toBe(1);
@@ -341,8 +259,7 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
 
   // Array half: structured args through the same path.
   const listed: any = await itx.invoke(["itx", "slack", "conversations", ["list", { limit: 1 }]]);
-  expect(listed).toMatchObject({ ok: true });
-  expect(listed.channels).toEqual([{ id: "C1", name: "general" }]);
+  expect(listed).toMatchObject({ ok: true, channels: [{ id: "C1", name: "general" }] });
 
   // The provider-side SDK saw the exact call.
   expect(slack.calls).toContainEqual(["chat.postMessage", { channel: "#wire", text: "deep" }]);
@@ -388,7 +305,7 @@ test("disposal: dup() survives disposal of the original; the LAST dispose kills 
   itx[Symbol.dispose]();
   // The duplicate still works — refcounted, not killed by the sibling's disposal.
   const who: any = await dup.invoke(["itx", ["whoami"]]);
-  expect(who.path).toBe("/");
+  expect(who).toMatchObject({ path: "/" });
   dup[Symbol.dispose]();
   // The LAST duplicate is gone — calls reject with the library's documented disposal error
   // (a prompt classifiable rejection, never a hang).
@@ -408,3 +325,85 @@ test("disposal: onRpcBroken fires on dirty transport death (the relay relies on 
   await until("both stubs report brokenness", () => broken.length >= 2);
   expect(String(broken[0])).toMatch(/WebSocket/);
 });
+
+const kindOf = (data: string): string => {
+  try {
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? String(parsed[0]) : typeof parsed;
+  } catch {
+    return "unparseable";
+  }
+};
+
+/** A capnweb session over a WebSocket WE instrumented: `send` is wrapped (outbound frames are
+ *  recorded at the moment they actually hit the socket — capnweb queues sends until open, so
+ *  recording at ws.send is wire-truthful), and our "message" listener registers BEFORE capnweb's
+ *  so inbound frames are recorded at arrival. */
+function wireSession(): InstrumentedWire {
+  const frames: WireFrame[] = [];
+  let seq = 0;
+  const record = (dir: "out" | "in", data: unknown) => {
+    const text = String(data);
+    frames.push({ dir, kind: kindOf(text), data: text, seq: seq++, atMs: Date.now() });
+  };
+  const stall = { active: false, held: [] as unknown[] };
+  let realSend!: (data: never) => void;
+  const { session, ws } = rawSession((ws) => {
+    realSend = ws.send.bind(ws);
+    (ws as unknown as { send: (d: unknown) => void }).send = (data: unknown) => {
+      if (stall.active) {
+        stall.held.push(data);
+        return;
+      }
+      record("out", data);
+      realSend(data as never);
+    };
+    ws.addEventListener("message", (ev) => record("in", (ev as MessageEvent).data));
+  });
+  const wire: InstrumentedWire = {
+    session,
+    ws,
+    frames,
+    mark: () => frames.length,
+    since: (mark: number) => frames.slice(mark),
+    stallOutbound: () => {
+      stall.active = true;
+    },
+    flushOutbound: () => {
+      stall.active = false;
+      for (const data of stall.held.splice(0)) {
+        record("out", data);
+        realSend(data as never);
+      }
+    },
+  };
+  return wire;
+}
+
+/** Frame census: {"out:push": n, "in:resolve": m, ...} — the pinnable shape. */
+const tally = (frames: WireFrame[]): Record<string, number> => {
+  const t: Record<string, number> = {};
+  for (const f of frames) t[`${f.dir}:${f.kind}`] = (t[`${f.dir}:${f.kind}`] ?? 0) + 1;
+  return t;
+};
+
+/** THE pipelining assertion: within `frames`, every REQUEST-BEARING outbound frame (push/pull)
+ *  precedes the first inbound frame — one contiguous outbound burst, then answers. Trailing
+ *  outbound `release` frames are cleanup, not round trips. Round trips == 1 by construction:
+ *  one burst, one answer wave. */
+function expectOneRoundTrip(frames: WireFrame[], label: string): void {
+  const firstIn = frames.find((f) => f.dir === "in");
+  expect(firstIn, `${label}: expected at least one inbound frame`).toBeDefined();
+  const requestFrames = frames.filter(
+    (f) => f.dir === "out" && (f.kind === "push" || f.kind === "pull"),
+  );
+  expect(
+    requestFrames.length,
+    `${label}: expected at least one outbound request frame`,
+  ).toBeGreaterThan(0);
+  const late = requestFrames.filter((f) => f.seq > firstIn!.seq);
+  expect(
+    late.map((f) => f.data),
+    `${label}: outbound push/pull AFTER the first inbound frame = a second round trip`,
+  ).toEqual([]);
+}
