@@ -647,10 +647,14 @@ can two workflows that name the same group: Depot wakes "a peer workflow in the
 same concurrency group" when the slot frees
 ([Depot's orchestrator](https://depot.dev/blog/building-ci-with-durable-lambda)),
 as GitHub does. For the Preview OS workflow, a manual dispatch, an automatic PR
-run and the Preview delete run for the same PR share `preview-os-<pr>` with
-`cancel-in-progress: false`: neither cancels the running one, but a newer
-pending run replaces an older pending one, so a dispatch queued behind a push
-can silently disappear. When validating previews, use one path at a time.
+run and the Preview delete run for the same PR share `preview-os-<pr>`. Only a
+push cancels the run in progress (`cancel-in-progress` is true for
+`pull_request` alone), whether a push's or a dispatch's run: its verdict would
+be out of date, Depot starts none of the cancelled run's `always()` jobs, and
+the next run redeploys the whole preview, which repairs a deploy cut short. A
+dispatch or a delete cancels nothing, but a newer pending run replaces an older
+pending one, so a dispatch queued behind a push can silently disappear. When
+validating previews, use one path at a time.
 
 `depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
 jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
@@ -885,8 +889,8 @@ CI trace, which only reports:
 - **Time to green**: the pushes whose checks all passed on their first
   execution.
 - **Time to first verdict**: every push, red ones and re-run ones at their
-  first execution's end, so flakes count. A push whose Test or Lint was
-  cancelled because the PR's next push superseded it is left out.
+  first execution's end, so flakes count. A push whose Test, Lint or Preview
+  OS was cancelled because the PR's next push superseded it is left out.
 
 Pushes are split by what their Preview OS E2E tests job ran, which its suite
 summary names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow

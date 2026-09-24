@@ -12,8 +12,9 @@
 //     and gates nothing. A red run, and one whose checks were re-run, counts at its first
 //     execution's end, so a flake costs what it costs.
 //   • TIME TO GREEN: the same, for the pushes whose checks all passed on their first execution.
-// A push whose Test or Lint was cancelled because the PR's next push superseded it has no verdict and
-// is left out. Any other cancel, a job's timeout say, is red.
+// A push whose check was cancelled because the PR's next push superseded it has no verdict and is left
+// out, even when its suites had passed and the cancel cut its CI trace. Any other cancel, a job's
+// timeout say, is red.
 //
 // Pushes are split by what their Preview OS E2E tests job ran, from its suite summary (`slowRows` in
 // packages/shared/src/test-support/flake-suite-summary.ts):
@@ -107,23 +108,20 @@ export function measurePush(input: {
     .filter(({ workflow }) => CHECKS.includes(workflow.name))
     .map(({ workflow, jobs }) => {
       const first = input.firstExecutions[workflow.workflowId] || workflow;
-      return { name: workflow.name, ...first, finishedAt: verdictEnd(first.finishedAt, jobs) };
+      return { name: workflow.name, ...first, verdictAt: verdictEnd(first.finishedAt, jobs) };
     });
   if (!checks.some((check) => check.name === "Test")) return { ...base, outcome: "not-a-push" };
   if (checks.some((check) => !check.finishedAt)) return undefined;
-  // Lint and Test cancel a run in progress when the PR's next push starts (their `concurrency:`);
-  // Preview OS never does, so its cancel is always a timeout or a person.
+  // Every check cancels its run in progress when the PR's next push starts (their `concurrency:`), so
+  // one cancelled once the next run existed was superseded; before, it was a timeout or a person.
   const nextRunAt = input.nextRunAt ? Date.parse(input.nextRunAt) : Infinity;
   if (
     checks.some(
-      (check) =>
-        check.name !== "Preview OS" &&
-        check.status === "cancelled" &&
-        nextRunAt <= Date.parse(check.finishedAt),
+      (check) => check.status === "cancelled" && nextRunAt <= Date.parse(check.finishedAt),
     )
   )
     return { ...base, outcome: "superseded" };
-  const verdictAt = Math.max(...checks.map((check) => Date.parse(check.finishedAt)));
+  const verdictAt = Math.max(...checks.map((check) => Date.parse(check.verdictAt)));
   return {
     ...base,
     outcome: checks.every((check) => check.status === "finished") ? "green" : "red",

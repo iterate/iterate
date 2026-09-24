@@ -637,8 +637,9 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
   expect(workflow).toMatchObject({
     // every PR that got a preview, and no other
     on: { pull_request: { types: ["closed"], paths: previewPaths } },
-    // a delete waits for the PR's in-flight deploy and e2e instead of racing them
-    concurrency: preview.concurrency,
+    // a delete waits for the PR's in-flight deploy and e2e instead of racing them, and is never
+    // cut short
+    concurrency: { group: preview.concurrency?.group, "cancel-in-progress": false },
   });
   expect(workflow.jobs.delete?.steps?.at(-1)).toMatchObject({
     "working-directory": "apps/os",

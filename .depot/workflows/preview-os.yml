@@ -45,8 +45,11 @@
 # all so every client is usable against the platform preview; auto remains available for a faster
 # targeted manual redeploy once the clients are already present.
 #
-# Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
-# preview-delete.yml takes the same group, so a PR's delete waits for its deploy and tests to settle.
+# Concurrency per PR. The PR's next push cancels the run in progress, in whatever job, since its
+# verdict would be out of date; Depot starts none of the cancelled run's `always()` jobs, and the next
+# run redeploys the whole preview, which repairs a deploy cut short. A dispatch cancels nothing: it
+# queues behind the run in progress. preview-delete.yml takes the same group and cancels nothing, so a
+# PR's delete waits for its deploy and tests to settle.
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
@@ -95,7 +98,7 @@ on:
 
 concurrency:
   group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
