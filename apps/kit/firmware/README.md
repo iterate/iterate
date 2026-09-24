@@ -242,7 +242,8 @@ The build runs CI's checks (flash layout, inputs, an unchanged tree) and reports
 its version as `dev`. Do not edit release offsets by hand or substitute
 downloaded binaries.
 
-The two reviewed UI WAVs are committed once. CMake deterministically converts
+The two reviewed UI WAVs are committed once, in `assets/sounds/`, where every
+board reads them. CMake deterministically converts
 them into each component build directory with the board's recorded trim and
 gain; generated C arrays are never committed and release builds need no audio
 service, secret or network access.
