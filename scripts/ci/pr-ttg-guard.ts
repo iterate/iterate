@@ -7,9 +7,10 @@
 // ruleset requires with the other two, and which runs on every push since 2026-09-24 (on those that
 // touched the preview's paths before). Each push is measured once it settled:
 //   • TIME TO FIRST VERDICT: from the run's creation (about the push, and where the CI trace's clock
-//     starts) to the end of the last check's first execution, the Preview OS trace job included, and
-//     a Preview OS that queued behind the PR's previous run. A red run, and one whose checks were
-//     re-run, counts at its first execution's end, so a flake costs what it costs.
+//     starts) to the end of the last check's first execution, a Preview OS that queued behind the
+//     PR's previous run included. Preview OS ends at its last job but the CI trace, which reports
+//     and gates nothing. A red run, and one whose checks were re-run, counts at its first
+//     execution's end, so a flake costs what it costs.
 //   • TIME TO GREEN: the same, for the pushes whose checks all passed on their first execution.
 // A push whose Test or Lint was cancelled because the PR's next push superseded it has no verdict and
 // is left out. Any other cancel, a job's timeout say, is red.
@@ -61,6 +62,8 @@ export const stateArtifact = {
  *  rename to preview-os.yml. LOC report and the PR dashboard gate nothing and finish within a
  *  minute; Kit Firmware runs only on firmware PRs. */
 export const CHECKS = ["Lint and Typecheck", "Test", "Preview OS"];
+/** Preview OS's CI trace job: it only reports, so a push's wait ends before it. */
+const TRACE_JOB = "preview-os.yml:trace";
 const HOUR_MS = 3_600_000;
 
 const E2eRows = z.enum(["slow-rows-skipped", "every-row", "no-summary", "no-preview"]);
@@ -102,10 +105,10 @@ export function measurePush(input: {
   const base = { run: run.runId, pr: Number(run.ref.split("/")[2]), createdAt: run.createdAt };
   const checks = workflows
     .filter(({ workflow }) => CHECKS.includes(workflow.name))
-    .map(({ workflow }) => ({
-      name: workflow.name,
-      ...(input.firstExecutions[workflow.workflowId] || workflow),
-    }));
+    .map(({ workflow, jobs }) => {
+      const first = input.firstExecutions[workflow.workflowId] || workflow;
+      return { name: workflow.name, ...first, finishedAt: verdictEnd(first.finishedAt, jobs) };
+    });
   if (!checks.some((check) => check.name === "Test")) return { ...base, outcome: "not-a-push" };
   if (checks.some((check) => !check.finishedAt)) return undefined;
   // Lint and Test cancel a run in progress when the PR's next push starts (their `concurrency:`);
@@ -133,6 +136,17 @@ export function measurePush(input: {
           : "every-row",
     seconds: Math.round((verdictAt - Date.parse(run.createdAt)) / 100) / 10,
   };
+}
+
+/** When a settled check's first execution reached its verdict: its end or, when it has a CI trace
+ *  job, the end of the first attempt of its last job but that one. Pure. */
+function verdictEnd(finishedAt: string, jobs: RunMetrics["workflows"][number]["jobs"]) {
+  if (!finishedAt || !jobs.some(({ job }) => job?.jobKey === TRACE_JOB)) return finishedAt;
+  const ends = jobs.flatMap(({ job, attempts }) => {
+    const first = attempts.find(({ attempt }) => attempt?.attempt === 1)?.attempt;
+    return job?.jobKey !== TRACE_JOB && first?.finishedAt ? [Date.parse(first.finishedAt)] : [];
+  });
+  return ends.length ? new Date(Math.max(...ends)).toISOString() : finishedAt;
 }
 
 /** Whether the push's Preview OS tested a preview: it ran, and its E2E tests job was not skipped,
@@ -489,7 +503,15 @@ const RunMetrics = z.object({
           .array(
             z.object({
               job: z.object({ jobKey: z.string(), status: z.string() }).optional(),
-              attempts: z.array(z.unknown()).default([]),
+              attempts: z
+                .array(
+                  z.object({
+                    attempt: z
+                      .object({ attempt: z.number(), finishedAt: z.string().default("") })
+                      .optional(),
+                  }),
+                )
+                .default([]),
             }),
           )
           .default([]),
