@@ -1,8 +1,8 @@
-# The SDK/platform line (proposal, 2026-09-24)
+# The SDK/platform line (2026-09-24)
 
-A proposal for the owner to decide. The branch that adds this file implements it, so the diff is
-the concrete version of every sentence below. If it is accepted, move the rule itself (the
-section [The rule](#the-rule)) into `packages/iterate/README.md` and delete this file.
+Decided by the owner on 2026-09-24. The change that adds this file implements it, so its diff is
+the concrete version of every sentence below. `packages/iterate/README.md` states the rule in
+short; this file keeps the reasons.
 
 ## The question
 
@@ -24,8 +24,10 @@ The overnight review found three symptoms of the missing line (considerations A3
   apps/agents imported its test harness from `apps/os/src/stream/test-support.ts`.
 - **Two git protocol implementations.** `packages/shared/src/config-repo-template/git-wire.ts`
   (675 lines) was a fork of `apps/os/src/repo/git-wire.ts` (724), and apps/os bundled both.
+  #3023 merged them into `packages/shared/src/git-wire.ts` before this landed
+  ([below](#where-the-git-codec-lives)).
 
-## Recommendation
+## Decision
 
 1. **The SDK is the programming model, and the platform is its first user.** One package,
    `iterate`, owns every module user code imports. apps/os builds its own entities (account,
@@ -84,6 +86,13 @@ same internals (Supabase's situation), or a bundled tool with no type surface (W
 Revisit this if `@iterate-com/cli`, or a second SDK, starts needing SDK internals that user
 code should not see.
 
+**The CLI stays its own package.** `@iterate-com/cli` (#3004) ships the `iterate` command and
+uses the SDK the way any user does, through four public subpaths (`iterate/api`, `iterate/lib`,
+`iterate/node`, `iterate/oauth`). The SDK keeps the name `iterate` because code imports it: a
+Worker, a facet or a browser app that depends on `iterate` then installs no prompts, argument
+parser or macOS menu bar app, and the CLI, as an outside consumer, is held to the same `exports`
+map and lint rule as everyone else.
+
 ## The rule
 
 A module belongs in `iterate` when user code runs it or speaks it: a loaded worker, a facet, a
@@ -93,7 +102,7 @@ more than one app needs it and user code never does. The SDK and the first-party
 (`apps/{agents,dash,notes,voice,kit,spa}`, `packages/{cli,ui}`) never import `apps/os/src`; the
 `no-restricted-imports` override in `.oxlintrc.json` enforces that.
 
-After this branch, the SDK's subpaths and who imports them:
+After this change, the SDK's subpaths and who imports them:
 
 | Subpath                                                    | What it is                                                                                                           | Runs in                   | Imported by (outside the SDK)        |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------ |
@@ -108,15 +117,15 @@ After this branch, the SDK's subpaths and who imports them:
 | `iterate/lib`                                              | Error codes, patches, timeouts, origin and cookie helpers                                                            | everywhere                | agents, dash, kit, cli, os           |
 | `iterate/expression`                                       | The expression codec and the dotted surface (`InvokeHandle`)                                                         | clients, the library tier | os                                   |
 | `iterate/principal`                                        | `Principal` and `ITX_PRINCIPAL_HEADER`                                                                               | config workers            | os                                   |
-| `iterate/oauth-scopes`, `iterate/project-ingress`          | The consent vocabulary; project hostnames                                                                            | clients                   | dash, os, specs                      |
+| `iterate/oauth-scopes`                                     | The consent vocabulary                                                                                               | clients                   | os                                   |
+| `iterate/project-ingress`                                  | Project hostnames                                                                                                    | clients                   | dash, os, specs                      |
 
 Three subpaths are imported only by apps/os today: `iterate/expression`, `iterate/principal` and
-`iterate/oauth-scopes`. They stay public because the other subpaths'
-types refer to them (`api.ts` names `InvokeHandle`, `ItxExpressionInput`, `Principal`, the
+`iterate/oauth-scopes`. They stay public because the other subpaths' types refer to them (`api.ts` names `InvokeHandle`, `ItxExpressionInput`, `Principal`, the
 consent scopes and the ingress routing) and because apps/os's library tier builds its
 connectors on the codec and `InvokeHandle`, which is how a user's connector would do it.
 
-## What the branch does
+## What the change does
 
 1. **Dispatch moves to apps/os.** `apps/os/src/context/dispatch.ts` (239 lines): the step walk
    (`walkSteps`, `callOn`), the brands registered at boot, `awaitAnswerReleasedIfRejected`, the
@@ -133,19 +142,26 @@ connectors on the codec and `InvokeHandle`, which is how a user's connector woul
    engine's two suites now run in packages/iterate. apps/os's processors and apps/agents import
    the harness from the SDK, like any processor author. `apps/os/src/stream/test-support.ts`
    keeps only the real Stream over node:sqlite.
-4. **One git protocol implementation.** The GitHub template reader moves to
-   `apps/os/src/project/github-template.ts` and speaks git with `apps/os/src/repo/git-wire.ts`,
-   which gains the reader's pack size limits, the blobless fetch and multi-prefix ls-refs with
-   peeled oids. The shared fork and `pako` in packages/shared are deleted. The template
-   reference parser stays in packages/shared, because the dash parses references too.
-5. **The rule is linted.** The one exception is `apps/agents/voice/worker.test.ts`, whose fake
+4. **The rule is linted.** The one exception is `apps/agents/voice/worker.test.ts`, whose fake
    `itx` refuses what the platform's app wall refuses by calling the platform's own
    `admitLoadedCodeRow`. That is a test fake borrowing the real policy, and it carries a
    disable comment that says so.
 
+## Where the git codec lives
+
+#3023 made one git protocol implementation, `packages/shared/src/git-wire.ts`
+(`@iterate-com/shared/git-wire`), beside the GitHub template reader
+(`@iterate-com/shared/config-repo-template/github`). This change keeps it there. By the rule
+above both would sit in apps/os: only the platform's Worker runs them (the repo facet, the
+project facet's template download and `session.projects.create`'s pin), and apps/os's e2e fake
+remote and seed script are its only other users. apps/dash imports only the template reference
+parser. Leaving them in packages/shared does not cross the line this file draws, because
+packages/shared is private, user code never sees it and neither module imports the platform.
+Move them into apps/os if packages/shared's charter is narrowed to "code more than one app runs".
+
 ## Changed published surface
 
-No aliases. Consumers of `iterate` on pkg.pr.new or npm change as follows:
+No aliases. The published surface of `iterate` on pkg.pr.new or npm changes as follows:
 
 | Before                                                                                                                                                                                                                                                                                  | After                                |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
@@ -155,10 +171,21 @@ No aliases. Consumers of `iterate` on pkg.pr.new or npm change as follows:
 | `IterateContextApi["facets"]["get"]` returns `FacetHandle`                                                                                                                                                                                                                              | returns `InvokeHandle`               |
 | none                                                                                                                                                                                                                                                                                    | `iterate/stream/test-support`        |
 
-Nothing outside apps/os imported any of the removed names. Decision 8 asked for one version bump
-across the SDK's published changes; this belongs in that bump.
+Nothing outside apps/os imported any of the removed names. What an external consumer changes:
 
-## Not in this branch
+- `cookieValueOf` from `iterate/principal`: import it from `iterate/lib`.
+- A value typed `FacetHandle`: type it `InvokeHandle` (`iterate/expression`), which is what
+  `itx.facets.get()` returns.
+- A processor tested against a copy of the harness: import `reduceProcessor`, `memoryStream`,
+  `memoryStorage`, `settle` or `nodeSqliteDurableObjectStorage` from `iterate/stream/test-support`.
+- Every other removed name has no replacement. They are how the platform walks a call and
+  attributes it, and the platform does both before user code sees the call: an event arrives with
+  `source.principal` stamped, and a forwarded Request with `ITX_PRINCIPAL_HEADER` set.
+
+The package version is unchanged. Decision 8 asked for one version bump across the SDK's
+published changes; this belongs in that bump.
+
+## Not in this change
 
 - **Splitting the event envelope** out of `stream/processor.ts` into its own subpath (A4). It
   would touch about 50 import sites for a file that is already SDK-only, so it is better done

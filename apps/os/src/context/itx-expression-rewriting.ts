@@ -2,7 +2,7 @@
 // REWRITE RULE is `{ match, target }`: a call that starts with `match` runs as the same call with
 // `match` replaced by `target`. Rewriting repeats until the call is rooted at THE RESERVED ROOT,
 // `itx.builtins` — the physical scope (kv, whoami, rpcStubs, facets, …; context/built-ins.ts) — and
-// that call is what actually runs (expression.ts's `walkSteps` walks it). The rules THEMSELVES are `core` state —
+// that call is what actually runs (dispatch.ts's `walkSteps` walks it). The rules THEMSELVES are `core` state —
 // stream/core-processor.ts reduces `itx/rewrite-rule-configured` into `state.itxExpressionRewriteRules`,
 // a MAP by canonical match (set replaces; `null` MASKS a name that has a platform row beneath it and
 // deletes any other). This module is the rules of matching, the ONE event that writes the table, and
@@ -717,7 +717,7 @@ export class ItxExpressionResolver {
   }
 
   /** Resolve + run one call: the chain's last element, walked against the physical scope from the
-   *  record (expression.ts `walkSteps` — the root after `builtins` is the first step). Runtime `extraArgs`
+   *  record (dispatch.ts `walkSteps` — the root after `builtins` is the first step). Runtime `extraArgs`
    *  are LIVE args (a Request, a callback — not expression data; an `x-itx-expression` fetch and the public
    *  `invoke(call, ...args)` hand them in): when the call ends in a NAME they are FOLDED INTO it BEFORE
    *  resolving — `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a template fills, a pinned row
