@@ -331,7 +331,7 @@ test("ingress routes: a root whose core checkpoint predates the table (13.0.0, w
 });
 
 test(
-  "ingress routes: a core-version bump re-reduces a root's routes in O(routes) per page — 14,000 routes (a core checkpoint of ~2 MB) in well under the CPU limit, where copying the table per fact took ~25 s on a laptop",
+  "ingress routes: a core-version bump re-reduces a root's routes in O(routes) per page — 14,000 routes (a core checkpoint of ~2 MB) well under the CPU limit (a copy per fact is O(routes²): ~25 s on a laptop)",
   { timeout: 60_000 },
   () => {
     const storage = nodeSqliteDurableObjectStorage();

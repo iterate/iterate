@@ -111,11 +111,12 @@ export type IngressRoute = IngressRouteTable[string] & { ingressRouteName: strin
  *  by a null matcher — `undefined` when nothing changes (the core reduce's keep-the-state signal).
  *  The table is written through `writable`: a fresh copy by default, the batch's DRAFT in the core
  *  reduce (stream/core-processor.ts `draftOf`), so a page of facts copies the table once and a
- *  core-version bump re-reduces a root's routes in the DO constructor in O(routes), not O(routes²)
- *  (14,000 routes: ~25 s copied per fact, a reboot loop against the CPU limit; ~0.1 s as a draft).
- *  A malformed payload is skipped, never thrown: the append boundary refuses one today, but a
- *  root's log keeps the facts appended while the table was a facet of its own, which checked
- *  nothing at append — and one route that does not compile must not break every request's match. */
+ *  core-version bump re-reduces a root's routes in the DO constructor in O(routes). A copy per fact
+ *  is O(routes²): 14,000 routes took ~25 s on a laptop, a reboot loop against the CPU limit, and
+ *  ~0.1 s as a draft (measured 2026-09-24). A malformed payload is skipped, never thrown: the
+ *  append boundary refuses one, but a root's log keeps the facts appended while the table was a
+ *  facet of its own, which checked nothing at append — and one route that does not compile must
+ *  not break every request's match. */
 export function reduceIngressRouteConfigured(
   table: IngressRouteTable,
   event: { offset: number; payload?: unknown },
