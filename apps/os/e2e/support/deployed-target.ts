@@ -33,7 +33,7 @@ export function deployedTarget(workerBaseUrl: string): {
   // with it fails at that sign-in (support/client.ts `loginPassword`), the operator-only ones run
   const loginPassword = appConfig.login.password.exposeSecret();
   // The envs.ts entry the worker falls under, by host suffix: `os.iterate.com` is prd's; a preview,
-  // `pr<n>-<slug>-os-preview.<subdomain>.workers.dev`, hangs under its parent's host and
+  // `pr<n>-os.<subdomain>.workers.dev`, hangs under its parent's host and
   // inherits the parent's routing.
   const host = new URL(workerBaseUrl).host;
   const env = Object.values(osEnvs).find((candidate) =>

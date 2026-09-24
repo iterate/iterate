@@ -43,12 +43,10 @@ test("runs on every main push a PR preview would run for, one run at a time, nev
   });
 });
 
-test("first deploys the preview parent from main, one push at a time", () => {
-  expect(runs("parent")).toContain("doppler run -- pnpm run-script deploy --env preview");
-  expect(main.jobs.parent).toMatchObject({
-    concurrency: { group: "os-preview-parent", "cancel-in-progress": false },
-  });
-  expect(main.jobs.deploy?.needs).toBe("parent");
+// A preview does not depend on its parent's code (preview-parents.yml deploys the parents).
+test("deploys the preview first, waiting for nothing", () => {
+  expect(Object.keys(main.jobs)).not.toContain("parent");
+  expect(main.jobs.deploy?.needs).toBeUndefined();
 });
 
 // Never brand-new, and the gate held past the old version's window
@@ -90,7 +88,7 @@ test("names its deploy, test and trace jobs as Preview OS does, each suite in it
 // so one that breaks while main is already red still pages.
 test("pages on main's and the slow rows' change of state, naming the failing rows, never for a run cancelled by hand or off main", () => {
   expect(main.jobs.alert?.if).toBe("${{ !cancelled() }}");
-  expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e", "specs"]);
+  expect([main.jobs.alert?.needs].flat()).toEqual(["deploy", "e2e", "specs"]);
   expect(runs("alert")).toContain(
     "pnpm tsx scripts/ci/main-e2e-alert.ts alert ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}",
   );
@@ -105,7 +103,7 @@ test("pages on main's and the slow rows' change of state, naming the failing row
 });
 
 // docs/ci-traces.md: main is traced as a PR preview is, and nothing that follows the suites waits for it.
-test("the CI trace covers the parent, deploy and both suites, beside alert", () => {
+test("the CI trace covers the deploy and both suites, beside alert", () => {
   expect(main.env).toMatchObject({
     BASH_ENV: "${{ github.workspace }}/scripts/ci/tracing/shell.sh",
     CI_TRACE_ENABLED: "1",
@@ -117,7 +115,7 @@ test("the CI trace covers the parent, deploy and both suites, beside alert", () 
     main.jobs.specs?.steps?.find((step) => step.run === "doppler run -- pnpm preview specs"),
   ).toMatchObject({ id: "specs" });
   expect(main.jobs.trace).toMatchObject({
-    needs: ["parent", "deploy", "e2e", "specs"],
+    needs: ["deploy", "e2e", "specs"],
     if: "always()",
   });
   const waitingForTrace = Object.entries(main.jobs).filter(([, job]) =>

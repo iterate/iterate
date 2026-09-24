@@ -6,7 +6,7 @@
 #                    nothing and passes. Otherwise it deploys the PR merged into main (the run's own
 #                    commit, the merge commit Depot read this file from; the head alone on a dispatch
 #                    whose PR conflicts, scripts/ci/preview-tested-commit.ts) as a preview named
-#                    `pr<n>-<branch slug>` of the parent worker os-preview, and writes the URL, the
+#                    `pr<n>` of the parent worker `os` (and of each app's), and writes the URL, the
 #                    tested commit and the operations into the PR body, under a status line:
 #                    deploying, deployed or deploy failed
 #   E2E tests        after Deploy preview: the vitest e2e suite against the preview, its line under
@@ -34,7 +34,7 @@
 # action = deploy | reset | test | e2e | specs. deploy and reset (which deletes the preview first)
 # run Deploy preview and then both suites, as a push does. test runs both suites against the preview
 # as it is deployed, e2e the E2E tests alone, specs the Browser specs alone. A test-only action names
-# its preview by pull-request-number or, without one, by preview-name (`pr3035-ttg-deploy-overlap`,
+# its preview by pull-request-number or, without one, by preview-name (`exp-jonas`,
 # or CI's own `main`), and runs the suite from the dispatched ref. A dispatch posts its checks on the
 # ref's head commit, replacing that commit's checks of the same name, and a job it skips counts as
 # passing there: dispatch e2e or specs alone with `--ref main`, never on a PR's branch.
@@ -167,7 +167,6 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'all' }}
           PREVIEW_TESTED_COMMIT: ${{ steps.tested.outputs.description }}
@@ -251,7 +250,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           # the branch a PR's preview is named for, or a preview by name when there is no PR number
-          PREVIEW_NAME: ${{ github.head_ref || (inputs.pull-request-number == '' && inputs.preview-name || '') }}
+          PREVIEW_NAME: ${{ inputs.preview-name }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           E2E_SLOW_ROWS: ${{ inputs.slow-rows }}
@@ -387,7 +386,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref || (inputs.pull-request-number == '' && inputs.preview-name || '') }}
+          PREVIEW_NAME: ${{ inputs.preview-name }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview specs

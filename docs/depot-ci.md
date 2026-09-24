@@ -289,8 +289,8 @@ live preview: `--input action=e2e --input slow-rows=run`.
 `test` runs E2E tests and Browser specs against a preview as it is deployed,
 without redeploying it; `e2e` and `specs` run one of them. Name the preview by
 `pull-request-number`, and the jobs test that PR merged into main, or by
-`preview-name` without a number (a PR's `pr<n>-<branch slug>`, or `main`, the
-one Main OS e2e keeps), and they run the dispatched ref's suite:
+`preview-name` without a number (a PR's `pr<n>`, or `main`, the one Main OS
+e2e keeps), and they run the dispatched ref's suite:
 
 ```bash
 # both suites against PR 1234's preview

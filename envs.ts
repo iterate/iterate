@@ -52,14 +52,14 @@ export interface KitEnv {
 
 export const kitEnvs = {
   // THE PARENT of kit's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its
-  // data. A preview lists and flashes the same GitHub releases as production
-  // (apps/kit/src/firmware/releases.ts).
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml). A preview lists and
+  // flashes the same GitHub releases as production (apps/kit/src/firmware/releases.ts).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "kit-preview",
-    baseUrl: "https://kit-preview.iterate-dev-preview.workers.dev",
+    workerName: "kit",
+    baseUrl: "https://kit.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -114,22 +114,26 @@ export interface OsEnv {
 export const osEnvs: Record<string, OsEnv> = {
   // THE PARENT OF EVERY PER-PR PREVIEW (apps/os/scripts/preview.ts, the cloudflare-os recipe): a
   // Worker Preview is a branch of an existing worker, and this is that worker on the dev/preview
-  // account — `pr<n>-<branch>-os-preview.<subdomain>.workers.dev`. Each preview has resources of
-  // its own; nothing reads this worker's data, and nobody browses to it. workers.dev only.
+  // account — `pr<n>-os.<subdomain>.workers.dev`. Each preview has resources of its own. The parent
+  // itself is main on the dev/preview account: preview-parents.yml deploys it from every
+  // push to main, beside the apps' parents, which sign in against it. workers.dev only.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "os-preview",
-    baseUrl: "https://os-preview.iterate-dev-preview.workers.dev",
-    mcpBaseUrl: "https://os-preview.iterate-dev-preview.workers.dev/mcp",
+    workerName: "os",
+    baseUrl: "https://os.iterate-dev-preview.workers.dev",
+    mcpBaseUrl: "https://os.iterate-dev-preview.workers.dev/mcp",
+    dashBaseUrl: "https://dash.iterate-dev-preview.workers.dev",
     // Projects as paths on the one origin (`/projects/<slug>/<routingSlug>/…`): workers.dev has no wildcard
     // subdomains, and every preview inherits this.
     ingressRouting: { type: "paths" },
-    artifactsNamespace: "os-preview-repos",
-    resourceNamePrefix: "os-preview",
+    // Not the worker's name: local dev's R2 bucket is `os-files` (wrangler.base.jsonc), and a
+    // preview's own resources are `os-<preview>-…` (preview-config.ts `previewResourceName`).
+    artifactsNamespace: "os-parent-repos",
+    resourceNamePrefix: "os-parent",
     resources: {
-      oauthKvId: "1abac70698334cae90f861869042f53f",
-      itxKvId: "c4ff804bf3fe48fbbbf99a73fe31d4a5",
+      oauthKvId: "cc1ea2c05a104790aa2716a87f304b3a",
+      itxKvId: "a5b73c18d78f4cafaa4fa5e67d7daadc",
     },
   },
   prd: {
@@ -182,12 +186,13 @@ export const osEnvs: Record<string, OsEnv> = {
  *  platform at os.iterate.com, on a custom domain (dash.iterate.com). */
 export const dashEnvs = {
   // THE PARENT of dash's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "dash-preview",
-    baseUrl: "https://dash-preview.iterate-dev-preview.workers.dev",
+    workerName: "dash",
+    baseUrl: "https://dash.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -201,12 +206,13 @@ export const dashEnvs = {
 /** apps/agents — the agents page (README there); the notes app's shape, on a custom domain. */
 export const agentsEnvs = {
   // THE PARENT of agents's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "agents-preview",
-    baseUrl: "https://agents-preview.iterate-dev-preview.workers.dev",
+    workerName: "agents",
+    baseUrl: "https://agents.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -220,12 +226,13 @@ export const agentsEnvs = {
 
 export const notesEnvs = {
   // THE PARENT of notes's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "notes-preview",
-    baseUrl: "https://notes-preview.iterate-dev-preview.workers.dev",
+    workerName: "notes",
+    baseUrl: "https://notes.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -239,12 +246,13 @@ export const notesEnvs = {
 
 export const voiceEnvs = {
   // THE PARENT of voice's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "voice-preview",
-    baseUrl: "https://voice-preview.iterate-dev-preview.workers.dev",
+    workerName: "voice",
+    baseUrl: "https://voice.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,

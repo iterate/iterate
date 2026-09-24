@@ -1,5 +1,5 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
-// preview's name (`pr<n>-<branch slug>`, cloudflare-os's), the parent it branches from (envs.ts
+// preview's name (`pr<n>`, or a slug without a PR), the parent it branches from (envs.ts
 // `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
 // change touches, the PR body's managed section and its status line, the template quick-launch
 // links, the config `wrangler preview` reads — a
@@ -25,7 +25,8 @@ export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
 
 /** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
  *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
- *  that worker — os-preview on the dev/preview account (envs.ts). Nothing reads its data. */
+ *  that worker — `os` on the dev/preview account (envs.ts), itself deployed from main
+ *  (preview-parents.yml). */
 export const PREVIEW_PARENT = osEnvs.preview!;
 
 /** cloudflare-os's limit: the slug is the URL's first label, and KV/R2 names carry it too. */
@@ -49,8 +50,8 @@ const SHARED_APP_PATHS = [
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
 /** Slugify a ref into a legal preview name, truncating with a stable hash (cloudflare-os). */
-export function slugifyPreviewName(raw: string, { reserve = 0 }: { reserve?: number } = {}) {
-  const budget = MAX_PREVIEW_NAME_LENGTH - reserve;
+export function slugifyPreviewName(raw: string) {
+  const budget = MAX_PREVIEW_NAME_LENGTH;
   const slug = raw
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -61,18 +62,27 @@ export function slugifyPreviewName(raw: string, { reserve = 0 }: { reserve?: num
   return `${slug.slice(0, budget - hash.length - 1).replace(/-+$/, "")}-${hash}`;
 }
 
-/** `pr<n>-<branch slug>`: recognizable, unique per pull request. Two live branches can slugify to
- *  one name (`feature/foo`, `feature-foo`) and would otherwise share an instance. Without a number
- *  — a local run — the bare slug, which the sweep judges on age alone. */
-export function resolvePreviewName({ name, prNumber }: { name: string; prNumber?: string }) {
+/** `pr<n>` for a pull request: its URLs are `pr<n>-os.…`, `pr<n>-dash.…`, one per PR whatever its
+ *  branch is called. Without a number — a CI workflow's own preview, a laptop's experiment — the
+ *  slugified name, which the sweep judges on age alone. A name whose resources would be one the
+ *  account already has for something else (`dev` → local dev's `os-dev-repos`) is refused. */
+export function resolvePreviewName({ name, prNumber }: { name?: string; prNumber?: string }) {
   const pr = (prNumber || "").trim();
-  if (!/^\d+$/.test(pr)) return slugifyPreviewName(name);
-  const prefix = `pr${pr}-`;
-  return `${prefix}${slugifyPreviewName(name, { reserve: prefix.length })}`;
+  if (/^\d+$/.test(pr)) return `pr${pr}`;
+  if (!name) throw new Error("a preview needs a PR number (--pr) or a name (--name)");
+  const previewName = slugifyPreviewName(name);
+  const taken = accountResourceNames();
+  const clash = Object.values(previewResourceSuffixes())
+    .flat()
+    .map((suffix) => previewResourceName(previewName, suffix))
+    .find((resourceName) => taken.has(resourceName));
+  if (clash)
+    throw new Error(`preview name ${previewName} would take ${clash}, which is not a preview's`);
+  return previewName;
 }
 
 export function previewPullRequestNumber(previewName: string) {
-  const match = /^pr(\d+)-/.exec(previewName);
+  const match = /^pr(\d+)$/.exec(previewName);
   return match ? Number(match[1]) : undefined;
 }
 
@@ -139,9 +149,28 @@ export function previewResourceSuffixes(
   };
 }
 
+/** THE ACCOUNT'S OTHER RESOURCES that still read as `<parent>-<preview>-<suffix>`: every OS
+ *  deployment's own (envs.ts — the parent's `os-parent-files` reads as preview `parent`'s R2) and
+ *  local dev's (wrangler.base.jsonc — `os-dev-repos` reads as preview `dev`'s Artifacts namespace).
+ *  No preview may take a name that would claim one (resolvePreviewName), and the sweep never
+ *  deletes one (preview-sweep.ts rule 4). KV is bound by id, so only its titles count. */
+export function accountResourceNames(template = readWranglerBase()) {
+  return new Set([
+    ...Object.values(osEnvs).flatMap((env) => [
+      `${env.resourceNamePrefix}-oauth`,
+      `${env.resourceNamePrefix}-itx`,
+      `${env.resourceNamePrefix}-files`,
+      env.artifactsNamespace,
+    ]),
+    ...template.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name),
+    ...template.artifacts.map((artifacts: { namespace: string }) => artifacts.namespace),
+  ]);
+}
+
 /** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
- *  for a name of another shape: the parent's own (`os-preview-repos`), another worker's,
- *  another binding's. How the sweep reads a leftover resource (scripts/preview-sweep.ts). */
+ *  for a name of another shape: another binding's, or one with nothing between the parent and the
+ *  suffix (local dev's `os-files`). How the sweep reads a leftover resource
+ *  (scripts/preview-sweep.ts). */
 export function previewNameOfResource(resourceName: string, binding: string) {
   const prefix = `${PREVIEW_PARENT.workerName}-`;
   const suffix = `-${binding}`;

@@ -4,7 +4,7 @@
 //
 // A preview is STALE (deletePreview takes it and everything it owns) when
 //   1. its last deploy is more than 7 days old, whatever its name;
-//   2. it is named `pr<n>-…` and pull request #n is closed or does not exist;
+//   2. it is named `pr<n>` and pull request #n is closed or does not exist;
 //   3. it names no pull request (a branch, or a hand-picked name like `exp-…` or `soak`), its last
 //      deploy is more than 24 h old, no open pull request's head branch slugifies to its name, and it
 //      is no CI workflow's own (CI_WORKFLOW_PREVIEWS: `main`, `latency`, `real-model`). A quiet day
@@ -17,9 +17,10 @@
 //   4. its name is `<parent>-<preview>-<suffix>` with a suffix of its kind (previewResourceSuffixes:
 //      KV `itx-kv`, `oauth-kv`; R2 `files`; D1 `db`; Artifacts `repos`) and `<preview>` a name a
 //      preview can have (lowercase letters and digits in hyphen-separated words, at most 28
-//      characters). Nothing else ever is: not the parent's own (`os-preview-files`), not
-//      `IterateDataResources-…`, not another worker's whose name begins `<parent>-` (a former
-//      `os-preview-2`'s `os-preview-2-files`);
+//      characters). Nothing else ever is: not one the account has for something else
+//      (preview-config.ts accountResourceNames: the parent's own `os-parent-files`, local dev's
+//      `os-dev-repos`), not `IterateDataResources-…`, not another worker's whose name begins
+//      `<parent>-` (the former parent `os-preview`'s `os-preview-files`);
 //   5. no listed preview, stale or kept, owns that exact name. The caller lists the previews AFTER
 //      the resources: wrangler creates a preview before it provisions the preview's KV and R2, so a
 //      first deploy in flight always shows its preview;
@@ -28,8 +29,9 @@
 //   7. it was not created before the parent worker was: a preview's resources come from a deploy
 //      of that preview, which the parent's existence precedes. The legacy platform's preview slots
 //      left `os-preview-<n>-repos` namespaces (2026-05 and 2026-07, tens of thousands of repos each)
-//      whose names read as previews `1`…`18` of the parent `os-preview`; they are older than it, and
-//      no preview of it owns them. A resource with no creation stamp (KV) is judged on 4–6 alone.
+//      whose names read as previews `1`…`18` of the then parent `os-preview`; they are older than
+//      it, and no preview of it owns them. A resource with no creation stamp (KV) is judged on 4–6
+//      alone.
 //      When the parent's creation time is unknown (the scripts listing does not name it) or a stamp
 //      does not parse, every stamped resource is kept: a failed lookup never deletes.
 // scripts/preview.ts looks each orphan's preview up once more right before deleting it.
@@ -69,6 +71,9 @@ export type PreviewSweepInput = {
   now: number;
   /** Every worker script on the account (rule 4: another worker whose name begins `<parent>-`). */
   workerNames: string[];
+  /** The resources the account has for something other than a preview (rule 4;
+   *  preview-config.ts accountResourceNames). */
+  accountResourceNames: Set<string>;
   /** When the parent worker was created (the scripts listing's `created_on`; rule 7), or undefined
    *  when the listing does not name it, which keeps every resource that has a creation stamp. */
   parentCreatedAt: string | undefined;
@@ -90,8 +95,9 @@ export type PreviewSweepPlan = {
  *  preview's. */
 export function previewNameOfSweptResource(
   resource: SweptResource,
-  input: Pick<PreviewSweepInput, "workerNames" | "resourceSuffixes">,
+  input: Pick<PreviewSweepInput, "workerNames" | "accountResourceNames" | "resourceSuffixes">,
 ) {
+  if (input.accountResourceNames.has(resource.name)) return undefined;
   const parent = PREVIEW_PARENT.workerName;
   const ownedByAnotherWorker = input.workerNames.some(
     (workerName) =>

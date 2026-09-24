@@ -8,7 +8,8 @@
 // status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
 // top), sweep (the stale previews and the resources that outlived theirs — the rules are
-// scripts/preview-sweep.ts). `--dry-run` prints the plan.
+// scripts/preview-sweep.ts), deploy-parents (the workers every preview branches from, from this
+// checkout: preview-parents.yml on every push to main). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,8 @@ import {
 import { OS_DOPPLER_PROJECT, osEnvs, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
+  deployWithSecrets,
+  findBuiltWranglerConfig,
   runAsync,
   smoke,
   smokeResponse,
@@ -44,6 +47,7 @@ import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
 import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
+import deployOs from "./deploy.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   deleteArtifactsNamespace,
@@ -55,6 +59,7 @@ import {
   type StuckArtifactsNamespace,
 } from "./preview-artifacts.ts";
 import {
+  accountResourceNames,
   APPS,
   appPreviewOrigins,
   appPreviewUrl,
@@ -103,7 +108,16 @@ const OUTPUT_DIR = path.join(ROOT, "output");
  *  mentions preview auto-provisioning. */
 const WRANGLER_PACKAGE = "https://pkg.pr.new/wrangler@14416";
 
-const Command = z.enum(["config", "deploy", "e2e", "specs", "reset", "delete", "sweep"]);
+const Command = z.enum([
+  "config",
+  "deploy",
+  "e2e",
+  "specs",
+  "reset",
+  "delete",
+  "sweep",
+  "deploy-parents",
+]);
 type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
@@ -369,8 +383,7 @@ function writeParentConfig(parent: { workerName: string; cloudflareAccountId: st
 
 /** Write the app's preview config — this PR's apps/os preview as the issuer, this run's app
  *  previews as the other apps (`appPreviewOrigins`) — onto its `preview` build, and branch a
- *  preview off the app's parent, deploying the parent from the same config the first time it is
- *  missing, as cloudflare-os's `deployBaselineWorker` does. */
+ *  preview off the app's parent, which main deploys (deployParents). */
 async function deployAppPreview(
   app: StartApp,
   previewName: string,
@@ -379,18 +392,19 @@ async function deployAppPreview(
 ) {
   const root = path.resolve(import.meta.dirname, "../..", app.name);
   const config = writeStartAppPreviewConfig(app, input);
-  const previewArgs = ["preview", "--name", previewName, "-c", config, "--json"];
-  let result = await run(wrangler, previewArgs, { cwd: root });
-  if (result.status !== 0 && isMissingWorkerError(`${result.stdout}\n${result.stderr}`)) {
-    console.log(`apps/${app.name}: parent worker missing; deploying it from the same config`);
-    await runAsync(wrangler, ["deploy", "-c", config], { cwd: root });
-    result = await run(wrangler, previewArgs, { cwd: root });
-  }
+  const result = await run(wrangler, ["preview", "--name", previewName, "-c", config, "--json"], {
+    cwd: root,
+  });
   if (result.stderr) process.stderr.write(result.stderr);
-  if (result.status !== 0)
+  if (result.status !== 0) {
+    const output = `${result.stdout}\n${result.stderr}`;
+    const hint = isMissingWorkerError(output)
+      ? ` — the parent worker ${app.envs.preview!.workerName} is missing: ${DEPLOY_PARENTS_HINT}`
+      : "";
     throw new Error(
-      `wrangler preview failed with exit code ${result.status}\n${lastLines(`${result.stdout}\n${result.stderr}`, 40)}`,
+      `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
     );
+  }
   const url = parseWranglerJson(result.stdout).preview?.urls?.[0];
   if (url !== appPreviewUrl(app, previewName))
     throw new Error(`expected ${appPreviewUrl(app, previewName)}, wrangler returned ${url}`);
@@ -468,6 +482,44 @@ async function deleteWorkerPreview(
   }
 }
 
+// ── the parents (preview-parents.yml) ───────────────────────────────────────────────────
+
+/** How a missing or out-of-date parent is put right: every parent is main's. */
+const DEPLOY_PARENTS_HINT =
+  "deploy the parents from main (the Preview parents workflow, or `pnpm preview deploy-parents` in apps/os under Doppler os/preview)";
+
+/** THE PARENTS, from this checkout: apps/os's `os` (envs.ts osEnvs.preview) as any OS deployment
+ *  deploys (scripts/deploy.ts: its own resources, its Doppler secrets, its smokes), and each app's
+ *  from its `preview` build, which signs in against `os` and links to the other parents
+ *  (start-app.ts startAppWorkerConfig). Every preview branches from these; preview-parents.yml
+ *  runs this on every push to main, so the parents are main on the dev/preview account. Side by
+ *  side; every one settles before the failed ones are named. */
+async function deployParents(ctx: EnvContext<OsEnv>) {
+  const credentials = {
+    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
+    CLOUDFLARE_ACCOUNT_ID: PREVIEW_PARENT.cloudflareAccountId,
+  };
+  const deployApp = async (app: StartApp) => {
+    const root = path.resolve(import.meta.dirname, "../..", app.name);
+    await buildStartApp(app, "preview");
+    const builtConfig = findBuiltWranglerConfig(root);
+    await deployWithSecrets({ cwd: root, builtConfig, secretValues: {}, credentials });
+    await smoke(`${app.envs.preview!.baseUrl}/healthz`, (status) => status === 200, "health");
+  };
+  const steps = [
+    { name: "apps/os", deploy: () => deployOs({ env: "preview" }) },
+    ...APPS.map((app) => ({ name: `apps/${app.name}`, deploy: () => deployApp(app) })),
+  ];
+  const results = await Promise.allSettled(steps.map((step) => step.deploy()));
+  const failures = results.flatMap((result, index) =>
+    result.status === "rejected" ? [`${steps[index]!.name}: ${describe(result.reason)}`] : [],
+  );
+  if (failures.length) throw new Error(`parents failed\n\n${failures.join("\n\n")}`);
+  console.log(
+    `✅ parents deployed: ${[PREVIEW_PARENT, ...APPS.map((app) => app.envs.preview!)].map((env) => env.baseUrl).join(", ")}`,
+  );
+}
+
 // ── the preview itself ─────────────────────────────────────────────────────────────────────────
 
 /** `preview secret bulk` writes the WORKER's Previews settings, which every preview of it inherits:
@@ -527,11 +579,11 @@ async function deployOsPreview(
       await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
       return deployOsPreview(ctx, previewName, dashOrigin, wrangler, settleMs, true);
     }
+    // Not the parent's classes: a brand-new preview binds a class its parent never had (measured
+    // 2026-09-24 on a throwaway worker).
     const hint = isMissingWorkerError(output)
-      ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm --dir apps/os run deploy --env preview`
-      : isDurableObjectClassNotExportedError(output)
-        ? ` — Cloudflare 10061 on a new preview too: the parent worker ${PREVIEW_PARENT.workerName} does not export a Durable Object class this build binds. Deploy the parent from main (pnpm --dir apps/os run deploy --env preview); a PR that itself adds a class needs the parent deployed from its branch first`
-        : "";
+      ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing: ${DEPLOY_PARENTS_HINT}`
+      : "";
     throw new Error(
       `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
     );
@@ -1114,6 +1166,7 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const scripts = await cf<{ id: string; created_on?: string }[]>("/workers/scripts");
   const workerNames = scripts.map((script) => script.id);
   const resourceSuffixes = previewResourceSuffixes();
+  const accountResources = accountResourceNames();
   // The pull requests the rules read: a preview's (rule 2), a leftover D1's or Artifacts namespace's
   // (rule 6).
   const pullRequestNumbers = new Set(
@@ -1123,7 +1176,11 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
         .filter((resource) => resource.kind === "d1" || resource.kind === "artifacts")
         .map(
           (resource) =>
-            previewNameOfSweptResource(resource, { workerNames, resourceSuffixes }) || "",
+            previewNameOfSweptResource(resource, {
+              workerNames,
+              accountResourceNames: accountResources,
+              resourceSuffixes,
+            }) || "",
         ),
     ]
       .map((name) => previewPullRequestNumber(name))
@@ -1135,6 +1192,7 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const plan = planPreviewSweep({
     now: Date.now(),
     workerNames,
+    accountResourceNames: accountResources,
     parentCreatedAt: scripts.find((script) => script.id === PREVIEW_PARENT.workerName)?.created_on,
     resourceSuffixes,
     previews: previews.map((preview) => ({
@@ -1274,22 +1332,9 @@ function parseArgs(argv: string[]): {
   return { command: command.data, pr, name, apps, settleSeconds, slowRows, dryRun };
 }
 
-/** The branch a PR-numbered run names its preview after: the flag, PREVIEW_NAME (the workflow's
- *  `github.head_ref`), or — a dispatch that only knows the number — the PR's head ref from GitHub. */
-async function resolveBranch(pr: string | undefined, name: string | undefined) {
-  if (name) return name;
-  if (process.env.PREVIEW_NAME) return process.env.PREVIEW_NAME;
-  if (pr && process.env.GITHUB_TOKEN) {
-    return (await getOctokit().rest.pulls.get(pullRequest(pr))).data.head.ref;
-  }
-  throw new Error(
-    "a preview needs a branch: --name <ref>, PREVIEW_NAME, or --pr with GITHUB_TOKEN",
-  );
-}
-
 /** The flags, then the workflow's spellings — PREVIEW_PR_NUMBER, PREVIEW_APPS (all | auto | none),
- *  PREVIEW_NAME (resolveBranch), E2E_SLOW_ROWS (run | skip | only; empty decides) — then the
- *  defaults. */
+ *  PREVIEW_NAME (a run without a PR number: a CI workflow's own preview), E2E_SLOW_ROWS (run | skip
+ *  | only; empty decides) — then the defaults. */
 async function main(argv: string[]) {
   const parsed = parseArgs(argv);
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
@@ -1299,8 +1344,11 @@ async function main(argv: string[]) {
       dryRun: parsed.dryRun,
       jobUrl: process.env.DEPOT_JOB_URL,
     });
-  const branch = await resolveBranch(pr, parsed.name);
-  const previewName = resolvePreviewName({ name: branch, prNumber: pr });
+  if (parsed.command === "deploy-parents") return deployParents(await parentContext());
+  const previewName = resolvePreviewName({
+    name: parsed.name || process.env.PREVIEW_NAME,
+    prNumber: pr,
+  });
   console.log(`preview ${previewName} → ${previewUrl(previewName)}`);
   if (parsed.command === "config" || parsed.dryRun) {
     await buildOs("preview");
