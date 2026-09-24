@@ -477,18 +477,23 @@ export function buildFirmwareRelease(input: {
   // a path mismatch between ninja and git would otherwise make the check vacuous
   if (!ownFiles.includes(`${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt`)) {
     // TEMPORARY diagnostics (PR #2934): how the regeneration statement names its inputs
-    const manifest = readFileSync(join(build, "build.ninja"), "utf8");
-    const rerun = manifest.slice(manifest.indexOf("RERUN_CMAKE") - 300).slice(0, 3000);
+    const head = (text: string) => text.split("\n").slice(0, 25).join("\n");
     throw new Error(
       [
         `ninja listed no ${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt; the input check proves nothing.`,
-        `It listed ${read.length} paths, ${ownFiles.length} under ${FIRMWARE_DIRECTORY}, for example:`,
-        ...[...new Set(ownFiles)]
-          .sort()
-          .slice(0, 40)
-          .map((file) => `  ${file}`),
-        "build.ninja around RERUN_CMAKE:",
-        rerun,
+        `It listed ${read.length} paths, ${ownFiles.length} under ${FIRMWARE_DIRECTORY}.`,
+        `which ninja: ${output("sh", ["-c", "command -v ninja; ninja --version"], repoRoot)}`,
+        "ninja -t inputs build.ninja:",
+        head(output("ninja", ["-C", build, "-t", "inputs", "build.ninja"], repoRoot)),
+        "ninja -t inputs all build.ninja, the CMake files:",
+        head(
+          output("ninja", ["-C", build, "-t", "inputs", "all", "build.ninja"], repoRoot)
+            .split("\n")
+            .filter((line) => /CMakeLists|\.cmake|idf_component/.test(line))
+            .join("\n"),
+        ),
+        "ninja -t query build.ninja:",
+        head(output("ninja", ["-C", build, "-t", "query", "build.ninja"], repoRoot)),
       ].join("\n"),
     );
   }
