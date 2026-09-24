@@ -24,11 +24,8 @@ extern "C" {
  * does not by itself prove acoustic alignment or cancellation quality; those
  * require board-specific evidence.
  *
- * Four more facts were advertised here and never asked for:
- * `full_duplex`, `capture_is_echo_cancelled`, and the two
- * `*_clock_is_hardware_owned` flags. Every board filled them in and no caller
- * ever branched on one, so all four said only what their board's own header
- * already says in prose. A property nobody reads is a claim nobody checks.
+ * Only properties some caller branches on belong here: a property nobody
+ * reads is a claim nobody checks.
  */
 struct iterate_kit_audio_codec_properties {
   uint32_t capture_sample_rate_hz;

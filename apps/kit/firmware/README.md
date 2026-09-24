@@ -165,8 +165,8 @@ browser writes Wi-Fi, OS URL, project id and that token into the versioned
 worker or a URL. The token is retired by revocation from that list, never
 refreshed.
 
-To write that partition by hand instead — which is how an os-next bench board
-is provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
+To write that partition by hand instead — which is how a bench board is
+provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
 reads the offset out of the target's own partition CSV; assuming one corrupts
 the application and leaves the board looking absent rather than offline.
 
@@ -182,19 +182,19 @@ python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
 
 `$KIT_TOKEN` is a personal access token scoped to the project: the one Kit
 Flasher's Prepare device step mints, or one minted the same way through
-os-next's `grants.mint` (`projects: [<project>]`, `expiresAt` up to ten years).
+the OS's `grants.mint` (`projects: [<project>]`, `expiresAt` up to ten years).
 The same image is what `iterate-kit-mac --config` reads.
 
 At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
 mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
 failures.
 
-The device dials `wss://<os base url host>/api` — os-next's public door — with
+The device dials `wss://<os base url host>/api` — the OS's public door — with
 the blob's key as `Authorization: Bearer` on the upgrade: a personal access
 token the Kit page minted for the person who set the device up, scoped to the
 one project, revocable from that person's sessions list. Both transports send
-it, ESP-TLS on a board and OpenSSL on the Mac. The blob's project id is a bare
-DNS-safe slug (`prj-voice`). The mount's three calls, the subscription shape
+it, ESP-TLS on a board and OpenSSL on the Mac. The blob's project id is the
+project's `prj_<hex>` id; `projects.get` also accepts its slug (`prj-voice`). The mount's three calls, the subscription shape
 and the delivery contract are documented where they live:
 `components/core/include/iterate/kit/itx_mount.h` and `stream_subscription.h`.
 
@@ -259,7 +259,7 @@ Then use a provisioned, idle device — a board or `iterate-kit-mac` — for the
 air-path proof:
 
 ```sh
-cd apps/os
+cd apps/agents
 WORKER_BASE_URL=https://os.iterate.com ADMIN_API_SECRET=… PROJECT=prj-voice \
   pnpm exec tsx scripts/voice-board.ts --device <device_name> \
     --prompt "Hello there. Please reply with the single word banana." --expect banana

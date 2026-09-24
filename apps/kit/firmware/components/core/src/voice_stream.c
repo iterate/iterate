@@ -9,7 +9,7 @@
 
 /*
  * NAMED ONE BY ONE, BECAUSE "*" NEVER SWEEPS AN EPHEMERAL. `spk-frame` is
- * ephemeral and os-next's `consumesEvent` is explicit that a wildcard does not
+ * ephemeral and the OS's `consumesEvent` is explicit that a wildcard does not
  * reach one, so the type that carries every syllable of every answer is the
  * one a shorthand would silently drop.
  */
@@ -77,23 +77,20 @@ static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /*
- * THE UPLINK MU-LAW ENCODER WAS HERE, AND WHY IT MIGHT HAVE TO COME BACK.
+ * THE UPLINK IS PCM16, AND WHY IT MIGHT HAVE TO BECOME MU-LAW AGAIN.
  *
- * It was removed deliberately: two codecs on one wire is two chances for the
- * ends to disagree, and they did — a server that read the bytes as PCM16 while
- * the device sent mu-law produced a call that heard nothing, answered nothing
- * and logged nothing. PCM16 both ways deletes that whole class of fault.
+ * PCM16 both ways means the two ends cannot disagree on the codec. They did
+ * when there were two: a server that read the bytes as PCM16 while the device
+ * sent mu-law produced a call that heard nothing, answered nothing and logged
+ * nothing.
  *
- * What it cost is on record and is NOT theoretical. Before mu-law, a 3-second
- * turn put roughly 100 KB/s of base64 PCM16 on the wire in one burst and the
- * TCP flow stalled dead — both directions, no errors, twenty seconds at a
- * time. That is the "I hold the button and nothing happens" this lab spent
- * days on. Halving the bytes fixed it, and also quartered the message rate,
- * because twice as many frames fit one append.
- *
- * So the uplink is back to where that happened. A host CLI on a wired network
- * will never show it; only a board on Wi-Fi can. If the stall returns, this is
- * the first thing to put back, and `git log` has the exact encoder.
+ * The cost is on record and is NOT theoretical. A 3-second turn puts roughly
+ * 100 KB/s of base64 PCM16 on the wire in one burst, and on a board's Wi-Fi
+ * that has stalled the TCP flow dead — both directions, no errors, twenty
+ * seconds at a time. Halving the bytes with mu-law fixed it. The Mac on a
+ * wired network will never show it; only a board on Wi-Fi can. If the stall
+ * returns, the mu-law encoder is the first thing to put back, and `git log`
+ * has the exact one.
  */
 
 static size_t base64_encode(
@@ -190,35 +187,28 @@ static bool base64_decode(
 /* --- inbound delivery batches (the exported callback capability) ---------- */
 
 /*
- * THE DOWNLINK MU-LAW EXPANDER WAS HERE. Same story as the encoder above, and
- * the same warning: it was measured delivering 9-31 frames a second against
- * the 50 that realtime needs, and halving the bytes was the only lever that
- * did not require the far end to guess at this network. PCM16 is what the
- * speaker path wants anyway, so nothing decodes anything now — but if a board
- * starts concealing, this is where the fix went.
+ * The downlink is PCM16 for the same reason, with the same warning: a mu-law
+ * downlink was once the fix for a board measured delivering 9-31 frames a
+ * second against the 50 that realtime needs. If a board starts concealing,
+ * that expander (see `git log`) is where the fix went.
  */
 
 /*
  * THE WHOLE OF THE DEVICE'S SPEAKER POLICY: clear it, or write it.
  *
- * WHAT USED TO BE HERE. Every chunk carried an answer number, a frame index
- * and a sequence, and the board ran a 230-line classifier (`audio_playout.c`)
- * over them to work out for itself whether the audio was still wanted:
- * high-water marks, abandoned-answer latches, restart detection, duplicate
- * rejection. Three separate bugs in it silenced the device PERMANENTLY — each
- * one a number the sender could never reach again — and all three were found
- * by listening to a board go quiet and then guessing. It was answering a
- * question the sender already knows the answer to.
- *
- * The sender says `drop` instead, on the first chunk of a replacing answer.
- * It cannot be reordered against the audio it invalidates because it IS that
- * audio, and there is nothing left to get wrong.
+ * The device does not work out for itself whether audio is still wanted; the
+ * sender already knows. A device-side classifier over answer numbers, frame
+ * indices and sequences silenced boards PERMANENTLY through three separate
+ * bugs, each one a number the sender could never reach again. The sender
+ * instead sets `clearSpeakerBufferBeforeFrame` on the first chunk of a
+ * replacing answer. It cannot be reordered against the audio it invalidates
+ * because it IS that audio, and there is nothing left to get wrong.
  *
  * DEDUPLICATION IS NOT DONE HERE EITHER. A make-before-break recycle really
  * does deliver the same events twice, and that is handled one layer up by
  * event OFFSET (`dispatch_batch`), which is where the identity of an event
- * actually lives. Doing it again by audio content was a second answer to the
- * same question, and the two could disagree.
+ * actually lives. Doing it again by audio content would be a second answer to
+ * the same question, and the two could disagree.
  */
 static void handle_spk_frame(
     struct iterate_kit_voice_stream *voice_stream,
@@ -273,8 +263,8 @@ static void handle_spk_frame(
 
   /*
    * A CHUNK WITH NO AUDIO IS NOT A BROKEN CHUNK. The sender closes an answer
-   * whose audio has already all gone with a bare `last`, and that chunk is the
-   * only marker that completes the answer. Treating it as a decode
+   * whose audio has already all gone with a bare `lastFrameOfAnswer`, and that
+   * chunk is the only marker that completes the answer. Treating it as a decode
    * failure and returning early is what made a conversation go deaf after two
    * or three turns.
    */

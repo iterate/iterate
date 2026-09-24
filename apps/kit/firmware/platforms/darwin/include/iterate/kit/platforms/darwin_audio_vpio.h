@@ -29,7 +29,7 @@
  * FORMAT. The client format on both buses is the wire's own 16 kHz mono
  * PCM16; the unit converts from the devices' native rates. If the unit is
  * unavailable or refuses the format, open fails cleanly and the caller falls
- * back to the queues — an escape hatch that is also `--no-aec` on the CLI.
+ * back to the queues — an escape hatch that is also `--no-aec` on iterate-kit-mac.
  */
 
 #include <AudioToolbox/AudioToolbox.h>

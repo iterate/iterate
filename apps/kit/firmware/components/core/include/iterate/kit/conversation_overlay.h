@@ -27,31 +27,25 @@ extern "C" {
  * colours, in the same order, painted by that board's own renderer through
  * `iterate_kit_conversation_lights_for_screen`. Learn it once.
  *
- * This module once painted them itself, as a rail down a frame's left margin
- * or a strip below the face. Every board turned it off — each already had a
- * renderer that knew its own panel — so all three callers passed LIGHTS_NONE
- * and the RGB565 blitter here drew nothing at all. Colours are shared; pixels
- * are the board's business.
+ * Colours are shared; pixels are the board's business — each board already
+ * has a renderer that knows its own panel.
  *
- * NOT-CONNECTED IS NOT A SUBTLE STATE, AND IT IS NOT A CAPTION EITHER. It was
- * a word across the bottom of the face for a while — legible, and wrong: a
- * device with a twelve-LED ring has no way to render a word, so the fleet was
- * saying the same thing two different ways and only three of the four could
- * say it at all. The lights say it now, everywhere, with the SAME animation:
- * a comet walking the twelve positions. One thing to learn, and every surface
- * can show it.
+ * NOT-CONNECTED IS NOT A SUBTLE STATE, AND IT IS NOT A CAPTION EITHER. A
+ * device with a twelve-LED ring has no way to render a word, so a caption
+ * would say the same thing two different ways, on only some devices. The
+ * lights say it everywhere, with the SAME animation: a comet walking the
+ * twelve positions. One thing to learn, and every surface can show it.
  *
  * Everything here is pure. No clock is read, no memory is allocated, and the
  * caller passes the time so the animation is reproducible in a host test.
  */
 
 /**
- * Reports whether two snapshots produce the same overlay.
- *
- * The lights alone are not enough to decide this. "Connecting" and "ready"
- * can render twelve identical pixels while the banner says entirely
- * different things, so a display that invalidated on light equality would
- * hold a stale CONNECTING bar over a device that was ready. Use this, not
+ * Reports whether two snapshots produce the same overlay: the same lights and
+ * the same overlay class (failed, connecting, idle, in call, speaking,
+ * listening). "Connecting" and "ready" can render twelve identical pixels, so
+ * a display that invalidated on light equality alone would hold a stale
+ * picture over a device whose state changed. Use this, not
  * `iterate_kit_conversation_lights_equal`, wherever a screen is involved.
  */
 bool iterate_kit_conversation_overlay_equal(
@@ -63,9 +57,9 @@ bool iterate_kit_conversation_overlay_equal(
  *
  * `conversation_lights_render` gives the twelve static colours; this adds the
  * only thing a still picture cannot say, which is that the device is BUSY
- * TRYING. Every surface calls this — the HA Voice PE's physical ring and the
- * status rail on all three screens — so there is exactly one answer to "what
- * does connecting look like", and changing it changes every device at once.
+ * TRYING. The status rail on the screen devices calls this, so there is
+ * exactly one answer to "what does connecting look like" there, and changing
+ * it changes every screen at once.
  *
  * While the device is ready, this is `conversation_lights_render` and nothing
  * more: a working device does not move.

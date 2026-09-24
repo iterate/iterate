@@ -267,12 +267,13 @@ static void seconds_of_lag_with_only_a_chunk_queued_is_played(void)
 /*
  * AN ANSWER THAT ENDED DOES NOT MAKE THE NEXT ONE LATE.
  *
- * This is the reset both owners used to carry themselves, and each forgot on
- * one path: the board on ordinary turns (a fifth of every answer after the
- * first, for a week), the host CLI on its live-audio dry path (nine seconds
- * of "lag" after a back-office wait, four frames in five discarded). The
- * clock forgets the timeline in the same call that decides the ring is at the
- * live edge, so a caller can no longer skip the reset by skipping a branch.
+ * When the board and a since-deleted host CLI (#2710) each carried this reset
+ * themselves, each forgot it on one path: the board on ordinary turns (a
+ * fifth of every answer after the first, for a week), the CLI on its
+ * live-audio dry path (nine seconds of "lag" after a back-office wait, four
+ * frames in five discarded). The clock forgets the timeline in the same call
+ * that decides the ring is at the live edge, so a caller cannot skip the
+ * reset by skipping a branch.
  */
 static void an_answer_that_ended_does_not_make_the_next_one_late(void)
 {
@@ -361,16 +362,13 @@ static void the_worst_lag_is_remembered(void)
  * middle of a sentence because the sender was quick is the failure the depth
  * rule had to be all but disabled to avoid.
  *
- * EIGHT SECONDS, WHICH IS TWICE THE SENDER'S BUDGET. voice-agent2 holds the
- * device to MAX_DEVICE_SPEAKER_BACKLOG_BYTES — 128,000 bytes, four seconds —
- * so a ring this deep is already past anything the sender should produce.
- * Depth alone still must not cost a frame: there was a second catch-up rule
- * that fired on exactly this, and it is gone. Lateness is the only signal.
+ * EIGHT SECONDS DEEP, and depth alone still must not cost a frame: lateness
+ * is the only signal.
  */
 static void a_deep_queue_on_time_loses_nothing(void)
 {
   struct iterate_kit_voice_playback_clock clock;
-  const uint32_t deep = 8000U * BYTES_PER_MS; /* twice the sender's budget */
+  const uint32_t deep = 8000U * BYTES_PER_MS;
   uint32_t index;
 
   iterate_kit_voice_playback_clock_init(&clock);

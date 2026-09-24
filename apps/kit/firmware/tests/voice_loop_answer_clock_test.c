@@ -298,11 +298,10 @@ static long callback_export_id(void) {
 /* --- the audio itself ----------------------------------------------------- */
 
 /**
- * `frames` whole wire frames of mu-law, base64, all one sample value.
+ * `frames` whole 20 ms frames of PCM16, base64, all one sample value.
  *
- * Content is irrelevant here — nothing in this file listens — but LENGTH is
- * not: the speaker path refuses any PCM length but 640, so a chunk that is not
- * a whole number of frames would be counted as bad rather than played.
+ * Content is irrelevant here — nothing in this file listens — but the length
+ * sets how much speaker audio the answer clock has to play out.
  */
 static uint8_t speaker_pcm_byte;
 

@@ -100,7 +100,7 @@ static void rejects_truncated_and_wrong_version_images(void) {
  * Convert only the transport scheme into a caller-sized fixed buffer and prove
  * both production TLS and local cleartext development forms.
  *
- * THE PATH IS `/api`: os-next's public door, whose OAuth gate resolves the
+ * THE PATH IS `/api`: the OS's public door, whose OAuth gate resolves the
  * `Authorization: Bearer` the transport sends on the upgrade (the blob's key,
  * a personal access token). The endpoint is four bytes longer than the base
  * URL.
@@ -142,20 +142,20 @@ static void rejects_invalid_or_truncated_itx_websocket_endpoints(void) {
 }
 
 /*
- * THE BLOB A BOARD IS ACTUALLY FLASHED WITH FOR os-next: a DNS-safe SLUG
- * project id, and an operator secret running to the field's full 128 bytes.
- * Both were refused until this port, and each refusal is a board that reads its
- * own partition, rejects it, never dials, and from outside looks dead.
+ * A BLOB A BOARD IS FLASHED WITH: a project reference with no `prj_` prefix,
+ * and a key running to the field's full 128 bytes. Refusing either is a board
+ * that reads its own partition, rejects it, never dials, and from outside
+ * looks dead.
  */
-static void decodes_the_os_next_image_with_a_slug_and_a_full_length_key(void) {
+static void decodes_the_flashed_image_with_an_unprefixed_project_and_a_full_length_key(void) {
   struct iterate_kit_configuration configuration;
   char key[ITERATE_KIT_PROJECT_API_KEY_CAPACITY];
   size_t index;
   const enum iterate_kit_configuration_error error =
       iterate_kit_configuration_decode(
           &configuration,
-          iterate_kit_test_os_next_configuration_image,
-          sizeof(iterate_kit_test_os_next_configuration_image));
+          iterate_kit_test_flashed_configuration_image,
+          sizeof(iterate_kit_test_flashed_configuration_image));
 
   for (index = 0U; index + 1U < sizeof(key); ++index) key[index] = 'k';
   key[sizeof(key) - 1U] = '\0';
@@ -170,7 +170,7 @@ static void decodes_the_os_next_image_with_a_slug_and_a_full_length_key(void) {
 
 int main(void) {
   decodes_the_typescript_golden_image();
-  decodes_the_os_next_image_with_a_slug_and_a_full_length_key();
+  decodes_the_flashed_image_with_an_unprefixed_project_and_a_full_length_key();
   classifies_corruption_without_partial_credentials();
   rejects_truncated_and_wrong_version_images();
   builds_the_itx_websocket_endpoint_without_allocation();

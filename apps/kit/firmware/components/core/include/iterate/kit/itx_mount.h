@@ -50,8 +50,8 @@ enum iterate_kit_itx_mount_failure {
 struct iterate_kit_itx_mount_options {
   struct capnweb_session *session;
   /**
-   * The project's id, which on os-next IS its DNS-safe slug ("prj-voice").
-   * `projects.get` takes it as one bare string.
+   * The project's id (`prj_<hex>`); `projects.get` takes it — or the project's
+   * slug — as one bare string.
    */
   const char *project_id;
   /**
@@ -78,7 +78,7 @@ struct iterate_kit_itx_mount_options {
 };
 
 /**
- * One live Cap'n Web session's addressing of an os-next project, plus the one
+ * One live Cap'n Web session's addressing of an OS project, plus the one
  * act that lends this device back to it.
  *
  * THREE CALLS:
@@ -131,7 +131,7 @@ enum capnweb_status iterate_kit_itx_mount_start(
     const struct iterate_kit_itx_mount_options *options);
 
 /**
- * Sends `whoami()` on the SESSION once a period, because os-next's idle close
+ * Sends `whoami()` on the SESSION once a period, because the OS's idle close
  * counts APPLICATION messages and a PING is not one; the timing and the ping's
  * division of labour are in voice_device_profile.h. The session's `whoami()` is
  * the cheapest real call there is: the edge answers it from the admission gate

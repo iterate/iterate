@@ -94,6 +94,10 @@ resets the board. Any early return after
 `esp_task_wdt_add(NULL)` causes an unobserved watchdog reboot: park and expose
 the fault instead.
 
+Satellite1 OTA via `itx.clients.satellite1.system.update({url, sha256})` was
+proven over Wi-Fi on 2026-09-21: the device reconnected within 20 s with
+`restartNote: "system-update"`.
+
 ## Satellite1 ROM recovery record
 
 On the recovered unit, ROM MAC `14:C1:9F:4F:D2:14` mapped through `ioreg` to

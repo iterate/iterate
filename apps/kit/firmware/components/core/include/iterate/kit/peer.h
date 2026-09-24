@@ -38,12 +38,6 @@ typedef void (*iterate_kit_module_session_ended_fn)(void *context);
  * session_ended() releases session-scoped remote handles without shutting down
  * physical hardware. close() is the separate device-lifecycle boundary and may
  * therefore stop hardware.
- *
- * There was a third hook, poll(), for bounded cooperative work per owner-loop
- * turn. Every module ever written left it NULL — capabilities here are
- * request/response or push straight from the task that owns the hardware — so
- * the peer's poll pass was four boards calling a function that walked a table
- * of nulls. The hook, the pass, and its two error statuses are gone.
  */
 struct iterate_kit_module {
   const struct iterate_kit_method *methods;

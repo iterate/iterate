@@ -10,14 +10,7 @@
 extern "C" {
 #endif
 
-/*
- * The conversation turn, as the face needs to know it.
- *
- * These used to live in `face_driver.h` beside a vtable that let a caller swap
- * animation algorithms at runtime. Nothing ever swapped one — the envelope
- * animator is called directly from all four boards — so the indirection went
- * and the events moved here, to their only consumer.
- */
+/* The conversation turn, as the face needs to know it. */
 typedef enum {
     FACE_STREAM_USER_SPEECH_STARTED = 0,
     FACE_STREAM_USER_SPEECH_STOPPED,

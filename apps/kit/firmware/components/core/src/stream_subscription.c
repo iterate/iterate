@@ -70,7 +70,7 @@ static void callback_disposed(void *context) {
 }
 
 /*
- * THE CALLEE IS THE STUB ITSELF, AND IT TAKES TWO ARGUMENTS. os-next evaluates
+ * THE CALLEE IS THE STUB ITSELF, AND IT TAKES TWO ARGUMENTS. The OS evaluates
  * a lent target whose last step is a call, so `method` is undefined and the
  * wire call carries an EMPTY path — which is why nothing here reads
  * `call->path`. The argument shape is in stream_subscription.h.
@@ -99,7 +99,7 @@ static enum capnweb_status callback_dispatch(
 }
 
 /*
- * RELEASING A SUBSCRIPTION HANDLE IS HOW IT CLOSES. os-next's handle has no
+ * RELEASING A SUBSCRIPTION HANDLE IS HOW IT CLOSES. The OS's handle has no
  * `close()`: a Cap'n Web release triggers its `Symbol.dispose`, which un-sets
  * the row. Calling a method that is not there would reject, and a rejection on
  * this client is indistinguishable from a network fault. Live state still has
@@ -324,7 +324,7 @@ enum capnweb_status iterate_kit_stream_subscription_open(
       {.string = {subscription_name, strlen(subscription_name)}}};
   /*
    * THE CAPABILITY IS THE TARGET, not a named member of the argument object.
-   * os-next looks at what `target` evaluates to: a live stub owns its own
+   * The OS looks at what `target` evaluates to: a live stub owns its own
    * progress and is pushed to directly, which is what makes the callback a
    * bare two-argument function rather than a `processEventBatch` method.
    */

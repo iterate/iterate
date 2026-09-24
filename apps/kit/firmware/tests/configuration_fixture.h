@@ -17,11 +17,10 @@ static const uint8_t iterate_kit_test_configuration_image[] = {
 };
 
 /*
- * AND THE ONE A BOARD IS FLASHED WITH FOR os-next, written by
- * tools/make-config-image.py: a bare SLUG project id with no `prj_` prefix, and
- * a key of the field's full 128 bytes. Both were refused before — the decoder
- * demanded the prefix and the writer's capacity table was one byte short — and
- * either refusal is a board that never dials and looks, from outside, dead.
+ * AND ONE A BOARD IS FLASHED WITH, written by tools/make-config-image.py: a
+ * project reference with no `prj_` prefix (`projects.get` also takes a slug),
+ * and a key of the field's full 128 bytes. Refusing either is a board that
+ * never dials and looks, from outside, dead.
  *
  * The key is 128 repeats of 'k', generated rather than pasted: 128 hand-copied
  * bytes prove nothing the repeat does not.
@@ -32,7 +31,7 @@ static const uint8_t iterate_kit_test_configuration_image[] = {
   ITERATE_KIT_TEST_KEY_8, ITERATE_KIT_TEST_KEY_8, ITERATE_KIT_TEST_KEY_8,   \
   ITERATE_KIT_TEST_KEY_8, ITERATE_KIT_TEST_KEY_8, ITERATE_KIT_TEST_KEY_8,   \
   ITERATE_KIT_TEST_KEY_8, ITERATE_KIT_TEST_KEY_8
-static const uint8_t iterate_kit_test_os_next_configuration_image[] = {
+static const uint8_t iterate_kit_test_flashed_configuration_image[] = {
   0x49, 0x54, 0x45, 0x52, 0x4b, 0x49, 0x54, 0x31, 0xd1, 0x00, 0x00, 0x00,
   0x6e, 0x01, 0xba, 0x2d, 0x01, 0x06, 0x00, 0x73, 0x74, 0x75, 0x64, 0x69,
   0x6f, 0x02, 0x1c, 0x00, 0x63, 0x6f, 0x72, 0x72, 0x65, 0x63, 0x74, 0x20,

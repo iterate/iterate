@@ -75,7 +75,7 @@ enum {
   /*
    * SHORTER THAN THE FAR END'S IDLE CLOSE, which is what decides this number.
    *
-   * It was 120 s, chosen to permit DO hibernation. os-next closes a socket
+   * It was 120 s, chosen to permit DO hibernation. The OS closes a socket
    * carrying nothing at about 100 s — its own pager answers that with a 30 s
    * keepalive — so a 120 s probe is a probe that arrives after the socket it
    * was meant to keep. On a board that reads as flaky Wi-Fi: a re-mount every

@@ -1,9 +1,10 @@
 """Shared face vocabulary.
 
-Mirrors the firmware conventions in firmware-ws/main/face_sprite_sheet.h and
-tools/generate_sprite_showcase.py so FSPP atlases stay drop-in compatible
-with the existing FSPR v2 player, the 12-byte face_keyframe_t prefix, and the
-40-byte face_render_key_t viseme vocabulary fields.
+Mirrors the firmware conventions in
+firmware/components/avatar/include/iterate/kit/avatar/face_sprite_sheet.h so
+FSPP atlases stay drop-in compatible with the FSPR v2 player, the 12-byte
+face_keyframe_t prefix, and the 40-byte face_render_key_t viseme vocabulary
+fields.
 """
 
 from __future__ import annotations

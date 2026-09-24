@@ -74,9 +74,8 @@ static inline void iterate_kit_atomic_update_max_relaxed_u32(
   }
 }
 
-/** Add an amount, saturating at UINT32_MAX. Same relaxed CAS as increment;
- * moved from the CoreS3 capture reserve and avatar diagnostics. Volatile
- * storage is accepted so existing ISR-facing counter layouts stay unchanged.
+/** Add an amount, saturating at UINT32_MAX. Same relaxed CAS as increment.
+ * Volatile storage is accepted so ISR-facing counter layouts stay unchanged.
  */
 static inline void iterate_kit_atomic_saturating_add_relaxed_u32(
     volatile uint32_t *value, uint32_t amount) {

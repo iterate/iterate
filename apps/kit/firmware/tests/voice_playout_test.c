@@ -1,11 +1,9 @@
 /*
  * THE SHARED PLAYOUT STEP, DRIVEN BY A SCRIPTED RING AND SINK.
  *
- * The board's answer-clock test proves the step through a real queue and a
- * fake codec; the CLI's paced-sink test proves it through the CLI's ring and
- * converter. This file proves the step ITSELF: every branch, with the ring
- * and the sink reduced to arrays and counters, so a rule that both targets
- * depend on is asserted once where both can see it.
+ * The answer-clock test proves the step through the voice loop's real queue
+ * and a fake codec. This file proves the step ITSELF: every branch, with the
+ * ring and the sink reduced to arrays and counters.
  */
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice_playout.h"

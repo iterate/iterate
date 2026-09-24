@@ -1,10 +1,9 @@
 # The platform half of a voice loop test
 
 `components/voice/src/voice_loop.c` is the one program every board runs. Its
-intent mapping — the thing that decides whether a press becomes a call — was
-once verified only by diffing it against the four device files it replaced, and
-the bug that cost an afternoon (a remote press latched and never read) lived
-exactly there. So the loop is compiled on a laptop and driven by tests.
+intent mapping — the thing that decides whether a press becomes a call — is
+where a remote press once latched and was never read, and reading the code did
+not find it. So the loop is compiled on a laptop and driven by tests.
 
 The loop is ESP-IDF-coupled by design: it owns FreeRTOS tasks, queues, the task
 watchdog and the platform transport, because those are the parts a device

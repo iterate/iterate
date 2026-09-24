@@ -125,7 +125,8 @@ static void fixture_init(struct fixture *fixture) {
 static void start_mount(struct fixture *fixture) {
   const struct iterate_kit_itx_mount_options options = {
     &fixture->session,
-    /* A BARE SLUG. os-next project ids have no `prj_` prefix. */
+    /* A project reference without a `prj_` prefix (`projects.get` also takes
+     * a slug) must still be accepted. */
     "prj-voice",
     "operator-secret-never-log",
     "itx.clients.m5stick_s3",
@@ -178,7 +179,7 @@ static void mounts_and_retains_the_project_and_the_rule(void) {
   assert(fixture.captured_count == 2U);
   /*
    * ONE FIELD AND NO SECRET. The token rode the upgrade as `Authorization:
-   * Bearer` and os-next's gate resolved it; this call asks for that session.
+   * Bearer` and the OS's gate resolved it; this call asks for that session.
    */
   assert(strcmp(
       fixture.captured[0],

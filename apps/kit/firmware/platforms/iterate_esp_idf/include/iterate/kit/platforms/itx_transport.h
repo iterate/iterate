@@ -36,9 +36,9 @@ extern "C" {
 /*
  * Single-lane A1 transport for Cap'n Web calls and ephemeral media events.
  *
- * Audio is mu-law encoded, base64 wrapped, and sent through the same bounded
- * Cap'n Web /api session as every other stream event. The retired /pcm socket
- * is deliberately absent. Generation replacement therefore discards all old
+ * Audio is PCM16, base64 wrapped, and sent through the same bounded Cap'n Web
+ * /api session as every other stream event. There is deliberately no second
+ * PCM socket. Generation replacement therefore discards all old
  * session traffic together instead of attempting cross-generation replay.
  */
 enum {
@@ -56,10 +56,11 @@ enum {
       ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   /*
-   * One four-frame microphone append and the largest bounded delivery batch
-   * must each fit a single message. The value is the global outbox slot bound,
-   * not a second platform tuning knob; a compile-time check below pins it to
-   * the shared measurement profile. A message larger than this cap is rejected
+   * One full microphone append (ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND
+   * frames) and the largest bounded delivery batch must each fit a single
+   * message. The value is the global outbox slot bound, not a second platform
+   * tuning knob; a compile-time check below pins it to the shared measurement
+   * profile. A message larger than this cap is rejected
    * before it can silently overrun the embedded transmit scratch.
    */
   ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY =

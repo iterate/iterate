@@ -12,24 +12,22 @@ extern "C" {
 #endif
 
 /*
- * ONE PLAYOUT STEP FOR THE BOARD AND THE HOST CLI.
+ * ONE PLAYOUT STEP, OWNED HERE.
  *
- * Both run the same sequence around the shared playback clock: is the ring
- * primed; take one frame; a dry ring is either a hole in the answer or the
- * end of it; a frame is skipped when the answer is behind with backlog to
- * skip into, otherwise handed to the speaker; and what was handed over is
- * reported so the answer's timeline advances. Each target used to write that
- * sequence itself around its own ring and sink, and the two drifted apart
+ * The sequence around the shared playback clock: is the ring primed; take one
+ * frame; a dry ring is either a hole in the answer or the end of it; a frame
+ * is skipped when the answer is behind with backlog to skip into, otherwise
+ * handed to the speaker; and what was handed over is reported so the answer's
+ * timeline advances. When the board and a since-deleted host CLI (#2710) each
+ * wrote that sequence around their own ring and sink, the two drifted apart
  * twice in a week — the board forgot to restart the timeline on ordinary
  * turns, the CLI forgot it on its live-audio dry path — because a rule
  * written in two places is two rules.
  *
- * This is the sequence, once. What differs between targets is injected: the
- * RING (a FreeRTOS queue with generations on the board; a byte ring on the
- * host) and the SINK (a codec write that may wait for DMA headroom; a paced
- * or unpaced CoreAudio/file converter), each a handful of callbacks. The
- * counters both targets report are kept here too, so `spkPlayed` means the
- * same thing in a board's health() as in the CLI's report.
+ * This is the sequence, once. The RING (a FreeRTOS queue with generations)
+ * and the SINK (a codec write that may wait for DMA headroom) are injected as
+ * a handful of callbacks. The counters the step reports are kept here too, so
+ * `spkPlayed` means the same thing in every board's health().
  *
  * The step owns no thread and never blocks on its own account; the board's
  * `read` blocks for its dry wait, the board's `write` for DMA headroom, and
@@ -39,14 +37,12 @@ extern "C" {
 /**
  * What the speaker path is doing, so a board can follow it in hardware.
  *
- * This replaces `dma_watch(bool)`, `dma_draining()`, `note_flush()` and
- * `amplifier(bool)` — eleven calls whose only job was to tell the driver which
- * of six situations the playback task was in. Named after the situations, the
- * six are exhaustive, and a board that ignores one is ignoring a fact rather
- * than missing a call.
+ * Named after the situations the playback task can be in, the six are
+ * exhaustive, and a board that ignores one is ignoring a fact rather than
+ * missing a call.
  *
  * Called from BOTH the app task and the playback task, so a board's handler
- * must be safe under that — which the four drivers already were.
+ * must be safe under that.
  */
 enum iterate_kit_voice_phase {
   /**
@@ -120,14 +116,13 @@ struct iterate_kit_voice_playout_sink {
   /**
    * Emits one frame of silence for a hole the clock judged mid-answer. NULL
    * where the hardware clocks out its own zeros and inserting more would
-   * only put the rest of the answer further behind — which is every board,
-   * and the host CLI whenever a real or modelled room is pulling.
+   * only put the rest of the answer further behind — which is every board.
    */
   bool (*conceal)(void *context);
 };
 
 /**
- * What the step counted. Reported by both targets under the same names.
+ * What the step counted, reported in health() under the same names.
  *
  * `waits_priming` is the clock saying the ring is below prefill;
  * `waits_dry` is the ring being empty. A stall in either used to be

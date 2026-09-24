@@ -24,23 +24,18 @@ extern "C" {
  * after the first one played; the gap between that and the wall clock is how
  * far behind realtime playback has fallen, and it is the only honest measure
  * of "behind" — queue depth is not, because a whole answer legitimately
- * arrives at once and a deep queue then means the sender was fast. Both the
- * board and the host CLI used to keep that timeline themselves, beside this
- * clock, and feed it in as a number. Each then had to remember, at every
- * place an answer ends, to start the next one from zero — and each forgot a
- * different place. The board forgot ordinary turns until 2026-09-06 (two
- * boards played a fifth of every answer after the first for a week); the CLI
- * forgot the live-audio dry path until 2026-09-09 (a back-office turn read as
- * nine seconds late and four frames in five were discarded for the rest of
- * it). The timeline is now reset HERE, in the same call that decides the ring
- * is at the live edge, so there is no longer a caller who can forget.
+ * arrives at once and a deep queue then means the sender was fast. When the
+ * board and a since-deleted host CLI (#2710) each kept that timeline
+ * themselves, beside this clock, each had to remember, at every place an
+ * answer ends, to start the next one from zero — and each forgot a different
+ * place. The board forgot ordinary turns until 2026-09-06 (two boards played
+ * a fifth of every answer after the first for a week); the CLI forgot the
+ * live-audio dry path until 2026-09-09 (a back-office turn read as nine
+ * seconds late and four frames in five were discarded for the rest of it).
+ * The timeline is reset HERE, in the same call that decides the ring is at
+ * the live edge, so there is no caller who can forget.
  *
- * There was a fifth answer, DROP_DEBT: one frame discarded per frame
- * concealed, so concealment could not permanently add its own duration to
- * playout lag.  Nothing ever incurred the debt — `drop_debt_frames` was only
- * ever zeroed and decremented, never incremented — so the branch, its counter
- * and the five device arms that read it were unreachable from the day they
- * were written.  DROP_CATCHUP is what actually bounds lag.
+ * DROP_CATCHUP is what bounds lag.
  *
  * One playback owner mutates this structure.  Calls are allocation-free and
  * non-blocking; `now_ms` is monotonic milliseconds and `queued_bytes` excludes
@@ -107,9 +102,9 @@ bool iterate_kit_voice_playback_clock_audio_arrived(
  * `started_ms` of zero means this is the first frame, and the answer is by
  * definition on time.
  *
- * Shared rather than written twice because both targets need exactly this
- * arithmetic and one of them getting it subtly different is how a metric ends
- * up meaning two things — which has already cost this project a night.
+ * One definition, because two copies of this arithmetic getting it subtly
+ * different is how a metric ends up meaning two things — which has already
+ * cost this project a night.
  */
 static inline uint32_t iterate_kit_voice_playout_lag_ms(
     uint64_t started_ms, uint32_t emitted_ms, uint64_t now_ms) {
@@ -122,7 +117,6 @@ static inline uint32_t iterate_kit_voice_playout_lag_ms(
 uint32_t iterate_kit_voice_playback_clock_lag_ms(
     const struct iterate_kit_voice_playback_clock *clock, uint64_t now_ms);
 
-/** Whether the owner should remove a frame from the ring on this iteration. */
 /**
  * Whether playback may take from the ring at `now_ms`. Priming ends when the
  * ring holds the prefill, when the sender marked the answer complete, or

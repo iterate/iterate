@@ -28,10 +28,11 @@
  * The two SPSC rings are the only message handoff. This avoids locks and keeps
  * arbitrary RPC and stream-event work out of ESP-IDF's callback task, while
  * bounded poll/send bursts cap application and network-task work. A1 carries
- * mu-law media as ephemeral Cap'n Web stream events on this same /api socket;
+ * PCM16 media as ephemeral Cap'n Web stream events on this same /api socket;
  * there is no second binary PCM lane. We rejected a callback-driven session
  * because device methods could block ESP-IDF networking. The global queue and
- * four-frame append bounds provide the explicit pressure limit for media.
+ * the MIC_FRAMES_PER_APPEND (8) append bound provide the explicit pressure
+ * limit for media.
  *
  * Recovery always establishes a new socket generation. Fragments and outbound
  * messages from the old Cap'n Web session are discarded with saturating
@@ -671,7 +672,7 @@ static void send_control_messages(
 }
 
 /*
- * THE CREDENTIAL RIDES THE UPGRADE. os-next gates `/api` with its OAuth
+ * THE CREDENTIAL RIDES THE UPGRADE. The OS gates `/api` with its OAuth
  * provider: the blob's key is a personal access token the Kit page minted,
  * sent as `Authorization: Bearer`, and the provider resolves it before the
  * first Cap'n Web frame exists — the session then only asks for what the

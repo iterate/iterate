@@ -2,7 +2,7 @@
 
 This component is the allocation-free, platform-independent part of the
 StackChan talking head. It consumes PCM that has actually completed speaker
-DMA, produces a compact semantic pose, and renders one of four 160×120 RGB565
+DMA, produces a compact semantic pose, and renders one of five 160×120 RGB565
 sprite atlases into caller-owned memory. It owns no task, queue, display,
 network connection, or framebuffer.
 

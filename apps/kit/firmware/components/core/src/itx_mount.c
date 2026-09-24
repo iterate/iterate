@@ -26,9 +26,9 @@ static bool nonempty(const char *value) {
 /*
  * A profile that forgot to spell its device name as an itx expression must fail
  * before authentication bytes leave the device, rather than become a reconnect
- * loop mislabeled as networking. Both callers already produce identifier-safe
- * segments (voice_loop.c sanitizes, cli_options.c refuses), so this bounds the
- * shape and nothing more: rooted at "itx.", within the capacity, no empty
+ * loop mislabeled as networking. Its only producer, voice_loop.c, already
+ * sanitizes the name into identifier-safe segments, so this bounds the shape
+ * and nothing more: rooted at "itx.", within the capacity, no empty
  * segment, and at least one segment past the root.
  */
 static bool valid_capability_match(const char *match) {
@@ -363,7 +363,7 @@ enum capnweb_status iterate_kit_itx_mount_start(
    * THE CREDENTIAL ALREADY RODE THE UPGRADE. The blob's key is a personal
    * access token the Kit page minted for the person who set this device up,
    * scoped to this project; the transport sends it as `Authorization: Bearer`
-   * and os-next's OAuth gate resolves it before the first frame. This call
+   * and the OS's OAuth gate resolves it before the first frame. This call
    * only asks the session for what that gate resolved, so it carries no
    * secret: `{type: "bearer"}` and nothing else.
    */

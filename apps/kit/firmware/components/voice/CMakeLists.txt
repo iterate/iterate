@@ -25,10 +25,8 @@ if(COMMAND idf_component_register)
 else()
   # THE SAME SOURCE, ON A LAPTOP.
   #
-  # Four boards depend on this file and it was in no host build at all, so its
-  # intent mapping — whether a press becomes a call — was verified only by
-  # diffing it against the four device files it replaced. That is exactly where
-  # the bug lived that cost an afternoon.
+  # Every board depends on this file, so its intent mapping — whether a press
+  # becomes a call — is tested on a laptop rather than on a flash.
   #
   # It compiles here because the ESP-IDF it names is the host one
   # (platforms/host/esp_idf), and the five platform seams it calls —

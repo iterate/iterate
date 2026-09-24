@@ -2,9 +2,8 @@
 """Build the ITERKIT1 provisioning image a board reads at boot.
 
 The format lives in `components/core/src/configuration.c` and this is its only
-writer in the repo — before this, reprovisioning a board meant knowing the byte
-layout by heart, which is why the four boards sat pointed at whatever
-deployment they were last flashed against.
+writer in the firmware tree, so reprovisioning a board never means knowing the
+byte layout by heart.
 
     16-byte header: "ITERKIT" '1' | u32le payload size | u32le CRC-32(payload)
     payload:        repeated { u8 field, u16le size, bytes value }

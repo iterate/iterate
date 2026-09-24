@@ -209,9 +209,8 @@ static void present(
   visual.conversation_active = view->call_active || view->wants_call;
   visual.speaker_peak = iterate_kit_stackchan_avatar_speaker_status_peak();
   /*
-   * The OVERLAY comparison for the face, not the lights one: the screen also
-   * carries a word, and "connecting" and "ready" can render the same twelve
-   * pixels.
+   * The OVERLAY comparison for the face, not the lights one: "connecting" and
+   * "ready" can render the same twelve pixels but different overlays.
    */
   if (!shown_valid ||
       !iterate_kit_conversation_overlay_equal(&visual, &shown)) {
@@ -434,10 +433,10 @@ static enum capnweb_status screen_show(
 }
 
 /*
- * `face.set({face})` — the ONLY face changer this board has left. The side
- * button that used to cycle sprites opens conversations now, so a face
- * nobody can ask for by name is a face the robot no longer makes. The slug
- * is validated against the compiled catalogue by the avatar itself.
+ * `face.set({face})` — the ONLY face changer this board has: the side button
+ * opens conversations, so a face nobody can ask for by name is a face the
+ * robot never makes. The slug is validated against the compiled catalogue by
+ * the avatar itself.
  */
 static const char *const face_set_path[] = {"face", "set"};
 

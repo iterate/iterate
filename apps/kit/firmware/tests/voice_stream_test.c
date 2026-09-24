@@ -222,15 +222,8 @@ static void note_order(char mark) {
   if (order_length + 1U < sizeof(order_log)) order_log[order_length++] = mark;
 }
 
-/*
- * THE SENDER SHIPS CHUNKS NOW, so a test has to build one.
- *
- * A `pcm` payload is a whole number of 320-byte mu-law wire frames — that is
- * the sender's guarantee and the only thing the module accepts, because both
- * speaker consumers reject any PCM length but 640. Four-byte fixtures were
- * fine when one event was one frame; they are now a protocol violation, which
- * is itself worth a test.
- */
+/* `byte_count` bytes of PCM16, all `fill`, as the base64 a `pcm` payload
+ * carries. */
 static const char *pcm_b64(size_t byte_count, uint8_t fill) {
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -383,11 +376,10 @@ static void downlink_flow(void) {
             "\"events.iterate.com/voice-agent/call-started\"]]") !=
         NULL);
     /*
-     * AND NOTHING ASKS FOR A DELIVERY BOUND, because os-next has no knob to
+     * AND NOTHING ASKS FOR A DELIVERY BOUND, because the OS has no knob to
      * ask with: commits landing behind an in-flight delivery fold into one
-     * call. What used to be `maxDeliveryEvents`/`maxDeliveryBytes` is now the
-     * sender's discipline of one speaker frame per append, plus this device's
-     * own bounded inbox.
+     * call. The bound is the sender's discipline of one speaker frame per
+     * append, plus this device's own bounded inbox.
      */
     assert(strstr(open_message, "maxDelivery") == NULL);
     /* The capability IS the target — not a `processEventBatch` member — which
@@ -667,16 +659,16 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
       &fixture, 3, 102, "\"deviceSpeakerFrameSeq\":2,", frames_b64(1U, 0x42));
   assert(spoken_frames == 3U);
 
-  /* The first agent sends no number at all, and its frames play the same. */
+  /* A frame with no number plays the same. */
   push_spk(&fixture, 4, 103, "", frames_b64(1U, 0x46));
 
   /*
-   * AND THE NEW NAME FOR THE END OF AN ANSWER, on its own empty frame.
+   * AND THE END OF AN ANSWER, on its own empty frame.
    *
-   * The second agent raises this at the DRAIN point rather than attaching it to
+   * The sender raises this at the DRAIN point rather than attaching it to
    * whichever frame turned out to be final, so when the answer is short the
    * marker arrives as a frame of its own carrying no audio. That is the exact
-   * shape the decode's early return used to swallow.
+   * shape a decode-first early return would swallow.
    */
   response_done_count = 0;
   spoken_frames = 0U;
@@ -704,7 +696,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
   assert(order_length == 2U);
   assert(memcmp(order_log, "fl", 2U) == 0);
 
-  /* The first agent's `last` still means what it always did. */
+  /* An unnumbered empty last frame completes the answer too. */
   push_spk(&fixture, 7, 106, "\"lastFrameOfAnswer\":true,", "");
   assert(response_done_count == 3);
 
@@ -734,10 +726,9 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
    *
    * An interruption is exactly when the sender has no audio left to attach the
    * flag to — it has just thrown the answer away — so the clear rides a frame
-   * whose `pcm` is empty. The decode has an early return on failure and this
-   * used to sit below it: the server said stop, the device agreed to obey, and
-   * the message was discarded on the doorstep for being an empty envelope.
-   * Three fixes upstream were measured against that and moved nothing.
+   * whose `pcm` is empty. The decode has an early return on failure, so the
+   * clear must be obeyed before it or the message is discarded on the doorstep
+   * for being an empty envelope.
    */
   spoken_frames = 0U;
   push_spk(
