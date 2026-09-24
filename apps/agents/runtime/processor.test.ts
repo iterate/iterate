@@ -97,6 +97,16 @@ describe("AgentProcessor — the reduce", () => {
       state: { creation: { status: "created", offset: 2 } },
     },
     {
+      name: "the empty state has moved never",
+      events: [],
+      state: { lastActivityAt: null },
+    },
+    {
+      name: "every change stamps the event's time; a harmless fact after it stamps nothing",
+      events: [...born, requested],
+      state: { lastActivityAt: new Date(2000).toISOString() },
+    },
+    {
       name: "a delete request opens the deletion at its offset; creation is untouched",
       events: [...born, deleteRequested],
       state: {

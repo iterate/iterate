@@ -44,6 +44,7 @@ import {
   traceOffsetByMessage,
 } from "../../lib/agent-events.ts";
 import { newWebAgentPath } from "../../lib/web-agent.ts";
+import { useAgentSummaries } from "../../lib/use-agent-summaries.ts";
 
 // An agent is a conversation on its own path (`/agents/...`); everything it does is an event
 // there. This page is a window onto that log: the CHAT (the shared agent-UI reducer's items:
@@ -95,6 +96,8 @@ function AgentsPage() {
   const href = useRouterState({ select: (state) => state.location.href });
   // the loader sends a sign-in the project is missing from off to sign in again, so it is here
   const project = data.project.id;
+  const paths = useMemo(() => data.agents.map((item) => item.path), [data.agents]);
+  const summaries = useAgentSummaries(api, project, paths);
   return (
     <AppShell
       app="Agents"
@@ -103,8 +106,10 @@ function AgentsPage() {
       projectHref={(item) => `/projects/${item.slug}`}
       nav={
         <AgentsNav
+          project={project}
           slug={data.project.slug}
           agents={data.agents}
+          summaries={summaries}
           installed={data.installed}
           agent={data.agent}
           onCreate={async () => {

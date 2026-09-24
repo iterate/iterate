@@ -76,7 +76,7 @@ export type LlmUsage = z.infer<typeof LlmUsage>;
 
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "5",
+  version: "6",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -163,6 +163,9 @@ export const AgentContract = defineProcessorContract({
       .default(null),
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     autonomousTurnCount: z.number().int().nonnegative().default(0),
+    /** When the state last moved: the `createdAt` of the last event the reduce changed it for —
+     *  words in, a request opened or settled, a pause. What the agents app's sidebar orders by. */
+    lastActivityAt: z.string().nullable().default(null),
     /** Set by `agent/paused` (the breakers, or an operator); cleared by `agent/resumed`. */
     paused: z
       .object({ reason: z.string(), atOffset: z.number().int().positive() })

@@ -61,7 +61,7 @@ var LlmUsage = z.object({
 });
 var AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "5",
+  version: "6",
   description: "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
    *  of the event that says so — the request, the certificate, or the failure; read that event for
@@ -121,6 +121,9 @@ var AgentContract = defineProcessorContract({
     }).nullable().default(null),
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     autonomousTurnCount: z.number().int().nonnegative().default(0),
+    /** When the state last moved: the `createdAt` of the last event the reduce changed it for —
+     *  words in, a request opened or settled, a pause. What the agents app's sidebar orders by. */
+    lastActivityAt: z.string().nullable().default(null),
     /** Set by `agent/paused` (the breakers, or an operator); cleared by `agent/resumed`. */
     paused: z.object({ reason: z.string(), atOffset: z.number().int().positive() }).nullable().default(null)
   }),
@@ -562,7 +565,14 @@ var AgentProcessor = class extends StreamProcessor {
   async #identity() {
     return this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami());
   }
-  reduce({ state, event }) {
+  /** Every change the facts make is stamped with the event's time: `lastActivityAt` moves exactly
+   *  when the state does, so a harmless fact (a late intent, a repeated certificate) never reorders
+   *  the sidebar. */
+  reduce(args) {
+    const next = this.#reduceFacts(args);
+    return next && { ...next, lastActivityAt: args.event.createdAt };
+  }
+  #reduceFacts({ state, event }) {
     switch (event.type) {
       case "events.iterate.com/agent/create-requested":
         return state.creation?.status === "created" ? void 0 : {
