@@ -543,7 +543,7 @@ only on genuine infra wedges).
 | One assertion               | `expect.timeout`                 | `SPEC_EXPECT_TIMEOUT_MS` 15s                                                                       | fail the attempt          |
 | One Playwright spec         | `timeout`                        | `SPEC_TEST_TIMEOUT_MS` 240s                                                                        | retry once (CI)           |
 | One Vitest e2e test/hook    | `testTimeout` / `hookTimeout`    | 60s / 120s (`apps/os/vitest.config.ts`, `e2e`)                                                     | retry once (CI)           |
-| A heavy test                | per-test `{ timeout }`           | per test, with a `// comment`                                                                      | retry once (CI)           |
+| A heavy test                | per-test `{ timeout }`           | per test, with a `// comment`; in the e2e project at most 90s ([the row budget](#the-row-budget))  | retry once (CI)           |
 | A retry's pause             | vitest `retry.delay`             | `E2E_CI_RETRY_DELAY_MS` 5s, for `createFailing`'s retries; the e2e project retries without a pause | n/a                       |
 | One Workers-suite test/hook | `testTimeout` / `hookTimeout`    | 120s / 120s (the first test pays workerd boot)                                                     | fail                      |
 | One perf test               | `testTimeout` / `hookTimeout`    | 240s / 120s (`apps/os/vitest.config.ts`, `perf`); concurrent project creation 420s                 | fail (no retry)           |
@@ -553,6 +553,51 @@ only on genuine infra wedges).
 The ladder is strictly ordered, and a new knob keeps it that way. Note the
 deliberate rule-3 consequence: no watchdog budgets for a test double-burning
 its timeout.
+
+### The row budget
+
+The e2e run starts every file at once and every row within a file
+concurrently, so it lasts its startup plus its slowest row: one slow row makes
+every PR wait for it. The numbers live in `e2e-policy/budgets.ts`.
+
+| Number                       | Value | What it does                                                                                                                                                                       |
+| ---------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E2E_ROW_BUDGET_MS`          | 60s   | An e2e row that runs on every PR finishes within it at its p95.                                                                                                                    |
+| `E2E_ROW_WARN_MS`            | 45s   | `RetryTelemetryReporter` prints each e2e row that ran longer, `[row-budget]` in the e2e step's log, and marks exempt rows.                                                         |
+| `E2E_ROW_TIMEOUT_CEILING_MS` | 90s   | The longest timeout such a row may declare. A `createFlake` / `createFailing` deadline counts, plus the second the wrapper adds.                                                   |
+| `E2E_SLEEP_CEILING_MS`       | 30s   | The longest fixed wait (`sleep`, a `setTimeout` that does not reject) such a row may make. Poll for the condition instead.                                                         |
+| `E2E_SLOW_ROW_TIMEOUT_MS`    | 300s  | The timeout of a row tagged `slow`.                                                                                                                                                |
+| `UNIT_ROW_WARN_MS`           | 10s   | The Test job's telemetry finalizer prints each unit or Workers row that ran longer and is not in `UNIT_ROW_WARN_EXEMPTIONS`, and each entry no row needs any more. A warning only. |
+
+`scripts/ci/e2e-policy.test.ts`, in the Test job, reads every e2e row with
+the TypeScript parser and fails when a row that runs on PRs declares a timeout
+over the ceiling or waits a fixed time over 30s. A row gated on an opt-in
+variable (`RUN_*`, `E2E_REAL_MODELS`) or on a local worker (`localOnly`) is
+out of its scope: the PR's e2e job, against the preview, never starts it. The
+same file pins the run's parallelism (`--sequence.concurrent`, `maxWorkers` 16
+in CI, `maxConcurrency` 32) and `E2E_CI_RETRIES` as the only retry setting.
+
+A row over the budget has three ways out:
+
+- **Make it faster.** Poll for the condition instead of sleeping through it.
+- **Exempt it** in `E2E_BUDGET_EXEMPTIONS`, with the reason, when it guards a
+  production incident or a behaviour no faster row can show. An entry may
+  carry its own timeout above the ceiling. An exempt row is only ever proposed
+  for making faster.
+- **Tag it `slow`** when it waits out real platform time (a quiet minute, a
+  sweep, an alarm). The tag is not declared yet: the three residency rows that
+  wait out real platform time are listed in the guard's `PENDING_SLOW` and still
+  run on every PR. `SLOW_ROW_PATHS` names the files whose change is to run them
+  on a PR once they carry it.
+
+The [flake dashboard](https://github.com/iterate/iterate/issues/2580) prices
+the rows too. Its **Cost** section folds each full `preview-e2e` and `unit`
+run's per-row durations: each row's p50 and p95 over the suite's last 100
+complete runs, its marginal wall (how much sooner the run would have ended
+without it), its retries and PR failures, and a proposal for a row past its
+budget or with 10s of marginal wall: make it faster, or tag it `slow`. A
+failure 8 or more rows of one run share counts once, as an incident. A
+proposal to delete a row must name the coverage that replaces it.
 
 ### Retry telemetry
 

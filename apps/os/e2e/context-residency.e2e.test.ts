@@ -119,7 +119,7 @@ test("a repo read through its facet does not keep its own context resident", asy
   } finally {
     await itx.cfArtifacts.delete(path); // teardown — the repo, by its path
   }
-}, 120_000);
+}, 90_000);
 
 // The root answers `repos.create` / `repos.list` by walking `facets.get('project').repos().create(…)`:
 // the collection stub the facet answers `repos()` with is walked on, never answered — the resolver
@@ -133,7 +133,7 @@ test("creating a repo does not keep the project root resident", async () => {
   } finally {
     await itx.cfArtifacts.delete(path);
   }
-}, 120_000);
+}, 90_000);
 
 test("listing repos does not keep the project root resident", async () => {
   const ctx = freshCtx("residency_list");
@@ -288,7 +288,7 @@ deployedOnly(
       await itx.cfArtifacts.delete(path);
     }
   },
-  120_000,
+  90_000,
 );
 
 // ── A FACET DOES NOT OUTLIVE ITS CONTEXT ──
@@ -330,7 +330,7 @@ test("a website project's facets do not outlive their contexts after a page load
   const again = openItx(projectId);
   expect(await facetStartedAt(again.facets.get("project"))).toBeGreaterThan(started.project);
   expect(await facetStartedAt(again.repos.get("/repos/config"))).toBeGreaterThan(started.repo);
-}, 120_000);
+}, 90_000);
 
 /** An SDK facet that reaches its context the way the platform's own facets do: a pipelined chain
  *  (the repo facet's `cfArtifacts.get(path).remote()`), and answers awaited inside the round trip
@@ -505,7 +505,7 @@ test("a facet's claimed background work finishes across its context's incarnatio
     woken.filter((e: any) => e.payload.facetsReset?.includes("sleeper")),
     JSON.stringify(woken),
   ).toEqual([]);
-}, 150_000);
+}, 120_000);
 
 // ── A REFUSAL DOES NOT HOLD THE CONTEXT ──
 // A Workers-RPC call that THREW keeps its session to the callee open until the caller disposes its

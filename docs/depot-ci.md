@@ -90,7 +90,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
 | `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
 | `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
-| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                    |
+| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records and row costs into [#2580](https://github.com/iterate/iterate/issues/2580)      |
 | `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
 | `pr-ttg.yml`                 | Hourly, dispatch                                         | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
 | `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                   |

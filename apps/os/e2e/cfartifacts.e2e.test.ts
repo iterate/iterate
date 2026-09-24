@@ -132,7 +132,7 @@ test("the repo facet round-trips files through the real remote: create, an unbor
   } finally {
     await itx.cfArtifacts.delete(path); // teardown — the repo, by its path
   }
-}, 120_000);
+}, 90_000);
 
 /** Every repo path this project can see, following the namespace-wide cursor to exhaustion — the
  *  binding pages, and `cfArtifacts.list` filters one page locally, so a project's repos can straddle

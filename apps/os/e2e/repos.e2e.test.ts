@@ -348,7 +348,7 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
   } finally {
     await itx.cfArtifacts.delete("/repos/config");
   }
-}, 120_000);
+}, 90_000);
 
 // LOCAL ONLY: the row reads the repo back from the fake git remote on this machine's loopback, which a
 // deployed worker cannot reach (the platform answers 403 — see localOnly).

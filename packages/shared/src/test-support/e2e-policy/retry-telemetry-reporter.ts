@@ -13,6 +13,7 @@ import {
   type ModuleTelemetryRecord,
   type TestTelemetryRecord,
 } from "../ci-telemetry.ts";
+import { E2E_BUDGET_EXEMPTIONS, E2E_ROW_BUDGET_MS, E2E_ROW_WARN_MS } from "./budgets.ts";
 
 interface ReportedTestCase {
   id?: string;
@@ -25,6 +26,7 @@ interface ReportedTestCase {
     timeout?: number;
   };
   tags?: readonly string[];
+  project?: { name: string };
   diagnostic():
     | {
         retryCount: number;
@@ -203,6 +205,7 @@ export class RetryTelemetryReporter {
     try {
       const tests: TestTelemetryRecord[] = [];
       const modules: ModuleTelemetryRecord[] = [];
+      const overBudget: { name: string; durationMs: number }[] = [];
       for (const testModule of testModules) {
         const moduleDiagnostic = testModule.diagnostic?.();
         const moduleTimes = this.moduleTimes.get(testModule);
@@ -256,6 +259,12 @@ export class RetryTelemetryReporter {
             normalizeTestTelemetryError(error, "Unknown test-attempt error"),
           );
           const firstFailure = compactRetryFailure(errors[0]);
+          if (
+            test.project?.name === "e2e" &&
+            durationMs > E2E_ROW_WARN_MS &&
+            !test.tags?.includes("slow")
+          )
+            overBudget.push({ name: test.name || test.fullName, durationMs });
           tests.push({
             fullName: test.fullName,
             leafName: test.name,
@@ -383,6 +392,16 @@ export class RetryTelemetryReporter {
           )
           .join("; ");
         console.log(`[retry-telemetry] ${retried.length} test(s) needed retries: ${details}`);
+      }
+      if (overBudget.length > 0) {
+        // The run lasts as long as its slowest row (docs/testing.md#the-row-budget).
+        console.log(
+          `[row-budget] ${overBudget.length} e2e row(s) ran longer than ${E2E_ROW_WARN_MS / 1000} s; a row that runs on every PR finishes within ${E2E_ROW_BUDGET_MS / 1000} s at its p95:`,
+        );
+        for (const row of overBudget.toSorted((a, b) => b.durationMs - a.durationMs))
+          console.log(
+            `[row-budget] ${(row.durationMs / 1000).toFixed(1)} s${E2E_BUDGET_EXEMPTIONS[row.name] ? " (exempt)" : ""} ${row.name}`,
+          );
       }
     } catch (error) {
       console.error("[retry-telemetry] failed to record test telemetry:", error);

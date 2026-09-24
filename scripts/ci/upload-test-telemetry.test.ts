@@ -5,9 +5,10 @@ import {
   writeTestTelemetryArtifact,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
+import { UNIT_ROW_WARN_EXEMPTIONS } from "@iterate-com/shared/test-support/e2e-policy";
 import { expect, test } from "vitest";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
-import { finalizeTestTelemetry } from "./upload-test-telemetry.ts";
+import { finalizeTestTelemetry, unitRowBudget } from "./upload-test-telemetry.ts";
 
 const artifact: TestTelemetryArtifact = {
   artifactSchemaVersion: 2,
@@ -286,6 +287,47 @@ test("rejects duplicate artifact IDs instead of double-counting a retried upload
   await expect(finalizeTestTelemetry({ artifactRoot: root.path })).rejects.toThrow(
     `Duplicate test telemetry artifact IDs: ${artifact.artifactId}`,
   );
+});
+
+test("warns about unit and Workers rows over the Test job's row budget, and exemptions gone stale", () => {
+  const [exempt, ...rest] = Object.keys(UNIT_ROW_WARN_EXEMPTIONS);
+  const unit = (tests: Array<{ name: string; durationMs: number }>): TestTelemetryArtifact => ({
+    ...artifact,
+    context: { framework: "vitest", testKind: "unit", suite: "unit", workspace: "os" },
+    tests: tests.map(({ name, durationMs }) => ({
+      ...artifact.tests[0]!,
+      fullName: `suite > ${name}`,
+      leafName: name,
+      moduleId: `/repo/apps/os/src/${name.length}.test.ts`,
+      durationMs,
+    })),
+  });
+
+  const lines = unitRowBudget([
+    unit([
+      { name: "a quick row", durationMs: 9_000 },
+      { name: "a slow row", durationMs: 12_345 },
+      { name: exempt!, durationMs: 60_000 },
+      ...rest.map((name) => ({ name, durationMs: 30_000 })),
+    ]),
+    // e2e artifacts carry their own budget (RetryTelemetryReporter's [row-budget] line).
+    { ...artifact, tests: [{ ...artifact.tests[0]!, durationMs: 60_000 }] },
+  ]);
+
+  expect(lines).toEqual([
+    `[row-budget] 1 unit or Workers row(s) ran longer than 10 s. Make each faster, or list it with its reason in UNIT_ROW_WARN_EXEMPTIONS (packages/shared/src/test-support/e2e-policy/budgets.ts):`,
+    "[row-budget] 12.3 s 10.test.ts: a slow row",
+  ]);
+  expect(
+    unitRowBudget([
+      unit([
+        { name: exempt!, durationMs: 9_000 },
+        ...rest.map((name) => ({ name, durationMs: 30_000 })),
+      ]),
+    ]),
+  ).toEqual([
+    `[row-budget] UNIT_ROW_WARN_EXEMPTIONS lists a row that did not run longer than 10 s; drop the entry: ${exempt}`,
+  ]);
 });
 
 function readManifest(artifactRoot: string) {

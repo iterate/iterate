@@ -4,6 +4,12 @@
 // reader is ../depot.ts `unzip` now, which the latency guard reads its state with too). The platform's Durable Object, processor host and itx GitHub integration are gone;
 // ./update.ts is the scheduled writer that feeds this fold from Depot artifacts and writes #2580.
 import type { z } from "zod";
+import {
+  E2E_BUDGET_EXEMPTIONS,
+  E2E_ROW_BUDGET_MS,
+  UNIT_ROW_WARN_EXEMPTIONS,
+  UNIT_ROW_WARN_MS,
+} from "@iterate-com/shared/test-support/e2e-policy";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { unzip } from "../depot.ts";
 import {
@@ -252,7 +258,27 @@ export function reduceFlakeDashboard(
               : previous?.complete || null,
         };
       }
-      return { ...state, tests, suites, mainRuns, unknownFlakes, lastDataOffset: event.offset };
+      const costs =
+        summary?.status === "complete" &&
+        COST_SUITES.includes(suite) &&
+        summary.tests?.some((test) => test.durationMs !== undefined)
+          ? {
+              ...state.costs,
+              [suite]: foldRunCost(state.costs[suite], summary.tests, {
+                at: Date.parse(summary.startedAt),
+                onDefaultBranch,
+              }),
+            }
+          : state.costs;
+      return {
+        ...state,
+        tests,
+        suites,
+        mainRuns,
+        unknownFlakes,
+        costs,
+        lastDataOffset: event.offset,
+      };
     }
 
     case flakeEventTypes.transitionProposed: {
@@ -272,6 +298,89 @@ export function reduceFlakeDashboard(
       };
     }
   }
+}
+
+/** The suites the Cost section prices: the ones a row budget covers (docs/testing.md#the-row-budget). */
+const COST_SUITES = ["preview-e2e", "unit"];
+/** The Cost section's window: each suite's last this many complete runs. */
+const COST_RUNS = 100;
+/** A row is sampled in a run when it ran this long, ended the run, retried or failed. */
+const COST_SAMPLE_FLOOR_MS = 10_000;
+/** A failure this many rows of one run share is one incident, not a failure of each row. */
+const INCIDENT_ROWS = 8;
+/** A marginal wall this long at the median proposes the row, like a p95 past its budget. */
+const COST_MARGINAL_BUDGET_MS = 10_000;
+
+type SuiteCost = FlakeDashboardState["costs"][string];
+/**
+ * One complete run folded into its suite's Cost window: a sample for each row that ran at least
+ * COST_SAMPLE_FLOOR_MS, ended the run, retried or failed, and one incident for each failure that
+ * INCIDENT_ROWS or more of the run's rows share. The marginal wall is how much sooner the run would
+ * have ended without the row: the last row's lead over the next, zero for every other row. That is
+ * exact for a suite whose rows all run at once (e2e), and a floor where rows queue for workers.
+ */
+function foldRunCost(
+  previous: SuiteCost | undefined,
+  tests: NonNullable<z.infer<typeof FlakeSuiteSummary>["tests"]>,
+  run: { at: number; onDefaultBranch: boolean },
+): SuiteCost {
+  const ends = tests
+    .flatMap((test) =>
+      test.startMs === undefined || test.durationMs === undefined
+        ? []
+        : [test.startMs + test.durationMs],
+    )
+    .sort((a, b) => b - a);
+  const [lastEnd = 0, nextEnd = 0] = ends;
+  const sharedErrors = new Map<string, number>();
+  for (const test of tests)
+    if (test.error) {
+      const error = incidentError(test.error);
+      sharedErrors.set(error, (sharedErrors.get(error) || 0) + 1);
+    }
+  const incidents = [...sharedErrors].filter(([, rows]) => rows >= INCIDENT_ROWS);
+  const rows = { ...previous?.rows };
+  for (const test of tests) {
+    if (test.durationMs === undefined) continue;
+    const end = test.startMs === undefined ? undefined : test.startMs + test.durationMs;
+    const marginalMs = end === lastEnd ? lastEnd - nextEnd : 0;
+    const incident =
+      !!test.error && incidents.some(([error]) => error === incidentError(test.error!));
+    const retried = !incident && !!test.retries;
+    const failed = !incident && !!test.failed;
+    if (test.durationMs < COST_SAMPLE_FLOOR_MS && !marginalMs && !retried && !failed) continue;
+    rows[test.name] = {
+      tags: test.tags || [],
+      samples: [
+        ...(rows[test.name]?.samples || []),
+        [run.at, test.durationMs, marginalMs, retried, failed, run.onDefaultBranch],
+      ],
+    };
+  }
+  const runs = [...(previous?.runs || []), run.at].sort((a, b) => a - b).slice(-COST_RUNS);
+  const since = runs[0]!;
+  return {
+    runs,
+    rows: Object.fromEntries(
+      Object.entries(rows).flatMap(([name, row]) => {
+        const samples = row.samples.filter(([at]) => at >= since);
+        return samples.length === 0 ? [] : [[name, { ...row, samples }]];
+      }),
+    ),
+    incidents: [
+      ...(previous?.incidents || []),
+      ...incidents.map(([error, count]) => ({ at: run.at, error, rows: count })),
+    ].filter((incident) => incident.at >= since),
+  };
+}
+
+/** A failure message with its numbers and ids blanked, so one incident's rows share it. */
+function incidentError(error: string) {
+  return error
+    .replaceAll(/\b[0-9a-f]{8,}\b/giu, "…")
+    .replaceAll(/\d+/gu, "#")
+    .replaceAll(/\s+/gu, " ")
+    .slice(0, 120);
 }
 
 /**
@@ -578,6 +687,7 @@ export function renderBody(state: FlakeDashboardState): string {
     "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and plain tests that needed a CI retry or failed. Maintained automatically — edits to this body will be overwritten. Squares show the last 10 outcomes, oldest→newest, and link to their commits. Wrapped tests show all branches; unknown flakes show main only. Lifecycle streak counts use main only.",
     ...sections.filter((section) => section.title !== "Sentinels").flatMap(renderSection),
     ...renderUnknownFlakes(state),
+    ...renderCost(state),
     ...sections.filter((section) => section.title === "Sentinels").flatMap(renderSection),
     "",
     `_Last recorded outcome: ${lastRecordedAt || "none"}._`,
@@ -668,5 +778,89 @@ function renderUnknownFlakes(state: FlakeDashboardState): string[] {
             ? "_Awaiting the first complete main results._"
             : "_No active unknown flakes. Passing streaks are evidence of stability, not proof that the root cause is fixed._",
         ]),
+  ];
+}
+
+/**
+ * Where each suite's time goes: its 15 costliest rows over its last COST_RUNS complete runs, with
+ * what the row budget proposes for each (docs/testing.md#the-row-budget).
+ */
+function renderCost(state: FlakeDashboardState): string[] {
+  const suites = Object.entries(state.costs)
+    .filter(([, cost]) => Object.keys(cost.rows).length > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (suites.length === 0) return [];
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+  const floor = `< ${seconds(COST_SAMPLE_FLOOR_MS)}`;
+  const escape = (text: string) =>
+    text.replaceAll(/\s+/gu, " ").replaceAll(/([\\`*_[\]|<>])/gu, "\\$1");
+  return [
+    "",
+    "## Cost",
+    "",
+    `_Where each suite's time goes, over its last ${COST_RUNS} complete runs on any branch. A row is sampled in a run when it ran ${seconds(COST_SAMPLE_FLOOR_MS)} or longer, ended the run, retried or failed; the percentiles count the runs it was not sampled in as under ${seconds(COST_SAMPLE_FLOOR_MS)}. **Marginal** is how much sooner the run would have ended without the row, at the median. A failure ${INCIDENT_ROWS} or more rows of one run share is one incident, not a failure of each row. A row past its budget at p95 (preview-e2e ${seconds(E2E_ROW_BUDGET_MS)}, unit ${seconds(UNIT_ROW_WARN_MS)}), or with ${seconds(COST_MARGINAL_BUDGET_MS)} of marginal wall, is proposed: make it faster, or in preview-e2e tag it \`slow\`. An exempt row is only ever made faster. A proposal to delete a row must name the coverage that replaces it. [The row budget](https://github.com/iterate/iterate/blob/main/docs/testing.md#the-row-budget)._`,
+    ...suites.flatMap(([suite, cost]) => {
+      const runs = cost.runs.length;
+      // Nearest rank over every run in the window, the unsampled ones below the floor.
+      const quantile = (values: number[], p: number) => {
+        const index = Math.ceil(p * runs) - 1 - (runs - values.length);
+        if (index < 0) return undefined;
+        return values.toSorted((a, b) => a - b)[Math.min(index, values.length - 1)];
+      };
+      const budgetMs = suite === "unit" ? UNIT_ROW_WARN_MS : E2E_ROW_BUDGET_MS;
+      const rows = Object.entries(cost.rows).map(([name, row]) => {
+        const durations = row.samples.map(([, durationMs]) => durationMs);
+        const p95 = quantile(durations, 0.95) || 0;
+        const marginal = quantile(
+          row.samples.map(([, , marginalMs]) => marginalMs),
+          0.5,
+        );
+        const exempt =
+          suite === "unit" ? !!UNIT_ROW_WARN_EXEMPTIONS[name] : !!E2E_BUDGET_EXEMPTIONS[name];
+        const overBudget = p95 > budgetMs || (marginal || 0) >= COST_MARGINAL_BUDGET_MS;
+        const proposal = row.tags.includes("slow")
+          ? "tagged `slow`"
+          : exempt
+            ? "exempt"
+            : !overBudget
+              ? "—"
+              : suite === "unit"
+                ? "make faster"
+                : "make faster, or tag `slow`";
+        const p50 = quantile(durations, 0.5);
+        return {
+          marginal: marginal || 0,
+          p95,
+          line: [
+            escape(name),
+            p50 ? seconds(p50) : floor,
+            p95 ? seconds(p95) : floor,
+            marginal ? seconds(marginal) : "—",
+            row.samples.filter(([, , , retried]) => retried).length,
+            row.samples.filter(([, , , , failed, onDefaultBranch]) => failed && !onDefaultBranch)
+              .length,
+            proposal,
+          ].join(" | "),
+        };
+      });
+      const incidents = cost.incidents.toSorted((a, b) => b.rows - a.rows);
+      return [
+        "",
+        `### ${escape(suite)}: ${runs} runs since ${shortDate(new Date(cost.runs[0]!).toISOString())} UTC · ${incidents.length} incident${incidents.length === 1 ? "" : "s"}`,
+        "",
+        "row | p50 | p95 | marginal | retries | PR failures | proposal",
+        "--- | --- | --- | --- | --- | --- | ---",
+        ...rows
+          .sort((a, b) => b.marginal - a.marginal || b.p95 - a.p95)
+          .slice(0, 15)
+          .map((row) => row.line),
+        ...incidents
+          .slice(0, 5)
+          .map(
+            (incident) =>
+              `- incident, ${shortDate(new Date(incident.at).toISOString())} UTC: ${incident.rows} rows failed with \`${incident.error.replaceAll("`", "'").replaceAll("|", "\\|")}\``,
+          ),
+      ];
+    }),
   ];
 }

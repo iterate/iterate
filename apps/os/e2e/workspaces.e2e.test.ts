@@ -337,7 +337,7 @@ test("against real Artifacts: nested paths through the workspace — a repo file
   } finally {
     await itx.cfArtifacts.delete("/repos/config"); // teardown — the repo, by its path
   }
-}, 120_000);
+}, 90_000);
 
 test("itx.workspaces.delete(path) lands the request and the death certificate on the workspace's path AND on /, drops the processor row and the overlay with it; the verbs refuse; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
   const itx = openItx(freshCtx("ws"));

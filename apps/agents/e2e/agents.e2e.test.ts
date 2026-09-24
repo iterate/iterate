@@ -560,7 +560,7 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
  *  this file 3 of 46, and 5 of 15 in the full suite (never a different error). The agent loop's
  *  depth is the product's to fix (the turn must start from a fresh invocation); until then the
  *  row is green on exactly this failure and recorded, and any other failure is red. */
-const jailFlake = createFlake(test, /Subrequest depth limit exceeded/, { timeoutMs: 90_000 });
+const jailFlake = createFlake(test, /Subrequest depth limit exceeded/, { timeoutMs: 60_000 });
 
 jailFlake(
   "THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards",
@@ -814,7 +814,7 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
   expect(agentWakes.map((event) => event.payload.facetsReset ?? [])).toEqual(
     agentWakes.map(() => []),
   );
-}, 120_000);
+}, 90_000);
 
 /** A turn's log as its loop facts — the settlements with what they said — for a failure message. */
 function turnSummary(log: { offset: number; type: string; payload?: any }[]): string {

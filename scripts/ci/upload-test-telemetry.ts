@@ -1,7 +1,11 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import {
+  UNIT_ROW_WARN_EXEMPTIONS,
+  UNIT_ROW_WARN_MS,
+} from "@iterate-com/shared/test-support/e2e-policy";
 import {
   analyzeTestTelemetryCompleteness,
   unitTestWorkspaces,
@@ -84,6 +88,8 @@ export async function finalizeTestTelemetry(options: {
     });
   }
   console.log(`[test-telemetry] checked ${loaded.length} artifact(s)`);
+  if (options.flakeSuites === "unit" && !options.cancelled)
+    for (const line of unitRowBudget(loaded.map(({ artifact }) => artifact))) console.log(line);
   if (!options.cancelled) {
     const { foreignArtifactIds, incompleteArtifactIds, missingWorkspaces } = completeness;
     const failures = [
@@ -100,6 +106,44 @@ export async function finalizeTestTelemetry(options: {
     if (failures.length > 0) throw new Error(failures.join("; "));
   }
   return loaded.map(({ artifact }) => artifact);
+}
+
+/**
+ * The Test job's row budget, a warning only: every unit or Workers row over `UNIT_ROW_WARN_MS`
+ * that `UNIT_ROW_WARN_EXEMPTIONS` does not list, and each listed title that no longer names a row
+ * over it (docs/testing.md#the-row-budget).
+ */
+export function unitRowBudget(artifacts: TestTelemetryArtifact[]) {
+  const rows = artifacts
+    .filter((artifact) => artifact.context.testKind === "unit")
+    .flatMap((artifact) =>
+      artifact.tests.map((test) => ({
+        name: test.leafName || test.fullName,
+        file: basename(test.moduleId),
+        durationMs: test.durationMs,
+      })),
+    );
+  const over = rows
+    .filter((row) => row.durationMs > UNIT_ROW_WARN_MS && !UNIT_ROW_WARN_EXEMPTIONS[row.name])
+    .toSorted((a, b) => b.durationMs - a.durationMs);
+  const stale = Object.keys(UNIT_ROW_WARN_EXEMPTIONS).filter(
+    (name) => !rows.some((row) => row.name === name && row.durationMs > UNIT_ROW_WARN_MS),
+  );
+  return [
+    ...(over.length === 0
+      ? []
+      : [
+          `[row-budget] ${over.length} unit or Workers row(s) ran longer than ${UNIT_ROW_WARN_MS / 1000} s. Make each faster, or list it with its reason in UNIT_ROW_WARN_EXEMPTIONS (packages/shared/src/test-support/e2e-policy/budgets.ts):`,
+          ...over.map(
+            (row) =>
+              `[row-budget] ${(row.durationMs / 1000).toFixed(1)} s ${row.file}: ${row.name}`,
+          ),
+        ]),
+    ...stale.map(
+      (name) =>
+        `[row-budget] UNIT_ROW_WARN_EXEMPTIONS lists a row that did not run longer than ${UNIT_ROW_WARN_MS / 1000} s; drop the entry: ${name}`,
+    ),
+  ];
 }
 
 async function filesBelow(directory: string): Promise<string[]> {

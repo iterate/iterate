@@ -193,6 +193,33 @@ export const FlakeDashboardState = z.object({
   suites: z
     .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))
     .default({}),
+  /**
+   * The Cost section, per suite (fold.ts `foldRunCost`): the start of each of its last
+   * COST_RUNS complete runs, and each row's samples from those runs. A sample is
+   * [run start (epoch ms), duration ms, marginal wall ms, retried, failed, on the default
+   * branch], taken only when the row ran 10 s or longer, ended the run, retried or failed.
+   * A failure 8 or more rows of one run share is an incident, never a row's retry or failure.
+   */
+  costs: z
+    .record(
+      z.string(),
+      z.object({
+        runs: z.array(z.number().int()),
+        rows: z.record(
+          z.string(),
+          z.object({
+            tags: z.array(z.string()),
+            samples: z.array(
+              z.tuple([z.number(), z.number(), z.number(), z.boolean(), z.boolean(), z.boolean()]),
+            ),
+          }),
+        ),
+        incidents: z.array(
+          z.object({ at: z.number().int(), error: z.string(), rows: z.number().int() }),
+        ),
+      }),
+    )
+    .default({}),
   /** Offset of the newest reduced event (created / run-recorded / transition-proposed). */
   lastDataOffset: StreamOffset.default(0),
 });
