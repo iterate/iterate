@@ -56,7 +56,7 @@ describe("the preview name (cloudflare-os: pr<n>-<branch slug>)", () => {
 describe("the PR body's managed section", () => {
   const section = renderPullRequestSection({
     previewName: "pr123-feature-foo",
-    url: "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+    url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
     deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [
@@ -69,7 +69,7 @@ describe("the PR body's managed section", () => {
 
   test("names the URL, the deployment, the apps on top, and where the operations are", () => {
     expect(section).toContain(
-      "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
     );
     expect(section).toContain("deployment `bd68a9bb`");
     expect(section).toContain(
@@ -83,7 +83,7 @@ describe("the PR body's managed section", () => {
   test("names the commit the run tested when the workflow resolved one", () => {
     const withCommit = renderPullRequestSection({
       previewName: "pr123-feature-foo",
-      url: "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
       deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
       dashboardUrl: "https://dash.cloudflare.com/x",
       apps: [],
@@ -140,22 +140,22 @@ describe("the PR body's managed section", () => {
 
   test("appends to a body without one, keeping the author's text", () => {
     const body = splicePullRequestBody("What this PR does.\n", section);
-    expect(body.startsWith("What this PR does.\n\n<!-- os-next-preview:begin -->\n")).toBe(true);
-    expect(body.endsWith("\n<!-- os-next-preview:end -->\n")).toBe(true);
+    expect(body.startsWith("What this PR does.\n\n<!-- os-preview:begin -->\n")).toBe(true);
+    expect(body.endsWith("\n<!-- os-preview:end -->\n")).toBe(true);
   });
 
   test("replaces an existing section in place, and only that", () => {
-    const before = `Intro.\n\n<!-- os-next-preview:begin -->\nold\n<!-- os-next-preview:end -->\n\nOutro.\n`;
+    const before = `Intro.\n\n<!-- os-preview:begin -->\nold\n<!-- os-preview:end -->\n\nOutro.\n`;
     const after = splicePullRequestBody(before, "new");
     expect(after).toBe(
-      `Intro.\n\n<!-- os-next-preview:begin -->\nnew\n<!-- os-next-preview:end -->\n\nOutro.\n`,
+      `Intro.\n\n<!-- os-preview:begin -->\nnew\n<!-- os-preview:end -->\n\nOutro.\n`,
     );
     expect(splicePullRequestBody(after, "newer")).not.toContain("new\n<!--");
   });
 
   test("an empty body becomes just the section", () => {
     expect(splicePullRequestBody("", "s")).toBe(
-      "<!-- os-next-preview:begin -->\ns\n<!-- os-next-preview:end -->\n",
+      "<!-- os-preview:begin -->\ns\n<!-- os-preview:end -->\n",
     );
   });
 });
@@ -182,7 +182,7 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
       AgentDurableObject: { type: "durable-object", state: "deleted" },
     },
     r2_buckets: [{ binding: "FILES", bucket_name: "os-files" }],
-    artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-dev-repos" }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: "os-dev-repos" }],
     kv_namespaces: [
       { binding: "ITX_KV", id: "1" },
       { binding: "OAUTH_KV", id: "2" },
@@ -191,7 +191,7 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
   const config = previewWranglerConfig({ template, previewName: "pr123-feature-foo" });
 
   test("the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
-    expect(config.name).toBe("os-next-preview");
+    expect(config).toMatchObject({ name: "os-preview" });
     expect(config.main).toBe("index.js");
     expect(config.no_bundle).toBe(true);
     expect(config.assets).toEqual(template.assets);
@@ -208,20 +208,17 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
     expect(config.previews.r2_buckets).toEqual([{ binding: "FILES" }]);
     expect(config.previews).not.toHaveProperty("d1_databases");
     expect(config.previews.artifacts).toEqual([
-      { binding: "ARTIFACTS", namespace: "os-next-preview-pr123-feature-foo-repos" },
+      { binding: "ARTIFACTS", namespace: "os-preview-pr123-feature-foo-repos" },
     ]);
   });
 
   test("vars are the preview's own origin, projects as paths and the one-click sign-in links on; the secrets are the parent's Previews settings", () => {
     expect(config.previews.vars).toEqual({
-      APP_CONFIG_URLS__OS:
-        "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      APP_CONFIG_URLS__OS: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
     });
-    expect(previewResourceName("pr123-feature-foo", "db")).toBe(
-      "os-next-preview-pr123-feature-foo-db",
-    );
+    expect(previewResourceName("pr123-feature-foo", "db")).toBe("os-preview-pr123-feature-foo-db");
   });
 
   test("a deployed Dash is available to secret collection link generation", () => {
@@ -282,19 +279,22 @@ describe("which apps on top a preview run deploys", () => {
 
 describe("the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes)", () => {
   test.each<[string, string, string | undefined]>([
-    ["os-next-preview-pr123-feature-foo-repos", "repos", "pr123-feature-foo"],
-    ["os-next-preview-pr123-feature-foo-db", "db", "pr123-feature-foo"],
-    ["os-next-preview-soak-repos", "repos", "soak"],
+    ["os-preview-pr123-feature-foo-repos", "repos", "pr123-feature-foo"],
+    ["os-preview-pr123-feature-foo-db", "db", "pr123-feature-foo"],
+    ["os-preview-soak-repos", "repos", "soak"],
     // the parent's own namespace is nobody's preview
-    ["os-next-preview-repos", "repos", undefined],
+    ["os-preview-repos", "repos", undefined],
     // another binding's resource
-    ["os-next-preview-pr123-feature-foo-db", "repos", undefined],
-    // another worker's
-    ["os-preview-1-repos", "repos", undefined],
-    ["project-worker-prd-repos", "repos", undefined],
+    ["os-preview-pr123-feature-foo-db", "repos", undefined],
+    // another worker's: the former parent's, prd's
+    ["os-next-preview-repos", "repos", undefined],
+    ["os-prd-repos", "repos", undefined],
+    // a legacy platform preview slot's reads as preview `1`; the sweep leaves it for being older
+    // than the parent (preview-sweep.ts rule 7)
+    ["os-preview-1-repos", "repos", "1"],
     // a former parent's: it reads as a preview name; the sweep leaves it while a worker of that name
     // exists (preview-sweep.ts rule 4)
-    ["os-next-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
+    ["os-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
   ])("%s as %s → %s", (resourceName, binding, expected) => {
     expect(previewNameOfResource(resourceName, binding)).toBe(expected);
   });
@@ -309,7 +309,7 @@ test.each([
   // #2895's deploy after #2888 added ControlPlaneDurableObject (2026-09-23)
   {
     output:
-      "A request to the Cloudflare API (/accounts/x/workers/workers/os-next-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",
+      "A request to the Cloudflare API (/accounts/x/workers/workers/os-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",
     recreate: true,
   },
   {

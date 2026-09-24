@@ -31,7 +31,7 @@ export function deployedTarget(workerBaseUrl: string): {
       "The deployment's APP_CONFIG sets no secrets.adminBearer or no login.password — every e2e session authenticates with the one and signs in with the other",
     );
   // The envs.ts entry the worker falls under, by host suffix: `os.iterate.com` is prd's; a preview,
-  // `pr<n>-<slug>-os-next-preview.<subdomain>.workers.dev`, hangs under its parent's host and
+  // `pr<n>-<slug>-os-preview.<subdomain>.workers.dev`, hangs under its parent's host and
   // inherits the parent's routing.
   const host = new URL(workerBaseUrl).host;
   const env = Object.values(osEnvs).find((candidate) =>

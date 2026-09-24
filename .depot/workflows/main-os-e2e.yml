@@ -79,7 +79,7 @@ defaults:
     shell: bash
 
 jobs:
-  # THE PREVIEW PARENT FROM MAIN: every preview branches from os-next-preview (envs.ts
+  # THE PREVIEW PARENT FROM MAIN: every preview branches from os-preview (envs.ts
   # osEnvs.preview), and nothing else redeployed it when main changed: after #2888 it ran code from
   # before ControlPlaneDurableObject (2026-09-23). Its own group, so two pushes never deploy it at
   # once. The start-app parents need no such job: their one Durable Object class never changes.
@@ -90,7 +90,7 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
     concurrency:
-      group: os-next-preview-parent
+      group: os-preview-parent
       cancel-in-progress: false
     steps:
       - name: Checkout main
@@ -104,7 +104,7 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy os-next-preview from main
+      - name: Deploy os-preview from main
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

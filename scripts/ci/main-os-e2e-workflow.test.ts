@@ -47,7 +47,7 @@ test("runs on every main push a PR preview would run for, one run at a time, nev
 test("first deploys the preview parent from main, one push at a time", () => {
   expect(runs("parent")).toContain("doppler run -- pnpm run-script deploy --env preview");
   expect(main.jobs.parent).toMatchObject({
-    concurrency: { group: "os-next-preview-parent", "cancel-in-progress": false },
+    concurrency: { group: "os-preview-parent", "cancel-in-progress": false },
   });
   expect(main.jobs.deploy?.needs).toBe("parent");
 });

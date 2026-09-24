@@ -14,14 +14,19 @@
 //   4. its name is `<parent>-<preview>-<suffix>` with a suffix of its kind (previewResourceSuffixes:
 //      KV `itx-kv`, `oauth-kv`; R2 `files`; D1 `db`; Artifacts `repos`) and `<preview>` a name a
 //      preview can have (lowercase letters and digits in hyphen-separated words, at most 28
-//      characters). Nothing else ever is: not the parent's own (`os-next-preview-files`), not the
-//      legacy slots' (`os-preview-3-files`, `IterateDataResources-…`), not another worker's whose
-//      name begins `<parent>-` (a former `os-next-preview-2`'s `os-next-preview-2-files`);
+//      characters). Nothing else ever is: not the parent's own (`os-preview-files`), not
+//      `IterateDataResources-…`, not another worker's whose name begins `<parent>-` (a former
+//      `os-preview-2`'s `os-preview-2-files`);
 //   5. no listed preview, stale or kept, owns that exact name. The caller lists the previews AFTER
 //      the resources: wrangler creates a preview before it provisions the preview's KV and R2, so a
 //      first deploy in flight always shows its preview;
 //   6. for a D1 or an Artifacts namespace, also: its pull request is closed or missing, or it was
-//      created more than 24 h ago. The deploy creates these two BEFORE the preview exists.
+//      created more than 24 h ago. The deploy creates these two BEFORE the preview exists;
+//   7. it was not created before the parent worker was: a preview's resources come from a deploy
+//      of that preview, which the parent's existence precedes. The legacy platform's preview slots
+//      left `os-preview-<n>-repos` namespaces (2026-05 and 2026-07, tens of thousands of repos each)
+//      whose names read as previews `1`…`18` of the parent `os-preview`; they are older than it, and
+//      no preview of it owns them. A resource with no creation stamp (KV) is judged on 4–6 alone.
 // scripts/preview.ts looks each orphan's preview up once more right before deleting it.
 import {
   MAX_PREVIEW_NAME_LENGTH,
@@ -52,6 +57,9 @@ export type PreviewSweepInput = {
   now: number;
   /** Every worker script on the account (rule 4: another worker whose name begins `<parent>-`). */
   workerNames: string[];
+  /** When the parent worker was created (the scripts listing's `created_on`; rule 7), or undefined
+   *  when the listing does not name it. */
+  parentCreatedAt: string | undefined;
   resourceSuffixes: Record<PreviewResourceKind, string[]>;
   previews: SweptPreview[];
   resources: SweptResource[];
@@ -132,6 +140,9 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     if (listedPreviewResourceNames.has(resource.name)) continue;
     const previewName = previewNameOfSweptResource(resource, input);
     if (!previewName) continue;
+    // rule 7
+    if (input.parentCreatedAt && hoursSince(resource.createdAt) > hoursSince(input.parentCreatedAt))
+      continue;
     let reason = `preview ${previewName} does not exist`;
     if (resource.kind === "d1" || resource.kind === "artifacts") {
       // rule 6
