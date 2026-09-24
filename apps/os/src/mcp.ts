@@ -5,7 +5,7 @@ import { platformAddressesOf } from "./app-config.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./env.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Authorization } from "./oauth.ts";
 
 // MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth

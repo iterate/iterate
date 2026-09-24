@@ -35,6 +35,9 @@ import type {
   CollectSecretInput,
   CollectSecretLink,
   RewriteRuleListEntry,
+  SecretCatalogEntry,
+  SecretMaterial,
+  SecretRefresh,
   StreamPage,
   WaitForEventFilter,
 } from "iterate/next/api";
@@ -52,16 +55,14 @@ import {
   assertSecretPath,
   normalizeSecretRecord,
   originsOf,
-  type SecretCatalogEntry,
   type SecretHmacVerification,
-  type SecretMaterial,
-  type SecretRefresh,
 } from "../secrets.ts";
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  ITX_PLATFORM_ORIGIN_HEADER,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
   FETCH_UPGRADE_SOCKET_HEADER,
   encodeFetchExpression,
@@ -948,7 +949,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             ITX_PRINCIPAL_HEADER,
             ITX_GRANT_HEADER,
             ITX_APP_HEADER,
-            "x-itx-platform-origin",
+            ITX_PLATFORM_ORIGIN_HEADER,
             RPC_STUB_PAGER_WEBSOCKET_HEADER,
             FETCH_UPGRADE_SOCKET_HEADER,
           ])
@@ -958,7 +959,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
           if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
           if (caller.app) headers.set(ITX_APP_HEADER, "1");
-          if (caller.platformOrigin) headers.set("x-itx-platform-origin", caller.platformOrigin);
+          if (caller.platformOrigin) headers.set(ITX_PLATFORM_ORIGIN_HEADER, caller.platformOrigin);
           return context.fetch(new Request(terminalFetch.request, { headers }));
         }
         const hopCaller = { ...caller, path: caller.path || path };

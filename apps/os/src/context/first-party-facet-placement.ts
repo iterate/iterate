@@ -8,8 +8,8 @@
 // every facet is created, context/facet-host.ts `FacetHost#callFacet`; where every stateless worker is
 // loaded, context/built-ins.ts `workers.get` (`itx.run`'s script loads there too); and before a
 // hosting row is appended, built-ins.ts `processors.enable`. A context is `(projectId, path)`, the
-// path canonical (iterate-context.ts `DurableObjectNameCodec`), its owner root `resourceScope`'s
-// (paths.ts). THE RULES, rows of the table test beside this file:
+// path canonical (paths.ts `DurableObjectNameCodec`), its owner root `resourceScope`'s (paths.ts).
+// THE RULES, rows of the table test beside this file:
 //   1. `account` — a user's own context, `global:/users/<id>`, and nowhere else: where the person's
 //      facts land (session.ts `publishGlobalFact`, grants.ts, consent.ts) and a user's secrets
 //      catalog is folded (built-ins.ts `ownerRootFacet`).

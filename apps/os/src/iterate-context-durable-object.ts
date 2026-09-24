@@ -49,6 +49,7 @@ import { RunRequested, type RunSettlement } from "iterate/next/stream/run";
 import { normalizeControlEvent } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionEndingInFetch,
   RpcStubFetchServer,
   RpcStubDirectory,
@@ -59,12 +60,8 @@ import {
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
 import { STREAM_ALARM_TRACE_EVENT, Stream, type ReachableContext } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
-import {
-  DurableObjectNameCodec,
-  itxEntrypointFor,
-  ITX_PLATFORM_ORIGIN_HEADER,
-} from "./iterate-context.ts";
-import { resourceScope } from "./context/paths.ts";
+import { itxEntrypointFor } from "./iterate-context.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
 import { secretPathsReferenced } from "./secrets.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
@@ -558,7 +555,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
     projectInfo: async () => {
-      if (this.#durableObjectAddress.projectId === "global") return {};
+      if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID) return {};
       // the control plane's row (control-plane/edge.ts, memoized per isolate: a project's slug never changes)
       const project = await this.#controlPlane.getProject(this.#durableObjectAddress.projectId);
       if (!project) return {};

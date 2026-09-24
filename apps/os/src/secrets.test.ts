@@ -25,8 +25,8 @@ import {
   secretPathsReferenced,
   substituteProjectSecrets,
   verifySecretHmac,
-  type SecretMaterial,
 } from "./secrets.ts";
+import type { SecretMaterial } from "iterate/next/api";
 
 // ── substitution ── `substituteProjectSecrets`, as a table: `{ url?, headers?, resolve?, becomes }`
 // rows. Every `getSecret("/secrets/NAME")` placeholder in the URL (path and query — matched as the

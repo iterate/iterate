@@ -17,7 +17,6 @@
 // session end); the raw event — `itx.append({ type: "…/rewrite-rule-configured", payload: { match, target } })` — is the verb
 // minus the handle and outlives the session. A client reaches a root context through session.ts and
 // the rest with `cd(path)`.
-//   durable object names — `DurableObjectNameCodec` / `resolveContextPath`: the ONE place a context DO name is formatted and parsed
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
@@ -46,6 +45,7 @@ import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processo
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  ITX_PLATFORM_ORIGIN_HEADER,
   encodeFetchExpression,
   terminalFetchOf,
   lendRpcStubOverPager,
@@ -54,8 +54,12 @@ import {
 } from "./context/rpc-stubs.ts";
 import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { GLOBAL_PROJECT_ID, PROJECT_ID } from "./context/paths.ts";
-import { SessionTeardown } from "./session.ts";
+import {
+  DurableObjectNameCodec,
+  GLOBAL_PROJECT_ID,
+  type DurableObjectAddress,
+} from "./context/paths.ts";
+import { SessionTeardown } from "./session-teardown.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -101,13 +105,6 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
 export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
-/** The header the edge (and a session's terminal fetch) stamps a fetch-lane Request with — the
- *  platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire) — read and
- *  stripped by the context DO's fetch lane. Inbound `x-itx-*` headers never survive the edge, and
- *  `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone before
- *  this is set. */
-export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
-
 export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;
@@ -461,57 +458,6 @@ export class IterateContextRpcTarget extends RpcTarget {
 // ONE `invoke(expression)` dispatch through the prototype hop (context/expression.ts says why a hop
 // and not a Proxy AROUND the instance), the declared methods above always winning.
 installPrototypeInvokeFallback(IterateContextRpcTarget, ["itx"]);
-
-// ── durable object names ── the ONE place a context DO name is formatted and parsed
-// (minimal: no query props, no global host
-// yet). A context is addressed by a faux URL `{projectId}.iterate{path}`:
-//
-//   prj_demo.iterate/                     → project root
-//   prj_demo.iterate/agents/support-bot   → an agent context
-//
-// The projectId is always the host prefix, so a name alone says which project the context
-// belongs to — the basis of isolation.
-
-const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
-// The projectId is the kv/secret prefix AND a loader-cacheKey component — a ":" (or worse) in it
-// collapses the isolation wall (prj_x + key "a:b" would address the same cell as project prj_x:a
-// + key "b"). Gate it at the ONE place every name is parsed.
-
-/** A parsed DO address. `name` is its own canonical string form — parse once, carry both
- *  halves together (no separate re-stringify field at call sites). */
-export type DurableObjectAddress = { projectId: string; path: string; name: string };
-
-export const DurableObjectNameCodec = {
-  /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}` — the path in the
-   *  CANONICAL form `cd` resolves to (`resolveContextPath`), so `/a`, `/a/`, `/a/./` and `a` are ONE
-   *  name and no door (the `?context=` query included) can mint a twin DO for a logical context. */
-  stringify({ projectId, path }: { projectId: string; path: string }): string {
-    return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${resolveContextPath("/", path)}`;
-  },
-  /** The canonical, validated address `{ projectId, path, name }` for a context, built from parts a
-   *  caller already holds — path canonicalized, projectId validated, the DO `name` carried. The
-   *  DIRECT form of `parse(stringify({ projectId, path }))`, with no string to round-trip through. */
-  address({ projectId, path }: { projectId: string; path: string }): DurableObjectAddress {
-    if (!PROJECT_ID.test(projectId))
-      throw codedError(
-        "INVALID_CONTEXT",
-        `invalid projectId ${JSON.stringify(projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
-      );
-    const parts = { projectId, path: resolveContextPath("/", path) };
-    return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
-  },
-  /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
-   *  `projects.get("prj_x")` hands in. */
-  parse(name: string): DurableObjectAddress {
-    const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
-    return i === -1
-      ? DurableObjectNameCodec.address({ projectId: name, path: "/" })
-      : DurableObjectNameCodec.address({
-          projectId: name.slice(0, i),
-          path: name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length),
-        });
-  },
-};
 
 // The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
 // it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on

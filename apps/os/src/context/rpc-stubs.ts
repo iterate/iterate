@@ -708,6 +708,13 @@ export async function lendRpcStubOverPager(
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
+/** The platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire),
+ *  set beside `ITX_EXPRESSION_FETCH_HEADER` by the edge (worker.ts) and a session's terminal fetch,
+ *  and read and stripped by the context DO's `fetch`. Inbound `x-itx-*` headers never survive the
+ *  edge, and `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone
+ *  before this is set. */
+export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
+
 /** JSON in an HTTP header must be ASCII: inline worker source may contain any Unicode text.
  * Keep ordinary JSON on the wire so existing expression readers can parse it unchanged. */
 export function encodeFetchExpression(expression: ItxExpression): string {

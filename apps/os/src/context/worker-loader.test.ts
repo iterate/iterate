@@ -22,7 +22,7 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import { DurableObjectNameCodec } from "../iterate-context.ts";
+import { DurableObjectNameCodec } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   FACET_SOURCE_MAX_CHARS,

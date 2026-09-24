@@ -23,7 +23,7 @@ import {
   defineProcessorContract,
   type ProcessorState,
 } from "iterate/next/stream/processor";
-import type { SecretRefresh } from "../secrets.ts";
+import type { SecretRefresh } from "iterate/next/api";
 
 /** The refresh strategies implemented (secrets.ts), by kind: what a `set` names, a `refreshed`
  *  reports and the catalog keeps — pinned to the SDK's `SecretRefresh`, so a strategy added there

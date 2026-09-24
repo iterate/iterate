@@ -1,20 +1,7 @@
-// iterate-context.test.ts — the context's pure half: the durable-object name codec.
+// context/paths.test.ts — the path law, pure: the durable-object name codec and the resource owner.
 
-import { expect, test, vi } from "vitest";
-
-// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
-// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
-// (no-op shells); the module's own logic runs unmodified.
-vi.mock("cloudflare:workers", () => ({
-  RpcTarget: class {},
-  DurableObject: class {},
-  WorkerEntrypoint: class {},
-  RpcStub: class {},
-  RpcPromise: class {},
-  RpcProperty: class {},
-}));
-import { DurableObjectNameCodec } from "./iterate-context.ts";
-import { resourceScope } from "./context/paths.ts";
+import { expect, test } from "vitest";
+import { DurableObjectNameCodec, resourceScope } from "./paths.ts";
 
 // ── durable object names ── the codec's projectId charset gate, applied at parse:
 // `[A-Za-z0-9_-]` only, because a ":" in a projectId would breach the `${projectId}:` kv/secret
@@ -41,7 +28,7 @@ test("a ':' (or other breach char) in the projectId is rejected loudly", () => {
   expect(() => DurableObjectNameCodec.parse("prj/x")).toThrow(/only \[A-Za-z0-9_-\]/);
 });
 
-test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicalizes like cd() does, so no door (the ?context= query included) can mint a twin DO for a logical context", () => {
+test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicalizes like cd() does, so no entry point (the ?context= query included) can mint a twin DO for a logical context", () => {
   const canonical = DurableObjectNameCodec.stringify({ projectId: "prj_t", path: "/a" });
   expect(canonical).toBe("prj_t.iterate/a");
   for (const path of ["/a", "/a/", "/a/./", "a", "a/", "//a", "/b/../a"])

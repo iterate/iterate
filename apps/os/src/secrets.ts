@@ -11,17 +11,10 @@
 // be pinned — so a credential that expires (an OAuth access token, a Waitrose session) is one secret,
 // not a worker.
 
-// The four shapes a caller sees — the material, the client-auth method, the refresh strategy and
-// the catalog entry — are the SDK's (`iterate/next/api`, where the dash and every client read them);
-// re-exported so the rest of os-next keeps one import for everything a secret is.
-import type {
-  ClientAuth,
-  SecretCatalogEntry,
-  SecretMaterial,
-  SecretRefresh,
-} from "iterate/next/api";
+// The shapes a caller sees — the material, the client-auth method and the refresh strategy — are the
+// SDK's (`iterate/next/api`, where the dash and every client read them).
+import type { ClientAuth, SecretMaterial, SecretRefresh } from "iterate/next/api";
 import { SecretRefreshKind } from "./secret/contract.ts";
-export type { ClientAuth, SecretCatalogEntry, SecretMaterial, SecretRefresh };
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
  *  empty — a secret is always pinned), and the refresh strategy or none. */

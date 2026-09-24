@@ -24,9 +24,8 @@ import {
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec, ITX_PLATFORM_ORIGIN_HEADER } from "./iterate-context.ts";
-import { resourceScope } from "./context/paths.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import type { SessionInput } from "./session.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 

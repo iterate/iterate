@@ -11,8 +11,7 @@ import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
-import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 

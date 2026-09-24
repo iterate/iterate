@@ -3,15 +3,16 @@
 // native Workers-RPC call returns an `instanceof` of it. workers-types lags this export (worker.ts
 // casts around it) — if workerd ever drops or renames it, this fails LOUDLY instead of the
 // registration silently never matching (which would quietly re-await every native chain step).
-// The behavioral contract itself is pinned in src/context/dispatch.test.ts ("pipelined RPC promise
-// threading") and, for the capnweb one-shot batch where it is CORRECTNESS, by
-// the e2e lane's remote-capnweb call-then-call test.
+// The behavioral contract itself is pinned in packages/iterate/src/next/expression.test.ts ("pipelined
+// RPC promise threading") and, for the capnweb one-shot batch where it is CORRECTNESS, by the e2e
+// tests' remote-capnweb call-then-call test.
 
+// Loaded for its side effect: iterate-context.ts registers the native brands with the same module
+// instance as walkSteps. The deployed behavior is covered separately by the remote-capnweb E2E test.
+import "../src/iterate-context.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { walkSteps } from "iterate/next/expression";
-// support.ts loads iterate-context.ts, which registers the brands in the same source module as
-// walkSteps. The deployed behavior is covered separately by the remote-capnweb E2E test.
 import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {
