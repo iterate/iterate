@@ -38,6 +38,7 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
+import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
@@ -196,49 +197,10 @@ async function listAll<T>(cf: Cf, route: string) {
   }
 }
 
-// ── GitHub over fetch ──────────────────────────────────────────────────────────────────────────
+// ── GitHub (scripts/ci/github.ts: a 5xx on a read or a whole-body write is asked again) ─────────
 
-function requireEnv(name: string) {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-}
-
-/** A GitHub 5xx is asked again twice, 5 s apart: every call here is a read or a whole-body write,
- *  so a repeat is harmless, and one 500 had failed a run whose checks had passed (#2911). A caller
- *  whose write must not land late asks once (`attempts: 1`). */
-async function github<T = unknown>(
-  route: string,
-  init: { method?: string; body?: unknown; attempts?: number } = {},
-) {
-  const method = init.method || "GET";
-  const attempts = init.attempts || 3;
-  let response: Response;
-  for (let attempt = 1; ; attempt++) {
-    response = await fetch(`https://api.github.com${route}`, {
-      method,
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${requireEnv("GITHUB_TOKEN")}`,
-        "user-agent": "os-preview",
-        ...(init.body !== undefined && { "content-type": "application/json" }),
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    });
-    if (response.status < 500 || attempt >= attempts) break;
-    console.log(
-      `GitHub ${method} ${route} answered ${response.status}; asking again (${attempt}/${attempts})`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-  if (!response.ok) {
-    throw new Error(`GitHub ${method} ${route} failed with ${response.status}`);
-  }
-  // GitHub's REST shapes are stable and documented; each caller declares the two or three fields it reads.
-  return (await response.json()) as T;
-}
-
-const repository = () => requireEnv("GITHUB_REPOSITORY");
+/** The pull request `number` of this repository (GITHUB_REPOSITORY), as Octokit's parameters. */
+const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: Number(number) });
 
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
@@ -254,20 +216,23 @@ async function writePullRequestBody(
   splice: (body: string) => string,
   mayBeOverwritten: (body: string) => boolean = () => false,
 ) {
-  const route = `/repos/${repository()}/pulls/${prNumber}`;
+  const github = getOctokit();
+  const readBody = async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "";
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const before = (await github<{ body: string | null }>(route)).body || "";
+    const before = await readBody();
     const body = splice(before);
     if (body === before) return console.log(`PR #${prNumber}'s body already carries ${what}`);
-    const patchError = await github(route, { method: "PATCH", body: { body }, attempts: 1 }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const patchError = await github.rest.pulls
+      .update({ ...pullRequest(prNumber), body, request: { askOnce: true } })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
     if (patchError) {
       console.warn(`${describe(patchError)}; reading the body again`);
       await new Promise((resolve) => setTimeout(resolve, 5000));
     } else if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
-    const after = (await github<{ body: string | null }>(route)).body || "";
+    const after = await readBody();
     if (splice(after) === after)
       return console.log(`wrote ${what} into the body of PR #${prNumber}`);
     console.warn(
@@ -452,15 +417,12 @@ async function appsToPreview(mode: AppsMode, prNumber: string | undefined) {
  *  merge-base); from git against origin/main on a laptop. */
 async function changedPaths(prNumber: string | undefined) {
   if (prNumber && process.env.GITHUB_TOKEN) {
-    const paths: string[] = [];
-    for (let page = 1; ; page++) {
-      // GET /pulls/{n}/files: one `filename` per changed file, 100 per page.
-      const files = await github<{ filename: string }[]>(
-        `/repos/${repository()}/pulls/${prNumber}/files?per_page=100&page=${page}`,
-      );
-      paths.push(...files.map((file) => file.filename));
-      if (files.length < 100) return paths;
-    }
+    const github = getOctokit();
+    const files = await github.paginate(github.rest.pulls.listFiles, {
+      ...pullRequest(prNumber),
+      per_page: 100,
+    });
+    return files.map((file) => file.filename);
   }
   const git = (...args: string[]) => {
     const result = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
@@ -1008,9 +970,8 @@ async function runSuite(
         requested: requestedSlowRows,
         prNumber,
         readPullRequest: async () => {
-          // GET /pulls/{n}: its `labels`, each with a `name`.
-          const [pull, paths] = await Promise.all([
-            github<{ labels: { name: string }[] }>(`/repos/${repository()}/pulls/${prNumber}`),
+          const [{ data: pull }, paths] = await Promise.all([
+            getOctokit().rest.pulls.get(pullRequest(prNumber!)),
             changedPaths(prNumber),
           ]);
           return { labels: pull.labels.map((label) => label.name), paths };
@@ -1053,20 +1014,10 @@ async function runSuite(
  *  PR still uses, so it falls back to age alone. */
 async function pullRequestState(number: number): Promise<PullRequestState> {
   try {
-    const response = await fetch(`https://api.github.com/repos/${repository()}/pulls/${number}`, {
-      headers: {
-        accept: "application/vnd.github+json",
-        "user-agent": "os-preview-sweep",
-        ...(process.env.GITHUB_TOKEN && { authorization: `Bearer ${process.env.GITHUB_TOKEN}` }),
-      },
-    });
-    if (response.status === 404) return "missing";
-    if (!response.ok) throw new Error(`GitHub GET pulls/${number} failed with ${response.status}`);
-    // GET /pulls/{n}: `state` is "open" | "closed" per the docs; anything else is refused below.
-    const { state } = (await response.json()) as { state: string };
-    if (state === "open" || state === "closed") return state;
-    throw new Error(`GitHub reported the state ${JSON.stringify(state)}`);
+    const github = createOctokit(process.env.GITHUB_TOKEN);
+    return (await github.rest.pulls.get(pullRequest(number))).data.state;
   } catch (error) {
+    if ((error as { status?: number }).status === 404) return "missing";
     console.warn(`${describe(error)}; PR #${number}'s preview is judged on age alone.`);
     return "unknown";
   }
@@ -1076,15 +1027,13 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
  *  rule 3) — or undefined when GitHub cannot say, and rule 3 then deletes nothing. */
 async function openPullRequestBranches() {
   try {
-    const branches: string[] = [];
-    for (let page = 1; ; page++) {
-      // GET /pulls?state=open: one `head.ref` per open pull request, 100 per page.
-      const pulls = await github<{ head: { ref: string } }[]>(
-        `/repos/${repository()}/pulls?state=open&per_page=100&page=${page}`,
-      );
-      branches.push(...pulls.map((pull) => pull.head.ref));
-      if (pulls.length < 100) return branches;
-    }
+    const github = getOctokit();
+    const pulls = await github.paginate(github.rest.pulls.list, {
+      ...getRepo(),
+      state: "open",
+      per_page: 100,
+    });
+    return pulls.map((pull) => pull.head.ref);
   } catch (error) {
     console.warn(`${describe(error)}; previews without a PR number are judged on age alone.`);
     return undefined;
@@ -1331,8 +1280,7 @@ async function resolveBranch(pr: string | undefined, name: string | undefined) {
   if (name) return name;
   if (process.env.PREVIEW_NAME) return process.env.PREVIEW_NAME;
   if (pr && process.env.GITHUB_TOKEN) {
-    const pull = await github<{ head: { ref: string } }>(`/repos/${repository()}/pulls/${pr}`);
-    return pull.head.ref;
+    return (await getOctokit().rest.pulls.get(pullRequest(pr))).data.head.ref;
   }
   throw new Error(
     "a preview needs a branch: --name <ref>, PREVIEW_NAME, or --pr with GITHUB_TOKEN",

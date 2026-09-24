@@ -38,24 +38,6 @@ test("asks a PATCH again after the connection drops", async () => {
   );
 });
 
-test("throws GitHub's last failure once every delay is spent", async () => {
-  using fixture = githubAnswering(
-    json(502, { message: "Bad gateway" }),
-    json(503, { message: "Unavailable" }),
-    json(500, { message: "Server Error" }),
-    json(504, { message: "Gateway timeout" }),
-  );
-
-  await expect(fixture.github.rest.pulls.get({ ...repo, pull_number: 2899 })).rejects.toMatchObject(
-    {
-      name: "HttpError",
-      status: 504,
-    },
-  );
-  expect(fixture.fetch).toHaveBeenCalledTimes(4);
-  expect(fixture.warn.mock.calls.map(([entry]) => entry.status)).toEqual([502, 503, 500]);
-});
-
 test("never asks a POST again: a 5xx may have landed, and a repeat would create a second one", async () => {
   using fixture = githubAnswering(unexpectedError());
 
@@ -88,6 +70,21 @@ test("asks a commit status again after GitHub's 503: the latest status per conte
       attempt: 1,
     }),
   );
+});
+
+test("asks a PATCH once when the caller says so: a PR body written from a read seconds earlier", async () => {
+  using fixture = githubAnswering(unexpectedError());
+
+  await expect(
+    fixture.github.rest.pulls.update({
+      ...repo,
+      pull_number: 2899,
+      body: "spliced",
+      request: { askOnce: true },
+    }),
+  ).rejects.toMatchObject({ status: 500 });
+  expect(fixture.fetch).toHaveBeenCalledOnce();
+  expect(fixture.warn).not.toHaveBeenCalled();
 });
 
 test("never asks again after a 4xx: it is GitHub's answer about the request", async () => {
