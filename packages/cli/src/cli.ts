@@ -13,6 +13,7 @@ import type { SessionCredentials } from "iterate/api";
 import { isCodingAgent } from "./coding-agent.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
 import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
+import { runTunnel } from "./tunnel.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
 import {
   CONFIG_PATH,
@@ -391,6 +392,44 @@ const launcherProcedures = {
       using owned = connection;
       const project = await selectProject(owned, input.project || resolved.config.defaultProject);
       await shareMyComputer({ connection: owned, project, name: input.name, json: input.json });
+    }),
+  tunnel: os
+    .input(
+      z.object({
+        port: z
+          .number()
+          .int()
+          .min(1)
+          .max(65535)
+          .meta({ positional: true })
+          .describe("The local port to serve, e.g. Vite's 5173"),
+        name: z
+          .string()
+          .optional()
+          .describe("Routing slug: the tunnel is <name>--<project> (default: a random one)"),
+        public: z
+          .boolean()
+          .optional()
+          .describe("Anyone may use it (default: signed-in project members only)"),
+        project: z.string().optional().describe("Project id or slug"),
+        json: z.boolean().optional().describe("Emit the URL and each request as NDJSON"),
+      }),
+    )
+    .meta({
+      description: "Serve a local port on a project host until Ctrl-C, WebSockets included",
+    })
+    .handler(async ({ input }) => {
+      const { resolved, connection } = await connectConfigured();
+      using owned = connection;
+      const project = await selectProject(owned, input.project || resolved.config.defaultProject);
+      await runTunnel({
+        connection: owned,
+        project,
+        port: input.port,
+        routingSlug: input.name,
+        public: input.public,
+        json: input.json,
+      });
     }),
   config: {
     get: os

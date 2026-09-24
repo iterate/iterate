@@ -42,6 +42,7 @@
     "iterate": "workspace:*",
     "oauth4webapi": "^3.8.5",
     "trpc-cli": "0.15.1",
+    "ws": "8.19.0",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -49,8 +50,7 @@
     "@types/ws": "^8.18.1",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
-    "vitest": "4.0.15",
-    "ws": "8.19.0"
+    "vitest": "4.0.15"
   },
   "bin": {
     "iterate": "./bin/iterate.js"
