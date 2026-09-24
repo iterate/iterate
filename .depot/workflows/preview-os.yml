@@ -481,7 +481,7 @@ jobs:
   # green (the last test job's success) or to red (the first failed job), and "Playwright report",
   # the Browser specs job's HTML report. After the three settle, whatever their outcome; never when
   # none ran, nor for a PR that changes no preview path. Main OS e2e has the same job
-  # (scripts/ci/main-os-e2e-workflow.test.ts keeps them alike).
+  # (scripts/ci/depot-workflows.test.ts keeps them alike).
   trace:
     name: CI trace
     needs: [deploy, e2e, specs]

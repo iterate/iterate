@@ -26,6 +26,10 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm spec`                              | Root browser specs: one project per app host, plus the issuer at phone width     |
 | `pnpm --dir apps/kit firmware:test:host` | Kit firmware host tests (needs cmake; not part of `pnpm test`)                   |
 
+`pnpm lint` and `pnpm lint:fix` run oxlint on one thread: at one per core every JS worker starts its
+own type-aware service, and a 16-core machine hits spawn ENOMEM. At 4, 8 and 12 threads it was no
+faster.
+
 > [!NOTE]
 > A quarantined suite is called out here, in a CAUTION box naming the skip,
 > its evidence and its restoration criteria, so nobody mistakes a hidden hole

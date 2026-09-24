@@ -17,6 +17,7 @@
 // is all it takes to be alarmed.
 //
 //   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+//   … run --ref <git ref> --state <previous.json> --state-out <next.json>   # keeps state on main only
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay the half hour to then, post nothing
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -85,7 +86,7 @@ export type AlarmState = z.infer<typeof AlarmState>;
 
 /** Reads the prd Workers' Logs since the last run and pages #error-pulse on a fault. */
 export async function run(
-  options: { at?: string; dryRun?: boolean; state?: string; stateOut?: string } = {},
+  options: { at?: string; dryRun?: boolean; ref?: string; state?: string; stateOut?: string } = {},
 ) {
   const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
   if (!accountId || !apiToken) throw new Error("run under doppler --project os --config prd");
@@ -104,8 +105,9 @@ export async function run(
     slack: options.dryRun ? null : getSlackClient,
   });
   // After every post: a run that failed to post keeps no state, so the next one reads its window
-  // again and posts what this one owed.
-  if (options.stateOut && !options.at && !options.dryRun) {
+  // again and posts what this one owed. Only a run on main (`ref`, the run's git ref) keeps it: a
+  // dispatch on a branch must not move main's read window or its open incidents.
+  if (options.stateOut && options.ref === "refs/heads/main" && !options.at && !options.dryRun) {
     mkdirSync(dirname(options.stateOut), { recursive: true });
     writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
   }

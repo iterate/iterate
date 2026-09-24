@@ -131,18 +131,6 @@ test("Preview OS: a PR's next push cancels its run in progress; a dispatch cance
   expect(cancels("workflow_dispatch")).toBe(false);
 });
 
-// docs/testing.md#slow-rows: a push leaves the e2e rows tagged `slow` to the PR's paths and
-// `slow-e2e` label (apps/os/scripts/slow-rows.ts); a dispatch may ask for them either way.
-test("Preview OS: the slow rows follow the PR's paths and label unless a dispatch asks", () => {
-  const dispatch = (
-    preview.on.workflow_dispatch as { inputs: Record<string, { default?: string }> } | undefined
-  )?.inputs;
-  expect(dispatch?.["slow-rows"]?.default).toBe("");
-  expect(preview.jobs.e2e!.steps?.find((step) => step.id === "e2e")?.env).toMatchObject({
-    E2E_SLOW_ROWS: "${{ inputs.slow-rows }}",
-  });
-});
-
 // THE REQUIRED CHECKS' TRUTH TABLE (docs/depot-ci.md#preview-job-shape). GitHub counts a skipped
 // job as passing, so each suite's job skips only when there is nothing for it to prove: a PR that
 // changes no preview path, or a dispatch of the other suite alone. Wherever a preview was needed
@@ -287,31 +275,6 @@ test("a test job keeps its evidence whenever its suite started, and only then", 
       "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
     ]);
   }
-});
-
-// docs/ci-traces.md: every run step's markers, each suite's step as its job's Test phase, and one
-// trace job after the deploy and both suites settle.
-test("the CI trace collects the deploy and both suites after they settle and posts its status", () => {
-  expect(preview.env).toMatchObject({
-    BASH_ENV: "${{ github.workspace }}/scripts/ci/tracing/shell.sh",
-    CI_TRACE_ENABLED: "1",
-  });
-  for (const suite of suites)
-    expect(preview.jobs[suite.job]!.steps?.find((step) => step.run === suite.run)).toMatchObject({
-      id: suite.job,
-    });
-  expect(preview.jobs.trace).toMatchObject({
-    needs: ["deploy", "e2e", "specs"],
-    if: expect.stringContaining("always()"),
-  });
-  const runs = (preview.jobs.trace!.steps || []).map((step) => step.run || step.uses || "");
-  const order = [
-    runs.findIndex((run) => run.includes("scripts/ci/tracing/cli.ts current")),
-    runs.indexOf("actions/upload-artifact@v4"),
-    runs.findIndex((run) => run.includes("scripts/ci/tracing/cli.ts publish")),
-  ];
-  expect(order.every((index) => index >= 0)).toBe(true);
-  expect(order).toEqual([...order].sort((a, b) => a - b));
 });
 
 /**
