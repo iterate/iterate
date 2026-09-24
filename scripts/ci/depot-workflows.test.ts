@@ -8,6 +8,7 @@ const repoRoot = resolve(import.meta.dirname, "../..");
 const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
 
 type WorkflowJob = {
+  permissions?: Record<string, string>;
   "runs-on": {
     image?: string;
     size?: string;
@@ -346,8 +347,43 @@ describe("Depot credential boundaries", () => {
       file: ".depot/workflows/flake-dashboard.yml",
       permissions: { contents: "read" },
     },
+    {
+      file: ".depot/workflows/kit-firmware.yml",
+      permissions: { contents: "read" },
+    },
   ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
     expect(loadWorkflow(file).permissions).toEqual(permissions);
+  });
+
+  // The legs run the firmware's own CMake, third-party components and scripts; none of them may hold
+  // a token that can create a release (apps/kit/scripts/firmware-release.ts).
+  test("Kit Firmware publishes from one job that runs no repository code", () => {
+    const workflow = loadWorkflow(".depot/workflows/kit-firmware.yml");
+    const writers = Object.entries(workflow.jobs).filter(
+      ([, job]) => job.permissions?.contents === "write",
+    );
+    const publish = workflow.jobs["publish-firmware"]!;
+    const checkouts = Object.values(workflow.jobs).flatMap((job) =>
+      (job.steps || []).filter((step) => step.uses?.startsWith("actions/checkout")),
+    );
+
+    expect(writers.map(([jobId]) => jobId)).toEqual(["publish-firmware"]);
+    expect(publish.steps?.filter((step) => step.uses?.startsWith("actions/checkout"))).toEqual([]);
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const checkout of checkouts) expect(checkout.with?.["persist-credentials"]).toBe(false);
+    // the daily vYYYY-… release stays the repository's Latest
+    expect(publish.steps?.map((step) => step.run || "").join("\n")).toContain("--latest=false");
+    expect(workflow.on?.push?.paths).toEqual(workflow.on?.pull_request?.paths);
+    // the schedule is the bounded recovery for a failed publish
+    expect(workflow.on?.schedule).toEqual([{ cron: expect.any(String) }]);
+  });
+
+  test("release.yml never takes a kit-firmware tag for the last release", () => {
+    const releaseInfo = loadWorkflow(".depot/workflows/release.yml").jobs.release?.steps?.find(
+      (step) => step.name === "Get release info",
+    );
+
+    expect(releaseInfo?.run).toContain("git describe --tags --abbrev=0 --match 'v[0-9]*'");
   });
 
   test("loads the Depot telemetry token from preview without changing the PostHog config", () => {
@@ -494,12 +530,17 @@ describe("Depot validation capacity", () => {
   });
 
   // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
-  // only runs on its schedule carries that job as a skipped check. The image bake is the
-  // exception: its push to main runs the same bake.
+  // only runs on its schedule carries that job as a skipped check. Two workflows run the same jobs
+  // on every trigger: the image bake (its push to main runs the same bake), and Kit Firmware,
+  // whose daily run re-plans every board so a failed publish is repaired without a firmware push.
   test.for(
     depotWorkflowFiles.filter(
       (file) =>
-        loadWorkflow(file).on?.schedule && file !== ".depot/workflows/build-preview-ci-image.yml",
+        loadWorkflow(file).on?.schedule &&
+        ![
+          ".depot/workflows/build-preview-ci-image.yml",
+          ".depot/workflows/kit-firmware.yml",
+        ].includes(file),
     ),
   )("%s runs only on its schedule or on request", (file) => {
     expect(

@@ -39,6 +39,44 @@ URL. The board validates the versioned CRC-protected image at boot, joins Wi-Fi,
 presents the token as a bearer on OS's `/api`, and is ready for its activation
 button or optional wake word.
 
+## Firmware releases
+
+Every firmware change merged to main becomes a GitHub release of each board it
+affects, tagged `kit-firmware/<device id>/<version>`, for example
+`kit-firmware/home-assistant-voice-preview-edition/002574-2026-09-23-b2a4558`. The
+version is main's first-parent commit count (six digits), the UTC commit date and
+the short sha, so versions sort as strings; the board reports it in `X-Iterate-Fw`.
+A release holds the build's flash files and `manifest.json`, a standard
+[esp-web-tools manifest](https://esphome.github.io/esp-web-tools/) with one extra
+field, `configurationPartition`, where Kit writes the install's configuration
+image. `src/firmware/catalog.ts` (`firmwareReleaseTag`, `FIRMWARE_VERSION_PATTERN`)
+and `scripts/firmware-release.ts` (`firmwareManifest`) own this contract.
+
+The Kit Firmware workflow (`.depot/workflows/kit-firmware.yml`) builds a board
+only when its inputs changed since its newest release: the firmware tree minus the
+other boards' `devices/<board>` and `targets/<board>`, the host and Mac code, the
+tests and the docs (`firmwareInputs`). A build fails when the board read a tracked
+file outside its inputs, changed a tracked file, or produced a flash layout that
+disagrees with its own partition table. Each board builds in its own leg, so main
+releases in about 5 minutes. Releases are never marked Latest; the daily `v…`
+release stays the repository's Latest. A pull request that touches firmware runs
+the same builds and lists what it would publish.
+
+- **Recovery.** Every run compares each board with its newest release, so the
+  daily 05:17 UTC run (or the next firmware push) releases what a failed run left
+  behind. A failure on main posts to Slack.
+- **Builder changes.** `scripts/firmware-release.ts` is not a release input. After
+  changing it, dispatch Kit Firmware on main with `devices=all` to rebuild every board.
+- **Yanking.** Merge the fix first, which releases a newer version, then
+  `gh release delete <tag> --cleanup-tag --yes` (an admin, once a tag ruleset
+  protects `kit-firmware/**`). Deleting first makes the next run
+  rebuild the bad commit, since the planner then compares with the older release.
+- **Stray drafts.** A publish killed mid-upload can leave a draft release. Drafts
+  have no tag, so nothing lists them; delete it in the releases page.
+- **Bench builds.** `node apps/kit/scripts/firmware-release.ts build --device <id>
+--out /tmp/kit-<id>` with ESP-IDF active; see the
+  [firmware guide](./firmware/README.md#release-and-proof).
+
 ## Release a firmware build
 
 Kit publishes from source, never from a third-party binary URL. The reviewed

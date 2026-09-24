@@ -32,7 +32,9 @@ The normal minimum is four files:
 3. `targets/<board>/CMakeLists.txt`
 4. `targets/<board>/sdkconfig.defaults`
 
-Add a source-built release only through the documented Kit pipeline. Do not put
+To ship it, add the board to `apps/kit/src/firmware/catalog.ts` (its `target` is the
+`devices/` and `targets/` directory name) and merge; Kit Firmware publishes its first
+release. Do not put
 credentials in firmware defaults or an artifact; the installer writes the
 versioned `iterate_kit` configuration partition.
 

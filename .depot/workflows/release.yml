@@ -41,7 +41,8 @@ jobs:
       - name: Get release info
         id: release_info
         run: |-
-          LAST_RELEASE=$(git describe --tags --abbrev=0 || echo '')
+          # only the daily v… releases: kit-firmware/* tags (kit-firmware.yml) and gh-attach-assets are not these
+          LAST_RELEASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' || echo '')
           echo "last_release=$LAST_RELEASE" >> $GITHUB_OUTPUT
           echo "release_name=v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
       - name: Check for changes

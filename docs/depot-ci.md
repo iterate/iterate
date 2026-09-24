@@ -351,6 +351,17 @@ same commit and image pass on rerun, treat that as runner provisioning evidence,
 not an application failure. Do not add automatic workflow retries: deployment
 reruns can repeat external side effects and need an operator decision.
 
+## Kit firmware releases
+
+Kit Firmware (`kit-firmware.yml`) runs on firmware pull requests and main pushes,
+daily at 05:17 UTC, and on dispatch (`devices=all` rebuilds every board after a
+builder change). Its Plan job picks the boards whose inputs changed since their
+newest `kit-firmware/<device>/<version>` release, and each one builds in its own
+2x8 leg. Publish is the workflow's only job with `contents: write`; it checks out
+nothing, runs only `gh` and `jq` on the legs' artifacts, and creates releases only
+on main. The ESP-IDF pin lives in `kit-firmware.yml` and in each target's
+`dependencies.lock`. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
+
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
