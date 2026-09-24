@@ -55,7 +55,6 @@
     "packages/ui/src/components/textarea.tsx",
     "packages/ui/src/components/tooltip.tsx",
     "packages/ui/src/hooks/use-mobile.ts",
-    "packages/ui/src/lib/utils.ts",
     "apps/browser-extension/capnweb.js",
     "configs/with-agents/agents.js"
   ]

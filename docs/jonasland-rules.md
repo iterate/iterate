@@ -25,8 +25,6 @@ DO NOT randomly add or modify these things without explicitly discussing and che
 **You never want to re-export things**
 We only use these modules internally. If you're re-exporting stuff, you probably broke the rule on backwards compatibility or barrel files.
 
-- Exception: `packages/ui/src/lib/utils.ts` is shadcn's vendored `utils` item, `export { cn } from "cn"`, exactly as the CLI writes it. `components.json`'s `aliases.utils` names it, and the CLI rewrites a registry item's `@/lib/utils` import to it (the AI Elements items), so it must exist. Our own code imports `cn` from `"cn"` ([packages/ui/AGENTS.md](../packages/ui/AGENTS.md)).
-
 **Don't declare or export infrequently used things**
 
 - Don't declare constants that are only used once - just inline them
