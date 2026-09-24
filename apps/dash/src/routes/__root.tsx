@@ -33,12 +33,11 @@ function Root() {
   // (specs/AGENTS.md) holds actions until then
   const hydrated = useHydrated();
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en">
       <head>
         <HeadContent />
       </head>
       <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
-        {/* light only, like every client app: no theme picker, no system theme */}
         <AppProviders posthogApiKey={posthogProjectKey || undefined}>
           <Outlet />
         </AppProviders>

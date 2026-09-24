@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { z } from "zod";
 import { createIterateClient } from "iterate/next/app";
+import { usePosthogIdentity } from "@iterate-com/ui/components/posthog";
 
 // Minting the device's access token needs the account scope on top of project access.
 const iterate = createIterateClient({ scopes: ["account"] });
@@ -17,11 +18,16 @@ export const Route = createFileRoute("/_auth")({
     if (deviceSession.deviceId !== model) throw redirect({ to: "/", search: { device: model } });
     return { ...(await iterate.authenticate(location.href)), deviceSession };
   },
-  component: () => (
+  component: Identified,
+});
+
+function Identified() {
+  usePosthogIdentity(Route.useRouteContext().info.principal);
+  return (
     <div className="mx-auto flex min-h-svh w-full max-w-5xl px-5 py-10 sm:px-8 sm:py-16">
       <main className="flex w-full items-start lg:items-center">
         <Outlet />
       </main>
     </div>
-  ),
-});
+  );
+}

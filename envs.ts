@@ -28,6 +28,10 @@ export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].clou
  */
 export const UNPROVISIONED = "UNPROVISIONED";
 
+/** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
+ *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
+const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
+
 /** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
  *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
  *  Cloudflare resources. */
@@ -37,6 +41,8 @@ export interface KitEnv {
   dopplerConfig: string;
   workerName: string;
   baseUrl: string;
+  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`), as every Start app's. Unset ⇒ no PostHog. */
+  posthogProjectKey?: string;
 }
 
 export const kitEnvs = {
@@ -57,12 +63,9 @@ export const kitEnvs = {
     // this worker available at kiterate.iterate.workers.dev as well.
     workerName: "kiterate",
     baseUrl: "https://k.iterate.com",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
   },
 } satisfies Record<string, KitEnv>;
-
-/** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
- *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
-const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
 export interface OsEnv {
   cloudflareAccountId: string;
