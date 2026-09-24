@@ -1,9 +1,9 @@
-// record-pipelined-steps.test.ts — `withItx` disposes what this records, so it must record EVERY call a
+// record-pipelined-steps.test.ts — `callReleasing` disposes what this records, so it must record EVERY call a
 // round trip reached (the undisposed `itx.cd(path)` of `itx.cd(path).append(…)` kept facet → ItxEntrypoint
 // → context resident until the next deploy, 2026-09-21/22; without this, the facet itself kept running,
 // billed, 2026-09-23) and change nothing else about the stub.
-import { describe, expect, test } from "vitest";
-import { recordPipelinedSteps } from "./record-pipelined-steps.ts";
+import { describe, expect, test, vi } from "vitest";
+import { callReleasing, recordPipelinedSteps } from "./record-pipelined-steps.ts";
 
 /** A stand-in for a Workers-RPC stub: each call answers a disposable promise-like step that pipelines
  *  further calls, and remembers whether it was disposed. */
@@ -55,12 +55,39 @@ describe("recordPipelinedSteps", () => {
     },
   ])("$name", async ({ run, answer, disposed }) => {
     const log: string[] = [];
-    const steps: unknown[] = [];
-    expect(await run(recordPipelinedSteps(fakeStub(log), steps))).toEqual(answer);
-    expect(log).toEqual([]); // recording disposes nothing itself
-    for (const step of steps.reverse())
-      (step as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
+    const answered = await callReleasing({ get: () => fakeStub(log) }, async (itx) => {
+      const value = await run(itx);
+      expect(log).toEqual([]); // recording disposes nothing itself
+      return value;
+    });
+    expect(answered).toEqual(answer);
     expect(log).toEqual(disposed);
+  });
+
+  test("a release that throws is reported, the rest are still released and the answer stands", async () => {
+    const log: string[] = [];
+    const stub = fakeStub(log);
+    const itx = {
+      ...stub,
+      cd: (path: string) =>
+        Object.assign(stub.cd(path), {
+          [Symbol.dispose]: () => {
+            log.push(`dispose cd(${path})`);
+            throw new Error(`cd(${path}) already gone`);
+          },
+        }),
+    };
+    const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const answered = await callReleasing({ get: () => itx }, (scope: any) =>
+        scope.cd("/d").append({ type: "y" }),
+      );
+      expect(answered).toEqual({ appended: [{ type: "y" }] });
+      expect(log).toEqual(["dispose cd(/d).append", "dispose cd(/d)"]);
+      expect(reported).toHaveBeenCalled();
+    } finally {
+      reported.mockRestore();
+    }
   });
 
   test("a void call is recorded as undefined and a recorded argument crosses as the value it wraps", () => {

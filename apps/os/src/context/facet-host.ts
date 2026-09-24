@@ -12,7 +12,13 @@
 // `callFacetAsPlatform`, which no walk can land on, and are checked against nothing.
 
 import { z } from "zod";
-import { codedError, errorCode, reportIssue, withTimeout } from "iterate/next/lib";
+import {
+  codedError,
+  errorCode,
+  releaseRpcSessions,
+  reportIssue,
+  withTimeout,
+} from "iterate/next/lib";
 import {
   REVIVE_AFTER_MAX_MS,
   REVIVE_AFTER_MS,
@@ -25,7 +31,6 @@ import {
   type ItxExpressionInput,
   walkSteps,
   awaitAnswerReleasedIfRejected,
-  releaseRpcSessions,
   FacetHandle,
 } from "iterate/next/expression";
 import {

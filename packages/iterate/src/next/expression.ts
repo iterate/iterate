@@ -8,7 +8,7 @@
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED SURFACE, every unknown chain one `invoke(expression)`
 import JSON5 from "json5";
 import { RpcTarget } from "capnweb";
-import { codedError, jsonEqual, reportIssue } from "./lib.ts";
+import { codedError, jsonEqual, releaseRpcSessions } from "./lib.ts";
 
 /** A STRING expression is for what a person types: short. Anything bigger — a worker's source, a large
  *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never
@@ -300,18 +300,6 @@ export function registerRpcSessionBrand(brand: abstract new (...args: never[]) =
   RPC_SESSION_BRANDS.push(brand);
 }
 const holdsRpcSession = (v: unknown): boolean => RPC_SESSION_BRANDS.some((b) => v instanceof b);
-
-/** Release each of `rpcSessions`, the last first. The answer they served is already in, so a release
- *  that throws is reported, never made the call's failure. */
-export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
-  for (const rpcSession of [...rpcSessions].reverse())
-    try {
-      // A session-brand value or an RPC result object: each carries a disposer, or has nothing to release.
-      (rpcSession as Partial<Disposable>)[Symbol.dispose]?.();
-    } catch (error) {
-      reportIssue("itx-expression.release-rpc-session", error);
-    }
-}
 
 /** A walk's ANSWER (`walkSteps`' value), awaited — and RELEASED if it rejects. A Workers-RPC call
  *  that threw keeps its session open, and the actor at its far end with it, until its promise is

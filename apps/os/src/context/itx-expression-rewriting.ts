@@ -34,14 +34,19 @@
 // reduce parses the match once and takes the target as it is.
 
 import type { Caller } from "iterate/next/principal";
-import { codedError, errorCode, jsonEqual, resolveContextPath } from "iterate/next/lib";
+import {
+  codedError,
+  errorCode,
+  jsonEqual,
+  releaseRpcSessions,
+  resolveContextPath,
+} from "iterate/next/lib";
 import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/next/api";
 import {
   callOn,
   InvokeHandle,
   walkSteps,
   awaitAnswerReleasedIfRejected,
-  releaseRpcSessions,
   normalizedItxExpression,
   containsItxExpressionHole,
   isItxExpressionHole,

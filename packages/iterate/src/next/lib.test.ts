@@ -9,6 +9,7 @@ import {
   forwardIssues,
   type Issue,
   isSameOriginBrowserRequest,
+  releaseRpcSessions,
   reportIssue,
 } from "./lib.ts";
 
@@ -143,4 +144,24 @@ test("reportIssue hands each issue to the forwarder — bounded attributes, the 
   expect(() => reportIssue("site.b", boom)).not.toThrow();
   forwardIssues(() => {});
   quiet.mockRestore();
+});
+
+test("releaseRpcSessions releases each once, the last first; one that throws is reported, the rest still released", () => {
+  const released: string[] = [];
+  const session = (name: string, fail = false) => ({
+    [Symbol.dispose]() {
+      released.push(name);
+      if (fail) throw new Error(`${name} already gone`);
+    },
+  });
+  const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    expect(() =>
+      releaseRpcSessions([session("first"), session("middle", true), session("last")]),
+    ).not.toThrow();
+    expect(released).toEqual(["last", "middle", "first"]);
+    expect(reported).toHaveBeenCalled();
+  } finally {
+    reported.mockRestore();
+  }
 });

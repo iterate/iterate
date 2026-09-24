@@ -20,7 +20,7 @@ import {
   type StreamEventInput,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
-import { recordPipelinedSteps } from "./record-pipelined-steps.ts";
+import { callReleasing } from "./record-pipelined-steps.ts";
 export {
   // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
   // `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
@@ -247,17 +247,8 @@ export abstract class StreamProcessorDurableObject<
    *  `invoke` cannot end this from its side: the facet holds the value (context-residency.e2e.test.ts,
    *  "… does not outlive …"). Protected: a host with methods of its own (the workspace,
    *  src/workspace/durable-object.ts) reaches its context the same way. */
-  protected async withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
-    const steps: unknown[] = [];
-    const itx = this.#itxEntrypoint().get();
-    try {
-      return await call(recordPipelinedSteps(itx, steps));
-    } finally {
-      // A step is whatever a call answered — a Workers-RPC promise (disposable), or a void call's undefined.
-      for (const step of steps.reverse())
-        (step as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
+  protected withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
+    return callReleasing(this.#itxEntrypoint(), call);
   }
 }
 
@@ -272,14 +263,17 @@ export abstract class ConfigWorker<
   protected readonly auth = auth;
   /** Process an explicitly subscribed batch with this worker's context scope. */
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    const itx = this.env.ITX.get();
-    try {
+    await this.withItx(async (itx) => {
       for (const event of events) {
         await this.processEvent({ event, range, itx });
       }
-    } finally {
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
+    });
+  }
+
+  /** ONE round trip on the itx scope, then release the scope and every call made through it
+   *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). */
+  protected withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
+    return callReleasing(this.env.ITX, call);
   }
 
   /** THE AUTHOR HOOK — one event at a time, in offset order. Append reactions through the itx scope;

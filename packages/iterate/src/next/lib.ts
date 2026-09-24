@@ -2,6 +2,7 @@
 // and the Node unit tests, so no cloudflare:workers here):
 //   errors  — `codedError` / `errorCode` / `reportIssue` / `forwardIssues`: THE machine-readable
 //             error channel
+//   release — `releaseRpcSessions`: dispose the Workers-RPC values a round trip reached
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
 //   timeout — `withTimeout`: a promise raced against a deadline (code TIMEOUT)
 //   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries;
@@ -122,6 +123,22 @@ export function reportIssue(
   } catch {
     // Reporting must never disturb the caller — swallow and move on.
   }
+}
+
+// ── release ── a Workers-RPC value (a stub, a call's promise) keeps its session, and the actor at
+// its far end, open until disposed.
+
+/** Release each of `rpcSessions`, the last first. The answer they served is already in, so a release
+ *  that throws is reported, never made the call's failure. */
+export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
+  for (const rpcSession of [...rpcSessions].reverse())
+    try {
+      // A session-brand value or an RPC result object carries a disposer; a void call's undefined
+      // answer, or a plain value, has nothing to release.
+      (rpcSession as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
+    } catch (error) {
+      reportIssue("itx-expression.release-rpc-session", error);
+    }
 }
 
 // ── patch ── the LiveView-style delta that rides every live-state change event. `diff` runs at
