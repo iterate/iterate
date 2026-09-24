@@ -5,9 +5,8 @@
 // person and their project are the signed-in session fixture's, so it works local and deployed.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { transformSync } from "esbuild";
-import { newHttpBatchRpcSession } from "capnweb";
-import type { IterateApi } from "iterate/next/api";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 
@@ -17,7 +16,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
   helpers,
 }) => {
   const origin = new URL(baseURL!).origin;
-  const { adminApiSecret, ingressRouting } = readOsPlaywrightAuthConfig();
+  const { ingressRouting } = readOsPlaywrightAuthConfig();
   // The project's host: `<project>.<hostname>` — `localhost` under the local worker (scripts/dev.ts),
   // the deployment's subdomain routing otherwise (PROJECT_INGRESS_ROUTING, as the e2e suite spells it).
   const base = ingressRouting?.type === "subdomains" ? ingressRouting.hostname : undefined;
@@ -32,20 +31,17 @@ test("a no-build mini-app served by a project persists a note through its own ca
   await using fixture = await helpers.createFixture("mini");
   const { project } = fixture;
 
-  // Install the mini-app as an app label — ONE rewrite rule. (An operator fixture here; a project
-  // owner would run the same provide() through their own session.)
+  // Install the mini-app as an app label — ONE rewrite rule. (The fixture's operator handle here; a
+  // project owner would run the same provide() through their own session.)
   const source = transformSync(
     readFileSync(resolve(import.meta.dirname, "../../apps/os/examples/mini-app.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   ).code;
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateApi>(
-    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
-  );
-  await operator
-    .authenticate({ type: "admin-secret", secret: adminApiSecret })
-    .projects.get(project.id)
-    .provide("itx.apps.notes", ["itx", "workers", ["get", { source: { "cap.js": source } }]]);
+  await fixture.itx.provide("itx.apps.notes", [
+    "itx",
+    "workers",
+    ["get", { source: { "cap.js": source } }],
+  ]);
 
   // Open the app on notes--<project>.<base> and prove a note round-trips through /rpc.
   const appOrigin = new URL(origin);
@@ -57,7 +53,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
     .filter({ hasText: /^live$/ })
     .waitFor();
 
-  const note = `written on the mini-app: ${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
+  const note = `written on the mini-app: ${uniqueFixtureSlug("note")}`;
   await page.getByRole("textbox", { name: "New note" }).fill(note);
   await page.getByRole("textbox", { name: "New note" }).press("Enter");
   await page.getByTestId("notes").filter({ hasText: note }).waitFor();

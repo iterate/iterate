@@ -4,9 +4,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
-import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
-import type { IterateApi } from "iterate/next/api";
 import { projectUrlOf } from "iterate/next/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
@@ -47,7 +45,7 @@ test("the Notes app works through a project config worker, and its session there
   context,
   helpers,
 }) => {
-  const { adminApiSecret, ingressRouting, osBaseUrl: origin } = readOsPlaywrightAuthConfig();
+  const { ingressRouting, osBaseUrl: origin } = readOsPlaywrightAuthConfig();
   // parked: under `paths` routing (every preview) Notes cannot be proxied at /projects/<p>/notes/:
   // it ignores ITERATE_BASE_PATH_HEADER, its links and assets are root-absolute — #2908, pending the
   // path-routed hosting decision. No CI job runs this until then. — revisit by 2026-10-21
@@ -77,22 +75,15 @@ test("the Notes app works through a project config worker, and its session there
       `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,
     );
   expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
-  using operator = newHttpBatchRpcSession<IterateApi>(
-    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
-  );
-  const projectContext = operator
-    .authenticate({ type: "admin-secret", secret: adminApiSecret })
-    .projects.get(project.id);
-  // Both rules in ONE batch (an HTTP-batch session is one-shot): install the config worker, and point
-  // the `notes` app label at it — so the app's host reaches the config worker with the app slug in
-  // x-iterate-app, and it fetches through to the Notes worker.
+  // The fixture's operator handle installs the config worker and points the `notes` app label at it,
+  // so the app's host reaches the config worker with the app slug in x-iterate-app, and it fetches
+  // through to the Notes worker. Every app interaction after this is real browser RPC.
   await Promise.all([
-    projectContext.append({
+    fixture.itx.append({
       type: "events.iterate.com/project/ingress-configured",
       payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
     }),
-    projectContext.provide("itx.apps.notes", [
+    fixture.itx.provide("itx.apps.notes", [
       "itx",
       "workers",
       ["get", { source: { "cap.js": source } }],

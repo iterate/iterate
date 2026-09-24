@@ -6,10 +6,8 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import {
-  createProjectFixture as createForgedProjectFixture,
-  createSessionFixture,
-} from "./forged-session.ts";
+import { createProjectFixture, createSessionFixture } from "./forged-session.ts";
+import { openOperatorSession, type OperatorSession } from "./operator.ts";
 import { screenshot } from "./screenshot.ts";
 
 const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
@@ -35,14 +33,18 @@ const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
 };
 
 export const test = base.extend<{
+  /** The operator's session on the platform under test (the admin bearer): every project. For
+   *  state no fixture makes; a fixture's own project is `fixture.itx`. */
+  operator: ReturnType<OperatorSession["authenticate"]>;
   helpers: {
-    /** A fresh person with fresh projects, signed in without driving the UI. With `app` (a client
-     *  app's URL, usually the project's `baseURL`), also signed in to that app and on its page for
-     *  the project; uncaught page errors then fail the spec. */
+    /** A fresh person with a fresh project, signed in without driving the UI; `itx` is that
+     *  project as the operator. With `app` (a client app's URL, usually the project's `baseURL`),
+     *  also signed in to that app and on its page for the project; uncaught page errors then fail
+     *  the spec. */
     createFixture: (
       slugPrefix: string,
-      options?: { projectCount?: number; app?: string },
-    ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
+      options?: { app?: string },
+    ) => Promise<Awaited<ReturnType<typeof createProjectFixture>>>;
     /** A browser signed in as a fresh person with no project, without driving the sign-in page. */
     createSession: (slugPrefix: string) => ReturnType<typeof createSessionFixture>;
     /** The origin of a client app deployed against the platform under test, from its
@@ -52,30 +54,46 @@ export const test = base.extend<{
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
+  // oxlint-disable-next-line no-empty-pattern -- Playwright reads a fixture's dependencies from this pattern; the operator's session has none
+  operator: async ({}, use) => {
+    using session = openOperatorSession();
+    await use(session.authenticate());
+  },
   helpers: async ({ page }, use) => {
     // A client app's uncaught errors fail its spec (docs/browser-testing.md: fail on page and
     // hydration errors), counted from before the fixture's sign-in to the end of the test.
     const appPageErrors: string[] = [];
-    await use({
-      createFixture: (slugPrefix, options) =>
-        base.step("create project fixture", () => {
-          if (options?.app) page.on("pageerror", (error) => appPageErrors.push(error.message));
-          return createForgedProjectFixture(slugPrefix, { page, ...options });
-        }),
-      createSession: (slugPrefix) =>
-        base.step("create signed-in session", () => createSessionFixture(slugPrefix, { page })),
-      appOrigin: (app) => {
-        const variable = `${app.toUpperCase()}_BASE_URL`;
-        const name = `${app[0]!.toUpperCase()}${app.slice(1)}`;
-        const url = process.env[variable];
-        base.skip(
-          !process.env.CI && !url,
-          `The ${name} specs need the ${name} app deployed against the platform under test`,
-        );
-        if (!url) throw new Error(`${variable}: the preview's ${name} app is not set`);
-        return new URL(url).origin;
-      },
-    });
+    // opened by the first createFixture, so a spec that makes none opens no socket
+    let operatorSession: OperatorSession | undefined;
+    try {
+      await use({
+        createFixture: (slugPrefix, options) =>
+          base.step("create project fixture", () => {
+            if (options?.app) page.on("pageerror", (error) => appPageErrors.push(error.message));
+            operatorSession ||= openOperatorSession();
+            return createProjectFixture(slugPrefix, {
+              page,
+              operator: operatorSession,
+              ...options,
+            });
+          }),
+        createSession: (slugPrefix) =>
+          base.step("create signed-in session", () => createSessionFixture(slugPrefix, { page })),
+        appOrigin: (app) => {
+          const variable = `${app.toUpperCase()}_BASE_URL`;
+          const name = `${app[0]!.toUpperCase()}${app.slice(1)}`;
+          const url = process.env[variable];
+          base.skip(
+            !process.env.CI && !url,
+            `The ${name} specs need the ${name} app deployed against the platform under test`,
+          );
+          if (!url) throw new Error(`${variable}: the preview's ${name} app is not set`);
+          return new URL(url).origin;
+        },
+      });
+    } finally {
+      operatorSession?.[Symbol.dispose]();
+    }
     expect(appPageErrors, "uncaught errors on the app's pages").toEqual([]);
   },
   page: async ({ page: basePage }, use, testInfo) => {

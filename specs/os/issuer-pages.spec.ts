@@ -2,27 +2,26 @@
 // end to end): the sign-in page's own states, the invalid-request page, and a consent page whose
 // session ends underneath it. Like auth.spec.ts these run against the local worker or, with
 // DEMO_BASE_URL, a deployment.
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { expect, type Page } from "@playwright/test";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { spinnerWaiter } from "middlewright";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
+import { claudeClient, signInWithPassword } from "../test-support/issuer.ts";
 import { test } from "../test-support/test.ts";
-
-const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
-const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
 
 test("the sign-in page refuses a wrong password in place, keeps the email, and tells a signed-in browser where to go", async ({
   page,
 }) => {
-  const email = `pages-${stamp()}@example.com`;
+  const email = `${uniqueFixtureSlug("pages")}@example.com`;
   await page.goto("/login");
   // a wrong password is refused where it was typed; the email is remembered, nobody is signed in
-  await passwordStep(page, email, "not-the-password");
+  await signInWithPassword(page, email, "not-the-password");
   await page.getByRole("alert").waitFor();
   expect(await page.getByRole("textbox", { name: "Email", exact: true }).inputValue()).toBe(email);
   expect(await page.getByText(`Signed in as ${email}.`).count()).toBe(0);
   // Signed in with nowhere asked for: the page says so and points onward.
-  await passwordStep(page, email);
+  await signInWithPassword(page, email);
   await page.getByText(`Signed in as ${email}.`).waitFor();
   await page.goto("/");
   const dash = page.locator('a[href*="/.auth/connect?"]');
@@ -87,7 +86,9 @@ test("a consent page whose session ends underneath it returns to sign-in", async
   await other.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   await other.close();
   // the page's next action is refused; it leaves for sign-in, bound for this very request
-  await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(`ended-${stamp()}`);
+  await page
+    .getByRole("textbox", { name: "Project slug", exact: true })
+    .fill(uniqueFixtureSlug("ended"));
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
   await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   expect(page.url()).toMatch(/\/login\?next=%2Foauth2%2Fauth%3F/);
@@ -113,7 +114,9 @@ test("a consent page whose action cannot reach the platform says so and can retr
   await page.route("**/_serverFn/**", (route) =>
     route.request().method() === "POST" ? route.abort() : route.continue(),
   );
-  await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(`offline-${stamp()}`);
+  await page
+    .getByRole("textbox", { name: "Project slug", exact: true })
+    .fill(uniqueFixtureSlug("offline"));
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
   await page.getByRole("alert").waitFor();
   // the refusal leaves the action ready to try again
@@ -137,12 +140,12 @@ test("the sign-in page renders its state in HTML without a JSON round trip", asy
 });
 
 test("email-code sign-in keeps the destination after a rejected address", async ({ page }) => {
-  const next = `/oauth2/auth?client_id=example-${stamp()}`;
+  const next = `/oauth2/auth?client_id=${uniqueFixtureSlug("example")}`;
   await page.goto(`/login?next=${encodeURIComponent(next)}`);
   const sendCode = page.getByRole("button", { name: "Send me a code", exact: true });
   test.skip((await sendCode.count()) === 0, "email-code sign-in is not configured");
   const providers = await page.getByRole("link", { name: /^Continue with / }).count();
-  const email = `code-${stamp()}@example.com`;
+  const email = `${uniqueFixtureSlug("code")}@example.com`;
   await page.getByLabel("Email", { exact: true }).fill(email);
   await sendCode.click();
   await page
@@ -210,7 +213,7 @@ for (const loads of [true, false]) {
     else await tile.filter({ hasText: /^EX$/ }).waitFor();
     await page
       .getByRole("textbox", { name: "Project slug", exact: true })
-      .fill(`branding-${stamp()}`);
+      .fill(uniqueFixtureSlug("branding"));
     await page.getByRole("button", { name: "Review permissions", exact: true }).click();
     await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
     await page.getByText("example.com", { exact: true }).waitFor();
@@ -223,18 +226,6 @@ for (const loads of [true, false]) {
     );
     await page.screenshot({ path: test.info().outputPath("client-branding.png"), fullPage: true });
   });
-}
-
-/** Password is the alternate method when email-code sign-in is configured. */
-async function passwordStep(page: Page, email: string, password?: string) {
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
-  const field = page.getByLabel("Password", { exact: true });
-  if (!(await field.isVisible()))
-    await page.getByRole("button", { name: "Use password instead", exact: true }).click();
-  await field.fill(password || readOsPlaywrightAuthConfig().loginPassword);
-  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
-  // navigation in flight as loading), not the click's tight action timeout
-  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
 }
 
 /** A loaded image's intrinsic width; 0 until it decodes, and for one that failed to. */

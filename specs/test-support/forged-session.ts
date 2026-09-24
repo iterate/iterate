@@ -1,53 +1,34 @@
 import { expect, test, type Page } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { VideoModePageExtension } from "middlewright";
-import { newHttpBatchRpcSession } from "capnweb";
-import type { IterateApi } from "iterate/next/api";
+import type { OperatorSession } from "./operator.ts";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
 
-export type MintedIterateSession = {
-  email: string;
-};
-
 /**
- * A browser signed in as a fresh person who owns fresh projects, without driving the sign-in page
- * or the consent flow — for specs whose subject is something else. With `app`, that person is
- * also signed in to the client app and on its page for the project (`signInToApp`). Dispose with
- * `await using fixture = await helpers.createFixture(...)`.
+ * A browser signed in as a fresh person who owns a fresh project, without driving the sign-in page
+ * or the consent flow — for specs whose subject is something else. `itx` is the project's root
+ * context as the operator, for seeding state the spec does not drive through the UI. With `app`,
+ * that person is also signed in to the client app and on its page for the project (`signInToApp`).
+ * Dispose with `await using fixture = await helpers.createFixture(...)`.
  */
 export async function createProjectFixture(
   slugPrefix: string,
   input: {
     page: Page;
-    projectCount?: number;
+    operator: OperatorSession;
     /** A client app (any URL on its origin) to sign in to and open on the project's page. */
     app?: string;
   },
 ) {
-  // the OS platform, whichever app host the spec's project targets
-  const baseUrl = readOsPlaywrightAuthConfig().osBaseUrl;
-
-  const projectSlug = uniqueFixtureSlug(slugPrefix);
-  const session = await mintIterateSession({
-    baseUrl,
-    email: `forged-${projectSlug}@example.com`,
-    page: input.page,
-  });
-  const projects = await Promise.all(
-    Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
-      createAdminProject({
-        baseUrl,
-        email: session.email,
-        slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
-      }),
-    ),
-  );
-  if (input.app) await signInToApp({ page: input.page, app: input.app, project: projects[0]! });
+  const slug = uniqueFixtureSlug(slugPrefix);
+  const email = `forged-${slug}@example.com`;
+  await mintIterateSession({ email, page: input.page });
+  const project = await createOwnedProject({ operator: input.operator, email, slug });
+  if (input.app) await signInToApp({ page: input.page, app: input.app, project });
 
   return {
-    project: projects[0]!,
-    projects,
-    session,
+    project,
+    itx: input.operator.authenticate().projects.get(project.id),
     [Symbol.asyncDispose]() {
       // Disposable Playwright projects are left behind: OS has no project removal, and a
       // preview's state goes with the preview.
@@ -88,16 +69,8 @@ async function signInToApp(input: { page: Page; app: string; project: { slug: st
 
 /** A browser signed in as a fresh person with no project yet — the consent page's onboarding
  *  step, without driving the sign-in page. */
-export async function createSessionFixture(
-  slugPrefix: string,
-  input: {
-    page: Page;
-  },
-) {
-  // the OS platform, whichever app host the spec's project targets
-  const baseUrl = readOsPlaywrightAuthConfig().osBaseUrl;
+export function createSessionFixture(slugPrefix: string, input: { page: Page }) {
   return mintIterateSession({
-    baseUrl,
     email: `forged-${uniqueFixtureSlug(slugPrefix)}@example.com`,
     page: input.page,
   });
@@ -109,17 +82,14 @@ export async function createSessionFixture(
  * page does (`login.password`), and the issuer's session cookie lands in the page's browser
  * context. The sign-in page itself is the subject of specs/os/issuer-pages.spec.ts.
  */
-async function mintIterateSession(input: {
-  baseUrl: string;
-  email: string;
-  page: Page;
-}): Promise<MintedIterateSession> {
-  const config = readOsPlaywrightAuthConfig();
+async function mintIterateSession(input: { email: string; page: Page }) {
+  // the OS platform, whichever app host the spec's project targets
+  const { osBaseUrl, loginPassword } = readOsPlaywrightAuthConfig();
   return test.step("sign in with the deployment's test password", async () => {
-    const origin = new URL(input.baseUrl).origin;
+    const origin = new URL(osBaseUrl).origin;
     const login = await input.page.request.post(`${origin}/login`, {
       headers: { Origin: origin },
-      form: { email: input.email, password: config.loginPassword, next: "/" },
+      form: { email: input.email, password: loginPassword, next: "/" },
       maxRedirects: 0,
       // A page.request call inherits the tight actionTimeout, but this is fixture setup over HTTP
       // (the sign-in makes an OAuth grant). timeout: no loading UI exists for the spinner-waiter
@@ -127,29 +97,21 @@ async function mintIterateSession(input: {
     });
     if (login.status() !== 302)
       throw new Error(`sign-in answered ${login.status()}: ${await login.text()}`);
-    return { email: input.email };
   });
 }
 
-async function createAdminProject(input: { baseUrl: string; email: string; slug: string }) {
-  const config = readOsPlaywrightAuthConfig();
+async function createOwnedProject(input: {
+  operator: OperatorSession;
+  email: string;
+  slug: string;
+}) {
   // create() resolves only after the project-creation saga commits, so no separate lifecycle
   // poll is needed.
   return test.step("create project fixture over /api", async () => {
-    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-    using session = newHttpBatchRpcSession<IterateApi>(
-      new Request(`${new URL(input.baseUrl).origin}/api`, {
-        headers: { authorization: `Bearer ${config.adminApiSecret}` },
-      }),
-    );
-    // One pipelined round trip (an HTTP batch session ends with its first): create the project as
-    // that person and read its minted id — a project is addressed by it; the slug labels its hosts.
-    const { projectId } = await session
-      .authenticate({
-        type: "admin-secret",
-        secret: config.adminApiSecret,
-        as: { email: input.email },
-      })
+    // Created as that person, so it lands in an organization they own; its minted id is how a
+    // project is addressed — the slug only labels its hosts.
+    const { projectId } = await input.operator
+      .authenticate({ email: input.email })
       .projects.create({ project: input.slug })
       .whoami();
     return { id: projectId, slug: input.slug };
