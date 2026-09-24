@@ -37,7 +37,6 @@ const TestTelemetryContext = z.object({
   lane: z.string().min(1),
   workspace: z.string().optional(),
   app: z.string().optional(),
-  previewSlot: z.string().optional(),
   testProject: z.string().optional(),
 });
 
@@ -141,7 +140,6 @@ const TestTelemetryLane = z.object({
 
 const DeploymentTelemetryLane = z.object({
   app: z.string().min(1),
-  previewSlot: z.string().optional(),
   status: z.enum(["passed", "failed"]),
   durationMs: z.number().nonnegative(),
   finishedAt: Timestamp.optional(),
@@ -159,7 +157,6 @@ const DeploymentTelemetry = z.object({
   startedAt: Timestamp,
   finishedAt: Timestamp,
   durationMs: z.number().nonnegative(),
-  previewSlot: z.string().optional(),
   error: TestTelemetryError.optional(),
   lanes: z.array(DeploymentTelemetryLane),
 });
@@ -348,7 +345,6 @@ export function testTelemetryContextFromEnvironment(
     lane: environment.TEST_TELEMETRY_LANE ?? defaults.lane,
     workspace: environment.TEST_TELEMETRY_WORKSPACE ?? defaults.workspace,
     app: environment.TEST_TELEMETRY_APP ?? defaults.app,
-    previewSlot: environment.TEST_TELEMETRY_PREVIEW_SLOT ?? defaults.previewSlot,
     testProject: environment.TEST_TELEMETRY_PROJECT ?? defaults.testProject,
   });
 }

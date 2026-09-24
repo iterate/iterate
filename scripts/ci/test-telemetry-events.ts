@@ -314,7 +314,6 @@ function deploymentTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEven
       "run-started",
       {
         lane: "preview",
-        preview_slot: deployment.previewSlot,
         status: "running",
       },
       deployment.startedAt,
@@ -324,7 +323,6 @@ function deploymentTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEven
     const laneCommon = {
       scope: "app",
       app: lane.app,
-      preview_slot: lane.previewSlot ?? deployment.previewSlot,
       status: lane.status,
       worker_name: lane.workerName,
       worker_version: lane.workerVersion,
@@ -367,7 +365,6 @@ function deploymentTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEven
       "run-finished",
       {
         lane: "preview",
-        preview_slot: deployment.previewSlot,
         status: deployment.status,
         duration_ms: deployment.durationMs,
         error_name: deployment.error?.name,
@@ -541,7 +538,6 @@ function contextProperties(context: TestTelemetryContext) {
     lane: context.lane,
     workspace: context.workspace,
     app: context.app,
-    preview_slot: context.previewSlot,
     test_project: context.testProject,
   };
 }

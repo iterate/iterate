@@ -61,7 +61,7 @@ const artifact: TestTelemetryArtifact = {
       moduleId: "specs/resume.spec.ts",
       tags: ["@recovery"],
       annotations: [{ type: "slow", description: "real liveness timeout" }],
-      context: { framework: "playwright", lane: "playwright", app: "os", testProject: "web" },
+      context: { framework: "playwright", lane: "playwright", app: "os", testProject: "os" },
       retryCount: 1,
       passedAfterRetry: true,
       state: "passed",
@@ -144,7 +144,7 @@ it("transmogrifies one runner-independent artifact into the shared PostHog event
       retry_count: 1,
       passed_after_retry: true,
       artifact_id: "preview:123:1",
-      test_id: "playwright:specs/resume.spec.ts:feed resumes:web",
+      test_id: "playwright:specs/resume.spec.ts:feed resumes:os",
     },
   });
   expect(events[4]?.properties).toMatchObject({
@@ -168,11 +168,9 @@ it("normalizes retained preview deployment evidence without reporter network I/O
       startedAt: "2026-07-21T09:58:00.000Z",
       finishedAt: "2026-07-21T10:00:00.000Z",
       durationMs: 120_000,
-      previewSlot: "preview-3",
       lanes: [
         {
           app: "os",
-          previewSlot: "preview-3",
           status: "passed",
           durationMs: 115_500,
           finishedAt: "2026-07-21T09:59:58.000Z",
@@ -727,7 +725,7 @@ it("normalizes source paths with the artifact's original workspace when replayed
     "specs/resume.spec.ts",
   );
   expect(events.find((event) => event.event === "ci test finished")?.properties.test_id).toBe(
-    "playwright:specs/resume.spec.ts:feed resumes:web",
+    "playwright:specs/resume.spec.ts:feed resumes:os",
   );
   expect(
     events.find((event) => event.event === "ci test phase finished")?.properties.source_file,
