@@ -276,7 +276,7 @@ function ProjectSecrets() {
           side="right"
           showCloseButton={!pending}
           initialFocus={updating || collectionIsValid ? valueField : undefined}
-          className="overflow-y-auto data-[side=right]:sm:max-w-md"
+          className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           <SecretForm
             // mounted with the sheet, keyed by what it opens on, so every opening starts from its row

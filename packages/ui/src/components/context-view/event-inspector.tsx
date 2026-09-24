@@ -43,7 +43,7 @@ export function EventInspector({
     : [];
   return (
     <Sheet open={Boolean(event)} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+      <SheetContent side="right" className="overflow-y-auto data-[side=right]:w-full sm:max-w-xl">
         {event ? (
           <>
             <SheetHeader>

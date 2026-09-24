@@ -15,8 +15,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/sidebar";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { toast } from "sonner";
+import { cn } from "cn";
 import {
   countActiveOrWaiting,
   orderAgents,

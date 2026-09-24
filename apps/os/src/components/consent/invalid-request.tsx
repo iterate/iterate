@@ -1,6 +1,6 @@
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { IssuerPage } from "../issuer-page.tsx";
 
 /** A request the authorization server refused outright, with no client to send the person back

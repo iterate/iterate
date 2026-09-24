@@ -1,5 +1,5 @@
 import { buttonVariants } from "@iterate-com/ui/components/button";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 /** The identity providers this deployment accepts, each a link that starts its sign-in — side by
  *  side, one under the other only where they do not fit. */

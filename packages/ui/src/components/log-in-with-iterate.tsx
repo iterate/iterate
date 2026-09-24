@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { cn } from "../lib/utils.ts";
+import { cn } from "cn";
 import { IterateLogo } from "./iterate-logo.tsx";
 
 /** THE log-in button — the one people recognise across sites, the way Google's is one button

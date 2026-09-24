@@ -12,6 +12,7 @@ import {
   useSyncExternalStore,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, LogOutIcon } from "lucide-react";
 import {
@@ -132,7 +133,7 @@ export function AppShell({
           <PaletteSidebarButton onOpen={openPalette} />
         </SidebarHeader>
         {/* ⌘K lists what the sidebar shows here — on a desktop; a phone's lists the projects alone */}
-        <SidebarContent ref={navRef}>{nav}</SidebarContent>
+        <SidebarNav navRef={navRef}>{nav}</SidebarNav>
         <SidebarFooter>
           <CollapseButton />
           <AccountMenu email={account.email} actions={accountActions} />
@@ -141,7 +142,7 @@ export function AppShell({
       </Sidebar>
       <SidebarInset className="min-w-0 overflow-hidden">
         <header className="flex shrink-0 items-center gap-3 px-4 pt-2.5 pb-1">
-          <SidebarTrigger className="-ml-1 md:hidden" />
+          <SidebarTrigger className="-ml-1 md:hidden" title="Toggle sidebar" />
           <PaletteHeaderButton onOpen={openPalette} />
           {header}
         </header>
@@ -172,6 +173,40 @@ function CloseMobileSidebarOnNavigate({ locationKey }: { locationKey: string }) 
     setOpenMobile(false);
   }, [locationKey, setOpenMobile]);
   return null;
+}
+
+/** The app's navigation. On a phone, a same-tab link click in it closes the sidebar sheet at once,
+ *  as the navigation starts; shadcn leaves it open (https://github.com/shadcn-ui/ui/issues/5561),
+ *  and `CloseMobileSidebarOnNavigate` only fires once the location has changed. A modified or
+ *  middle click, a download, or a link to another tab leaves the sheet open, as does a button (the
+ *  collapse button, a dropdown trigger). This used to live in the vendored sidebar.tsx's
+ *  SidebarMenuButton (#1984); a vendored file stays byte-identical to upstream
+ *  (packages/ui/AGENTS.md). */
+function SidebarNav({
+  navRef,
+  children,
+}: {
+  navRef: RefObject<HTMLDivElement | null>;
+  children: ReactNode;
+}) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  return (
+    <SidebarContent
+      ref={navRef}
+      onClick={(event) => {
+        if (!isMobile) return;
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+          return;
+        const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+        if (!link || !event.currentTarget.contains(link) || link.hasAttribute("download")) return;
+        const target = link.getAttribute("target");
+        if (target && target !== "_self") return;
+        setOpenMobile(false);
+      }}
+    >
+      {children}
+    </SidebarContent>
+  );
 }
 
 function ProjectSwitcher({

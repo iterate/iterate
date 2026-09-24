@@ -94,6 +94,8 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
 | `pr-ttg.yml`                 | Hourly, dispatch                                         | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
 | `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                   |
+| `shadcn-drift.yml`           | PR touching the vendored shadcn files, dispatch          | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)          |
+| `shadcn-upstream.yml`        | Daily, dispatch                                          | Posts to #ci when shadcn's registry moves past packages/ui's vendored files                             |
 
 Each file's header comment and `on:` block are the details.
 

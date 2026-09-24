@@ -15,7 +15,10 @@ export function AppProviders(props: { children: ReactNode; posthogApiKey?: strin
     // https://github.com/mui/base-ui/blob/master/docs/src/app/(docs)/react/components/tooltip/page.mdx
     <TooltipProvider delay={0}>
       {props.children}
-      <Toaster />
+      {/* Light mode only (docs/frontend-development.md). The vendored Toaster asks next-themes for the
+          theme, and with no ThemeProvider mounted it falls back to "system", which follows the OS
+          into dark; a `theme` prop overrides it (it spreads the props last). */}
+      <Toaster theme="light" />
     </TooltipProvider>
   );
 }

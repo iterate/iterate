@@ -1,6 +1,6 @@
 // Who is here: the people who acted on the context, newest first (from the log's stamps), and how
 // many live rpc stubs are lent to it right now. One line, text — no badges.
-import { cn } from "../../lib/utils.ts";
+import { cn } from "cn";
 import type { ContextViewPresence } from "./types.tsx";
 
 export function PresenceStrip({

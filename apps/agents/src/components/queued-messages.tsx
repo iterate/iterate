@@ -7,7 +7,7 @@ import { BanIcon } from "lucide-react";
 import type { AgentUiMessageItem } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { UserMessageBody, type SignedUrl } from "./agent-feed.tsx";
 
 export function QueuedMessagesPanel({

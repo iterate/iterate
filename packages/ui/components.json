@@ -1,0 +1,24 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@iterate-com/ui/components",
+    "utils": "@iterate-com/ui/lib/utils",
+    "hooks": "@iterate-com/ui/hooks",
+    "lib": "@iterate-com/ui/lib",
+    "ui": "@iterate-com/ui/components"
+  },
+  "registries": {
+    "@ai-elements": "https://elements.ai-sdk.dev/api/registry/{name}.json"
+  }
+}

@@ -12,7 +12,7 @@ import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { stringify as stringifyYaml } from "yaml";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 type SerializedFormat = "yaml" | "json";
 

@@ -3,7 +3,7 @@ import { memo, useState } from "react";
 import { CopyIcon } from "lucide-react";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { Button } from "@iterate-com/ui/components/button";
-import { toast } from "@iterate-com/ui/components/sonner";
+import { toast } from "sonner";
 import {
   Sheet,
   SheetContent,
@@ -23,7 +23,7 @@ export function FullTextSnapshot({ text }: { text: StreamText }) {
         onOpenChange={(open) => setSnapshot(open ? sliceText(text) : undefined)}
       >
         <SheetTrigger render={<Button variant="outline" size="xs" />}>View full text</SheetTrigger>
-        <SheetContent className="sm:max-w-3xl">
+        <SheetContent className="data-[side=right]:w-full sm:max-w-3xl">
           <SheetHeader>
             <SheetTitle>Available response text</SheetTitle>
             <SheetDescription>Captured when opened. Reopen for newer text.</SheetDescription>
