@@ -9,7 +9,7 @@
 // (the stale previews and the resources that outlived theirs — the rules are
 // scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -37,6 +37,7 @@ import {
   APPS,
   appPreviewOrigins,
   appPreviewUrl,
+  assertFreshInstall,
   changedApps,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
@@ -542,18 +543,6 @@ async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
   }
 }
 
-/** A laptop deploy bundles whatever node_modules holds, so a lockfile newer than the install would
- *  ship stale dependencies: pnpm-lock.yaml newer than node_modules → stop. CI installs first. */
-function assertFreshInstall() {
-  const root = path.resolve(ROOT, "../..");
-  const lockfile = statSync(path.join(root, "pnpm-lock.yaml")).mtimeMs;
-  const installed = statSync(path.join(root, "node_modules", ".modules.yaml"), {
-    throwIfNoEntry: false,
-  })?.mtimeMs;
-  if (installed === undefined || lockfile > installed)
-    throw new Error("pnpm-lock.yaml is newer than node_modules: run `pnpm install` first");
-}
-
 /** The OS's own preview, from an OS build already made — its Artifacts namespace, its config
  *  (naming the PR's Dash preview when this run deploys one), the Previews secrets, `wrangler
  *  preview`, and the smoke that the new deployment serves. The wrangler it prepared comes back for
@@ -634,7 +623,7 @@ async function deployPreview(
   prNumber: string | undefined,
   apps: StartApp[],
 ) {
-  assertFreshInstall();
+  assertFreshInstall(path.resolve(ROOT, "../.."));
   // The apps' vite builds run beside apps/os's build, their rejection handlers attached at once:
   // apps/os's build and deployment can take minutes, and an app build may fail before its result is
   // consumed. Each step is a span in the CI trace (docs/ci-traces.md), so the deploy step shows
