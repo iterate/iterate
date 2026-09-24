@@ -731,6 +731,7 @@ static void stop_websocket(
 static void network_task(void *context) {
   struct iterate_kit_itx_transport *transport = context;
   struct iterate_kit_retry_gate websocket_retry;
+  struct iterate_kit_retry_gate credential_retry;
   uint32_t wifi_retry_ms = WIFI_RETRY_INITIAL_MS;
   int64_t wifi_retry_at_us = 0;
   bool prior_wifi_connected = false;
@@ -739,6 +740,10 @@ static void network_task(void *context) {
       &websocket_retry,
       WEBSOCKET_RETRY_INITIAL_MS,
       WEBSOCKET_RETRY_MAX_MS);
+  (void)iterate_kit_retry_gate_init(
+      &credential_retry,
+      ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS,
+      ITERATE_KIT_ITX_CREDENTIAL_RETRY_MAX_MS);
   atomic_store_u32(&transport->network_task_running, 1U);
   /*
    * Subscribe to the task watchdog so a wedged transport becomes a classified
@@ -777,11 +782,13 @@ static void network_task(void *context) {
        * so repeated pre-mount protocol failures retain exponential backoff.
        */
       iterate_kit_retry_gate_reset(&websocket_retry);
+      iterate_kit_retry_gate_reset(&credential_retry);
     }
 
     if (wifi_connected && !prior_wifi_connected) {
       /*
        * A proven IP lease resets both retry histories for immediate recovery.
+       * Not the credential's: a new lease cannot make a refused key good.
        */
       wifi_retry_ms = WIFI_RETRY_INITIAL_MS;
       wifi_retry_at_us = 0;
@@ -849,7 +856,9 @@ static void network_task(void *context) {
             &transport->fatal_failure_latched) &&
         !websocket_started &&
         iterate_kit_retry_gate_ready(
-            &websocket_retry, now_us)) {
+            &websocket_retry, now_us) &&
+        iterate_kit_retry_gate_ready(
+            &credential_retry, now_us)) {
       enum iterate_kit_status status;
       if (task_stack_headroom_bytes(NULL) <
           ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES) {
@@ -883,6 +892,7 @@ static void network_task(void *context) {
           mark_socket_connected(transport)) {
         websocket_started = true;
         atomic_store_u32(&transport->websocket_started, 1U);
+        atomic_store_u32(&transport->credential_refused, 0U);
       } else {
         if (status == ITERATE_KIT_OK) {
           remember_platform_error(
@@ -895,6 +905,14 @@ static void network_task(void *context) {
               transport, transport->websocket.last_error);
           iterate_kit_retry_gate_defer(
               &websocket_retry, now_us);
+          if (iterate_kit_esp_idf_websocket_refused_credential(
+                  transport->websocket.last_upgrade_status)) {
+            iterate_kit_atomic_saturating_increment_relaxed_u32(
+                &transport->websocket_credential_refusals);
+            atomic_store_u32(&transport->credential_refused, 1U);
+            iterate_kit_retry_gate_defer(
+                &credential_retry, now_us);
+          }
         }
         iterate_kit_esp_idf_websocket_connection_close(
             &transport->websocket);
@@ -1663,6 +1681,13 @@ void iterate_kit_itx_transport_metrics(
       atomic_load_u32(&transport->websocket_disconnects);
   metrics->websocket_errors =
       atomic_load_u32(&transport->websocket_errors);
+  metrics->websocket_credential_refusals =
+      atomic_load_u32(
+          &transport->websocket_credential_refusals);
+  metrics->last_websocket_upgrade_status = __atomic_load_n(
+      &transport->websocket.last_upgrade_status, __ATOMIC_ACQUIRE);
+  metrics->credential_refused =
+      atomic_load_u32(&transport->credential_refused) != 0U;
   metrics->fatal_failure_latched =
       atomic_load_u32(
           &transport->fatal_failure_latched) != 0U;

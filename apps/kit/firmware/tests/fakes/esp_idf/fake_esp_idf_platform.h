@@ -52,6 +52,9 @@ void iterate_kit_fake_platform_connect(void);
 void iterate_kit_fake_platform_set_state(
     enum iterate_kit_itx_transport_state state);
 
+/** What the loop reads as the OS having refused the device's key. */
+void iterate_kit_fake_platform_set_credential_refused(bool refused);
+
 /**
  * Everything the loop sent, in order, as whole Cap'n Web messages.
  *

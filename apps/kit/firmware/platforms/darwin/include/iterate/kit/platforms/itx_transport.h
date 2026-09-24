@@ -87,6 +87,9 @@ struct iterate_kit_itx_transport_metrics {
   int32_t last_websocket_close_status_code;
   int32_t last_websocket_transport_errno;
   uint32_t websocket_pongs_received;
+  /* The Mac's client does not read a refused upgrade's status, so a refused
+   * key is an ordinary failed connect here and this stays false. */
+  bool credential_refused;
   bool fatal_failure_latched;
   enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
   struct iterate_kit_spsc_ring_metrics control_inbox;

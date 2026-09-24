@@ -455,6 +455,8 @@ iterate_kit_esp_idf_websocket_connection_open(
       timeout_ms <= 0) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
+  __atomic_store_n(
+      &connection->last_upgrade_status, 0, __ATOMIC_RELEASE);
   destroy_transports(connection);
   /*
    * Handles are created per generation instead of recycled. Parser/TLS state
@@ -497,6 +499,16 @@ iterate_kit_esp_idf_websocket_connection_open(
       connection->host,
       connection->port,
       timeout_ms);
+  /*
+   * The wrapper returns -1 for a refused upgrade exactly as for a dropped
+   * connection; only the status it parsed tells them apart, and it goes with
+   * the handle.
+   */
+  __atomic_store_n(
+      &connection->last_upgrade_status,
+      (int32_t)esp_transport_ws_get_upgrade_request_status(
+          connection->websocket),
+      __ATOMIC_RELEASE);
   if (result != 0) {
     remember_transport_failure(
         connection,
@@ -862,6 +874,8 @@ void iterate_kit_esp_idf_websocket_connection_metrics(
       &connection->last_tls_stack_error, __ATOMIC_ACQUIRE);
   metrics->last_tls_cert_flags = __atomic_load_n(
       &connection->last_tls_cert_flags, __ATOMIC_ACQUIRE);
+  metrics->last_upgrade_status = __atomic_load_n(
+      &connection->last_upgrade_status, __ATOMIC_ACQUIRE);
   iterate_kit_websocket_tx_metrics(
       &connection->tx, &metrics->tx);
 }
