@@ -5,9 +5,9 @@
 import { z } from "zod";
 import { parseCodemodeResponse } from "../../runtime/codemode-format.ts";
 
-/** `running`: a model request is open or about to be, a script it asked for has not come back, or
- *  its birth is still settling. `waiting`: paused — a breaker tripped or an operator paused it, and
- *  only a person's next words resume it. `idle`: nothing owed. */
+/** `waiting`: paused — a breaker tripped or an operator paused it, and only a person's next words
+ *  resume it. `running`: otherwise, a model request is open or about to be, a script it asked for
+ *  has not come back, or its birth is still settling. `idle`: nothing owed. */
 export type AgentStatus = "running" | "waiting" | "idle";
 
 export type AgentSummary = {
@@ -48,15 +48,16 @@ export function summarizeAgentState(value: unknown): AgentSummary | undefined {
     last?.role === "assistant" &&
     last.llmRequestOffset !== undefined &&
     parseCodemodeResponse(last.content).kind === "script";
-  const status: AgentStatus =
-    state.creation?.status === "requested" ||
-    state.openRequest ||
-    state.pendingLlmRequestTrigger ||
-    scriptRunning
+  // A pause reads first, as the conversation's header does: a pause lands mid-turn with the request
+  // still open, and it is the person's move from there.
+  const status: AgentStatus = state.paused
+    ? "waiting"
+    : state.creation?.status === "requested" ||
+        state.openRequest ||
+        state.pendingLlmRequestTrigger ||
+        scriptRunning
       ? "running"
-      : state.paused
-        ? "waiting"
-        : "idle";
+      : "idle";
   const first = state.contextItems.find(
     (item) => item.role === "user" && (!item.actor || item.actor.type === "user"),
   );

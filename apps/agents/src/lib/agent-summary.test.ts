@@ -73,6 +73,11 @@ const summaryRows: {
     summary: { status: "waiting", lastActivityAt: at(5), title: "Hi" },
   },
   {
+    name: "a pause mid-turn leaves the request open, and still reads as waiting on a person",
+    events: [...born, system, user("Hi"), llmRequested(4), paused],
+    summary: { status: "waiting", lastActivityAt: at(6), title: "Hi" },
+  },
+  {
     name: "a late intent is a harmless fact: it moves neither the state nor its time",
     events: [
       ...born,
