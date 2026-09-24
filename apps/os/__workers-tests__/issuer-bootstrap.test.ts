@@ -526,7 +526,7 @@ test("the consent page renders on the server, and Authorize posts the choice to 
   expect((await app.projects.list()).map((listed) => listed.id)).toEqual([project.id]);
 });
 
-/** `user`'s issuer session, as a sign-in starts it; this lane's code exchange reaches the worker. */
+/** `user`'s issuer session, as a sign-in starts it; this suite's code exchange reaches the worker. */
 async function issuerSignIn(
   user: UserRecord,
   next: string,
