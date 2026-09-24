@@ -4,9 +4,9 @@
 // app's code. The platform's Durable Object, processor host and itx GitHub integration are gone;
 // ./update.ts is the scheduled writer that feeds this fold from Depot artifacts and writes #2580.
 import type { z } from "zod";
+import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import {
   FlakeRecord,
-  FlakeSuiteSummary,
   flakeEventTypes,
   flakeTransitionThresholds,
   FlakeDashboardState,

@@ -1,8 +1,6 @@
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 
-export { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
-
 export const flakeEventTypes = {
   created: "events.iterate.com/flakes/created",
   runRecorded: "events.iterate.com/flakes/run-recorded",
@@ -29,13 +27,13 @@ export const FlakeOutcome = z.enum([
 /**
  * Which wrapper (or reporter) produced a record: createFlake, createFailing,
  * or the telemetry reporters' retried-pass records for tests nobody has
- * classified yet. Old events predate the field — they were all createFlake.
+ * classified yet.
  */
 export const FlakeKind = z.enum(["flake", "failing", "unknown"]);
 
 export const FlakeRecord = z.object({
   name: z.string().min(1).max(1_000),
-  kind: FlakeKind.default("flake"),
+  kind: FlakeKind,
   outcome: FlakeOutcome,
   // Optional: kind "unknown" records carry error samples instead of a pattern.
   pattern: z.string().min(1).max(2_000).optional(),
@@ -59,7 +57,8 @@ export const FlakeRunRecorded = z.object({
   branch: z.string().min(1).max(500),
   commit: z.string().min(1).max(100),
   records: z.array(FlakeRecord).max(10_000),
-  // Historical events have records only; they cannot certify a complete suite.
+  // An artifact without suite-summary.json (e.g. a cancelled run) has records only; it cannot
+  // certify a complete suite.
   summary: FlakeSuiteSummary.optional(),
 });
 
@@ -175,7 +174,8 @@ export const FlakeDashboardState = z.object({
       z.object({
         latest: MainSuiteRun,
         complete: MainSuiteRun.nullable(),
-        // Keep the last full test list even if a newer legacy summary has only counts.
+        // The last full test list; mainRuns snapshots strip per-test lists (fold.ts), so this
+        // carries it forward.
         inventory: z
           .object({ startedAt: z.iso.datetime(), names: z.array(z.string()) })
           .nullable()
