@@ -678,7 +678,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     return this.#session.input.controlPlane.reachableProjects(this.#session.authority.reach);
   }
 
-  /** The built-in config repo templates a creation may name (generated/config-templates.js). */
+  /** The built-in config repo templates a creation may name (generated/config-templates.js); naming
+   *  none creates the default config (configs-next/default). */
   async templates() {
     return templates;
   }

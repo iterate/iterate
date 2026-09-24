@@ -404,7 +404,8 @@ export interface IterateSessionApi {
     list(): Promise<ProjectRecord[]>;
     /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
-    /** Config repository presets available on this platform. */
+    /** Config repository presets available on this platform, besides the default config a
+     *  creation that names no template gets. */
     templates(): Promise<{ label: string; reference: string }[]>;
     /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
      *  context's `whoami()` says it, so does `list()` */

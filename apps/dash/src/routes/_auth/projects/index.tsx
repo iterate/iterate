@@ -257,13 +257,11 @@ function NewProjectForm({
             onChange={(event) => setTemplate(event.target.value)}
           >
             <NativeSelectOption value="">Minimal</NativeSelectOption>
-            {templateOptions
-              .filter((option) => option.label !== "Minimal")
-              .map((option) => (
-                <NativeSelectOption key={option.reference} value={option.reference}>
-                  {option.label}
-                </NativeSelectOption>
-              ))}
+            {templateOptions.map((option) => (
+              <NativeSelectOption key={option.reference} value={option.reference}>
+                {option.label}
+              </NativeSelectOption>
+            ))}
             <NativeSelectOption value="custom">Custom GitHub template…</NativeSelectOption>
           </NativeSelect>
           <FieldDescription>

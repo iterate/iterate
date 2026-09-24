@@ -61,13 +61,11 @@ export async function build() {
     cwd: root,
     encoding: "utf8",
   }).trim();
+  // `default` is not a named template: a creation that names none gets its files (`defaultFiles`).
   const templates = readdirSync(templatesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && entry.name !== "default")
     .map((entry) => ({
-      label:
-        entry.name === "default"
-          ? "Minimal"
-          : entry.name.charAt(0).toUpperCase() + entry.name.slice(1).replaceAll("-", " "),
+      label: entry.name.charAt(0).toUpperCase() + entry.name.slice(1).replaceAll("-", " "),
       reference: `github:iterate/iterate#${sourceRef}&path:configs-next/${entry.name}`,
     }));
   const defaultFiles = readdirSync(path.join(templatesRoot, "default")).map((file) => ({
