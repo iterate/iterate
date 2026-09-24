@@ -8,10 +8,8 @@ field of it. They were introduced in
 `*.test.ts` and `*.test.tsx` in the repository: each workspace's unit tests, the
 os Workers lane and the e2e lane.
 
-Each rule but `prefer-test-over-it` (which no line violates) is wrapped in
-[grandfatherRule](grandfather-rule.md) with an inclusive **2026-09-23 23:59:59 UTC**
-author-date cutoff. Lines last authored on or before then are exempt; new and changed lines
-must comply. Fix an old line when you touch it.
+Every line must comply. Where a rule genuinely does not apply to a file, exclude that
+exact path in `.oxlintrc.json` with a comment saying why.
 
 | Rule                           | Flags                                                      | Write instead                                          |
 | ------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------ |

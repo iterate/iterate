@@ -16,7 +16,7 @@ type Diagnostic = {
 /**
  * The lint tests' temp project: the real iterate plugin with only `rules` armed (every category
  * off), linted by the real oxlint binary from the project root, so rules see the paths a test
- * writes. It sits outside Git, where grandfatherRule exempts nothing. `tsconfig` adds a strict
+ * writes. `tsconfig` adds a strict
  * project over the root's *.ts for the type-aware rules.
  */
 export function createOxlintFixture(input: { rules: Record<string, unknown>; tsconfig?: boolean }) {

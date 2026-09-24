@@ -1,5 +1,5 @@
 // Reimplements the design from iterate/iterate#2491 (simple-truthiness-check).
-// Adds direct-property checks and a dated rollout; uses types to leave numeric,
+// Adds direct-property checks; uses types to leave numeric,
 // boolean and unknown-input checks alone, and deliberately offers no autofix.
 import {
   ObjectFlags,
@@ -14,7 +14,7 @@ import {
   getTypeAwareLintFileService,
   type TypeAwareLintFileService,
 } from "../oxlint-type-aware.ts";
-import { grandfatherRule } from "../grandfather-rule.ts";
+import type { StrictRule } from "../types.ts";
 
 /**
  * Aim for falsy ≈ nil. Missing, undefined, null and empty strings should rarely
@@ -27,8 +27,7 @@ import { grandfatherRule } from "../grandfather-rule.ts";
  * Zero and false can matter. Keep those checks; explain real protocol exceptions.
  * No autofix: deciding whether a distinction matters still needs a human.
  */
-export const simpleTruthinessCheckRule = grandfatherRule({
-  allowedUpTo: new Date("2026-09-11T00:00:00Z"),
+export const simpleTruthinessCheckRule: StrictRule = {
   meta: {
     type: "suggestion",
     schema: [],
@@ -220,7 +219,7 @@ export const simpleTruthinessCheckRule = grandfatherRule({
       },
     };
   },
-});
+};
 
 function isReference(node: Node): boolean {
   return (

@@ -132,13 +132,13 @@ export function formatAgentUiActivitySummary(
     interruptedPartialHint?: string;
   } = {},
 ): string {
-  const summary = options.summary ?? summarizeAgentUiActivity(activity);
+  const summary = options.summary || summarizeAgentUiActivity(activity);
   const parts: string[] = [];
   if (summary.codeCount > 0) parts.push(`Ran code ${summary.codeCount}×`);
   parts.push(`${summary.requestCount} request${summary.requestCount === 1 ? "" : "s"}`);
   if (summary.outcome === "interrupted") {
     parts.push(
-      summary.interruptedWithPartialResponse && options.interruptedPartialHint != null
+      summary.interruptedWithPartialResponse && options.interruptedPartialHint
         ? `interrupted (${options.interruptedPartialHint})`
         : "interrupted",
     );
@@ -169,7 +169,7 @@ export function groupActivityRounds(steps: readonly AgentUiStep[]) {
     const current = rounds.at(-1);
     if (step.kind === "llm") {
       rounds.push({ llm: step, code: null });
-    } else if (current !== undefined && current.code === null) {
+    } else if (current && !current.code) {
       current.code = step;
     } else {
       rounds.push({ llm: null, code: step });
@@ -220,9 +220,9 @@ export type AgentUiLiveStatus = {
  */
 export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus | null {
   const live = state.live;
-  if (live == null) return null;
+  if (!live) return null;
   const statusText =
-    state.summaryActivity !== null &&
+    state.summaryActivity &&
     state.summaryActivityUpdatedAtMs !== null &&
     state.summaryActivityUpdatedAtMs >= live.startedAtMs
       ? state.summaryActivity
@@ -399,19 +399,6 @@ export function settleAgentUiAtIdleBoundary(
   return { endState, items };
 }
 
-const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
-const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
-const AGENT_LLM_RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
-const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
-const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
-const STREAM_WOKEN = "events.iterate.com/stream/woken";
-const STREAM_PAUSED = "events.iterate.com/stream/paused";
-const STREAM_RESUMED = "events.iterate.com/stream/resumed";
-const AGENT_PAUSED = "events.iterate.com/agent/paused";
-const AGENT_RESUMED = "events.iterate.com/agent/resumed";
-const AGENT_SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
-const STREAM_WAKE_LABEL = "Stream durable object woke";
-
 function reduceAgentUiEvent(
   previous: AgentUiState,
   event: Event,
@@ -436,6 +423,7 @@ function reduceAgentUiEvent(
     case "events.iterate.com/agent/context-added": {
       const role = readString(event, "role");
       const text = readString(event, "content");
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (runtime/durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
       if (text == null) return state;
       const actor = readRecord(event, "actor");
       const actorType = typeof actor?.type === "string" ? actor.type : undefined;
@@ -491,7 +479,7 @@ function reduceAgentUiEvent(
           text: rendersFromRawEvent ? "" : text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: actorType, ...(sender === undefined ? {} : { sender }) },
+          via: { service: actorType, sender },
         });
       }
       return state;
@@ -499,6 +487,7 @@ function reduceAgentUiEvent(
 
     case "events.iterate.com/agent/web-message-sent": {
       const text = readString(event, "message");
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty message is still a sent message: it can carry attachments alone
       if (text == null) return state;
       // An llmRequestOffset marks the message as EXTRACTED from that request's
       // response (a userland response interpreter) — the raw response text is
@@ -519,11 +508,11 @@ function reduceAgentUiEvent(
       return emitAssistantMessageItem(marked, items, item);
     }
 
-    case AGENT_LLM_REQUEST_REQUESTED: {
+    case "events.iterate.com/agent/llm-request-requested": {
       const base =
         state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
       const ready =
-        base.live === null &&
+        !base.live &&
         (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
           ? flushDeferredMessages(base, items)
           : base;
@@ -534,7 +523,7 @@ function reduceAgentUiEvent(
         id: `llm-${event.offset}`,
         llmRequestOffset: event.offset,
         status: "running",
-        ...(model == null ? {} : { model }),
+        model: model || undefined,
         thinkingText: "",
         responseText: "",
         startedAtMs: timestampMs,
@@ -542,7 +531,7 @@ function reduceAgentUiEvent(
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case AGENT_LLM_RESPONSE_CHUNKS: {
+    case "events.iterate.com/agent/llm-response-chunks": {
       const llmRequestOffset = readLlmRequestOffset(event);
       if (llmRequestOffset == null) return state;
       const payload = readPayloadRecord(event);
@@ -569,12 +558,12 @@ function reduceAgentUiEvent(
       }));
     }
 
-    case AGENT_LLM_REQUEST_SETTLED: {
+    case "events.iterate.com/agent/llm-request-settled": {
       // The ONE terminal fact for a request (succeeded | failed | cancelled),
       // pointing back at the requested event's offset via `requestOffset`.
       const payload = readPayloadRecord(event);
       const requestOffset = payload?.requestOffset;
-      if (payload == null || typeof requestOffset !== "number") return state;
+      if (!payload || typeof requestOffset !== "number") return state;
       const result = isRecord(payload.result) ? payload.result : undefined;
       const status = typeof result?.status === "string" ? result.status : "succeeded";
       const usage = readUsageTokens(result?.usage);
@@ -587,7 +576,7 @@ function reduceAgentUiEvent(
       // empty responseText — the settled fact fills it in.
       const partialText = typeof result?.partialText === "string" ? result.partialText : null;
       return updateLlmStep(state, requestOffset, (step) =>
-        step.outcome != null
+        step.outcome
           ? step
           : {
               ...step,
@@ -608,22 +597,22 @@ function reduceAgentUiEvent(
                 : status === "cancelled"
                   ? { durationMs: Math.max(0, timestampMs - step.startedAtMs) }
                   : {}),
-              ...(usage.input == null ? {} : { inputTokens: usage.input }),
-              ...(usage.output == null ? {} : { outputTokens: usage.output }),
-              ...(errorMessage == null ? {} : { errorMessage }),
-              ...(cancelReason == null ? {} : { cancelReason }),
+              inputTokens: usage.input,
+              outputTokens: usage.output,
+              errorMessage,
+              cancelReason: cancelReason || undefined,
             },
       );
     }
 
-    case SCRIPT_EXECUTION_REQUESTED: {
+    case "events.iterate.com/capability-host/script-run-requested": {
       const payload = readPayloadRecord(event);
       const executionId = typeof payload?.executionId === "string" ? payload.executionId : null;
       const code = typeof payload?.code === "string" ? payload.code : null;
       const expiresAtMs = payload?.expiresAt;
       if (
-        executionId == null ||
-        code == null ||
+        !executionId ||
+        !code ||
         typeof expiresAtMs !== "number" ||
         !Number.isSafeInteger(expiresAtMs) ||
         expiresAtMs <= 0
@@ -634,10 +623,9 @@ function reduceAgentUiEvent(
       // marks that response's llm step interpreted: the Script tab now carries
       // the code, so pretty rendering can fold the raw response away.
       const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
-      const interpretedState =
-        extractedFromAssistantOffset === null
-          ? state
-          : markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]));
+      const interpretedState = extractedFromAssistantOffset
+        ? markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]))
+        : state;
       const live = ensureLive(interpretedState, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
@@ -649,20 +637,20 @@ function reduceAgentUiEvent(
         expiresAtMs,
         // Inherit the stream's summary status from birth, so live headers and
         // inferred (deadline/idle) closes carry it — not only durable settles.
-        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
+        activitySummary: state.summaryActivity || undefined,
       };
       return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case SCRIPT_EXECUTION_COMPLETED: {
+    case "events.iterate.com/capability-host/script-run-settled": {
       const payload = readPayloadRecord(event);
-      if (payload == null) return state;
+      if (!payload) return state;
       const executionId = typeof payload.executionId === "string" ? payload.executionId : null;
       // Completion identity is mandatory in the current contract. Guessing
       // the last running step can stamp one script's result onto another.
-      if (executionId == null) return state;
+      if (!executionId) return state;
       const outcome = readCodeOutcome(payload);
-      if (state.live == null) {
+      if (!state.live) {
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
       const steps = [...state.live.steps];
@@ -670,14 +658,14 @@ function reduceAgentUiEvent(
         (step) => step.kind === "code" && step.executionId === executionId,
       );
       const step = steps[index];
-      if (step == null || step.kind !== "code") {
+      if (!step || step.kind !== "code") {
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
       steps[index] = {
         ...applyDurableCodeOutcome(step, outcome, timestampMs),
         // The stream's summary status as of this round — inherited from an
         // earlier round when this one's script didn't update it.
-        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
+        activitySummary: state.summaryActivity || undefined,
       };
       const next = { ...state, live: { ...state.live, steps } };
       // A visible reply the script sent was deferred while its step ran (see
@@ -700,13 +688,13 @@ function reduceAgentUiEvent(
       return next;
     }
 
-    case AGENT_SUMMARY_UPDATED: {
+    case "events.iterate.com/agent/summary-updated": {
       const activity = readString(event, "activity");
-      if (activity == null || activity === "") return state;
+      if (!activity) return state;
       // Summaries are usually appended by the running script itself, so the
       // running code step picks the new text up immediately (live rounds show
       // it before the settle stamp lands).
-      if (state.live != null) {
+      if (state.live) {
         const steps = state.live.steps.map((step) =>
           step.kind === "code" && step.status === "running"
             ? { ...step, activitySummary: activity }
@@ -722,12 +710,12 @@ function reduceAgentUiEvent(
       return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
     }
 
-    case STREAM_WOKEN: {
+    case "events.iterate.com/stream/woken": {
       if (isInitialStreamWake(event)) return state;
       items.push({
         kind: "stream-woken",
         id: `stream-woken-${event.offset}`,
-        text: STREAM_WAKE_LABEL,
+        text: "Stream durable object woke",
         timestampMs,
       });
       return state;
@@ -742,10 +730,10 @@ function reduceAgentUiEvent(
     // idle-boundary overlay. A still-running step keeps the activity
     // live: agent/paused is operator/script-appendable while a request is
     // open, and that request settles normally.
-    case STREAM_PAUSED:
-    case AGENT_PAUSED: {
+    case "events.iterate.com/stream/paused":
+    case "events.iterate.com/agent/paused": {
       const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
-      const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+      const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
       items.push({
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
@@ -756,8 +744,8 @@ function reduceAgentUiEvent(
       return flushed;
     }
 
-    case STREAM_RESUMED:
-    case AGENT_RESUMED:
+    case "events.iterate.com/stream/resumed":
+    case "events.iterate.com/agent/resumed":
       items.push({
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
@@ -774,7 +762,7 @@ function reduceAgentUiEvent(
 
 function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): AgentUiActivity {
   // Multiple simultaneous steps render as one live activity.
-  if (state.live != null) return { ...state.live, status: "running" };
+  if (state.live) return { ...state.live, status: "running" };
   return {
     kind: "activity",
     id: `activity-${offset}`,
@@ -798,20 +786,13 @@ function settleLiveIfIdle(
   return settleLive(state, endedAtMs, items);
 }
 
-const SCRIPT_DEADLINE_WITHOUT_COMPLETION_ERROR =
-  "Script execution exceeded its deadline without a completion event. It may have partially executed and was NOT re-run.";
-const LLM_IDLE_WITHOUT_COMPLETION_ERROR =
-  "The agent became idle without a durable LLM completion or cancellation event.";
-const SCRIPT_IDLE_WITHOUT_COMPLETION_ERROR =
-  "The agent became idle without a durable script completion event. Its execution outcome is unknown; do not assume it is safe to re-run.";
-
 /**
  * A requested code step whose server-side deadline passed without a durable
  * completion cannot remain live forever. At a visible run boundary, preserve
  * the uncertain side-effect outcome and close the UI step explicitly.
  */
 function expireOverdueCodeSteps(state: AgentUiState, boundaryAtMs: number): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   let changed = false;
   const steps = state.live.steps.map((step): AgentUiStep => {
     if (step.kind !== "code" || step.status !== "running" || boundaryAtMs < step.expiresAtMs) {
@@ -824,7 +805,8 @@ function expireOverdueCodeSteps(state: AgentUiState, boundaryAtMs: number): Agen
       success: false,
       outcomeSource: "inferred",
       durationMs: Math.max(0, step.expiresAtMs - step.startedAtMs),
-      errorMessage: SCRIPT_DEADLINE_WITHOUT_COMPLETION_ERROR,
+      errorMessage:
+        "Script execution exceeded its deadline without a completion event. It may have partially executed and was NOT re-run.",
     };
   });
   if (!changed) return state;
@@ -848,7 +830,7 @@ function settleActivityAtBoundary(
 
 /** Closes the live activity (if any) and emits it as a settled item. */
 function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   if (state.live.steps.length === 0) return { ...state, live: null };
   const settled: AgentUiActivity = {
     ...state.live,
@@ -863,7 +845,8 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
             status: "done",
             outcome: "failed",
             durationMs,
-            errorMessage: LLM_IDLE_WITHOUT_COMPLETION_ERROR,
+            errorMessage:
+              "The agent became idle without a durable LLM completion or cancellation event.",
           }
         : {
             ...step,
@@ -871,7 +854,8 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
             success: false,
             outcomeSource: "inferred",
             durationMs,
-            errorMessage: SCRIPT_IDLE_WITHOUT_COMPLETION_ERROR,
+            errorMessage:
+              "The agent became idle without a durable script completion event. Its execution outcome is unknown; do not assume it is safe to re-run.",
           };
     }),
   };
@@ -880,7 +864,7 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
     provisionalActivities[settled.id] = settled;
     while (Object.keys(provisionalActivities).length > AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT) {
       const oldestId = Object.keys(provisionalActivities)[0];
-      if (oldestId === undefined) break;
+      if (!oldestId) break;
       delete provisionalActivities[oldestId];
     }
   }
@@ -916,7 +900,7 @@ function emitUserMessageItem(
   if (isAgentUiActivityWorking(settled.live)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
-  const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+  const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
   items.push(item);
   return flushed;
 }
@@ -938,7 +922,7 @@ function emitAssistantMessageItem(
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
     };
   }
-  const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+  const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
   items.push(item);
   return flushed;
 }
@@ -958,7 +942,7 @@ function correctProvisionalCodeStep(
         step.outcomeSource === "inferred",
     ),
   );
-  if (activity == null) return state;
+  if (!activity) return state;
   const steps = activity.steps.map((step): AgentUiStep => {
     if (step.kind !== "code" || step.executionId !== executionId) return step;
     return applyDurableCodeOutcome(step, outcome, completedAtMs);
@@ -1002,11 +986,11 @@ function markLlmStepInterpretedByAssistantOffset(
   state: AgentUiState,
   assistantEventOffset: number,
 ): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   const match = state.live.steps.find(
     (step) => step.kind === "llm" && step.assistantEventOffset === assistantEventOffset,
   );
-  if (match == null || match.kind !== "llm") return state;
+  if (!match || match.kind !== "llm") return state;
   return updateLlmStep(state, match.llmRequestOffset, (step) => ({ ...step, interpreted: true }));
 }
 
@@ -1015,12 +999,12 @@ function updateLlmStep(
   llmRequestOffset: number,
   update: (step: AgentUiLlmStep) => AgentUiLlmStep,
 ): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   const index = state.live.steps.findIndex(
     (step) => step.kind === "llm" && step.llmRequestOffset === llmRequestOffset,
   );
   const step = state.live.steps[index];
-  if (step == null || step.kind !== "llm") return state;
+  if (!step || step.kind !== "llm") return state;
   const steps = [...state.live.steps];
   steps[index] = update(step);
   return { ...state, live: { ...state.live, steps } };
@@ -1101,7 +1085,7 @@ function readFileAttachments(event: Event): AgentUiFileAttachment[] {
     const path = typeof item.path === "string" ? item.path : null;
     const size = typeof item.size === "number" && Number.isFinite(item.size) ? item.size : null;
     const url = typeof item.url === "string" ? item.url : null;
-    if (contentType == null || filename == null || path == null || size == null || url == null) {
+    if (!contentType || !filename || !path || size == null || !url) {
       return [];
     }
     return [{ contentType, filename, path, size, url }];
@@ -1115,7 +1099,7 @@ function readString(event: Event, key: string): string | null {
 
 function readOptionalReason(event: Event): { reason: string } | Record<string, never> {
   const reason = readString(event, "reason");
-  return reason == null ? {} : { reason };
+  return reason ? { reason } : {};
 }
 
 function readNumber(event: Event, key: string): number | null {
@@ -1138,5 +1122,5 @@ function readPayloadRecord(event: Event): Record<string, unknown> | null {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
+  return typeof value === "object" && !!value && !Array.isArray(value);
 }

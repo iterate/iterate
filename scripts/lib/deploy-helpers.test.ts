@@ -1,30 +1,27 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { runCloudflareCommandWith429Retry, runAsync, smokeResponse } from "./deploy-helpers.ts";
 
-afterEach(() => vi.unstubAllGlobals());
-
-describe("runAsync", () => {
-  test("resolves only after the child exits successfully", async () => {
-    await expect(
-      runAsync(process.execPath, ["--eval", "process.exit(0)"], { cwd: process.cwd() }),
-    ).resolves.toBeUndefined();
-  });
-
-  test("rejects a nonzero child exit", async () => {
-    await expect(
-      runAsync(process.execPath, ["--eval", "process.exit(7)"], { cwd: process.cwd() }),
-    ).rejects.toThrow("exited with 7");
-  });
+// ── runAsync ──
+test("resolves only after the child exits successfully", async () => {
+  await expect(
+    runAsync(process.execPath, ["--eval", "process.exit(0)"], { cwd: process.cwd() }),
+  ).resolves.toBeUndefined();
 });
 
-describe("runCloudflareCommandWith429Retry", () => {
-  test("retries an explicit Wrangler 429 and then succeeds", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
-    const attemptFile = join(directory, "attempts");
-    const script = `
+test("rejects a nonzero child exit", async () => {
+  await expect(
+    runAsync(process.execPath, ["--eval", "process.exit(7)"], { cwd: process.cwd() }),
+  ).rejects.toThrow("exited with 7");
+});
+
+// ── runCloudflareCommandWith429Retry ──
+test("retries an explicit Wrangler 429 and then succeeds", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
+  const attemptFile = join(directory, "attempts");
+  const script = `
       const fs = require("node:fs");
       const file = ${JSON.stringify(attemptFile)};
       const attempts = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0;
@@ -34,87 +31,88 @@ describe("runCloudflareCommandWith429Retry", () => {
         process.exit(1);
       }
     `;
-    const sleep = vi.fn(async () => {});
+  const sleep = vi.fn(async () => {});
 
-    try {
-      await expect(
-        runCloudflareCommandWith429Retry(
-          process.execPath,
-          ["--eval", script],
-          { cwd: process.cwd() },
-          { backoffMs: [7], sleep },
-        ),
-      ).resolves.toBeUndefined();
-
-      expect(readFileSync(attemptFile, "utf8")).toBe("2");
-      expect(sleep).toHaveBeenCalledExactlyOnceWith(7);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  test("does not retry a non-429 command failure", async () => {
-    const sleep = vi.fn(async () => {});
-
+  try {
     await expect(
       runCloudflareCommandWith429Retry(
         process.execPath,
-        ["--eval", 'console.error("500 Internal Server Error"); process.exit(7)'],
+        ["--eval", script],
         { cwd: process.cwd() },
-        { backoffMs: [1, 1], sleep },
-      ),
-    ).rejects.toThrow("exited with 7");
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  test("does not retry a recovered 429 when a later unrelated error terminates the command", async () => {
-    const sleep = vi.fn(async () => {});
-
-    await expect(
-      runCloudflareCommandWith429Retry(
-        process.execPath,
-        [
-          "--eval",
-          'console.error("429 Too Many Requests\\nERROR\\n500 Internal Server Error"); process.exit(7)',
-        ],
-        { cwd: process.cwd() },
-        { backoffMs: [1, 1], sleep },
-      ),
-    ).rejects.toThrow("exited with 7");
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  test("fails after the bounded 429 attempt budget is exhausted", async () => {
-    const sleep = vi.fn(async () => {});
-
-    await expect(
-      runCloudflareCommandWith429Retry(
-        process.execPath,
-        ["--eval", 'console.error("429 Too Many Requests"); process.exit(1)'],
-        { cwd: process.cwd() },
-        { backoffMs: [1, 1], sleep },
-      ),
-    ).rejects.toThrow("exited with 1");
-    expect(sleep).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("smokeResponse", () => {
-  test("can require an exact response body rather than trusting the status alone", async () => {
-    const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      smokeResponse(
-        "https://auth-rpc-smoke.example.test/",
-        async (response) => {
-          const body = (await response.json()) as { error?: unknown };
-          return response.status === 404 && body.error === "not found";
-        },
-        "auth Workers RPC",
+        { backoffMs: [7], sleep },
       ),
     ).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(readFileSync(attemptFile, "utf8")).toBe("2");
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(7);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not retry a non-429 command failure", async () => {
+  const sleep = vi.fn(async () => {});
+
+  await expect(
+    runCloudflareCommandWith429Retry(
+      process.execPath,
+      ["--eval", 'console.error("500 Internal Server Error"); process.exit(7)'],
+      { cwd: process.cwd() },
+      { backoffMs: [1, 1], sleep },
+    ),
+  ).rejects.toThrow("exited with 7");
+  expect(sleep).not.toHaveBeenCalled();
+});
+
+test("does not retry a recovered 429 when a later unrelated error terminates the command", async () => {
+  const sleep = vi.fn(async () => {});
+
+  await expect(
+    runCloudflareCommandWith429Retry(
+      process.execPath,
+      [
+        "--eval",
+        'console.error("429 Too Many Requests\\nERROR\\n500 Internal Server Error"); process.exit(7)',
+      ],
+      { cwd: process.cwd() },
+      { backoffMs: [1, 1], sleep },
+    ),
+  ).rejects.toThrow("exited with 7");
+  expect(sleep).not.toHaveBeenCalled();
+});
+
+test("fails after the bounded 429 attempt budget is exhausted", async () => {
+  const sleep = vi.fn(async () => {});
+
+  await expect(
+    runCloudflareCommandWith429Retry(
+      process.execPath,
+      ["--eval", 'console.error("429 Too Many Requests"); process.exit(1)'],
+      { cwd: process.cwd() },
+      { backoffMs: [1, 1], sleep },
+    ),
+  ).rejects.toThrow("exited with 1");
+  expect(sleep).toHaveBeenCalledTimes(2);
+});
+
+// ── smokeResponse ──
+test("can require an exact response body rather than trusting the status alone", async () => {
+  const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
+  vi.stubGlobal("fetch", fetchMock);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
   });
+
+  await expect(
+    smokeResponse(
+      "https://auth-rpc-smoke.example.test/",
+      async (response) => {
+        const body = (await response.json()) as { error?: unknown };
+        return response.status === 404 && body.error === "not found";
+      },
+      "auth Workers RPC",
+    ),
+  ).resolves.toBeUndefined();
+
+  expect(fetchMock).toHaveBeenCalledOnce();
 });

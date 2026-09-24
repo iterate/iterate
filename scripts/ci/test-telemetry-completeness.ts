@@ -25,7 +25,7 @@ export function analyzeTestTelemetryCompleteness(
   const observedWorkspaces = [
     ...new Set(
       currentArtifacts.flatMap((artifact) =>
-        artifact.context.workspace === undefined ? [] : [artifact.context.workspace],
+        artifact.context.workspace ? [artifact.context.workspace] : [],
       ),
     ),
   ];

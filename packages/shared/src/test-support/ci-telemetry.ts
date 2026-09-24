@@ -181,7 +181,7 @@ export function normalizeTestTelemetryError(
   error: unknown,
   fallbackMessage = "Unknown test telemetry error",
 ): TestTelemetryError {
-  if (typeof error !== "object" || error === null) return { message: String(error) };
+  if (typeof error !== "object" || !error) return { message: String(error) };
   const candidate = error as { message?: unknown; name?: unknown; stack?: unknown };
   return {
     message: typeof candidate.message === "string" ? candidate.message : fallbackMessage,
@@ -295,11 +295,11 @@ export function testTelemetryContextFromEnvironment(
 ): TestTelemetryContext {
   return TestTelemetryContext.parse({
     framework,
-    testKind: environment.TEST_TELEMETRY_KIND ?? defaults.testKind,
-    lane: environment.TEST_TELEMETRY_LANE ?? defaults.lane,
-    workspace: environment.TEST_TELEMETRY_WORKSPACE ?? defaults.workspace,
-    app: environment.TEST_TELEMETRY_APP ?? defaults.app,
-    testProject: environment.TEST_TELEMETRY_PROJECT ?? defaults.testProject,
+    testKind: environment.TEST_TELEMETRY_KIND || defaults.testKind,
+    lane: environment.TEST_TELEMETRY_LANE || defaults.lane,
+    workspace: environment.TEST_TELEMETRY_WORKSPACE || defaults.workspace,
+    app: environment.TEST_TELEMETRY_APP || defaults.app,
+    testProject: environment.TEST_TELEMETRY_PROJECT || defaults.testProject,
   });
 }
 
@@ -307,8 +307,8 @@ export function ciTelemetrySourceFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
   fallbackRunId = `local-${Date.now()}`,
 ): TestTelemetryArtifact["ci"] {
-  const repository = environment.GITHUB_REPOSITORY ?? "iterate/iterate";
-  const runId = environment.GITHUB_RUN_ID ?? fallbackRunId;
+  const repository = environment.GITHUB_REPOSITORY || "iterate/iterate";
+  const runId = environment.GITHUB_RUN_ID || fallbackRunId;
   return {
     repository,
     ...((environment.TEST_TELEMETRY_HEAD_SHA || environment.GITHUB_SHA) && {
@@ -326,22 +326,22 @@ export function ciTelemetrySourceFromEnvironment(
       environment.TEST_TELEMETRY_PULL_REQUEST_NUMBER,
       environment.GITHUB_REF,
     ),
-    ...(environment.GITHUB_WORKFLOW && { workflowName: environment.GITHUB_WORKFLOW }),
+    workflowName: environment.GITHUB_WORKFLOW || undefined,
     workflowRunId: runId,
-    workflowRunAttempt: environment.GITHUB_RUN_ATTEMPT ?? "1",
+    workflowRunAttempt: environment.GITHUB_RUN_ATTEMPT || "1",
     ...(environment.GITHUB_SERVER_URL &&
       environment.GITHUB_REPOSITORY &&
       environment.GITHUB_RUN_ID && {
         workflowRunUrl: `${environment.GITHUB_SERVER_URL}/${environment.GITHUB_REPOSITORY}/actions/runs/${environment.GITHUB_RUN_ID}`,
       }),
-    ...(environment.GITHUB_JOB && { jobName: environment.GITHUB_JOB }),
-    workspaceRoot: environment.GITHUB_WORKSPACE ?? process.cwd(),
+    jobName: environment.GITHUB_JOB || undefined,
+    workspaceRoot: environment.GITHUB_WORKSPACE || process.cwd(),
     runnerProvider: environment.DEPOT_JOB_URL
       ? "depot"
       : environment.GITHUB_RUN_ID
         ? "github-actions"
         : "local",
-    ...(environment.DEPOT_JOB_URL && { depotJobUrl: environment.DEPOT_JOB_URL }),
+    depotJobUrl: environment.DEPOT_JOB_URL || undefined,
     executionContext: environment.GITHUB_RUN_ID ? "ci" : "local",
   };
 }

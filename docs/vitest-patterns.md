@@ -18,8 +18,7 @@ Every `*.test.ts(x)` is linted for one style: flat files with top-level
 `test(...)` calls (no `describe`), helpers below the tests, no lifecycle hooks,
 no `vi.mock`, `test` rather than `it`, and
 `expect(object).toMatchObject({ property })` rather than
-`expect(object.property).toBe(...)`. Existing lines are grandfathered; new and
-changed lines comply. [The rules and what to write instead](../lint/test-style-rules.md)
+`expect(object.property).toBe(...)`. Every line complies. [The rules and what to write instead](../lint/test-style-rules.md)
 cover ordered rows (`test.sequential`), gated suites (`test.skipIf`), disposable
 fixtures (`using`/`await using`) and the os unit lane's `cloudflare:workers` shim.
 

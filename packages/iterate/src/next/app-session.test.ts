@@ -1,31 +1,7 @@
 // Real PKCE/token code with an in-memory DurableObject store and a controlled OAuth token endpoint.
 // Preview smoke verifies the same flow against the deployed issuer and actual DurableObjects.
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { BrowserSession } from "./app-session.ts";
-
-function fixture() {
-  const values = new Map<string, unknown>();
-  const session = new BrowserSession(
-    {
-      storage: {
-        get: async (key: string) => values.get(key),
-        put: async (key: string, value: unknown) => {
-          values.set(key, value);
-        },
-        setAlarm: async () => {},
-        deleteAll: async () => {
-          values.clear();
-        },
-        deleteAlarm: async () => {},
-      },
-      blockConcurrencyWhile: async <T>(work: () => Promise<T>) => work(),
-    } as unknown as DurableObjectState,
-    {},
-  );
-  return { session };
-}
-
-afterEach(() => vi.unstubAllGlobals());
 
 test("a device's client id is used at authorization, code exchange and refresh, and its branding survives activation", async () => {
   const { session } = fixture();
@@ -50,6 +26,9 @@ test("a device's client id is used at authorization, code exchange and refresh, 
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(await session.client()).toBeUndefined();
   const requests: URLSearchParams[] = [];
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
@@ -96,3 +75,25 @@ test("ordinary app sessions retain their existing origin client", async () => {
   );
   expect(url.searchParams.get("client_id")).toBe("https://notes.example/.auth/client.json");
 });
+
+function fixture() {
+  const values = new Map<string, unknown>();
+  const session = new BrowserSession(
+    {
+      storage: {
+        get: async (key: string) => values.get(key),
+        put: async (key: string, value: unknown) => {
+          values.set(key, value);
+        },
+        setAlarm: async () => {},
+        deleteAll: async () => {
+          values.clear();
+        },
+        deleteAlarm: async () => {},
+      },
+      blockConcurrencyWhile: async <T>(work: () => Promise<T>) => work(),
+    } as unknown as DurableObjectState,
+    {},
+  );
+  return { session };
+}

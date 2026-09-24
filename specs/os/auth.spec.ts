@@ -82,7 +82,7 @@ test("first Claude consent creates the organization and project on the consent p
         );
       }),
     ]);
-    expect(new URL(page.url()).search).toBe(flow.url.search);
+    expect(new URL(page.url())).toMatchObject({ search: flow.url.search });
     // the page with no projects has optional parts left out — none may render as the text "null"
     expect(await page.getByText("null", { exact: true }).count()).toBe(0);
     // The onboarding step, before consent, for a person with no project yet: the organization's
@@ -207,7 +207,7 @@ test("first Claude consent creates the organization and project on the consent p
     await checkbox(thirdChoice, { checked: true }).waitFor();
     await checkbox(otherChoice, { checked: false }).waitFor();
     await checkbox(thirdChoice).uncheck();
-    expect(new URL(page.url()).search).toBe(flow.url.search);
+    expect(new URL(page.url())).toMatchObject({ search: flow.url.search });
     await review.click();
     await checkbox(accountAccess, { checked: false }).waitFor();
     await page
@@ -240,7 +240,7 @@ test("first Claude consent creates the organization and project on the consent p
         resource,
       }),
     });
-    expect(exchange.status, await exchange.clone().text()).toBe(200);
+    expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
     const tokens = (await exchange.json()) as { access_token: string };
     // The inventory, in one batch (an HTTP batch session ends with its first round trip): the
     // issuer grant and the Claude grant are the only two sessions created; the onboarding step's
