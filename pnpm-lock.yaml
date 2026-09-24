@@ -568,6 +568,9 @@ importers:
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       wrangler:
         specifier: 4.136.3
         version: 4.136.3(@cloudflare/workers-types@5.20260922.1)(@types/node@24.11.0)
@@ -4897,6 +4900,7 @@ packages:
   eslint@9.39.3:
     resolution: {integrity: sha512-VmQ+sifHUbI/IcSopBCF/HO3YiHQx/AVd3UVyYL6weuwW+HvON9VYn5l6Zl1WZzPWXPNZrSQpxwkkZ/VuvJZzg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
