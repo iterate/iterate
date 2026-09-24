@@ -58,7 +58,6 @@ export function ContextView({
   renderLiveState,
   state,
   onStateChange,
-  defaultMode = "pretty",
   emptyText = "Nothing has happened on this context yet.",
   className,
 }: {
@@ -78,12 +77,10 @@ export function ContextView({
   state: ContextViewState;
   /** A patch to the state; an `undefined` value drops the key (the route spreads it into the search). */
   onStateChange: (patch: Partial<ContextViewState>) => void;
-  /** How the log reads when `state.mode` is unset. */
-  defaultMode?: ContextViewMode;
   emptyText?: string;
   className?: string;
 }) {
-  const mode = state.mode || defaultMode;
+  const mode = state.mode || "pretty";
   const filter = useMemo(() => contextViewFilterOf(state), [state]);
   const filtering = Boolean(state.filter);
   const inspected = state.event;
@@ -144,7 +141,7 @@ export function ContextView({
               role="tab"
               aria-selected={mode === candidate.id}
               onClick={() =>
-                onStateChange({ mode: candidate.id === defaultMode ? undefined : candidate.id })
+                onStateChange({ mode: candidate.id === "pretty" ? undefined : candidate.id })
               }
               className={cn(
                 "rounded px-2 py-0.5 whitespace-nowrap",

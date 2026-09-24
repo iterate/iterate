@@ -14,7 +14,6 @@ import { IterateLogo } from "./iterate-logo.tsx";
 export function LogInWithIterate({
   next = "/",
   scopes = ["iterate"],
-  loginPath = "/.auth/login",
   className,
   formAction,
   children = "Log in with iterate",
@@ -26,10 +25,8 @@ export function LogInWithIterate({
   formAction?: string;
   /** the OAuth scopes to ask for; `iterate` is always among them */
   scopes?: string[];
-  /** the app's login door, `/.auth/login` unless the app mounts the SDK elsewhere */
-  loginPath?: string;
 }) {
-  const href = `${loginPath}?${new URLSearchParams({ next, scope: scopes.join(" ") })}`;
+  const href = `/.auth/login?${new URLSearchParams({ next, scope: scopes.join(" ") })}`;
   const style = cn(
     "inline-flex h-11 items-center gap-3 rounded-lg border border-[#dadce0] bg-white pr-5 pl-3 text-[15px] font-medium tracking-[0.01em] text-[#1f1f1f] no-underline shadow-[0_1px_2px_rgba(0,0,0,0.06)] transition-colors select-none hover:bg-[#f6f7f8] focus-visible:ring-3 focus-visible:ring-black/15 focus-visible:outline-none active:bg-[#eef0f2]",
     className,

@@ -6,7 +6,6 @@
   "exports": {
     "./apps/providers": "./src/apps/providers.tsx",
     "./globals.css": "./src/styles/globals.css",
-    "./styles.css": "./src/styles/globals.css",
     "./components/ai-elements/*": "./src/components/ai-elements/*.tsx",
     "./components/context-view/*": "./src/components/context-view/*.tsx",
     "./components/context-view/context-view-search": "./src/components/context-view/context-view-search.ts",
@@ -14,9 +13,7 @@
     "./components/events/types": "./src/components/events/types.ts",
     "./components/*": "./src/components/*.tsx",
     "./lib/*": "./src/lib/*.ts",
-    "./hooks/*": "./src/hooks/*.ts",
-    "./assets/*": "./src/assets/*",
-    "./postcss.config": "./postcss.config.mjs"
+    "./hooks/*": "./src/hooks/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -35,7 +32,6 @@
     "@codemirror/view": "^6.43.6",
     "@fsegurai/codemirror-theme-bundle": "^6.3.1",
     "@iterate-com/shared": "workspace:*",
-    "@tailwindcss/postcss": "^4.3.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",

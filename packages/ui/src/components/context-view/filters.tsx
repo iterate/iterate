@@ -11,8 +11,6 @@ export type ContextViewFilter = {
   actor?: string;
 };
 
-export const EMPTY_FILTER: ContextViewFilter = { query: "", types: new Set() };
-
 export function filterEvents(
   events: readonly ContextViewEvent[],
   filter: ContextViewFilter,
