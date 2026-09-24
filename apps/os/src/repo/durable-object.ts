@@ -37,7 +37,7 @@ import {
   type RepoLogEntry,
   type RepoManifest,
 } from "./git-wire.ts";
-import { RepoContract, type RepoState } from "./contract.ts";
+import { RepoContract, type CommitCompleted, type RepoState } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
 
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
@@ -48,8 +48,6 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 type Transport = ReturnType<typeof createGitWireTransport>;
-/** `repo/commit-completed`'s payload — what a push owes the logs (kept in storage until landed). */
-type CommitFact = { path: string; commitOid: string; message: string; changedPaths: string[] };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
@@ -274,7 +272,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // refusing the fact refuses this commit too, loud. An owed fact for another commit than the tip
     // never landed (a debt written before a push that was refused or died) or is stale (main moved
     // since): dropped.
-    const owed = await this.ctx.storage.get<CommitFact>("commit-fact");
+    const owed = await this.ctx.storage.get<CommitCompleted>("commit-fact");
     if (owed) {
       if (owed.commitOid === tip) await this.#commitFact(owed);
       else await this.ctx.storage.delete("commit-fact");
@@ -323,7 +321,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     toPush.push({ payload: commitBytes, type: "commit" });
     // The fact this push will owe, kept in storage until it has landed on both logs — so a retry after
     // a lost append lands the same event (above), never a different one under the same key.
-    const committed: CommitFact = { path, commitOid, message: input.message, changedPaths };
+    const committed: CommitCompleted = { path, commitOid, message: input.message, changedPaths };
     await this.ctx.storage.put("commit-fact", committed);
     const refused = await transport.push({
       newOid: commitOid,
@@ -346,7 +344,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  commits with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
    *  published anyway — then on this path. Keyed by the commit on both, so landing it again (an owed
    *  fact on a retry, above) lands nothing where it stands. Owed no more once both have landed. */
-  async #commitFact(payload: CommitFact): Promise<void> {
+  async #commitFact(payload: CommitCompleted): Promise<void> {
     const committed: EventInput<typeof RepoContract> = {
       type: "events.iterate.com/repo/commit-completed",
       payload,

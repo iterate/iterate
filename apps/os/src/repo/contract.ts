@@ -14,6 +14,15 @@ import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
 import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 
+/** `repo/commit-completed`'s payload: the commit that landed on main and the paths it changed. */
+export const CommitCompleted = z.object({
+  path: z.string().min(1),
+  commitOid: z.string().min(1),
+  message: z.string(),
+  changedPaths: z.array(z.string()),
+});
+export type CommitCompleted = z.infer<typeof CommitCompleted>;
+
 export const RepoContract = defineProcessorContract({
   slug: "repo",
   version: "2",
@@ -50,12 +59,7 @@ export const RepoContract = defineProcessorContract({
     "events.iterate.com/repo/commit-completed": {
       description:
         "A commit landed on the repo's main through the repo facet: on the repo's path, and cross-posted to / — hence it names the path — where the project processor follows the config repo's commits with the apex (a commit to /repos/config IS its publication).",
-      payloadSchema: z.object({
-        path: z.string().min(1),
-        commitOid: z.string().min(1),
-        message: z.string(),
-        changedPaths: z.array(z.string()),
-      }),
+      payloadSchema: CommitCompleted,
     },
   },
   consumes: [
