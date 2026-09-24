@@ -9,6 +9,7 @@ import { codedError, errorCode } from "iterate/next/lib";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
+import { isRetryableTransportError } from "../retryable-error.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers:
@@ -82,14 +83,6 @@ type RpcStubPagerRecord = { rpcStubKey: string };
 function disposeRpcStub(x: unknown): void {
   (x as Partial<Disposable> | null)?.[Symbol.dispose]?.();
 }
-
-/** A BROKEN STUB: the call failed at the TRANSPORT — workerd stamps `retryable: true` on every
- *  DISCONNECTED failure (jsg/util.c++: "Network connection lost.", a Durable Object reset) — and a
- *  stub whose transport is gone fails every later call the same way (Cloudflare, error handling:
- *  "avoid reusing a stub after it throws an exception … create a new one"). A coded refusal (the
- *  relay's RPC_STUB_OFFLINE) or the client's own throw says nothing about this leg. */
-const isBrokenRpcStubError = (error: unknown): boolean =>
-  (error as { retryable?: unknown } | null)?.retryable === true;
 
 export class RpcStubDirectory {
   readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
@@ -176,7 +169,7 @@ export class RpcStubDirectory {
       // way until the pins' release, while its pager may already lend a live one — so the NEXT call
       // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
       // The failed call is not retried.
-      if (isBrokenRpcStubError(error) && this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
+      if (isRetryableTransportError(error) && this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
         this.#borrowedRpcStubs.delete(rpcStubKey);
         disposeRpcStub(borrowed);
       }

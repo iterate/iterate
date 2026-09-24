@@ -196,7 +196,7 @@ function requestBase(
  *  string `name`/`in`, so it fails this and is dropped instead of surfacing as `{ name: undefined }`
  *  that violates OpenApiOperation. An internal `$ref` (a shared `#/components/parameters/…`) is
  *  resolved first; an external ref (a URL or file) stays dropped — this lane fetches only the spec. */
-const OpenAPIParameter = z.object({
+const OpenApiParameter = z.object({
   name: z.string(),
   in: z.string(),
   required: z.boolean().optional(),
@@ -237,7 +237,7 @@ function derefInternal(root: unknown, node: unknown, seen = new Set<string>()): 
 const concreteParameters = (raw: unknown, spec: unknown): OpenApiOperation["parameters"] =>
   Array.isArray(raw)
     ? raw.flatMap((p) => {
-        const parsed = OpenAPIParameter.safeParse(derefInternal(spec, p));
+        const parsed = OpenApiParameter.safeParse(derefInternal(spec, p));
         return parsed.success ? [parsed.data] : [];
       })
     : [];

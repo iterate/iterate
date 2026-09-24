@@ -12,6 +12,7 @@ import {
   completeSecretOAuth,
   isSecretOAuthState,
   normalizeSecretOAuth,
+  SECRET_OAUTH_TTL_MS,
 } from "./secret-oauth.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
@@ -20,7 +21,7 @@ import {
   hmacSha256Hex,
   normalizeSecretRecord,
   originPinned,
-  ProjectSecretRefused,
+  SecretRefused,
   refreshSecretMaterial,
   secretMaterialStringOf,
   secretPathsReferenced,
@@ -36,7 +37,7 @@ import {
 // naming the placeholder and where it sat; substituted values are never rescanned; a NEW Request
 // only when something changed (the rebuild is WS-safe — method, Upgrade and body survive it).
 // `becomes` is what came back: the rebuilt Request's URL and headers (a subset), "unchanged" (the
-// ORIGINAL Request — no rebuild), or `{ refused }` — the `ProjectSecretRefused` message.
+// ORIGINAL Request — no rebuild), or `{ refused }` — the `SecretRefused` message.
 
 // The stored secrets by PATH — what `resolve(path)` is handed (`"/secrets/a"`, never the bare name).
 const secrets: Record<string, SecretMaterial> = {
@@ -171,7 +172,7 @@ for (const row of rows)
       (out) =>
         out === request ? "unchanged" : { url: out.url, headers: Object.fromEntries(out.headers) },
       (error: unknown) =>
-        error instanceof ProjectSecretRefused ? { refused: error.message } : Promise.reject(error),
+        error instanceof SecretRefused ? { refused: error.message } : Promise.reject(error),
     );
     if (typeof row.becomes === "string") expect(became).toBe(row.becomes);
     else expect(became).toMatchObject(row.becomes);
@@ -184,7 +185,7 @@ test("a mintable miss (no material, a missing field) is marked so the Durable Ob
       resolve,
     ).then(
       () => "substituted",
-      (error: ProjectSecretRefused) => error.mintable,
+      (error: SecretRefused) => error.mintable,
     );
   expect(await miss(() => null, 'getSecret("/secrets/x")')).toBe(true);
   expect(
@@ -585,7 +586,7 @@ test("beginSecretOAuth: the authorize URL carries the code request with PKCE S25
     options,
     redirectUri: "https://os.example/.secrets/oauth/callback",
     nonce: "n1",
-    until: 1000 + 10 * 60_000,
+    until: 1000 + SECRET_OAUTH_TTL_MS,
   });
   expect(authorizationUrl).not.toContain("sekrit-value");
   expect(authorizationUrl).not.toContain(pending.codeVerifier);

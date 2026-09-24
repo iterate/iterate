@@ -19,8 +19,6 @@ export class ControlPlaneDurableObject extends DurableObject {
     return this.ctx.storage.transactionSync(write);
   }
 
-  // ── the reads ──
-
   user(ref: string) {
     return this.#db.user(ref);
   }
@@ -48,8 +46,6 @@ export class ControlPlaneDurableObject extends DurableObject {
   accessibleTo(userId: string) {
     return this.#db.accessibleTo(userId);
   }
-
-  // ── the writes ──
 
   createUser(caller: Caller, input: { email: string; id?: string }) {
     return this.#write(() => this.#db.createUser(caller, input));

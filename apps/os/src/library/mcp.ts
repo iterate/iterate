@@ -4,8 +4,8 @@
 // answers `initialize` with an `Mcp-Session-Id` header gets it back on every later request and a
 // DELETE on close. Responses may be plain JSON or a `text/event-stream` carrying the JSON-RPC
 // response as one `data:` event; both are read here.
-// (tool args = one object; a result's `structuredContent` wins, else its text, JSON-parsed when it
-// parses) without the MCP SDK: the whole client is the few requests below.
+// Tool args are one object; a result's `structuredContent` wins, else its text, JSON-parsed when it
+// parses. There is no MCP SDK: the whole client is the few requests below.
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
@@ -15,10 +15,11 @@ import { refuseUnlessOk, subclassWithMethods } from "./connection.ts";
 /** Options for `connectToMcp`: extra headers sent with every request (auth). */
 export type McpConnectOptions = { headers?: Record<string, string> };
 
-/** One tool as `tools/list` describes it. */
 // An external MCP server's responses are UNTRUSTED network data — parsed against these schemas at
 // every boundary, never cast, so a server that answers off-spec heals into a clear error instead of
 // handing a typed frontend a value of the wrong shape (a tool whose `name` is a number, say).
+
+/** One tool as `tools/list` describes it. */
 const MCPTool = z.object({
   name: z.string(),
   description: z.string().optional(),

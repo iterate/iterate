@@ -50,12 +50,6 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 const CLIENT_AUTHS: readonly ClientAuth[] = ["client_secret_basic", "client_secret_post", "none"];
 
-/** The strategy kinds implemented (`SecretRefreshKind`, secret/contract.ts) — the one place a kind
- *  is admitted from untyped input (a `set` option). */
-function isRefreshKind(kind: unknown): kind is SecretRefreshKind {
-  return SecretRefreshKind.safeParse(kind).success;
-}
-
 /** The client-auth method as given, or the default; anything else is refused by name. */
 export function clientAuthOf(value: unknown): ClientAuth {
   if (value === undefined) return "client_secret_basic";
@@ -89,11 +83,16 @@ export function normalizeSecretRecord(
     );
   let refresh: SecretRefresh | null = null;
   if (options?.refresh) {
-    if (!isRecord(options.refresh) || !isRefreshKind(options.refresh.kind))
+    // The one place a strategy kind (`SecretRefreshKind`, secret/contract.ts) is admitted from
+    // untyped input.
+    const parsedKind = isRecord(options.refresh)
+      ? SecretRefreshKind.safeParse(options.refresh.kind)
+      : undefined;
+    if (!isRecord(options.refresh) || !parsedKind?.success)
       throw new Error(
         `secrets: refresh.kind is one of ${SecretRefreshKind.options.join(", ")}, got ${JSON.stringify(isRecord(options.refresh) ? options.refresh.kind : options.refresh)}`,
       );
-    const kind = options.refresh.kind;
+    const kind = parsedKind.data;
     const endpointKey = kind === "oauth-refresh-token" ? "tokenEndpoint" : "graphqlUrl";
     const endpoint = new URL(String(options.refresh[endpointKey]));
     if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")
@@ -138,7 +137,7 @@ const placeholderOf = (path: string, field: string | undefined): string =>
  *  at, a secret pinned to other origins — answered with a 502 to the CALLER, never the destination.
  *  `mintable` marks the two misses a refresh strategy can fill (no material yet, a field not there
  *  yet): the mint-on-first-use. */
-export class ProjectSecretRefused extends Error {
+export class SecretRefused extends Error {
   readonly mintable: boolean;
   // A plain field, not a parameter property: only erasable syntax in this module (the header).
   constructor(message: string, mintable = false) {
@@ -160,14 +159,14 @@ function secretFieldOf(
     try {
       value = JSON.parse(material);
     } catch {
-      throw new ProjectSecretRefused(
+      throw new SecretRefused(
         `itx.fetch: ${placeholder} in ${where} names a field, but the secret is not a JSON value`,
       );
     }
   }
   for (const segment of field.split(".")) value = isRecord(value) ? value[segment] : undefined;
   if (typeof value !== "string")
-    throw new ProjectSecretRefused(
+    throw new SecretRefused(
       `itx.fetch: ${placeholder} in ${where}: the secret has no string at field "${field}"`,
       true,
     );
@@ -192,7 +191,7 @@ export function secretPathsReferenced(request: Request): string[] {
  * existing secret must never survive as a literal placeholder wherever it appears (a URL
  * `?access_token=getSecret("/secrets/token")` would otherwise send the credential's NAME to the
  * destination and the value nowhere); a placeholder with NO stored secret throws
- * `ProjectSecretRefused` naming the placeholder and where it sat — to the caller, never the
+ * `SecretRefused` naming the placeholder and where it sat — to the caller, never the
  * destination. `resolve(path)` answers the stored material; a `{ field }` placeholder then picks one
  * string out of it; an OBJECT material with no `field` is refused (a whole object is never a header).
  * In the URL the value is spliced as ONE component (`encodeURIComponent`, with `:` kept — a Telegram
@@ -219,7 +218,7 @@ export async function substituteProjectSecrets(
       const stored = await resolve(path);
       // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
       if (stored == null)
-        throw new ProjectSecretRefused(
+        throw new SecretRefused(
           `itx.fetch: no stored project secret for ${placeholder} in ${where}`,
           true,
         );
@@ -227,7 +226,7 @@ export async function substituteProjectSecrets(
       if (field) secret = secretFieldOf(stored, field, placeholder, where);
       else if (typeof stored === "string") secret = stored;
       else
-        throw new ProjectSecretRefused(
+        throw new SecretRefused(
           `itx.fetch: ${placeholder} in ${where} names no field, but the secret is a JSON object — pick one with { field: "…" }`,
         );
       out +=
@@ -255,10 +254,6 @@ export async function substituteProjectSecrets(
   return changed ? new Request(base, { headers }) : base;
 }
 
-// ── the pin ──
-
-/** A secret is sent to its pinned origins ONLY — a mis-typed URL cannot mail a credential to a
- *  stranger, and an app that forwards a visitor's headers cannot be made to mail it either. */
 /** What `itx.secrets.verifyHmac(path, …)` takes: the bytes a webhook signed (a string is its UTF-8),
  *  the hex HMAC-SHA256 it sent, and which field of a JSON material is the key (the whole material
  *  when omitted). Stripe signs `${t}.${body}`, GitHub the body (`sha256=<hex>`), Slack `v0:${t}:${body}`;
@@ -286,8 +281,7 @@ export function secretMaterialStringOf(material: SecretMaterial, field?: string)
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/** Hex HMAC-SHA256 of `payload` under `key` — the webhook-signature primitive
- *  `computeHmacHex`). WebCrypto, present in every isolate. */
+/** Hex HMAC-SHA256 of `payload` under `key`. WebCrypto, present in every isolate. */
 export async function hmacSha256Hex(key: string, payload: string | Uint8Array): Promise<string> {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
@@ -335,12 +329,14 @@ export async function verifySecretHmac(
   return constantTimeEquals(await hmacSha256Hex(key, input.payload), signature);
 }
 
+/** A secret is sent to its pinned origins ONLY — a mis-typed URL cannot mail a credential to a
+ *  stranger, and an app that forwards a visitor's headers cannot be made to mail it either. */
 export function originPinned(url: string, urls: string[]): boolean {
   return urls.includes(new URL(url).origin);
 }
 
-export function pinRefusal(path: string, url: string, urls: string[]): ProjectSecretRefused {
-  return new ProjectSecretRefused(
+export function pinRefusal(path: string, url: string, urls: string[]): SecretRefused {
+  return new SecretRefused(
     `itx.fetch: the secret ${path} is pinned to ${urls.join(", ")} — not sent to ${new URL(url).origin}`,
   );
 }

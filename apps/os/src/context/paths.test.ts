@@ -56,29 +56,58 @@ test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicaliz
 
 test.each([
   // a project: byte-identical keys, whatever the path — even its own `/users/<id>` context
-  { projectId: "prj_demo", path: "/", becomes: { id: "prj_demo", rootPath: "/" } },
-  { projectId: "prj_demo", path: "/agents/x", becomes: { id: "prj_demo", rootPath: "/" } },
-  { projectId: "prj_demo", path: "/users/u1", becomes: { id: "prj_demo", rootPath: "/" } },
+  {
+    projectId: "prj_demo",
+    path: "/",
+    becomes: { id: "prj_demo", rootPath: "/", kind: "project", ownerId: "prj_demo" },
+  },
+  {
+    projectId: "prj_demo",
+    path: "/agents/x",
+    becomes: { id: "prj_demo", rootPath: "/", kind: "project", ownerId: "prj_demo" },
+  },
+  {
+    projectId: "prj_demo",
+    path: "/users/u1",
+    becomes: { id: "prj_demo", rootPath: "/", kind: "project", ownerId: "prj_demo" },
+  },
   // the global namespace: the owner subtree, its root the secrets root
   {
     projectId: "global",
     path: "/users/u1",
-    becomes: { id: "global--users--u1", rootPath: "/users/u1" },
+    becomes: { id: "global--users--u1", rootPath: "/users/u1", kind: "users", ownerId: "u1" },
   },
   {
     projectId: "global",
     path: "/users/u1/notes",
-    becomes: { id: "global--users--u1", rootPath: "/users/u1" },
+    becomes: { id: "global--users--u1", rootPath: "/users/u1", kind: "users", ownerId: "u1" },
   },
   {
     projectId: "global",
     path: "/organizations/o1",
-    becomes: { id: "global--organizations--o1", rootPath: "/organizations/o1" },
+    becomes: {
+      id: "global--organizations--o1",
+      rootPath: "/organizations/o1",
+      kind: "organizations",
+      ownerId: "o1",
+    },
   },
   // the global root, and any global path not under an owner: the kernel's own
-  { projectId: "global", path: "/", becomes: { id: "global", rootPath: "/" } },
-  { projectId: "global", path: "/other", becomes: { id: "global", rootPath: "/" } },
-  { projectId: "global", path: "/users", becomes: { id: "global", rootPath: "/" } },
+  {
+    projectId: "global",
+    path: "/",
+    becomes: { id: "global", rootPath: "/", kind: "global", ownerId: "global" },
+  },
+  {
+    projectId: "global",
+    path: "/other",
+    becomes: { id: "global", rootPath: "/", kind: "global", ownerId: "global" },
+  },
+  {
+    projectId: "global",
+    path: "/users",
+    becomes: { id: "global", rootPath: "/", kind: "global", ownerId: "global" },
+  },
 ])("resourceScope($projectId, $path) is $becomes", ({ projectId, path, becomes }) => {
   expect(resourceScope(projectId, path)).toEqual(becomes);
 });

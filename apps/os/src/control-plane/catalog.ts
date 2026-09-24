@@ -77,8 +77,6 @@ export class ControlPlaneDatabase {
     return this.sql.exec(query, ...bindings).toArray() as unknown as T[];
   }
 
-  // ── the reads ──
-
   /** A user by id or by email. */
   user(ref: string): UserRecord | null {
     return (
@@ -357,8 +355,6 @@ export class ControlPlaneDatabase {
     );
     return { id: projectId, slug, orgId: organizationId };
   }
-
-  // ── who may ──
 
   #role(organizationId: string, userId: string): OrganizationRole | undefined {
     return this.#rows<{ role: OrganizationRole }>(

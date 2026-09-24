@@ -8,9 +8,9 @@
 // trusted code and the request is retried ONCE. One facet = one writer: a rotating refresh token is
 // never raced by two contexts. A WebSocket upgrade is a dispatch like any other: the 101 and its
 // socket ride the fetch channel back through the parent to the caller — this facet HOLDS no socket,
-// it dials one and hands it back, so the socket lives as long as the dial does, as it did through the
-// secret's former Durable Object (measured 2026-09-21, __workers-tests__/secret-facet-proxies-a-socket.test.ts:
-// the frames round-trip; the facet's abort closes it, 1006).
+// it dials one and hands it back, so the socket lives as long as the dial does (measured 2026-09-21,
+// __workers-tests__/secret-facet-proxies-a-socket.test.ts: the frames round-trip; the facet's abort
+// closes it, 1006).
 //
 // The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
 // storage's, and through the facet host's platform entry: a caller's itx expression reaches the reads
@@ -27,14 +27,14 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { EventInput } from "iterate/next/stream/processor";
 import { signClaims, verifyAdminSecret } from "iterate/next/principal";
-import { codedError } from "iterate/next/lib";
+import { codedError, reportIssue } from "iterate/next/lib";
 import {
   appConfigOf,
   atRestKeysOf,
   sessionSigningSecretOf,
   type AppConfigEnv,
 } from "../app-config.ts";
-import { DurableObjectNameCodec, resourceScope } from "../context/paths.ts";
+import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   decryptSecretMaterial,
@@ -46,6 +46,7 @@ import {
   beginSecretOAuth,
   completeSecretOAuth,
   SECRET_OAUTH_CALLBACK_PATH,
+  SECRET_OAUTH_TTL_MS,
   type NormalizedSecretOAuthOptions,
   type PendingSecretOAuth,
   type SecretOAuthState,
@@ -53,7 +54,7 @@ import {
 import {
   originPinned,
   pinRefusal,
-  ProjectSecretRefused,
+  SecretRefused,
   refreshSecretMaterial,
   substituteProjectSecrets,
   verifySecretHmac,
@@ -99,17 +100,16 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
 
   /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
    *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
-   *  (iterate-context.ts `resourceScope`): `/secrets/shop` for a project's `/secrets/shop` and for a
+   *  (context/paths.ts `resourceScope`): `/secrets/shop` for a project's `/secrets/shop` and for a
    *  user's `/users/<id>/secrets/shop` alike. */
   #address(): { context: string; path: string } {
     const context = this.ctx.props.iterateContextName;
     const { projectId, path } = DurableObjectNameCodec.parse(context);
-    const { rootPath } = resourceScope(projectId, path);
-    return { context, path: rootPath === "/" ? path : path.slice(rootPath.length) };
+    return { context, path: pathUnderOwner(resourceScope(projectId, path), path) };
   }
 
-  /** Replace the record whole — material always travels with its complete policy
-   *  `update` rule), so a value never inherits a pin or a strategy it was not set with. The caller
+  /** Replace the record whole — material always travels with its complete policy, so a value
+   *  never inherits a pin or a strategy it was not set with. The caller
    *  (`itx.secrets.set`) has appended the fact already; this is the value. */
   async write(record: SecretRecord): Promise<void> {
     const revision = await this.#bump();
@@ -140,7 +140,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     try {
       opened = await decryptSecretMaterial(stored.record.material, binding, this.#keys());
     } catch {
-      throw new ProjectSecretRefused(
+      throw new SecretRefused(
         `itx.fetch: the stored material of ${path} cannot be opened (a rotated key, or another context's record) — set the secret again`,
       );
     }
@@ -218,7 +218,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       kind: "secret-oauth",
       context: this.#address().context,
       nonce,
-      exp: Date.now() + 10 * 60_000,
+      exp: Date.now() + SECRET_OAUTH_TTL_MS,
     };
     const { pending, authorizationUrl } = await beginSecretOAuth(options, {
       redirectUri: `${platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
@@ -311,7 +311,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       // at the egress that routed the request (the facet is the boundary that holds the bytes).
       const resolve = (named: string) => {
         if (named !== path)
-          throw new ProjectSecretRefused(
+          throw new SecretRefused(
             `itx.fetch: getSecret(${JSON.stringify(named)}) does not belong to the secret ${path}`,
           );
         return stored?.record.material ?? null;
@@ -326,12 +326,11 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         substituted = await substituteProjectSecrets(request, resolve);
       } catch (error) {
         // No accessToken yet with a strategy configured: mint first (the first-use case), then go.
-        if (!(error instanceof ProjectSecretRefused) || !retry || !error.mintable || !stored)
-          throw error;
+        if (!(error instanceof SecretRefused) || !retry || !error.mintable || !stored) throw error;
         try {
           await this.#refresh(stored.revision);
         } catch (cause) {
-          throw new ProjectSecretRefused(
+          throw new SecretRefused(
             `${error.message}; the refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`,
           );
         }
@@ -352,7 +351,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       return used(await dispatch(await substituteProjectSecrets(retry, resolve)));
     } catch (error) {
       // A refusal is a 502 to the caller with the reason — never the destination, never the value.
-      if (error instanceof ProjectSecretRefused)
+      if (error instanceof SecretRefused)
         return new Response(`${error.message}\n`, { status: 502 });
       throw error;
     }
@@ -423,7 +422,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     try {
       await this.withItx((itx) => itx.append(event));
     } catch (error) {
-      console.error("secret.fact_append_failed", { type: event.type, error: String(error) });
+      reportIssue("secret.fact-append-failed", error, { type: event.type });
     }
   }
 }
@@ -436,7 +435,7 @@ const dispatch = async (request: Request): Promise<Response> => {
   try {
     return await fetch(request, { redirect: "manual" });
   } catch {
-    throw new ProjectSecretRefused(
+    throw new SecretRefused(
       `itx.fetch: the pinned host ${new URL(request.url).origin} could not be reached`,
     );
   }

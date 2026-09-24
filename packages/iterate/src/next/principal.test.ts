@@ -7,7 +7,7 @@ import {
   stampCaller,
   verifyAdminSecret,
   verifyClaims,
-} from "iterate/next/principal";
+} from "./principal.ts";
 
 const SECRET = "test-secret";
 const claims = { actor: "user_a", email: "a@example.com", next: "/" };

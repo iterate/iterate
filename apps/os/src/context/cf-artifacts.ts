@@ -125,7 +125,8 @@ export function repoPathOf(name: string): string {
 }
 
 /** The Artifacts "repo does not exist" signal (API error 10200, "Repository not found") — the ONLY
- *  failure `create` reads as "not yet"; an outage or an auth error surfaces as what it is. */
+ *  failure `create` reads as "not yet" and `delete` as "already gone"; an outage or an auth error
+ *  surfaces as what it is. */
 const isRepoNotFound = (error: unknown): boolean =>
   /not found|10200/i.test(String((error as { message?: unknown })?.message ?? error));
 
@@ -151,6 +152,8 @@ export interface ArtifactsScope {
     repos: { path: string }[];
     cursor?: string;
   }>;
+  /** True when the repo existed; false when it was already gone (the binding's not-found signal,
+   *  API error 10200). Any other failure surfaces. */
   delete(path: string): Promise<boolean>;
 }
 
@@ -197,6 +200,13 @@ export function projectScopedArtifacts(input: {
         ...(page.cursor !== undefined && { cursor: page.cursor }),
       };
     },
-    delete: (path) => input.namespace.delete(boundName(path)),
+    delete: async (path) => {
+      try {
+        return await input.namespace.delete(boundName(path));
+      } catch (error) {
+        if (!isRepoNotFound(error)) throw error;
+        return false;
+      }
+    },
   };
 }

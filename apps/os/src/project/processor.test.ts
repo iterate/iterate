@@ -83,7 +83,7 @@ describe("ProjectProcessor — the reduce", () => {
       state: { ...empty, configRepoTip: { commitOid: "ccc", offset: 3 } },
     },
     {
-      name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
+      name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
       events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
       state: {
         creation: { status: "created", offset: 2 },
@@ -137,17 +137,6 @@ describe("ProjectProcessor — the reduce", () => {
           "/vendor/lib": { createdAt: expect.any(String) },
         },
       },
-    },
-    {
-      name: "historical MCP connection certificates no longer populate the project catalog",
-      events: [
-        repoBorn("/repos/config"),
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "old-grant", path: "/mcp/inbound/grants/old-grant" },
-        },
-      ],
-      state: { ...empty, repos: { "/repos/config": { createdAt: expect.any(String) } } },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",

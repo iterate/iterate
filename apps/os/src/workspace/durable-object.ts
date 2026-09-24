@@ -61,6 +61,21 @@ function routeMount(
   return best;
 }
 
+/** The workspace's own verbs: its public methods beyond the processor's reads, and the handle type
+ *  `itx.workspaces.get(path)` answers (library.ts `WorkspaceFacet`). */
+export const workspaceVerbs = [
+  "mounts",
+  "readFile",
+  "readBase",
+  "writeFile",
+  "deleteFile",
+  "revert",
+  "listAllFiles",
+  "gitStatus",
+  "gitCommit",
+  "gitLog",
+] as const;
+
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   WorkspaceState,
   { ITX?: ItxEntrypointService },
@@ -68,19 +83,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 > {
   /** The processor's reads, and the workspace's own verbs — what `itx.workspaces.get(path)` reaches
    *  (library.ts). */
-  static override publicMethods = [
-    ...super.publicMethods,
-    "mounts",
-    "readFile",
-    "readBase",
-    "writeFile",
-    "deleteFile",
-    "revert",
-    "listAllFiles",
-    "gitStatus",
-    "gitCommit",
-    "gitLog",
-  ];
+  static override publicMethods = [...super.publicMethods, ...workspaceVerbs];
 
   processor = new WorkspaceProcessor((call) => this.withItx(call));
 
@@ -118,8 +121,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       .toArray();
   }
 
-  // ── the created guard ──
-
   /** Every verb starts here: a workspace whose certificate has not landed refuses, and so does one
    *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
    *  every call (in memory once the facet is caught up). */
@@ -141,8 +142,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       mounts[path] = { repo: path };
     return mounts;
   }
-
-  // ── files: the merged view ──
 
   /** The overlay's copy (a whiteout reads null), else the mounted repo's file at its tip; null when absent. */
   async readFile(path: string): Promise<string | null> {
@@ -225,8 +224,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
     );
     return [...paths].sort();
   }
-
-  // ── git, per mount ──
 
   /** The overlay's changes grouped by mount (every mount listed, dirty or not), plus the unmounted
    *  scratch — which is never committed. */

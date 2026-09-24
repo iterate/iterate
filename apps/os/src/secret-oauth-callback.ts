@@ -6,13 +6,13 @@
 import { verifyClaims } from "iterate/next/principal";
 import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
+import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "./context/paths.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
 import { isSecretOAuthState } from "./secret-oauth.ts";
 
-/** A secret's OWNER (iterate-context.ts `resourceScope`), read off the secret's context (its Durable
+/** A secret's OWNER (context/paths.ts `resourceScope`), read off the secret's context (its Durable
  *  Object name, what the callback's claims carry): a project's id, or the user's / the
  *  organization's id whose own secret it is — the callback admits the human by it. `path` is the
  *  path the placeholder spells, `/secrets/<name>`, relative to the owner's root. */
@@ -23,12 +23,8 @@ function secretOwnerOf(context: string): {
 } {
   const { projectId, path } = DurableObjectNameCodec.parse(context);
   const owner = resourceScope(projectId, path);
-  const secretPath = owner.rootPath === "/" ? path : path.slice(owner.rootPath.length);
-  if (projectId !== GLOBAL_PROJECT_ID) return { kind: "project", id: projectId, path: secretPath };
-  const [, kind, id] = /^global--(users|organizations)--(.+)$/.exec(owner.id) ?? [];
-  if (kind !== "users" && kind !== "organizations")
-    throw new Error("the global root owns no secrets");
-  return { kind, id: id || "", path: secretPath };
+  if (owner.kind === "global") throw new Error("the global root owns no secrets");
+  return { kind: owner.kind, id: owner.ownerId, path: pathUnderOwner(owner, path) };
 }
 
 /** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
@@ -41,8 +37,7 @@ async function reachesSecretOwner(
   owner: ReturnType<typeof secretOwnerOf>,
 ): Promise<boolean> {
   if (reach === "every") return true;
-  if (owner.kind === "project")
-    return owner.id !== GLOBAL_PROJECT_ID && controlPlane.reachesProject(reach, owner.id);
+  if (owner.kind === "project") return controlPlane.reachesProject(reach, owner.id);
   // a grant bound to projects reaches those projects and nothing of the person's own (session.user)
   if (!("userId" in reach) || "projectIds" in reach) return false;
   if (owner.kind === "users") return reach.userId === owner.id;

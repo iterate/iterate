@@ -18,9 +18,9 @@ import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/next/stream/run";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
-import type { RepoDurableObject } from "./repo/durable-object.ts";
+import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
-import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
+import type { WorkspaceDurableObject, workspaceVerbs } from "./workspace/durable-object.ts";
 import {
   connectToCapnweb,
   type CapnwebConnectOptions,
@@ -73,23 +73,11 @@ export interface LibraryRoots {
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
    *  and `create(path)` are the collection's on the `project` facet at `/`. */
-  repos: {
-    get(path: string): InvokeHandle & RepoFacet;
-    list(): Promise<{ path: string; createdAt: string }[]>;
-    create(path: string): Promise<{ path: string }>;
-    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
-    delete(path: string): Promise<{ path: string }>;
-  };
+  repos: EntityRoot<RepoFacet>;
   /** A workspace (src/workspace/): the workspace of any context, at most one per path. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the workspace's own events;
    *  `list()` and `create(path)` are the collection's on the `project` facet at `/`. */
-  workspaces: {
-    get(path: string): InvokeHandle & WorkspaceFacet;
-    list(): Promise<{ path: string; createdAt: string }[]>;
-    create(path: string): Promise<{ path: string }>;
-    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
-    delete(path: string): Promise<{ path: string }>;
-  };
+  workspaces: EntityRoot<WorkspaceFacet>;
   /** THE FILES: project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
    *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
@@ -102,6 +90,16 @@ export interface LibraryRoots {
     list(prefix?: string): Promise<FileRecord[]>;
   };
 }
+
+/** An entity root (`itx.repos`, `itx.workspaces`): `get(path)` the handle, typed as the facet it
+ *  dispatches to; `list()`, `create(path)` and `delete(path)` the collection's. */
+type EntityRoot<Facet> = {
+  get(path: string): InvokeHandle & Facet;
+  list(): Promise<{ path: string; createdAt: string }[]>;
+  create(path: string): Promise<{ path: string }>;
+  /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+  delete(path: string): Promise<{ path: string }>;
+};
 
 /** A stored file as `itx.files` answers it: its path, content type and size. */
 type FileRecord = { path: string; contentType: string; size: number };
@@ -122,40 +120,32 @@ type FileHandle = {
 
 /** What a repo handle's dotted members reach: the repo facet's own methods, and the typed `append`
  *  of the repo's events on that context (`entityHandle`). */
-type RepoFacet = Pick<
-  RepoDurableObject,
-  "tip" | "readFile" | "readModules" | "modules" | "listFiles" | "commitFiles" | "writeFile" | "log"
-> & { append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]> };
+type RepoFacet = Pick<RepoDurableObject, (typeof repoVerbs)[number]> & {
+  append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]>;
+};
 /** What a workspace handle's dotted members reach: the workspace facet's own methods, and the typed
  *  `append` of the workspace's events on that context. */
-type WorkspaceFacet = Pick<
-  WorkspaceDurableObject,
-  | "mounts"
-  | "readFile"
-  | "readBase"
-  | "writeFile"
-  | "deleteFile"
-  | "revert"
-  | "listAllFiles"
-  | "gitStatus"
-  | "gitCommit"
-  | "gitLog"
-> & { append(...events: EventInput<typeof WorkspaceContract>[]): Promise<StreamEvent[]> };
+type WorkspaceFacet = Pick<WorkspaceDurableObject, (typeof workspaceVerbs)[number]> & {
+  append(...events: EventInput<typeof WorkspaceContract>[]): Promise<StreamEvent[]>;
+};
+
+/** What `buildLibrary` closes over beside `itx`. */
+type LibraryDeps = {
+  /** WHO is calling right now — read when a handle is MADE (a handle is a value that outlives the
+   *  call; its later dispatches arrive with no ambient caller), so a relative path (`./x` from a
+   *  child, answered at the root through its link) means the caller's, and a creation's parent
+   *  link names the caller's context. */
+  caller: () => Caller;
+  /** This context's path — a relative path's base when the caller carries none. */
+  path: string;
+};
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
  *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
  *  pays nothing for the library until a verb runs. */
 export function buildLibrary(
   itx: LibraryItx,
-  deps: {
-    /** WHO is calling right now — read when a handle is MADE (a handle is a value that outlives the
-     *  call; its later dispatches arrive with no ambient caller), so a relative path (`./x` from a
-     *  child, answered at the root through its link) means the caller's, and a creation's parent
-     *  link names the caller's context. */
-    caller: () => Caller;
-    /** This context's path — a relative path's base when the caller carries none. */
-    path: string;
-  },
+  deps: LibraryDeps,
 ): {
   roots: LibraryRoots;
   /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
@@ -194,47 +184,14 @@ export function buildLibrary(
         memoized(["capnweb", url, options], options?.transport !== "batch", () =>
           connectToCapnweb(itx, url, options),
         ),
-      // An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
-      // dispatches to — the entities section says why the assertion is safe), `list()` and
-      // `create(path)` one dispatch each on the collection the `project` facet carries
-      // (`projectFacet`): the platform's own `EntityCollectionRpcTarget`, whose `list` and
-      // `create` answer exactly these shapes — ours, so the wire's copy is asserted, not re-validated.
-      repos: {
-        get: (path) =>
-          entityHandle(itx, path, "repo", RepoContract, deps.caller(), deps.path) as InvokeHandle &
-            RepoFacet,
-        list: () =>
-          projectFacet(itx, [["repos"], ["list"]]) as Promise<
-            { path: string; createdAt: string }[]
-          >,
-        create: (path) => createEntity(itx, path, "repos", deps.caller(), deps.path),
-        delete: async (path) =>
-          projectFacet(itx, [
-            ["repos"],
-            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
-          ]) as Promise<{ path: string }>,
-      },
-      workspaces: {
-        get: (path) =>
-          entityHandle(
-            itx,
-            path,
-            "workspace",
-            WorkspaceContract,
-            deps.caller(),
-            deps.path,
-          ) as InvokeHandle & WorkspaceFacet,
-        list: () =>
-          projectFacet(itx, [["workspaces"], ["list"]]) as Promise<
-            { path: string; createdAt: string }[]
-          >,
-        create: (path) => createEntity(itx, path, "workspaces", deps.caller(), deps.path),
-        delete: async (path) =>
-          projectFacet(itx, [
-            ["workspaces"],
-            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
-          ]) as Promise<{ path: string }>,
-      },
+      repos: entityRoot<RepoFacet>(itx, deps, "repo", "repos", RepoContract),
+      workspaces: entityRoot<WorkspaceFacet>(
+        itx,
+        deps,
+        "workspace",
+        "workspaces",
+        WorkspaceContract,
+      ),
       files: {
         get: (path) => fileHandle(itx, path),
         list: async (prefix = "") => {
@@ -252,7 +209,8 @@ export function buildLibrary(
     holdsOpenSocket: () => [...liveConnections.values()].some((c) => c.holdsSocket),
     releaseConnections: () => {
       // `close()` where a connection has one (the graceful half-close), else its dispose; a release
-      // that throws is REPORTED — a connection that will not close is a fact worth a log line.
+      // that throws is logged, not reported as an issue — the far end is any server a caller
+      // connected to, and one that will not close is a fact worth a warning, not a platform fault.
       for (const [memoKey, { connection }] of liveConnections)
         void connection
           .then((c) => {
@@ -260,7 +218,11 @@ export function buildLibrary(
             return held.close ? held.close() : held[Symbol.dispose]?.();
           })
           .catch((error: unknown) =>
-            console.warn(`releaseConnections: ${memoKey} did not close: ${String(error)}`),
+            console.warn({
+              event: "library.connection-close-failed",
+              memoKey,
+              message: String(error),
+            }),
           );
       liveConnections.clear();
     },
@@ -448,6 +410,36 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
  *  through its link, is the child's `./x`), else this one (`ownPath`). */
 const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
 
+/** An entity's absolute path: `path` resolved against the caller's originating context. */
+const entityPathOf = (caller: Caller, ownPath: string, path: string): string =>
+  resolveContextPath(originOf(caller, ownPath), path);
+
+/** An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
+ *  dispatches to — the note above `entityHandle` says why the assertion is safe), `list()`,
+ *  `create(path)` and `delete(path)` one dispatch each on the collection the `project` facet carries
+ *  (`projectFacet`): the platform's own `EntityCollectionRpcTarget`, whose verbs answer exactly
+ *  these shapes — ours, so the wire's copy is asserted, not re-validated. */
+function entityRoot<Facet>(
+  itx: LibraryItx,
+  deps: LibraryDeps,
+  name: "repo" | "workspace",
+  collection: "repos" | "workspaces",
+  contract: EntityContract,
+): EntityRoot<Facet> {
+  return {
+    get: (path) =>
+      entityHandle(itx, path, name, contract, deps.caller(), deps.path) as InvokeHandle & Facet,
+    list: () =>
+      projectFacet(itx, [[collection], ["list"]]) as Promise<{ path: string; createdAt: string }[]>,
+    create: (path) => createEntity(itx, path, collection, deps.caller(), deps.path),
+    delete: async (path) =>
+      projectFacet(itx, [
+        [collection],
+        ["delete", entityPathOf(deps.caller(), deps.path, path)],
+      ]) as Promise<{ path: string }>,
+  };
+}
+
 /** THE CREATION, from the caller's context: the path resolved against it, the CREATOR named on the
  *  request — the collection's saga on the `project` facet (`<entity>/create-requested { creator }` …
  *  `created`) writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new context before the
@@ -514,7 +506,7 @@ function entityHandle(
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
+    const context = await itx.builtins.cd(entityPathOf(caller, ownPath, path));
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;
