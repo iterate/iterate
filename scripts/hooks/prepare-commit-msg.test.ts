@@ -96,23 +96,16 @@ test("a person can amend, including in an IDE terminal that carries CLAUDECODE",
   expect(repo.git("log", "--format=%s")).toMatchObject({ stdout: "reworded\n" });
 });
 
-test("lint-staged runs the agent checks for the same markers as the hook", () => {
-  expect(lintStagedCommands({})).toEqual(["oxfmt --no-error-on-unmatched-pattern"]);
-  expect(lintStagedCommands({ CLAUDECODE: "1" })).toEqual([
-    "oxfmt --no-error-on-unmatched-pattern",
-  ]);
-  expect(lintStagedCommands({ CLAUDE_CODE_CHILD_SESSION: "1" })).toEqual([
-    "oxfmt --no-error-on-unmatched-pattern",
-    "pnpm typecheck",
-    // A scratch repository a test builds must not reach the committing worktree's git directory.
-    "env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_AUTHOR_DATE -u GIT_CONFIG_PARAMETERS pnpm test",
-    "pnpm lint:fix --deny-warnings --report-unused-disable-directives-severity error",
-  ]);
-});
+test.each([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGENT: "1" }])(
+  "the pre-commit hook only formats the staged files, for people and agents alike (%o)",
+  (marker) => {
+    expect(lintStagedCommands(marker)).toEqual(["oxfmt --no-error-on-unmatched-pattern"]);
+  },
+);
 
 // A one-commit repo on `main` whose only hook is the real prepare-commit-msg, next to the agent
 // detector it loads from the same path as in this repo. The environment keeps none of this
-// process's agent markers or GIT_* variables (a pre-commit run of this test inherits both).
+// process's agent markers or GIT_* variables.
 function scratchRepo(marker: Record<string, string | undefined>) {
   const dir = mkdtempSync(join(tmpdir(), "prepare-commit-msg-"));
   mkdirSync(join(dir, "hooks"));
@@ -156,10 +149,7 @@ function scratchRepo(marker: Record<string, string | undefined>) {
 function lintStagedCommands(marker: Record<string, string>) {
   const result = spawnSync(
     process.execPath,
-    [
-      "-e",
-      'const commands = require("./lint-staged.config.cjs")["*"]; console.log(JSON.stringify(commands.map((command) => typeof command === "function" ? command() : command)))',
-    ],
+    ["-e", 'console.log(JSON.stringify(require("./lint-staged.config.cjs")["*"]))'],
     { cwd: projectDir, env: { ...cleanEnv(), ...marker }, encoding: "utf8" },
   );
   expect(result).toMatchObject({ stderr: "" });
