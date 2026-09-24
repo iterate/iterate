@@ -17,8 +17,8 @@
 // the RPC error. A preview still missing at the deadline fails the deploy with those misses.
 //
 // AN IN-PLACE REDEPLOY has its own window: its Durable Objects keep running the previous version on
-// some hosts for up to ~80 s after `wrangler preview` returns, then reset with "Durable Object reset
-// because its code was updated.", failing every call in flight. The rounds pass meanwhile, since the
+// some hosts for up to ~100 s after `wrangler preview` starts (Workers Logs, 48 soak redeploys), then
+// reset with "Durable Object reset because its code was updated.", failing every call in flight. The rounds pass meanwhile, since the
 // old version answers them. On 2026-09-24 the ControlPlane singleton answered 238 calls of a soak's
 // e2e run on the old version, then reset and failed 16 rows. `holdMs` keeps the rounds going that long
 // (every probe's `whoami` reads the ControlPlane), so the reset lands on a probe instead of on e2e.
