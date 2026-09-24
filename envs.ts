@@ -89,8 +89,9 @@ export interface OsEnv {
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
    *  serves `<baseUrl>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
   ingressRouting?: NonNullable<IngressRouting>;
-  /** The Artifacts namespace the `ARTIFACTS` binding names: `<workerName>-repos`. ensure-resources
-   *  creates it; a namespace cannot be renamed. */
+  /** The Artifacts namespace the `ARTIFACTS` binding names, `<workerName>-…`; ensure-resources
+   *  creates it. A namespace cannot be renamed, and no other Worker may bind it: erase-data refuses a
+   *  shared store, and another Worker would read every project's repos. */
   artifactsNamespace: string;
   /** The prefix of the deployment's named Cloudflare resources (KV `<prefix>-oauth|-itx`, R2
    *  `<prefix>-files`). Today it is the worker name; it is its own field so a worker can be renamed
@@ -178,7 +179,9 @@ export const osEnvs: Record<string, OsEnv> = {
     },
     ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
-    artifactsNamespace: "os-prd-repos",
+    // Not `os-prd-repos`: the legacy platform's namespace of that name (2026-05-18) is still bound
+    // by its artifact viewer, cf-artifact-viewer-prd (artifacts.iterate.com).
+    artifactsNamespace: "os-prd-project-repos",
     resourceNamePrefix: "os-prd",
     resources: {
       oauthKvId: "5d23b869bff94a32a8f8049edc7de122",

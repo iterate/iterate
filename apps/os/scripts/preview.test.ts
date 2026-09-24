@@ -288,7 +288,7 @@ describe("the preview a resource name encodes (previewResourceName's inverse; th
     ["os-preview-pr123-feature-foo-db", "repos", undefined],
     // another worker's: the former parent's, prd's
     ["os-next-preview-repos", "repos", undefined],
-    ["os-prd-repos", "repos", undefined],
+    ["os-prd-project-repos", "repos", undefined],
     // a legacy platform preview slot's reads as preview `1`; the sweep leaves it for being older
     // than the parent (preview-sweep.ts rule 7)
     ["os-preview-1-repos", "repos", "1"],
