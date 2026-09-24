@@ -434,9 +434,8 @@ export class InvokeHandle extends RpcTarget {
   invoke(itxExpressionSteps: ItxExpression): unknown {
     return this.#dispatchItxExpressionSteps(itxExpressionSteps);
   }
-  /** Call the bare capability this handle fronts — the ANONYMOUS call step (apps/os
-   *  context/dispatch.ts `callOn` uses it when a rewritten call's target IS a handle:
-   *  `handle(events, range)`). */
+  /** Call the bare capability this handle fronts — the ANONYMOUS call step (how a rewritten call
+   *  whose target IS a handle calls it: `handle(events, range)`). */
   applyRoot(args: unknown[]): unknown {
     return this.#dispatchItxExpressionSteps([["", ...args]]);
   }
@@ -447,8 +446,8 @@ installPrototypeInvokeFallback(InvokeHandle, []);
  *  itself (a bare function lent as a capability). NO await inside the loop: on a capnweb stub every
  *  step is a PIPELINED path, so an n-step chain costs ONE round trip, flushed by the caller's single
  *  await. A DIRECT call on the stub, never `.apply`: reading `.apply` off a capnweb stub's method is
- *  itself a pipelined remote path (apps/os context/dispatch.ts `walkSteps`' DataCloneError learning).
- *  What a connector over a lent stub or a remote capnweb API walks (apps/os library/capnweb.ts). */
+ *  itself a pipelined remote path, and calling it sends the stub as an argument, which a facet stub
+ *  refuses with a DataCloneError. What a connector over a lent stub or a remote capnweb API walks. */
 export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown {
   let value: unknown = stub;
   for (const step of steps) {

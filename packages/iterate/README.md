@@ -6,8 +6,9 @@ workspace and compiled JavaScript with declarations when packed. The `iterate` c
 [`@iterate-com/cli`](../cli/README.md).
 
 The SDK holds what user code runs or speaks, and the platform is its first user: apps/os builds
-its own entities on `iterate/sdk`, and the first-party apps use only `iterate/*` (lint enforces
-that they never import `apps/os/src`). Code that only the platform's Worker runs stays in apps/os.
+its own entities on `iterate/sdk`, and the first-party apps' code uses only `iterate/*` (lint
+refuses any import of apps/os from another app or package, apps/os's test harnesses aside). Code
+that only the platform's Worker runs stays in apps/os.
 Each subpath in `package.json`'s `exports` is one public module; nothing else is importable. The
 rule and its reasons: [the SDK/platform line](../../docs/2026-09-24-sdk-platform-line.md).
 

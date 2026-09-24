@@ -12,7 +12,7 @@ short; this file keeps the reasons.
 > just re-exports some of the modules from our internal packages. I don't know what you would
 > normally do in this situation.
 
-The overnight review found three symptoms of the missing line (considerations A3–A5):
+A review of the SDK found three symptoms of the missing line:
 
 - **Platform runtime published as SDK API.** About 215 of `iterate/expression`'s 680 lines
   ran only in the platform: the dispatch half (`walkSteps`, `callOn`, the RPC brands,
@@ -32,8 +32,10 @@ The overnight review found three symptoms of the missing line (considerations A3
 1. **The SDK is the programming model, and the platform is its first user.** One package,
    `iterate`, owns every module user code imports. apps/os builds its own entities (account,
    organization, project, repo, workspace, secret) on `iterate/sdk`, as a user's processor does,
-   and every first-party app uses only `iterate/*`. That makes "the internal and external
-   programming models are the same" a checked fact instead of an intention.
+   and the first-party apps' code uses only `iterate/*` (their tests may also drive a real
+   platform through apps/os's test harnesses, [below](#the-rule)). Lint checks that, which makes
+   "the internal and external programming models are the same" a checked fact instead of an
+   intention.
 2. **The line is where code runs.** `iterate` holds what runs in user code (a loaded worker, a
    facet, a processor, a browser app, a Node script) and the contracts both sides speak (the
    API's types, the event envelope, the expression codec, the principal header). apps/os holds
@@ -46,8 +48,8 @@ The overnight review found three symptoms of the missing line (considerations A3
    allows module authors to clearly define the public interface for their package"). That gives
    the list the owner asked for without a second package.
 4. **No `@iterate-com/core` behind a thin `iterate`.** Reasons below.
-5. **Enforce it.** A lint rule stops the SDK and the first-party apps importing `apps/os/src`, and
-   the SDK's own tests run in the SDK.
+5. **Enforce it.** A lint rule stops every package and every app but apps/os importing apps/os,
+   and the SDK's own tests run in the SDK.
 
 ## What comparable platforms do
 
@@ -98,9 +100,17 @@ the `exports` map and the lint rule hold it to the same line as everyone else.
 A module belongs in `iterate` when user code runs it or speaks it: a loaded worker, a facet, a
 processor, a browser or Node client, or the wire contract between them and the platform. It
 belongs in apps/os when only the platform's Worker runs it. It belongs in packages/shared when
-more than one app needs it and user code never does. The SDK and the first-party apps
-(`apps/{agents,dash,notes,voice,kit,spa}`, `packages/{cli,ui}`) never import `apps/os/src`; the
-`no-restricted-imports` override in `.oxlintrc.json` enforces that.
+more than one app needs it and user code never does. The git codec is the one known exception
+([below](#where-the-git-codec-lives)).
+
+Outside apps/os, no package and no app imports apps/os. `import-js/no-restricted-paths` in
+`.oxlintrc.json` enforces that by resolving each import in `packages/**` and `apps/**` to a file,
+so type imports, re-exports, dynamic `import()` and an app added later are all covered, and
+`lint/oxlintrc-platform-line.test.ts` pins it. Tests have one exception: apps/os's test harnesses,
+`apps/os/e2e/support/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform
+and so import it. apps/agents' e2e and Workers tests use them. The rule allows importing a harness
+but does not look inside it, so those tests depend on apps/os's classes through it. Typing the
+harnesses against `iterate/api` instead would remove that dependency, and is a follow-up.
 
 After this change, the SDK's subpaths and who imports them:
 
@@ -113,7 +123,8 @@ After this change, the SDK's subpaths and who imports them:
 | `iterate/api`                                              | The API's types, as a capnweb client sees them                                                                       | clients                   | agents, dash, os, cli, specs         |
 | `iterate/app`, `iterate/app-server`, `iterate/app-session` | A client app's OAuth session and gate pages                                                                          | browser, app Workers      | agents, dash, kit, notes, voice, os  |
 | `iterate/client`, `iterate/react`                          | Live state in the browser                                                                                            | browser                   | agents, dash, notes, voice, os       |
-| `iterate/node`, `iterate/oauth`                            | Node connection, OAuth client helpers                                                                                | Node                      | cli, os, specs                       |
+| `iterate/node`                                             | Node connection                                                                                                      | Node                      | cli, os                              |
+| `iterate/oauth`                                            | OAuth client helpers                                                                                                 | Node                      | cli, os, specs                       |
 | `iterate/lib`                                              | Error codes, patches, timeouts, origin and cookie helpers                                                            | everywhere                | agents, dash, kit, cli, os           |
 | `iterate/expression`                                       | The expression codec and the dotted surface (`InvokeHandle`)                                                         | clients, the library tier | os                                   |
 | `iterate/principal`                                        | `Principal` and `ITX_PRINCIPAL_HEADER`                                                                               | config workers            | os                                   |
@@ -143,22 +154,24 @@ ingress routing) and because apps/os's library tier builds its connectors on the
    engine's two suites now run in packages/iterate. apps/os's processors and apps/agents import
    the harness from the SDK, like any processor author. `apps/os/src/stream/test-support.ts`
    keeps only the real Stream over node:sqlite.
-4. **The rule is linted.** The one exception is `apps/agents/voice/worker.test.ts`, whose fake
-   `itx` refuses what the platform's app wall refuses by calling the platform's own
-   `admitLoadedCodeRow`. That is a test fake borrowing the real policy, and it carries a
-   disable comment that says so.
+4. **The rule is linted.** Besides the harnesses, the one exception is
+   `apps/agents/voice/worker.test.ts`, whose fake `itx` refuses what the platform's app wall
+   refuses by calling the platform's own `admitLoadedCodeRow`. That is a test fake borrowing the
+   real policy, and it carries a disable comment that says so.
 
 ## Where the git codec lives
 
 #3023 made one git protocol implementation, `packages/shared/src/git-wire.ts`
 (`@iterate-com/shared/git-wire`), beside the GitHub template reader
-(`@iterate-com/shared/config-repo-template/github`). This change keeps it there. By the rule
-above both would sit in apps/os: only the platform's Worker runs them (the repo facet, the
-project facet's template download and `session.projects.create`'s pin), and apps/os's e2e fake
-remote and seed script are their only other users. apps/dash imports only the template reference
-parser. Leaving them in packages/shared does not cross the line this file draws, because
+(`@iterate-com/shared/config-repo-template/github`). This change keeps them there, as the one
+known exception to the rule above. By that rule both belong in apps/os: only the platform's
+Worker runs them (the repo facet, the project facet's template download and
+`session.projects.create`'s pin), and apps/os's e2e fake remote and seed script are their only
+other users. apps/dash imports only the template reference parser, which stays in
+packages/shared either way. The exception does not cross the SDK/platform line, because
 packages/shared is private, user code never sees it and neither module imports the platform.
-Move them into apps/os if packages/shared's charter is narrowed to "code more than one app runs".
+Moving `git-wire.ts`, `config-repo-template/github.ts` and their tests into `apps/os/src/repo/`
+is a pure move that keeps one implementation. It is left as a follow-up.
 
 ## Changed published surface
 
@@ -183,12 +196,12 @@ Nothing outside apps/os imported any of the removed names. What an external cons
   attributes it, and the platform does both before user code sees the call: an event arrives with
   `source.principal` stamped, and a forwarded Request with `ITX_PRINCIPAL_HEADER` set.
 
-The package version is unchanged. Decision 8 asked for one version bump across the SDK's
-published changes; this belongs in that bump.
+The package version is unchanged. The SDK's published changes are to ship together in one
+version bump, and this change belongs in it.
 
 ## Not in this change
 
-- **Splitting the event envelope** out of `stream/processor.ts` into its own subpath (A4). It
+- **Splitting the event envelope** out of `stream/processor.ts` into its own subpath. It
   would touch about 50 import sites for a file that is already SDK-only, so it is better done
   the next time the envelope changes.
 - **A check that every public subpath has a user.** The table above is the check for now.

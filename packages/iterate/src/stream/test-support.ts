@@ -2,7 +2,7 @@
 // stream/test-support.ts — the in-memory stand-ins a processor's unit tests drive the engine with
 // (`iterate/stream/test-support`, Node only: node:sqlite). The SDK's own engine tests use them
 // (processor.test.ts, processor-rules.test.ts), and so does every processor author, first-party or
-// not — apps/os's entities, apps/agents' agent — so the commit semantics the tests assume are ONE copy.
+// not, so the commit semantics the tests assume are ONE copy.
 //
 //   reduceProcessor — fold events through a processor's pure `reduce`, as the engine does
 //   memoryStream    — the Stream's commit semantics in memory (one offset sequence, idempotency on
@@ -10,12 +10,13 @@
 //                     `processEventBatch` to every engine in `engines` after each append (awaited, it
 //                     would deadlock a processor that appends during its own batch). A short page's
 //                     proof is the in-memory head, so the engine's stale-push and ephemeral-window
-//                     rules are exercised directly; the real Stream stops at the DURABLE mark (apps/os
-//                     stream.test.ts pins that against real SQL)
+//                     rules are exercised directly; the platform's real Stream stops at the DURABLE
+//                     mark
 //   memoryStorage   — the real `ReduceCheckpointTable` over node:sqlite, counting writes
 //   nodeSqliteDurableObjectStorage — a Durable Object's `sql` + `transactionSync` over node:sqlite
 //   settle          — wait for fire-and-forget pushes to land
 import { DatabaseSync } from "node:sqlite";
+import type { SqlStorageValue } from "@cloudflare/workers-types";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -160,9 +161,9 @@ export function memoryStorage(): WriteCountingReduceCheckpointTable {
 export const settle = (ms = 25) => new Promise((r) => setTimeout(r, ms));
 
 // ── node:sqlite durable object storage ── a Durable Object's `sql` and `transactionSync` over
-// node:sqlite (apps/os's `DurableObjectStorageSlice`), so the REAL checkpoint table — and apps/os's
-// real Stream — run in plain Node (the memory pins: local workerd enforces no isolate memory limit,
-// a capped V8 does). Faithful where memory is concerned: `exec` hands back node:sqlite's LAZY row
+// node:sqlite, so the REAL checkpoint table, and anything else written against a Durable Object's
+// storage, runs in plain Node, where a capped V8 enforces the isolate memory limit local workerd
+// does not. Faithful where memory is concerned: `exec` hands back node:sqlite's LAZY row
 // iterator, as workerd's cursor is, and `transactionSync` is a real BEGIN/ROLLBACK, so a throw
 // inside a commit undoes its rows. The cell ceiling workerd enforces (2 MB, SQLITE_TOOBIG) is not
 // reproduced here: the typed modules refuse before it, coded (processor.ts `ReduceCheckpointTable`).

@@ -690,9 +690,9 @@ export type StreamEventInput = {
     principal?: { actor: string; email?: string };
     /** THE CONNECTION the principal acted through: the OAuth grant's id — one per
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
-     *  `principal` by the DO's append root (apps/os src/caller.ts `stampCaller`); absent for the admin secret and the kernel. */
+     *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
     grant?: string;
-    /** THE PLATFORM WROTE THIS FACT, on the principal's behalf (`Caller.platform`, apps/os src/caller.ts):
+    /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
      *  what a processor folding an account's or an organization's facts requires — a client can
      *  append any type to a context it holds, never this. */
     platform?: true;

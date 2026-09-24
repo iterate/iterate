@@ -1,7 +1,7 @@
 // principal.ts — WHO user code is acting for, as the platform tells it: the verified `Principal`
 // (`itx.whoami()`, `source.principal` on an event) and the header the platform stamps it in on a
 // Request it forwards to a project's worker (sdk/auth.ts reads it). How the platform admits and
-// carries a caller — `Caller`, `stampCaller`, its signed claims — is apps/os src/caller.ts.
+// carries a caller, and signs its own tokens, stays in the platform.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
