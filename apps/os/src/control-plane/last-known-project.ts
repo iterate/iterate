@@ -91,18 +91,23 @@ export async function admitProjectHost(
     }
   };
 
-  /** The copy at `key` in `ProjectRow`'s shape, or null. KV failing to answer is no copy: the
-   *  caller's 503 stays a 503. */
-  const copyAt = async (key: string) => {
+  /** The first of `keys` that holds a copy, in `ProjectRow`'s shape, and its index; null when none
+   *  does. KV failing to answer for any of them is no copy (the caller's 503 stays a 503): a more
+   *  specific key it could not read may hold the answer. */
+  const firstCopy = async (keys: string[]) => {
     try {
-      const row = ProjectRow.safeParse(await kv.get(key, "json")).data ?? null;
-      if (row) copies.push(key);
-      return row;
+      const rows = await Promise.all(
+        keys.map(async (key) => ProjectRow.safeParse(await kv.get(key, "json")).data),
+      );
+      const index = rows.findIndex(Boolean);
+      if (index < 0) return null;
+      copies.push(keys[index]!);
+      return { index, row: rows[index]! };
     } catch (error) {
       console.warn({
         event: "control-plane.last-known-copy-unread",
         name: url.hostname,
-        key,
+        keys,
         message: String(error),
       });
       return null;
@@ -117,18 +122,19 @@ export async function admitProjectHost(
       async () => {
         // as the catalog reads it (catalog.ts `projectByHostname`): the first candidate held
         const candidates = customHostnameCandidatesOf(url.hostname);
-        for (const candidate of candidates) {
-          const row = await copyAt(lastKnownKey("hostname", candidate.hostname));
-          if (row) return { routingSlug: candidate.routingSlug, project: row.id, basePath: "" };
-        }
-        return null;
+        const found = await firstCopy(
+          candidates.map((candidate) => lastKnownKey("hostname", candidate.hostname)),
+        );
+        if (!found) return null;
+        const { routingSlug } = candidates[found.index]!;
+        return { routingSlug, project: found.row.id, basePath: "" };
       },
     ));
   if (!address) return null;
   const project = await readOrCopy(
     "project",
     () => controlPlane.getProject(address.project),
-    () => copyAt(lastKnownKey("project", address.project)),
+    async () => (await firstCopy([lastKnownKey("project", address.project)]))?.row ?? null,
   );
   return { address, project, stale: stale && { ...stale, copies } };
 }

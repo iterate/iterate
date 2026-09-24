@@ -160,6 +160,28 @@ test("a hostname its project removed: its copy goes before its claim, so an outa
   await expectUnavailable(await call(host), hostname);
 });
 
+test("an unreadable copy of the host's own name is no copy, even when a name above it has one: the host answers 503, never the other project", async () => {
+  const above = await catalogOnlyProject("above", { ownHostname: true });
+  const below = await catalogOnlyProject("below");
+  // claimed first: a claim is refused under another project's name, not above one
+  const hostname = `docs.${new URL(above.host).hostname}`;
+  await controlPlaneStub().releaseHostname(above.projectId, new URL(above.host).hostname);
+  await controlPlaneStub().claimHostname(below.projectId, hostname);
+  await controlPlaneStub().claimHostname(above.projectId, new URL(above.host).hostname);
+  await failReads("throws");
+  const get = env.OAUTH_KV.get.bind(env.OAUTH_KV) as (key: string, type: "json") => unknown;
+  const gets = vi
+    .spyOn(env.OAUTH_KV, "get")
+    .mockImplementation(((key: string) =>
+      key === lastKnownKey("hostname", hostname)
+        ? Promise.reject(new Error("KV unavailable"))
+        : get(key, "json")) as never);
+  onTestFinished(() => gets.mockRestore());
+
+  await expectUnavailable(await call(`https://${hostname}/`), hostname);
+  expect(gets).toHaveBeenCalledWith(lastKnownKey("hostname", hostname), "json");
+});
+
 test("a release the KV delete fails keeps the claim, so the copy never outlives it: the hostname's processor asks again", async () => {
   const { projectId, host } = await catalogOnlyProject("release-fails", { ownHostname: true });
   const { hostname } = new URL(host);
