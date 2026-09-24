@@ -56,15 +56,18 @@ export type ConsentView =
   | { kind: "invalid"; description: string };
 
 /** A platform-served project CIMD client can receive only that project's authority — its
- *  client.json on a project host (app-config.ts `projectHostOf`, as the edge admits one). */
+ *  client.json on a project host (app-config.ts `projectHostOf`, as the edge admits one).
+ *  `expected` are the ids the caller refuses without — approve's ticked projects, re-read past
+ *  the isolate's access memo before one is left out (edge.ts `reachableProjects`). */
 export async function projectsForClient(
   env: Env,
   platformOrigin: string,
   clientId: string,
   userId: string,
+  expected: readonly string[] = [],
 ) {
   const controlPlane = new ControlPlane(env.CONTROL_PLANE);
-  const projects = await controlPlane.reachableProjects({ userId });
+  const projects = await controlPlane.reachableProjects({ userId }, expected);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const host =
     url?.pathname === "/.auth/client.json"
@@ -132,6 +135,13 @@ export class ConsentRpcTarget extends RpcTarget {
       denied.searchParams.set("error_description", "The user declined access.");
       if (request.state) denied.searchParams.set("state", request.state);
       if (request.issuer) denied.searchParams.set("iss", request.issuer);
+      // The page lists what the person holds NOW, read past this isolate's access memo: a project
+      // just made (the page's New project form, served by whichever isolate) is listed at once.
+      // The project list below reads the answer this read just memoized.
+      const { organizations } = await new ControlPlane(env.CONTROL_PLANE).accessibleTo(
+        this.#grant.userId,
+        true,
+      );
       return {
         kind: "consent",
         query,
@@ -147,8 +157,7 @@ export class ConsentRpcTarget extends RpcTarget {
           const name = OAuthScope.parse(scope);
           return { name, ...OAuthScopeDescriptions[name] };
         }),
-        orgs: (await new ControlPlane(env.CONTROL_PLANE).accessibleTo(this.#grant.userId))
-          .organizations,
+        orgs: organizations,
         ingressRouting: appConfigOf(env).urls.ingressRouting,
         suggestedOrganizationName: suggestOrganizationName({
           name: this.#grant.name,
@@ -190,6 +199,7 @@ export class ConsentRpcTarget extends RpcTarget {
         this.#addresses.platformOrigin,
         request.clientId,
         this.#grant.userId,
+        data.projects.filter((project) => project !== "*"),
       );
       const checked = new Set(data.projects);
       const granted = projects.filter((p) => checked.has(p.id)).map((p) => p.id);

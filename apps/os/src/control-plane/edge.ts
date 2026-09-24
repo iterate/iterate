@@ -120,14 +120,24 @@ export class ControlPlane {
   }
 
   /** The projects `reach` reaches: every one for the admin secret; the user's, with their role;
-   *  the named ones (a name the catalog never heard of is no record). */
-  async reachableProjects(reach: Reach): Promise<ProjectRecord[]> {
+   *  the named ones (a name the catalog never heard of is no record). `expected` names the ids the
+   *  caller refuses without (consent's ticked projects, a socket's held ones): one of them, or of
+   *  the reach's own selection, missing from the memoized access set is re-read once first — the
+   *  project may have been created on another isolate within the memo's five seconds. */
+  async reachableProjects(
+    reach: Reach,
+    expected: readonly string[] = [],
+  ): Promise<ProjectRecord[]> {
     if (reach === "every") return this.#call<ProjectRecord[]>("projects");
     if ("userId" in reach) {
-      const { projects } = await this.accessibleTo(reach.userId);
-      return reach.projectIds
-        ? projects.filter((project) => reach.projectIds!.includes(project.id))
-        : projects;
+      const { userId, projectIds } = reach;
+      const named = [...expected, ...(projectIds || [])];
+      let record = await this.accessibleTo(userId);
+      if (!named.every((id) => record.projects.some((project) => project.id === id)))
+        record = await this.accessibleTo(userId, true);
+      return projectIds
+        ? record.projects.filter((project) => projectIds.includes(project.id))
+        : record.projects;
     }
     const rows = await Promise.all(reach.projectIds.map((projectId) => this.getProject(projectId)));
     return rows.filter((row): row is ProjectRecord => !!row);

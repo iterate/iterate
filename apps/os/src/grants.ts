@@ -202,7 +202,9 @@ export class GrantsRpcTarget extends RpcTarget {
     const { platformOrigin: issuer, api, mcp } = this.#addresses;
     if (!mintsPersonalAccessTokens(issuer))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
-    const projects = (await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach))
+    const projects = (
+      await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach, data.projects)
+    )
       .filter((project) => data.projects.includes(project.id))
       .map((project) => project.id);
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");
