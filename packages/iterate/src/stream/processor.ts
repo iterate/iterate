@@ -33,6 +33,12 @@
 // ephemeral missed while a facet rebuilds is gone by design) and NEVER trigger a checkpoint write,
 // so a pure-ephemeral flood costs this class ZERO storage writes.
 //
+// THE READ VERBS (`snapshot`, `liveSnapshot`) read the log only while the reduce has not provably
+// reached the head SHOWN so far: the highest a push showed or — for a processor FED BY PUSHES (its
+// host's word: a row of its context pushes it every commit it consumes) — a catch-up read from the
+// log. So an idle processor a row pushes reads its log once per incarnation, not on every read; one
+// nothing pushes learns of a new event only by reading, and reads every time.
+//
 // `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
 // (`ReduceCheckpointTable` below) with the offset and contract version it was reduced under; bumping
 // `contract.version` re-reduces from offset 0 through `reduce` only, never re-running side effects —
@@ -190,6 +196,13 @@ export class ProcessorEngine<State> {
   #staleCheckpoint?: { reducedThroughOffset: number; state: State };
   /** The highest `range.through` ever SHOWN to this processor (see processEventBatch). */
   #pushedThroughOffset?: number;
+  /** The host's word that a row pushes this processor every commit it consumes (the constructor's
+   *  `fedByPushes`) — what lets a head read from the log count as shown. */
+  readonly #fedByPushes: boolean;
+  /** The highest head a catch-up of a processor FED BY PUSHES reduced through (`#showHeadReadFromLog`):
+   *  every commit past it that the processor consumes reaches it as a push, so the read verbs trust it
+   *  as a push's head. In memory only — a fresh incarnation catches up once before it trusts any. */
+  #headReadFromLogOffset?: number;
   /** A refusal that can only repeat — the checkpoint over its cell (stamped `retryable: false`):
    *  LATCHED for this incarnation, so every later batch, catch-up and read verb rejects with it at
    *  once instead of re-reducing into the same wall on every push and wake. A fresh incarnation
@@ -211,12 +224,20 @@ export class ProcessorEngine<State> {
 
   constructor(
     processor: StreamProcessor<State>,
-    deps: { stream: ProcessorStream; storage: ReduceCheckpointTable },
+    deps: {
+      stream: ProcessorStream;
+      storage: ReduceCheckpointTable;
+      /** The host's word that a subscription row pushes this processor every commit it consumes
+       *  (`processEventBatch`). The read verbs then trust the head a catch-up read until a push shows
+       *  a later one; absent, only a push's head is trusted, so an unpushed processor reads each time. */
+      fedByPushes?: boolean;
+    },
   ) {
     this.processor = processor;
     this.#contract = processor.contract;
     this.#stream = deps.stream;
     this.#storage = deps.storage;
+    this.#fedByPushes = deps.fedByPushes === true;
     // ONE row, so cursor and state never disagree; one written under another contract version is
     // kept as #staleCheckpoint for the chain's first work.
     const { slug, version } = this.#contract;
@@ -313,7 +334,11 @@ export class ProcessorEngine<State> {
       for (;;) {
         const after = this.#reducedThroughOffset;
         const page = await this.#stream.read(after, 500);
-        if (page.scannedThroughOffset <= after) return; // nothing beyond the cursor: at head already
+        if (page.scannedThroughOffset <= after) {
+          // Nothing beyond the cursor: at head already.
+          if (page.atHead) this.#showHeadReadFromLog(after);
+          return;
+        }
         // The page says whether it reached the head — never judge by its length (rule 5's caught-up
         // pass rides the last page).
         await this.#reduceAndCommitEventBatch(
@@ -321,9 +346,22 @@ export class ProcessorEngine<State> {
           { after, through: page.scannedThroughOffset },
           page.atHead,
         );
-        if (page.atHead) return;
+        if (page.atHead) {
+          this.#showHeadReadFromLog(page.scannedThroughOffset);
+          return;
+        }
       }
     });
+  }
+
+  /** A catch-up reduced through `reducedThroughOffset`, the head its last page reached: for a
+   *  processor FED BY PUSHES, the head is SHOWN. Every later commit it consumes reaches it as a push,
+   *  whose `range.through` is recorded the moment the push arrives, so a read that follows the push
+   *  catches up again; while none arrives, nothing it consumes has landed and its reads stop re-reading
+   *  the log. A processor nothing pushes records nothing: it learns of a new event only by reading. */
+  #showHeadReadFromLog(reducedThroughOffset: number): void {
+    if (!this.#fedByPushes) return;
+    this.#headReadFromLogOffset = Math.max(this.#headReadFromLogOffset ?? 0, reducedThroughOffset);
   }
 
   // ── the read surface ──
@@ -334,12 +372,16 @@ export class ProcessorEngine<State> {
     return { offset: this.#reducedThroughOffset, state: this.#reducedState };
   }
 
-  /** Provably reduced through the head SHOWN so far → the read verbs skip their catch-up read. */
+  /** Provably reduced through the head SHOWN so far — the highest a push showed or, fed by pushes, a
+   *  catch-up read — → the read verbs skip their catch-up read. Nothing shown yet (a fresh
+   *  incarnation, or an unpushed processor) → they read. Whether a PUSH reaches the head (rule 5)
+   *  is still judged against pushes alone (processEventBatch). */
   #reducedThroughPushedHead(): boolean {
-    return (
-      this.#pushedThroughOffset !== undefined &&
-      this.#reducedThroughOffset >= this.#pushedThroughOffset
-    );
+    const shownHeadOffset =
+      this.#headReadFromLogOffset === undefined
+        ? this.#pushedThroughOffset
+        : Math.max(this.#pushedThroughOffset ?? 0, this.#headReadFromLogOffset);
+    return shownHeadOffset !== undefined && this.#reducedThroughOffset >= shownHeadOffset;
   }
 
   /** THE barrier verb (read-your-writes): resolves once processed AT LEAST through `offset`. An
