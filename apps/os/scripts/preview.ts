@@ -611,9 +611,15 @@ async function deployPreviewSteps(
   await traceOperation("Build OS", () => buildOs("preview"));
   const appBuildResults = await appBuilds;
   const failedBuilds = appBuildResults.flatMap((result, index) =>
-    result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
+    result.status === "rejected"
+      ? [{ app: apps[index]!.name, error: describe(result.reason) }]
+      : [],
   );
-  if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
+  // the apps on the first line (the PR body's summary), each one's error and output tail after it
+  if (failedBuilds.length)
+    throw new Error(
+      `app preview build failed: ${failedBuilds.map(({ app }) => app).join(", ")}\n${failedBuilds.map(({ app, error }) => `${app}: ${error}`).join("\n\n")}`,
+    );
   const appOrigins = appPreviewOrigins(apps, previewName);
   const { wrangler, url, deploymentId, slug } = await traceOperation("Deploy OS preview", () =>
     deployOsPreview(ctx, previewName, appOrigins.dash),
