@@ -1,3 +1,4 @@
+// push-delivery-no-dropped-warns.e2e.test.ts — the three pins that read the WORKER'S CONSOLE: the
 // delivery loop emits `delivery.push.dropped` for a push that fails with anything but
 // RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's

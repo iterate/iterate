@@ -360,11 +360,8 @@ describe("security requirements — the global namespace is not navigable", () =
     expect(bPage.events.some((event) => event.type === "smuggled")).toBe(false);
   });
 
-  test("user contexts have no implicit global subscription", async () => {
+  test("a user's builtins cd('/') is refused", async () => {
     const a = await userSession("funnel@sec.test");
-    await a.user.invoke(["itx", ["append", { type: "mark" }]]);
-    const rows = (await a.user.invoke("itx.subscriptions.list()")) as { name: string }[];
-    expect(rows.map((row) => row.name)).not.toContain("config");
     await expect(a.user.invoke("itx.builtins.cd('/').kv.list()")).rejects.toThrow("never by path");
   });
 

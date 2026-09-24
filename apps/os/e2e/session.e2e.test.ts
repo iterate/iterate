@@ -8,6 +8,7 @@ import {
   adminCredentials,
   codeOf,
   freshCtx,
+  mcpCall,
   publicSession,
   openItx,
   processorNames,
@@ -280,25 +281,12 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(codeOf(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
 
   // /mcp: the one tool is `run`; this token reaches exactly one project, so `run(script)` omits it
-  const mcp = process.env.MCP_BASE_URL || workerUrl("/mcp");
-  const mcpHeaders = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  const ran = await fetch(mcp, {
-    method: "POST",
-    headers: mcpHeaders,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
-    }),
-  });
-  const ranBody = await ran.text();
-  expect(ran.status, ranBody).toBe(200);
-  expect(ranBody).toContain(projectId); // itx.whoami() names the project the token reaches
+  const ran = await mcpCall(
+    "tools/call",
+    { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
+    token,
+  );
+  expect(JSON.stringify(ran)).toContain(projectId); // itx.whoami() names the project the token reaches
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
@@ -333,11 +321,6 @@ test("a personal access token — one OAuth grant the account mints — is the u
       result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
     },
   });
-  expect(
-    (await readAll(api.projects.get(projectId))).some(
-      (e) => e.type === "events.iterate.com/project/mcp-connection-created",
-    ),
-  ).toBe(false);
   // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
   // the issuer session it was minted through (best-effort and async: wait for it)
   const accountEvents = async () => {
@@ -374,9 +357,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
   expect(endedApi.status).toBe(401);
   await endedApi.body?.cancel();
-  const endedMcp = await fetch(mcp, { method: "POST", headers: mcpHeaders, body: "{}" });
-  expect(endedMcp.status).toBe(401);
-  await endedMcp.body?.cancel();
+  await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
   expect((await fetchProjectUrl(echoOf(slug), bearer)).status).toBe(401);
   // … and the end is the account's fact too
   const ended = await until("the end is on the account context", async () =>

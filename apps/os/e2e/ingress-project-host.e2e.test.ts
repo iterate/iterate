@@ -121,7 +121,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const apexRoot = projectUrl({ project: slug, path: "/" });
   const bare = await fetchProjectUrl(apexRoot);
   expect(bare.status, bare.text).toBe(404);
-  expect(bare.text).toMatch(/no site yet|not configured/); // the deployed worker may run the older wording
+  expect(bare.text).toMatch(/no site yet/);
   await itx.append({
     type: "events.iterate.com/project/ingress-configured",
     payload: {
@@ -162,7 +162,7 @@ localOnly(
     // A custom hostname reaches its project, but needs an explicit ingress target.
     const bare = await fetchProjectHost("custom-apex.test", "/");
     expect(bare.status, bare.text).toBe(404);
-    expect(bare.text).toMatch(/no site yet|not configured/); // the deployed worker may run the older wording
+    expect(bare.text).toMatch(/no site yet/);
     await itx.append({
       type: "events.iterate.com/project/ingress-configured",
       payload: {

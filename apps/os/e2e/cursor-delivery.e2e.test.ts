@@ -1,3 +1,4 @@
+// cursor-delivery.e2e.test.ts — THE CURSOR LANE live. A subscription whose target cannot own its
 // progress — a Worker-Loader entrypoint's `processEventBatch(events, range)`, the stateless "project
 // worker" — is delivered at-least-once from a cursor THE STREAM keeps
 // (`itx.subscriptions.get(name).cursor`): the awaited call is the ack; a plain throw climbs the one

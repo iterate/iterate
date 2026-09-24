@@ -45,6 +45,40 @@ export const adminCredentials = (as?: {
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
+/** MCP's protocol endpoint (global-setup: `<worker>/mcp`, or a deployed worker's own MCP origin). */
+const mcpUrl = (): string => {
+  const url = process.env.MCP_BASE_URL;
+  if (!url) throw new Error("MCP_BASE_URL unset — the e2e globalSetup/setup did not run");
+  return url;
+};
+
+let mcpRequestId = 0;
+/** One MCP JSON-RPC call with `bearer`, answered as JSON or as an event stream; hands back the
+ *  `result` and throws on a non-200 answer or a JSON-RPC `error`. */
+export async function mcpCall(method: string, params: unknown, bearer: string): Promise<any> {
+  const response = await fetch(mcpUrl(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${bearer}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++mcpRequestId, method, params }),
+  });
+  const body = await response.text();
+  if (response.status !== 200) throw new Error(`MCP ${method} answered ${response.status}: ${body}`);
+  const message = response.headers.get("content-type")?.includes("text/event-stream")
+    ? JSON.parse(
+        body
+          .split("\n")
+          .find((line) => line.startsWith("data: "))!
+          .slice(6),
+      )
+    : JSON.parse(body);
+  if (message.error) throw new Error(`MCP ${method} failed: ${body}`);
+  return message.result;
+}
+
 /** THE RUN'S ID — one value for the whole `pnpm e2e` run, minted by global-setup and handed to every
  *  vitest worker process (support/setup.ts sets `E2E_RUN_ID` from it; a caller may pin it — a commit
  *  sha in CI). Every identifier a test mints carries it, so no two runs against one deployment can
