@@ -105,14 +105,16 @@ const ConsentApproval = z.object({
 /** POST /oauth2/auth — the page's Authorize form, posted to the authorization URL itself so the
  *  query is the one the client sent. The browser follows the 303 to the client's redirect URI,
  *  whatever its scheme. A request that cannot be approved as posted returns to the page, which
- *  describes it afresh. */
+ *  describes it afresh. The form is read before the issuer session is admitted: the approval reads
+ *  the session no second time (`admittedThisRequest`), so no body the client sends slowly may
+ *  stand between that admission and the grant it approves. */
 export async function approveConsentForm(request: Request, env: Env, ctx: ExecutionContext) {
   const authorization = new URL(request.url).search;
   const seeOther = (location: string) =>
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
+  const form = await request.formData().catch(() => null);
   const signedIn = await issuerSignIn(request, env);
   if (!signedIn) return seeOther(signInHref(`/oauth2/auth${authorization}`));
-  const form = await request.formData().catch(() => null);
   const approval = ConsentApproval.safeParse({
     project: form?.getAll("project"),
     scope: form?.getAll("scope"),

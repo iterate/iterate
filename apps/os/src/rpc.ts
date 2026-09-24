@@ -52,9 +52,8 @@ export async function rpcResponse(
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
     // A read unanswered in 3 s is a retryable ControlPlaneUnavailableError, not a call held until
-    // the transport gives up: the singleton's slowest prd answer was 1.25 s (measured 2026-09-24),
-    // and 3 s is what a project host's admission waits before a copy stands in
-    // (last-known-project.ts).
+    // the transport gives up. 3 s is also how long a project host's admission waits before a copy
+    // stands in (last-known-project.ts, which gives the singleton's measured answer times).
     controlPlane: new ControlPlane(env.CONTROL_PLANE, { readDeadlineMs: 3_000 }),
     appConfig: appConfigOf(env),
     platformOrigin,

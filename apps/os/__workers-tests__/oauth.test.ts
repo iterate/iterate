@@ -290,7 +290,7 @@ test("a use the account recorded within the hour is not recorded again by anothe
   });
 });
 
-test("the consent page's Authorize form reads the issuer session on its own admission alone: ended, it sends the browser to sign in and issues no code", async () => {
+test("the consent page's Authorize form admits the issuer session once its form has arrived: a session that ends while the form is on its way issues no code", async () => {
   fetchReachesThisWorker();
   const flow = await grant([`${ORIGIN}/api`]);
   const client = await helpers().createClient({
@@ -301,26 +301,48 @@ test("the consent page's Authorize form reads the issuer session on its own admi
     responseTypes: ["code"],
   });
   const { query } = await authorizationRequest(client.clientId, [`${ORIGIN}/api`]);
-  const authorize = () => {
-    const form = new FormData();
-    form.append("project", flow.oauthA.id);
-    form.append("scope", "iterate");
-    return call(`/oauth2/auth?${query}`, {
+  const form = new URLSearchParams({ project: flow.oauthA.id, scope: "iterate" }).toString();
+  const authorize = (body: BodyInit) =>
+    call(`/oauth2/auth?${query}`, {
       method: "POST",
-      headers: { Origin: ORIGIN, cookie: flow.cookie },
-      body: form,
+      headers: {
+        Origin: ORIGIN,
+        cookie: flow.cookie,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body,
     });
-  };
-  const approved = await authorize();
+  const approved = await authorize(form);
   expect(approved).toMatchObject({ status: 303 });
   expect(approved.headers.get("location")).toMatch(/^https:\/\/client\.test\/callback\?code=/);
+
+  // The same form again, sent only once the worker is reading it and the session has ended since:
+  // the approval reads the session no second time, so an admission made before the form arrived
+  // would approve with a session that ended while the client was still sending.
   const issuerToken = await appSession(
     env.BROWSER_SESSION,
     new Request(ORIGIN, { headers: { cookie: flow.cookie } }),
   )!.bearer();
   const [userId, issuerGrantId] = issuerToken!.split(":") as [string, string];
+  let reading = false;
+  let send!: () => void;
+  const sent = new Promise<void>((resolve) => (send = resolve));
+  const slowForm = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        reading = true;
+        await sent;
+        controller.enqueue(new TextEncoder().encode(form));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const refusing = authorize(slowForm);
+  await until("the worker reading the form", () => reading);
   await endGrantOnAccount(userId, issuerGrantId);
-  const refused = await authorize();
+  send();
+  const refused = await refusing;
   expect(refused).toMatchObject({ status: 303 });
   expect(refused.headers.get("location")).toBe(
     `/login?${new URLSearchParams({ next: `/oauth2/auth?${query}` })}`,
