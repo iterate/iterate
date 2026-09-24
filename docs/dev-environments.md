@@ -420,7 +420,8 @@ DEMO_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- 
   pnpm spec specs/os/auth.spec.ts --repeat-each 25
 ```
 
-The soak runs sequentially and writes `output/soak/summary.json` plus a table:
+After each run of the suite the soak runs the perf budgets (`apps/os/perf`)
+alone. It runs sequentially and writes `output/soak/summary.json` plus a table:
 a row that fails once in a hundred is a flake, a row that fails every time is a
 bug. All requested runs complete, so the summary preserves the failure rate.
 Run it from CI (`os-e2e-soak.yml`) when the result matters: from a laptop

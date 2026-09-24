@@ -12,6 +12,8 @@
     "e2e": "pnpm build && pnpm e2e:run",
     "e2e:run": "vitest run --configLoader runner --project e2e --sequence.concurrent --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "e2e:soak": "tsx scripts/e2e-soak.ts",
+    "perf": "pnpm build && pnpm perf:run",
+    "perf:run": "vitest run --configLoader runner --project perf",
     "bench": "pnpm build && vitest bench --configLoader runner --run --project bench",
     "preview": "tsx scripts/preview.ts",
     "ensure-resources": "tsx scripts/ensure-resources.ts",

@@ -1,5 +1,6 @@
 # THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (a preview of
-# main by default, `pnpm preview deploy --name soak`) and tally every row that did not pass every time
+# main by default, `pnpm preview deploy --name soak`), each run followed by the perf budgets
+# (apps/os/perf, alone on the wire), and tally every row that did not pass every time
 # (apps/os/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input worker-base-url=https://soak-os-next-preview.iterate-dev-preview.workers.dev

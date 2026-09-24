@@ -114,7 +114,8 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | Kit host         | `pnpm --dir apps/kit firmware:test:host` (needs cmake)             | `apps/kit/firmware/tests/`                                                                                    | Depot **Test** workflow, every PR (its own step after `pnpm test`)                                                                           | Firmware logic compiled for the host and run under CTest.                                                                                                                                                             |
 | Kit ESP builds   | `node apps/kit/scripts/firmware-release.ts build …`                | `apps/kit/firmware/targets/`, `apps/kit/scripts/firmware-release.ts`                                          | **Kit Firmware** workflow, firmware PRs and main (not required)                                                                              | Builds each changed board with ESP-IDF (active), checks its flash layout, its inputs and an unchanged tree; main publishes the releases.                                                                              |
 | Dummy petshop    | `pnpm test` (its unit suite)                                       | `apps/dummy-petshop/src/`                                                                                     | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                                                       | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                           |
-| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)         | `apps/os/scripts/e2e-soak.ts`                                                                                 | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                           | The e2e suite N times against one deployed worker, tallying every row that did not pass every time.                                                                                                                   |
+| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)         | `apps/os/scripts/e2e-soak.ts`                                                                                 | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                           | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time.                                                                            |
+| Perf budgets     | `pnpm --dir apps/os perf` (`WORKER_BASE_URL`)                      | `apps/os/perf/*.perf.test.ts`                                                                                 | In every soak run, after the e2e suite; otherwise **Manual**                                                                                 | Latency and throughput budgets over the same client and worker, measured alone: files one at a time, rows in order, each budget on the median of its rounds.                                                          |
 | Crash hunt       | `RUN_ISOLATE_CRASH_HUNT=1 pnpm e2e isolate-ceilings`               | `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts`                                                           | Nightly against prd (`os-crash-hunt.yml`); opt-in rows, so the preview run stays deterministic                                               | Drives one context's Durable Object up to and past its isolate ceiling on purpose.                                                                                                                                    |
 | Bench            | `pnpm --dir apps/os bench` (`BENCH_OUT=<file.json>`)               | `apps/os/bench/`                                                                                              | **Manual**                                                                                                                                   | Latency scenarios over the same client and worker, files one at a time.                                                                                                                                               |
 
@@ -511,6 +512,7 @@ only on genuine infra wedges).
 | A heavy test               | per-test `{ timeout }`           | per test, with a `// comment`                                                                      | retry once (CI)           |
 | A retry's pause            | vitest `retry.delay`             | `E2E_CI_RETRY_DELAY_MS` 5s, for `createFailing`'s retries; the e2e project retries without a pause | n/a                       |
 | One Workers-lane test/hook | `testTimeout` / `hookTimeout`    | 120s / 120s (the first test pays workerd boot)                                                     | fail                      |
+| One perf test              | `testTimeout` / `hookTimeout`    | 240s / 120s (`apps/os/vitest.config.ts`, `perf`)                                                   | fail (no retry)           |
 | One bench file             | `testTimeout` / `hookTimeout`    | 300s                                                                                               | fail                      |
 | The Depot CI job           | `timeout-minutes`                | Test 20, preview deploy 40, preview e2e 30 minutes                                                 | outer edge: re-run button |
 
@@ -542,9 +544,14 @@ be diagnosed, even though the same test outcome remains green in normal CI.
 - **Volume**: probabilistic regressions need run volume to detect — that is
   what the on-demand soak is for (`os-e2e-soak.yml`, or
   `pnpm --dir apps/os e2e:soak --runs N` with `WORKER_BASE_URL`: N sequential
-  runs of the e2e suite against one deployed worker). It names every row that
-  did not pass every time: a row that fails once in a hundred is a flake; a
-  row that fails every time is a bug.
+  runs of the e2e suite against one deployed worker, each followed by the perf
+  budgets). It names every row that did not pass every time: a row that fails
+  once in a hundred is a flake; a row that fails every time is a bug.
+- **Latency is not an e2e assertion**: the e2e run puts 16 files, their rows
+  concurrent, on one worker, so a wall-clock number measured there is the
+  suite's contention as much as the platform's. A latency or throughput
+  budget belongs in `apps/os/perf/` (the `perf` project), which runs alone and
+  asserts the median of several rounds; an e2e row may print its numbers.
 
 When telemetry trends up without failures, investigate it. If the test is
 repeatedly flaky or adds disproportionate tail latency, use the quarantine

@@ -67,6 +67,7 @@ export default {
         // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
         // export is reported
         "e2e/**/*.e2e.test.ts",
+        "perf/**/*.perf.test.ts",
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
         "src/**/*.test.ts",
@@ -82,6 +83,7 @@ export default {
         "scripts/**/*.ts",
         "examples/**/*.ts",
         "e2e/**/*.ts",
+        "perf/**/*.ts",
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
       ],

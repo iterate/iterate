@@ -198,6 +198,7 @@ describe("Depot deployment safety", () => {
       "apps/os/src/project/templates.test.ts",
       "apps/os/__workers-tests__/support.ts",
       "apps/os/bench/api.bench.ts",
+      "apps/os/perf/push-delivery.perf.test.ts",
       "apps/os/scripts/preview.ts",
       "apps/os/scripts/preview-config.ts",
       "apps/os/scripts/e2e-soak.ts",
