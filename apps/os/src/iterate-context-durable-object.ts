@@ -307,22 +307,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
       this.#stream.appendBirthRecord();
       this.#residency.resetUnclaimedFacetsAtBirth();
-      // Retire only the subscription installed by older runtime versions. This durable
-      // removal runs once per existing context; explicit user subscriptions are preserved.
-      const config = this.#stream.coreReducedState.subscriptions.config;
-      const retiredTarget = ["itx", ["cd", "/"], "worker", "processEventBatch"];
-      if (config && JSON.stringify(config.target) === JSON.stringify(retiredTarget)) {
-        this.#stream.append(
-          normalizeControlEvent(
-            {
-              type: "events.iterate.com/stream/subscription-configured",
-              payload: { name: "config", target: null },
-              idempotencyKey: "migration:explicit-ingress:remove-default-subscription",
-            },
-            this.#durableObjectAddress.path,
-          ),
-        );
-      }
     });
   }
 
