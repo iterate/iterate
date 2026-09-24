@@ -77,7 +77,7 @@ export function issuerOriginOf(
  *  exactly. NOTHING else is read from the document — the endpoints stay hand-built from the origin
  *  (app-session.ts: `/oauth2/token`, and `/api` as the resource), so a document can steer nothing.
  *  Null when it answers as expected, else the reason. */
-async function issuerAnswersAt(origin: string): Promise<string | null> {
+export async function issuerAnswersAt(origin: string): Promise<string | null> {
   try {
     const response = await fetch(`${origin}/.well-known/oauth-authorization-server`, {
       headers: { accept: "application/json" },

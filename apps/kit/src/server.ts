@@ -1,7 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env } from "cloudflare:workers";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
-import { appAuth } from "iterate/app-server";
+import { appAuth, issuerAnswersAt } from "iterate/app-server";
 import type { BrowserSession } from "iterate/app-session";
 import { deviceClientMetadata } from "./firmware/device-client.ts";
 import { proxyFirmwareFile } from "./firmware/firmware-proxy.ts";
@@ -40,7 +40,7 @@ export default createServerEntry({
     // A device's own OAuth client and sign-in come next.
     const deviceClient = deviceClientMetadata(url);
     if (deviceClient) return deviceClient;
-    const deviceLogin = await deviceAuth(request, env);
+    const deviceLogin = await deviceAuth(request, env, { issuerAnswersAt });
     if (deviceLogin) return deviceLogin;
     const auth = await appAuth(request, {
       client: { name: "iterate Kit", logoUri: "/favicon.svg" },

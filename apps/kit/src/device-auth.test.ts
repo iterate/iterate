@@ -5,6 +5,7 @@ import { deviceAuth } from "./device-auth.ts";
 
 const origin = "https://kit-preview.example";
 const cookie = "__Host-itx-session=11111111-1111-4111-8111-111111111111";
+const selfHost = "https://iterate.someone.workers.dev";
 
 test("choosing a device starts its branded client before consent, with a new identity even for two of the same model", async () => {
   const f = fixture();
@@ -16,6 +17,7 @@ test("choosing a device starts its branded client before consent, with a new ide
         headers: { origin, cookie },
       }),
       f.env,
+      f.deps,
     );
     expect(response?.status).toBe(303);
     expect(response?.headers.get("set-cookie")).toContain("HttpOnly; Secure; SameSite=Lax");
@@ -51,6 +53,7 @@ test("GETs and cross-origin requests cannot replace a device session", async () 
         await deviceAuth(
           new Request(`${origin}/devices/satellite1/login`, { method, headers }),
           f.env,
+          f.deps,
         )
       )?.status,
     ).toBe(status);
@@ -66,6 +69,7 @@ test("setup reads the stored consent identity; query parameters cannot change it
       headers: { cookie },
     }),
     f.env,
+    f.deps,
   );
   expect(await response?.json()).toEqual({
     deviceId: "satellite1",
@@ -73,8 +77,13 @@ test("setup reads the stored consent identity; query parameters cannot change it
   });
   f.bearer.mockResolvedValue(null);
   expect(
-    (await deviceAuth(new Request(`${origin}/device-session.json`, { headers: { cookie } }), f.env))
-      ?.status,
+    (
+      await deviceAuth(
+        new Request(`${origin}/device-session.json`, { headers: { cookie } }),
+        f.env,
+        f.deps,
+      )
+    )?.status,
   ).toBe(401);
 });
 
@@ -83,9 +92,10 @@ test("generic login and old firmware bookmarks return to device selection withou
   const response = await deviceAuth(
     new Request(`${origin}/.auth/login?next=/devices/satellite1/firmware/latest`),
     f.env,
+    f.deps,
   );
   expect(response?.headers.get("location")).toBe("/?device=satellite1");
-  expect(await deviceAuth(new Request(`${origin}/`), f.env)).toBeNull();
+  expect(await deviceAuth(new Request(`${origin}/`), f.env, f.deps)).toBeNull();
   expect(f.begin).not.toHaveBeenCalled();
 });
 
@@ -100,6 +110,7 @@ test("a failed end is observable and does not create another authorization", asy
         headers: { origin, cookie },
       }),
       f.env,
+      f.deps,
     );
     expect(response?.status).toBe(503);
     expect(f.begin).not.toHaveBeenCalled();
@@ -110,6 +121,69 @@ test("a failed end is observable and does not create another authorization", asy
   } finally {
     log.mockRestore();
   }
+});
+
+test("a connect link to another iterate platform carries it to device selection, checked", async () => {
+  const f = fixture();
+  const connect = await deviceAuth(
+    new Request(
+      `${origin}/.auth/connect?issuer=${encodeURIComponent(`${selfHost}/some/path`)}&next=/devices/satellite1/firmware/latest`,
+    ),
+    f.env,
+    f.deps,
+  );
+  expect(connect?.status).toBe(303);
+  expect(connect?.headers.get("location")).toBe(
+    `/?device=satellite1&issuer=${encodeURIComponent(selfHost)}`,
+  );
+
+  const denied = await deviceAuth(
+    new Request(`${origin}/.auth/connect?issuer=https://look-alike.iterate.app`),
+    f.env,
+    f.deps,
+  );
+  expect(denied?.status).toBe(400);
+  expect(await denied?.text()).toContain("not an issuer this app can be connected to");
+  expect(f.begin).not.toHaveBeenCalled();
+});
+
+test("choosing a device for another iterate platform starts its consent on that platform", async () => {
+  const f = fixture();
+  const response = await deviceAuth(
+    new Request(
+      `${origin}/devices/home-assistant-voice-preview-edition/login?issuer=${encodeURIComponent(selfHost)}`,
+      { method: "POST", headers: { origin, cookie } },
+    ),
+    f.env,
+    f.deps,
+  );
+  expect(response?.status).toBe(303);
+  expect(f.deps.issuerAnswersAt).toHaveBeenCalledWith(selfHost);
+  const [host] = f.begin.mock.lastCall!;
+  expect(host).toMatchObject({
+    issuer: selfHost,
+    resource: `${selfHost}/api`,
+    client: { name: "Home Assistant Voice Preview Edition" },
+  });
+});
+
+test("a platform that doesn't answer as iterate is refused before any session changes", async () => {
+  const f = fixture();
+  f.deps.issuerAnswersAt.mockResolvedValue(
+    "iterate.someone.workers.dev does not answer as an iterate platform.",
+  );
+  const response = await deviceAuth(
+    new Request(`${origin}/devices/satellite1/login?issuer=${encodeURIComponent(selfHost)}`, {
+      method: "POST",
+      headers: { origin, cookie },
+    }),
+    f.env,
+    f.deps,
+  );
+  expect(response?.status).toBe(400);
+  expect(await response?.text()).toContain("does not answer as an iterate platform");
+  expect(f.end).not.toHaveBeenCalled();
+  expect(f.begin).not.toHaveBeenCalled();
 });
 
 function fixture() {
@@ -126,8 +200,14 @@ function fixture() {
   const sessions = {
     getByName: () => ({ begin, end, client, bearer }),
   } as unknown as DurableObjectNamespace<BrowserSession>;
+  const issuerAnswersAt = vi.fn(async (_origin: string): Promise<string | null> => null);
   return {
-    env: { BROWSER_SESSION: sessions, ITERATE_ORIGIN: "https://issuer.example" },
+    env: {
+      BROWSER_SESSION: sessions,
+      ITERATE_ORIGIN: "https://issuer.example",
+      ITERATE_DENY_ZONES: "iterate.app,iterate.com",
+    },
+    deps: { issuerAnswersAt },
     begin,
     end,
     client,
