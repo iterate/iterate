@@ -78,9 +78,11 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/context/held-resident-while-idle",
 ]);
 
-/** One waiting waitForEvent caller. In-memory only — an eviction drops waiters, and that is FINE:
- *  the caller's own open RPC call keeps the DO awake for the wait's duration anyway, and a dropped
- *  waiter surfaces as the transport error the caller already handles. */
+/** One waiting waitForEvent caller. In-memory only: the caller's own open RPC call keeps the DO
+ *  awake for the wait's duration, and a reset (`ctx.abort`, a storage reset) fails the call. An
+ *  instance the PLATFORM replaces under the call is the exception: the call stays on the old
+ *  instance, whose waiters never see the new one's appends and time out — a caller that must not
+ *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS). */
 type WaitForEventWaiter = {
   /** The types that resolve it; empty = any. */
   types: string[];

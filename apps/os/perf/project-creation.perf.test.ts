@@ -10,8 +10,11 @@
 //   ready    — its `project/created` certificate is on `/`: the config repo seeded and published,
 //              the apex serving it (session.e2e proves that sequence; this times it).
 // and each round until its LAST project is ready. A project that is not ready by READY_DEADLINE_MS,
-// or whose create threw, counts as READY_DEADLINE_MS: a creation that stalls or fails under load is
-// the slowness this guards, never a broken probe.
+// whose create threw or whose saga failed (`project/create-failed`, its error printed with the
+// round), counts as READY_DEADLINE_MS: a creation that stalls or fails under load is the slowness
+// this guards, never a broken probe. The network between the runner and Cloudflare's edge is not
+// what it guards: a person's socket that fails, or does not open within SOCKET_OPEN_MS, is opened
+// once more, logged (`perf.socket-reopened`), and the project still timed from its first call.
 //
 // Where the time goes (25 at once, 2026-09-24, from the log's own stamps): Cloudflare Artifacts. The
 // config repo's `repo/created` lands 3.4–8.3 s after the request and its seed `repo/commit-completed`
@@ -19,12 +22,16 @@
 // ready in ~5–7 s at 1, 10 and 25 at once alike; the slowest of a round of 25, 2–3× that.
 
 import { test } from "vitest";
-import { adminCredentials, session, sleep } from "../e2e/support/client.ts";
+import { adminCredentials, rawSession, sleep } from "../e2e/support/client.ts";
 import { freshDnsSafeProjectSlug } from "../e2e/support/project-host.ts";
 import type { LatencyMetricName } from "./latency.ts";
 import { recordLatency } from "./record.ts";
 
 const READY_DEADLINE_MS = 60_000;
+/** How long a person's socket may take to open before it is opened once more. The edge upgrades
+ *  one in 0.1–0.7 s; on 2026-09-24 one upgrade of a round of 25 reached the Worker 56.7 s late, and
+ *  another socket was lost 10.5 s after it opened. */
+const SOCKET_OPEN_MS = 10_000;
 
 test.for([
   {
@@ -89,27 +96,84 @@ test.for([
 
 /** One person's first project: signed in as a fresh email on a socket of its own, `projects.create`,
  *  then its log read from the cursor every 100 ms until `project/created` (a read per poll, so a
- *  sample is at most one poll and one round trip late). A throw or a miss of the deadline answers
- *  the deadline, with the reason. */
+ *  sample is at most one poll and one round trip late), or `project/create-failed`. A throw, a
+ *  failure or a miss of the deadline answers the deadline, with the reason. A socket that fails
+ *  before it opens, or is lost after, is opened ONCE more: `projects.create` asks again for the same
+ *  project (the same person's slug is the same project), and the log is read on from the cursor. */
 async function createProject(prefix: string) {
   const slug = freshDnsSafeProjectSlug(prefix);
+  const credentials = adminCredentials({ email: `${slug}@example.com` });
   const started = performance.now();
   let answeredMs = READY_DEADLINE_MS;
-  try {
-    const itx = await session()
-      .authenticate(adminCredentials({ email: `${slug}@example.com` }))
-      .projects.create({ project: slug });
-    answeredMs = performance.now() - started;
-    for (let after = 0; performance.now() - started < READY_DEADLINE_MS; await sleep(100)) {
-      const page = await itx.invoke(["itx", ["readEvents", after, 100]]);
-      if (
-        page.events.some((e: { type: string }) => e.type === "events.iterate.com/project/created")
-      )
-        return { answeredMs, readyMs: performance.now() - started };
-      after = page.scannedThroughOffset;
+  let after = 0;
+  let reopened = false;
+  for (;;) {
+    const { session, ws } = rawSession();
+    try {
+      await opened(ws);
+      const itx = await session.authenticate(credentials).projects.create({ project: slug });
+      answeredMs = Math.min(answeredMs, performance.now() - started);
+      for (; performance.now() - started < READY_DEADLINE_MS; await sleep(100)) {
+        const page = await itx.invoke(["itx", ["readEvents", after, 100]]);
+        for (const event of page.events as { type: string; payload?: { error?: string } }[]) {
+          if (event.type === "events.iterate.com/project/created")
+            return { answeredMs, readyMs: performance.now() - started };
+          if (event.type === "events.iterate.com/project/create-failed")
+            return {
+              answeredMs,
+              readyMs: READY_DEADLINE_MS,
+              error: `${slug}: project/create-failed: ${event.payload?.error}`,
+            };
+        }
+        after = page.scannedThroughOffset;
+      }
+      return { answeredMs, readyMs: READY_DEADLINE_MS, error: `${slug}: not ready in time` };
+    } catch (error) {
+      const lost = ws.readyState !== WebSocket.OPEN;
+      if (!lost || reopened || performance.now() - started >= READY_DEADLINE_MS)
+        return { answeredMs, readyMs: READY_DEADLINE_MS, error: `${slug}: ${String(error)}` };
+      reopened = true;
+      console.warn({
+        event: "perf.socket-reopened",
+        slug,
+        atMs: Math.round(performance.now() - started),
+        answered: answeredMs < READY_DEADLINE_MS,
+        error: String(error),
+      });
+    } finally {
+      try {
+        session[Symbol.dispose]();
+      } catch {
+        /* already broken */
+      }
     }
-    return { answeredMs, readyMs: READY_DEADLINE_MS, error: `${slug}: not ready in time` };
-  } catch (error) {
-    return { answeredMs, readyMs: READY_DEADLINE_MS, error: `${slug}: ${String(error)}` };
   }
+}
+
+/** Resolves once `ws` is open; rejects when it fails first, or has not opened in SOCKET_OPEN_MS
+ *  (closed then). */
+function opened(ws: WebSocket): Promise<void> {
+  if (ws.readyState === WebSocket.OPEN) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error(`the socket did not open in ${SOCKET_OPEN_MS} ms`));
+    }, SOCKET_OPEN_MS);
+    ws.addEventListener(
+      "open",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+    ws.addEventListener(
+      "error",
+      () => {
+        clearTimeout(timer);
+        reject(new Error("the socket failed before it opened"));
+      },
+      { once: true },
+    );
+  });
 }

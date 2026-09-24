@@ -117,6 +117,10 @@ export function entityLifecycle<const Slug extends "repo" | "workspace">(slug: S
 export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndDeletionState> {
   readonly contract: ProcessorContract<EntityCreationAndDeletionState>;
   private readonly withItx: WithItx<ItxEntrypointScope>;
+  /** The path of the context this processor's facet is hosted on — the entity's one name, which the
+   *  host reads off its own props (the context's name), never off `itx.whoami()`: that also reads the
+   *  project's row from the control plane, whose bound fails a creation on a cold wake of it. */
+  private readonly path: () => string;
   /** What the entity provisions at birth and tears down at death, by its path; none for a workspace. */
   private readonly effects: {
     provision?: (path: string) => Promise<unknown>;
@@ -126,11 +130,13 @@ export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndD
   constructor(
     contract: EntityLifecycleProcessor["contract"],
     withItx: WithItx<ItxEntrypointScope>,
+    path: () => string,
     effects: EntityLifecycleProcessor["effects"] = {},
   ) {
     super();
     this.contract = contract;
     this.withItx = withItx;
+    this.path = path;
     this.effects = effects;
   }
 
@@ -200,7 +206,7 @@ export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndD
       this.#creating = true;
       runInBackground(async () => {
         try {
-          const { path } = await this.withItx((itx) => itx.whoami());
+          const path = this.path();
           await this.effects.provision?.(path);
           await certify("created", path);
         } catch (error) {
@@ -225,7 +231,7 @@ export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndD
       this.#deleting = true;
       runInBackground(async () => {
         try {
-          const { path } = await this.withItx((itx) => itx.whoami());
+          const path = this.path();
           await this.effects.teardown?.(path);
           await certify("deleted", path);
         } finally {
