@@ -71,9 +71,9 @@ In each of the three jobs, after the telemetry finalizer:
 1. **Write the test evidence manifest** (`pnpm tsx scripts/ci/test-evidence.ts write`,
    `if: !cancelled()`, `continue-on-error`). It builds `tables/tests.parquet`
    from the raw telemetry and flake records, then hashes every file in the
-   folder and writes `manifest.json`. On the real artifacts of a Test attempt
-   (17 files, 3.3 MB) and a Preview OS attempt (37 files, 3.3 MB) it took
-   about half a second.
+   folder and writes `manifest.json`. In this change's own Preview OS run it
+   took 0.56 s for 37 files (3.5 MB); on a Test attempt's real artifacts (17
+   files, 3.3 MB) it took about half a second.
 2. **Upload the test evidence to R2**, only when the workflow's
    `TEST_EVIDENCE_UPLOAD` is `r2` and a manifest exists (`continue-on-error`,
    Doppler `_shared/preview` for the keys).
@@ -86,59 +86,68 @@ Neither step decides the job. The tests' own steps and the finalizer do.
 ### The manifest
 
 `TestEvidenceManifest` (the same module) is the schema; readers parse with it.
-A real one, abbreviated:
+The one this change's own Preview OS run wrote, abbreviated to one runner and
+two of its 37 files:
 
 ```json
 {
   "manifestSchemaVersion": 1,
-  "testRunId": "testrun_90jkrkl44h",
-  "createdAt": "2026-09-24T12:20:31.114Z",
+  "testRunId": "testrun_1tf879r75h",
+  "createdAt": "2026-09-24T13:15:47.062Z",
   "source": {
     "repository": "iterate/iterate",
-    "commit": "63b4d82148861d72fae4b17a49066c4c4dfd8468",
-    "tree": "b77295f4f9d153860a8c53b1b8b3688726c298ba",
+    "commit": "50f69522109a8eedf91f4f57fd0abfdafbf58ecb",
+    "tree": "4ed3ca3b42b277eeaf664e2a3a9553453ba73856",
     "dirty": false,
     "lockfileSha256": "c752eac5b45390fe6f91bc5720b458a00b86e67b93d3c79359cbed5d9f58f60b",
-    "headSha": "5cde3d500872e5b1d22a69ca1db5ad3371f9d7f5",
-    "branch": "platform-facet-abort-reset",
-    "pullRequestNumber": 3030
+    "headSha": "4a4617db58006f1ed5cea4e34bc683ab5a7584ea",
+    "branch": "draft-test-telemetry-parquet",
+    "pullRequestNumber": 2984
   },
   "runner": {
     "provider": "depot",
     "workflowName": "Preview OS",
-    "workflowRunId": "275757759645094",
+    "workflowRunId": "227491187545774",
     "workflowRunAttempt": "1",
     "jobName": "e2e",
-    "jobAttemptId": "90jkrkl44h",
-    "jobUrl": "https://depot.dev/orgs/0p91s0lz49/workflows/tb4rtts9jc?job=zkfl7d4hb9&attempt=90jkrkl44h",
+    "jobAttemptId": "1tf879r75h",
+    "jobUrl": "https://depot.dev/orgs/0p91s0lz49/workflows/tnvgwdc563?job=7zncg7grdw&attempt=1tf879r75h",
     "trigger": "pull_request",
     "actor": "jonastemplestein",
-    "node": "v24.4.1",
+    "node": "v24.21.0",
     "platform": "linux",
     "arch": "x64"
   },
-  "timings": { "startedAt": "2026-09-24T12:17:09.959Z", "finishedAt": "2026-09-24T12:20:13.215Z" },
+  "timings": { "startedAt": "2026-09-24T13:12:39.651Z", "finishedAt": "2026-09-24T13:15:43.644Z" },
   "runners": [
     {
-      "artifactId": "vitest:os:1526:1790252229959",
+      "artifactId": "vitest:os:1553:1790255559651",
       "producer": "vitest-retry-telemetry-reporter",
       "suite": "vitest",
       "workspace": "os",
       "status": "passed",
-      "testCount": 341,
-      "startedAt": "2026-09-24T12:17:09.959Z",
-      "finishedAt": "2026-09-24T12:20:13.215Z"
+      "testCount": 335,
+      "startedAt": "2026-09-24T13:12:39.651Z",
+      "finishedAt": "2026-09-24T13:15:43.644Z"
     }
   ],
   "files": [
     {
-      "path": "ci-telemetry/raw/vitest-os-1526-1790252229959-40f02b1be234.json",
-      "bytes": 364282,
-      "sha256": "da81b73d5d242113a89d6302240087c57587a87d481c8151acc71361778e5ce5"
+      "path": "ci-telemetry/raw/vitest-os-1553-1790255559651-fd4fc5bccf5e.json",
+      "bytes": 359565,
+      "sha256": "627dff179d047a0412801fec308ce5bf7d716bfcce82097fa7899f400a8c2606"
+    },
+    {
+      "path": "tables/tests.parquet",
+      "bytes": 61645,
+      "sha256": "b19f56bd1b4394f32b28a4b94a696700249b68267ef36346ec5668be454ebd98"
     }
   ]
 }
 ```
+
+The same run's Test job wrote the same `tree`: both jobs tested one merge
+commit, and neither left the checkout dirty.
 
 - `testRunId` is `testrun_<Depot job attempt id>`, the id every artifact name
   of that attempt already ends in ([per job attempt](depot-ci.md#artifacts-per-job-attempt)),

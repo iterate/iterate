@@ -730,10 +730,12 @@ after Vitest's, and upload two artifacts even when the suite fails:
   `main-os-test-artifacts-attempt-<id>`): all of `test-results/`, one per job
   attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
   `trace.zip`, screenshot and `error-context.md` are under
-  `playwright-output/<test>/`, next to `playwright-results.json` and the
-  telemetry.
+  `playwright-output/<test>/`, next to `playwright-results.json`, the
+  telemetry and the [test evidence](test-evidence.md) manifest.
 
 Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
-`unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`.
+`unit-test-telemetry-attempt-<id>`, `flake-records-unit-attempt-<id>` and
+`unit-test-evidence-attempt-<id>` (all of `test-results/`, with its
+[test evidence](test-evidence.md) manifest).
