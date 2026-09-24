@@ -417,7 +417,12 @@ function Invitations({
   const [expiresInDays, setExpiresInDays] = useState(7);
   const [emailHint, setEmailHint] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [created, setCreated] = useState<{ link: string; emailHint: string | null } | null>(null);
+  // the link just created, shown until dismissed — or revoked, when it opens nothing any more
+  const [created, setCreated] = useState<{
+    id: string;
+    link: string;
+    emailHint: string | null;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
   const pending = Object.entries(org.invitations).sort(
     ([idA, a], [idB, b]) => a.createdAt.localeCompare(b.createdAt) || idA.localeCompare(idB),
@@ -433,6 +438,7 @@ function Invitations({
         emailHint: emailHint.trim() || undefined,
       });
       setCreated({
+        id: invitation.id,
         link: new URL(`/invitations/${invitation.token}`, window.location.origin).href,
         emailHint: invitation.emailHint,
       });
@@ -457,6 +463,7 @@ function Invitations({
     setBusy(invitationId);
     try {
       await api.organizations.revokeInvitation(org.id, { invitationId });
+      setCreated((shown) => (shown?.id === invitationId ? null : shown));
     } catch (caught) {
       onError(caught instanceof Error ? caught.message : String(caught));
     } finally {
