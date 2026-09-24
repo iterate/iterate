@@ -177,9 +177,9 @@ timed.concurrent(
     console.log(
       `[claimed] ${woken.length} wake(s) mid-sleep; slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
     );
-    // The claim's alarm woke the context mid-sleep (20 s, then the revive's 40 s), and the append
-    // came from the instance the sleep started on.
-    expect(woken.length, JSON.stringify(woken)).toBeGreaterThanOrEqual(2);
+    // The claim's alarm woke the context mid-sleep (20 s in; the revive's next claim falls due after
+    // the append), and the append came from the instance the sleep started on.
+    expect(woken.length, JSON.stringify(woken)).toBeGreaterThanOrEqual(1);
     expect(Math.abs(slept.payload.startedAt - started)).toBeLessThan(5_000);
   },
   150_000,
