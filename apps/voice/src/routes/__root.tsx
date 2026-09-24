@@ -5,7 +5,7 @@ import css from "../styles.css?url";
 /** The worker's PostHog project key (envs.ts, prd only; wrangler var `POSTHOG_PROJECT_KEY`). */
 const posthogProjectKey = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
-  return (env as { POSTHOG_PROJECT_KEY?: string }).POSTHOG_PROJECT_KEY || null;
+  return env.POSTHOG_PROJECT_KEY || null;
 });
 
 export const Route = createRootRoute({

@@ -14,7 +14,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
-import { useEffect } from "react";
+import { useMemo } from "react";
 import { z } from "zod";
 import { createIterateClient } from "iterate/next/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
@@ -24,7 +24,7 @@ import {
   DropdownMenuLabel,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Identifier } from "@iterate-com/ui/components/identifier";
-import { syncPosthogContext } from "@iterate-com/ui/components/posthog";
+import { usePosthogIdentity, type PosthogGroup } from "@iterate-com/ui/components/posthog";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
 import { OrganizationTree, useOrganizationTree } from "../components/organization-tree.tsx";
@@ -70,13 +70,9 @@ function Shell() {
   // PostHog: the person is the platform user id (the same person in every app); the groups are the
   // project on screen and its organization, keyed by id (docs: organization, then project).
   const activeOrg = active && tree.organizations.find((org) => org.id === active.orgId);
-  useEffect(() => {
-    syncPosthogContext({
-      person: {
-        distinctId: info.principal.actor,
-        properties: info.principal.email ? { email: info.principal.email } : {},
-      },
-      groups: active
+  const posthogGroups = useMemo(
+    (): PosthogGroup[] =>
+      active
         ? [
             ...(activeOrg
               ? [{ type: "organization", key: activeOrg.id, properties: { name: activeOrg.name } }]
@@ -84,8 +80,9 @@ function Shell() {
             { type: "project", key: active.id, properties: { slug: active.slug } },
           ]
         : [],
-    });
-  }, [info.principal.actor, info.principal.email, active, activeOrg]);
+    [active, activeOrg],
+  );
+  usePosthogIdentity(info.principal, posthogGroups);
   return (
     <>
       <OrganizationTree api={api} info={info} />
