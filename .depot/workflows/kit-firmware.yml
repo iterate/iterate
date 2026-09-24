@@ -93,6 +93,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       # The image carries ESP-IDF (scripts/depot-ci/esp-idf.sh, the pin); a leg downloads it only
       # while that file differs from the image's, and then says so in a warning.
+      # Throwaway verification of the baked ESP-IDF (PR #2976); never merged.
       - name: ESP-IDF (baked)
         run: scripts/depot-ci/esp-idf.sh ensure
       - name: Build
