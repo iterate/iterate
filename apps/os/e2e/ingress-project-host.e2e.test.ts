@@ -107,7 +107,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   expect(seen.itxHeaders).not.toContain("x-itx-visitor");
   expect(seen.app).toBe("site");
   // the second app shape, `<app>.<project>.<base>`: the same row. LOCAL ONLY: a wildcard
-  // certificate covers ONE label under the base (`*.project-worker.iterate.com`), and a wildcard
+  // certificate covers ONE label under the base (`*.iterate.app`), and a wildcard
   // never matches two, so on the deployed worker this shape fails the TLS handshake until a
   // certificate per project subdomain exists — a deploy-side fact, not the edge's (the workers lane
   // pins the parse; this pins the whole edge, where it can be reached).
