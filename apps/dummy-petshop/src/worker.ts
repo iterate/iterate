@@ -1,8 +1,7 @@
 /**
  * dummy-petshop — a deliberately fake third-party service ("the pet shop")
  * for exercising Iterate's integrations & secrets system end to end
- * (apps/os/docs/integrations-and-secrets-design.md §7 S0, "Petshop ×2" §3):
- * ONE pets API behind many authentication doors — an OAuth 2.0 provider with
+ * (apps/os/e2e/support/petshop.ts is the OS side's client): ONE pets API behind many authentication doors — an OAuth 2.0 provider with
  * Basic client auth at the token endpoint and short-TTL sealed tokens, a
  * legacy email+password login, a GraphQL session-login door, MCP, typed
  * RPC/OpenAPI surfaces, three WebSocket gateways — plus HMAC-signed outbound
@@ -54,8 +53,8 @@ export { PetshopStateDurableObject };
 /** Authorization codes only need to survive the redirect back to the callback. */
 const CODE_TTL_SECONDS = 120;
 
-/** GitHub-App installation tokens are deliberately short (design §9 P4 wants
- * refresh exercised): 60s, so an integration that caches one hits real re-mint. */
+/** GitHub-App installation tokens are deliberately short so re-minting gets
+ * exercised: 60s, so an integration that caches one hits real re-mint. */
 const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** Bindings the worker runs with (vite.config.ts). */
@@ -131,7 +130,7 @@ interface RefreshPayload {
 }
 
 /**
- * Sealed GitHub-App installation token (design §9 P4): what petshop mints when a
+ * Sealed GitHub-App installation token: what petshop mints when a
  * valid App JWT is exchanged at `POST /app/installations/{id}/access_tokens`. It
  * carries `sub`/`clientId`/`epoch`/`exp` so it flows through the SAME bearer API
  * and revocation model as an OAuth access token (see {@link Grant}), plus the
@@ -173,7 +172,6 @@ function escapeHtml(value: string): string {
 // instance sees the whole surface without opening the repo.
 const INDEX = dedent`
   🐾 dummy-petshop — a fake third party for integrations & secrets e2e
-     (apps/os/docs/integrations-and-secrets-design.md §7 S0)
 
   GET  /.well-known/oauth-protected-resource[/mcp]  RFC 9728 — /mcp's resource + this origin as its auth server
   GET  /.well-known/oauth-authorization-server      RFC 8414 — authorize/token/register endpoints, PKCE S256, auth methods none + client_secret_basic
@@ -559,7 +557,7 @@ function authenticateTokenClient(
 }
 
 /**
- * The legacy email+password login (design R8): email+password → short-TTL
+ * The legacy email+password login: email+password → short-TTL
  * bearer token, no refresh token — re-minting through this endpoint IS the
  * refresh path. Deterministic for e2e: any email, password "correct-horse".
  */
@@ -584,7 +582,7 @@ async function legacyLogin(request: Request, deps: PetshopDeps): Promise<Respons
 }
 
 /**
- * The GitHub-App installation-token endpoint (design §9 P4, ADR 0006):
+ * The GitHub-App installation-token endpoint:
  * `POST /app/installations/{installationId}/access_tokens` with an App JWT in
  * `Authorization: Bearer`. petshop holds ONLY the app's PUBLIC key, so all it
  * can do is VERIFY: the JWT's RS256 signature (the OS side signed
@@ -926,7 +924,7 @@ function attachGatewayEchoLoop(
 }
 
 /**
- * The Discord-style gateway (integrations-and-secrets-design.md §R2, §9 D6):
+ * The Discord-style gateway:
  * accept a WebSocket, greet with a hello frame, and run the protocol through
  * `handleGatewayMessage` — the credential rides *inside* the IDENTIFY frame, so
  * authentication happens on the first client frame, not at the upgrade. On the
@@ -944,7 +942,7 @@ async function gatewayUpgrade(request: Request, deps: PetshopDeps): Promise<Resp
 }
 
 /**
- * The OpenAI-Realtime-style gateway (§9 D6): the sealed access token rides in
+ * The OpenAI-Realtime-style gateway: the sealed access token rides in
  * the `Authorization: Bearer` UPGRADE header. On the OS side that header is a
  * `getSecret(...)` placeholder substituted at the jailed outbound before the
  * dial, so the worker never holds the token. Auth happens at the handshake:
@@ -966,7 +964,7 @@ async function gatewayHeaderUpgrade(request: Request, deps: PetshopDeps): Promis
 }
 
 /**
- * The browser-WS-style gateway (§9 D6): the token is smuggled in
+ * The browser-WS-style gateway: the token is smuggled in
  * `Sec-WebSocket-Protocol` as `petshop.access-token.<token>` (browsers cannot
  * set arbitrary headers). We extract + validate it at the handshake and echo
  * back the REAL selected subprotocol (never the token carrier) in the 101, per
@@ -1060,7 +1058,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
   }
   if (key === "POST /oauth/token") return tokenEndpoint(request, deps);
   // GitHub-App installation-token minting: the installationId is a path segment,
-  // so this is matched by shape rather than the exact-key table (§9 P4).
+  // so this is matched by shape rather than the exact-key table.
   if (request.method === "POST") {
     const match = url.pathname.match(/^\/app\/installations\/([^/]+)\/access_tokens$/);
     if (match) {
@@ -1086,7 +1084,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
         clientId: grant.clientId,
         tokenExpiresInSeconds: grant.exp - nowSeconds(),
         // An installation token names which GitHub-App installation it acts as,
-        // so the OS side can assert it minted the token it expected (§9 P4).
+        // so the OS side can assert it minted the token it expected.
         ...(grant.t === "installation" && {
           installationId: grant.installationId,
           appId: grant.appId,
@@ -1131,7 +1129,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     if (!grant) return json({ error: "invalid_token" }, 401);
     return handleCapnwebRequest(request, { owner: grant.sub, pets: deps.pets });
   }
-  // The WebSocket gateways (§9 D6). Three shapes, same sealed access token,
+  // The WebSocket gateways. Three shapes, same sealed access token,
   // presented three ways — the OS side proves it can inject the credential into
   // each: a frame (/gateway), the Authorization upgrade header (/gateway-header),
   // and the Sec-WebSocket-Protocol upgrade header (/gateway-subprotocol).

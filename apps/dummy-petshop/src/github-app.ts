@@ -1,12 +1,11 @@
 /**
  * GitHub-App JWT verification for the pet shop — the third-party half of the
- * first-party GitHub proof (apps/os/docs/integrations-and-secrets-design.md §9
- * P4, ADR 0006). GitHub mints an installation token when a client presents a
+ * first-party GitHub proof. GitHub mints an installation token when a client presents a
  * short-lived JSON Web Token signed by the App's RSA private key; the App
  * registry (state.ts) holds ONLY the matching PUBLIC key, so this module can do
  * one thing and one thing only: VERIFY a presented App JWT. It never signs —
  * signing happens on the OS side inside a jailed worker via the secrets `sign()`
- * compute method (utils.ts `computeSignatureBase64Url`), and the App private key
+ * compute method, and the App private key
  * never leaves its secret. That asymmetry is the whole point being proven.
  *
  * The JWT is the compact-serialization shape `sign()` produces: three base64url
@@ -20,8 +19,8 @@
  * so the whole thing unit-tests in plain Node (see github-app.test.ts).
  */
 
-/** The only JWT algorithm petshop's App registry verifies (design §9 P4;
- * `sign()` is RS256 today, ES256 later). */
+/** The only JWT algorithm petshop's App registry verifies (`sign()` is RS256
+ * today, ES256 later). */
 export const APP_JWT_ALG = "RS256";
 
 /**

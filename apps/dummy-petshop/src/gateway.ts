@@ -1,8 +1,8 @@
 /**
  * WebSocket "gateways" for the pet shop — the transport shapes the OS
  * secret-worker model must support beyond header-bearing HTTP, where a
- * credential rides on a WebSocket rather than a plain-HTTP Authorization header
- * (apps/os/docs/integrations-and-secrets-design.md §R2, §9 D6). All three
+ * credential rides on a WebSocket rather than a plain-HTTP Authorization header.
+ * All three
  * gateways validate the SAME sealed access token petshop's OAuth issues; they
  * differ only in HOW that token is presented, which is exactly the axis the OS
  * side proves:

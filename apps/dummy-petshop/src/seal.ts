@@ -1,6 +1,5 @@
 /**
- * Stateless token sealing: AES-256-GCM encrypted JSON blobs, cribbed from
- * the zero-trust-mcp try's dummy-oauth worker.
+ * Stateless token sealing: AES-256-GCM encrypted JSON blobs.
  *
  * Format: base64url( version(1 byte) || iv(12 bytes) || ciphertext+tag )
  *
@@ -81,8 +80,8 @@ export async function unseal<T>(token: string, secret: string): Promise<T | null
 /**
  * Hex HMAC-SHA256 over a string body — the webhook signature primitive.
  * Deliberately the same "HMAC over raw bytes, hex digest" shape as GitHub's
- * `x-hub-signature-256` so it matches what the secrets design verifies with
- * its `hmac()` compute method (integrations-and-secrets-design.md §2.1).
+ * `x-hub-signature-256`, which the OS side's secret `verifyHmac` checks
+ * (apps/os/src/secrets.ts `verifySecretHmac`).
  */
 export async function hmacSha256Hex(secret: string, payload: string): Promise<string> {
   const key = await crypto.subtle.importKey(

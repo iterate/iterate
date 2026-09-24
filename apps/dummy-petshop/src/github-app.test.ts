@@ -1,11 +1,10 @@
 /**
- * Unit tests for the GitHub-App installation stand-in (design §9 P4, ADR 0006),
+ * Unit tests for the GitHub-App installation stand-in,
  * run in plain Node like worker.test.ts/gateway.test.ts. The whole loop is
  * hermetic: generate an RSA keypair in-test, register ONLY the public key with
  * petshop's App registry, sign an App JWT with the private key exactly as the OS
  * side's secrets `sign()` compute method does (RS256 over `header.payload`,
- * base64url — see apps/os/src/domains/secrets/utils.ts `computeSignatureBase64Url`
- * and its test), exchange it for an installation token, and drive the bearer API
+ * base64url), exchange it for an installation token, and drive the bearer API
  * with it. This proves petshop verifies REAL signatures and never needs — never
  * even sees — the private key.
  */

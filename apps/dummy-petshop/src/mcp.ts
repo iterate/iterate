@@ -1,7 +1,6 @@
 /**
  * The pet shop as an MCP server, served at `GET|POST /mcp` over the modern
- * streamable-HTTP transport (the shape createMcpHandler produces — the same
- * wiring the zero-trust-mcp try uses). It exposes the shop's pets as MCP
+ * streamable-HTTP transport (the shape createMcpHandler produces). It exposes the shop's pets as MCP
  * tools:
  *
  *   - `list_pets`      — the account's pets.

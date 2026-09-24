@@ -1,6 +1,6 @@
 /**
- * The GraphQL session-login door (design R8, the username/password →
- * session-token archetype): one more way to authenticate against petshop's
+ * The GraphQL session-login door (the username/password → session-token
+ * archetype): one more way to authenticate against petshop's
  * ONE pets API, alongside OAuth, the legacy JSON login, MCP, and the
  * WebSocket gateways. Some real-world vendors authenticate exactly like
  * this — a GraphQL `NewSession` mutation trading email+password for a
