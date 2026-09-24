@@ -14,16 +14,11 @@ export function appCookies(cookie: string | null) {
 }
 
 /** The edge stamps app requests after the ordinary public token gate admits them. */
-export async function browserAuthorization(env: Env, request: Request, ctx: ExecutionContext) {
+export async function browserAuthorization(env: Env, request: Request) {
   const session = appSession(env.BROWSER_SESSION, request);
   const token = await session?.bearer();
   if (!token) return null;
-  const authorization = await authorizationForToken(
-    env,
-    ctx,
-    token,
-    platformAddressesOf(env, request),
-  );
+  const authorization = await authorizationForToken(env, token, platformAddressesOf(env, request));
   if (!authorization) await session!.discard();
   return authorization;
 }

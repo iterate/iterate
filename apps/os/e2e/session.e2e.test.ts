@@ -258,7 +258,7 @@ export default class Echo extends WorkerEntrypoint {
 }`,
 };
 
-test("a personal access token — one OAuth grant the account mints — is the user's bearer on /api, /mcp and a covered project host; an uncovered project is FORBIDDEN; grants.end refuses it on /api, /mcp and the project host", async () => {
+test("a personal access token — one OAuth grant the account mints, for one resource — is the user's bearer on /api and a covered project host, or on /mcp, and nowhere else; an uncovered project is FORBIDDEN; grants.end refuses it at once", async () => {
   const slug = freshDnsSafeProjectSlug("personal");
   const otherSlug = freshDnsSafeProjectSlug("personal-other");
   const member = { email: `${slug}@example.com` };
@@ -279,6 +279,11 @@ test("a personal access token — one OAuth grant the account mints — is the u
     .authenticate({ type: "from-server-cookie" })
     .grants.mint({ name: "E2E personal access token", projects: [projectId] });
   expect(expiresAt).toBeGreaterThan(Date.now());
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint, the token for /mcp.
+  using mcpMinter = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
+  const { token: mcpToken } = await mcpMinter
+    .authenticate({ type: "from-server-cookie" })
+    .grants.mint({ name: "E2E MCP access token", projects: [projectId], resource: "mcp" });
 
   // /api: the bearer IS the user, with the token's project ceiling
   const api = publicSession(token);
@@ -290,9 +295,17 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const ran = await mcpCall(
     "tools/call",
     { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
-    token,
+    mcpToken,
   );
   expect(JSON.stringify(ran)).toContain(projectId); // itx.whoami() names the project the token reaches
+  // each token is for its one resource (RFC 8707): the /api token is no /mcp token, nor the reverse
+  await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
+  const mcpAtApi = await fetch(workerUrl("/api"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${mcpToken}` },
+  });
+  expect(mcpAtApi).toMatchObject({ status: 401 });
+  await mcpAtApi.body?.cancel();
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
@@ -302,13 +315,18 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(covered, covered.text).toMatchObject({ status: 200 });
   expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
   expect(await fetchProjectUrl(echoOf(otherSlug), bearer)).toMatchObject({ status: 403 });
+  expect(
+    await fetchProjectUrl(echoOf(slug), { Authorization: `Bearer ${mcpToken}` }),
+  ).toMatchObject({ status: 401 });
 
   // the account lists it as what it is …
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
   using lister = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   const listed = await lister.authenticate({ type: "from-server-cookie" }).grants.list();
   const grant = listed.items.find((item) => item.name === "E2E personal access token");
+  const mcpGrant = listed.items.find((item) => item.name === "E2E MCP access token");
   expect(grant?.kind).toBe("personal");
+  expect(mcpGrant?.kind).toBe("personal");
   // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
   expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
   // MCP runs on the project root, with the user and grant stamped on the request.
@@ -319,7 +337,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
     "events.iterate.com/context/run-requested",
     "events.iterate.com/context/run-settled",
   ]);
-  expect(runPair[0]).toMatchObject({ source: { principal, grant: grant!.id } });
+  expect(runPair[0]).toMatchObject({ source: { principal, grant: mcpGrant!.id } });
   expect(runPair[1]).toMatchObject({
     payload: {
       requestOffset: runPair[0].offset,
@@ -360,17 +378,18 @@ test("a personal access token — one OAuth grant the account mints — is the u
       platform: true,
     },
   });
-  // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
+  // … and ends them: each bearer is refused where it worked, at once
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   // `grants.end` answers once `account/grant-ended` has landed on the person's account — nothing to
   // clean up later, so nothing to return
-  await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id);
+  const account = ender.authenticate({ type: "from-server-cookie" });
+  await Promise.all([account.grants.end(grant!.id), account.grants.end(mcpGrant!.id)]);
   const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
   expect(endedApi).toMatchObject({ status: 401 });
   await endedApi.body?.cancel();
-  await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
   expect(await fetchProjectUrl(echoOf(slug), bearer)).toMatchObject({ status: 401 });
+  await expect(mcpCall("tools/list", {}, mcpToken)).rejects.toThrow("answered 401");
   // … and the end is the account's fact too
   const ended = await until("the end is on the account context", async () =>
     (await accountEvents()).find(

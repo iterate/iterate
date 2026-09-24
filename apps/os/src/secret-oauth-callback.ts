@@ -54,7 +54,6 @@ async function reachesSecretOwner(
 export async function secretOAuthCallback(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
   addresses: PlatformAddresses,
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -71,8 +70,8 @@ export async function secretOAuthCallback(
     return answer(400, "This link is not one the platform issued, or it has expired.");
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const authorization = bearer
-    ? await authorizationForToken(env, ctx, bearer, addresses)
-    : await browserAuthorization(env, request, ctx);
+    ? await authorizationForToken(env, bearer, addresses)
+    : await browserAuthorization(env, request);
   if (!authorization)
     return answer(
       401,

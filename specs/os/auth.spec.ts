@@ -58,10 +58,11 @@ test("first Claude consent creates the organization and project on the consent p
     issuer: origin,
     clientId: claudeClient,
     redirectUri,
-    resources: [resource, `${origin}/api`],
+    resources: [resource, resource],
     scopes: ["iterate", "account"],
   });
-  // Repeated resource keys and '+' form encoding must survive the page's form round trips.
+  // Repeated resource keys (one resource twice: a request names one, RFC 8707) and '+' form
+  // encoding must survive the page's form round trips.
   const expectedState = `${flow.state} + OAuth state`;
   flow.url.searchParams.set("state", expectedState);
   const sockets: string[] = [];

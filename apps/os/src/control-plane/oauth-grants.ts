@@ -66,20 +66,23 @@ export class OAuthGrantTable {
     this.#sql.exec("DELETE FROM oauth_grants WHERE key = ?", key);
   }
 
-  /** The live keys starting with `prefix`, in key order, after `cursor`. A prefix is compared as
-   *  text, never as a LIKE pattern: a user id's `_` is a LIKE wildcard. */
+  /** The live keys starting with `prefix`, in key order, after `cursor`: a range of the key's
+   *  index, from `prefix` (or the cursor past it) to the first key past every key starting with it —
+   *  `prefix` with its last character one higher (`grant:user_a:` → `grant:user_a;`). Never a LIKE
+   *  pattern (a user id's `_` is a LIKE wildcard), and never `substr`, which reads every row. */
   list(
     prefix: string,
     options: { cursor?: string; limit?: number },
     now: number,
   ): OAuthGrantListing {
     const limit = Math.min(options.limit ?? LIST_LIMIT_MAX, LIST_LIMIT_MAX);
+    const end = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
     const rows = this.#sql
       .exec<{ key: string; expires_at: number | null }>(
-        "SELECT key, expires_at FROM oauth_grants WHERE substr(key, 1, ?) = ? AND key > ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
-        prefix.length,
-        prefix,
+        "SELECT key, expires_at FROM oauth_grants WHERE key > max(?, ?) AND key < ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
         options.cursor || "",
+        prefix,
+        end,
         now,
         limit + 1,
       )

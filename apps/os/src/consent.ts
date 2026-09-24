@@ -21,7 +21,7 @@ import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.
 import { ControlPlane } from "./control-plane/edge.ts";
 import { appConfigOf, projectHostOf, type PlatformAddresses } from "./app-config.ts";
 import {
-  authorizationOf,
+  grantIsLive,
   oauthHelpers,
   parseAuthorization,
   type AccessGrant,
@@ -121,7 +121,7 @@ export class ConsentRpcTarget extends RpcTarget {
   }
   async #request(query: unknown) {
     // Issuing a new grant must not spend the live transport's revocation grace.
-    if (!(await authorizationOf(this.#env, this.#grant)))
+    if (!(await grantIsLive(this.#env, this.#grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const search = z.string().parse(query).replace(/^\?/, "");
     return parseAuthorization(

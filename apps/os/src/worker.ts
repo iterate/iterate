@@ -204,8 +204,8 @@ export default {
       }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
-        ? await authorizationForToken(env, ctx, bearer, addresses)
-        : await browserAuthorization(env, request, ctx);
+        ? await authorizationForToken(env, bearer, addresses)
+        : await browserAuthorization(env, request);
       if (bearer && !authorization)
         return new Response("Invalid or revoked bearer", {
           status: 401,
@@ -265,7 +265,7 @@ export default {
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
     // with the code. Its own reserved path, `/.secrets/`, beside `/version`.
     if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
-      return secretOAuthCallback(request, env, ctx, addresses);
+      return secretOAuthCallback(request, env, addresses);
     const identity = await identityResponse(request, env);
     if (identity) return identity;
     if (url.pathname === "/mcp") {
@@ -278,12 +278,14 @@ export default {
     const browserResponse = await browserClient(request, env, ctx);
     if (browserResponse) return browserResponse;
     // `/api` itself was answered above; anything under it is nothing — without this line a bearer
-    // on `/api/<anything>` would pass the provider's gate and be routed to the MCP handler (api.ts).
+    // on `/api/<anything>` would pass the `/api` resource's gate (its paths are the resource's,
+    // api.ts) and reach Cap'n Web.
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // Everything else on the platform origin is the OAuth provider (api.ts, oauth.ts: the
-    // authorize, token and registration endpoints, discovery) with the issuer's pages as its
-    // catch-all (issuer-pages.ts) — every one an open path, or a 404.
+    // Everything else on the platform origin is OAuth (api.ts, oauth.ts: the authorization
+    // server's token and registration endpoints and metadata, each resource's metadata) with the
+    // issuer's pages — the authorize endpoint's consent page among them — as its catch-all
+    // (issuer-pages.ts): every one an open path, or a 404.
     return oauthResponse(request, env, ctx, issuerHandler);
   },
 };

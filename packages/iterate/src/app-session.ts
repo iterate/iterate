@@ -195,7 +195,8 @@ export class BrowserSession extends DurableObject {
 
   async alarm() {
     // Pending flows expire in ten minutes; active grants have the same absolute
-    // thirty-day lifetime at the issuer. No refresh token survives this bound.
+    // thirty-day lifetime at the issuer (which also ends one unused for a week: its
+    // refresh then answers `invalid_grant`). No refresh token survives this bound.
     await this.#clear();
   }
   async #bearer() {

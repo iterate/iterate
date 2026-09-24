@@ -1,4 +1,3 @@
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
@@ -13,18 +12,15 @@ test("Google proves issuer identity; upstream credentials never become app token
   const cookies = response.headers.getSetCookie();
   expect(cookies.join()).not.toContain("upstream-google-access-token");
   const sessionCookie = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;
-  const ctx = createExecutionContext();
   const session = appSession(
     env.BROWSER_SESSION,
     new Request(ORIGIN, { headers: { cookie: sessionCookie } }),
   )!;
   const auth = await authorizationForToken(
     env,
-    ctx,
     (await session.bearer())!,
     platformAddressesOf(env, new Request(`${ORIGIN}/`)),
   );
-  await waitOnExecutionContext(ctx);
   // the person's id is minted by the control plane; Google's subject names them from now on
   expect(auth?.principal).toEqual({
     actor: expect.stringMatching(/^user_[0-9a-f]{32}$/),
@@ -127,18 +123,15 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
   const cookies = response.headers.getSetCookie();
   expect(cookies.join()).not.toContain("upstream-google-access-token");
   const sessionCookie = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;
-  const ctx = createExecutionContext();
   const session = appSession(
     env.BROWSER_SESSION,
     new Request(ORIGIN, { headers: { cookie: sessionCookie } }),
   )!;
   const auth = await authorizationForToken(
     env,
-    ctx,
     (await session.bearer())!,
     platformAddressesOf(env, new Request(ORIGIN)),
   );
-  await waitOnExecutionContext(ctx);
   expect(auth?.principal).toEqual({
     actor: expect.stringMatching(/^user_[0-9a-f]{32}$/),
     email: "cloudflare@identity.test",

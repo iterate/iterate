@@ -28,7 +28,8 @@ export interface Env extends DurableObjectEnv {
   POSTHOG_PROJECT_KEY?: string;
 }
 
-/** A worker handler with a REQUIRED fetch — what OAuthProvider expects for defaultHandler/apiHandler. */
+/** A worker handler with a REQUIRED fetch: the issuer's pages behind the platform's OAuth routes
+ *  (api.ts `oauthResponse`). */
 export interface Handler {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
 }

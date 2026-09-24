@@ -34,6 +34,7 @@ minimumReleaseAgeExclude:
   - "@cloudflare/unenv-preset"
   - "@cloudflare/vite-plugin"
   - "@cloudflare/workers-types"
+  - "@cloudflare/workers-oauth-provider"
   - middlewright
   - trpc-cli
   - "@iterate-com/capnweb"

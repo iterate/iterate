@@ -31,9 +31,9 @@ export const getLandingState = createServerFn({ method: "GET" }).handler(async (
 export const getLoginState = createServerFn({ method: "GET" })
   .inputValidator(loginSearchOf)
   .handler(async ({ data }) => {
-    const { env, ctx } = issuerRequestContext();
+    const { env } = issuerRequestContext();
     setResponseHeader("cache-control", "no-store");
-    return loginState(getRequest(), env, ctx, data);
+    return loginState(getRequest(), env, data);
   });
 
 export const getConsent = createServerFn({ method: "GET" })

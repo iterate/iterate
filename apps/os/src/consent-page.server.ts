@@ -16,8 +16,8 @@ import { SessionRpcTarget, SessionTeardown } from "./session.ts";
 
 /** The browser's issuer session — the only grant that may approve access or act on the consent
  *  page. Anything else (no cookie, an ended session) is not signed in to the issuer. */
-async function issuerSignIn(request: Request, env: Env, ctx: ExecutionContext) {
-  const signedIn = await browserAuthorization(env, request, ctx);
+async function issuerSignIn(request: Request, env: Env) {
+  const signedIn = await browserAuthorization(env, request);
   if (signedIn?.grant?.kind !== "issuer") return null;
   return { ...signedIn, grant: signedIn.grant };
 }
@@ -30,7 +30,7 @@ export async function describeConsent(
   ctx: ExecutionContext,
   authorization: string,
 ) {
-  const signedIn = await issuerSignIn(request, env, ctx);
+  const signedIn = await issuerSignIn(request, env);
   if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${authorization}`) });
   const addresses = platformAddressesOf(env, request);
   const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses).describe(
@@ -59,7 +59,7 @@ export async function createConsentProject(
   ctx: ExecutionContext,
   input: z.infer<typeof NewConsentProject>,
 ): Promise<{ orgId?: string; error?: string }> {
-  const signedIn = await issuerSignIn(request, env, ctx);
+  const signedIn = await issuerSignIn(request, env);
   if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${input.authorization}`) });
   const teardown = new SessionTeardown();
   const session = new SessionRpcTarget(
@@ -110,7 +110,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
   const authorization = new URL(request.url).search;
   const seeOther = (location: string) =>
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
-  const signedIn = await issuerSignIn(request, env, ctx);
+  const signedIn = await issuerSignIn(request, env);
   if (!signedIn) return seeOther(signInHref(`/oauth2/auth${authorization}`));
   const form = await request.formData().catch(() => null);
   const approval = ConsentApproval.safeParse({

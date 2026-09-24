@@ -27,7 +27,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   );
   const { token } = await minter
     .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "MCP root regression", projects: [projectId] });
+    .grants.mint({ name: "MCP root regression", projects: [projectId], resource: "mcp" });
   const grantId = token.split(":")[1]!;
   const request = (method: string, params: unknown, bearer = token) =>
     mcpCall(method, params, bearer);
@@ -142,7 +142,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   );
   const second = await secondMinter
     .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "Second MCP connection", projects: [projectId] });
+    .grants.mint({ name: "Second MCP connection", projects: [projectId], resource: "mcp" });
   const secondRun = await request(
     "tools/call",
     { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },

@@ -10,10 +10,10 @@ import type { Env } from "./env.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import {
   accountStateOf,
-  authorizationOf,
+  authorizationServerFetch,
+  grantIsLive,
   oauthHelpers,
   parseAuthorization,
-  providerFetch,
   revokeGrant,
   type GrantProps,
   type Authorization,
@@ -35,6 +35,9 @@ const MintInput = z.object({
   /** Epoch ms. Default 30 days; at most ten years — a device that can neither refresh nor
    *  reflash itself is retired by revocation from the sessions list, not by a clock. */
   expiresAt: z.number().int().positive().optional(),
+  /** The one resource the token is for (RFC 8707: the provider binds each grant to one): `api`,
+   *  Cap'n Web at `/api` and the covered projects' hosts, or `mcp`. */
+  resource: z.enum(["api", "mcp"]).default("api"),
 });
 
 /** Whether this deployment mints personal access tokens: a bearer that acts as a person must only
@@ -185,17 +188,18 @@ export class GrantsRpcTarget extends RpcTarget {
    * says longer (up to ten years, for a device that holds it), scoped to the `projects` named (each
    * one the user reaches), revocable from `list`/`end` like any grant — whose
    * access token is answered ONCE and never stored readable; it carries no refresh credential
-   * (`tokenExchangeCallback`, oauth.ts, refuses a refresh of a personal grant). The bearer opens
-   * `/api`, `/mcp` and a project host of a covered project as the user (`authorizationForToken`).
-   * The console's client, or the device's public CIMD client, performs the exchange in process. */
+   * (oauth.ts `grantLifetime` refuses a refresh of a personal grant). The bearer acts as the user at
+   * its one `resource`: `api` opens `/api` and a project host of a covered project
+   * (`authorizationForToken`), `mcp` opens `/mcp`. The console's client, or the device's public
+   * CIMD client, performs the exchange in process. */
   async mint(input: unknown) {
     const env = this.#env;
     const ctx = this.#ctx;
     const session = this.#account();
-    if (!(await authorizationOf(env, session.grant)))
+    if (!(await grantIsLive(env, session.grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
-    const { platformOrigin: issuer, api, mcp } = this.#addresses;
+    const { platformOrigin: issuer } = this.#addresses;
     if (!mintsPersonalAccessTokens(issuer))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
     const projects = (
@@ -223,7 +227,7 @@ export class GrantsRpcTarget extends RpcTarget {
       issuer,
       clientId,
       redirectUri,
-      resources: [api, mcp],
+      resources: [this.#addresses[data.resource]],
     });
     const auth = await parseAuthorization(env, new Request(flow.url));
     const expiresAt = Math.min(
@@ -254,7 +258,7 @@ export class GrantsRpcTarget extends RpcTarget {
     if (!code) throw new Error("The token authorization did not produce a code.");
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
-    const response = await providerFetch(
+    const response = await authorizationServerFetch(
       env,
       this.#addresses,
       new Request(`${issuer}/oauth2/token`, {

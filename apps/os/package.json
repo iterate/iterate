@@ -23,7 +23,7 @@
     "project-seed": "tsx scripts/project-seed.ts"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "0.10.3",
+    "@cloudflare/workers-oauth-provider": "1.0.0",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@modelcontextprotocol/server": "2.0.0",

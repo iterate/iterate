@@ -501,8 +501,8 @@ importers:
   apps/os:
     dependencies:
       '@cloudflare/workers-oauth-provider':
-        specifier: 0.10.3
-        version: 0.10.3
+        specifier: 1.0.0
+        version: 1.0.0
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -1279,8 +1279,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workers-oauth-provider@0.10.3':
-    resolution: {integrity: sha512-25ufMONJir9PllqVpK4GwOOoSFgpYm3+bM6NBedj7ufMCIfNf5jk4OI0LPuTJBaJgLl2lGCLqFqEPJXcSuPopQ==}
+  '@cloudflare/workers-oauth-provider@1.0.0':
+    resolution: {integrity: sha512-gVlV0UowYiSYZbNYIu8hjd4gUP5dH/Lz2iIWss0hqvQFMEMw9LPLEfDMDJNUsJ9f9jT/aZKTsQzzVEp3gL+cUA==}
 
   '@cloudflare/workers-types@5.20260922.1':
     resolution: {integrity: sha512-zZVBBFJan5Kw+flEgSHqqCZ0LvHPv5LvfP2igmQiLvZ4fFQYsI4epN9cGiCQqaCyhCzQuqWEyK1Lamzm3QJAmw==}
@@ -8366,7 +8366,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260921.1':
     optional: true
 
-  '@cloudflare/workers-oauth-provider@0.10.3': {}
+  '@cloudflare/workers-oauth-provider@1.0.0': {}
 
   '@cloudflare/workers-types@5.20260922.1': {}
 

@@ -52,3 +52,33 @@ test("a list is one user's keys in key order, paged by cursor, with each one's e
   });
   expect(grants.list("grant:", {}, NOW).keys).toHaveLength(6);
 });
+
+test("a list is a range of the key's index: every key with the prefix and no other, whatever sorts next to it", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const queries: { query: string; bindings: unknown[] }[] = [];
+  const grants = new OAuthGrantTable({
+    exec: (query: string, ...bindings: unknown[]) => {
+      queries.push({ query, bindings });
+      return storage.sql.exec(query, ...bindings);
+    },
+  } as typeof storage.sql);
+  // the keys either side of the range: `9` and `;` sort just before and just after `:`
+  for (const key of ["grant:user_a9", "grant:user_a:g1", "grant:user_a:~", "grant:user_a;g1"])
+    grants.put(key, "{}", null, NOW);
+  expect(grants.list("grant:user_a:", {}, NOW)).toEqual({
+    keys: [{ name: "grant:user_a:g1" }, { name: "grant:user_a:~" }],
+    list_complete: true,
+  });
+  // SQLite searches the key's index for the range; it reads no row outside it
+  const listing = queries.at(-1)!;
+  const [plan] = storage.sql
+    .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${listing.query}`, ...listing.bindings)
+    .toArray();
+  expect(plan!.detail).toMatch(/^SEARCH oauth_grants USING INDEX \S+ \(key>\? AND key<\?\)$/);
+  // a cursor before the prefix starts at the prefix; one past the range answers nothing
+  expect(grants.list("grant:user_a:", { cursor: "grant:" }, NOW).keys).toHaveLength(2);
+  expect(grants.list("grant:user_a:", { cursor: "grant:user_a;" }, NOW)).toEqual({
+    keys: [],
+    list_complete: true,
+  });
+});
