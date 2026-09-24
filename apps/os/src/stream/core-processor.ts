@@ -627,6 +627,9 @@ const SubscriptionDeliveryResumed = z.strictObject({
  *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
+  // A fixed type list is a stopgap: it isolates the platform's own records, but it cannot say who
+  // may append what to a given stream. That needs provenance on the event itself — e.g. events
+  // signed by their appender, and processors that ignore an event whose signature does not check.
   if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   if (event.type === "events.iterate.com/stream/paused") {
