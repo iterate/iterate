@@ -1,6 +1,6 @@
 import { appendText, sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
-import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
+import { RunSettled } from "iterate/next/stream/run";
 import type { Event } from "./types.ts";
 
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
@@ -1065,7 +1065,7 @@ function llmChunkDeltas(chunk: unknown): {
 }
 
 function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeStep> {
-  const parsed = ScriptExecutionSettlement.safeParse(payload.settlement);
+  const parsed = RunSettled.shape.settlement.safeParse(payload.settlement);
   if (!parsed.success) {
     return {
       success: false,
