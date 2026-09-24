@@ -4,8 +4,8 @@
 // context and a facet it hosts — answering over it. On a brand-new preview they do not, for seconds
 // after `/version` does: the preview's freshly provisioned Durable Object namespace answers calls
 // with workerd's opaque `internal error; reference = …` before any Durable Object is invoked (no
-// invocation is logged for them). Cloudflare's, not iterate's: fresh-preview-repro.ts reproduces
-// it with one 20-line Durable Object class (8 of 12 brand-new previews, for up to 24 s; none of 10
+// invocation is logged for them). Cloudflare's, not iterate's: github.com/iterate/fresh-preview-repro
+// reproduces it with one 20-line Durable Object class (8 of 12 brand-new previews, for up to 24 s; none of 10
 // in-place redeploys; 1 call in ~30,000 on the parent). In CI it failed whole e2e runs:
 // main-2eb7238 2026-09-24T00:53 (139 of 145 failed attempts), main-c0812a4 09:00:57, and a fresh-
 // preview soak with e2e started at once had 16 of 20 runs fail 50–269 rows each.
