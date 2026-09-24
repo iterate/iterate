@@ -1,12 +1,16 @@
 // scripts/ci/os-latency-guard.ts — THE LATENCY GUARD'S JUDGE (.depot/workflows/os-latency.yml, every
 // 3 hours and on main pushes, against a throwaway preview of main that nothing else touches). It reads
 // one run of apps/os's perf lane — Vitest's JSON report, where each row left its raw samples on its
-// meta (apps/os/perf/record.ts) — and judges every metric's statistic against two lines:
+// meta (apps/os/perf/record.ts) — and judges every metric's median against two lines:
 //   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and
 //   • a sharp REGRESSION against the guard's own rolling baseline, the last 10 main runs: more than
-//     twice their median (and 100 ms more), AND beyond the slowest of them — so a metric whose runs
-//     already spread wide (the slowest of 25 concurrent projects) does not page on its own spread.
-//     For a rate: under half the median and under the lowest.
+//     3× their median (the calibration's runs of one commit spread up to 2.4× theirs: fan50.all,
+//     x10.answered) and 250 ms more (below that a round trip's weather decides, and the budget
+//     guards), AND slower than the slowest of them that crossed no line — so a metric whose runs
+//     spread wide (the slowest of 25 concurrent projects: 7–21 s on one commit) does not page on its
+//     own spread, and one slow run does not raise the line the next run is judged by. For a rate:
+//     under a third of the median and under the lowest. A regression that lasts moves the median in ~6
+//     runs; the metric then clears, and its green page names the baseline it moved to.
 // Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). The
 // page is the alarm and it pages #error-pulse on a change of state only: RED once when a metric
 // crossed a line in two runs in a row (one slow run is weather; the next one confirms it — at most 3
@@ -16,7 +20,7 @@
 // no row recorded, no report.
 //
 // The memory between runs is the previous main run's `os-latency-state` artifact (depot.ts
-// `newestArtifactFile`, `stateArtifact` below): the last 20 main runs' judged values, what each
+// `newestArtifactFile`, `stateArtifact` below): the last 20 main runs' medians, what each
 // crossed, and which metrics are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
 // pages whatever crossed in this run alone, marked 🧪 and mentioning nobody, and keeps no state.
 //
@@ -55,10 +59,12 @@ const HISTORY_RUNS = 20;
 const BASELINE_RUNS = 10;
 /** …and there is none below this many: a baseline of one or two runs is one or two samples of weather. */
 const BASELINE_MIN_RUNS = 5;
-/** A regression is more than this many times the baseline… */
-const REGRESSION_FACTOR = 2;
-/** …and, for a time, also more than this far above it: twice a 20 ms round trip is weather. */
-const REGRESSION_FLOOR_MS = 100;
+/** A regression is more than this many times the baseline… (not 2: one commit's runs spread up to
+ *  2.4× their median in the calibration, apps/os/perf/latency.ts) */
+const REGRESSION_FACTOR = 3;
+/** …and, for a time, also more than this far above it: twice a 30 ms round trip is weather (the
+ *  calibration's warm appends ran 25 ms on one preview and 72 ms on the next). */
+const REGRESSION_FLOOR_MS = 250;
 
 const MetricName = z.enum(Object.keys(LATENCY_METRICS) as [LatencyMetricName]);
 /** Metric names read back from a state an older table wrote: a metric since renamed or removed is
@@ -76,7 +82,7 @@ export const GuardState = z.object({
       sha: z.string(),
       run: z.string(),
       at: z.iso.datetime(),
-      /** Each measured metric's judged statistic. */
+      /** Each measured metric's median. */
       judged: z
         .record(z.string(), z.number())
         .transform((judged) =>
@@ -147,10 +153,10 @@ export function judgeRun(input: {
     const recorded = input.samples[metric];
     if (!recorded?.length) return { metric, missing: true as const };
     const summary = summarize(recorded);
-    const value = summary[LATENCY_METRICS[metric].judged];
+    const value = summary.p50;
     const budget = budgetLine(metric, input.scale);
     const window = baselineWindow(metric, input.history);
-    const baseline = window && summarize(window).p50;
+    const baseline = window && summarize(window.map((run) => run.value)).p50;
     const regressionLine = window && regressionLineOf(metric, window);
     const overBudget = crosses(metric, value, budget);
     const regressed = regressionLine !== undefined && crosses(metric, value, regressionLine);
@@ -171,22 +177,30 @@ export function judgeRun(input: {
 export type Reading = ReturnType<typeof judgeRun>[number];
 type Measured = Extract<Reading, { missing: false }>;
 
-/** The metric's judged values in the newest BASELINE_RUNS runs that measured it, or undefined below
- *  BASELINE_MIN_RUNS. Pure. */
+/** The metric's median in each of the newest BASELINE_RUNS runs that measured it, and whether
+ *  it crossed a line there, or undefined below BASELINE_MIN_RUNS. Pure. */
 export function baselineWindow(metric: LatencyMetricName, history: GuardState["runs"]) {
-  const values = history
-    .flatMap((run) => (run.judged[metric] === undefined ? [] : [run.judged[metric]]))
+  const window = history
+    .flatMap((run) => {
+      const value = run.judged[metric];
+      return value === undefined ? [] : [{ value, over: run.over.includes(metric) }];
+    })
     .slice(-BASELINE_RUNS);
-  return values.length < BASELINE_MIN_RUNS ? undefined : values;
+  return window.length < BASELINE_MIN_RUNS ? undefined : window;
 }
 
-/** Past which a judged value is a sharp regression on `window`: REGRESSION_FACTOR times its median
- *  (and REGRESSION_FLOOR_MS above it) and beyond its extreme; for a rate, the factor below. */
-function regressionLineOf(metric: LatencyMetricName, window: number[]) {
-  const { p50, max, min } = summarize(window);
+/** Past which a run's median is a sharp regression on `window`: REGRESSION_FACTOR times its median
+ *  and REGRESSION_FLOOR_MS above it, and beyond the most extreme of its runs that crossed no line; for
+ *  a rate, the factor below and under the lowest. */
+function regressionLineOf(
+  metric: LatencyMetricName,
+  window: NonNullable<ReturnType<typeof baselineWindow>>,
+) {
+  const median = summarize(window.map((run) => run.value)).p50;
+  const normal = window.filter((run) => !run.over).map((run) => run.value);
   return LATENCY_METRICS[metric].unit === "events/s"
-    ? Math.min(p50 / REGRESSION_FACTOR, min)
-    : Math.max(p50 * REGRESSION_FACTOR, p50 + REGRESSION_FLOOR_MS, max);
+    ? Math.min(median / REGRESSION_FACTOR, ...normal)
+    : Math.max(median * REGRESSION_FACTOR, median + REGRESSION_FLOOR_MS, ...normal);
 }
 
 /** The state after this run and the page it owes, if any. A metric turns red when it crossed a line
@@ -244,18 +258,23 @@ export function renderPage(input: {
   const lines = input.metrics.map((metric) => {
     const reading = byMetric.get(metric);
     if (!reading || reading.missing) return `• ${metric}: not measured`;
-    const { judged, unit } = LATENCY_METRICS[metric];
-    const value = `${judged} ${format(reading.value)} ${unit}`;
+    const { unit } = LATENCY_METRICS[metric];
+    const rate = unit === "events/s";
+    const value = `median ${format(reading.value)} ${unit}`;
     const baseline =
       reading.baseline === undefined
         ? "no baseline yet"
         : `baseline ${format(reading.baseline)} ${unit}, ${(reading.value / reading.baseline).toFixed(1)}×`;
     const crossed = [
-      reading.overBudget && `over its budget of ${format(reading.budget)} ${unit}`,
+      reading.overBudget &&
+        `${rate ? "under" : "over"} its budget of ${format(reading.budget)} ${unit}`,
       reading.regressed && `a sharp regression (line ${format(reading.regressionLine!)} ${unit})`,
     ].filter(Boolean);
+    const extreme = rate
+      ? `min ${format(reading.summary.min)}`
+      : `max ${format(reading.summary.max)}`;
     return input.page === "red"
-      ? `• *${metric}* ${value}: ${crossed.join(" and ")} (${baseline}); n=${reading.summary.n}, max ${format(reading.summary.max)}`
+      ? `• *${metric}* ${value}: ${crossed.join(" and ")} (${baseline}); n=${reading.summary.n}, ${extreme}`
       : `• ${metric} ${value} (budget ${format(reading.budget)}, ${baseline})`;
   });
   const test = input.testRun ? `🧪 TEST RUN (budgets × ${input.testRun.scale}) ` : "";
@@ -292,7 +311,6 @@ export function latencyEvents(
             percentile,
             value: Math.round(reading.summary[percentile] * 10) / 10,
             unit: LATENCY_METRICS[reading.metric].unit,
-            judged: percentile === LATENCY_METRICS[reading.metric].judged,
             budget: reading.budget,
             baseline: reading.baseline,
             over: reading.over,
@@ -341,7 +359,7 @@ async function judge(options: {
   for (const reading of readings)
     if (!reading.missing)
       console.log(
-        `${reading.over ? "OVER " : "     "}${reading.metric}: ${LATENCY_METRICS[reading.metric].judged} ${format(reading.value)} — budget ${format(reading.budget)}${reading.baseline === undefined ? "" : `, baseline ${format(reading.baseline)}, regression line ${format(reading.regressionLine!)}`} (n=${reading.summary.n} p50=${format(reading.summary.p50)} p95=${format(reading.summary.p95)} max=${format(reading.summary.max)})`,
+        `${reading.over ? "OVER " : "     "}${reading.metric}: median ${format(reading.value)} — budget ${format(reading.budget)}${reading.baseline === undefined ? "" : `, baseline ${format(reading.baseline)}, regression line ${format(reading.regressionLine!)}`} (n=${reading.summary.n} p50=${format(reading.summary.p50)} p95=${format(reading.summary.p95)} max=${format(reading.summary.max)})`,
       );
 
   const outcome = testRun

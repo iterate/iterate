@@ -61,63 +61,69 @@ test("a report's metrics come off each row's meta; a row that missed only budget
 
 test.for([
   {
-    name: "under both lines",
-    samples: [20, 21, 22, 23, 24],
+    name: "x25 ready under both lines",
+    metric: "project.create.x25.ready" as const,
+    samples: [1900, 2000, 2100],
     scale: 1,
-    expected: { value: 22, budget: 150, baseline: 21, regressionLine: 121, over: false },
-  },
-  // twice the baseline is weather at 21 ms: the line is 100 ms above it
-  {
-    name: "twice the baseline but under the floor",
-    samples: [44, 44, 44],
-    scale: 1,
-    expected: { value: 44, overBudget: false, regressed: false, over: false },
+    expected: { value: 2000, budget: 20_000, baseline: 2000, regressionLine: 6000, over: false },
   },
   {
-    name: "a sharp regression still under the budget",
-    samples: [130, 130, 130],
+    name: "x25 ready, a sharp regression still under its budget",
+    metric: "project.create.x25.ready" as const,
+    samples: [7000, 7000, 7000],
     scale: 1,
-    expected: { value: 130, overBudget: false, regressed: true, over: true },
+    expected: { value: 7000, overBudget: false, regressed: true, over: true },
   },
   {
-    name: "over the budget",
-    samples: [160, 170, 180],
+    name: "x25 ready over its budget",
+    metric: "project.create.x25.ready" as const,
+    samples: [20_500, 21_000, 21_500],
     scale: 1,
-    expected: { value: 170, overBudget: true, regressed: true, over: true },
+    expected: { value: 21_000, overBudget: true, regressed: true, over: true },
+  },
+  // three times a 21 ms round trip is weather: the line is 250 ms above it
+  {
+    name: "rules.300.newest at three times its baseline, under the floor",
+    metric: "rules.300.newest" as const,
+    samples: [66, 66, 66],
+    scale: 1,
+    expected: { value: 66, regressionLine: 271, overBudget: false, regressed: false, over: false },
   },
   {
-    name: "a forced alert: the budget scaled to 1.5 ms",
-    samples: [20, 21, 22],
+    name: "a forced alert: x25 ready's budget scaled to 200 ms",
+    metric: "project.create.x25.ready" as const,
+    samples: [1900, 2000, 2100],
     scale: 0.01,
-    expected: { value: 21, budget: 1.5, overBudget: true, regressed: false, over: true },
+    expected: { value: 2000, budget: 200, overBudget: true, regressed: false, over: true },
   },
-])("rules.300.newest (budget 150 ms, baseline 21 ms): $name", ({ samples, scale, expected }) => {
+])("$name", ({ metric, samples, scale, expected }) => {
+  // five runs at 2 s (x25 ready) and 21 ms (the rule table), none over its lines
   const history = Array.from({ length: 5 }, (_, i) => ({
     ...stateRun(`r${i}`, []),
-    judged: { "rules.300.newest": 21 },
+    judged: { "project.create.x25.ready": 2000, "rules.300.newest": 21 },
   }));
   expect(
-    judgeRun({ samples: { "rules.300.newest": samples }, history, scale }).find(
-      (reading) => reading.metric === "rules.300.newest",
+    judgeRun({ samples: { [metric]: samples }, history, scale }).find(
+      (reading) => reading.metric === metric,
     ),
   ).toMatchObject(expected);
 });
 
-test("a rate's budget is a floor, and halving its baseline is a regression; a metric no row recorded is missing", () => {
+test("a rate's budget is a floor, and a third of its baseline is a regression; a metric no row recorded is missing", () => {
   const history = Array.from({ length: 5 }, (_, i) => ({
     ...stateRun(`r${i}`, []),
-    judged: { "push.flood.throughput": 8000 },
+    judged: { "push.flood.throughput": 9000 },
   }));
   const readings = judgeRun({
-    samples: { "push.flood.throughput": [3000, 3500, 3900] },
+    samples: { "push.flood.throughput": [2000, 2500, 2900] },
     history,
     scale: 1,
   });
   expect(readings.find((reading) => reading.metric === "push.flood.throughput")).toMatchObject({
-    value: 3500,
+    value: 2500,
     budget: 1000,
-    baseline: 8000,
-    regressionLine: 4000,
+    baseline: 9000,
+    regressionLine: 3000,
     overBudget: false,
     regressed: true,
   });
@@ -132,7 +138,7 @@ test("the baseline is the newest 10 runs that measured the metric, and none belo
     ...stateRun(`r${i}`, []),
     judged: { "context.append": value * 10 },
   }));
-  expect(baselineWindow("context.append", runs)).toEqual([
+  expect(baselineWindow("context.append", runs)?.map((run) => run.value)).toEqual([
     30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
   ]);
   expect(baselineWindow("context.append", runs.slice(0, 4))).toBe(undefined);
@@ -140,8 +146,8 @@ test("the baseline is the newest 10 runs that measured the metric, and none belo
 });
 
 test("a metric whose runs spread wide regresses only beyond the slowest of them", () => {
-  // the slowest of 25 concurrent projects: 7 s to 21 s across runs on one commit
-  const history = [7, 9, 21, 8, 12, 10, 7].map((seconds, i) => ({
+  // the slowest of 25 concurrent projects: 7 s to 21 s across runs on one commit, and once 35 s
+  const history = [7, 9, 35, 8, 12, 10, 7].map((seconds, i) => ({
     ...stateRun(`r${i}`, []),
     judged: { "project.create.x25.all-ready": seconds * 1000 },
   }));
@@ -151,8 +157,27 @@ test("a metric whose runs spread wide regresses only beyond the slowest of them"
       history,
       scale: 1,
     }).find((reading) => reading.metric === "project.create.x25.all-ready");
-  expect(reading(20)).toMatchObject({ baseline: 9000, regressionLine: 21000, regressed: false });
-  expect(reading(22)).toMatchObject({ regressed: true });
+  expect(reading(30)).toMatchObject({ baseline: 9000, regressionLine: 35_000, regressed: false });
+  expect(reading(36)).toMatchObject({ regressed: true });
+});
+
+test("a run that crossed a line does not raise the line the next run is judged by", () => {
+  const history = [7, 9, 8, 12, 10].map((seconds, i) => ({
+    ...stateRun(`r${i}`, []),
+    judged: { "project.create.x25.ready": seconds * 1000 },
+  }));
+  const slow = {
+    ...stateRun("r5", ["project.create.x25.ready"]),
+    judged: { "project.create.x25.ready": 40_000 },
+  };
+  // the median counts the slow run (a lasting change moves it), the extreme does not
+  expect(
+    judgeRun({
+      samples: { "project.create.x25.ready": [35_000] },
+      history: [...history, slow],
+      scale: 1,
+    }).find((reading) => reading.metric === "project.create.x25.ready"),
+  ).toMatchObject({ baseline: 10_000, regressionLine: 30_000, regressed: true });
 });
 
 test("a metric turns red when it crossed in two runs in a row, and pages once", () => {
@@ -259,7 +284,7 @@ test("a state from an older metrics table drops the metrics it no longer has", (
   });
 });
 
-test("a run is remembered by each measured metric's judged value and what crossed", () => {
+test("a run is remembered by each measured metric's median and what crossed", () => {
   const readings = judgeRun({
     samples: { "rules.300.newest": [160, 170, 180], "rules.300.root": [20, 30, 40] },
     history: [],
@@ -281,7 +306,7 @@ test.for([
     testRun: undefined,
     expected: [
       "🔴 latency over its lines at `3b6b1c8b0` (A &lt;change&gt;) <@U067G4QRFK2>",
-      "• *rules.300.newest* p50 170 ms: over its budget of 150 ms and a sharp regression (line 121 ms) (baseline 21 ms, 8.1×); n=3, max 180",
+      "• *rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180",
       "still red: sign-in",
       "<https://depot.dev/run|the run>",
     ].join("\n"),
@@ -292,7 +317,7 @@ test.for([
     testRun: { scale: 0.01 },
     expected: [
       "🧪 TEST RUN (budgets × 0.01) 🔴 latency over its lines at `3b6b1c8b0` (A &lt;change&gt;)",
-      "• *rules.300.newest* p50 170 ms: over its budget of 150 ms and a sharp regression (line 121 ms) (baseline 21 ms, 8.1×); n=3, max 180",
+      "• *rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180",
       "still red: sign-in",
       "<https://depot.dev/run|the run>",
     ].join("\n"),
@@ -303,7 +328,7 @@ test.for([
     testRun: undefined,
     expected: [
       "🟢 latency back under its lines at `3b6b1c8b0` (A &lt;change&gt;)",
-      "• rules.300.newest p50 170 ms (budget 150, baseline 21 ms, 8.1×)",
+      "• rules.300.newest median 170 ms (budget 150, baseline 21 ms, 8.1×)",
       "still red: sign-in",
       "<https://depot.dev/run|the run>",
     ].join("\n"),
@@ -330,6 +355,27 @@ test.for([
   ).toBe(expected);
 });
 
+test("a rate's page line says it fell under its budget, and its lowest round", () => {
+  expect(
+    renderPage({
+      page: "red",
+      readings: judgeRun({
+        samples: { "push.flood.throughput": [600, 800, 900] },
+        history: [],
+        scale: 1,
+      }),
+      metrics: ["push.flood.throughput"],
+      stillRed: [],
+      commit: { sha: "3b6b1c8b0aaaaaaa", subject: "A change" },
+    }),
+  ).toBe(
+    [
+      "🔴 latency over its lines at `3b6b1c8b0` (A change) <@U067G4QRFK2>",
+      "• *push.flood.throughput* median 800 events/s: under its budget of 1,000 events/s (no baseline yet); n=3, min 600",
+    ].join("\n"),
+  );
+});
+
 test("PostHog gets one event per measured metric and percentile, deduplicated per run attempt", () => {
   const readings: Reading[] = judgeRun({
     samples: { "rules.300.newest": [10, 20, 30, 40, 50] },
@@ -352,7 +398,6 @@ test("PostHog gets one event per measured metric and percentile, deduplicated pe
       metric: properties.metric,
       percentile: properties.percentile,
       value: properties.value,
-      judged: properties.judged,
     })),
   ).toEqual([
     {
@@ -362,7 +407,6 @@ test("PostHog gets one event per measured metric and percentile, deduplicated pe
       metric: "rules.300.newest",
       percentile: "p50",
       value: 30,
-      judged: true,
     },
     {
       event: "os latency measured",
@@ -371,7 +415,6 @@ test("PostHog gets one event per measured metric and percentile, deduplicated pe
       metric: "rules.300.newest",
       percentile: "p95",
       value: 50,
-      judged: false,
     },
     {
       event: "os latency measured",
@@ -380,7 +423,6 @@ test("PostHog gets one event per measured metric and percentile, deduplicated pe
       metric: "rules.300.newest",
       percentile: "max",
       value: 50,
-      judged: false,
     },
   ]);
   expect(events[0]!.properties).toMatchObject({

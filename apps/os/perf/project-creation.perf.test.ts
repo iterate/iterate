@@ -12,6 +12,11 @@
 // and each round until its LAST project is ready. A project that is not ready by READY_DEADLINE_MS,
 // or whose create threw, counts as READY_DEADLINE_MS: a creation that stalls or fails under load is
 // the slowness this guards, never a broken probe.
+//
+// Where the time goes (25 at once, 2026-09-24, from the log's own stamps): Cloudflare Artifacts. The
+// config repo's `repo/created` lands 3.4–8.3 s after the request and its seed `repo/commit-completed`
+// 1.6–7.4 s after that; the ingress and the certificate take under a second. The median project is
+// ready in ~5–7 s at 1, 10 and 25 at once alike; the slowest of a round of 25, 2–3× that.
 
 import { test } from "vitest";
 import { adminCredentials, session, sleep } from "../e2e/support/client.ts";

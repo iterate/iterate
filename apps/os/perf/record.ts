@@ -22,7 +22,7 @@ declare module "vitest" {
 }
 
 /** Record `samples` of `metric` on the running row (`task`, from the test's context) and hold the
- *  judged statistic to the metric's budget. Call it once the row's own correctness checks passed: a
+ *  median to the metric's budget. Call it once the row's own correctness checks passed: a
  *  metric that was never recorded is what the guard reads as a broken probe. */
 export function recordLatency(
   task: TestContext["task"],
@@ -31,16 +31,16 @@ export function recordLatency(
 ) {
   (task.meta.latency ||= {})[metric] = samples;
   const summary = summarize(samples);
-  const { judged, unit } = LATENCY_METRICS[metric];
+  const { unit } = LATENCY_METRICS[metric];
   const line = budgetLine(metric, 1);
-  const value = summary[judged];
+  const value = summary.p50;
   console.log(
-    `[latency] ${metric}: n=${summary.n} p50=${round(summary.p50)} p95=${round(summary.p95)} max=${round(summary.max)} ${unit} — ${judged} ${round(value)} against a budget of ${line}`,
+    `[latency] ${metric}: n=${summary.n} p50=${round(summary.p50)} p95=${round(summary.p95)} max=${round(summary.max)} ${unit} — the median against a budget of ${line}`,
   );
   expect
     .soft(
       crosses(metric, value, line),
-      `${BUDGET_MISSED} ${metric} ${judged} ${round(value)} ${unit}, budget ${line} (samples ${samples.map(round).join(", ")})`,
+      `${BUDGET_MISSED} ${metric} median ${round(value)} ${unit}, budget ${line} (samples ${samples.map(round).join(", ")})`,
     )
     .toBe(false);
   return summary;
