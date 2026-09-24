@@ -33,7 +33,7 @@ import {
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
 } from "iterate/next/expression";
-import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
+import type { IterateContextApi } from "iterate/next/api";
 import type { Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
@@ -226,31 +226,14 @@ export class IterateContextRpcTarget extends RpcTarget {
    *    • an itx EXPRESSION — a pure rewrite: literally `append({ type: "…/rewrite-rule-configured", payload: { match, target } })`;
    *    • `null` — deny `match`: kept as a MASK where an implicit row lies beneath it (a bare `itx`
    *      denies all), a deletion otherwise (and a stub THIS session lent under it is recalled).
-   *  The object form is the event's payload (`RewriteRuleConfigured`) and may carry `description`,
-   *  the one line a model reads for the name; `(match, target)` is its shorthand.
+   *  `description` is the one line a model reads for the name; it rides the rule's row.
    *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandleRpcTarget`: disposing
    *  it, or the session ending, un-does the act. */
-  provide(input: RewriteRuleConfigured): Promise<RewriteRuleHandleRpcTarget>;
-  provide(
+  async provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
-  ): Promise<RewriteRuleHandleRpcTarget>;
-  async provide(
-    matchOrInput:
-      | ItxExpressionInput
-      | (Omit<RewriteRuleConfigured, "target"> & {
-          target: ClientRpcStub | ItxExpressionInput | null;
-        }),
-    maybeTarget?: ClientRpcStub | ItxExpressionInput | null,
+    options: { description?: string } = {},
   ): Promise<RewriteRuleHandleRpcTarget> {
-    // The object form IS the event's payload (`RewriteRuleConfigured`, its target widened to a live
-    // stub); `(match, target)` is its shorthand. An expression is a string or an array, so the check
-    // narrows to the object form.
-    const input =
-      typeof matchOrInput === "string" || Array.isArray(matchOrInput)
-        ? { match: matchOrInput, target: maybeTarget || null }
-        : matchOrInput;
-    const { match, target } = input;
     // LOADED CODE may lend its OWN object (a live stub answers with the code's own authority and
     // dies with its invocation); a pure rewrite or a deny is a ROW, and a row from loaded code is
     // `itx.append`'s business — through its context's table, where a jail's wall stands.
@@ -259,7 +242,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         "FORBIDDEN",
         "loaded code writes a row with itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match, target, description } }); provide lends a live stub only",
       );
-    const description = input.description ? { description: input.description } : {};
+    const description = options.description ? { description: options.description } : {};
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
     if (!target || typeof target === "string" || Array.isArray(target)) {

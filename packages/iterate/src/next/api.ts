@@ -38,8 +38,8 @@ export type WaitForEventFilter = {
   timeoutMs?: number;
 };
 
-/** The `rewrite-rule-configured` event's payload — what `provide` takes, what `itx.append` writes
- *  durably: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
+/** The `rewrite-rule-configured` event's payload — what `itx.append` writes durably and `provide`
+ *  writes for its session: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
  *  line a model reads for the name; it rides the row into `rewriteRules.list()`. */
 export type RewriteRuleConfigured = {
   match: ItxExpressionInput;
@@ -254,14 +254,15 @@ export interface IterateContextApi {
     consumes?: string[];
     afterOffset?: number;
   }): Promise<{ [Symbol.dispose](): void }>;
-  /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): the event's
-   *  payload `{ match, target, description? }`, or the shorthand `(match, target)`. `target` is an
-   *  expression, or null to deny. The durable spelling is the same payload through `itx.append`. */
-  provide(input: RewriteRuleConfigured): Promise<{ [Symbol.dispose](): void }>;
+  /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
+   *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a
+   *  model reads for the name. The durable spelling is the rule's event (`RewriteRuleConfigured`)
+   *  through `itx.append`. */
   provide(
     match: ItxExpressionInput,
     // Expressions, null, or live RPC references (RpcTarget / callable), serialized by capnweb.
     target: unknown,
+    options?: { description?: string },
   ): Promise<{ [Symbol.dispose](): void }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON

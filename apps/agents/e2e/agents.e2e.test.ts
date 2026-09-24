@@ -498,9 +498,7 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   const support = itx.cd("/agents/support");
   const ai = new ScriptedAi(["Nothing to do."]);
   await support.provide("itx.ai", ai);
-  await itx.provide({
-    match: "itx.tool",
-    target: "itx.whoami",
+  await itx.provide("itx.tool", "itx.whoami", {
     description: "who this project is, really: itx.tool()",
   });
   const agent = itx.agents.get("/agents/support");
@@ -529,11 +527,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       return [{ name: `${input.q}.com`, price: 42 }];
     }
   })();
-  await itx.provide({
-    match: "itx.catalogue",
-    target: catalogue,
-    description: "search the catalogue",
-  });
+  await itx.provide("itx.catalogue", catalogue, { description: "search the catalogue" });
   const scripts = [
     "return await itx.kv.list()",
     "return await itx.cd('/').whoami()",
