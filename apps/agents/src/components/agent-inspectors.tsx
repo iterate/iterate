@@ -287,7 +287,7 @@ function ResponseView({
       {script ? (
         <div>
           <div className="mb-1 flex items-center gap-2">
-            <p className="font-mono text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-emerald-700">
               parsed script
             </p>
             {scriptExecutionId ? (
@@ -342,9 +342,9 @@ function Outcome({ outcome }: { outcome: LlmTrace["outcome"] }) {
       {" · "}
       <span
         className={cn(
-          outcome.status === "succeeded" && "text-emerald-600 dark:text-emerald-500",
+          outcome.status === "succeeded" && "text-emerald-600",
           outcome.status === "failed" && "text-destructive",
-          outcome.status === "cancelled" && "text-amber-600 dark:text-amber-500",
+          outcome.status === "cancelled" && "text-amber-600",
         )}
       >
         {outcome.status}
@@ -359,11 +359,11 @@ function RoleChip({ name }: { name: string }) {
     <span
       className={cn(
         "font-mono text-[10px] font-semibold uppercase tracking-wider",
-        name === "system" && "text-purple-700 dark:text-purple-300",
-        name === "developer" && "text-purple-700/80 dark:text-purple-300/80",
-        name === "user" && "text-blue-700 dark:text-blue-300",
-        name === "assistant" && "text-emerald-700 dark:text-emerald-400",
-        name === "response" && "text-amber-700 dark:text-amber-400",
+        name === "system" && "text-purple-700",
+        name === "developer" && "text-purple-700/80",
+        name === "user" && "text-blue-700",
+        name === "assistant" && "text-emerald-700",
+        name === "response" && "text-amber-700",
         name === "derived" && "text-muted-foreground",
       )}
     >
@@ -416,9 +416,7 @@ function ScriptTraceContent({
           {trace.settlement ? (
             <>
               {" · "}
-              <span
-                className={failed ? "text-destructive" : "text-emerald-600 dark:text-emerald-500"}
-              >
+              <span className={failed ? "text-destructive" : "text-emerald-600"}>
                 {failed ? "failed" : "succeeded"} in{" "}
                 {formatAgentUiDuration(trace.settlement.atMs - trace.requestedAtMs)}
               </span>

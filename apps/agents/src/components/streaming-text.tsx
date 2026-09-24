@@ -100,7 +100,7 @@ export function StreamingCodeBlock({ code }: { code: StreamText }) {
         const element = event.currentTarget;
         pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
       }}
-      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
+      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground"
     >
       <StreamingText text={code} />
       <StreamingCursor className="bg-amber-600" />

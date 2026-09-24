@@ -48,7 +48,7 @@ export function QueuedMessagesPanel({
             size="sm"
             onClick={() => void onInterrupt()}
             disabled={isInterrupting}
-            className="ml-auto h-6 shrink-0 gap-1 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800 dark:text-red-300 dark:hover:bg-red-950/30"
+            className="ml-auto h-6 shrink-0 gap-1 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
           >
             {isInterrupting ? (
               <Spinner className="size-3" />

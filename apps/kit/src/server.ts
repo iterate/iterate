@@ -1,5 +1,6 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env } from "cloudflare:workers";
+import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { appAuth } from "iterate/next/app-server";
 import type { BrowserSession } from "iterate/next/app-session";
 import { deviceClientMetadata } from "./firmware/device-client.ts";
@@ -18,6 +19,8 @@ declare global {
       ITERATE_DENY_ZONES: string;
       /** the first-party apps' origins by name, JSON — the dash's for the device-token link (routes/__root.tsx) */
       ITERATE_APP_ORIGINS: string;
+      /** PostHog's project key (envs.ts, prd only); unset ⇒ no PostHog */
+      POSTHOG_PROJECT_KEY?: string;
     }
   }
 }
@@ -29,6 +32,8 @@ export default createServerEntry({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
+    // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
+    if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
     // Firmware release files are public: esp-web-tools fetches them from the page (firmware-proxy.ts).
     const firmware = await proxyFirmwareFile(request, fetch);
     if (firmware) return firmware;
