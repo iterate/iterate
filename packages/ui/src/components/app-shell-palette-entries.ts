@@ -57,12 +57,14 @@ export function filterPaletteEntries<Entry extends PaletteEntry>(
   }));
 }
 
-/** Reads the sidebar's navigation off `content` (the sidebar's `SidebarContent`, null when it is
- *  not mounted — a phone's closed sheet): each enabled menu button and sub-button, labelled by its
- *  text (or its aria-label when it shows none), under its group's label; a sub-button's detail is
- *  its parent item's label. */
+/** Reads the sidebar's navigation off `content` (the sidebar's `SidebarContent`): each enabled menu
+ *  button and sub-button, labelled by its text (or its aria-label when it shows none), under its
+ *  group's label; a sub-button's detail is its parent item's label. Nothing on a phone, where the
+ *  sidebar is a sheet (`data-mobile`): closed, `content` is not mounted (null); open, the palette's
+ *  first press is outside it, the sheet closes and unmounts, and a row's element would be detached
+ *  by the time it is chosen — a click on it does nothing. */
 export function readSidebarNav(content: Element | null): SidebarNavItem[] {
-  if (!content) return [];
+  if (!content || content.closest("[data-mobile]")) return [];
   return [
     ...content.querySelectorAll<HTMLElement>(
       '[data-slot="sidebar-menu-button"], [data-slot="sidebar-menu-sub-button"]',

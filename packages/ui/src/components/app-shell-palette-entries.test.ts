@@ -140,8 +140,12 @@ test("a sidebar link to a project under its slug is its project row; a page at i
   ).toEqual(["Overview", "globex"]);
 });
 
-test("no content mounted (a phone's closed sidebar sheet): nothing to list", () => {
+test("a phone's sidebar sheet, closed (not mounted) or open: nothing to list", () => {
   expect(readSidebarNav(null)).toEqual([]);
+  const sheet = document.createElement("div");
+  sheet.dataset.mobile = "true";
+  sheet.innerHTML = `<div><a data-slot="sidebar-menu-button" href="/projects/acme"><span>Overview</span></a></div>`;
+  expect(readSidebarNav(sheet.firstElementChild)).toEqual([]);
 });
 
 function row(label: string, group: string, detail?: string): PaletteEntry {

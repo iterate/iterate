@@ -131,7 +131,7 @@ export function AppShell({
           />
           <PaletteSidebarButton onOpen={openPalette} />
         </SidebarHeader>
-        {/* on a phone the sheet mounts this only while open, so ⌘K there lists the projects alone */}
+        {/* ⌘K lists what the sidebar shows here — on a desktop; a phone's lists the projects alone */}
         <SidebarContent ref={navRef}>{nav}</SidebarContent>
         <SidebarFooter>
           <CollapseButton />
