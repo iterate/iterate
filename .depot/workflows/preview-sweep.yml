@@ -4,6 +4,10 @@
 # rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a failed cleanup,
 # from leaking a preview.
 #
+# A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
+# goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a
+# page to #error-pulse instead (preview.ts: StuckArtifactsNamespace), tried again the next night.
+#
 # Its own workflow, not a job of preview-os.yml, so no PR's checks carry it as a skipped job.
 # Sweep now with a dispatch:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-sweep.yml --ref main

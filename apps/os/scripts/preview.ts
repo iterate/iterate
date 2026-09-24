@@ -31,14 +31,17 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
+import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { buildOs } from "./build.ts";
 import {
   deleteArtifactsNamespace,
   ensureArtifactsNamespace,
   isCloudflareError,
+  renderStuckArtifactsNamespacesPage,
   type ArtifactsNamespaceRow,
   type Cf,
+  type StuckArtifactsNamespace,
 } from "./preview-artifacts.ts";
 import {
   APPS,
@@ -584,11 +587,13 @@ async function deployPreview(
 /** The preview, then everything it owned, each found by its name: its Artifacts namespace (this
  *  script created it), any `db` D1 a preview from before the control plane moved to a Durable Object
  *  left behind, its KV namespaces and its R2 bucket (wrangler provisioned them; see WRANGLER_PACKAGE
- *  for why its delete leaves them). One already gone is the expected case. */
+ *  for why its delete leaves them). One already gone is the expected case. Resolves to its
+ *  Artifacts namespace when Cloudflare will not delete it (StuckArtifactsNamespace): the rest still
+ *  goes, and the namespace, now an orphan, is the nightly sweep's to retry and page. */
 async function deletePreview(cf: Cf, previewName: string, wrangler: string) {
   await deleteWorkerPreview(PREVIEW_PARENT, previewName, wrangler);
   await deleteDatabase(cf, previewResourceName(previewName, "db"));
-  await deleteArtifactsNamespace(cf, previewResourceName(previewName, "repos"));
+  const stuck = await deleteArtifactsNamespace(cf, previewResourceName(previewName, "repos"));
   const suffixes = previewResourceSuffixes();
   const kvNamespaces = await listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces");
   for (const title of suffixes.kv.map((suffix) => previewResourceName(previewName, suffix))) {
@@ -598,17 +603,23 @@ async function deletePreview(cf: Cf, previewName: string, wrangler: string) {
   }
   for (const suffix of suffixes.r2)
     await deleteR2Bucket(cf, previewResourceName(previewName, suffix));
+  return stuck;
 }
 
 /** apps/os's preview and everything it owned, then every app on top's preview (whether or not it
- *  exists). */
+ *  exists). A namespace Cloudflare will not delete does not fail it: the PR-close delete and main's
+ *  e2e cleanup report on a commit that did not cause it, and the nightly sweep pages it. */
 async function deleteAll(cf: Cf, previewName: string) {
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;
-    await deletePreview(cf, previewName, wrangler.command);
+    const stuck = await deletePreview(cf, previewName, wrangler.command);
     for (const app of APPS)
       await deleteWorkerPreview(app.envs.preview!, previewName, wrangler.command);
+    if (stuck)
+      console.warn(
+        `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
+      );
   } finally {
     wrangler.cleanup();
   }
@@ -802,7 +813,8 @@ const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
 
 /** The stale previews (deletePreview, and the apps on top of the same name) and the resources that
  *  outlived their preview, by the rules in scripts/preview-sweep.ts. */
-async function sweep(cf: Cf, dryRun: boolean) {
+async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefined }) {
+  const { dryRun } = options;
   // The resources BEFORE the previews (rule 5): wrangler creates a preview before its KV and R2.
   const resources = await listSweptResources(cf);
   const previews = await listAll<ListedPreview>(
@@ -882,8 +894,13 @@ async function sweep(cf: Cf, dryRun: boolean) {
   try {
     await wrangler.ready;
     const failures: string[] = [];
+    // Cloudflare's, not the sweep's: paged, and tried again the next night (StuckArtifactsNamespace).
+    const stuckNamespaces: StuckArtifactsNamespace[] = [];
+    const noteStuck = (stuck: StuckArtifactsNamespace | undefined) => {
+      if (stuck) stuckNamespaces.push(stuck);
+    };
     for (const { name } of stale) {
-      await deletePreview(cf, name, wrangler.command).catch((error) =>
+      await deletePreview(cf, name, wrangler.command).then(noteStuck, (error) =>
         failures.push(`${name}: ${describe(error)}`),
       );
     }
@@ -912,7 +929,7 @@ async function sweep(cf: Cf, dryRun: boolean) {
             await cf(`/d1/database/${orphan.id}`, { method: "DELETE" });
             console.log(`deleted D1 ${orphan.name}`);
           },
-          artifacts: () => deleteArtifactsNamespace(cf, orphan.name),
+          artifacts: async () => noteStuck(await deleteArtifactsNamespace(cf, orphan.name)),
         }[orphan.kind];
         await deleteOrphan().catch((error) => failures.push(`${orphan.name}: ${describe(error)}`));
       }
@@ -921,6 +938,18 @@ async function sweep(cf: Cf, dryRun: boolean) {
       await deleteWorkerPreview(app.envs.preview!, name, wrangler.command).catch((error) =>
         failures.push(`apps/${app.name} ${name}: ${describe(error)}`),
       );
+    }
+    // The run is red only when the sweep could not act. A scheduled run reports on main's head
+    // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
+    // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
+    if (stuckNamespaces.length > 0) {
+      const text = renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl);
+      console.log(text);
+      await (async () =>
+        getSlackClient().chat.postMessage({
+          channel: slackChannelIds["#error-pulse"],
+          text,
+        }))().catch((error) => failures.push(`paging #error-pulse: ${describe(error)}`));
     }
     if (failures.length > 0) throw new Error(`sweep failures:\n  ${failures.join("\n  ")}`);
   } finally {
@@ -977,7 +1006,11 @@ async function main(argv: string[]) {
   const parsed = parseArgs(argv);
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
   const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
-  if (parsed.command === "sweep") return sweep((await parentContext()).cf, parsed.dryRun);
+  if (parsed.command === "sweep")
+    return sweep((await parentContext()).cf, {
+      dryRun: parsed.dryRun,
+      jobUrl: process.env.DEPOT_JOB_URL,
+    });
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });
   console.log(`preview ${previewName} → ${previewUrl(previewName)}`);

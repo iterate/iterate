@@ -389,6 +389,11 @@ Preview cleanliness is an **invariant of birth**, not a promise about exits:
 every preview is created with resources of its own, so no PR ever inherits
 another PR's data. When an exit path skips the delete (a force-closed PR, a
 failed cleanup), the sweep collects both the preview and any orphaned resource.
+One exit is Cloudflare's: an Artifacts namespace it will not delete (an empty
+repos list, yet `DELETE` keeps answering 409/10202 "Namespace is not empty").
+The delete and the sweep log `preview.platform-failure-stuck-namespace` and
+carry on; the sweep pages #error-pulse to escalate it to Cloudflare and tries
+again the next night. The run goes red only when the sweep could not act.
 
 ### Story 2: run what CI runs, locally
 
