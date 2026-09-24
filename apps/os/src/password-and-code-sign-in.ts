@@ -17,6 +17,7 @@ import type { Env } from "./env.ts";
 import { appConfigOf } from "./app-config.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
+import { watchSignInStep } from "./sign-in-watch.ts";
 
 const cookieName = "__Host-itx-login";
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
@@ -82,7 +83,7 @@ async function charge(env: Env, keys: readonly string[], counts: number[]): Prom
 /** `password` for `email`: right → the user (created on first sign-in); wrong → `{ error }`, one
  *  more wrong attempt on the books. Five wrong attempts per email, twenty per client (`client` is the
  *  caller's address, `cf-connecting-ip`), in ten minutes; over either cap the attempt is refused
- *  before the password is even looked at. */
+ *  before the password is even looked at. The right password clears both counts. */
 export async function signInWithPassword(
   env: Env,
   email: string,
@@ -96,13 +97,23 @@ export async function signInWithPassword(
     `login-password-rate:address:${address}`,
     `login-password-rate:client:${client || "unknown"}`,
   ] as const;
-  const counts = await countersOf(env, keys);
+  const counts = await watchSignInStep("password-counters", countersOf(env, keys));
   if (counts[0]! >= 5 || counts[1]! >= 20) return { error: "Too many tries. Wait a few minutes." };
   if (!(await secretsEqual(password, secret))) {
     await charge(env, keys, counts);
     return { error: "That password is not right." };
   }
-  return { user: await new ControlPlane(env.CONTROL_PLANE).ensureUser(address) };
+  // THE RIGHT PASSWORD CLEARS THE TRIES: there is one password, and a client that has just shown it
+  // has nothing left to guess — its wrong tries, and this address's, protect nothing any more. Kept,
+  // they would add up across sign-ins that each got it right in the end (a browser spec that types
+  // one wrong password per run locks its machine out at the tenth run: every try renews the window).
+  if (counts.some((count) => count > 0)) await Promise.all(keys.map((k) => env.OAUTH_KV.delete(k)));
+  return {
+    user: await watchSignInStep(
+      "ensure-user",
+      new ControlPlane(env.CONTROL_PLANE).ensureUser(address),
+    ),
+  };
 }
 
 // ── the mailed code ──

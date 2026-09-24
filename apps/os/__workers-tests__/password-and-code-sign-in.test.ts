@@ -1,13 +1,37 @@
-// The email code sign-in (src/password-and-code-sign-in.ts) with a fake mailbox, so the test can read the code it
-// mailed: the message, the right code, the wrong ones, the spent challenge, the reserved domains.
+// The sign-ins without an identity provider (src/password-and-code-sign-in.ts): the password's wrong-try
+// caps, and the email code with a fake mailbox, so the test can read the code it mailed: the message,
+// the right code, the wrong ones, the spent challenge, the reserved domains.
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { Env } from "../src/env.ts";
-import { finishLoginCode, startLoginCode } from "../src/password-and-code-sign-in.ts";
-import { ORIGIN } from "./support.ts";
+import {
+  finishLoginCode,
+  signInWithPassword,
+  startLoginCode,
+} from "../src/password-and-code-sign-in.ts";
+import { loginPassword, ORIGIN } from "./support.ts";
 
 /** What password-and-code-sign-in.ts hands the mailbox: the builder shape of `SendEmail.send`. */
 type Mail = { to: string; from: string; subject: string; text: string; html: string };
+
+test("a client's wrong passwords are capped at twenty, and the right password clears them: one wrong try per sign-in never adds up", async () => {
+  const client = `client-${crypto.randomUUID()}`;
+  const wrong = (n: number) =>
+    signInWithPassword(env, `wrong-${n}-${client}@example.com`, "not-the-password", client);
+  // a sign-in that got the password wrong once, then right — thirty times over from one client
+  for (let n = 0; n < 30; n++) {
+    expect(await wrong(n)).toEqual({ error: "That password is not right." });
+    expect(
+      await signInWithPassword(env, `right-${n}-${client}@example.com`, loginPassword(), client),
+    ).toMatchObject({ user: { email: `right-${n}-${client}@example.com` } });
+  }
+  // twenty wrong tries in a row still close the client, the right password included
+  for (let n = 0; n < 20; n++)
+    expect(await wrong(100 + n)).toEqual({ error: "That password is not right." });
+  expect(
+    await signInWithPassword(env, `late-${client}@example.com`, loginPassword(), client),
+  ).toEqual({ error: "Too many tries. Wait a few minutes." });
+});
 
 test("the mailed code signs in; a wrong code costs a try; five wrong tries end the challenge; three codes per address per window; a reserved test domain gets no mail", async () => {
   const send = vi.fn<(mail: Mail) => Promise<{ messageId: string }>>(async () => ({

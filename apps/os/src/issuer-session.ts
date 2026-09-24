@@ -7,6 +7,7 @@ import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import { watchSignInStep } from "./sign-in-watch.ts";
 import { redeemTestLink } from "./test-link.ts";
 
 /** Verified Google login and explicitly enabled test/administrator login call this tail.
@@ -27,40 +28,52 @@ export async function startIssuerSession(
   const { platformOrigin, api } = addresses;
   // The issuer's own session holds every scope: it is the person at the issuer, and the consent
   // page creates organizations and projects through it.
-  const flow = await startAppSession(
-    env.BROWSER_SESSION,
-    {
-      origin: platformOrigin,
-      client: { name: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
-      issuer: platformOrigin,
-      resource: api,
-      scopes: [...OAuthScope.options],
-    },
-    sameOriginPath(next, platformOrigin),
+  const flow = await watchSignInStep(
+    "session-begin",
+    startAppSession(
+      env.BROWSER_SESSION,
+      {
+        origin: platformOrigin,
+        client: { name: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
+        issuer: platformOrigin,
+        resource: api,
+        scopes: [...OAuthScope.options],
+      },
+      sameOriginPath(next, platformOrigin),
+    ),
   );
   const helpers = oauthHelpers(env, addresses);
-  const authorization = await parseAuthorization(env, new Request(flow.location));
-  const approved = await helpers.completeAuthorization({
-    request: authorization,
-    userId: user.id,
-    scope: authorization.scope,
-    metadata: clientDisplay(
-      { clientName: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
-      authorization.clientId,
-    ),
-    revokeExistingGrants: false,
-    props: {
-      kind: "issuer",
+  const authorization = await watchSignInStep(
+    "parse-authorization",
+    parseAuthorization(env, new Request(flow.location)),
+  );
+  const approved = await watchSignInStep(
+    "complete-authorization",
+    helpers.completeAuthorization({
+      request: authorization,
       userId: user.id,
-      email: user.email,
-      picture: extras.picture,
-      name: extras.name,
-      testLink: extras.testLink,
-      projects: null,
-      deadline: Date.now() + 30 * 24 * 3600_000,
-    } satisfies GrantProps,
-  });
-  const result = await flow.session.complete(new URL(approved.redirectTo).search);
+      scope: authorization.scope,
+      metadata: clientDisplay(
+        { clientName: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
+        authorization.clientId,
+      ),
+      revokeExistingGrants: false,
+      props: {
+        kind: "issuer",
+        userId: user.id,
+        email: user.email,
+        picture: extras.picture,
+        name: extras.name,
+        testLink: extras.testLink,
+        projects: null,
+        deadline: Date.now() + 30 * 24 * 3600_000,
+      } satisfies GrantProps,
+    }),
+  );
+  const result = await watchSignInStep(
+    "code-exchange",
+    flow.session.complete(new URL(approved.redirectTo).search),
+  );
   if (result.error) throw new Error(result.error);
   return { setCookie: flow.setCookie, location: result.next! };
 }
@@ -84,7 +97,10 @@ export async function testLinkResponse(request: Request, env: Env) {
       status: decision.status,
       headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
     });
-  const user = await new ControlPlane(env.CONTROL_PLANE).ensureUser(decision.email);
+  const user = await watchSignInStep(
+    "ensure-user",
+    new ControlPlane(env.CONTROL_PLANE).ensureUser(decision.email),
+  );
   const { setCookie } = await startIssuerSession(env, request, user, "/login", {
     testLink: { clients: decision.clients, project: decision.project },
   });

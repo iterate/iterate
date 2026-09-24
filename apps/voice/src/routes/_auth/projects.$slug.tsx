@@ -96,8 +96,12 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
         using itx = await api.projects.get(project);
         const openaiKey = String(form.get("openai-key") || "");
         await ensureVoiceAgent(itx, fetchVoiceInstall, openaiKey);
-        // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks
-        await router.invalidate();
+        // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks.
+        // `sync`: the reload is awaited, so "Installing…" stays up until the page shows what the
+        // install made. Without it the router reloads a route it already has data for in the
+        // background, the action ends at once, and the form comes back empty (the install looks
+        // failed) until the reload lands — seconds on a busy platform.
+        await router.invalidate({ sync: true });
         return undefined;
       } catch (e: unknown) {
         return e instanceof Error ? e.message : String(e);
