@@ -71,7 +71,6 @@ function NotesPage() {
       account={{ email: info.principal.email || info.principal.actor }}
       locationKey={href}
     >
-      {/* the loader sends a sign-in the project is missing from off to sign in again */}
       <Editor key={data.project.id} project={data.project.id} initial={data.note} tip={data.tip} />
     </AppShell>
   );

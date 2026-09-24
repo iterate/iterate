@@ -1,8 +1,8 @@
 // THE TREE the dash navigates — the signed-in person → their organizations → each organization's
 // projects — read from LIVE STATE, not listed: which organizations the person belongs to is the
-// account fold on `session.user` (`memberships`, os-next src/account/contract.ts); what an
+// account fold on `session.user` (`memberships`, apps/os/src/account/contract.ts); what an
 // organization is called, who belongs to it and which projects it holds is the organization fold on
-// `session.organizations.get(orgId)` (src/organization/contract.ts). ONE subscription per
+// `session.organizations.get(orgId)` (apps/os/src/organization/contract.ts). ONE subscription per
 // organization and one for the account, never one per project (every open live state is a
 // subscription row and a pinned Durable Object): a project's own live state opens on its page alone.
 // `<OrganizationTree>` is mounted once by the shell and renders nothing; it publishes the tree it
@@ -18,10 +18,10 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
-import { useLiveState } from "iterate/next/react";
+import { useContextStub, useFacetLiveState } from "../lib/context-stub.ts";
 
 export type OrganizationRole = "owner" | "member";
-export type TreeProject = {
+type TreeProject = {
   id: string;
   slug: string;
   orgId: string;
@@ -42,7 +42,7 @@ export type TreeOrganization = {
   status: "connecting" | "live" | "error";
   error?: string;
 };
-export type OrganizationTree = {
+type OrganizationTreeState = {
   /** live: the account's memberships and every organization's record, pushed as they change;
    *  listed: the session's lists, read once */
   source: "live" | "listed";
@@ -56,13 +56,18 @@ export type OrganizationTree = {
   error?: string;
 };
 
-const EMPTY: OrganizationTree = { source: "live", loaded: false, organizations: [], projects: [] };
+const EMPTY: OrganizationTreeState = {
+  source: "live",
+  loaded: false,
+  organizations: [],
+  projects: [],
+};
 
 // ── the store: what the mounted `<OrganizationTree>` last published ──
-let published: OrganizationTree = EMPTY;
+let published: OrganizationTreeState = EMPTY;
 const listeners = new Set<() => void>();
 let reload: () => void = () => {};
-function publish(tree: OrganizationTree) {
+function publish(tree: OrganizationTreeState) {
   published = tree;
   for (const listener of listeners) listener();
 }
@@ -72,7 +77,7 @@ function subscribe(listener: () => void) {
 }
 
 /** The tree as every component reads it; re-renders as it changes. */
-export function useOrganizationTree(): OrganizationTree {
+export function useOrganizationTree(): OrganizationTreeState {
   return useSyncExternalStore(
     subscribe,
     () => published,
@@ -81,10 +86,9 @@ export function useOrganizationTree(): OrganizationTree {
 }
 /** The tree as a route's `beforeLoad` reads it — a snapshot: empty and not loaded before the shell
  *  has mounted it (a fresh page load), so a loader that needs a row falls back to the catalog. */
-export function readOrganizationTree(): OrganizationTree {
+export function readOrganizationTree(): OrganizationTreeState {
   return published;
 }
-/** The listed tree reads its lists again (after a create); the live tree already has it. */
 /** How long a page waits for an organization the loaded tree does not list yet: a creation answers
  *  before the account's live-state push lands in this client, so the tree is `loaded` and the
  *  organization absent for a moment. After the grace it is missing. */
@@ -108,16 +112,13 @@ export function useOrganizationTreeEntry(orgId: string): {
   return { org, missing: !org && tree.loaded && graceOverFor === orgId };
 }
 
+/** The listed tree reads its lists again (after a create); the live tree already has it. */
 export function reloadOrganizationTree(): void {
   reload();
 }
 
 type Api = AuthenticatedApp["api"];
-/** A global context stub the session vends — `api.user`, `api.organizations.get(orgId)`. */
-type GlobalContext = Awaited<Api["user"]>;
 
-/** A live-state seed as a facet's `liveSnapshot()` answers it. */
-const Seed = z.object({ rev: z.number(), state: z.unknown() });
 const Membership = z.object({ role: z.enum(["owner", "member"]), since: z.string() });
 /** The account fold, the one field the tree reads. */
 const AccountLive = z.looseObject({ memberships: z.record(z.string(), Membership).default({}) });
@@ -131,48 +132,27 @@ const OrganizationLive = z.looseObject({
 /** Mounted once, by the shell: opens the account's live state — or, for a session that cannot,
  *  lists — and publishes the tree. Renders nothing. */
 export function OrganizationTree({ api, info }: { api: Api; info: AuthenticatedApp["info"] }) {
-  // `undefined` while the account is being opened; null when this session cannot open it
-  const [user, setUser] = useState<GlobalContext | null | undefined>(
-    info.scopes.includes("account") ? undefined : null,
+  // each session (or scope set) opens its own account. `api.user` is pipelined: the round trip is
+  // the await, and a grant bound to projects rejects it (FORBIDDEN) — the listed tree then, as for
+  // a session without `account`
+  const account = useContextStub(
+    info.scopes.includes("account") ? () => Promise.resolve(api.user) : null,
+    [api, info.scopes],
   );
-  useEffect(() => {
-    // each session (or scope set) opens its own account: the last one's stub is disposed below, so
-    // nothing renders it meanwhile
-    setUser(info.scopes.includes("account") ? undefined : null);
-    if (!info.scopes.includes("account")) return;
-    let disposed = false;
-    let held: GlobalContext | undefined;
-    // `api.user` is pipelined: the round trip is the await, and a grant bound to projects rejects it
-    // (FORBIDDEN) — the listed tree then. A capnweb stub is a callable proxy: handed to a state
-    // setter directly, React would take it for an updater and CALL it — so it is wrapped in a thunk.
-    Promise.resolve(api.user).then(
-      (stub) => {
-        if (disposed) return stub[Symbol.dispose]();
-        held = stub;
-        setUser(() => stub);
-      },
-      () => !disposed && setUser(null),
-    );
-    return () => {
-      disposed = true;
-      held?.[Symbol.dispose]();
-    };
-  }, [api, info.scopes]);
   useEffect(() => () => publish(EMPTY), []);
-  if (user === undefined) return null;
-  return user ? <LiveTree api={api} user={user} /> : <ListedTree api={api} />;
+  if (account.pending) return null;
+  return account.stub ? <LiveTree api={api} user={account.stub} /> : <ListedTree api={api} />;
 }
 
 /** One organization's live state as its branch reports it up. */
 type Branch = { value: unknown; status: "connecting" | "live" | "error"; error?: string };
 
+/** A global context stub the session vends — `api.user`, `api.organizations.get(orgId)`. */
+type GlobalContext = Awaited<Api["user"]>;
+
 /** The live tree: the account's memberships, and a branch per membership. */
 function LiveTree({ api, user }: { api: Api; user: GlobalContext }) {
-  const account = useLiveState<unknown>(user, {
-    key: "account",
-    // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- the hook's own option name (iterate/next/react `useLiveState`)
-    door: async () => Seed.parse(await user.invoke("itx.facets.get('account').liveSnapshot()")),
-  });
+  const account = useFacetLiveState(user, "account");
   const memberships = useMemo(
     () => AccountLive.safeParse(account.value).data?.memberships ?? {},
     [account.value],
@@ -193,7 +173,7 @@ function LiveTree({ api, user }: { api: Api; user: GlobalContext }) {
         .map(([id]) => id),
     [memberships],
   );
-  const tree = useMemo((): OrganizationTree => {
+  const tree = useMemo((): OrganizationTreeState => {
     const organizations = orgIds.map((id): TreeOrganization => {
       const branch = branches[id];
       const record =
@@ -255,32 +235,8 @@ function OrganizationBranch({
   orgId: string;
   report: (orgId: string, branch: Branch | null) => void;
 }) {
-  const [context, setContext] = useState<{ stub?: GlobalContext; error?: string }>({});
-  useEffect(() => {
-    let disposed = false;
-    let held: GlobalContext | undefined;
-    setContext({});
-    api.organizations.get(orgId).then(
-      (stub) => {
-        if (disposed) return stub[Symbol.dispose]();
-        held = stub;
-        setContext({ stub });
-      },
-      (caught: unknown) =>
-        !disposed &&
-        setContext({ error: caught instanceof Error ? caught.message : String(caught) }),
-    );
-    return () => {
-      disposed = true;
-      held?.[Symbol.dispose]();
-    };
-  }, [api, orgId]);
-  const live = useLiveState<unknown>(context.stub, {
-    key: "organization",
-    // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- the hook's own option name (iterate/next/react `useLiveState`)
-    door: async () =>
-      Seed.parse(await context.stub!.invoke("itx.facets.get('organization').liveSnapshot()")),
-  });
+  const context = useContextStub(() => api.organizations.get(orgId), [api, orgId]);
+  const live = useFacetLiveState(context.stub, "organization");
   useEffect(() => {
     report(orgId, {
       value: live.value,

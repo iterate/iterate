@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
 // server bundle.
 const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
@@ -142,6 +144,25 @@ function withPosthogClient(action: (client: import("posthog-js").PostHog) => voi
 /** Synchronize identity and groups without recording a navigation. */
 export function syncPosthogContext(input: PosthogContext | null) {
   withPosthogClient((client) => applyPosthogContext(client, input));
+}
+
+const NO_GROUPS: PosthogGroup[] = [];
+
+/** PostHog: the person is the platform user id — the same person in every app. `groups` re-sync
+ *  when their identity changes, so a caller that builds them per render memoizes them. */
+export function usePosthogIdentity(
+  principal: { actor: string; email?: string },
+  groups: PosthogGroup[] = NO_GROUPS,
+) {
+  useEffect(() => {
+    syncPosthogContext({
+      person: {
+        distinctId: principal.actor,
+        properties: principal.email ? { email: principal.email } : {},
+      },
+      groups,
+    });
+  }, [principal.actor, principal.email, groups]);
 }
 
 /** Apply identity/groups, then capture the resolved TanStack location. */

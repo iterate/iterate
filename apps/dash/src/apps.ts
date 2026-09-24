@@ -15,7 +15,7 @@ export const APPS = [
   },
   {
     name: "Voice",
-    url: "https://voice.iterate.workers.dev",
+    url: "https://voice.iterate.com",
     blurb: "A phone in the browser: press, talk to a project's voice agent.",
   },
 ] as const;

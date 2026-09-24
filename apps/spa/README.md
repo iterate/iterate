@@ -16,8 +16,8 @@ capnweb comes from a CDN through a native import map (`@iterate-com/capnweb`). T
 token hourly, and the socket is closed by the platform at the grant's expiry or revocation.
 
 Run locally: `pnpm --filter @iterate-com/spa dev` serves the files at http://localhost:8799; open
-`http://localhost:8799/?issuer=http://localhost:8797` against a local OS (`pnpm --dir ../os dev -- --port 8797`).
-Deploy: `pnpm --filter @iterate-com/spa run-script deploy --env prd` → https://iterate-spa.iterate.workers.dev, which
+`http://localhost:8799/?issuer=http://localhost:8788` against a local OS (`pnpm --dir ../os dev`).
+Deploy: `pnpm --dir apps/spa run deploy --env prd` → https://iterate-spa.iterate.workers.dev, which
 talks to https://os.iterate.com by default.
 
 Production deploys automatically on main via `.depot/workflows/deploy-spa.yml`, including changes

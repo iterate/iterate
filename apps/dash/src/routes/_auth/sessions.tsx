@@ -2,14 +2,13 @@
 // tokens), each endable on its own, and the one place a personal access token is minted: a name and
 // the projects it may reach → `api.grants.mint` → the token, shown ONCE (it is a finite provider
 // access token, never stored readable). The list is one page of `grants.list(cursor)` — the route's
-// loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it. Ported
-// from apps/os's console page: every string, role and test id is the same.
+// loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Badge } from "@iterate-com/ui/components/badge";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
   CardContent,
@@ -21,7 +20,6 @@ import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
-import { cn } from "@iterate-com/ui/lib/utils";
 import {
   Table,
   TableBody,
@@ -30,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { AllowAccount } from "../../components/allow-account.tsx";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: z.object({ cursor: z.string().optional().catch(undefined) }),
@@ -42,33 +41,6 @@ export const Route = createFileRoute("/_auth/sessions")({
   head: () => ({ meta: [{ title: "Sessions · Dash" }] }),
   component: SessionsPage,
 });
-
-/** The dash asked for `account` and the person unticked it: `/.auth/login` with the scopes asked
- *  for again re-consents (`/.auth/login` bounces a session that already holds them). */
-function AllowAccount() {
-  const stepUp = `/.auth/login?${new URLSearchParams({
-    next: "/sessions",
-    scope: "iterate account organizations:write",
-  })}`;
-  return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
-      <Card>
-        <CardHeader>
-          <CardTitle>Account permission</CardTitle>
-          <CardDescription>
-            This session may not manage your sessions and personal access tokens.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <a href={stepUp} className={cn(buttonVariants({ variant: "outline" }))}>
-            Allow the dash to manage them
-          </a>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
 
 /** A personal access token as the form just minted it — held only in this page's state, shown
  *  once; a reload forgets it, as the server already has. */
@@ -88,7 +60,15 @@ function SessionsPage() {
   // Ending THIS browser's grant is a sign-out: the app's own logout clears the session and its
   // cookie too (a bare redirect to `/` would bounce a still-cached token back into /projects).
   const logout = useRef<HTMLFormElement>(null);
-  if (!data) return <AllowAccount />;
+  if (!data)
+    return (
+      <AllowAccount
+        title="Sessions"
+        next="/sessions"
+        description="This session may not manage your sessions and personal access tokens."
+        action="Allow the dash to manage them"
+      />
+    );
   const { items, cursor: nextCursor, projects, canMintToken } = data;
   const selectedProjectIds = projects
     .filter((project) => !excludedProjectIds.has(project.id))

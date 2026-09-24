@@ -4,11 +4,11 @@
 // the tree's (components/organization-tree.tsx), and an organization the tree does not hold is not
 // found. A sibling of the settings route, not its child (the `_` in the file name): the settings
 // page renders no outlet.
-import { useEffect, useState } from "react";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
-import { ContextActivity, type ActivityItx } from "../../../components/context-activity.tsx";
+import { ContextActivity } from "../../../components/context-activity.tsx";
 import { useOrganizationTreeEntry } from "../../../components/organization-tree.tsx";
+import { useContextStub } from "../../../lib/context-stub.ts";
 
 export const Route = createFileRoute("/_auth/organizations/$orgId_/activity")({
   // the view's every choice — mode, filter, the inspected event, the open sheet — is this URL
@@ -22,26 +22,8 @@ function OrganizationActivity() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const { org, missing } = useOrganizationTreeEntry(orgId);
-  const [context, setContext] = useState<ActivityItx>();
-  useEffect(() => {
-    let disposed = false;
-    let held: (ActivityItx & Partial<Disposable>) | undefined;
-    api.organizations.get(orgId).then(
-      (stub) => {
-        // the org's context stub has the itx surface the activity view reads (log, tables, invoke)
-        held = stub as unknown as ActivityItx & Partial<Disposable>;
-        if (disposed) held[Symbol.dispose]?.();
-        else setContext(() => held);
-      },
-      () => undefined,
-    );
-    return () => {
-      // another organization, or gone: release the stub and show nothing until the next one lands
-      disposed = true;
-      held?.[Symbol.dispose]?.();
-      setContext(undefined);
-    };
-  }, [api, orgId]);
+  // another organization: the last one's stub is released and nothing shows until the next lands
+  const context = useContextStub(() => api.organizations.get(orgId), [api, orgId]);
   if (missing) throw notFound();
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 md:p-8">
@@ -61,7 +43,7 @@ function OrganizationActivity() {
         onStateChange={(patch) =>
           void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true })
         }
-        itx={context}
+        itx={context.stub}
         title={<span className="font-mono text-xs">/organizations/{orgId}</span>}
         ensureProcessor="organization"
       />

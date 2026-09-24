@@ -30,7 +30,7 @@ function Root() {
         <HeadContent />
       </head>
       <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
-        {/* light only, like every os-next app: no theme picker, no system theme */}
+        {/* light only, like every client app: no theme picker, no system theme */}
         <AppProviders config={{}} devtools={null} forcedTheme="light">
           <Outlet />
         </AppProviders>

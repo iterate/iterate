@@ -1,4 +1,4 @@
-# Config repository templates for os-next
+# Config repository templates
 
 Project creation copies a template's files into a new `/repos/config` repository. The project owns
 that copy: later template changes never overwrite it. The public GitHub reference parser and

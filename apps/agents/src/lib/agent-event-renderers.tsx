@@ -6,22 +6,15 @@ import type {
   EventInspectors,
   EventRenderers,
 } from "@iterate-com/ui/components/context-view/types";
+import { mono, record, str } from "@iterate-com/ui/components/context-view/renderer-helpers";
 
-const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
 const num = (value: unknown) => (typeof value === "number" ? String(value) : "?");
-const record = (value: unknown): Record<string, unknown> =>
-  Object.prototype.toString.call(value) === "[object Object]"
-    ? (value as Record<string, unknown>) // explained: the toString brand is the plain-object check
-    : {};
 /** The first line of a text, cut for a row. */
 const firstLine = (text: string, max = 160) => {
   const line = text.split("\n")[0] || "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-const mono = (text: string) => (
-  <span className="font-mono text-xs text-muted-foreground">{text}</span>
-);
 /** The role a context item was added as — the model's conversation has four. */
 const role = (name: string) => (
   <>

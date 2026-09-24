@@ -1,6 +1,3 @@
-dist/
-node_modules/
-.wrangler/
 public/firmware/
 firmware/.build/
 public/voice-install.json

@@ -75,7 +75,6 @@ function CallPage() {
       account={{ email: info.principal.email || info.principal.actor }}
       locationKey={href}
     >
-      {/* the loader sends a sign-in the project is missing from off to sign in again */}
       {voice.installed ? (
         <Phone key={project.id} project={project.id} />
       ) : (
@@ -270,7 +269,7 @@ function Phone({ project }: { project: string }) {
           </ol>
           <ul className="flex flex-col gap-1 font-mono text-xs break-words text-muted-foreground">
             {facts.map((fact) => (
-              <li key={fact.at}>{fact.text}</li>
+              <li key={fact.id}>{fact.text}</li>
             ))}
           </ul>
         </section>

@@ -1,18 +1,9 @@
 // The platform's own events, as sentences — what every context's log carries whatever the app:
 // the stream's lifecycle, its subscriptions, live state, the context's script runs. The view lays
 // an app's renderers over these (the app's win), so a page never shows `stream/woken {"incarnation"…}`.
+import { mono, record, str } from "./renderer-helpers.tsx";
 import type { EventInspectors, EventRenderers } from "./types.tsx";
 
-const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
-const record = (value: unknown): Record<string, unknown> =>
-  Object.prototype.toString.call(value) === "[object Object]"
-    ? (value as Record<string, unknown>) // explained: the toString brand is the plain-object check
-    : {};
-
-/** A muted mono span for an id, a path or a name inside a sentence. */
-const mono = (text: string) => (
-  <span className="font-mono text-xs text-muted-foreground">{text}</span>
-);
 /** The platform's housekeeping reads quieter than what people and apps did. */
 const quiet = (text: string) => <span className="text-muted-foreground">{text}</span>;
 

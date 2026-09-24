@@ -177,7 +177,7 @@ export const osEnvs: Record<string, OsEnv> = {
 };
 /** apps/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
- *  platform at os.iterate.com, on the one custom domain among the apps. */
+ *  platform at os.iterate.com, on a custom domain (dash.iterate.com). */
 export const dashEnvs = {
   // THE PARENT of dash's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.

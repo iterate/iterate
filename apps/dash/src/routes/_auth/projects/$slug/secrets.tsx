@@ -7,8 +7,11 @@
 // fields the placeholder's `{ field }` picks) and the origins the value may be sent to. Update is
 // the same sheet on an existing row: the name locked, the pin pre-filled, the value pasted again —
 // the current one is never shown, and a pin only ever enters together with the value it guards (the
-// platform has no verb that changes a pin alone). The list is the route's loader; a set or a delete
-// invalidates the router, which reloads it.
+// platform has no verb that changes a pin alone). An agent's collection link
+// (`?collect=1&project&platform&path&urls&description&agent`, minted by `itx.secrets.collectFromUser`
+// in apps/os/src/context/built-ins.ts) opens the same sheet only when its project and platform are
+// this page's, with the path and origins locked; once the secret is set, the requesting agent is
+// messaged. The list is the route's loader; a set or a delete invalidates the router, which reloads it.
 import { useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
@@ -70,9 +73,12 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   component: ProjectSecrets,
 });
 
-/** The name's grammar (os-next secrets.ts `assertSecretPath`): what `getSecret("/secrets/<name>")`
- *  can spell. The input's `pattern`, so the browser says so before the platform has to. */
-const SECRET_NAME_PATTERN = "[a-zA-Z0-9._\\-]+";
+/** The name's grammar, mirroring `SECRET_NAME` in apps/os/src/secrets.ts: `[a-zA-Z0-9._-]+`, never
+ *  `.` or `..` — what `getSecret("/secrets/<name>")` can spell. Its source is the input's `pattern`,
+ *  so the browser says so before the platform has to. The hyphen is escaped because browsers
+ *  compile `pattern` with the `v` flag, where a bare `-` in a class is invalid and silently disables
+ *  the check (https://html.spec.whatwg.org/multipage/input.html#the-pattern-attribute). */
+const SECRET_NAME = /^(?!\.\.?$)[a-zA-Z0-9_\-.]+$/;
 const SECRETS_PREFIX = "/secrets/";
 
 function ProjectSecrets() {
@@ -90,28 +96,27 @@ function ProjectSecrets() {
   const closeSheet = () => navigate({ search: {}, replace: true });
   const collectionUrls = (() => {
     if (!search.urls) return null;
-    try {
-      const parsed = z.array(z.string().url()).safeParse(search.urls);
-      if (!parsed.success || parsed.data.length === 0) return null;
-      const origins = parsed.data.map((value) => new URL(value));
-      if (
-        origins.some(
-          (url) =>
-            !["http:", "https:"].includes(url.protocol) || Boolean(url.username || url.password),
-        )
+    const parsed = z.array(z.string().url()).safeParse(search.urls);
+    if (!parsed.success || parsed.data.length === 0) return null;
+    const origins = parsed.data.map((value) => new URL(value));
+    if (
+      origins.some(
+        (url) =>
+          !["http:", "https:"].includes(url.protocol) || Boolean(url.username || url.password),
       )
-        return null;
-      return [...new Set(origins.map((url) => url.origin))];
-    } catch {
+    )
       return null;
-    }
+    return [...new Set(origins.map((url) => url.origin))];
   })();
   const collecting = search.collect === 1;
   const collectionTargetMatches =
     collecting && search.project === project.id && search.platform === info.platformOrigin;
   const collectionIsValid =
     collectionTargetMatches &&
-    Boolean(search.path && /^\/secrets\/[a-zA-Z0-9._-]+$/.test(search.path)) &&
+    Boolean(
+      search.path?.startsWith(SECRETS_PREFIX) &&
+      SECRET_NAME.test(search.path.slice(SECRETS_PREFIX.length)),
+    ) &&
     Boolean(collectionUrls) &&
     (!search.agent || search.agent.startsWith("/agents/"));
   /** The row `?update=<name>` names — none when the name is not (or no longer) a secret. */
@@ -280,15 +285,12 @@ function ProjectSecrets() {
             projectId={project.id}
             secrets={secrets}
             initialName={
-              collecting && collectionIsValid
-                ? search.path!.slice(SECRETS_PREFIX.length)
-                : search.update || ""
+              collectionIsValid ? search.path!.slice(SECRETS_PREFIX.length) : search.update || ""
             }
             initialUrls={collectionIsValid ? collectionUrls!.join(" ") : undefined}
             description={collectionIsValid ? search.description : undefined}
             requestingAgent={collectionIsValid ? search.agent : undefined}
             collecting={collectionIsValid}
-            collectionTargetMatches={collectionTargetMatches}
             expectedPlatformOrigin={search.platform}
             collectionTarget={
               collectionIsValid
@@ -323,7 +325,6 @@ function SecretForm({
   description,
   requestingAgent,
   collecting,
-  collectionTargetMatches,
   expectedPlatformOrigin,
   collectionTarget,
   updating,
@@ -340,7 +341,6 @@ function SecretForm({
   description?: string;
   requestingAgent?: string;
   collecting: boolean;
-  collectionTargetMatches: boolean;
   expectedPlatformOrigin?: string;
   collectionTarget?: string;
   updating: SecretCatalogEntry | null;
@@ -361,10 +361,6 @@ function SecretForm({
   const setSecret = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
-    if (collecting && !collectionTargetMatches) {
-      setError("This collection link is for a different Iterate instance or project.");
-      return;
-    }
     // the platform pins ORIGINS, so each entry must be a whole URL — said here, where it was typed
     const notAUrl = origins.find((origin) => !URL.canParse(origin));
     if (notAUrl) {
@@ -425,7 +421,7 @@ function SecretForm({
               id="secret-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              pattern={SECRET_NAME_PATTERN}
+              pattern={SECRET_NAME.source}
               title="Letters, digits, dots, underscores and dashes"
               placeholder="stripe"
               autoComplete="off"

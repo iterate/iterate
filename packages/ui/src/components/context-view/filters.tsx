@@ -1,5 +1,6 @@
 // Filtering the log, as pure functions: by type (the set left ticked), by a text query over the
 // type and the payload's JSON, by the actor who appended. Plus the two short forms every row uses.
+import { isRecord } from "./renderer-helpers.tsx";
 import type { ContextViewEvent } from "./types.tsx";
 
 export type ContextViewFilter = {
@@ -53,7 +54,7 @@ export function payloadSummary(payload: unknown, max = 120): string {
   if (payload === undefined) return "";
   if (Array.isArray(payload))
     return `${String(payload.length)} item${payload.length === 1 ? "" : "s"}`;
-  if (!isPlainObject(payload)) return valueGlance(payload);
+  if (!isRecord(payload)) return valueGlance(payload);
   const parts: string[] = [];
   for (const [key, value] of Object.entries(payload)) {
     if (parts.length === 5) {
@@ -66,9 +67,6 @@ export function payloadSummary(payload: unknown, max = 120): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  Object.prototype.toString.call(value) === "[object Object]";
-
 /** One value inside the line: a string's first line, an array's length, an object's keys, else JSON. */
 function valueGlance(value: unknown): string {
   if (typeof value === "string") {
@@ -76,7 +74,7 @@ function valueGlance(value: unknown): string {
     return line.length > 48 ? `${line.slice(0, 47)}…` : line;
   }
   if (Array.isArray(value)) return `[${String(value.length)}]`;
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     const keys = Object.keys(value);
     return `{${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", …" : ""}}`;
   }

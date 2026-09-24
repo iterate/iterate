@@ -1,4 +1,1 @@
-node_modules/
-dist/
-.wrangler/
 public/voice-install.json
