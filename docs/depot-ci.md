@@ -248,9 +248,9 @@ monitor) are in [Pull requests](pull-requests.md#agent-wait-loops-gate-on-the-he
 Never open a pull request only to run CI, and never run CI on main's commit.
 Push a scratch branch and run against its head. `depot ci run` runs any
 workflow file, whatever its `on:` (Test has no `workflow_dispatch`).
-`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. There
-is no PR, so nothing writes a PR body, and every check lands on the scratch
-commit.
+`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Every
+check lands on the scratch commit, and no PR body changes unless a Preview OS
+dispatch names a PR.
 
 Auth: `depot login`, or the organization token from Doppler:
 
@@ -426,7 +426,10 @@ dispatch of one suite from a PR's branch marks the PR's other suite skipped,
 green, on the PR's head: dispatch a PR's suite alone from a scratch branch cut
 from main ([Run CI without a PR](#run-ci-without-a-pr)), which tests that PR's
 tree all the same, and from the PR's branch run `test` or `deploy`. Not from
-`--ref main`: that posts the suite's result on main's head.
+`--ref main`: that posts the suite's result on main's head. Such a dispatch
+(`f6qx3gjvlq`, PR #3090's specs) put its checks on the scratch commit and none
+on the PR's head. It still updated the suite's line in the PR body and posted
+the CI trace and Playwright report statuses on the PR's head.
 A preview by name may be redeployed under the dispatch by its own workflow
 (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview
 specs` do the same ([apps/os/README.md](../apps/os/README.md)).
