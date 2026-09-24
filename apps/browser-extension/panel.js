@@ -32,7 +32,7 @@ async function clientIdFor(issuer, metadata) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      client_name: "Iterate Chrome extension",
+      client_name: "iterate Chrome extension",
       client_uri: "https://iterate.com",
       logo_uri: "https://os.iterate.com/client-logos/browser-extension.svg",
       redirect_uris: [redirectUri()],

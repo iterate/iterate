@@ -27,7 +27,7 @@ export async function startIssuerSession(
     env.BROWSER_SESSION,
     {
       origin: platformOrigin,
-      client: { name: "Iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
+      client: { name: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
       issuer: platformOrigin,
       resource: api,
       scopes: ["iterate", "account", "organizations:write"],
@@ -41,7 +41,7 @@ export async function startIssuerSession(
     userId: user.id,
     scope: authorization.scope,
     metadata: clientDisplay(
-      { clientName: "Iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
+      { clientName: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
       authorization.clientId,
     ),
     revokeExistingGrants: false,

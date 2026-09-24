@@ -20,9 +20,14 @@
 // it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept.
 
-import { compileRawAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
+import { compileRawAppConfigFromEnv, redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
-import type { IngressRouting } from "iterate/next/project-ingress";
+import {
+  customProjectHostOf,
+  projectAddressOf,
+  type IngressRouting,
+  type ProjectAddress,
+} from "iterate/next/project-ingress";
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
@@ -32,12 +37,8 @@ const httpOrigin = z
   .string()
   .trim()
   .refine((value) => {
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      return false;
-    }
+    if (!URL.canParse(value)) return false;
+    const url = new URL(value);
     return url.origin === value && (url.protocol === "https:" || url.protocol === "http:");
   }, "expected an HTTP(S) origin without a path");
 
@@ -184,6 +185,7 @@ function fieldNameOf(path: readonly (string | number | symbol)[]): string {
 function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): void {
   const object = z.record(z.string(), z.unknown()).safeParse(raw);
   if (!object.success) return;
+  // unwrap() and shape hand back loosely typed schemas; the walk checks each with instanceof
   let current: z.ZodTypeAny = schema;
   while (
     current instanceof z.ZodDefault ||
@@ -328,4 +330,23 @@ export function platformAddressesOf(env: AppConfigEnv, request: Request): Platfo
   };
 }
 
-export type { Redacted };
+/** The project `url` is a host of: under the ingress routing (iterate/next/project-ingress:
+ *  subdomains — a host under the wildcard; paths — `/<project>[/<app>]` on the platform origin), or
+ *  one of the deployment's custom hostnames (a project's apex). The platform and MCP origins are the
+ *  platform's own even when their zone also has a project wildcard. What worker.ts admits a project
+ *  host with, and what consent.ts binds a project's CIMD client to. */
+export function projectHostOf(
+  config: AppConfig,
+  url: URL,
+  platformOrigin: string,
+): ProjectAddress | null {
+  const routed = projectAddressOf(config.urls.ingressRouting, url, platformOrigin);
+  if (routed) return routed;
+  if (url.origin === platformOrigin || url.origin === config.urls.mcp) return null;
+  const custom = customProjectHostOf(
+    url.hostname,
+    config.urls.temporaryCustomHostnames,
+    config.urls.projectWildcard,
+  );
+  return custom && { ...custom, basePath: "" };
+}

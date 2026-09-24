@@ -149,8 +149,8 @@ function appClients(): { notes: Client; dash: Client } {
     host: new URL(url).host,
   });
   return {
-    notes: client(process.env.NOTES_BASE_URL!, "Iterate Notes"),
-    dash: client(process.env.DASH_BASE_URL!, "Iterate Dash"),
+    notes: client(process.env.NOTES_BASE_URL!, "iterate Notes"),
+    dash: client(process.env.DASH_BASE_URL!, "iterate Dash"),
   };
 }
 

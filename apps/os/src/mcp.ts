@@ -1,7 +1,8 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
-import { errorCode } from "iterate/next/lib";
+import { codedError, errorCode } from "iterate/next/lib";
 import { platformAddressesOf } from "./app-config.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./env.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
@@ -23,9 +24,19 @@ async function projectOfToolCall(
       throw new Error(
         `project: got a context name ${JSON.stringify(requested)} — pass the project and cd(path) in the expression`,
       );
+    // the same refusal as projects.get (session.ts): the admin secret reaches every project, and
+    // the global namespace is none
+    if (projectId === GLOBAL_PROJECT_ID)
+      throw codedError(
+        "FORBIDDEN",
+        `project ${JSON.stringify(requested)}: the deployment-global namespace is no project`,
+      );
     const id = await controlPlane.projectIdOf(projectId);
     if (!(await controlPlane.reachesProject(reach, id)))
-      throw new Error(`project ${JSON.stringify(requested)} is outside this token's grant`);
+      throw codedError(
+        "FORBIDDEN",
+        `project ${JSON.stringify(requested)} is outside this token's grant`,
+      );
     return id;
   }
   if (reach === "every") throw new Error("the admin secret reaches every project — pass project");
@@ -120,6 +131,8 @@ async function buildServer(
       ),
     },
     async (raw: unknown) => {
+      // fromJsonSchema's validator has checked `raw` against the schema above: `script` required,
+      // nothing else but `project`
       const toolArguments = raw as { project?: string; script: string };
       try {
         const projectId = await projectOfToolCall(

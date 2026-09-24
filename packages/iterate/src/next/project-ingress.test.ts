@@ -268,7 +268,35 @@ describe("customProjectHostOf", () => {
       becomes: null,
       why: "the platform's own origin is not a project",
     },
+    {
+      hostname: "iterate.iterate.app",
+      becomes: null,
+      why: "the ingress's own shapes are not custom hostnames",
+    },
   ])("$hostname → $why", ({ hostname, becomes }) => {
     expect(customProjectHostOf(hostname, hostnames)).toEqual(becomes);
+  });
+
+  const wildcard = {
+    hostname: "iterate.com",
+    project: "iterate",
+    excludedHostnames: [
+      "os.iterate.com",
+      "mcp.iterate.com",
+      "dash.iterate.com",
+      "k.iterate.com",
+      "voice.iterate.com",
+      "install.iterate.com",
+    ],
+  };
+  test.each([
+    { hostname: "www.iterate.com", project: "iterate" },
+    { hostname: "Blog.Iterate.com.", project: "iterate" },
+    { hostname: "iterate.com", project: "iterate" },
+    { hostname: "deep.www.iterate.com", project: null },
+    { hostname: "www.iterate.app", project: null },
+    ...wildcard.excludedHostnames.map((hostname) => ({ hostname, project: null })),
+  ])("project wildcard $hostname → $project", ({ hostname, project }) => {
+    expect(customProjectHostOf(hostname, hostnames, wildcard)?.project ?? null).toBe(project);
   });
 });

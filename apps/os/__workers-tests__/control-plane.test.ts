@@ -409,7 +409,7 @@ test("password sign-in: the email and the password make an ordinary user session
   const bindings = env as unknown as Env;
   // no mailbox binding: the deployment offers no email sign-in at all (the password stays)
   await expect(
-    startLoginCode({ ...bindings, EMAIL: undefined }, "someone@directory.test"),
+    startLoginCode({ ...bindings, EMAIL: undefined }, "someone@directory.test", null),
   ).rejects.toThrow();
   // The page renders the offered sign-ins in its initial HTML.
   const page = await SELF.fetch(`${origin}/login?next=/sessions`);

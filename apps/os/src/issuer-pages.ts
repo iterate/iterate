@@ -20,6 +20,8 @@ const publicFiles = new Set([
   "/iterate-logo.svg",
   "/google-logo.svg",
   "/cloudflare-logo.svg",
+  // the browser extension's OAuth client logo_uri (apps/browser-extension/panel.js)
+  "/client-logos/browser-extension.svg",
   // the stylesheet apps' own sign-in pages link from their issuer (iterate/next/app-server)
   "/issuer.css",
   // the prompt an agent follows to deploy and connect a platform of the person's own

@@ -14,3 +14,13 @@ const LoginSearch = z
   .catch({});
 
 export const loginSearchOf = (search: unknown) => LoginSearch.parse(search);
+
+/** Sign in first, and come back to `next`. */
+export function signInHref(next: string) {
+  return `/login?${new URLSearchParams({ next })}`;
+}
+
+/** Sign out, then sign in as someone else and come back to `next`. */
+export function switchAccountHref(next: string) {
+  return `/.auth/logout?${new URLSearchParams({ next: signInHref(next) })}`;
+}

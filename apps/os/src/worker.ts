@@ -7,7 +7,6 @@
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { forwardIssues } from "iterate/next/lib";
-import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
@@ -16,7 +15,12 @@ import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
-import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
+import {
+  appConfigOf,
+  platformAddressesOf,
+  projectHostOf,
+  sessionSigningSecretOf,
+} from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
@@ -31,7 +35,6 @@ import { authorizationForToken, recordGrantUse } from "./oauth.ts";
  *  the edge refuses past a few. A fresh Request starts at zero — an app looping its own project
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
-const PROJECT_HOST_MAX_HOPS = 4;
 
 /** THE BASE PATH an app is served under (paths ingress: `/projects/<project>/<app>`), alongside
  *  `x-iterate-app`: the edge strips it from the URL the app sees and says it here, so
@@ -132,12 +135,12 @@ export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     // THE HOP COUNT — what the app forwards: a request carrying the count it was handed re-enters
-    // here with it, each pass adds one, a few is a loop; a fresh Request carries none and starts at
-    // zero. The edge writes digits; anything else (an app spelling "NaN" to defeat the budget —
-    // `NaN > max` is never true) is over budget by definition.
+    // here with it, each pass adds one, more than four is a loop; a fresh Request carries none and
+    // starts at zero. The edge writes digits; anything else (an app spelling "NaN" to defeat the
+    // budget — `NaN > 4` is never true) is over budget by definition.
     const hopsHeader = request.headers.get(PROJECT_HOST_HOPS_HEADER) ?? "0";
     const hops = /^\d{1,3}$/.test(hopsHeader) ? Number(hopsHeader) + 1 : Infinity;
-    if (hops > PROJECT_HOST_MAX_HOPS)
+    if (hops > 4)
       return new Response(
         `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app fetching its own host)\n`,
         { status: 508 },
@@ -169,21 +172,7 @@ export default {
       platformOrigin,
     };
     const routing = appConfig.urls.ingressRouting;
-    // A project under the ingress routing (iterate/next/project-ingress: subdomains — a host under
-    // the wildcard; paths — `/<project>[/<app>]` on the platform origin), or one of the deployment's
-    // custom hostnames (a project's apex).
-    // The issuer has a more specific route on the same Worker; keep it on the control plane.
-    const customHost =
-      url.origin === platformOrigin
-        ? null
-        : customProjectHostOf(
-            url.hostname,
-            appConfig.urls.temporaryCustomHostnames,
-            appConfig.urls.projectWildcard,
-          );
-    const projectHost =
-      projectAddressOf(routing, url, platformOrigin) ??
-      (customHost && { ...customHost, basePath: "" });
+    const projectHost = projectHostOf(appConfig, url, platformOrigin);
     if (projectHost) {
       // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
       // touch, so a hostname whose project the control plane does not know must never reach one —

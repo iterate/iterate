@@ -68,7 +68,7 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
     )
   )
     throw new AuthorizationError("invalid_target", {
-      description: "Choose an advertised Iterate API resource.",
+      description: "Choose an advertised iterate API resource.",
       redirectUri: auth.redirectUri,
       state: auth.state,
       issuer: auth.issuer,

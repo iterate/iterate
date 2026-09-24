@@ -37,7 +37,7 @@ export function browserClient(request: Request, env: Env, ctx: ExecutionContext)
     api: (request) => oauthResponse(request, env, ctx),
     ...(new URL(request.url).origin === platformOrigin && {
       loginPage: "/login",
-      client: { name: "Iterate", logoUri: "/iterate-logo.svg" },
+      client: { name: "iterate", logoUri: "/iterate-logo.svg" },
     }),
   });
 }
