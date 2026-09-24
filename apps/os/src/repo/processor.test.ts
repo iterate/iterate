@@ -2,7 +2,7 @@
 // `{ events → state }` rows (stream/test-support.ts `reduceProcessor`). The sagas — `itx.repos.create`
 // landing the request, the processor provisioning and landing the certificate on `/` and on the
 // path; `itx.repos.delete` the same in reverse — are pinned end to end in e2e/repos.e2e.test.ts; the
-// path → Artifacts-name mapping lives with the physical root (context/repos.test.ts).
+// path → Artifacts-name mapping lives with the physical root (context/cf-artifacts.test.ts).
 
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";

@@ -248,7 +248,7 @@ export type CoreState = {
    *  anywhere, the bare `itx` — one row denies all; or a stored shorter row with a target: `itx.tool`
    *  behind the parent link) and DELETES otherwise; `null` with `ifTarget` is a handle's
    *  compare-and-set DELETE; a target equal to the implicit row it would restate deletes (the
-   *  default said as much), the same spelling elsewhere is a grant and is stored (rule 8). */
+   *  default said as much), the same spelling elsewhere is a grant and is stored. */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
@@ -404,8 +404,8 @@ export function reduceCoreEvent(
       const matchPrefix = parseItxExpressionPrefix(payload.match as ItxExpressionInput);
       const matchString = print(matchPrefix);
       const existing = state.itxExpressionRewriteRules[matchString];
-      // What has an implicit row HERE (rule 3) decides what a null and a platform-equivalent target
-      // mean (rule 8). The event carries the path.
+      // What has an implicit row HERE (`implicitRootsAt`) decides what a null and a platform-equivalent
+      // target mean. The event carries the path.
       const implicitRoots = implicitRootsAt(state.projectId || "", event.path);
       // Every change to the rules table re-derives the subscriptions' hosting markers through it.
       const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
@@ -448,7 +448,7 @@ export function reduceCoreEvent(
           return undefined;
         return withRule({ match: matchPrefix, target: null, ...description });
       }
-      const target = normalizedItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (rule 7); stored as the parsed form
+      const target = normalizedItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (`fillItxExpressionHoles`); stored as the parsed form
       // A target that restates THE implicit row of its match (`itx.kv ⇒ itx.builtins.kv` at the owner
       // root, `itx ⇒ itx.builtins` there, `itx.append ⇒ itx.builtins.append` anywhere) is "back to
       // the default": the row is deleted, never stored, so the table never carries a row that only

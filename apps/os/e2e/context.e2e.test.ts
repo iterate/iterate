@@ -33,7 +33,7 @@ subdomainsOnly(
     // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host. Under the base there
     // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
     // platform origin on a name the platform never chose) and no Durable Object is ever named or
-    // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/iterate-context.test.ts.
+    // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/context/paths.test.ts.
     const answer = await fetchProjectHost(`site--prj_evil.${ingressHostname()}`, "/w?repo=x");
     expect(answer.status, answer.text).toBe(421);
     expect(answer.text).toContain("not a project host");
@@ -227,8 +227,9 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
 });
 
-// PINS context/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
-// expression.test.ts "hides reserved path segments from function-backed path proxies").
+// PINS iterate/next/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// packages/iterate/src/next/expression.test.ts "hides reserved path segments from the path proxies
+// the hop hands out").
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
 // a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through

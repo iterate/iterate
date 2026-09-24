@@ -1,4 +1,4 @@
-// repos.ts — `itx.cfArtifacts`: Cloudflare Artifacts, project-scoped, addressed BY THE REPO'S PATH — a
+// context/cf-artifacts.ts — `itx.cfArtifacts`: Cloudflare Artifacts, project-scoped, addressed BY THE REPO'S PATH — a
 // PROXY to the binding and nothing more: `create` / `get` / `list` / `delete` a repo, and the two facts
 // git-over-HTTPS needs from it, a token (`get(path).createToken`) and the remote URL (`get(path).remote()`,
 // the binding's own — it knows the account and namespace; nothing here spells them).
@@ -13,8 +13,8 @@
 import { RpcTarget } from "capnweb";
 
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
- *  typed minimally here (not in `@cloudflare/workers-types` yet; reconcile against `wrangler types`
- *  when the namespace is provisioned). `create` returns the repo's initial git credential; `get`
+ *  typed minimally here: only what this proxy calls, although `@cloudflare/workers-types` now
+ *  declares the full `Artifacts` / `ArtifactsRepo`. `create` returns the repo's initial git credential; `get`
  *  returns a repo HANDLE (mint a credential with `createToken`); `list` is UNFILTERED. */
 export interface ArtifactsNamespace {
   create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
@@ -154,7 +154,7 @@ export interface ArtifactsScope {
   delete(path: string): Promise<boolean>;
 }
 
-/** Pure and namespace-injected: unit-tests alone (repos.test.ts). Every `path` is a repo's context
+/** Pure and namespace-injected: unit-tests alone (cf-artifacts.test.ts). Every `path` is a repo's context
  *  path (`/repos/config`); `boundName` is the one step from it to the bound Artifacts name. */
 export function projectScopedArtifacts(input: {
   namespace: ArtifactsNamespace;

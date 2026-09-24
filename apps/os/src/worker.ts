@@ -24,10 +24,8 @@ import {
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec, ITX_PLATFORM_ORIGIN_HEADER } from "./iterate-context.ts";
-import { resourceScope } from "./context/paths.ts";
-import type { SessionInput } from "./session.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
@@ -68,7 +66,7 @@ function sandboxed(response: Response): Response {
   return answer;
 }
 
-/** WHO a project host's request is, as the lane into a context reads it: `principal` is the
+/** WHO a project host's request is, as the context DO's `fetch` reads it: `principal` is the
  *  verified stamp the context runs the call under (null: nobody) and `grant` the OAuth grant it
  *  acts through (absent for the admin secret); `platformBearer` says the `Authorization: Bearer`
  *  was the platform's own credential, which an app never sees. */
@@ -81,9 +79,9 @@ type ProjectHostIdentity = { principal: Principal | null; grant?: string; platfo
  *  (an OAuth access token, the admin secret) removed (an app's own bearer scheme passes through
  *  untouched), then the expression the host names — `itx.apps.<app>`, or the
  *  configured explicit ingress target for a host with no app label (an empty expression
- *  header selects the target stored on the root context) — the hop count and the principal's stamp. The app label the app
- *  sees (`x-iterate-app`) is not written here: the DO's fetch lane derives it from the expression,
- *  the one door every fetch-lane Request passes (iterate-context-durable-object.ts). */
+ *  header selects the target stored on the root context) — the hop count and the principal's stamp.
+ *  The app label the app sees (`x-iterate-app`) is not written here: the DO's `fetch` derives it from
+ *  the expression, on every `x-itx-expression` Request (iterate-context-durable-object.ts). */
 function projectHostRequestTo(
   request: Request,
   routing: {
@@ -146,11 +144,6 @@ export default {
         { status: 508 },
       );
 
-    // PROJECT-HOST INGRESS (the project host section below): a request on a project host IS the app
-    // it names — or, with no app label, the project's config worker — the Request riding into the
-    // DO's fetch lane with its URL, the app's own cookies and a WebSocket upgrade intact. The browser
-    // adapter's `/api` and `/.auth/*` are the app's own on a host of its own (subdomains) and the
-    // issuer's under paths, where the app shares the platform's origin.
     const appConfig = appConfigOf(env);
     const { deployId } = appConfig;
     if (appConfig.urls.mcp && url.origin === appConfig.urls.mcp) {
@@ -163,15 +156,13 @@ export default {
     // this request's own — stamped on every caller from here on, and the two resource identifiers.
     const addresses = platformAddressesOf(env, request);
     const { platformOrigin } = addresses;
-    /** What every session and every lane's identity is built from — ONE object per request. */
-    const sessionInput: SessionInput = {
-      contextNamespace: env.ITERATE_CONTEXT,
-      waitUntil: (promise) => ctx.waitUntil(promise),
-      controlPlane: new ControlPlane(env.CONTROL_PLANE),
-      appConfig,
-      platformOrigin,
-    };
+    const controlPlane = new ControlPlane(env.CONTROL_PLANE);
     const routing = appConfig.urls.ingressRouting;
+    // PROJECT-HOST INGRESS: a request on a project host IS the app it names — or, with no app label,
+    // the project's config worker — the Request riding into the context DO's `fetch` with its URL,
+    // the app's own cookies and a WebSocket upgrade intact. The browser adapter's `/api` and
+    // `/.auth/*` are the app's own on a host of its own (subdomains) and the issuer's under paths,
+    // where the app shares the platform's origin.
     const projectHost = projectHostOf(appConfig, url, platformOrigin);
     if (projectHost) {
       // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
@@ -179,7 +170,7 @@ export default {
       // else any label under the wildcard would mint durable storage from the public internet. One
       // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
       // host's label (a slug, an id would do too) to the project's id; an unknown label is 421.
-      const project = await sessionInput.controlPlane.getProject(projectHost.project);
+      const project = await controlPlane.getProject(projectHost.project);
       if (!project)
         return new Response(
           `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
@@ -200,7 +191,7 @@ export default {
         // sandboxed exactly as an app's answer does (an opaque origin, no cookie to spend).
         return routing?.type === "paths" ? sandboxed(file) : file;
       }
-      // The browser adapter's doors (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
+      // The browser adapter's endpoints (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
       // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are
       // the issuer's: an app there has no cookie sign-in of its own (it authenticates in-band).
       if (routing?.type !== "paths") {
@@ -216,10 +207,7 @@ export default {
           status: 401,
           headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
         });
-      if (
-        authorization &&
-        !(await sessionInput.controlPlane.reachesProject(authorization.reach, projectId))
-      )
+      if (authorization && !(await controlPlane.reachesProject(authorization.reach, projectId)))
         return new Response("This session cannot access this project", { status: 403 });
       if (authorization?.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do

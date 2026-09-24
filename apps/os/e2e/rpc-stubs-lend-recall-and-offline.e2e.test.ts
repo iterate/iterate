@@ -141,7 +141,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
   }
   expect(await ruleEventsAt(observer, "itx.ghosttool")).toEqual([
     { target: ["itx", "builtins", "rpcStubs", ["get", "itx.ghosttool"]] },
-    { target: null }, // the un-set: `null` with `ifTarget`, a compare-and-set delete (rule 8)
+    { target: null }, // the un-set: `null` with `ifTarget`, a compare-and-set delete (stream/core-processor.ts)
   ]);
 });
 

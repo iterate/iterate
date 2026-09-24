@@ -1,32 +1,20 @@
 // context/worker-loader.test.ts — the Worker Loader cacheKey is an AUTHORITY boundary: the
 // isolate's whole world (its env.ITX host stub, its globalOutbound) is baked in at first
 // materialization, so two callers who compose the same key SHARE an isolate. prepareConfinedWorker
-// mints the JSON array `[kind, deploy, owner, sourceVersion]` (the caller's cacheKey, else the modules'
-// content hash) WITHOUT asking the loader — `load()` is the one call that does (the last-but-one row); a facet's owner is (context name, class name), and either half may contain ":" (a
-// context path is any string; ES2022 allows `export { X as "y:Door" }`). `facetLoaderOwner`
-// length-prefixes the context so the split is unambiguous whatever either half contains. The second
+// mints the JSON array `[kind, deploy, platformOrigin, owner, sourceVersion]` (the caller's cacheKey,
+// else the modules' content hash) WITHOUT asking the loader — `load()` is the one call that does (the
+// last-but-one row). A facet's owner is the pair (context name, class name), and either half may
+// contain ":" (a context path is any string; ES2022 allows `export { X as "y:Tally" }`); as one JSON
+// element of the id, the pair is unambiguous whatever either half contains. The second
 // half pins Cloudflare's `get(id, getCode)` contract as we use it: a PRODUCER expression runs inside
 // `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
 // WORKAROUND (worker-loader.ts `loaderIdGenerations`): a producer that threw marks its id dead, the
 // next attempt produces outside the loader and loads literally under the id's next generation.
-import { expect, test, vi } from "vitest";
-
-// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
-// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
-// (no-op shells); the module's own logic runs unmodified.
-vi.mock("cloudflare:workers", () => ({
-  RpcTarget: class {},
-  DurableObject: class {},
-  WorkerEntrypoint: class {},
-  RpcStub: class {},
-  RpcPromise: class {},
-  RpcProperty: class {},
-}));
-import { DurableObjectNameCodec } from "../iterate-context.ts";
+import { expect, test } from "vitest";
+import { DurableObjectNameCodec } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   FACET_SOURCE_MAX_CHARS,
-  facetLoaderOwner,
   prepareConfinedWorker,
 } from "./worker-loader.ts";
 
@@ -61,7 +49,7 @@ const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) =
 };
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
-  // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources, and until the v4 review one isolate.
+  // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
   const { env, keys } = fakeLoaderEnv();
   const load = (main: string) =>
     loadConfined({
@@ -102,12 +90,12 @@ test("an owner and a caller's cacheKey that concatenate alike never share one Wo
 });
 
 test("two DIFFERENT facet identities never share one Worker Loader cacheKey", async () => {
-  // context "/x:y" + class "Door" vs context "/x" + class "y:Door": a naive `${context}:${class}`
-  // owner composes the IDENTICAL "prj_u.iterate/x:y:Door" — the second caller would reuse the
+  // context "/x:y" + class "Tally" vs context "/x" + class "y:Tally": a naive `${context}:${class}`
+  // owner composes the IDENTICAL "prj_u.iterate/x:y:Tally" — the second caller would reuse the
   // first's isolate, a silent cross-context authority transfer. Same shared source (identical
   // contentHash), as in prod.
   const { env, keys } = fakeLoaderEnv();
-  const modules = { "cap.js": "export default class Door {}" };
+  const modules = { "cap.js": "export default class Tally {}" };
   const load = (iterateContextName: string, className: string) =>
     loadConfined({
       env,
@@ -115,15 +103,17 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
       platformOrigin: null,
       itxEntrypoint: {} as Fetcher,
       kind: "facet",
-      owner: facetLoaderOwner(iterateContextName, className),
+      owner: [iterateContextName, className],
       source: modules,
       invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
       where: `facet "${className}"`,
     });
-  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" }), "Door");
-  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x" }), "y:Door");
+  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" }), "Tally");
+  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x" }), "y:Tally");
+  // distinct — each half is its own JSON string in the id
+  const [first, second] = keys;
   expect(keys).toHaveLength(2);
-  expect(new Set(keys).size).toBe(2); // distinct — the length-prefix makes the split unambiguous
+  expect(first).not.toBe(second);
 });
 
 test("a producer source runs INSIDE getCode — once per cold isolate, never on a warm key — and needs a cacheKey", async () => {
@@ -253,12 +243,20 @@ test("prepare resolves the identity without asking the loader; load() is the one
     platformOrigin: null,
     itxEntrypoint: {} as Fetcher,
     kind: "facet",
-    owner: facetLoaderOwner("prj_u.iterate/", "Counter"),
+    owner: ["prj_u.iterate/", "Counter"],
     source: { "cap.js": "export default class Counter {}" },
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: 'facet "counter"',
   });
   expect(keys).toEqual([]); // `FacetHost#callFacet` stores this identity before any isolate exists
+  // the stored restart marker: respelling it restarts every facet once on its next wake
+  expect(JSON.parse(prepared.loaderId)).toEqual([
+    "facet",
+    "deploy-1",
+    null,
+    ["prj_u.iterate/", "Counter"],
+    expect.stringMatching(/^[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/),
+  ]);
   prepared.load();
   expect(keys).toEqual([prepared.loaderId]);
   prepared.load();

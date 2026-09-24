@@ -29,7 +29,7 @@ type ErrorCode =
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (stream/processor.ts)
   | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
   | "STREAM_PAUSED"
-  | "INVALID_CONTEXT" // a context name / project id the codec refuses (iterate-context.ts `DurableObjectNameCodec`) — coded, so it survives the hop
+  | "INVALID_CONTEXT" // a context name / project id the codec refuses (apps/os context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind

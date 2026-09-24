@@ -11,7 +11,7 @@ import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression"
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
-// table — physical, never event-sourced. Two layers, in the order the tutorial builds them:
+// table — physical, never event-sourced. Two layers:
 //
 //   LAYER 1 — THE BORROWED RPC STUBS. Anyone with a Workers-RPC route to this DO can LEND a stub
 //   under an OPAQUE key (`lendRpcStub`); the DO keeps it BORROWED — every call on that key rides
@@ -40,7 +40,7 @@ import type { IterateContextDurableObject } from "../iterate-context-durable-obj
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
 /** What the pager upgrade's header carries: the key, and the events that NAME it — appended by the DO
- *  in the turn it accepts the pager (empty for a bare pager, the workers-lane probes). */
+ *  in the turn it accepts the pager (empty for a bare pager, the workers-project tests' probes). */
 type RpcStubPagerAttachRequest = { rpcStubKey: string; appendEvents: StreamEventInput[] };
 /** The header value: URI-encoded JSON — a header is a ByteString, a key or an event is not. */
 export const encodeRpcStubPagerAttachRequest = (request: RpcStubPagerAttachRequest): string =>
@@ -64,7 +64,7 @@ export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
  *  immediately, so 10 s is a dead relay, not a slow one. */
 const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
 
-/** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO doors: `invoke(steps)`
+/** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO methods: `invoke(steps)`
  *  walks the itx-expression steps on the client's rpc stub (a DIRECT dotted dispatch — never
  *  `.apply`), and `fetch(upgradeId, steps, request)` is the rpc-stub fetch dial
  *  (the fetch section below — dies with its WORKAROUND fence). */
@@ -121,8 +121,8 @@ export class RpcStubDirectory {
   // the second must not report the pager (and its presence) as lost twice.
   readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
-  /** The DO's append door, SYNCHRONOUS (Stream.append is): what a pager attach carries lands through
-   *  it in the turn the pager is accepted; a refusal throws the coded error. */
+  /** The DO's append, SYNCHRONOUS (Stream.append is): what a pager attach carries is committed
+   *  through it in the turn the pager is accepted; a refusal throws the coded error. */
   readonly #appendEvents: (events: StreamEventInput[]) => void;
 
   constructor(deps: {
@@ -153,7 +153,7 @@ export class RpcStubDirectory {
     }
   }
 
-  /** THE one call door behind `itx.rpcStubs.get(rpcStubKey)` — resolved calls and the delivery loop's
+  /** THE one call path behind `itx.rpcStubs.get(rpcStubKey)` — resolved calls and the delivery loop's
    *  push (an anonymous call step = the bare lent callable itself): have it? call it · else page it,
    *  then call · else RPC_STUB_OFFLINE. The stub stays borrowed afterwards — steady traffic is pure
    *  RPC — unless the call broke it (below). */
@@ -172,7 +172,7 @@ export class RpcStubDirectory {
         return await this.#rpcStubFetch.serve(borrowed, terminalFetch.steps, terminalFetch.request);
       return await borrowed.invoke(itxExpressionSteps);
     } catch (error) {
-      // A BROKEN STUB IS DROPPED, NEVER KEPT (v4 §2.7): every later call on it would fail the same
+      // A BROKEN STUB IS DROPPED, NEVER KEPT: every later call on it would fail the same
       // way until the pins' release, while its pager may already lend a live one — so the NEXT call
       // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
       // The failed call is not retried.
@@ -201,11 +201,11 @@ export class RpcStubDirectory {
   // ── LAYER 2: the pager upgrade (attach + the events that name the key) → pages → close ──
 
   /** PARTIAL FETCH (compose first in the DO's fetch): the pager upgrade (the header, above); `null` =
-   *  not this door's request. Accept, append, stamp in ONE synchronous turn, so a refused append
+   *  not a pager upgrade. Accept, append, stamp in ONE synchronous turn, so a refused append
    *  leaves no socket, no presence and no row. */
   acceptRpcStubPagerWebSocket(request: Request): Response | null {
     const header = request.headers.get(RPC_STUB_PAGER_WEBSOCKET_HEADER);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- an ABSENT header (null) means "not this door"; a present-but-empty one is malformed input that must fall through to the parse/tag below and be refused, never quietly treated as absent (the same present-vs-absent distinction the DO's fetch door keeps)
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- an ABSENT header (null) means "not this request"; a present-but-empty one is malformed input that must fall through to the parse/tag below and be refused, never quietly treated as absent (the same present-vs-absent distinction the DO's `fetch` keeps)
     if (header === null) return null;
     let attachRequest: RpcStubPagerAttachRequest;
     try {
@@ -397,7 +397,7 @@ export class RpcStubDirectory {
 // (a standing offer to lend the key back on demand); when the DO wants the client — a delivery, a
 // request/response call — it PAGES this worker, and this worker LENDS a fresh Workers-RPC leg
 // wrapping the client's capnweb stub (`lendRpcStub`). The edge OWNS the stub for the session; the DO
-// only borrows it. The DO half — the pager door, the pages, the borrowed table — is
+// only borrows it. The DO half — the pager upgrade, the pages, the borrowed table — is
 // the directory section above.
 //
 // The whole dance is behind ONE function, `lendRpcStubOverPager` (open the pager, hand back a
@@ -501,7 +501,7 @@ export async function lendRpcStubOverPager(
   const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
   // the one shared "the lend ended" reason (LentRpcStub#lendEnded says why it is shared)
   const lendEnded: { reason: string | null } = { reason: null };
-  // THE PAGER WEBSOCKET, opened through the DO's fetch door: the header is the attach request — the
+  // THE PAGER WEBSOCKET, opened through the DO's `fetch`: the header is the attach request — the
   // first dial here, every re-dial below.
   const dialPager = () =>
     durableObjectStub().fetch("https://rpc-stub-pager.internal/", {
@@ -523,7 +523,7 @@ export async function lendRpcStubOverPager(
   }
   if (response.status !== 101 || !response.webSocket) {
     // The DO refused (a paused stream, a row the reduce rejects): nothing is lent, and the refusal's
-    // CODE crosses to the caller as the same coded error the append door would have thrown.
+    // CODE crosses to the caller as the same coded error the append would have thrown.
     disposeRpcStub(sessionRpcStub);
     const refusal = (await response.json().catch(() => null)) as {
       code?: string | null;
@@ -673,15 +673,15 @@ export async function lendRpcStubOverPager(
 //   1. Some capabilities are FETCH-SHAPED: `(request: Request) => Promise<Response>`. They are
 //      ALWAYS called through a terminal `fetch` — `itx.site.fetch(request)`, never a method of
 //      any other name. `itxExpressionEndingInFetch` (below) is the one normalizer that enforces the
-//      spelling at the fetch lane; `terminalFetchOf` is the one reader of the shape a LIVE call
+//      spelling for an `x-itx-expression` fetch; `terminalFetchOf` is the one reader of the shape a LIVE call
 //      carries.
 //
 //   2. Some fetch-shaped capabilities answer with a WEBSOCKET UPGRADE (a 101 Response carrying
 //      `webSocket`). Whether a given fetch upgrades is the PROVIDER'S decision, expressed in its
 //      answer — nothing here ever inspects the request to guess.
 //
-//   3. Fetch-shaped calls enter through TWO doors, both landing here: over HTTP via the
-//      itx-expression fetch lane (`x-itx-expression`, below), and over the dotted door — any terminal
+//   3. Fetch-shaped calls enter TWO ways, both landing here: over HTTP via an itx-expression fetch
+//      (`x-itx-expression`, below), and over the dotted surface — any terminal
 //      `.fetch(request)` on a lent rpc stub (`itx.<match>.fetch(...)` through a rewrite rule) is
 //      recognized by the terminal-fetch branch of `RpcStubDirectory.invokeRpcStub` and routed into
 //      `RpcStubFetchServer.serve`.
@@ -700,13 +700,20 @@ export async function lendRpcStubOverPager(
 //      every other call, its Response flowing back over the RPC legs.
 //
 
-// ── THE ITX-EXPRESSION FETCH LANE (the `x-itx-expression` door) ──
+// ── THE ITX-EXPRESSION FETCH (the `x-itx-expression` header) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — the
 // edge sets it for a project host (`itx.apps.<app>` or the configured ingress target), a session's terminal fetch and a
 // loaded worker's `env.ITX.fetch` set it themselves. The DO rewrites the expression through its
 // rules and the provider's Response — 101s included — flows back out natively.
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
+
+/** The platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire),
+ *  set beside `ITX_EXPRESSION_FETCH_HEADER` by the edge (worker.ts) and a session's terminal fetch,
+ *  and read and stripped by the context DO's `fetch`. Inbound `x-itx-*` headers never survive the
+ *  edge, and `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone
+ *  before this is set. */
+export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
 
 /** JSON in an HTTP header must be ASCII: inline worker source may contain any Unicode text.
  * Keep ordinary JSON on the wire so existing expression readers can parse it unchanged. */
@@ -733,7 +740,7 @@ function splitTerminalFetch(
 /** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
  *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
  *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
- *  carrying expression args is a LOUD error: the author meant something the lane cannot do. */
+ *  carrying expression args is a LOUD error: the author meant something a fetch cannot do. */
 export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
   const terminal = splitTerminalFetch(expr);
   if (terminal && terminal.fetchArgs.length > 0)
@@ -773,7 +780,7 @@ export function terminalFetchOf(
 //   Response returns over the RPC leg as-is (it serializes fine). A socket-bearing one CANNOT —
 //   so the socket is accepted right there, ONE dedicated "upgrade leg" WebSocket is opened back
 //   into the DO (a fetch upgrade carrying `x-itx-fetch-upgrade` → acceptFetchUpgradeLeg, correlated
-//   with the eyeball by the upgradeId tag alone — an unguessable UUID; nothing gates the door),
+//   with the eyeball by the upgradeId tag alone — an unguessable UUID; nothing else gates it),
 //   frames are wired provider⇄leg, and a plain marker returns instead.
 //
 //   DO side again: on the marker, mint the eyeball's WebSocketPair natively (the DO ↔ eyeball
@@ -786,7 +793,7 @@ export function terminalFetchOf(
 //     dep + `#rpcStubFetch` field, and the `RpcStubFetchTransport &` half of BorrowedRpcStub
 //     (the directory section);
 //   • LentRpcStub's `fetch` method (the relay section);
-//   • the context DO's `#rpcStubFetch` field, its acceptFetchUpgradeLeg door, and the
+//   • the context DO's `#rpcStubFetch` field, its acceptFetchUpgradeLeg handler, and the
 //     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts).
 // Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
 // sockets included — crossing the RPC legs.
@@ -846,7 +853,7 @@ type ClientWebSocket = {
  *  dies on its own RPC leg, pinned in fetch-door.e2e.test.ts — a future dial-back fix must
  *  deliver the upgradeId to the provider WITHOUT riding the Request headers verbatim, because a
  *  provider that forwards its received Request would smuggle the header back into our own
- *  upgrade-leg door). Dials the provider's real fetch and branches ONLY on the answer:
+ *  upgrade-leg handler). Dials the provider's real fetch and branches ONLY on the answer:
  *    • socketless Response → returned as-is (crosses the RPC leg fine);
  *    • socket-bearing Response → accept the socket HERE, open the dedicated upgrade leg into the
  *      DO, wire the frames, and return the marker instead. */
@@ -894,9 +901,9 @@ async function dialRpcStubFetch(
   return { webSocketUpgrade: true };
 }
 
-/** DO SIDE of an rpc-stub fetch: the leg door, the eyeball pair, and the frame/close forwarding
+/** DO SIDE of an rpc-stub fetch: the upgrade leg, the eyeball pair, and the frame/close forwarding
  *  between them. One instance per DO, wired into its fetch / webSocketMessage / webSocketClose
- *  alongside the other doors. */
+ *  alongside the other handlers. */
 export class RpcStubFetchServer {
   readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
 
@@ -907,7 +914,7 @@ export class RpcStubFetchServer {
   /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
    *  Response straight through; on the upgrade marker, mint the eyeball's pair (the leg arrived
    *  during the dial — the dial awaits its 101) — a real 101 only after the provider actually
-   *  upgraded. Provider failures throw through with their own words (the fetch lane answers non-101). */
+   *  upgraded. Provider failures throw through with their own words (the itx-expression fetch answers non-101). */
   async serve(
     transport: RpcStubFetchTransport,
     itxExpressionSteps: ItxExpression,
@@ -934,7 +941,7 @@ export class RpcStubFetchServer {
    *  dial's upgradeId — the tag is the correlation). */
   acceptFetchUpgradeLeg(request: Request): Response | null {
     const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- an ABSENT header (null) means "not this door"; a present-but-empty one is malformed input that must fall through to the parse/tag below and be refused, never quietly treated as absent (the same present-vs-absent distinction the DO's fetch door keeps)
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- an ABSENT header (null) means "not this request"; a present-but-empty one is malformed input that must fall through to the parse/tag below and be refused, never quietly treated as absent (the same present-vs-absent distinction the DO's `fetch` keeps)
     if (upgradeId === null) return null;
     return this.#acceptUpgradeSocket("leg", upgradeId);
   }

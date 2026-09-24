@@ -1,9 +1,3 @@
-import {
-  normalizeConfigRepoTemplateReference,
-  parseConfigRepoTemplateReference,
-  formatConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
-import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 // Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
 // socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
 // project contexts and own their teardown. What a session KNOWS — which projects and organizations
@@ -13,16 +7,22 @@ import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-templat
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import {
+  normalizeConfigRepoTemplateReference,
+  parseConfigRepoTemplateReference,
+  formatConfigRepoTemplateReference,
+} from "@iterate-com/shared/config-repo-template/reference";
+import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
+import type { SessionTeardown } from "./session-teardown.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
-import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
-  DurableObjectNameCodec,
   IterateContextRpcTarget,
   type IterateContextNamespace,
   type WaitUntil,
@@ -76,7 +76,7 @@ export interface SessionInput {
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
   /** The in-band bearer (rpc.ts): verify a token a bare socket presents and bind the transport to
-   *  its grant — null for a token the gate refuses. Absent on a door with no such form. */
+   *  its grant — null for a token the gate refuses. Absent on an endpoint with no such form. */
   resolveBearer?: (token: string) => Promise<SessionAuthority | null>;
 }
 
@@ -158,7 +158,7 @@ export class IterateRpcTarget extends RpcTarget {
    *  and project credentials name none. The fact rides `session.user`'s stream, where the
    *  AccountProcessor folds it into the account view (src/account/contract.ts). NOTE: the boundary is
    *  per-authenticate for now (a reconnect re-publishes); narrowing it to credential-establishment is
-   *  a later refinement. Attribution is the user's until the platform principal lands. */
+   *  a later refinement. */
   #publishAuthenticationFact(
     principal: Principal,
     credential: "from-server-cookie" | "admin-secret",
@@ -841,47 +841,6 @@ class UserCollectionRpcTarget extends RpcTarget {
       })
       .parse(input);
     return this.#session.input.controlPlane.linkIdentity(data.provider, data.subject, data.email);
-  }
-}
-
-// ── session teardown ── WHAT A SESSION MUST UNDO AT ITS END, as a leaf (no imports): the one-entry-per-key
-// register every IterateContextRpcTarget of a session shares, testable in the node lane.
-
-/** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
- *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the
- *  session. THE CALLER OWNS THE KEY (iterate-context.ts `#sessionTeardownKey` pairs the context name
- *  with the stub key). Re-adding the SAME key is a TRANSPORT REPLACEMENT (a reconnect): by the time
- *  the new relay's pager is open, the DO has already dropped the old transport as "replaced", so
- *  disposing the incumbent here is a harmless double-close that keeps this map from accumulating
- *  dead relays. */
-export class SessionTeardown {
-  readonly #undoByKey = new Map<string, { dispose(): void }>();
-  /** Register `undo` under `key`, REPLACING what sat there (disposed now). Returns the LEASE — the
-   *  one thing a handle should hold: its dispose runs `undo` only while `undo` is still the current
-   *  entry, so a stale handle (re-provide at the same match, then dispose the OLD handle) can never tear
-   *  down its replacement (the v4 review's kernel finding 2.6). */
-  add(key: string, undo: { dispose(): void }): { dispose(): void } {
-    this.#undoByKey.get(key)?.dispose();
-    this.#undoByKey.set(key, undo);
-    return {
-      dispose: () => {
-        if (this.#undoByKey.get(key) !== undo) return; // replaced — the replacement owns the key now
-        this.#undoByKey.delete(key);
-        undo.dispose();
-      },
-    };
-  }
-  /** Dispose whatever sits under `key` now — the SESSION's own act (a `provide(match, null)`, a
-   *  `subscribe` re-spelled as an expression), never a handle's. */
-  dispose(key: string): void {
-    const undo = this.#undoByKey.get(key);
-    if (!undo) return;
-    this.#undoByKey.delete(key);
-    undo.dispose();
-  }
-  disposeAll(): void {
-    for (const undo of this.#undoByKey.values()) undo.dispose();
-    this.#undoByKey.clear();
   }
 }
 

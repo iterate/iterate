@@ -9,13 +9,14 @@
 // the check and the insert with no `await` between them. No `await` in this file: a unit test drives
 // it over node:sqlite (catalog.test.ts).
 import { codedError } from "iterate/next/lib";
+import type { Caller as PrincipalCaller } from "iterate/next/principal";
 import type { SqlStorageHandle } from "iterate/next/stream/processor";
 import type { OrganizationRole } from "../organization/contract.ts";
 import type { IdentityProvider } from "./contract.ts";
 
 /** WHO asked: the caller's principal and grant, as the edge hands them over. The operator is the
  *  admin secret's principal (oauth.ts) — actor `admin`, no email. */
-export type Caller = { principal: { actor: string; email?: string } | null; grant?: string };
+export type Caller = Pick<PrincipalCaller, "principal" | "grant">;
 export const isOperator = (caller: Caller) =>
   caller.principal?.actor === "admin" && !caller.principal.email;
 

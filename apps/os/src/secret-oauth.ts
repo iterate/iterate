@@ -10,13 +10,13 @@
 // The host (secret/durable-object.ts) signs the `state`, keeps the pending attempt and runs these.
 
 import * as oauth from "oauth4webapi";
+import type { ClientAuth } from "iterate/next/api";
 import {
   clientAuthOf,
   isRecord,
   oauthTokenRequest,
   oauthTokensOf,
   originsOf,
-  type ClientAuth,
   type SecretRecord,
 } from "./secrets.ts";
 

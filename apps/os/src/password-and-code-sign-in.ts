@@ -1,5 +1,5 @@
-// ── the sign-in mechanisms without an identity provider ── /login's form posts (issuer-pages.ts
-// `loginFormPost` calls these):
+// ── the sign-in mechanisms without an identity provider ── /login's form posts (login.server.ts
+// `loginFormResponse` calls these):
 //
 //   THE PASSWORD (`login.password`): one global password — anyone who knows it signs in as the email
 //   they type; the membership is the password, the email is the name tag. The self-host default,

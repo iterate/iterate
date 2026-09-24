@@ -1,6 +1,3 @@
-import { z } from "zod";
-import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
-import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
 // workspace is born once; a secret's latest `set` is its
@@ -18,6 +15,10 @@ import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-rep
 // constructs it with `new` and reduces rows (processor.test.ts, in node); the effects are proven on
 // the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
 // e2e/website-publication.e2e.test.ts: a commit publishes).
+
+import { z } from "zod";
+import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
+import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
 import {
   type ConsumedEvent,
   type EmittedEventInput,

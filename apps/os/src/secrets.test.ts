@@ -6,6 +6,7 @@
 
 import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
+import type { SecretMaterial } from "iterate/next/api";
 import {
   beginSecretOAuth,
   completeSecretOAuth,
@@ -25,7 +26,6 @@ import {
   secretPathsReferenced,
   substituteProjectSecrets,
   verifySecretHmac,
-  type SecretMaterial,
 } from "./secrets.ts";
 
 // ── substitution ── `substituteProjectSecrets`, as a table: `{ url?, headers?, resolve?, becomes }`

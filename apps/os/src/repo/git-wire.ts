@@ -37,7 +37,7 @@ export type RepoLogEntry = {
 /** A tip's tree FLATTENED: repo-relative path → its entry (blob oid + mode). Every tree object is in
  *  the snapshot pack (`deepen 1` carries everything reachable from the tip), so the walk fetches
  *  nothing. A submodule pointer (mode 160000) is kept — a re-encoded tree must not drop it — and has
- *  no blob. Exported for the codec pin in repos.test.ts. */
+ *  no blob. */
 export type RepoManifest = Map<string, { oid: string; mode: string }>;
 
 export function manifestOf(
@@ -685,8 +685,8 @@ function pushRefused(body: Uint8Array, expectedRef: string): string | null {
 // -- transport ---------------------------------------------------------------------
 
 /**
- * HTTP transport against one Artifacts remote — the three verbs `repos.ts`
- * calls: `tipOf(ref)` (the branch tip's oid, or undefined for an unborn
+ * HTTP transport against one Artifacts remote — the three verbs the repo facet
+ * (repo/durable-object.ts) calls: `tipOf(ref)` (the branch tip's oid, or undefined for an unborn
  * branch), `fetchObjects` (a v2 fetch; the verified objects of the response
  * pack) and `push` (one receive-pack; null when the server moved the ref,
  * else the refusal in its words). `token` is the repo access token Artifacts

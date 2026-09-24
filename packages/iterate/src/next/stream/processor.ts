@@ -1,4 +1,3 @@
-import type { SqlStorageValue } from "@cloudflare/workers-types";
 // stream/processor.ts — THE PROCESSOR: `StreamProcessor`, the PURE class an author writes (a
 // contract and three hooks, no constructor arguments, no storage, no stream — a unit test constructs
 // it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a
@@ -39,6 +38,7 @@ import type { SqlStorageValue } from "@cloudflare/workers-types";
 // `contract.version` re-reduces from offset 0 through `reduce` only, never re-running side effects —
 // over durable rows only, which is why durable product truth must never derive from an ephemeral.
 
+import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { reportIssue, jsonEqual, codedError, diff } from "../lib.ts";
 

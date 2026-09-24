@@ -8,7 +8,7 @@
 // belongs HERE, behind an RpcTarget method.
 //
 // The DO owns every contract. This class declares only what the edge must do itself: `cd` (pure
-// addressing), `invoke` (the landing door of the prototype hop at the bottom, plus the one fetch-lane
+// addressing), `invoke` (where the prototype hop at the bottom lands, plus the one terminal-fetch
 // fork), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
 // which must live in this stateless worker and never in the DO — the DON'T-PIN rule,
 // context/rpc-stubs.ts) and the two processor verbs. Each verb builds ONE event and appends it;
@@ -17,7 +17,6 @@
 // session end); the raw event — `itx.append({ type: "…/rewrite-rule-configured", payload: { match, target } })` — is the verb
 // minus the handle and outlives the session. A client reaches a root context through session.ts and
 // the rest with `cd(path)`.
-//   durable object names — `DurableObjectNameCodec` / `resolveContextPath`: the ONE place a context DO name is formatted and parsed
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
@@ -46,6 +45,7 @@ import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processo
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  ITX_PLATFORM_ORIGIN_HEADER,
   encodeFetchExpression,
   terminalFetchOf,
   lendRpcStubOverPager,
@@ -54,8 +54,12 @@ import {
 } from "./context/rpc-stubs.ts";
 import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { GLOBAL_PROJECT_ID, PROJECT_ID } from "./context/paths.ts";
-import { SessionTeardown } from "./session.ts";
+import {
+  DurableObjectNameCodec,
+  GLOBAL_PROJECT_ID,
+  type DurableObjectAddress,
+} from "./context/paths.ts";
+import { SessionTeardown } from "./session-teardown.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -101,13 +105,6 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
 export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
-/** The header the edge (and a session's terminal fetch) stamps a fetch-lane Request with — the
- *  platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire) — read and
- *  stripped by the context DO's fetch lane. Inbound `x-itx-*` headers never survive the edge, and
- *  `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone before
- *  this is set. */
-export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
-
 export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;
@@ -125,7 +122,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
-    caller: Caller = { principal: null },
+    caller: Caller,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -163,9 +160,8 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  same session. Pure addressing — and, the projectId being kept, a project's `cd` can never spell
    *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
    *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused for everyone
-   *  — the admin included; the one path hop the platform needs there is the kernel's own, inside the
-   *  DO (built-ins.ts `cd`). This is the whole path mask: with no way to name another user's path,
-   *  there is no policy to get wrong. */
+   *  — the admin included — and the DO's built-in `cd` refuses it too. This is the whole path mask:
+   *  with no way to name another user's path, there is no policy to get wrong. */
   cd(path: string): IterateContextRpcTarget {
     if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID)
       throw codedError(
@@ -176,15 +172,18 @@ export class IterateContextRpcTarget extends RpcTarget {
     // and the resolver's app wall keeps it to self and descendants) — the dotted surface of the handle
     // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
     if (this.#caller.app)
-      return new InvokeHandle((steps) =>
-        // The proxy hands relative steps; a caller's own `.invoke("itx.whoami()")` is a whole call.
-        this.invoke([
-          "itx",
-          ["cd", path],
-          ...(typeof steps === "string" || steps[0] === "itx"
-            ? normalizedItxExpression(steps as ItxExpressionInput).slice(1)
-            : steps),
-        ]),
+      return new InvokeHandle(
+        (steps) =>
+          // The proxy hands relative steps; a caller's own `.invoke("itx.whoami()")` is a whole call.
+          this.invoke([
+            "itx",
+            ["cd", path],
+            ...(typeof steps === "string" || steps[0] === "itx"
+              ? normalizedItxExpression(steps as ItxExpressionInput).slice(1)
+              : steps),
+          ]),
+        // The handle's dotted surface reduces onto that one `invoke` (the prototype fallback), so
+        // it answers every member the edge context declares; InvokeHandle's own type has none.
       ) as unknown as IterateContextRpcTarget;
     const durableObjectAddress = DurableObjectNameCodec.address({
       projectId: this.#durableObjectAddress.projectId,
@@ -199,7 +198,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     );
   }
 
-  /** THE dispatch door (built-ins + every rewrite rule) — the ONE way to call the itx surface. Takes an
+  /** THE dispatch (built-ins + every rewrite rule) — the ONE way to call the itx surface. Takes an
    *  `ItxExpressionInput`: a dotted string (`"itx.append({...})"`) OR the parsed array
    *  (`["itx",["append",{...}]]`); both carry mid-path call args. The dotted sugar `itx.a.b(x)` reduces
    *  into `["itx","a",["b",x]]` (the prototype fallback at the bottom of this file) and lands here.
@@ -231,7 +230,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     return this.#invokeOnDurableObject(itxExpression, args);
   }
 
-  // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
+  // ── PROVIDE, THE ONE WAY IN: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
 
   /** PROVIDE: from now on a call starting with `match` runs as the same call with `match` replaced by
    *  `target` (context/itx-expression-rewriting.ts — `match` may pin literal args: `itx.ai.run('gpt-5')`).
@@ -349,7 +348,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       | ((events: unknown[], range: unknown) => void)
       | null;
     consumes?: string[];
-    /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
+    /** Where the cursor starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
   }): Promise<SubscriptionHandleRpcTarget> {
     // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
@@ -367,7 +366,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
-    const consumes = {
+    const delivery = {
       consumes: input.consumes,
       afterOffset: input.afterOffset,
     };
@@ -379,13 +378,13 @@ export class IterateContextRpcTarget extends RpcTarget {
         payload: {
           name,
           target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
-          ...consumes,
+          ...delivery,
         },
       };
       if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
       const pager = await lendRpcStubOverPager(
         () => this.#durableObject,
-        input.target as ClientRpcStub,
+        input.target as ClientRpcStub, // neither a string nor an array, so a live object or a plain callback
         rpcStubKey,
         this.#caller.app ? [] : [row],
         this.#waitUntil,
@@ -397,11 +396,11 @@ export class IterateContextRpcTarget extends RpcTarget {
     }
     // An expression (or a removal): appended FIRST, then this session's lend under the name is
     // recalled — the same order as `provide`, for the same reason.
-    const target = input.target as ItxExpressionInput | null;
+    const target = input.target as ItxExpressionInput | null; // the live-object branch returned above, so this is an expression or null
     const [committed] = (await this.#append({
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { name, target, ...consumes },
-    })) as StreamEvent[];
+      payload: { name, target, ...delivery },
+    })) as StreamEvent[]; // `append` answers the committed events; `invoke` is untyped over RPC
     this.#sessionTeardown.dispose(sessionTeardownKey);
     return new SubscriptionHandleRpcTarget(name, () => {
       // no pager to recall: the handle un-sets the row itself — only the one this call wrote
@@ -415,7 +414,7 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  `itx.builtins.append`, so a context's own rows redirect the user's calls, never this. LOADED
    *  CODE's goes through ITS table under the context root `append` — implicit everywhere, so a child
    *  writes; a jail's bare null (or a mask at `itx.append`) refuses a live lend's row, a live
-   *  subscription's and an undo exactly as it refuses `itx.append` — and the door walls the row's
+   *  subscription's and an undo exactly as it refuses `itx.append` — and the built-in walls the row's
    *  target (context/built-ins.ts `append`). */
   #append(event: StreamEventInput): Promise<unknown> {
     return this.#invokeOnDurableObject(
@@ -426,7 +425,8 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — `null` WITH the target it
    *  wrote (`ifTarget`), which the core reduce applies as a compare-and-set DELETE only while the
    *  row's target is still that (a later provide at the same match owns the row now); never a mask,
-   *  never a "restore" (rule 8: at a child that spelling would be a grant). Fire-and-forget under
+   *  never a "restore" (at a child that spelling would be a grant: stream/core-processor.ts
+   *  `CoreState.itxExpressionRewriteRules`). Fire-and-forget under
    *  waitUntil (a disposer cannot await), a refusal ignored. */
   #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(
@@ -462,57 +462,6 @@ export class IterateContextRpcTarget extends RpcTarget {
 // and not a Proxy AROUND the instance), the declared methods above always winning.
 installPrototypeInvokeFallback(IterateContextRpcTarget, ["itx"]);
 
-// ── durable object names ── the ONE place a context DO name is formatted and parsed
-// (minimal: no query props, no global host
-// yet). A context is addressed by a faux URL `{projectId}.iterate{path}`:
-//
-//   prj_demo.iterate/                     → project root
-//   prj_demo.iterate/agents/support-bot   → an agent context
-//
-// The projectId is always the host prefix, so a name alone says which project the context
-// belongs to — the basis of isolation.
-
-const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
-// The projectId is the kv/secret prefix AND a loader-cacheKey component — a ":" (or worse) in it
-// collapses the isolation wall (prj_x + key "a:b" would address the same cell as project prj_x:a
-// + key "b"). Gate it at the ONE place every name is parsed.
-
-/** A parsed DO address. `name` is its own canonical string form — parse once, carry both
- *  halves together (no separate re-stringify field at call sites). */
-export type DurableObjectAddress = { projectId: string; path: string; name: string };
-
-export const DurableObjectNameCodec = {
-  /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}` — the path in the
-   *  CANONICAL form `cd` resolves to (`resolveContextPath`), so `/a`, `/a/`, `/a/./` and `a` are ONE
-   *  name and no door (the `?context=` query included) can mint a twin DO for a logical context. */
-  stringify({ projectId, path }: { projectId: string; path: string }): string {
-    return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${resolveContextPath("/", path)}`;
-  },
-  /** The canonical, validated address `{ projectId, path, name }` for a context, built from parts a
-   *  caller already holds — path canonicalized, projectId validated, the DO `name` carried. The
-   *  DIRECT form of `parse(stringify({ projectId, path }))`, with no string to round-trip through. */
-  address({ projectId, path }: { projectId: string; path: string }): DurableObjectAddress {
-    if (!PROJECT_ID.test(projectId))
-      throw codedError(
-        "INVALID_CONTEXT",
-        `invalid projectId ${JSON.stringify(projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
-      );
-    const parts = { projectId, path: resolveContextPath("/", path) };
-    return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
-  },
-  /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
-   *  `projects.get("prj_x")` hands in. */
-  parse(name: string): DurableObjectAddress {
-    const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
-    return i === -1
-      ? DurableObjectNameCodec.address({ projectId: name, path: "/" })
-      : DurableObjectNameCodec.address({
-          projectId: name.slice(0, i),
-          path: name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length),
-        });
-  },
-};
-
 // The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
 // it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
 // one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
@@ -544,7 +493,7 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 // { iterateContextName } })` — never a raw `env.ITERATE_CONTEXT.getByName` DO stub — so the context it forwards
 // to is a PROP of the stub, not a binding the loaded code could reach around.
 //
-// TWO doors, nothing else — `get()` (the itx scope) and `fetch` (`globalOutbound`) — both addressing
+// TWO methods, nothing else — `get()` (the itx scope) and `fetch` (`globalOutbound`) — both addressing
 // the DO through `env.ITERATE_CONTEXT`, this worker's own binding to its namespace.
 
 /** The itx scope as `env.ITX.get()` types it — the Workers-RPC stub of a context, every dotted step
@@ -584,10 +533,9 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   }
 
   /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a
-   *  fetch-lane call it addressed itself with `x-itx-expression` — goes to the context DO's fetch
-   *  door unchanged, because THAT door is where raw Requests are sorted. Not
-   *  `get().invoke(["itx",["fetch",…]])`: the edge's terminal-fetch fork would overwrite a lane header
-   *  the loaded worker already set. */
+   *  fetch it addressed itself with `x-itx-expression` — goes to the context DO's `fetch` unchanged,
+   *  because THAT is where raw Requests are sorted. Not `get().invoke(["itx",["fetch",…]])`: the
+   *  edge's terminal-fetch fork would overwrite an `x-itx-*` header the loaded worker already set. */
   override fetch(request: Request): Promise<Response> {
     // A loaded worker speaks for the project, never for a person: the principal and grant headers
     // are the edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.

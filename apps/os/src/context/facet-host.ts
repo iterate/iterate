@@ -45,7 +45,6 @@ import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
   assertFacetSourceWithinCeiling,
-  facetLoaderOwner,
   facetSpecOf,
   prepareConfinedWorker,
   type FacetSpec,
@@ -58,9 +57,10 @@ import {
  *  when the loaded worker's env carries a stub (every facet here does), a bare "internal error;
  *  reference = …" when it does not. The facet container is then unusable for the incarnation (a
  *  live facet never re-runs its startup) and the loader's cached entry is too (a fresh loader id
- *  heals at once) — so the recovery is a restart of both and ONE more attempt (`invoke`),
- *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`).
- *  same recovery for its dynamic workers (issue #2288). Remove when the platform is fixed. */
+ *  heals at once) — so the recovery (`#recover`) is a restart of both and ONE more attempt,
+ *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). worker-loader.ts
+ *  `loaderIdGenerations` applies the same recovery to dynamic workers (#2288). Remove when the
+ *  platform is fixed. */
 const isFacetStartPlatformFailure = (error: unknown): error is Error =>
   error instanceof Error &&
   (error.message.includes("Unable to deserialize cloned data") ||
@@ -155,8 +155,9 @@ export class FacetHost {
   /** Each facet's latest recovery (`#recover`), settled either way: the next one starts after it,
    *  so no restart aborts another recovery's retry mid-call. */
   readonly #facetRecoveryByName = new Map<string, Promise<void>>();
-  /** The in-flight count the test-only `releasePins` respects: aborting a facet mid-REDUCE is exactly the stall a
-   *  reduce would have to repair from the log — never cause it. */
+  /** Facet work in flight: the test-only release (`abortLiveFacetsWhenIdle`) respects it — aborting a
+   *  facet mid-REDUCE is exactly the stall a reduce would have to repair from the log, never cause it —
+   *  and the residency watchdog and the unclaimed-facet sweep read it through `snapshot()`. */
   #facetWorkInFlight = 0;
   /** THE CLAIMS of hosted processors on this context's alarm (`processors.claim`): name → the time
    *  a `revive()` is owed by. A kv row each, so a claim outlives the incarnation that made it —
@@ -341,7 +342,7 @@ export class FacetHost {
   // ── the two committed-event effects the DO runs off a fresh commit ──
 
   /** THE ONE EFFECT of a hosting configuration: the facet's startup memo is refreshed from the
-   *  event that configured it, source and all (the reduced row has none — M1). The memo is the ONLY
+   *  event that configured it, source and all (the reduced row is source-less, core-processor.ts `hostedFacet`). The memo is the ONLY
    *  place a materialization reads the source from, so a re-enable with NEW source under the same
    *  name and class is a new loader identity on the facet's next call (`invoke` restarts it in
    *  place, storage preserved) — without this the old memo kept running the old code. A target that
@@ -349,10 +350,7 @@ export class FacetHost {
   refreshFacetStartupMemosFromHostingConfigurations(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
-      const { name, target } = event.payload as {
-        name: string;
-        target: ItxExpressionInput | null;
-      };
+      const { name, target } = event.payload as SubscriptionConfiguredPayload;
       if (!target || !this.#deps.stream.coreReducedState.subscriptions[name]?.hostedFacet) continue;
       try {
         const spec = facetSpecFromHostingTarget(
@@ -382,9 +380,9 @@ export class FacetHost {
   ): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
-      const { name, target } = event.payload as { name: string; target: string | null };
+      const { name, target } = event.payload as SubscriptionConfiguredPayload;
       const removedRow = !target ? subscriptionsBeforeCommit[name] : undefined;
-      // M1: the marker, not the (source-less) target, says which facet a row hosts.
+      // The marker, not the (source-less) target, says which facet a row hosts.
       const facetName = removedRow?.hostedFacet?.name;
       if (!facetName) continue;
       // Another row still hosts it (a mirror, an audit): the facet is theirs now, not gone.
@@ -657,7 +655,7 @@ export class FacetHost {
         platformOrigin: this.#deps.platformOrigin(),
         itxEntrypoint: this.#deps.itxEntrypoint(),
         kind: "facet",
-        owner: facetLoaderOwner(this.#deps.iterateContextName, memo.className),
+        owner: [this.#deps.iterateContextName, memo.className],
         source: memo.source,
         cacheKey: memo.cacheKey,
         invoke: (call) => this.#deps.invoke(call),
@@ -791,7 +789,7 @@ export class FacetHost {
       } catch {
         return result;
       }
-      (result as Disposable)[Symbol.dispose]();
+      (result as Disposable)[Symbol.dispose](); // `Symbol.dispose in result`, checked above
       return copy;
     }
     return result;
@@ -800,10 +798,11 @@ export class FacetHost {
   /** THE STARTUP MEMO `facet:<name>` (the FacetSpec in this DO's kv) for one call: a hosting `spec`
    *  writes it (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the
    *  facet after an eviction; a bare name reads it; a name with neither is recovered from the durable
-   *  log (M1, below); an unknown name is NO_FACET. Synchronous, so nothing slips in between the checks. */
+   *  log (the source-less hosting row, below); an unknown name is NO_FACET. Synchronous, so nothing slips in between the checks. */
   #facetStartupMemoFor(name: string, spec: FacetSpec | undefined): FacetSpec {
     let facetStartupMemo =
       this.#facetStartupMemoByName.get(name) ??
+      // kv answers `unknown`; this method is the only writer of `facet:<name>`.
       (this.#deps.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined);
     if (spec) {
       assertFacetSourceWithinCeiling(spec, `facet "${name}"`);
@@ -816,7 +815,7 @@ export class FacetHost {
       }
     }
     if (!facetStartupMemo) {
-      // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
+      // A hosting row keeps NO source in core state — recover it from the DURABLE log event that
       // configured it and write the memo once. The memo survives eviction (kv), so this log read
       // happens at most once per facet per deployment, never per push. The hosting row's marker
       // names the facet (the subscription's own name may differ).
@@ -826,7 +825,7 @@ export class FacetHost {
       if (row?.hostedFacet) {
         const [configuredEvent] = this.#deps.stream.read(row.configuredAtOffset - 1, 1).events;
         const configuredTarget = (
-          configuredEvent?.payload as { target?: ItxExpressionInput } | undefined
+          configuredEvent?.payload as SubscriptionConfiguredPayload | undefined
         )?.target;
         // RESOLVED before reading the spec off it, as the reduce did when it marked the row.
         const recoveredSpec = configuredTarget
@@ -892,3 +891,8 @@ export class FacetHost {
     this.#liveFacetNames.delete(name);
   }
 }
+
+/** A `subscription-configured` payload as the log holds it: `normalizeControlEvent`
+ *  (stream/core-processor.ts `normalizeSubscriptionConfigured`) parses the target to its
+ *  `ItxExpression` at the append boundary, so every committed event, fresh or read back, has it. */
+type SubscriptionConfiguredPayload = { name: string; target: ItxExpression | null };

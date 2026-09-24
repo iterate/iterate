@@ -9,7 +9,7 @@ import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, vi } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
-import { DurableObjectNameCodec } from "../src/iterate-context.ts";
+import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 

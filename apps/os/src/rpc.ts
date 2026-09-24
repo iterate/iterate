@@ -9,12 +9,8 @@ import {
   recordGrantUse,
   type Authorization,
 } from "./oauth.ts";
-import {
-  IterateRpcTarget,
-  SessionTeardown,
-  type SessionAuthority,
-  type SessionInput,
-} from "./session.ts";
+import { IterateRpcTarget, type SessionAuthority, type SessionInput } from "./session.ts";
+import { SessionTeardown } from "./session-teardown.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an

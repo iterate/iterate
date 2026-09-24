@@ -1,4 +1,3 @@
-import { z } from "zod";
 // src/repo/durable-object.ts — THE REPO: the facet a context at ANY path hosts under the name `repo`
 // (`itx.repos.get(path)`, library.ts; `/repos/<name>` is the convention, not a rule). A repo's files
 // live in git, in Cloudflare Artifacts, and THIS facet is the only thing that speaks git (git-wire.ts):
@@ -15,6 +14,8 @@ import { z } from "zod";
 // refuses it — no merge; the caller reads again and retries).
 // Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, git-wire.ts and pako
 // with it, reached as `itx.facets.get("repo")` (library.ts).
+
+import { z } from "zod";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { EventInput } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";

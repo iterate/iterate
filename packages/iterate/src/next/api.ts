@@ -1,4 +1,3 @@
-import type { Ai } from "@cloudflare/workers-types";
 // next/api.ts — THE API AN APP DIALS: the shapes of os-next's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
 // platform's classes: os-next asserts that `IterateRpcTarget` satisfies `IterateApi` and that
@@ -7,6 +6,8 @@ import type { Ai } from "@cloudflare/workers-types";
 // has ONE method — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the
 // dotted spelling (`itx.repos.get(path).readFile(file)`) onto it; the roots declared below are the
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
+
+import type { Ai } from "@cloudflare/workers-types";
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";

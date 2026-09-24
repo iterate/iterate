@@ -21,12 +21,8 @@ test("fetch expression headers preserve Unicode worker source through the HTTP B
   expect(JSON.parse(headers.get("x-itx-expression")!)).toEqual(expression);
 });
 
-// LentRpcStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —
-// mock JUST the base class (a no-op shell); the relay's own logic runs unmodified.
-vi.mock("cloudflare:workers", () => ({ RpcTarget: class {} }));
-
 // ── rpc stub directory ── the borrowed table's one lifetime rule beyond lend/return:
-// A BROKEN STUB IS DROPPED (v4 §2.7). workerd stamps `retryable: true` on a call that failed at the
+// A BROKEN STUB IS DROPPED. workerd stamps `retryable: true` on a call that failed at the
 // transport (DISCONNECTED — "Network connection lost.", a DO reset), and a stub whose transport is
 // gone fails every later call the same way; kept borrowed it would answer that error until the idle
 // return, while its pager could lend a live one. A client's own throw, or a coded refusal, is not a
@@ -167,7 +163,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   const context = {
     fetch: async () => ({ status: 101, webSocket: pager }),
     // The stub is constructed EAGERLY as this call's argument, so anything its constructor
-    // registered would land on every page regardless of what the lend door does.
+    // registered would land on every page regardless of what the lend does.
     lendRpcStub: async (_input: { rpcStubKey: string; stub: unknown }) => undefined,
   };
 
@@ -287,7 +283,7 @@ describe("a pager that closes under a live session", () => {
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
 // pager: a REFUSED append (a paused stream) is the upgrade's answer — a non-101 whose JSON body carries
 // the code. The relay must then lend NOTHING: release the session's dup, register no listener, and
-// re-throw the same CODED error the append door would have (lib.ts: classify by code).
+// re-throw the same CODED error the append would have (lib.ts: classify by code).
 test("a refused pager upgrade (the DO would not append what names the key) lends nothing and re-throws the refusal's code", async () => {
   vi.useFakeTimers();
   let disposed = 0;

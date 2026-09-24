@@ -68,8 +68,8 @@ export function cfBrowser(binding: BrowserRun) {
      * `quickAction("markdown", { url })` is the markdown string, structured
      * actions (links, json, scrape, …) are their parsed value, and binary
      * actions (screenshot, pdf) are bytes — instead of the binding's raw
-     * Response, whose `{ success, result }` JSON envelope every caller was
-     * unwrapping by hand. A failed action throws with the envelope's error.
+     * Response and its `{ success, result }` JSON envelope. A failed action
+     * throws with the envelope's error.
      */
     async quickAction(
       action: CfBrowserQuickAction,

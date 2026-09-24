@@ -6,10 +6,9 @@
 import { verifyClaims } from "iterate/next/principal";
 import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
-import { GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
 import { authorizationForToken } from "./oauth.ts";
 import { isSecretOAuthState } from "./secret-oauth.ts";
 

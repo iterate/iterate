@@ -12,7 +12,8 @@ import { ConsentRpcTarget } from "./consent.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { signInHref } from "./login-search.ts";
 import type { Env } from "./env.ts";
-import { SessionRpcTarget, SessionTeardown } from "./session.ts";
+import { SessionRpcTarget } from "./session.ts";
+import { SessionTeardown } from "./session-teardown.ts";
 
 /** The browser's issuer session — the only grant that may approve access or act on the consent
  *  page. Anything else (no cookie, an ended session) is not signed in to the issuer. */

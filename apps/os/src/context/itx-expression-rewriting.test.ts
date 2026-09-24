@@ -2,7 +2,7 @@
 // is the call that runs. Every rule in itx-expression-rewriting.ts is a row here; read the rows, not
 // the code. Rules are written `"match ⇒ target"`; `null` is a MASK. Built-in roots for the table: kv,
 // whoami, rpcStubs, ai — reached as `itx.builtins.<root>` (the fixed point) or through the implicit
-// platform row `itx.<root> ⇒ itx.builtins.<root>`. Below the table: the ONE door
+// platform row `itx.<root> ⇒ itx.builtins.<root>`. Below the table: the ONE append-boundary check
 // (`normalizeRewriteRuleConfigured`), the resolver over a fake physical scope
 // (rules first, masks, the fixed point, default-deny, depth 32, lent stubs through a fake
 // `itx.builtins.rpcStubs`), and the reduce as the DO runs it — the rules are `core` state, reduced
@@ -37,7 +37,7 @@ import {
 const ROOT: ReadonlySet<string> = new Set(BUILT_IN_ROOTS);
 const CHILD: ReadonlySet<string> = new Set(CONTEXT_ROOTS);
 /** The platform-equivalent target of a match: at the owner root, where these tests run, a
- *  deletion (rule 8) — the spelling a client may still use to un-set a row it wrote. */
+ *  deletion (the core reduce's un-set) — the spelling a client may still use to un-set a row it wrote. */
 const restoreRuleTarget = (match: ItxExpressionInput): ItxExpression => [
   "itx",
   "builtins",
@@ -97,7 +97,7 @@ describe("resolveItxExpression — the call that runs", () => {
       call: "itx.builtins.kv.get('k')",
       becomes: "itx.builtins.kv.get('k')",
     },
-    // A BARE `itx` ROW WITH A TARGET claims only what no implicit row claims (rule 3): at the owner
+    // A BARE `itx` ROW WITH A TARGET claims only what no implicit row claims (`implicitRootsAt`): at the owner
     // root every built-in is implicit, so only an unknown name goes to the row — the context's own
     // `append` stays its own.
     {
@@ -195,7 +195,8 @@ describe("resolveItxExpression — the call that runs", () => {
       call: "itx.ai.run({ b: 2, a: 1 })",
       becomes: "itx.builtins.whoami()",
     },
-    // RULE 7 — `@` IS THE CALLER'S INPUT: the target is a TEMPLATE, rule 4's fold does not apply.
+    // `@` IS THE CALLER'S INPUT (`fillItxExpressionHoles`): the target is a TEMPLATE, the fold of the
+    // caller's args into the rewritten call does not apply.
     // As a top-level argument `@` is the unpinned args, SPLICED — the real Workers AI shape,
     // `run(model, inputs, options?)`, with the model pinned (THE DREAM: `itx.fable(inputs)`)
     {
@@ -298,7 +299,7 @@ describe("resolveItxExpression — the call that runs", () => {
     // a bare `itx` row with a SHORT, unclaimed target claims its own target: a loop, refused by the
     // depth budget — a name an implicit row answers never re-enters it (`itx.append` above)
     { rules: ["itx ⇒ itx.cam.get('itx')"], call: "itx.nothing(1)", throws: /depth 32/ },
-    // RULE 7 refusals: a nested `@` or a `...@` needs EXACTLY one argument — never a guess
+    // `@` refusals (`fillItxExpressionHoles`): a nested `@` or a `...@` needs EXACTLY one argument — never a guess
     {
       rules: ["itx.ask ⇒ itx.ai.gateway('g').run({ query: @ })"],
       call: "itx.ask(1, 2)",
@@ -515,7 +516,7 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
   });
 });
 
-// ───────────────────────────── the door ─────────────────────────────
+// ───────────────────────────── the append boundary ─────────────────────────────
 
 describe("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary", () => {
   test("AT REST: BOTH halves are the PARSED form (either codec half in, the parsed form out) — the reduce keys the table by printing the match, so a canonical match over the codec cap never re-parses", () => {
@@ -531,7 +532,7 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: ["itx", "db"], target: ["itx", "facets", ["get", "tab-1"]] },
     });
-    // either codec half on either side, parsed once at the door
+    // either codec half on either side, parsed once at the append boundary
     expect(
       normalizeControlEvent(
         {
@@ -561,8 +562,8 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
     });
   });
 
-  // THE DOOR'S REFUSALS, one row each: `{ match, target, throws }` — rule 6 (rooting, the reserved
-  // root, the proxy's verbs), rule 7 (`@` in a match, in a non-final step, in a call), and the
+  // THE APPEND BOUNDARY'S REFUSALS, one row each: `{ match, target, throws }` — rooting, the reserved
+  // root, the proxy's verbs, `@` (in a match, in a non-final step, in a call), and the
   // prefix grammar (an argless pinned step, an anonymous step, an unbalanced paren, a non-identifier
   // step in the ARRAY half).
   const doorRefusals: {
@@ -578,14 +579,14 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       target: "itx.whoami",
       throws: /may not be rooted at "itx\.builtins"/,
     },
-    // a bare row's short target is legal at the door — it loops at resolve time, where the budget catches it
+    // a bare row's short target is legal at the append boundary — it loops at resolve time, where the budget catches it
     ...["invoke", "provide", "subscribe"].map((verb) => ({
       match: `itx.${verb}`,
       target: "itx.kv",
       throws: new RegExp(`may not start with the proxy's own verb "${verb}"`),
     })),
     // `cd` is a NAME, not a proxy verb: `itx.cd ⇒ null` (a wall) and `itx.cd('/x') ⇒ …` are rows
-    { match: "itx.a(@)", target: "itx.kv", throws: /legal only in a rewrite rule's target/ }, // rule 7: never in a match…
+    { match: "itx.a(@)", target: "itx.kv", throws: /legal only in a rewrite rule's target/ }, // `@`: never in a match…
     { match: ["itx", ["a", { "@": true }]], target: "itx.kv", throws: /not its match/ }, // …in either half
     {
       match: "itx.x",
@@ -614,51 +615,50 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       ).toThrow(throws);
     });
 
-  // …and what the door ACCEPTS: both halves the PARSED form (either codec half in), `{ match, target, payload }`.
-  const doorAccepts: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] =
-    [
-      {
-        match: "itx.db",
-        target: "itx.builtins.kv",
-        payload: { match: ["itx", "db"], target: ["itx", "builtins", "kv"] },
-      }, // a target may name the physical spelling
-      {
-        match: "itx.archive",
-        target: "itx.cd('/archive')",
-        payload: { match: ["itx", "archive"], target: ["itx", ["cd", "/archive"]] },
-      }, // …and a proxy verb (a built-in root in an expression)
-      {
-        match: "itx.ai.run('gpt-5')",
-        target: "itx.kv",
-        payload: { match: ["itx", "ai", ["run", "gpt-5"]], target: ["itx", "kv"] },
-      }, // pinned args in the match, parsed once at the door
-      {
-        match: ["itx", "ok", ["get", 1]],
-        target: "itx.kv",
-        payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
-      }, // the ARRAY half of a match passes through as the parsed form
-      // The physical spelling of the match itself is an ordinary target at the door — the REDUCE
-      // decides (rule 8): a deletion where it restates the implicit row, a grant where it does not.
-      {
-        match: "itx.kv",
-        target: "itx.builtins.kv",
-        payload: { match: ["itx", "kv"], target: ["itx", "builtins", "kv"] },
+  // …and what the append boundary ACCEPTS: both halves the PARSED form (either codec half in), `{ match, target, payload }`.
+  const accepted: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] = [
+    {
+      match: "itx.db",
+      target: "itx.builtins.kv",
+      payload: { match: ["itx", "db"], target: ["itx", "builtins", "kv"] },
+    }, // a target may name the physical spelling
+    {
+      match: "itx.archive",
+      target: "itx.cd('/archive')",
+      payload: { match: ["itx", "archive"], target: ["itx", ["cd", "/archive"]] },
+    }, // …and a proxy verb (a built-in root in an expression)
+    {
+      match: "itx.ai.run('gpt-5')",
+      target: "itx.kv",
+      payload: { match: ["itx", "ai", ["run", "gpt-5"]], target: ["itx", "kv"] },
+    }, // pinned args in the match, parsed once at the append boundary
+    {
+      match: ["itx", "ok", ["get", 1]],
+      target: "itx.kv",
+      payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
+    }, // the ARRAY half of a match passes through as the parsed form
+    // The physical spelling of the match itself is an ordinary target at the append boundary — the
+    // REDUCE decides: a deletion where it restates the implicit row, a grant where it does not.
+    {
+      match: "itx.kv",
+      target: "itx.builtins.kv",
+      payload: { match: ["itx", "kv"], target: ["itx", "builtins", "kv"] },
+    },
+    {
+      match: "itx.ai.run('gpt-5')",
+      target: "itx.builtins.ai.run('gpt-5')",
+      payload: {
+        match: ["itx", "ai", ["run", "gpt-5"]],
+        target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
       },
-      {
-        match: "itx.ai.run('gpt-5')",
-        target: "itx.builtins.ai.run('gpt-5')",
-        payload: {
-          match: ["itx", "ai", ["run", "gpt-5"]],
-          target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
-        },
-      },
-      {
-        match: "itx",
-        target: "itx.builtins",
-        payload: { match: ["itx"], target: ["itx", "builtins"] },
-      },
-    ];
-  for (const { match, target, payload } of doorAccepts)
+    },
+    {
+      match: "itx",
+      target: "itx.builtins",
+      payload: { match: ["itx"], target: ["itx", "builtins"] },
+    },
+  ];
+  for (const { match, target, payload } of accepted)
     test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
       expect(
         normalizeControlEvent(
@@ -672,29 +672,33 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
     });
 
   test("ACCEPTED: `ifTarget` (a handle's compare-and-set undo) is normalized like `target` — a string parses to the stored shape, null is the mask sentinel, the key rides through only when sent, undefined is refused", () => {
-    const door = (payload: Record<string, unknown>) =>
+    const normalized = (payload: Record<string, unknown>) =>
       normalizeControlEvent(
         { type: "events.iterate.com/itx/rewrite-rule-configured", payload },
         "/",
       ).payload as Record<string, unknown>;
     const base = { match: ["itx", "x"], target: ["itx", "builtins", "x"] };
-    expect(door({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.tab1" })).toEqual({
+    expect(normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.tab1" })).toEqual({
       ...base,
       ifTarget: ["itx", "tab1"],
     });
-    expect(door({ match: "itx.x", target: "itx.builtins.x", ifTarget: ["itx", "tab1"] })).toEqual({
+    expect(
+      normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: ["itx", "tab1"] }),
+    ).toEqual({
       ...base,
       ifTarget: ["itx", "tab1"],
     });
-    expect(door({ match: "itx.x", target: "itx.builtins.x", ifTarget: null })).toEqual({
+    expect(normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: null })).toEqual({
       ...base,
       ifTarget: null,
     });
-    expect("ifTarget" in door({ match: "itx.x", target: "itx.builtins.x" })).toBe(false);
-    expect(() => door({ match: "itx.x", target: "itx.builtins.x", ifTarget: undefined })).toThrow(
-      /never undefined/,
-    );
-    expect(() => door({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.(" })).toThrow();
+    expect("ifTarget" in normalized({ match: "itx.x", target: "itx.builtins.x" })).toBe(false);
+    expect(() =>
+      normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: undefined }),
+    ).toThrow(/never undefined/);
+    expect(() =>
+      normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.(" }),
+    ).toThrow();
   });
 
   test("REFUSED against the path the row LANDS on, whichever caller appends: a bare `itx` row whose target is `cd` of that context; a bare link elsewhere, a longer match, a mask and a foreign event pass; a schedule's batch is checked as it is scheduled", () => {
@@ -981,7 +985,7 @@ const setup = () => {
     caller: () => ({ principal: null }),
   });
   /** The edge's `provide(match, expression | null)`: build the ONE event, append it. A refusal throws
-   *  at the door — nothing is appended. */
+   *  at the append boundary — nothing is appended. */
   const rewrite = (match: ItxExpressionInput, target: ItxExpressionInput | null) =>
     stream.append(
       normalizeControlEvent(
@@ -1063,7 +1067,7 @@ describe("built-in resolution + default-deny", () => {
     }
   });
 
-  test("`invoke(call, ...args)`: live args are applied to the value the expression denotes (the fetch lane's shape)", async () => {
+  test("`invoke(call, ...args)`: live args are applied to the value the expression denotes (an `x-itx-expression` fetch's shape)", async () => {
     const { invoke } = setup();
     await invoke("itx.kv.put", "k", "v");
     expect(await invoke("itx.kv.get", "k")).toBe("v");
@@ -1097,7 +1101,7 @@ describe("built-in resolution + default-deny", () => {
 
   test("even a smuggled raw event cannot reach the built-ins (a target not rooted at itx matches nothing — default-deny)", async () => {
     const { stream, invoke } = setup();
-    // bypass the door entirely — append the raw string-at-rest event
+    // bypass the append boundary entirely — append the raw string-at-rest event
     stream.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.evil", target: "kv" },
@@ -1166,7 +1170,7 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
       code: "NO_ITX_EXPRESSION_MATCH",
       message: expect.stringMatching(/is masked/),
     });
-    expect(await invoke("itx.builtins.kv.put('a', '1')")).toEqual({ ok: true }); // the physical door still answers
+    expect(await invoke("itx.builtins.kv.put('a', '1')")).toEqual({ ok: true }); // the physical scope still answers
     const masked = events.length;
     rewrite("itx.kv", null); // a second deny is a no-op: the event lands, the state is unchanged
     expect(events).toHaveLength(masked + 1);
@@ -1301,7 +1305,7 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     await expect(invoke("itx.whoami()")).rejects.toThrow(/is masked/);
     await expect(invoke("itx.append({ type: 't' })")).rejects.toThrow(/is masked/);
     await expect(invoke("itx.anything('x')")).rejects.toThrow(/is masked/);
-    expect(await invoke("itx.builtins.whoami()")).toEqual({ projectId: "prj_t", path: "/" }); // the physical door is the kernel's
+    expect(await invoke("itx.builtins.whoami()")).toEqual({ projectId: "prj_t", path: "/" }); // the physical scope is the kernel's
     rewrite("itx.whoami", "itx.builtins.whoami"); // a grant through the wall
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
     await expect(invoke("itx.append({ type: 't' })")).rejects.toThrow(/is masked/);
