@@ -257,6 +257,43 @@ test("settles the activity into items when all work completes", () => {
   });
 });
 
+test("a run the context's restart interrupted shows the platform's error, not an invalid settlement", () => {
+  const state = reduceAll([
+    {
+      type: "events.iterate.com/agent/llm-request-requested",
+      offset: 5,
+      payload: { model: "gpt-test" },
+    },
+    {
+      type: "events.iterate.com/capability-host/script-run-requested",
+      payload: { executionId: "x1", code: "await stream.read()", expiresAt: SCRIPT_EXPIRES_AT },
+    },
+    {
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: {
+        executionId: "x1",
+        settlement: {
+          status: "failed",
+          error: "the context restarted before the script finished",
+          failureKind: "interrupted",
+        },
+      },
+    },
+    {
+      type: "events.iterate.com/agent/llm-request-settled",
+      payload: { requestOffset: 5, durationMs: 100, result: { status: "succeeded", text: "ok" } },
+    },
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "ok" } },
+  ]);
+  const activity = state.items.find((item) => item.kind === "activity");
+  if (activity?.kind !== "activity") throw new Error("expected activity item");
+  expect(activity.steps[1]).toMatchObject({
+    kind: "code",
+    success: false,
+    errorMessage: "the context restarted before the script finished",
+  });
+});
+
 test("stamps the summary activity onto the running code step as it lands", () => {
   const state = reduceAll([
     {

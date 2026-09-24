@@ -787,6 +787,9 @@ importers:
       codemirror-json5:
         specifier: ^1.0.3
         version: 1.0.3
+      iterate:
+        specifier: workspace:*
+        version: link:../iterate
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(@types/react@19.2.17)(react@19.2.7)

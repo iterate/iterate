@@ -77,7 +77,6 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
     if (event.type === "events.iterate.com/context/run-settled") {
       const payload = isRecord(event.payload) ? event.payload : {};
       const requestOffset = typeof payload.requestOffset === "number" ? payload.requestOffset : NaN;
-      const settlement = isRecord(payload.settlement) ? payload.settlement : {};
       return {
         ...event,
         type: "events.iterate.com/capability-host/script-run-settled",
@@ -85,16 +84,7 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
           executionId:
             executionIdByRequestOffset.get(requestOffset) ?? `run:${String(requestOffset)}`,
           requestOffset,
-          settlement:
-            settlement.status === "failed"
-              ? {
-                  // `interrupted` (the context restarted mid-run) or `deadline`: the script may have run.
-                  phase: "execution",
-                  executionMayHaveOccurred: true,
-                  cancellation: "not-applicable",
-                  ...settlement,
-                }
-              : settlement,
+          settlement: payload.settlement,
         },
       };
     }

@@ -101,7 +101,7 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
     expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
   });
 
-  test("a failed settlement gains the fields the shared reducer's strict schema wants — an interrupted run counts as having run", () => {
+  test("a failed settlement reaches the shared reducer exactly as the platform wrote it", () => {
     const [, settled] = adaptContextRuns([
       at(
         8,
@@ -123,13 +123,11 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
     ]);
     expect(settled!.payload).toMatchObject({
       executionId: "agent-output:6",
-      settlement: {
-        status: "failed",
-        error: "the context restarted",
-        failureKind: "interrupted",
-        phase: "execution",
-        executionMayHaveOccurred: true,
-      },
+    });
+    expect(settled!.payload).toHaveProperty("settlement", {
+      status: "failed",
+      error: "the context restarted",
+      failureKind: "interrupted",
     });
   });
 
