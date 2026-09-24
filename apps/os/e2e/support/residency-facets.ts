@@ -16,6 +16,7 @@ export const facetStartedAt = async (facet: any): Promise<number> =>
  *  beats, the last, the instance's start, and the error a beat threw (a beat that throws stops the
  *  timer, which must not read as a stop from outside). */
 export const HEARTBEAT_SOURCE = {
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: the sweep must stop a facet that keeps its env.ITX answer
   "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class HeartbeatDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "beat", "beats"];
@@ -52,6 +53,7 @@ export class HeartbeatDurableObject extends FacetDurableObject {
 /** A careless facet that calls its own context every 5 s (an append of `chatter`) and keeps every
  *  answer: it keeps that context resident, so no birth resets it. */
 export const CHATTY_SOURCE = {
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: a facet that keeps every scope and answer from its own calls
   "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class ChattyDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "chatter"];
@@ -65,6 +67,23 @@ export class ChattyDurableObject extends FacetDurableObject {
     void tick();
     return "chattering";
   }
+}`,
+};
+
+/** A careless mini-app: its LiveState sink takes a fresh `env.ITX` scope per `set` and releases
+ *  neither it nor the append's answer. Its live state's revision (`rev`, the start time × 4096) names
+ *  the instance. The careful one is support/sources.ts `chatroom`. */
+export const CARELESS_CHATROOM_SOURCE = {
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless sink IS the subject: neither the context nor the facet may stay running on it
+  "cap.js": `import { FacetDurableObject, LiveState } from "./processor.js";
+export class ChatroomDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "post", "state"];
+  #chat = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] });
+  post(from, text) {
+    this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
+    return { ok: true };
+  }
+  state() { return this.#chat.snapshot(); }
 }`,
 };
 
@@ -82,24 +101,20 @@ export class SiteDurableObject extends FacetDurableObject {
  *  `start` answers the facet's clock at the start, `beats()` the last beat and when the release
  *  landed. */
 export const RELEASER_SOURCE = {
-  "cap.js": `import { FacetDurableObject } from "./processor.js";
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: a claimed facet that keeps its env.ITX answer
+  "cap.js": `import { FacetDurableObject, withItx } from "./processor.js";
 export class ReleaserDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "start", "beats"];
   kept = [];
-  async released(call) {
-    const itx = this.env.ITX.get();
-    const answer = call(itx);
-    try { return await answer; } finally { answer?.[Symbol.dispose]?.(); itx[Symbol.dispose]?.(); }
-  }
   async start(holdMs) {
     const name = this.ctx.props.name;
-    await this.released((itx) => itx.processors.claim(name, Date.now() + 600_000));
+    await withItx(this.env.ITX, (itx) => itx.processors.claim(name, Date.now() + 600_000));
     const itx = this.env.ITX.get();
     this.kept.push(itx, await itx.whoami());
     const beat = () => { this.ctx.storage.kv.put("lastBeat", Date.now()); setTimeout(beat, 5_000); };
     beat();
     setTimeout(async () => {
-      await this.released((itx) => itx.processors.claim(name, null));
+      await withItx(this.env.ITX, (itx) => itx.processors.claim(name, null));
       this.ctx.storage.kv.put("releasedAt", Date.now());
     }, holdMs);
     return Date.now();

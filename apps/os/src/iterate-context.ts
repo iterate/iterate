@@ -96,8 +96,8 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
 /** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `readEvents`, `waitForEvent`, `kv`, `rpcStubs`,
  *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
- *  whole surface, and `env.ITX.get().append(…)` typechecks in loaded code. `cd` is the edge's own
- *  (below) — it returns an EDGE context, not the built-in's handle. */
+ *  whole surface, and `withItx(env.ITX, (itx) => itx.append(…))` typechecks in loaded code. `cd` is
+ *  the edge's own (below) — it returns an EDGE context, not the built-in's handle. */
 export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */

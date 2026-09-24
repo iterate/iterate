@@ -1165,13 +1165,21 @@ var AgentAiSink = class extends RpcTarget {
   }
 };
 
+// runtime/with-itx-module.ts
+var WITH_ITX_MODULE = 'function T(n){return typeof n=="object"&&n&&"code"in n?n.code:void 0}var c={message:1024,stack:16384,string:256,attributeKeys:32},w;function O(n,e,o){try{let r={};for(let[a,t]of Object.entries(o||{}).slice(0,c.attributeKeys))t!==void 0&&(r[a.slice(0,c.string)]=typeof t=="string"?t.slice(0,c.string):t);let s=T(e),d=e instanceof Error?{type:(e.name||"Error").slice(0,c.string),message:e.message.slice(0,c.message),...e.stack&&{stack:e.stack.slice(0,c.stack)}}:typeof e=="object"&&e?{type:"ObjectThrown"}:{type:`${typeof e}Thrown`,message:String(e).slice(0,c.message)};console.error({...r,event:"issue",failureSite:n.slice(0,c.string),code:s,error:d}),w?.({failureSite:n,caught:e,attributes:r})}catch{}}function y(n){for(let e of[...n].reverse())try{e?.[Symbol.dispose]?.()}catch(o){O("itx-expression.release-rpc-session",o)}}async function m(n,e){let o=[],r=n.get();try{return await e(h(r,o))}finally{y([r,...o])}}function h(n,e){let o=new WeakMap,r=(s,d)=>{if(!s||typeof s!="object"&&typeof s!="function")return s;let a=new Proxy(s,{get(t,u){let i=Reflect.get(t,u);return u==="then"&&typeof i=="function"?(p,l)=>Reflect.apply(i,t,[typeof p=="function"?f=>typeof f!="function"?p(f):(e.push(f),p(r(f,void 0))):p,l]):typeof u=="symbol"||u==="then"||u==="catch"||u==="finally"?typeof i=="function"?i.bind(t):i:r(i,t)},apply(t,u,i){let p=Reflect.apply(t,d,i.map(l=>o.get(Object(l))??l));return e.push(p),r(p,void 0)}});return o.set(a,s),a};return r(n,void 0)}export{h as recordPipelinedSteps,m as withItx};\n';
+
 // runtime/ai-transport-source.ts
 var AI_TRANSPORT_SOURCE = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./with-itx.js";
 export default class AgentAiTransport extends WorkerEntrypoint {
-  async run(path, model, input, options, sink, idleBudgetMs) {
-    const itx = this.env.ITX.get();
-    const scoped = itx.cd(path);
+  // One withItx round trip for the whole model call: the scope, its cd(path) and the ai.run call are
+  // released after the drain, the whole body inside. The agent facet's runInBackground claim is what
+  // keeps this call alive that long (apps/agents/runtime/processor.ts #runLlmRequest).
+  run(path, model, input, options, sink, idleBudgetMs) {
+    return withItx(this.env.ITX, (itx) => this.#run(itx.cd(path), model, input, options, sink, idleBudgetMs));
+  }
+  async #run(scoped, model, input, options, sink, idleBudgetMs) {
     let call, reader, initialTimedOut = false;
     const withinIdle = async (operation, message) => {
       let timer;
@@ -1219,11 +1227,10 @@ export default class AgentAiTransport extends WorkerEntrypoint {
       void reader?.cancel(error).catch(() => {});
       void sink.error(error instanceof Error ? error.message : String(error)).catch(() => {});
       throw error;
-    } finally {
-      call?.[Symbol.dispose]?.(); scoped[Symbol.dispose]?.(); itx[Symbol.dispose]?.();
     }
   }
-}`
+}`,
+  "with-itx.js": WITH_ITX_MODULE
 };
 
 // runtime/durable-object.ts

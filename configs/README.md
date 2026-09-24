@@ -8,9 +8,12 @@ downloader live in `packages/shared/src/config-repo-template`.
 - `with-agents/` — homepage plus the optional agents app, installed on `project/created`.
 
 A template must contain `worker.ts`, executable JavaScript despite its extension. Its sibling `.js`
-files are available as worker modules. Optional `iterate.json` declares an `events` array; the
-platform subscribes the config worker's `processEventBatch(events, range)` before emitting
-`project/created`. Templates without that manifest have no lifecycle subscription.
+files are available as worker modules. The worker extends `ConfigWorker` from `./processor.js` and
+reaches the project through `this.withItx((itx) => …)`, which releases everything the call reached;
+lint refuses a raw `env.ITX.get()` (`iterate/no-raw-itx-get`). Optional `iterate.json` declares an
+`events` array; the platform subscribes the config worker's `processEventBatch(events, range)` before
+emitting `project/created`, and `ConfigWorker` hands each event to `processEvent({ event, itx })`.
+Templates without that manifest have no lifecycle subscription.
 
 `session.projects.templates()` lists presets. `projects.create({ project, configRepoTemplate })`
 also accepts custom references such as `github:owner/repo#main&path:templates/example`. The API

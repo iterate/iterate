@@ -172,6 +172,7 @@ test("a missing project secret in the URL query is a loud 502 naming the URL —
 // binding with the x-itx-expression header, riding the DO's expression fetch; no capnweb client anywhere ──
 
 const SRC_PROVIDER = {
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the provider's scope and lend are held on globalThis on purpose: the rows below pin a lent stub's lifetime
   "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 class WsDevice extends RpcTarget {
   fetch(request) {

@@ -9,6 +9,10 @@
 // config worker. Browser cookie flows are in specs/os/auth.spec.ts. RED, deployed: the hop budget
 // counts only what a site forwards — a site fetching its own host with a FRESH Request is not stopped by it.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { newWebSocketRpcSession } from "capnweb";
+import { transformSync } from "esbuild";
 import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
@@ -251,6 +255,46 @@ deployedOnly(
     });
     ws.close(1000, "done");
     expect(echo).toBe("site-echo:hi");
+  },
+);
+
+// THE MINI-APP EXAMPLE (examples/mini-app.ts, TS stripped and routed as specs/os/mini-app.spec.ts
+// publishes it): its capnweb API lives as long as the page's WebSocket, and holds no scope for it —
+// `Notes` takes a `WithItx` accessor, so each method is its own round trip. The spec drives the page
+// and dials a subdomain; this row dials the API itself, so it also runs on a preview's paths.
+deployedOnly(
+  "deployed: the mini-app example's notes round-trip over one long-lived WebSocket, each method its own withItx round trip",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("mini-app");
+    const itx = openItx(await registerProject(slug));
+    const miniApp = transformSync(
+      readFileSync(resolve(import.meta.dirname, "../examples/mini-app.ts"), "utf8"),
+      { loader: "ts", format: "esm" },
+    ).code;
+    const router = `import { WorkerEntrypoint } from "cloudflare:workers";
+import MiniApp from "./mini-app.js";
+export default class extends WorkerEntrypoint {
+  fetch(request) {
+    if (request.headers.get("x-iterate-routing-slug") === "notes")
+      return new MiniApp(this.ctx, this.env).fetch(request);
+    return new Response("Not found\\n", { status: 404 });
+  }
+}`;
+    await publishConfigWorker(itx, [
+      "itx",
+      "workers",
+      ["get", { source: { "cap.js": router, "mini-app.js": miniApp } }],
+    ]);
+    using notes = newWebSocketRpcSession<{
+      add(text: string): Promise<{ text: string }[]>;
+      list(): Promise<{ text: string }[]>;
+    }>(
+      projectUrl({ project: slug, routingSlug: "notes", path: "/rpc" }).href.replace(/^http/, "ws"),
+    );
+    expect(await notes.list()).toEqual([]);
+    await notes.add("first");
+    await notes.add("second");
+    expect((await notes.list()).map((note) => note.text)).toEqual(["second", "first"]);
   },
 );
 

@@ -22,117 +22,120 @@ const VOICE_AGENT_CACHE_KEY = "voice-agent:dev";
 
 export default class VoiceWorker extends ConfigWorker {
   async health(): Promise<{ ok: true; projectId: unknown; cacheKey: string }> {
-    const itx = this.env.ITX.get() as unknown as { whoami(): Promise<{ projectId?: unknown }> };
-    return { ok: true, projectId: (await itx.whoami()).projectId, cacheKey: VOICE_AGENT_CACHE_KEY };
+    const { projectId } = await this.withItx((itx) => itx.whoami());
+    return { ok: true, projectId, cacheKey: VOICE_AGENT_CACHE_KEY };
   }
 
   /** Render to the resolution and pixel format advertised by the target. */
   async setImage(rawInput: z.input<typeof ScreenImageInput>) {
     const input = ScreenImageInput.parse(rawInput);
     const startedAt = Date.now();
-    // ITX mounts are dynamic remote capabilities. Validate their returned
-    // metadata at the boundary; this interface describes the methods we call.
-    const itx = this.env.ITX.get() as unknown as {
-      browser: {
-        quickAction(action: "screenshot", options: Record<string, unknown>): Promise<Uint8Array>;
+    // One round trip for the whole upload, bounded by the screen's refreshTimeoutMs.
+    return this.withItx(async (scope) => {
+      // ITX mounts are dynamic remote capabilities. Validate their returned
+      // metadata at the boundary; this interface describes the methods we call.
+      const itx = scope as unknown as {
+        browser: {
+          quickAction(action: "screenshot", options: Record<string, unknown>): Promise<Uint8Array>;
+        };
+        clients: Record<
+          string,
+          {
+            screen: {
+              info(): Promise<unknown>;
+              status(): Promise<unknown>;
+              setImage(
+                input: null | { uploadId: number; offset: number; format: string; data: string },
+              ): Promise<unknown>;
+            };
+          }
+        >;
       };
-      clients: Record<
-        string,
-        {
-          screen: {
-            info(): Promise<unknown>;
-            status(): Promise<unknown>;
-            setImage(
-              input: null | { uploadId: number; offset: number; format: string; data: string },
-            ): Promise<unknown>;
-          };
-        }
-      >;
-    };
-    const screen = itx.clients[input.device]!.screen;
-    const info = ScreenInfo.parse(await screen.info());
-    if (!input.image) {
+      const screen = itx.clients[input.device]!.screen;
+      const info = ScreenInfo.parse(await screen.info());
+      if (!input.image) {
+        const transferStartedAt = Date.now();
+        await screen.setImage(null);
+        const transferMs = Date.now() - transferStartedAt;
+        return {
+          shown: false,
+          bytes: 0,
+          renderMs: 0,
+          transferMs,
+          totalMs: Date.now() - startedAt,
+        };
+      }
+      const format = input.image.format || info.preferredFormat;
+      if (!info.formats.includes(format)) throw new Error(`Screen does not support ${format}`);
+      const renderStartedAt = Date.now();
+      const png = await itx.browser.quickAction("screenshot", {
+        html: input.image.html,
+        viewport: { width: info.width, height: info.height, deviceScaleFactor: 1 },
+        // A screenshot can succeed even when an <img> is a broken-link icon.
+        // Gate capture on decoded images and loaded fonts, with a bounded wait.
+        addScriptTag: [
+          {
+            content: `
+          document.documentElement.removeAttribute("data-iterate-screen-assets");
+          Promise.all([
+            ...Array.from(document.images, image => { image.loading = "eager"; return image.decode(); }),
+            document.fonts.ready,
+          ]).then(
+            () => document.documentElement.setAttribute("data-iterate-screen-assets", "ready"),
+            () => document.documentElement.setAttribute("data-iterate-screen-assets", "failed"),
+          );
+        `,
+          },
+        ],
+        waitForSelector: { selector: '[data-iterate-screen-assets="ready"]', timeout: 5000 },
+        screenshotOptions: { type: "png", fullPage: false },
+      });
+      const renderMs = Date.now() - renderStartedAt;
+      const bitmap = renderScreenPixels(
+        png instanceof Uint8Array ? png : new Uint8Array(png),
+        info,
+        format,
+      );
+      const uploadId = Math.floor(Math.random() * 0x7fffffff);
       const transferStartedAt = Date.now();
-      await screen.setImage(null);
+      for (let offset = 0; offset < bitmap.length; offset += info.maxChunkBytes) {
+        const expected = Math.min(offset + info.maxChunkBytes, bitmap.length);
+        const acknowledged = await screen.setImage({
+          uploadId,
+          format,
+          offset,
+          data: bytesToBase64(
+            bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length)),
+          ),
+        });
+        if (acknowledged !== expected) {
+          throw new Error(
+            `screen acknowledged ${String(acknowledged)} bytes; expected ${String(expected)}`,
+          );
+        }
+      }
+      const deadline = Date.now() + info.refreshTimeoutMs;
+      for (;;) {
+        const status = ScreenStatus.parse(await screen.status());
+        if (status.uploadId !== uploadId)
+          throw new Error("Screen upload was replaced by another caller");
+        if (status.state === "shown") break;
+        if (status.state !== "pending") throw new Error(`Screen refresh ${status.state}`);
+        if (Date.now() >= deadline) throw new Error("Screen refresh timed out");
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
       const transferMs = Date.now() - transferStartedAt;
       return {
-        shown: false,
-        bytes: 0,
-        renderMs: 0,
+        shown: true,
+        width: info.width,
+        height: info.height,
+        format,
+        bytes: bitmap.length,
+        renderMs,
         transferMs,
         totalMs: Date.now() - startedAt,
       };
-    }
-    const format = input.image.format || info.preferredFormat;
-    if (!info.formats.includes(format)) throw new Error(`Screen does not support ${format}`);
-    const renderStartedAt = Date.now();
-    const png = await itx.browser.quickAction("screenshot", {
-      html: input.image.html,
-      viewport: { width: info.width, height: info.height, deviceScaleFactor: 1 },
-      // A screenshot can succeed even when an <img> is a broken-link icon.
-      // Gate capture on decoded images and loaded fonts, with a bounded wait.
-      addScriptTag: [
-        {
-          content: `
-        document.documentElement.removeAttribute("data-iterate-screen-assets");
-        Promise.all([
-          ...Array.from(document.images, image => { image.loading = "eager"; return image.decode(); }),
-          document.fonts.ready,
-        ]).then(
-          () => document.documentElement.setAttribute("data-iterate-screen-assets", "ready"),
-          () => document.documentElement.setAttribute("data-iterate-screen-assets", "failed"),
-        );
-      `,
-        },
-      ],
-      waitForSelector: { selector: '[data-iterate-screen-assets="ready"]', timeout: 5000 },
-      screenshotOptions: { type: "png", fullPage: false },
     });
-    const renderMs = Date.now() - renderStartedAt;
-    const bitmap = renderScreenPixels(
-      png instanceof Uint8Array ? png : new Uint8Array(png),
-      info,
-      format,
-    );
-    const uploadId = Math.floor(Math.random() * 0x7fffffff);
-    const transferStartedAt = Date.now();
-    for (let offset = 0; offset < bitmap.length; offset += info.maxChunkBytes) {
-      const expected = Math.min(offset + info.maxChunkBytes, bitmap.length);
-      const acknowledged = await screen.setImage({
-        uploadId,
-        format,
-        offset,
-        data: bytesToBase64(
-          bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length)),
-        ),
-      });
-      if (acknowledged !== expected) {
-        throw new Error(
-          `screen acknowledged ${String(acknowledged)} bytes; expected ${String(expected)}`,
-        );
-      }
-    }
-    const deadline = Date.now() + info.refreshTimeoutMs;
-    for (;;) {
-      const status = ScreenStatus.parse(await screen.status());
-      if (status.uploadId !== uploadId)
-        throw new Error("Screen upload was replaced by another caller");
-      if (status.state === "shown") break;
-      if (status.state !== "pending") throw new Error(`Screen refresh ${status.state}`);
-      if (Date.now() >= deadline) throw new Error("Screen refresh timed out");
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    }
-    const transferMs = Date.now() - transferStartedAt;
-    return {
-      shown: true,
-      width: info.width,
-      height: info.height,
-      format,
-      bytes: bitmap.length,
-      renderMs,
-      transferMs,
-      totalMs: Date.now() - startedAt,
-    };
   }
 
   /** The press. `activation` is the device's call identity: the call starts under it at boot and
@@ -149,91 +152,94 @@ export default class VoiceWorker extends ConfigWorker {
     const deviceMatch = /^\/agents\/voice\/v23\/([A-Za-z0-9_-]+)\//.exec(streamPath);
     const screenDevice =
       options.screen === true && deviceMatch?.[1] ? deviceMatch[1].replaceAll("-", "_") : undefined;
-    const itx = this.env.ITX.get() as unknown as {
-      agents: { create(path: string): Promise<unknown> };
-      cd(path: string): {
-        append(...events: object[]): Promise<unknown>;
-        processors: { disable(name: string): Promise<unknown> };
+    return this.withItx(async (scope) => {
+      // `agents` is the rewrite rule the agents app mounts, which the declared scope does not name.
+      const itx = scope as unknown as {
+        agents: { create(path: string): Promise<unknown> };
+        cd(path: string): {
+          append(...events: object[]): Promise<unknown>;
+          processors: { disable(name: string): Promise<unknown> };
+        };
       };
-    };
-    // Normal agent creation establishes the creator link and script sandbox before
-    // either loaded voice processor needs project code, egress or tools.
-    await itx.agents.create(streamPath);
-    const conversation = itx.cd(streamPath);
-    await conversation.processors.disable("agent");
-    await conversation.append(
-      {
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "voice-agent",
-          target: [
-            "itx",
-            "facets",
-            [
-              "get",
-              "voice-agent",
-              {
-                source: "itx.kv.get('voice-agent.js')",
-                cacheKey: VOICE_AGENT_CACHE_KEY,
-                className: "VoiceAgentDurableObject",
-              },
+      // Normal agent creation establishes the creator link and script sandbox before
+      // either loaded voice processor needs project code, egress or tools.
+      await itx.agents.create(streamPath);
+      const conversation = itx.cd(streamPath);
+      await conversation.processors.disable("agent");
+      await conversation.append(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "voice-agent",
+            target: [
+              "itx",
+              "facets",
+              [
+                "get",
+                "voice-agent",
+                {
+                  source: "itx.kv.get('voice-agent.js')",
+                  cacheKey: VOICE_AGENT_CACHE_KEY,
+                  className: "VoiceAgentDurableObject",
+                },
+              ],
+              "processEventBatch",
             ],
-            "processEventBatch",
-          ],
-          /* Every durable event, plus the two ephemeral types a processor only sees by name. */
-          consumes: [
-            "*",
-            "events.iterate.com/voice-agent/mic-frame",
-            "events.iterate.com/voice-agent/keepalive",
-          ],
-        },
-      },
-      {
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          /* Not "agent": that is the normal agent processor this press disabled above. */
-          name: "voice-delegate",
-          target: [
-            "itx",
-            "facets",
-            [
-              "get",
-              "voice-delegate",
-              {
-                source: "itx.kv.get('voice-delegate.js')",
-                /* Substituted by the installer with voice-delegate.js's content hash, like the voice key. */
-                cacheKey: "voice-delegate:dev",
-                className: "VoiceDelegateDurableObject",
-              },
+            /* Every durable event, plus the two ephemeral types a processor only sees by name. */
+            consumes: [
+              "*",
+              "events.iterate.com/voice-agent/mic-frame",
+              "events.iterate.com/voice-agent/keepalive",
             ],
-            "processEventBatch",
-          ],
-          /* The delegate contract's own list (events.ts): context, the relay's delegations, and
-           * its own answers (to settle the pending fold). */
-          consumes: [...VOICE_DELEGATE_CONSUMES],
+          },
         },
-      },
-      {
-        type: "events.iterate.com/voice-agent/call-started",
-        idempotencyKey: `voice-agent/call:${options.activation}`,
-        payload: {
-          activation: options.activation,
-          conversationId: `conv_${options.activation}`,
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            /* Not "agent": that is the normal agent processor this press disabled above. */
+            name: "voice-delegate",
+            target: [
+              "itx",
+              "facets",
+              [
+                "get",
+                "voice-delegate",
+                {
+                  source: "itx.kv.get('voice-delegate.js')",
+                  /* Substituted by the installer with voice-delegate.js's content hash, like the voice key. */
+                  cacheKey: "voice-delegate:dev",
+                  className: "VoiceDelegateDurableObject",
+                },
+              ],
+              "processEventBatch",
+            ],
+            /* The delegate contract's own list (events.ts): context, the relay's delegations, and
+             * its own answers (to settle the pending fold). */
+            consumes: [...VOICE_DELEGATE_CONSUMES],
+          },
         },
-      },
-      ...(screenDevice
-        ? [
-            {
-              type: "events.iterate.com/agent/context-added",
-              idempotencyKey: `voice-agent/screen-context:${options.activation}`,
-              payload: {
-                role: "developer",
-                content: SCREEN_CONTEXT.replaceAll("{{DEVICE}}", screenDevice!),
+        {
+          type: "events.iterate.com/voice-agent/call-started",
+          idempotencyKey: `voice-agent/call:${options.activation}`,
+          payload: {
+            activation: options.activation,
+            conversationId: `conv_${options.activation}`,
+          },
+        },
+        ...(screenDevice
+          ? [
+              {
+                type: "events.iterate.com/agent/context-added",
+                idempotencyKey: `voice-agent/screen-context:${options.activation}`,
+                payload: {
+                  role: "developer",
+                  content: SCREEN_CONTEXT.replaceAll("{{DEVICE}}", screenDevice!),
+                },
               },
-            },
-          ]
-        : []),
-    );
-    return { streamPath };
+            ]
+          : []),
+      );
+      return { streamPath };
+    });
   }
 }

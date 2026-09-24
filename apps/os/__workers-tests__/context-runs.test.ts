@@ -121,11 +121,23 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
 // from its loaded isolate, and a LIVE value in it — a function, an object carrying one, a handle —
 // arrives as a stub. Serialized and dropped undisposed, that stub held the context: workerd refused
 // to evict it ("still has active references") until the next deploy. The number is the control.
+// The script runs inside one `withItx` round trip (`runScriptModule`), so the calls it made and never
+// returned — awaited or not, on the scope or on a handle it awaited — are released with its scope.
 test.for([
   ["a number", "async () => 1", 1],
   ["a function", "async () => () => 1", undefined],
   ["an object carrying a function", "async () => ({ n: 1, f: () => 1 })", { n: 1 }],
   ["a handle", "async (itx) => itx.cd('/elsewhere')", undefined],
+  [
+    "a number after calls it never returned",
+    "async (itx) => { itx.cd('/elsewhere').whoami(); await itx.cd('/elsewhere').whoami(); return 1; }",
+    1,
+  ],
+  [
+    "a number after a call on a handle it awaited",
+    "async (itx) => { const elsewhere = await itx.cd('/elsewhere'); await elsewhere.whoami(); return 1; }",
+    1,
+  ],
 ] as const)(
   "a run returning %s leaves nothing holding the context: settled, then evicted at once",
   async ([name, code, result]) => {

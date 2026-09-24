@@ -9,6 +9,7 @@ import type { Program } from "estree";
 import { getPropertyName } from "./rules/ast.ts";
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
+import { noRawItxGetRule } from "./rules/no-raw-itx-get.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
 
@@ -766,6 +767,7 @@ const plugin: StrictPlugin = {
     },
     ...tseslintRules,
     "mechanical-class-impl": mechanicalClassImplRule,
+    "no-raw-itx-get": noRawItxGetRule,
     "isolated-codemode": isolatedCodemodeRule,
     "relative-import-extensions": {
       meta: {
