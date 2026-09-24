@@ -34,7 +34,7 @@
 import { codedError } from "iterate/next/lib";
 import type { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
 import { SECRET_PATH } from "../secrets.ts";
-import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
+import { GLOBAL_PROJECT_ID, pathUnderOwner, resourceScope } from "./paths.ts";
 
 /** A context as the rules read it: the project it belongs to and its canonical path. */
 type IterateContextAddress = { projectId: string; path: string };
@@ -69,8 +69,8 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
     where: "/secrets/<name> directly under a project's, a user's or an organization's root",
     mayBeHostedOn: ({ projectId, path }) => {
       const owner = resourceScope(projectId, path);
-      if (owner.id === GLOBAL_PROJECT_ID) return false;
-      return SECRET_PATH.test(owner.rootPath === "/" ? path : path.slice(owner.rootPath.length));
+      if (owner.kind === "global") return false;
+      return SECRET_PATH.test(pathUnderOwner(owner, path));
     },
   },
   // 5.

@@ -19,8 +19,14 @@ export const GLOBAL_PROJECT_ID = "global";
 
 /** THE RESOURCE OWNER of a context: `id` is the half every project-scoped resource key is prefixed
  *  with (`itx.kv`'s `${id}:`, a secret cell's `${id}:${name}` Durable Object, the Artifacts `${id}.`
- *  repo prefix) and `rootPath` the context whose log holds its secrets catalog. */
-export type ResourceScope = { id: string; rootPath: string };
+ *  repo prefix) and `rootPath` the context whose log holds its secrets catalog. `kind` and `ownerId`
+ *  say who that is: a project, a user's or an organization's subtree, or the global root. */
+export type ResourceScope = {
+  id: string;
+  rootPath: string;
+  kind: "project" | "users" | "organizations" | "global";
+  ownerId: string;
+};
 
 /** THE ONE DERIVATION of a context's resource owner (`ResourceScope`). A project owns its resources
  *  whole — `{ id: projectId, rootPath: "/" }`, every key byte-identical to a plain project prefix.
@@ -35,16 +41,29 @@ export type ResourceScope = { id: string; rootPath: string };
  *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own
  *  secrets root. */
 export function resourceScope(projectId: string, path: string): ResourceScope {
-  if (projectId !== GLOBAL_PROJECT_ID) return { id: projectId, rootPath: "/" };
+  if (projectId !== GLOBAL_PROJECT_ID)
+    return { id: projectId, rootPath: "/", kind: "project", ownerId: projectId };
   const [kind, ownerId] = resolveContextPath("/", path).split("/").slice(1);
   if (!ownerId || (kind !== "users" && kind !== "organizations"))
-    return { id: GLOBAL_PROJECT_ID, rootPath: "/" };
+    return { id: GLOBAL_PROJECT_ID, rootPath: "/", kind: "global", ownerId: GLOBAL_PROJECT_ID };
   if (!PROJECT_ID.test(ownerId))
     throw codedError(
       "INVALID_CONTEXT",
       `invalid ${kind} id ${JSON.stringify(ownerId)}: only [A-Za-z0-9_-] (it is half of every resource key)`,
     );
-  return { id: `${GLOBAL_PROJECT_ID}--${kind}--${ownerId}`, rootPath: `/${kind}/${ownerId}` };
+  return {
+    id: `${GLOBAL_PROJECT_ID}--${kind}--${ownerId}`,
+    rootPath: `/${kind}/${ownerId}`,
+    kind,
+    ownerId,
+  };
+}
+
+/** A context's path relative to its owner's root (`resourceScope`) — what a secret's placeholder
+ *  spells: `/secrets/shop` for a project's `/secrets/shop` and a user's `/users/<id>/secrets/shop`
+ *  alike. */
+export function pathUnderOwner(scope: ResourceScope, path: string): string {
+  return scope.rootPath === "/" ? path : path.slice(scope.rootPath.length);
 }
 
 // ── durable object names ── the ONE place a context DO name is formatted and parsed. A context is

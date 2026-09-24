@@ -34,7 +34,7 @@ import {
   sessionSigningSecretOf,
   type AppConfigEnv,
 } from "../app-config.ts";
-import { DurableObjectNameCodec, resourceScope } from "../context/paths.ts";
+import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   decryptSecretMaterial,
@@ -104,8 +104,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   #address(): { context: string; path: string } {
     const context = this.ctx.props.iterateContextName;
     const { projectId, path } = DurableObjectNameCodec.parse(context);
-    const { rootPath } = resourceScope(projectId, path);
-    return { context, path: rootPath === "/" ? path : path.slice(rootPath.length) };
+    return { context, path: pathUnderOwner(resourceScope(projectId, path), path) };
   }
 
   /** Replace the record whole — material always travels with its complete policy, so a value
