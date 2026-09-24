@@ -61,6 +61,21 @@ function routeMount(
   return best;
 }
 
+/** The workspace's own verbs: its public methods beyond the processor's reads, and the handle type
+ *  `itx.workspaces.get(path)` answers (library.ts `WorkspaceFacet`). */
+export const workspaceVerbs = [
+  "mounts",
+  "readFile",
+  "readBase",
+  "writeFile",
+  "deleteFile",
+  "revert",
+  "listAllFiles",
+  "gitStatus",
+  "gitCommit",
+  "gitLog",
+] as const;
+
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   WorkspaceState,
   { ITX?: ItxEntrypointService },
@@ -68,19 +83,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 > {
   /** The processor's reads, and the workspace's own verbs — what `itx.workspaces.get(path)` reaches
    *  (library.ts). */
-  static override publicMethods = [
-    ...super.publicMethods,
-    "mounts",
-    "readFile",
-    "readBase",
-    "writeFile",
-    "deleteFile",
-    "revert",
-    "listAllFiles",
-    "gitStatus",
-    "gitCommit",
-    "gitLog",
-  ];
+  static override publicMethods = [...super.publicMethods, ...workspaceVerbs];
 
   processor = new WorkspaceProcessor((call) => this.withItx(call));
 

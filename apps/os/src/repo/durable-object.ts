@@ -61,23 +61,26 @@ function filePath(path: string): string {
   return path;
 }
 
+/** The repo's own verbs: its public methods beyond the processor's reads, and the handle type
+ *  `itx.repos.get(path)` answers (library.ts `RepoFacet`). */
+export const repoVerbs = [
+  "tip",
+  "readFile",
+  "readModules",
+  "modules",
+  "listFiles",
+  "commitFiles",
+  "writeFile",
+  "log",
+] as const;
+
 export class RepoDurableObject extends StreamProcessorDurableObject<
   RepoState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
   /** The processor's reads, and the repo's own verbs — what `itx.repos.get(path)` reaches (library.ts). */
-  static override publicMethods = [
-    ...super.publicMethods,
-    "tip",
-    "readFile",
-    "readModules",
-    "modules",
-    "listFiles",
-    "commitFiles",
-    "writeFile",
-    "log",
-  ];
+  static override publicMethods = [...super.publicMethods, ...repoVerbs];
 
   processor = new RepoProcessor((call) => this.withItx(call));
 
