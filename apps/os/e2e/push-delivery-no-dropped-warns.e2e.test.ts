@@ -3,7 +3,7 @@
 // RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's
 // cold catch-up would heal a dropped push before a snapshot could tell). Logs are worker-global, so
-// this file boots its OWN worker (support/log-harness.ts) and every row is `test.sequential`: a
+// this file boots its OWN worker (support/own-worker.ts) and every row is `test.sequential`: a
 // sibling running at the same time would write into the very log these rows count. Every other e2e
 // file speaks to the shared worker through support/client.ts, its rows concurrent.
 
@@ -23,16 +23,16 @@ import {
   subscriptions,
   until,
 } from "./support/client.ts";
-import { startLoggedWorker, type LoggedWorker } from "./support/log-harness.ts";
+import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
 import { projectHostsAreLocal } from "./support/project-host.ts";
 import { E2E_ADMIN_API_SECRET } from "./support/worker-config.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
-let worker: LoggedWorker;
+let worker: OwnWorker;
 const localSequential = test.skipIf(!projectHostsAreLocal()).sequential;
 beforeAll(async () => {
   if (!projectHostsAreLocal()) return;
-  worker = await startLoggedWorker();
+  worker = await startOwnWorker();
 }, 120_000);
 afterAll(async () => {
   await worker?.stop();

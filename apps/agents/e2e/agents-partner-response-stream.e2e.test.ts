@@ -3,7 +3,7 @@
 import { RpcTarget } from "capnweb";
 import { expect } from "vitest";
 import { collector, freshCtx, readAll, rejection, until } from "../../os/e2e/support/client.ts";
-import { startLoggedWorker } from "../../os/e2e/support/log-harness.ts";
+import { startOwnWorker } from "../../os/e2e/support/own-worker.ts";
 import { localOnly } from "../../os/e2e/support/project-host.ts";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { AI_TRANSPORT_SOURCE } from "../runtime/ai-transport-source.ts";
@@ -124,7 +124,7 @@ class DelayedWorkersAi extends RpcTarget {
 localOnly(
   "the installed agent settles delayed model streams through env.ITX.get",
   async () => {
-    const worker = await startLoggedWorker();
+    const worker = await startOwnWorker();
     try {
       const itx = worker.itx(freshCtx("agent-partner-stream"));
       await installAgents(itx, await buildAgentRuntime());
@@ -261,7 +261,7 @@ localOnly(
 localOnly(
   "the byte transport bounds a stalled sink write",
   async () => {
-    const worker = await startLoggedWorker();
+    const worker = await startOwnWorker();
     try {
       const itx = worker.itx(freshCtx("agent-transport-write-timeout"));
       const modelPath = "/agents/transport-write-timeout";

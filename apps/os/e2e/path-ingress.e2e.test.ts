@@ -6,11 +6,9 @@
 // origin, so its script cannot spend the issuer's cookie); and the platform's own first segments
 // (`api`, `mcp`, `login`, …) are never a project. LOCAL ONLY: this file boots its own worker with the
 // paths configuration (support/worker-config.ts) — the shared worker routes by subdomain.
-import { newWebSocketRpcSession } from "capnweb";
-import { createTestHarness } from "wrangler";
 import { afterAll, beforeAll, expect } from "vitest";
+import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
 import { localOnly, projectHostsAreLocal } from "./support/project-host.ts";
-import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./support/worker-config.ts";
 
 /** An app that answers with what it was handed: the URL it saw, its base path, its app label. */
 const SRC_ECHO_URL_APP = {
@@ -27,39 +25,19 @@ export default class Echo extends WorkerEntrypoint {
 }`,
 };
 
-let server: ReturnType<typeof createTestHarness>;
+let worker: OwnWorker;
 let origin: string;
-const sessions: unknown[] = [];
 const slug = `prj-paths-${Date.now().toString(36)}`;
 
 beforeAll(async () => {
   if (!projectHostsAreLocal()) return;
-  server = createTestHarness({
-    root: PACKAGE_DIR,
-    workers: [{ config: e2eWorkerConfig("http://127.0.0.1", { type: "paths" }) }],
-  });
-  const { url } = await server.listen();
-  origin = url.origin;
-  await server.update({
-    root: PACKAGE_DIR,
-    workers: [{ config: e2eWorkerConfig(origin, { type: "paths" }) }],
-  });
-  const session = newWebSocketRpcSession(`ws://${url.host}/api`) as any;
-  sessions.push(session);
-  const itx = await session
-    .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
-    .projects.create({ project: slug });
+  worker = await startOwnWorker({ ingressRouting: { type: "paths" } });
+  origin = worker.url.origin;
+  const itx = await worker.createProject(slug);
   await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_URL_APP }]]);
 }, 120_000);
 afterAll(async () => {
-  for (const session of sessions) {
-    try {
-      (session as Partial<Disposable>)[Symbol.dispose]?.();
-    } catch {
-      /* already broken */
-    }
-  }
-  await server?.close();
+  await worker?.stop();
 });
 
 localOnly(
@@ -102,11 +80,7 @@ localOnly(
 localOnly(
   "a stored file served under /projects/<project>/files/… is sandboxed too — a document on the platform's origin, whatever its type",
   async () => {
-    const session = newWebSocketRpcSession(`ws://${new URL(origin).host}/api`) as any;
-    sessions.push(session);
-    const itx = session
-      .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
-      .projects.get(slug);
+    const itx = worker.itx(slug);
     await itx.files.get("/page.html").put({
       // `data` is base64 (or a data: URL): the bytes of a page that would call /api if it ran unsandboxed
       data: Buffer.from("<script>fetch('/api')</script>").toString("base64"),

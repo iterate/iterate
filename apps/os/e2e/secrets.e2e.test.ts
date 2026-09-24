@@ -21,7 +21,7 @@
 import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, processorNames, readAll, runId, workerUrl } from "./support/client.ts";
-import { petshopBaseUrl } from "./support/petshop.ts";
+import { petshopBaseUrl, petshopLegacyBearer } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
@@ -344,16 +344,7 @@ deployedOnly(
   "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door dialled from a NESTED context (`/agents/dialler`), whose egress forwards the upgrade to /secrets/shop and its facet substitutes the bearer, dials, and hands the 101 back; the capnweb call answers over it; the use is a fact on the secret's path with status 101",
   async () => {
     const shop = petshopBaseUrl();
-    const login = await fetch(`${shop}/api/legacy-login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        email: `secret-ws-${runId()}@example.com`,
-        password: "correct-horse",
-      }),
-    });
-    expect(login.status).toBe(200);
-    const { accessToken } = (await login.json()) as { accessToken: string };
+    const accessToken = await petshopLegacyBearer(`secret-ws-${runId()}@example.com`);
     const itx = openItx(freshCtx("secrets-ws"));
     await itx.secrets.set("/secrets/shop", accessToken, { urls: [shop] });
     const wsUrl = `${shop.replace(/^http/, "ws")}/capnweb`;
