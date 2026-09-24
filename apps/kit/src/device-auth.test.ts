@@ -186,28 +186,6 @@ test("a platform that doesn't answer as iterate is refused before any session ch
   expect(f.begin).not.toHaveBeenCalled();
 });
 
-test("a session whose platform is gone doesn't block setting up another board", async () => {
-  const f = fixture();
-  f.end.mockRejectedValue(new Error("Sign-out could not reach Iterate (522). Try again."));
-  f.host.mockResolvedValue({
-    issuer: "https://gone.example",
-    resource: "https://gone.example/api",
-  });
-  f.deps.issuerAnswersAt.mockImplementation(async (issuer: string) =>
-    issuer === "https://gone.example" ? "gone.example could not be reached." : null,
-  );
-  const response = await deviceAuth(
-    new Request(`${origin}/devices/satellite1/login?issuer=${encodeURIComponent(selfHost)}`, {
-      method: "POST",
-      headers: { origin, cookie },
-    }),
-    f.env,
-    f.deps,
-  );
-  expect(response?.status).toBe(303);
-  expect(f.begin).toHaveBeenCalledOnce();
-});
-
 function fixture() {
   const begin = vi.fn(
     async (_host: BrowserHost, _next: string) => "https://issuer.example/oauth2/auth",
@@ -219,14 +197,8 @@ function fixture() {
     logoUri: `${origin}/vendors/futureproofhomes.png`,
   }));
   const bearer = vi.fn(async (): Promise<string | null> => "token");
-  const host = vi.fn(
-    async (): Promise<{ issuer: string; resource: string } | null> => ({
-      issuer: "https://issuer.example",
-      resource: "https://issuer.example/api",
-    }),
-  );
   const sessions = {
-    getByName: () => ({ begin, end, client, bearer, host }),
+    getByName: () => ({ begin, end, client, bearer }),
   } as unknown as DurableObjectNamespace<BrowserSession>;
   const issuerAnswersAt = vi.fn(async (_origin: string): Promise<string | null> => null);
   return {
@@ -240,6 +212,5 @@ function fixture() {
     end,
     client,
     bearer,
-    host,
   };
 }
