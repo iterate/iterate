@@ -17,6 +17,12 @@ the same model. After sign-in, enter Wi-Fi, click **Prepare device**, then **Fla
 device**. **Set up another device** returns to the public selector and starts fresh
 consent; it never silently changes the authorized model.
 
+A board can belong to another iterate platform, a self-hosted one included: open
+`k.iterate.com/.auth/connect?issuer=<its origin>`. Kit checks the origin (https, not one of
+iterate's own zones, and its discovery document names it), then the selector's button says
+**Log in with &lt;its host&gt;** and consent happens there. The board is flashed with that
+platform's address. **Set up another device** keeps the platform.
+
 Prepare installs voice when missing and asks for an OpenAI API key if the project
 has none. It verifies voice health before minting a ten-year token scoped to the
 chosen project, under the same OAuth client that was authorized. Existing voice

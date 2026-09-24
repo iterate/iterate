@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { createFileRoute, getRouteApi, redirect, Link } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, redirect } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -160,13 +160,14 @@ function KitPage() {
             <FieldContent>
               <div className="flex flex-wrap items-center justify-between gap-2 sm:pt-2">
                 <span id="device">{device.name}</span>
-                <Link
-                  to="/"
-                  search={{ device: device.id }}
+                {/* through Kit's connect route (device-auth.ts): back to device selection, keeping
+                    this session's platform when it isn't the default one */}
+                <a
+                  href={`/.auth/connect?${new URLSearchParams({ issuer: info.platformOrigin, next: `/devices/${device.id}/firmware/${DEFAULT_FIRMWARE_VERSION}` })}`}
                   className="text-xs underline underline-offset-4"
                 >
                   Set up another device
-                </Link>
+                </a>
               </div>
               <FieldDescription className="flex items-center gap-2">
                 <img

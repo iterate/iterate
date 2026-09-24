@@ -14,7 +14,7 @@ import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "./lib
 import { OAuthScopes } from "./oauth-scopes.ts";
 
 /** The port separates local apps sharing localhost's cookie jar. */
-function sessionCookieName(url: URL) {
+export function sessionCookieName(url: URL) {
   return `__Host-itx-session${url.port ? `-${url.port}` : ""}`;
 }
 export function appSession(namespace: DurableObjectNamespace<BrowserSession>, request: Request) {
@@ -77,7 +77,7 @@ export function issuerOriginOf(
  *  exactly. NOTHING else is read from the document — the endpoints stay hand-built from the origin
  *  (app-session.ts: `/oauth2/token`, and `/api` as the resource), so a document can steer nothing.
  *  Null when it answers as expected, else the reason. */
-async function issuerAnswersAt(origin: string): Promise<string | null> {
+export async function issuerAnswersAt(origin: string): Promise<string | null> {
   try {
     const response = await fetch(`${origin}/.well-known/oauth-authorization-server`, {
       headers: { accept: "application/json" },

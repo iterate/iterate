@@ -21,7 +21,15 @@ import { DEFAULT_DEVICE_ID, findFirmwareDevice, firmwareCatalog } from "../firmw
 import { deviceVendors } from "../firmware/device-client.ts";
 
 export const Route = createFileRoute("/")({
-  validateSearch: z.object({ device: z.string().optional().catch(undefined) }),
+  validateSearch: z.object({
+    device: z.string().optional().catch(undefined),
+    // another iterate platform (a self-hosted one), carried here by `/.auth/connect?issuer=`
+    // (device-auth.ts, which checks it again when the login is posted)
+    issuer: z
+      .url({ protocol: /^https$/ })
+      .optional()
+      .catch(undefined),
+  }),
   head: () => ({ meta: [{ title: "Choose your device · Kit" }] }),
   component: DevicePicker,
 });
@@ -82,7 +90,15 @@ function DevicePicker() {
           Each device has its own access to the project you choose. You can revoke its access at any
           time.
         </p>
-        <LogInWithIterate formAction={`/devices/${device.id}/login`} />
+        {search.issuer ? (
+          <LogInWithIterate
+            formAction={`/devices/${device.id}/login?${new URLSearchParams({ issuer: search.issuer })}`}
+          >
+            Log in with {new URL(search.issuer).host}
+          </LogInWithIterate>
+        ) : (
+          <LogInWithIterate formAction={`/devices/${device.id}/login`} />
+        )}
       </section>
     </main>
   );
