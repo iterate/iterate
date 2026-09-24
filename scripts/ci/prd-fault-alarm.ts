@@ -14,7 +14,8 @@
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
-// is all it takes to be alarmed.
+// is all it takes to be alarmed. One whose defect is too rare to pin with a failing test is pinned
+// here instead (PINNED_WORKAROUNDS): the alarm posts once when its heal has been absent for weeks.
 //
 //   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
 //   … run --ref <git ref> --state <previous.json> --state-out <next.json>   # keeps state on main only
@@ -63,24 +64,47 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
 
 /** One window's rows per signal: [label, count], biggest first. `pagers` is not a fault: the
  *  rpc-stub pagers' re-dial outcomes by event, the recovery a page shows beside a connection's
- *  close (apps/os context/rpc-stubs.ts); one that gives up logs an error, which is. */
+ *  close (apps/os context/rpc-stubs.ts); one that gives up logs an error, which is. `healEvents` is
+ *  `heals` by event instead of by name, for PINNED_WORKAROUNDS. */
 export type FaultReading = Record<
-  "serverErrors" | "heals" | "errors" | "pagers",
+  "serverErrors" | "heals" | "healEvents" | "errors" | "pagers",
   [string, number][]
 >;
+
+/**
+ * WORKAROUNDS PINNED BY PRD TELEMETRY. A workaround for a platform defect stays only while a test
+ * fails once the defect is fixed (docs/engineering-invariants.md). A defect too rare to reproduce in
+ * a test is pinned here instead, by the heal its workaround logs: each run notes when prd last
+ * logged it, and once prd has logged none for `PIN_QUIET_DAYS`, the run posts once to #error-pulse
+ * that the workaround can go. A heal seen again starts the count over. The count lives in the
+ * state, because Workers Logs cannot answer for 28 days: on 2026-09-24 a query spanning six days or
+ * more answered empty, with success, where one of five found the heals, and empty would read as
+ * fixed. A run without state starts the count again: a late post, never a false one.
+ */
+export const PINNED_WORKAROUNDS = [
+  {
+    /** What every `event` of the workaround's heals starts with. */
+    event: "iterate-context.platform-failure-alarm-",
+    /** The post, once the heal has been absent `PIN_QUIET_DAYS`. */
+    post: "Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts",
+  },
+];
+export const PIN_QUIET_DAYS = 28;
 
 /** The logs one run reads: from where the last run stopped to now. */
 export type LogWindow = { from: Date; to: Date };
 
 /** What the alarm remembers between runs. `readUntil` is where the next read starts; each open
  *  incident, by its key, holds the thread of the page that opened it, how often it was seen and the
- *  count the channel last heard. */
+ *  count the channel last heard. Each pinned workaround, by its event, holds when prd last logged
+ *  its heal (or when the count started) and whether its post went out. */
 export const AlarmState = z.object({
   readUntil: z.string(),
   incidents: z.record(
     z.string(),
     z.object({ thread: z.string(), lastSeen: z.string(), count: z.number(), told: z.number() }),
   ),
+  pins: z.record(z.string(), z.object({ lastSeen: z.string(), told: z.boolean() })).optional(),
 });
 export type AlarmState = z.infer<typeof AlarmState>;
 
@@ -130,8 +154,10 @@ export async function alarm(input: {
   const reading = await readWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
+  const pinned = pinnedWorkarounds(reading.healEvents, window, input.state);
   // Only a run that owes a post needs Slack: a quiet run stays green whatever its token does.
-  const slack = triage.page || triage.replies.length ? input.slack?.() : undefined;
+  const slack =
+    triage.page || triage.replies.length || pinned.posts.length ? input.slack?.() : undefined;
   const channel = slackChannelIds["#error-pulse"];
   const incidents = { ...triage.incidents };
   if (triage.page && slack) {
@@ -146,13 +172,43 @@ export async function alarm(input: {
       text: reply.text,
       reply_broadcast: reply.broadcast,
     });
-  const summary = [triage.page?.text, ...triage.replies.map((reply) => reply.text)]
+  for (const text of pinned.posts) await slack?.chat.postMessage({ channel, text });
+  const summary = [triage.page?.text, ...triage.replies.map((reply) => reply.text), ...pinned.posts]
     .filter(Boolean)
     .join("\n\n");
   return {
     summary: summary || "prd is quiet",
-    next: { readUntil: window.to.toISOString(), incidents } satisfies AlarmState,
+    next: {
+      readUntil: window.to.toISOString(),
+      incidents,
+      pins: pinned.pins,
+    } satisfies AlarmState,
   };
+}
+
+/** What PINNED_WORKAROUNDS owe after `window`: each pin's next state, and the posts of those whose
+ *  heal has now been absent `PIN_QUIET_DAYS` and not yet posted. Pure. */
+export function pinnedWorkarounds(
+  healEvents: [string, number][],
+  window: LogWindow,
+  state: AlarmState | null,
+) {
+  const pins: NonNullable<AlarmState["pins"]> = {};
+  const posts: string[] = [];
+  for (const pin of PINNED_WORKAROUNDS) {
+    const before = state?.pins?.[pin.event];
+    const seen = healEvents.some(([event, count]) => event.startsWith(pin.event) && count > 0);
+    const lastSeen = seen || !before ? window.to.toISOString() : before.lastSeen;
+    const told = !seen && before?.told === true;
+    const quietMs = window.to.getTime() - Date.parse(lastSeen);
+    const post = !told && quietMs >= PIN_QUIET_DAYS * 86_400_000;
+    if (post)
+      posts.push(
+        `✅ ${pin.post}. prd has logged no \`${pin.event}*\` since ${lastSeen.slice(0, 10)} (${PIN_QUIET_DAYS} days) ${onCallMention}`,
+      );
+    pins[pin.event] = { lastSeen, told: told || post };
+  }
+  return { pins, posts };
 }
 
 /** The logs a run at `now` reads. Workers Logs can land a minute or so after the event, so a run
@@ -487,28 +543,30 @@ async function readWindow(
     ]);
     return [...errors, ...apiUnreadBodyErrors];
   };
-  const [serverErrors, heals, initialErrors, structuredErrors, pagers] = await Promise.all([
-    readServerErrors(),
-    rows(
-      [{ key: "event", operation: "includes", value: "platform-failure", type: "string" }],
-      "name",
-    ),
-    readErrors("$metadata.message"),
-    readErrors("$metadata.error", [
-      {
-        kind: "group",
-        filterCombination: "or",
-        filters: [
-          { key: "$metadata.message", operation: "is_null", type: "string" },
-          { key: "$metadata.message", operation: "eq", value: "", type: "string" },
-        ],
-      },
-    ]),
-    rows(
-      [{ key: "event", operation: "includes", value: "rpc-stub-pager-", type: "string" }],
-      "event",
-    ),
-  ]);
+  const healed = [
+    { key: "event", operation: "includes", value: "platform-failure", type: "string" },
+  ];
+  const [serverErrors, heals, healEvents, initialErrors, structuredErrors, pagers] =
+    await Promise.all([
+      readServerErrors(),
+      rows(healed, "name"),
+      rows(healed, "event"),
+      readErrors("$metadata.message"),
+      readErrors("$metadata.error", [
+        {
+          kind: "group",
+          filterCombination: "or",
+          filters: [
+            { key: "$metadata.message", operation: "is_null", type: "string" },
+            { key: "$metadata.message", operation: "eq", value: "", type: "string" },
+          ],
+        },
+      ]),
+      rows(
+        [{ key: "event", operation: "includes", value: "rpc-stub-pager-", type: "string" }],
+        "event",
+      ),
+    ]);
   let errors = initialErrors;
   if (errors.length) {
     try {
@@ -590,6 +648,7 @@ async function readWindow(
   return {
     serverErrors,
     heals,
+    healEvents,
     errors: [...errors, ...structuredErrors],
     pagers,
   };

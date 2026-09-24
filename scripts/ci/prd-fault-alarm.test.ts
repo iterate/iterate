@@ -9,6 +9,9 @@ import {
   deployResetSummaries,
   type FaultReading,
   logWindow,
+  PIN_QUIET_DAYS,
+  PINNED_WORKAROUNDS,
+  pinnedWorkarounds,
   run,
   triageIncidents,
 } from "./prd-fault-alarm.ts";
@@ -17,6 +20,7 @@ import { slackChannelIds } from "./slack.ts";
 const quiet: FaultReading = {
   serverErrors: [],
   heals: [],
+  healEvents: [],
   errors: [],
   pagers: [],
 };
@@ -78,7 +82,7 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(9);
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(10);
   expect(slack).toMatchObject({ posts: [] });
 });
 
@@ -380,7 +384,7 @@ test("a reset-only window goes quiet after the re-count and posts nothing", asyn
   const slack = fakeSlack();
   await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(12);
+  expect(logs.fetch).toHaveBeenCalledTimes(13);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -623,6 +627,105 @@ test.for(["capped", "failed"])(
     expect(await summary()).toContain("4 5xx responses: blog--p.iterate.app 4");
   },
 );
+
+// A workaround whose defect is too rare for a failing test is pinned by its heal's absence.
+const [heldAlarm] = PINNED_WORKAROUNDS;
+const day = 86_400_000;
+test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAYS, never again, and a heal after that starts the count over", () => {
+  const heal: [string, number][] = [["iterate-context.platform-failure-alarm-rearm", 2]];
+  let state: AlarmState | null = null;
+  const runs = (
+    [
+      [heal, 0],
+      [[], PIN_QUIET_DAYS - 0.01],
+      [[], PIN_QUIET_DAYS],
+      [[], PIN_QUIET_DAYS + 1],
+      [heal, PIN_QUIET_DAYS + 2],
+    ] as const
+  ).map(([heals, days]) => {
+    const outcome = pinnedWorkarounds([...heals], at(days), state);
+    state = { readUntil: at(days).to.toISOString(), incidents: {}, pins: outcome.pins };
+    return outcome;
+  });
+  expect({
+    posts: runs.map((outcome) => outcome.posts),
+    pins: runs.map((outcome) => outcome.pins[heldAlarm!.event]),
+  }).toEqual({
+    posts: [
+      [],
+      [],
+      [
+        "✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts. prd has logged no `iterate-context.platform-failure-alarm-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
+      ],
+      [],
+      [],
+    ],
+    pins: [
+      { lastSeen: now.toISOString(), told: false },
+      { lastSeen: now.toISOString(), told: false },
+      { lastSeen: now.toISOString(), told: true },
+      { lastSeen: now.toISOString(), told: true },
+      { lastSeen: at(PIN_QUIET_DAYS + 2).to.toISOString(), told: false },
+    ],
+  });
+});
+
+test("a run without a pin's state starts its count: a late post, never a false one", () => {
+  expect(pinnedWorkarounds([], window, null)).toEqual({
+    posts: [],
+    pins: { [heldAlarm!.event]: { lastSeen: now.toISOString(), told: false } },
+  });
+  expect(
+    pinnedWorkarounds([], window, { readUntil: now.toISOString(), incidents: {} }),
+  ).toMatchObject({ posts: [] });
+});
+
+test("the held-alarm pin reads prd's heals by event and posts its one message to #error-pulse; the next run posts nothing", async () => {
+  const slack = fakeSlack();
+  // Another workaround's heal, by event: not the pinned one's.
+  const anotherHeal = (groupBy: string | undefined) =>
+    groupBy === "event"
+      ? {
+          success: true,
+          result: {
+            calculations: [
+              { aggregates: [{ groupKey: "context.platform-failure-other", count: 3 }] },
+            ],
+          },
+        }
+      : serverErrorsOnly(0)(groupBy);
+  const lastSeen = new Date(Date.parse("2026-09-23T07:28:00Z") - PIN_QUIET_DAYS * day);
+  const run1 = await runAt("07:30", pinState(lastSeen), slack, anotherHeal);
+  const run2 = await runAt("07:45", run1.next, slack, anotherHeal);
+  expect({
+    posts: slack.posts.map((post) => [
+      post.channel,
+      post.thread_ts,
+      String(post.text).slice(0, 32),
+    ]),
+    pin: run2.next.pins,
+  }).toEqual({
+    posts: [[channel, undefined, "✅ Cloudflare seems to have fixed"]],
+    pin: { [heldAlarm!.event]: { lastSeen: lastSeen.toISOString(), told: true } },
+  });
+});
+
+/** The quarter hour a run `days` after `now` reads. */
+function at(days: number) {
+  return {
+    from: new Date(now.getTime() + days * day - 15 * 60_000),
+    to: new Date(now.getTime() + days * day),
+  };
+}
+
+/** A state whose held-alarm pin last saw its heal at `lastSeen`, and has not posted. */
+function pinState(lastSeen: Date): AlarmState {
+  return {
+    readUntil: lastSeen.toISOString(),
+    incidents: {},
+    pins: { [heldAlarm!.event]: { lastSeen: lastSeen.toISOString(), told: false } },
+  };
+}
 
 /** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
 function page(reading: Partial<FaultReading>) {

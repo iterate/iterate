@@ -15,7 +15,7 @@ import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts"
 // KNOWN FLAKE, THE PLATFORM'S: the runtime sometimes holds an armed alarm past its time
 // (src/alarm-coordinator.ts, the overdue watch; 2026-09-24 on PR #2950's preview this row's deadline
 // fired 20.7 s late, and in soak qvs7pzv6rq 3.6 s late, delivered the instant the reconnect arrived).
-// A resident actor's watch passes it within 5 s; this row's actor is evicted on purpose, so nothing
+// A resident actor's watch re-arms it at 5 s; this row's actor is evicted on purpose, so nothing
 // watches its alarm until the reconnect, and a batch the reconnect's own incarnation commits voids
 // the proof of dormancy. The pattern is exactly that case, proven, not presumed: the batch committed
 // at or after the reconnect (or 3 s or more past its deadline — normal delivery is p99 4 ms) by a

@@ -62,7 +62,7 @@ import {
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
-import { ALARM_MAX_WATCH_PASSES, AlarmCoordinator } from "./alarm-coordinator.ts";
+import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
 import { secretPathsReferenced } from "./secrets.ts";
@@ -124,9 +124,6 @@ export type AlarmTrace = {
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
   dueSchedules?: number;
-  /** On `alarm-fired`: the runtime held this alarm past its time, and the overdue watch ran the
-   *  pass itself (alarm-coordinator.ts). */
-  overdueWatch?: true;
   facetWorkInFlight: number;
   /** Names, at most 32. */
   liveFacets: string[];
@@ -715,45 +712,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ...Object.values(this.#residency.deadlines()),
     ],
     held: () => this.#residency.holdsResident(),
-    // The watch's own pass runs as the runtime's delivery would: under no caller (the timer fires in
-    // whatever call armed it, and an append must never be stamped as that caller's).
-    runOverduePass: () =>
-      void this.#callerStorage
-        .exit(() => this.#alarmPass({ delivered: false }))
-        .catch((error) =>
-          // The runtime reports a delivered pass that throws; this one is the watch's to report. Its
-          // alarm stays stored: the runtime's delivery, when it comes, is the retry.
-          reportIssue("iterate-context.overdue-pass", error, {
-            name: this.#durableObjectAddress.name,
-          }),
-        ),
-    // The platform fault the watch works around (alarm-coordinator.ts): a re-arm or a pass of its own
-    // is a warn the prd fault alarm counts; a give-up is an error — nothing here acts again for it.
-    onOverdue: ({ armedAt, overdueMs, action }) => {
+    // The platform fault the watch works around (alarm-coordinator.ts): a re-arm is a warn the prd
+    // fault alarm counts, and its telemetry pin (PINNED_WORKAROUNDS) waits out; a give-up is an
+    // error — nothing here acts again for it.
+    onOverdue: ({ armedAt, overdueMs, action, rearms }) => {
       const detail = {
         name: this.#durableObjectAddress.name,
         armedAt: new Date(armedAt).toISOString(),
         overdueMs,
+        rearms,
       };
       if (action === "give-up")
         reportIssue(
           "iterate-context.alarm-overdue",
           new Error(
-            `the alarm armed for ${detail.armedAt} is still due ${overdueMs} ms past its time after ${ALARM_MAX_WATCH_PASSES} passes of the overdue watch`,
+            `the alarm armed for ${detail.armedAt} is still due ${overdueMs} ms past its time after ${ALARM_MAX_REARMS} re-arms of the overdue watch`,
           ),
           detail,
         );
       else
         console.warn({
-          event:
-            action === "pass"
-              ? "iterate-context.platform-failure-alarm-pass"
-              : "iterate-context.platform-failure-alarm-rearm",
+          event: "iterate-context.platform-failure-alarm-rearm",
           namespace: "iterate-context",
-          message:
-            action === "pass"
-              ? "the runtime held an armed alarm past its time; this context ran the pass itself"
-              : "the runtime held an armed alarm past its time; re-armed it for now",
+          message: "the runtime held an armed alarm past its time; re-armed it for now",
           ...detail,
         });
     },
@@ -804,7 +785,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #traceAlarm(
     reason: AlarmTrace["reason"],
     before: number | null,
-    extra: Pick<AlarmTrace, "error" | "dueSchedules" | "overdueWatch"> = {},
+    extra: Pick<AlarmTrace, "error" | "dueSchedules"> = {},
   ) {
     const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
@@ -891,119 +872,98 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  from what is left. The unclaimed-facet sweep is decided first in every pass; a wake with
    *  nothing durable due is the sweep's alone and does nothing else. */
   async alarm(): Promise<void> {
-    await this.#alarmPass({ delivered: true });
-  }
-
-  /** The passes, ONE AT A TIME: the runtime's delivery (`alarm()`) and the overdue watch's own pass
-   *  (alarm-coordinator.ts), which may meet when the runtime delivers a held alarm late. */
-  #alarmPasses: Promise<unknown> = Promise.resolve();
-  #alarmPass({ delivered }: { delivered: boolean }): Promise<void> {
-    const pass = this.#alarmPasses.then(() => this.#runAlarmPass({ delivered }));
-    this.#alarmPasses = pass.catch(() => {});
-    return pass;
-  }
-
-  async #runAlarmPass({ delivered }: { delivered: boolean }): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
     if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
-      await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt), {
-        delivered,
-      });
+      await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
     }
     try {
-      await this.#alarmCoordinator.pass(
-        async () => {
-          await this.#residency.alarmPassStarted(wokeAt);
-          // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
-          // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
-          // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
-          this.#stream.appendWakeRecord("alarm");
-          // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
-          // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
-          const now = Date.now();
-          const due = Object.values(this.#stream.coreReducedState.schedules)
-            .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
-            .sort(
-              (a, b) =>
-                Date.parse(a.nextAt) - Date.parse(b.nextAt) ||
-                a.scheduledAtOffset - b.scheduledAtOffset,
-            )
-            .slice(0, 32);
-          this.#traceAlarm("alarm-fired", fired, {
-            dueSchedules: due.length,
-            ...(!delivered && { overdueWatch: true }),
-          });
-          for (const row of due) {
-            if (this.#stream.coreReducedState.paused) break;
-            if (
-              this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-              row.scheduledAtOffset
-            )
-              continue;
-            const payload = {
-              key: row.key,
-              scheduledAtOffset: row.scheduledAtOffset,
-              at: row.nextAt,
-            };
-            try {
-              this.#appendAndRunCommittedEffects([
-                ...row.events.map((event) => ({
-                  ...event,
-                  source: {
-                    schedule: {
-                      ...payload,
-                      ...((row.source?.processor || row.source?.principal) && {
-                        definedBy: {
-                          ...(row.source?.processor && { processor: row.source.processor }),
-                          ...(row.source?.principal && { principal: row.source.principal }),
-                        },
-                      }),
-                    },
+      await this.#alarmCoordinator.pass(async () => {
+        await this.#residency.alarmPassStarted(wokeAt);
+        // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
+        // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
+        // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
+        this.#stream.appendWakeRecord("alarm");
+        // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
+        // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
+        const now = Date.now();
+        const due = Object.values(this.#stream.coreReducedState.schedules)
+          .filter((row) => !row.failure && Date.parse(row.nextAt) <= now)
+          .sort(
+            (a, b) =>
+              Date.parse(a.nextAt) - Date.parse(b.nextAt) ||
+              a.scheduledAtOffset - b.scheduledAtOffset,
+          )
+          .slice(0, 32);
+        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length });
+        for (const row of due) {
+          if (this.#stream.coreReducedState.paused) break;
+          if (
+            this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+            row.scheduledAtOffset
+          )
+            continue;
+          const payload = {
+            key: row.key,
+            scheduledAtOffset: row.scheduledAtOffset,
+            at: row.nextAt,
+          };
+          try {
+            this.#appendAndRunCommittedEffects([
+              ...row.events.map((event) => ({
+                ...event,
+                source: {
+                  schedule: {
+                    ...payload,
+                    ...((row.source?.processor || row.source?.principal) && {
+                      definedBy: {
+                        ...(row.source?.processor && { processor: row.source.processor }),
+                        ...(row.source?.principal && { principal: row.source.principal }),
+                      },
+                    }),
                   },
-                })),
-                { type: "events.iterate.com/stream/append-schedule-completed", payload },
-              ]);
-              console.log({
-                event: "scheduled-append.completed",
-                namespace: "iterate-context",
-                ...payload,
-                count: row.events.length,
-                latenessMs: now - Date.parse(row.nextAt),
-              });
-            } catch (error) {
-              // If the commit succeeded but a subsequent effect threw, preserve the completion and let
-              // the platform retry recovery. Otherwise park this definition visibly, without a loop.
-              if (
-                this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
-                this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
-                  row.scheduledAtOffset
-              ) {
-                reportIssue("scheduled-append.effect-failed", error, payload);
-                throw error;
-              }
-              this.#appendAndRunCommittedEffects([
-                {
-                  type: "events.iterate.com/stream/append-schedule-failed",
-                  payload: { ...payload, error: String(error).slice(0, 2000) },
                 },
-              ]);
-              reportIssue("scheduled-append.failed", error, payload);
+              })),
+              { type: "events.iterate.com/stream/append-schedule-completed", payload },
+            ]);
+            console.log({
+              event: "scheduled-append.completed",
+              namespace: "iterate-context",
+              ...payload,
+              count: row.events.length,
+              latenessMs: now - Date.parse(row.nextAt),
+            });
+          } catch (error) {
+            // If the commit succeeded but a subsequent effect threw, preserve the completion and let
+            // the platform retry recovery. Otherwise park this definition visibly, without a loop.
+            if (
+              this.#stream.coreReducedState.schedules[row.key]?.nextAt !== row.nextAt ||
+              this.#stream.coreReducedState.schedules[row.key]?.scheduledAtOffset !==
+                row.scheduledAtOffset
+            ) {
+              reportIssue("scheduled-append.effect-failed", error, payload);
+              throw error;
             }
+            this.#appendAndRunCommittedEffects([
+              {
+                type: "events.iterate.com/stream/append-schedule-failed",
+                payload: { ...payload, error: String(error).slice(0, 2000) },
+              },
+            ]);
+            reportIssue("scheduled-append.failed", error, payload);
           }
-          // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
-          // the deadline it leaves is the one derived below.
-          await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-          // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
-          // revive may make is the one derived below.
-          await this.#facetHost.reviveDueClaims();
-        },
-        { delivered },
-      );
+        }
+        // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
+        // the deadline it leaves is the one derived below.
+        await this.#subscriptionDelivery.deliverEveryCursorSubscription();
+        // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
+        // revive may make is the one derived below.
+        await this.#facetHost.reviveDueClaims();
+      });
     } catch (error) {
       this.#traceAlarm("alarm-abandoned", fired, { error: String(error).slice(0, 256) });
       throw error;
