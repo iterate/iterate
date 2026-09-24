@@ -8,9 +8,9 @@
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
-import type { Caller } from "iterate/principal";
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
+import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";

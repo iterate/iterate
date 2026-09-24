@@ -33,22 +33,20 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   InvokeHandle,
-  RpcStubHandle,
-  itxAnswerDetachedFromSession,
   normalizedItxExpression,
 } from "iterate/expression";
-import {
-  ITX_APP_HEADER,
-  ITX_CALLER_PATH_HEADER,
-  ITX_PRINCIPAL_HEADER,
-  ITX_GRANT_HEADER,
-  stampCaller,
-  type Caller,
-  type Principal,
-} from "iterate/principal";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
 import { projectUrlOf } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
+import {
+  ITX_APP_HEADER,
+  ITX_CALLER_PATH_HEADER,
+  ITX_GRANT_HEADER,
+  stampCaller,
+  type Caller,
+} from "./caller.ts";
+import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
 import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -1044,7 +1042,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
       this.#residency.inboundCallEnded(caller.app === true),
     );
-    // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (expression.ts
+    // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (context/dispatch.ts
     // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
     // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
     // method, so this actor enforces it here, whatever the caller disposes: a live answer leaves as

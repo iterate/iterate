@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../../../os/src/stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { AgentProcessor } from "../../runtime/processor.ts";
 import {
   countActiveOrWaiting,

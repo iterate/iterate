@@ -1,5 +1,6 @@
 {
-  "files": ["src/node.ts"],
+  // The Node entries' declarations: `iterate/node` and `iterate/stream/test-support` (node:sqlite).
+  "files": ["src/node.ts", "src/stream/test-support.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

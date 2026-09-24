@@ -26,16 +26,12 @@
 //     invoke its replacement.
 
 import { expect, test, vi } from "vitest";
-import {
-  print,
-  registerPipelinedRpcBrand,
-  type ItxExpression,
-  FacetHandle,
-} from "iterate/expression";
+import { print, type ItxExpression } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { StreamEvent, ScannedRange } from "iterate/stream/processor";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
-import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
+import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
 import {
   RECENT_EPHEMERALS_BUDGET_CHARS,
   Stream,
@@ -169,7 +165,7 @@ test("halt once: a facet catch-up refused for good (retryable: false — a latch
 
 test("halt once: a push answered with a PIPELINED refusal (a sibling hop's FORBIDDEN) is settled before it is released — the row halts, the batch is never acked as delivered", async () => {
   // On workerd a call on a sibling context answers with a branded promise the step walk hands back
-  // UNAWAITED (expression.ts). Unless the delivery loop settles it, the branded rejection is
+  // UNAWAITED (context/dispatch.ts). Unless the delivery loop settles it, the branded rejection is
   // released unseen and the push counted as delivered. A brand registered here stands in for it.
   class PipelinedAnswer<T> extends Promise<T> {}
   registerPipelinedRpcBrand(PipelinedAnswer);

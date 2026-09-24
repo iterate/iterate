@@ -1,9 +1,9 @@
 // src/organization/processor.test.ts — the OrganizationProcessor's executable spec: declarative
-// `{ events → state }` rows on the shared processor harness (stream/test-support.ts
+// `{ events → state }` rows on the shared processor harness (iterate/stream/test-support
 // `reduceProcessor`): the pure reduce, with the engine's contract validation (a malformed KNOWN
 // payload is skipped).
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { OrganizationProcessor } from "./processor.ts";
 import { type OrganizationState } from "./contract.ts";
 

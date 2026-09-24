@@ -19,9 +19,6 @@ import {
   print,
   type ItxExpression,
   type ItxExpressionInput,
-  walkSteps,
-  awaitAnswerReleasedIfRejected,
-  FacetHandle,
 } from "iterate/expression";
 import {
   CoreContract,
@@ -36,6 +33,7 @@ import { RepoDurableObject } from "../repo/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
 import { WorkspaceDurableObject } from "../workspace/durable-object.ts";
+import { walkSteps, awaitAnswerReleasedIfRejected, FacetHandle } from "./dispatch.ts";
 import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {

@@ -13,17 +13,13 @@
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
-import { stampCaller, type Caller } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   print,
   type ItxExpression,
   type ItxExpressionInput,
   type ItxExpressionStep,
-  FacetHandle,
   InvokeHandle,
-  RpcStubHandle,
-  materializeItxHandleReference,
 } from "iterate/expression";
 import type {
   CollectSecretInput,
@@ -36,6 +32,7 @@ import type {
   WaitForEventFilter,
 } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -53,6 +50,7 @@ import {
 } from "../secrets.ts";
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -263,7 +261,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  armed alarm. GOES: in-memory state, every facet instance and its in-flight work, every socket
    *  (a lender's pager re-dials), every borrowed stub, and every call still in flight here — it
    *  rejects with the reset's message. A handle a holder kept is the expression that names it
-   *  (expression.ts `itxAnswerDetachedFromSession`), so its next call reaches the fresh
+   *  (dispatch.ts `itxAnswerDetachedFromSession`), so its next call reaches the fresh
    *  incarnation. A context root, so it resets the context it is spelled at; another context of
    *  the project is `itx.cd(path).abort()`. */
   abort(reason?: string): Promise<StreamEvent>;
@@ -525,7 +523,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
-   *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
+   *  stamp, never a client's (src/caller.ts `stampCaller`): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
     // Loaded code can delegate its scope to descendants through durable rows; child code
@@ -590,7 +588,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const secretFacet = (call: ItxExpressionStep) => deps.callFacetAsPlatform("secret", [call]);
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
    *  caller, then cross-posted to the owner's root for the catalog — stamped `source.platform`, which
-   *  a person's or an organization's catalog fold requires (principal.ts `Caller.platform`). */
+   *  a person's or an organization's catalog fold requires (caller.ts `Caller.platform`). */
   const crossPostSecretFact = (event: StreamEventInput) =>
     deps
       .context(owner.rootPath)
@@ -945,7 +943,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
           return context.fetch(new Request(terminalFetch.request, { headers }));
         }
-        // The sibling names a handle by expression (expression.ts): this context mints its own over the
+        // The sibling names a handle by expression (dispatch.ts): this context mints its own over the
         // sibling's stub, so a handle held here is one whole call per verb, never a session held open.
         return Promise.resolve(context.invoke(["itx", ...itxExpressionSteps], [], hopCaller)).then(
           (result) =>

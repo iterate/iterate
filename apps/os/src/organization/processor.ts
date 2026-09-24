@@ -25,7 +25,7 @@ export class OrganizationProcessor extends StreamProcessor<
   }: ReduceArgs<OrganizationState, ConsumedEvent<typeof OrganizationContract>>):
     | OrganizationState
     | undefined {
-    // Every fact folded here is the platform's to write (`source.platform`, principal.ts
+    // Every fact folded here is the platform's to write (`source.platform`, caller.ts
     // `Caller.platform`): a member can append any type to the organization's context, and that one
     // stays on the log, attributed to them, and changes nothing.
     if (event.source?.platform !== true) return undefined;

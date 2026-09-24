@@ -1,8 +1,8 @@
 import { expect, test, vi } from "vitest";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { CoreContract, normalizeControlEvent, reduceCoreEventBatch } from "./core-processor.ts";
 import { Stream } from "./stream.ts";
-import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 
 test("a schedule, replacement, stale cancellation and atomic completion reconstruct from the log", () => {
   const { stream, create } = setup();

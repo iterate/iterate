@@ -12,7 +12,7 @@
 // — so a name is never shared across users. And a person can append any event type to a context
 // they hold, their own account included, so an account's and an organization's facts are believed
 // only when the platform wrote them: the platform stamps `source.platform` on the facts it writes
-// (principal.ts `Caller.platform`), a client's claim to it is dropped, and the account and
+// (src/caller.ts `Caller.platform`), a client's claim to it is dropped, and the account and
 // organization processors fold nothing else — a forged fact stays on the log, attributed to whoever
 // appended it, and changes nothing.
 import { runInDurableObject } from "cloudflare:test";

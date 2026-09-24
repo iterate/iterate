@@ -1,12 +1,12 @@
 // src/project/entity-lifecycle.test.ts — the EntityLifecycleProcessor's executable spec: the reduce
-// as declarative `{ events → state }` rows (stream/test-support.ts `reduceProcessor`), run for each
+// as declarative `{ events → state }` rows (iterate/stream/test-support `reduceProcessor`), run for each
 // entity's contract. The sagas — `itx.<entity>s.create` landing the request, the processor
 // provisioning and landing the certificate on `/` and on the path; `itx.<entity>s.delete` the same
 // in reverse — are pinned end to end in e2e/repos.e2e.test.ts and e2e/workspaces.e2e.test.ts; the
 // path → Artifacts-name mapping lives with the physical root (context/cf-artifacts.test.ts).
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { EntityLifecycleProcessor } from "./entity-lifecycle.ts";

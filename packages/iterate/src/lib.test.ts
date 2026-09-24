@@ -5,6 +5,7 @@
 import { expect, test, vi } from "vitest";
 import {
   applyPatch,
+  cookieValueOf,
   diff,
   forwardIssues,
   type Issue,
@@ -111,6 +112,20 @@ for (const { headers: sent, becomes } of originRows)
     expect(isSameOriginBrowserRequest({ url: "https://worker.example/api", headers })).toBe(
       becomes,
     );
+  });
+
+// ── cookies ── `cookieValueOf(header, name)`: `{ header, name, becomes }` rows.
+const cookieRows: { header: string | null; name: string; becomes: string | null }[] = [
+  { header: null, name: "a", becomes: null },
+  { header: "a=1", name: "a", becomes: "1" },
+  { header: "b=2; a=x=y", name: "a", becomes: "x=y" }, // a value may hold `=`
+  { header: "a=", name: "a", becomes: "" },
+  { header: "ab=1", name: "a", becomes: null }, // the whole name
+  { header: "a", name: "a", becomes: null }, // no `=`: not a cookie
+];
+for (const { header, name, becomes } of cookieRows)
+  test(`cookieValueOf(${JSON.stringify(header)}, ${JSON.stringify(name)}) ⇒ ${JSON.stringify(becomes)}`, () => {
+    expect(cookieValueOf(header, name)).toBe(becomes);
   });
 
 test("reportIssue hands each issue to the forwarder — bounded attributes, the caught value itself — and a throwing forwarder never reaches the caller", () => {

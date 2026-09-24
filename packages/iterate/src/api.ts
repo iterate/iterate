@@ -8,7 +8,7 @@
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 
 import type { Ai } from "@cloudflare/workers-types";
-import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
+import type { InvokeHandle, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
 import type { IngressRouting } from "./project-ingress.ts";
@@ -212,7 +212,7 @@ export interface IterateContextApi {
   /** A facet of this context: a caller reaches only what its class lists in `static publicMethods`
    *  (sdk/index.ts `FacetDurableObject`); anything else is refused FORBIDDEN. */
   facets: {
-    get(name: string, spec?: FacetSpec): FacetHandle;
+    get(name: string, spec?: FacetSpec): InvokeHandle;
     /** RESET one facet of this context, from the context that hosts it — any facet, whether or not
      *  it extends the SDK's host, including one that would never answer a call. Its instance and
      *  in-memory state go, and every call in flight on it rejects `FACET_ABORTED`; its storage

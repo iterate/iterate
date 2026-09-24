@@ -8,7 +8,7 @@
 // processor-rules.test.ts.
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
-import { applyPatch, type PatchOp } from "iterate/lib";
+import { applyPatch, type PatchOp } from "../lib.ts";
 import {
   defineProcessorContract,
   type StreamEvent,
@@ -19,7 +19,7 @@ import {
   type ReduceArgs,
   sameIdempotentEvent,
   LiveState,
-} from "iterate/stream/processor";
+} from "./processor.ts";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 // ── contract ──

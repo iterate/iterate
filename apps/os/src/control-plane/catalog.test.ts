@@ -4,7 +4,7 @@
 // the session's (session.ts), proven on the worker (__workers-tests__/control-plane.test.ts,
 // e2e/organizations.e2e.test.ts).
 import { expect, test } from "vitest";
-import { nodeSqliteDurableObjectStorage } from "../stream/test-support.ts";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { ADMIN_ORG_ID, type Caller, ControlPlaneDatabase, projectSlug } from "./catalog.ts";
 
 const admin: Caller = { principal: { actor: "admin" } };

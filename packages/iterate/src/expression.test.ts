@@ -1,7 +1,7 @@
 // expression.test.ts — executable spec for the expression codec (parse ⇄ print over one table,
-// the canonical spelling, comments in args, the char limit), the step walk's pipelining contract and
-// the prototype hop's dotted invoke. The resolver over it (apps/os
-// src/context/itx-expression-rewriting.ts) is tested in apps/os src/context/expression.test.ts.
+// the canonical spelling, comments in args, the char limit) and the prototype hop's dotted invoke.
+// What the platform does with an expression — the step walk, the resolver over it — is tested in
+// apps/os src/context/dispatch.test.ts.
 
 import { expect, test } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
@@ -11,9 +11,6 @@ import {
   parseItxExpressionPrefix,
   print,
   type ItxExpression,
-  registerPipelinedRpcBrand,
-  registerRpcSessionBrand,
-  walkSteps,
   installPrototypeInvokeFallback,
 } from "./expression.ts";
 
@@ -83,77 +80,6 @@ test("a string expression over the char limit is refused, coded, before any pars
       ["get", { source: { "cap.js": "x".repeat(3000) } }],
     ]),
   ).toHaveLength(3);
-});
-
-// ───────────────────────────── pipelined RPC promise threading ─────────────────────────────
-// THE CONTRACT (walkSteps): a value carrying a registered pipelinable-promise brand is NEVER
-// awaited mid-chain — property access and calls build on it directly, and only the caller's
-// terminal await settles the chain. Everything else (plain thenables included) keeps the
-// await-every-step behavior. For native workerd RPC (worker.ts registers the cloudflare:workers
-// RpcPromise/RpcProperty at boot) this collapses a facet or loaded-entrypoint chain into one
-// pipelined round trip; the brand list is EMPTY in Node, so the test registers its own.
-
-test("a registered brand threads UNAWAITED through call-then-call — the terminal settles once", async () => {
-  fakeRpcPromiseAwaits.length = 0;
-  const itx = { dial: () => new FakeRpcPromise("dial") };
-  const { value } = await walkSteps(
-    { value: itx, receiver: undefined },
-    parse("itx.dial().svc('x').add(2, 3)").slice(1),
-  );
-  // no step awaited any intermediate — the chain BUILT on the promises
-  expect(fakeRpcPromiseAwaits).toEqual([]);
-  expect(value).toBeInstanceOf(FakeRpcPromise);
-  expect(value).toMatchObject({ chain: "dial.svc(x).add(2,3)" });
-  // the caller's terminal await is the single settle (what resolve() does at its end)
-  expect(await value).toEqual({ settled: "dial.svc(x).add(2,3)" });
-  expect(fakeRpcPromiseAwaits).toEqual(["dial.svc(x).add(2,3)"]);
-});
-
-test("rpcSessionsSteppedPast collects every session-holding value stepped past, pipelined or awaited — never the start, never the answer", async () => {
-  // The resolver's `invoke` and facet-host.ts `#call` release these once the answer is in: each held
-  // its session, and the actor at its far end, open until GC — the collection stub a facet answered
-  // `repos()` with, walked on for `.create(path)`, kept a project's root resident (2026-09-23).
-  const itx = {
-    dial: () => new FakeRpcPromise("dial"),
-    collection: async () => new FakeRpcStub("collection"), // awaited: a facet call's answer
-    local: { twice: (n: number) => n * 2 }, // holds no session
-  };
-  const walk = async (source: string) => {
-    const rpcSessionsSteppedPast: unknown[] = [];
-    const { value } = await walkSteps(
-      { value: itx, receiver: undefined },
-      parse(source).slice(1),
-      rpcSessionsSteppedPast,
-    );
-    return { value, steppedPast: rpcSessionsSteppedPast.map((s) => (s as FakeRpcStub).chain) };
-  };
-  expect(await walk("itx.dial().svc('x').add(2, 3)")).toMatchObject({
-    steppedPast: ["dial", "dial.svc(x)"],
-    value: { chain: "dial.svc(x).add(2,3)" },
-  });
-  expect(await walk("itx.collection().list()")).toMatchObject({
-    steppedPast: ["collection"],
-    value: { chain: "collection.list()" },
-  });
-  expect(await walk("itx.local.twice(2)")).toEqual({ steppedPast: [], value: 4 });
-});
-
-test("an UNREGISTERED thenable keeps the default: awaited at every step", async () => {
-  const awaited: string[] = [];
-  const plain = (chain: string) => ({
-    then(resolve: (v: unknown) => void) {
-      awaited.push(chain);
-      resolve({ svc: (name: string) => plain(`${chain}.svc(${name})`) });
-    },
-  });
-  const itx = { dial: () => plain("dial") };
-  const { value } = await walkSteps(
-    { value: itx, receiver: undefined },
-    parse("itx.dial().svc('x')").slice(1),
-  );
-  // the walk awaited the intermediate before stepping into it, and settled the tail too
-  expect(awaited).toEqual(["dial", "dial.svc(x)"]);
-  expect(value).toEqual({ svc: expect.any(Function) });
 });
 
 // ── invoke handle ── the dotted invoke's pure mechanism (the prototype hop and the path proxies it
@@ -300,40 +226,6 @@ test("hides reserved path segments from the path proxies the hop hands out, at e
 });
 
 // ── helpers ──
-
-/** The pipelining brand's awaits, in order: the test resets it. */
-const fakeRpcPromiseAwaits: string[] = [];
-/** A thenable that records every await and chains svc/add like a remote API — the test brand. */
-class FakeRpcPromise {
-  readonly chain: string;
-  constructor(chain: string) {
-    this.chain = chain;
-  }
-  then(resolve: (v: unknown) => void): void {
-    fakeRpcPromiseAwaits.push(this.chain);
-    resolve({ settled: this.chain });
-  }
-  svc(name: string): FakeRpcPromise {
-    return new FakeRpcPromise(`${this.chain}.svc(${name})`);
-  }
-  add(a: number, b: number): FakeRpcPromise {
-    return new FakeRpcPromise(`${this.chain}.add(${a},${b})`);
-  }
-}
-registerPipelinedRpcBrand(FakeRpcPromise);
-/** A stub an awaited call answered with (a facet's collection): not a promise, but it holds its
- *  session until disposed — as iterate-context.ts registers the native RpcStub. */
-class FakeRpcStub {
-  readonly chain: string;
-  constructor(chain: string) {
-    this.chain = chain;
-  }
-  list(): unknown {
-    return new FakeRpcPromise(`${this.chain}.list()`);
-  }
-}
-registerRpcSessionBrand(FakeRpcPromise);
-registerRpcSessionBrand(FakeRpcStub);
 
 type DynamicCall = { args: unknown[]; path: string[] };
 

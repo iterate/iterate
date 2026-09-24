@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { expect, test, vi } from "vitest";
 
+// oxlint-disable-next-line import-js/no-restricted-paths -- the fake `itx`'s append refuses what the platform's app wall refuses: a fake borrowing the real policy, never runtime code crossing the line
 import { admitLoadedCodeRow } from "../../os/src/context/itx-expression-rewriting.ts";
 
 // Whichever row runs first pays for bundling the worker with esbuild (`loadVoiceWorker()`), which

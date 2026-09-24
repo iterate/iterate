@@ -1,10 +1,10 @@
 // src/secret/processor.test.ts — the SecretProcessor's executable spec: the reduce as declarative
-// `{ events → state }` rows (stream/test-support.ts `reduceProcessor`). The verbs — `itx.secrets.set`
+// `{ events → state }` rows (iterate/stream/test-support `reduceProcessor`). The verbs — `itx.secrets.set`
 // landing the fact on the path and on the owner's root, the value in the facet, egress substituting
 // it — are pinned end to end in e2e/secrets.e2e.test.ts and e2e/secrets-connections.e2e.test.ts.
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { SecretProcessor } from "./processor.ts";
 import type { SecretState } from "./contract.ts";
 

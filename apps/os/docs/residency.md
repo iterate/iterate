@@ -9,15 +9,15 @@ Seven mechanisms keep that from happening. Three release Workers-RPC sessions so
 nothing behind that holds an actor. Three are the context's own timers and resets for what it holds
 on purpose or cannot stop others from holding. The last one records whatever the other six missed.
 
-| #   | Mechanism                              | Ends                                                      | Where                                                             | Since                                |
-| --- | -------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------ |
-| 1   | `withItx` records every pipelined step | a facet's hold on its context's values                    | `packages/iterate/src/sdk/index.ts`, `record-pipelined-steps.ts`  | #2846, removed #2855, restored #2863 |
-| 2   | `itxAnswerDetachedFromSession`         | a caller's hold on what the context answered              | `packages/iterate/src/expression.ts`, called by the DO's `invoke` | #2855                                |
-| 3   | `awaitAnswerReleasedIfRejected`        | a rejected call's session                                 | `expression.ts`, called by the step walk                          | #2874                                |
-| 4   | The pins' release, 30 s                | borrowed rpc stubs, the library's open sockets            | [`src/context/residency.ts`](../src/context/residency.ts)         | named in #2756                       |
-| 5   | The birth reset                        | unclaimed loaded facets the last incarnation left running | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`            | #2905                                |
-| 6   | The quiet-period sweep, 60 s           | the same facets, while the context is still resident      | `residency.ts`                                                    | #2905, clock fixed in #2922          |
-| 7   | The residency watchdog, 15 min         | nothing: it records a held context                        | `residency.ts`, `src/context/residency-watchdog.ts`               | #2858                                |
+| #   | Mechanism                              | Ends                                                      | Where                                                            | Since                                |
+| --- | -------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------ |
+| 1   | `withItx` records every pipelined step | a facet's hold on its context's values                    | `packages/iterate/src/sdk/index.ts`, `record-pipelined-steps.ts` | #2846, removed #2855, restored #2863 |
+| 2   | `itxAnswerDetachedFromSession`         | a caller's hold on what the context answered              | `src/context/dispatch.ts`, called by the DO's `invoke`           | #2855                                |
+| 3   | `awaitAnswerReleasedIfRejected`        | a rejected call's session                                 | `src/context/dispatch.ts`, called by the step walk               | #2874                                |
+| 4   | The pins' release, 30 s                | borrowed rpc stubs, the library's open sockets            | [`src/context/residency.ts`](../src/context/residency.ts)        | named in #2756                       |
+| 5   | The birth reset                        | unclaimed loaded facets the last incarnation left running | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`           | #2905                                |
+| 6   | The quiet-period sweep, 60 s           | the same facets, while the context is still resident      | `residency.ts`                                                   | #2905, clock fixed in #2922          |
+| 7   | The residency watchdog, 15 min         | nothing: it records a held context                        | `residency.ts`, `src/context/residency-watchdog.ts`              | #2858                                |
 
 Mechanisms 4–7 live in one class, `Residency` in [`src/context/residency.ts`](../src/context/residency.ts).
 The context DO forwards its entry points to it and reads its two deadlines back for its one alarm
@@ -105,7 +105,7 @@ pages on 5xx, platform-failure heals and errors.
 - Unit: `src/context/residency.test.ts` (the clocks, the pins' timer, the record) and
   `src/context/residency-watchdog.test.ts` (the shared rule);
   [`record-pipelined-steps.test.ts`](../../../packages/iterate/src/sdk/record-pipelined-steps.test.ts) (1);
-  `src/context/expression.test.ts` (2).
+  `src/context/dispatch.test.ts` (2).
 - Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
   `__workers-tests__/facet-birth-reset.test.ts` (5, 6),
   `__workers-tests__/residency-watchdog.test.ts` and `context-abort-and-the-watchdog.test.ts` (7).

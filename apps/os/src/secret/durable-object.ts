@@ -26,8 +26,8 @@
 
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
-import { signClaims, verifyAdminSecret } from "iterate/principal";
 import { codedError, reportIssue } from "iterate/lib";
+import { signClaims, verifyAdminSecret } from "../caller.ts";
 import {
   appConfigOf,
   atRestKeysOf,

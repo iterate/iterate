@@ -1,11 +1,11 @@
 // runtime/processor.test.ts — the AgentProcessor's executable spec: the reduce as declarative
-// `{ events → state }` rows on the shared harness (apps/os/src/stream/test-support.ts
+// `{ events → state }` rows on the shared harness (iterate/stream/test-support
 // `reduceProcessor`), and the assistant-output parser's rows. The effects — the birth saga, the
 // model call, the script run, the breakers as appends — are proven end to end on the worker
 // (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../../os/src/stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { type AgentState } from "./contract.ts";
 import {
   AgentProcessor,

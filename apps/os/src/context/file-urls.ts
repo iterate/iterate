@@ -1,6 +1,6 @@
 // file-urls.ts — SIGNED FILE URLS: a URL on
 // the project host `files--<project>.<base>` whose ONE query parameter is a signed claim over
-// `{ project, key, method, exp }` (principal.ts `signClaims`, the platform's session secret), served
+// `{ project, key, method, exp }` (caller.ts `signClaims`, the platform's session secret), served
 // at ingress straight from the bucket — a download (`GET`/`HEAD`, Range honoured) or an upload
 // (`PUT`, the body stored under the key with the request's content type). The signature IS the
 // authorization: no session, no cookie; the project cannot be escaped because the key is signed with
@@ -8,8 +8,8 @@
 // credentials, works locally (the e2e worker serves project hosts under `localhost`); the price is
 // that bytes flow through the worker, bounded by the request-body limit.
 import { z } from "zod";
-import { signClaims, verifyClaims } from "iterate/principal";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { signClaims, verifyClaims } from "../caller.ts";
 
 /** What a signed file URL carries: the project it belongs to, the object key (owner prefix NOT
  *  included — ingress applies it), the one method it permits, and when it stops working. */

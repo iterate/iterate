@@ -144,7 +144,7 @@ test("listing repos does not keep the project root resident", async () => {
 
 // ── CARELESS CALLERS: a context's inbound session ends with the call, whatever the caller keeps ──
 // Userspace code will never dispose correctly, so residency must not rest on it: the context
-// enforces the rule itself, at its RPC `invoke` (expression.ts `itxAnswerDetachedFromSession`). The
+// enforces the rule itself, at its RPC `invoke` (src/context/dispatch.ts `itxAnswerDetachedFromSession`). The
 // holders below are DELIBERATELY CARELESS — they are the test subject: each keeps everything
 // `env.ITX` handed it, in a facet of the context (an actor that outlives the call), and disposes
 // nothing. Measured on a preview of main (2026-09-23): the data row, the live row and the client
@@ -513,7 +513,7 @@ test("a facet's claimed background work finishes across its context's incarnatio
 // callee here is a facet, and the context hosting it stays resident, billed, until V8 collects the
 // promise. Measured 2026-09-23 after a full e2e run: every delete flow's contexts, and the roots
 // whose collection refused, were still on their first incarnation 20 minutes later. The context
-// releases a rejected answer (expression.ts `awaitAnswerReleasedIfRejected`). Each row reads the
+// releases a rejected answer (src/context/dispatch.ts `awaitAnswerReleasedIfRejected`). Each row reads the
 // context's wakes and, since a facet can outlive its context, the facet's own start.
 
 test("a deleted workspace's refusal keeps neither its context nor its facet resident", async () => {

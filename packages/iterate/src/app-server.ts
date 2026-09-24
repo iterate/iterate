@@ -10,8 +10,7 @@
 import { newHttpBatchRpcSession } from "capnweb";
 import type { BrowserHost, BrowserSession } from "./app-session.ts";
 import type { IterateApi } from "./api.ts";
-import { cookieValueOf } from "./principal.ts";
-import { isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
+import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 
 /** The port separates local apps sharing localhost's cookie jar. */

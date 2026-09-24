@@ -2,7 +2,7 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig([
   {
-    entry: { node: "src/node.ts" },
+    entry: { node: "src/node.ts", "stream/test-support": "src/stream/test-support.ts" },
     format: "esm",
     fixedExtension: true,
     platform: "node",

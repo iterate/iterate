@@ -237,6 +237,30 @@
       "rules": {
         "no-restricted-imports": "off"
       }
+    },
+    {
+      "files": ["packages/**", "apps/**"],
+      "rules": {
+        "import-js/no-restricted-paths": [
+          "error",
+          {
+            "zones": [
+              {
+                "target": ["./packages/**", "./apps/!(os)/**"],
+                "from": "./apps/os",
+                "except": ["./e2e/support", "./__workers-tests__/support.ts"],
+                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in apps/os. Tests may drive a real platform through apps/os's test harnesses, apps/os/e2e/support/ and apps/os/__workers-tests__/support.ts (docs/2026-09-24-sdk-platform-line.md)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/os/**"],
+      "rules": {
+        "import-js/no-restricted-paths": "off"
+      }
     }
   ]
 }
