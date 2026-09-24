@@ -22,6 +22,7 @@ import { Route as AuthProjectsSlugIndexRouteImport } from "./routes/_auth/projec
 import { Route as AuthProjectsSlugSecretsRouteImport } from "./routes/_auth/projects/$slug/secrets.tsx";
 import { Route as AuthProjectsSlugMcpRouteImport } from "./routes/_auth/projects/$slug/mcp.tsx";
 import { Route as AuthOrganizationsOrgIdActivityRouteImport } from "./routes/_auth/organizations/$orgId_.activity.tsx";
+import { Route as AuthProjectsSlugActivitySplatRouteImport } from "./routes/_auth/projects/$slug/activity.$.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -88,6 +89,12 @@ const AuthOrganizationsOrgIdActivityRoute =
     path: "/organizations/$orgId/activity",
     getParentRoute: () => AuthRoute,
   } as any);
+const AuthProjectsSlugActivitySplatRoute =
+  AuthProjectsSlugActivitySplatRouteImport.update({
+    id: "/activity/$",
+    path: "/activity/$",
+    getParentRoute: () => AuthProjectsSlugRouteRoute,
+  } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
@@ -102,6 +109,7 @@ export interface FileRoutesByFullPath {
   "/projects/$slug/mcp": typeof AuthProjectsSlugMcpRoute;
   "/projects/$slug/secrets": typeof AuthProjectsSlugSecretsRoute;
   "/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
+  "/projects/$slug/activity/$": typeof AuthProjectsSlugActivitySplatRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
@@ -115,6 +123,7 @@ export interface FileRoutesByTo {
   "/projects/$slug/mcp": typeof AuthProjectsSlugMcpRoute;
   "/projects/$slug/secrets": typeof AuthProjectsSlugSecretsRoute;
   "/projects/$slug": typeof AuthProjectsSlugIndexRoute;
+  "/projects/$slug/activity/$": typeof AuthProjectsSlugActivitySplatRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -131,6 +140,7 @@ export interface FileRoutesById {
   "/_auth/projects/$slug/mcp": typeof AuthProjectsSlugMcpRoute;
   "/_auth/projects/$slug/secrets": typeof AuthProjectsSlugSecretsRoute;
   "/_auth/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
+  "/_auth/projects/$slug/activity/$": typeof AuthProjectsSlugActivitySplatRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -146,7 +156,8 @@ export interface FileRouteTypes {
     | "/organizations/$orgId/activity"
     | "/projects/$slug/mcp"
     | "/projects/$slug/secrets"
-    | "/projects/$slug/";
+    | "/projects/$slug/"
+    | "/projects/$slug/activity/$";
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/"
@@ -159,7 +170,8 @@ export interface FileRouteTypes {
     | "/organizations/$orgId/activity"
     | "/projects/$slug/mcp"
     | "/projects/$slug/secrets"
-    | "/projects/$slug";
+    | "/projects/$slug"
+    | "/projects/$slug/activity/$";
   id:
     | "__root__"
     | "/"
@@ -174,7 +186,8 @@ export interface FileRouteTypes {
     | "/_auth/organizations/$orgId_/activity"
     | "/_auth/projects/$slug/mcp"
     | "/_auth/projects/$slug/secrets"
-    | "/_auth/projects/$slug/";
+    | "/_auth/projects/$slug/"
+    | "/_auth/projects/$slug/activity/$";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -275,6 +288,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthOrganizationsOrgIdActivityRouteImport;
       parentRoute: typeof AuthRoute;
     };
+    "/_auth/projects/$slug/activity/$": {
+      id: "/_auth/projects/$slug/activity/$";
+      path: "/activity/$";
+      fullPath: "/projects/$slug/activity/$";
+      preLoaderRoute: typeof AuthProjectsSlugActivitySplatRouteImport;
+      parentRoute: typeof AuthProjectsSlugRouteRoute;
+    };
   }
 }
 
@@ -282,12 +302,14 @@ interface AuthProjectsSlugRouteRouteChildren {
   AuthProjectsSlugMcpRoute: typeof AuthProjectsSlugMcpRoute;
   AuthProjectsSlugSecretsRoute: typeof AuthProjectsSlugSecretsRoute;
   AuthProjectsSlugIndexRoute: typeof AuthProjectsSlugIndexRoute;
+  AuthProjectsSlugActivitySplatRoute: typeof AuthProjectsSlugActivitySplatRoute;
 }
 
 const AuthProjectsSlugRouteRouteChildren: AuthProjectsSlugRouteRouteChildren = {
   AuthProjectsSlugMcpRoute: AuthProjectsSlugMcpRoute,
   AuthProjectsSlugSecretsRoute: AuthProjectsSlugSecretsRoute,
   AuthProjectsSlugIndexRoute: AuthProjectsSlugIndexRoute,
+  AuthProjectsSlugActivitySplatRoute: AuthProjectsSlugActivitySplatRoute,
 };
 
 const AuthProjectsSlugRouteRouteWithChildren =

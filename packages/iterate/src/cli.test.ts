@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +16,13 @@ import { promisify } from "node:util";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
-import { oauthResourceForOsBaseUrl, refreshOAuthSession } from "./cli.ts";
+import {
+  claudeMcpArgs,
+  oauthResourceForOsBaseUrl,
+  preflightMcp,
+  refreshOAuthSession,
+  shellCommand,
+} from "./cli.ts";
 import { connectIterate } from "./next-node.ts";
 import { Config } from "./config.ts";
 import { MyComputer } from "./use-my-computer.ts";
@@ -410,6 +425,67 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
   }
 });
 
+test("mcp claude: the command is Claude Code's argv for the one iterate server, shell-quoted", async () => {
+  const args = claudeMcpArgs({ mcpUrl: "https://mcp.iterate.com/", token: "it's-secret" });
+  expect(args).toEqual([
+    "--mcp-config",
+    JSON.stringify({
+      mcpServers: {
+        iterate: {
+          type: "http",
+          url: "https://mcp.iterate.com/",
+          headers: { Authorization: "Bearer it's-secret" },
+        },
+      },
+    }),
+    "--strict-mcp-config",
+  ]);
+  // the printed line, read back by a shell, is exactly that argv
+  const { stdout } = await promisify(execFile)("sh", [
+    "-c",
+    `printf '%s\\0' ${shellCommand(["claude", ...args])}`,
+  ]);
+  expect(stdout.split("\0").slice(0, -1)).toEqual(["claude", ...args]);
+});
+
+test("mcp claude: the preflight follows the MCP origin redirect with the bearer and refuses a wrong one", async () => {
+  await using deployment = await mcpDeployment();
+  expect(await preflightMcp(deployment.osBaseUrl, "it's-secret")).toEqual({
+    mcpUrl: deployment.mcpUrl,
+    tools: ["run"],
+  });
+  await expect(preflightMcp(deployment.osBaseUrl, "wrong")).rejects.toThrow(
+    `${deployment.mcpUrl} rejected the bearer (401). APP_CONFIG_ADMIN_API_SECRET must be the operator bearer of the deployment at ${deployment.osBaseUrl}.`,
+  );
+});
+
+test("mcp claude: prints the command alone on stdout, or --exec runs claude with it", async () => {
+  await using deployment = await mcpDeployment();
+  using config = cliConfig(deployment.osBaseUrl);
+  // a stand-in `claude` on PATH that reports the argv it was given
+  writeFileSync(join(config.directory, "claude"), `#!/bin/sh\nprintf '%s\\0' "$@"\nexit 3\n`);
+  chmodSync(join(config.directory, "claude"), 0o755);
+  const run = (args: string[]) =>
+    promisify(execFile)(process.execPath, [bin, "mcp", "claude", ...args], {
+      env: {
+        ...process.env,
+        XDG_CONFIG_HOME: config.directory,
+        PATH: `${config.directory}:${process.env.PATH}`,
+        APP_CONFIG_ADMIN_API_SECRET: "it's-secret",
+      },
+      timeout: 10_000,
+    });
+  const args = claudeMcpArgs({ mcpUrl: deployment.mcpUrl, token: "it's-secret" });
+  const printed = await run([]);
+  expect(printed).toMatchObject({
+    stdout: `${shellCommand(["claude", ...args])}\n`,
+    stderr: expect.stringContaining(`${deployment.mcpUrl} accepted the bearer; tools: run`),
+  });
+  const executed = await run(["--exec"]).catch((error: { code: number; stdout: string }) => error);
+  expect(executed).toMatchObject({ code: 3 });
+  expect(executed.stdout.split("\0").slice(0, -1)).toEqual(args);
+});
+
 function cliConfig(baseUrl: string) {
   const directory = mkdtempSync(join(tmpdir(), "iterate-next-cli-"));
   mkdirSync(join(directory, "iterate"));
@@ -434,4 +510,37 @@ function runCli(directory: string, args: string[]) {
     },
     timeout: 10_000,
   });
+}
+
+/** A deployment whose /mcp 308s to a separate MCP origin, as prd's does, and a tools/list there
+ *  that answers the operator bearer over SSE, as apps/os/src/mcp.ts does. */
+async function mcpDeployment() {
+  const listen = async (handler: Parameters<typeof createServer>[1]) => {
+    const server = createServer(handler);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No port");
+    return { server, origin: `http://127.0.0.1:${address.port}` };
+  };
+  const mcp = await listen((request, response) => {
+    if (request.headers.authorization !== "Bearer it's-secret") {
+      response.writeHead(401).end('{"error":"invalid_token"}');
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(
+      `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [{ name: "run" }] } })}\n\n`,
+    );
+  });
+  const os = await listen((request, response) => {
+    response.writeHead(request.url === "/mcp" ? 308 : 404, { location: `${mcp.origin}/` }).end();
+  });
+  return {
+    osBaseUrl: os.origin,
+    mcpUrl: `${mcp.origin}/`,
+    async [Symbol.asyncDispose]() {
+      for (const { server } of [mcp, os])
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
 }
