@@ -129,10 +129,9 @@ step of the same job (`pnpm --dir apps/kit firmware:test:host`), so `pnpm test`
 runs on machines without cmake; that step runs even when `pnpm test` fails.
 OS's `test`, `e2e` and `bench` scripts run the Vite build first, so every suite
 tests the built worker. Live tests belong to preview CI instead: the Preview OS workflow's
-`e2e` job runs the OS e2e project and `pnpm spec` side by side against the
-PR's preview (`apps/os/scripts/preview.ts` `runE2e`; it runs `pnpm e2e:run`,
-which skips the build, so the preview's built `dist/` stays intact while
-Playwright runs), and only once that preview's deploy succeeded.
+E2E tests job runs the OS e2e project and its Browser specs job `pnpm spec`, side by side against
+the PR's preview (`apps/os/scripts/preview.ts` `runSuite`; E2E tests runs `pnpm e2e:run`, which
+skips the build), and both fail rather than skip when that preview's deploy did not succeed.
 The OS e2e rows that talk to the petshop dial the deployed fixture; they
 cannot silently skip back out of preview CI.
 
@@ -318,9 +317,9 @@ doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.
 Specs take the same shape with `DEMO_BASE_URL`; without it Playwright starts
 `pnpm dev` on `DEMO_PORT` (8788) and reuses an existing server locally. To run
 both suites against a preview exactly as CI does, run
-`pnpm preview e2e --pr <number> --name <branch>` from `apps/os` under the same
-Doppler config; `--slow-rows run|skip|only` picks the rows tagged `slow`
-([slow rows](#slow-rows)). A deployed target is always described by its own `APP_CONFIG`
+`pnpm preview e2e --pr <number> --name <branch>` and `pnpm preview specs` with
+the same flags from `apps/os` under the same Doppler config; `--slow-rows run|skip|only` picks the
+e2e rows tagged `slow` ([slow rows](#slow-rows)). A deployed target is always described by its own `APP_CONFIG`
 and its `envs.ts` entry; there are no per-run credential overrides.
 
 ## Reaching the test runner from a deployed Worker
@@ -354,7 +353,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `DASH_BASE_URL`                               | The preview script, or you                                  | The Dash deployment the Notes session specs sign in to, to end a Notes session                                                                    | Unset → skipped locally, a failure in CI    |
 | `RUN_ISOLATE_CRASH_HUNT`                      | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
 | `E2E_REAL_MODELS`                             | The real-model suite (`os-real-model.yml`)                  | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
-| `E2E_SLOW_ROWS`                               | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone, no specs); vitest then holds each row to its timeout ceiling      | Unset → the PR's paths and label            |
+| `E2E_SLOW_ROWS`                               | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone); vitest then holds each row to its timeout ceiling                | Unset → the PR's paths and label            |
 | `BENCH_OUT`                                   | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                            | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
 | `TEST_TELEMETRY_ARTIFACT_FILE`                | You                                                         | Optional named immediate canonical JSON copy                                                                                                      | Unset → no immediate copy                   |
@@ -558,7 +557,7 @@ only on genuine infra wedges).
 | One Workers-suite test/hook | `testTimeout` / `hookTimeout`    | 120s / 120s (the first test pays workerd boot)                                                     | fail                      |
 | One perf test               | `testTimeout` / `hookTimeout`    | 240s / 120s (`apps/os/vitest.config.ts`, `perf`); concurrent project creation 420s                 | fail (no retry)           |
 | One bench file              | `testTimeout` / `hookTimeout`    | 300s                                                                                               | fail                      |
-| The Depot CI job            | `timeout-minutes`                | Test 20, preview deploy 40, preview e2e 30, latency guard 45 minutes                               | outer edge: re-run button |
+| The Depot CI job            | `timeout-minutes`                | Test 20, Deploy preview 40, E2E tests and Browser specs 30 each, latency guard 45 minutes          | outer edge: re-run button |
 
 The ladder is strictly ordered, and a new knob keeps it that way. Note the
 deliberate rule-3 consequence: no watchdog budgets for a test double-burning
@@ -586,7 +585,7 @@ starts holds every row to the same ceiling at runtime too
 (`e2e/support/setup.ts`): a row whose timeout is over it fails before it
 starts, which catches a timeout the parser cannot read. A row gated on an opt-in
 variable (`RUN_*`, `E2E_REAL_MODELS`) or on a local worker (`localOnly`) is
-out of its scope: the PR's e2e job, against the preview, never starts it. The
+out of its scope: the PR's E2E tests job, against the preview, never starts it. The
 same file pins the run's parallelism (`--sequence.concurrent`, `maxWorkers` 16
 in CI, `maxConcurrency` 32) and `E2E_CI_RETRIES` as the only retry setting.
 
@@ -624,13 +623,13 @@ sleeping 110–180 s. Every PR used to wait for the longest of them.
 `pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`)
 and prints its choice as `[slow-rows] <run|skip|only>: <reason>`:
 
-| Run                                            | The slow rows                                                                                                                                                  |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A PR push (Preview OS)                         | Skipped, unless the PR changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label. When GitHub does not answer, every row runs.                        |
-| A Preview OS dispatch                          | As its `slow-rows` input says (`run` or `skip`); empty, as a push. `--input action=e2e --input slow-rows=run` runs them against the live preview.              |
-| Main OS e2e, every main push                   | Run, with every other row (`E2E_SLOW_ROWS: run`).                                                                                                              |
-| OS slow e2e (`os-slow-e2e.yml`), every 2 hours | Run alone against main's preview `slow-e2e`; pages #error-pulse on its own change of state (`scripts/ci/os-slow-e2e-alert.ts`).                                |
-| You                                            | `--slow-rows run`, `skip` or `only` (alone, no specs): `pnpm preview e2e --pr <n> --name <branch> --slow-rows only` from `apps/os` under Doppler `os/preview`. |
+| Run                                            | The slow rows                                                                                                                                        |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A PR push (Preview OS)                         | Skipped, unless the PR changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label. When GitHub does not answer, every row runs.              |
+| A Preview OS dispatch                          | As its `slow-rows` input says (`run` or `skip`); empty, as a push. `--input action=e2e --input slow-rows=run` runs them against the live preview.    |
+| Main OS e2e, every main push                   | Run, with every other row (`E2E_SLOW_ROWS: run`).                                                                                                    |
+| OS slow e2e (`os-slow-e2e.yml`), every 2 hours | Run alone against main's preview `slow-e2e`; pages #error-pulse on its own change of state (`scripts/ci/os-slow-e2e-alert.ts`).                      |
+| You                                            | `--slow-rows run`, `skip` or `only` (alone): `pnpm preview e2e --pr <n> --name <branch> --slow-rows only` from `apps/os` under Doppler `os/preview`. |
 
 The label is read when the e2e job starts, so add it before the push, or
 dispatch the run afterwards. Main OS e2e pages only when main changes state,
@@ -745,7 +744,7 @@ Two wrappers in `packages/shared/src/test-support` register through the runner's
 - `createFlake(test, /pattern/)` ([flake-test.ts](../packages/shared/src/test-support/flake-test.ts)) marks a known flake. The body asserts real behavior. A pass or a failure matching the pattern is green, any other failure or a hang is red, and the test is never retried: one sample per run.
 - `createFailing(test, /pattern/)` ([failing-test.ts](../packages/shared/src/test-support/failing-test.ts)) pins a known bug. The body asserts the desired behavior and must fail with the pattern. A pass (the bug looks fixed) or a different failure is red.
 
-Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|preview>`) adds each suite's `suite-summary.json`, and the job uploads `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
+Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|specs|preview-e2e>`, one suite per job) adds the suite's `suite-summary.json`, and the job uploads `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
 
 Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. The three have distinct names, so each gets its own dashboard row: `flake sentinel` (`packages/shared/src/test-support/flake-sentinel.test.ts`), `flake sentinel (specs)` (`specs/flake-sentinel.spec.ts`) and `flake sentinel (e2e)` (`apps/os/e2e/flake-sentinel.e2e.test.ts`). A sentinel that reads 0% or goes red means the recording or ingestion pipeline is broken; distrust the dashboard, not the sentinel. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
 

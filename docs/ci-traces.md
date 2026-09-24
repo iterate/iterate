@@ -1,24 +1,26 @@
 # Interactive CI traces
 
 The Preview OS workflow (`.depot/workflows/preview-os.yml`) and Main OS e2e
-(`.depot/workflows/main-os-e2e.yml`) each end in a `trace` job. It runs once the
-jobs it `needs` have settled, whatever their outcome: Preview OS's `deploy` and
-`e2e`, main's `parent`, `deploy` and `e2e` (main's `delete` and `alert` run
-beside it and wait for none of it). `scripts/ci/tracing/cli.ts current` reads
+(`.depot/workflows/main-os-e2e.yml`) each end in a CI trace job (`trace`),
+reporting only. It runs once the jobs it `needs` have settled, whatever their
+outcome: Preview OS's Deploy preview, E2E tests and Browser specs (`deploy`,
+`e2e`, `specs`), main's `parent` and the same three (main's `alert` runs beside
+it and waits for none of it). A PR that changes no preview path deploys nothing
+and gets no trace. `scripts/ci/tracing/cli.ts current` reads
 the run from Depot and writes `trace.html` and `trace.json` for exactly those
 jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`
 artifact (it asks for 30 days; Depot keeps artifacts about a week, see
 [test evidence](test-evidence.md)). Then `cli.ts publish` finds that artifact
-and the e2e job's `public-playwright-report` in Depot and posts two commit statuses
+and the Browser specs job's `public-playwright-report` in Depot and posts two commit statuses
 (`statuses: write`), each linking the report in the viewer below:
 
 - **CI trace**: success with the time to green, failure with the time to red,
   or error when the run has no verdict (cancelled).
-- **Playwright report**: success whenever the e2e job uploaded one.
+- **Playwright report**: success whenever the Browser specs job uploaded one.
 
-A status means the report exists; the run's own checks carry the verdict.
-Neither workflow is a required check, and nothing waits for the trace job: the
-next push's Preview OS deploy waits only for the PR's previous run to finish.
+A status means the report exists; the run's own checks carry the verdict. The
+trace job is never a gate: nothing waits for it but the PR's next Preview OS
+run, which waits for the previous run to finish.
 
 ## The viewer
 
@@ -42,13 +44,14 @@ with the artifact, about a week after the run.
 
 ## What the trace shows
 
-The report shows the workflow, its jobs, each job's Setup and Test phases, the
-measured shell steps, and individual Playwright attempts and Vitest tests.
+The report shows the workflow, its jobs, each test job's Setup, Test and Finish
+phases, the measured shell steps, and individual Playwright attempts and Vitest
+tests.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
 
-The summary shows **Time to green** at the last traced job's finish when none
-failed or was cancelled, and **Time to red** from the first failed job attempt
+The summary shows **Time to green** at the last traced job's finish (the later
+of the two suites, usually E2E tests) when none failed or was cancelled, and **Time to red** from the first failed job attempt
 in the run; recovered test or job attempts do not count. Missing failure timing uses a
 labelled upper bound.
 
@@ -74,7 +77,8 @@ to the authored commands. Reports show the step's name, falling back to its ID
 and then its normalized run command; hover the label or bar to see all three.
 Commands have the Doppler wrapper stripped and come from the workflow YAML at
 the run's triggering SHA (the merge revision on PR runs), never from expanded
-runner logs. The `e2e` step opens the **Test** phase. The shell hook preserves
+runner logs. Each test job's suite step, `e2e` in E2E tests and `specs` in
+Browser specs, opens its **Test** phase. The shell hook preserves
 exit codes and ignores nested shells. It requires only the Node already
 installed in the runner image, so it measures `pnpm install` too.
 

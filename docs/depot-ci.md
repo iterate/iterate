@@ -76,10 +76,10 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `test.yml`                   | PR, main push                                            | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
 | `loc-report.yml`             | PR, dispatch                                             | The LOC table in the PR body                                                                            |
 | `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed            | The Slack PR update and the daily PR dashboard                                                          |
-| `preview-os.yml`             | PR touching the preview paths, dispatch                  | **Preview OS**: the PR's preview, its e2e job, the CI trace and report statuses                         |
+| `preview-os.yml`             | Every PR, dispatch                                       | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
 | `preview-delete.yml`         | Such a PR closing, dispatch                              | Deletes the PR's preview                                                                                |
 | `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                   |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: main redeployed in place to the preview `main`, e2e and specs, trace, alert            |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, trace, alert     |
 | `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                  |
 | `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                |
@@ -157,7 +157,7 @@ artifact API can return 404 for that URL.
 
 ### Artifacts per job attempt
 
-The Test job and the preview and main e2e jobs name every evidence artifact
+The Test job and the preview and main test jobs name every evidence artifact
 after the job attempt that uploaded it: `unit-test-telemetry-attempt-<id>`,
 `flake-records-<suite>-attempt-<id>`, `preview-os-test-artifacts-attempt-<id>`
 and so on. The job's first step reads `<id>` from `DEPOT_JOB_URL`
@@ -277,12 +277,47 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --input action=deploy
 ```
 
-`action` is `deploy | reset | e2e`, `apps` is
+`action` is `deploy | reset | test | e2e | specs`, `apps` is
 `all | auto | none` (the clients on top of the platform preview), and
 `slow-rows` is `run | skip` (the e2e rows tagged `slow`; empty follows the PR's
 paths and `slow-e2e` label, [slow rows](testing.md#slow-rows)); the header of
-`.depot/workflows/preview-os.yml` documents each. To run the slow rows against
-a PR's live preview: `--input action=e2e --input slow-rows=run`. Deleting a PR's preview
+`.depot/workflows/preview-os.yml` documents each. `deploy` and `reset` deploy
+and then run both suites, as a push does. To run the slow rows against a PR's
+live preview: `--input action=e2e --input slow-rows=run`.
+
+### Run the suites against a deployed preview
+
+`test` runs E2E tests and Browser specs against a preview as it is deployed,
+without redeploying it; `e2e` and `specs` run one of them. Name the preview by
+`pull-request-number`, and the jobs test that PR merged into main, or by
+`preview-name` without a number (a PR's `pr<n>-<branch slug>`, or `main`, the
+one Main OS e2e keeps), and they run the dispatched ref's suite:
+
+```bash
+# both suites against PR 1234's preview
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow preview-os.yml --ref main \
+  --input pull-request-number=1234 --input action=test
+# E2E tests alone, main's suite against main's preview
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow preview-os.yml --ref main \
+  --input preview-name=main --input action=e2e
+# Browser specs alone, a branch's specs against a preview by name
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow preview-os.yml --ref <branch> \
+  --input preview-name=pr1234-my-branch --input action=specs
+```
+
+A dispatch posts its checks on its ref's head commit, replacing that commit's
+checks of the same name, and GitHub counts a job it skips as passing. So a
+dispatch of one suite from a PR's branch marks the PR's other suite skipped,
+green, on the PR's head: dispatch a PR's suite alone with `--ref main`, which
+tests that PR's tree all the same, and from a branch run `test` or `deploy`.
+A preview by name may be redeployed under the dispatch by its own workflow
+(Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview
+specs` do the same ([apps/os/README.md](../apps/os/README.md)).
+
+Deleting a PR's preview
 and the nightly preview sweep are workflows of their own: dispatch
 `preview-delete.yml` (`--input pull-request-number=<pr-number>`) to delete one
 now, `preview-sweep.yml` (no inputs) to sweep now.
@@ -363,10 +398,11 @@ freshness:
   dashboard, Release) use `2x8`. Re-check with `depot ci metrics --run <run-id>`
   before increasing a size.
 
-These defaults keep a normal all-app main push to 38 requested vCPUs (lint 8,
-test 8, Deploy OS 4, 2 for each of the seven client deploys, and 4
-for Main OS e2e, whose parent, deploy and e2e jobs run one after another; its
-trace, delete and alert jobs follow them), without reducing the parallel lint job that
+These defaults keep a normal all-app main push to 42 requested vCPUs (lint 8,
+test 8, Deploy OS 4, 2 for each of the seven client deploys, and 8
+for Main OS e2e, whose parent and deploy jobs run one after another, then its
+E2E tests and Browser specs side by side; its trace and alert jobs follow
+them), without reducing the parallel lint job that
 uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
 
@@ -400,9 +436,9 @@ The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI, the preview
 browser, and Kit Firmware's ESP-IDF ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
-`8x32`, or `16x64` from measured workload demand. Preview deploy and e2e run on
-`4x16`; the e2e job runs Vitest and Playwright concurrently against the one
-preview. The image rebuilds when
+`8x32`, or `16x64` from measured workload demand. Deploy preview, E2E tests
+and Browser specs each run on `4x16`, the two suites on runners of their own.
+The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
 rebuild as drift repair. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
 Lint and Typecheck, OS crash hunt and OS e2e soak jobs run
@@ -571,21 +607,26 @@ the red check.
 
 ## Which PRs get a preview
 
-The Preview OS workflow (`.depot/workflows/preview-os.yml`, cribbed from
-cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
-`configs`, the five hosted clients (`apps/dash`, `apps/agents`,
+Preview OS (`.depot/workflows/preview-os.yml`, cribbed from cloudflare-os)
+runs on every pull request, with no `paths` filter, because its E2E tests and
+Browser specs checks are built to be required: GitHub leaves a required check
+"Pending" forever when a `paths` filter skips its workflow. Its Deploy preview
+job decides instead. Its first step, `node scripts/ci/preview-paths.ts changes`,
+diffs the tested merge commit against main and matches `previewPaths`:
+`apps/os`, `configs`, the five hosted clients (`apps/dash`, `apps/agents`,
 `apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `specs` and
 `playwright.config.ts`, `packages/cli` (the e2e drives the built CLI),
 `packages/iterate`, `packages/shared`, `packages/ui`, the root manifests and lockfile,
 `envs.ts`, `scripts/lib`, `scripts/depot-ci`,
 and its own and the six production deploy workflows (OS, Dash, Agents, Notes,
 Voice, Kit: a production-workflow change must exercise the isolated
-deployment). A PR that
-touches none of them, such as docs, lint rules or Kit firmware, gets no preview
-checks at all: they never appear, rather than reporting a skip. The Preview
-delete workflow (`.depot/workflows/preview-delete.yml`) runs on the same list
-when such a PR closes; `scripts/ci/depot-workflows.test.ts` keeps the two lists
-equal.
+deployment). A PR that touches none of them, such as docs, lint rules or Kit
+firmware, gets a green Deploy preview after about 20 s that deployed nothing,
+and E2E tests and Browser specs skipped, which GitHub counts as passing. When
+the step cannot tell (no merge commit, or main's commit could not be fetched),
+the PR gets a preview. The Preview delete workflow
+(`.depot/workflows/preview-delete.yml`) runs on the same list when such a PR
+closes; `scripts/ci/depot-workflows.test.ts` keeps it equal to `previewPaths`.
 
 ## Which main pushes deploy
 
@@ -614,19 +655,38 @@ timed-out deploy posts failure.
 
 ## Preview job shape
 
-The Preview OS workflow runs **deploy**, then **e2e** as a separate job with
-`needs: deploy` (#2861). Inside deploy, each step starts once what it needs is
-there: the wrangler install, the Previews secrets, the Artifacts namespace and
-the `deploying` status run beside the builds, and the clients deploy beside the
-OS ([the trace's spans](ci-traces.md#steps-and-phases)). The e2e job starts only behind a deploy that succeeded,
-or alone on an `action=e2e` dispatch, then runs the Vitest e2e suite and the
-Playwright specs concurrently against the live preview (`runE2e` in
-`apps/os/scripts/preview.ts`). The Vitest rows tagged `slow` run only when the
-PR changes their code or carries the `slow-e2e` label
-([slow rows](testing.md#slow-rows)). Job dependencies replace milestone signalling:
-there is no commit status to wait for, and a red e2e can run again without a
-redeploy (dispatch `action=e2e`, or retry the e2e job and then the trace job), because the preview persists
-until the PR closes.
+Preview OS runs four jobs, each a check named for what it proves:
+
+- **Deploy preview** deploys the PR merged into main. Inside it, each step
+  starts once what it needs is there: the wrangler install, the Previews
+  secrets, the Artifacts namespace and the `deploying` status run beside the
+  builds, and the clients deploy beside the OS
+  ([the trace's spans](ci-traces.md#steps-and-phases)).
+- **E2E tests** (the Vitest e2e suite, `pnpm preview e2e`) and **Browser specs**
+  (the Playwright specs, `pnpm preview specs`) then start side by side, each on
+  a `4x16` runner of its own, so neither shares CPU with the other. The Vitest
+  rows tagged `slow` run only when the PR changes their code or carries the
+  `slow-e2e` label ([slow rows](testing.md#slow-rows)).
+- **CI trace** runs after the three, whatever their outcome, and reports only
+  ([Interactive trace reports](#interactive-trace-reports)).
+
+The two suites report on every PR, so a ruleset can require them. Each skips
+only when there is nothing for it to prove: a PR that changes no preview path,
+or a dispatch of the other suite alone. Where a preview was needed and Deploy
+preview did not succeed (failed, cancelled, or a dispatch that named no
+preview), each still starts (`always()`), and its first step, "Require a
+deployed preview", fails it: red, never a skip that GitHub would count as
+passing. `scripts/ci/preview-os-workflow.test.ts` evaluates the conditions
+over every case.
+
+Separate jobs cost each suite its own runner start and checkout, in parallel,
+and make each one runnable and retryable alone: a red suite runs again without
+a redeploy, because the preview persists until the PR closes. Dispatch
+`action=e2e` or `specs`, or re-run the run's failed jobs
+(`depot ci retry <run-id> --failed --workflow <workflow-id>`): that is the red
+suite and the trace job after it, since Depot refuses to retry a job alone
+once a job that needs it has started. Main OS e2e has the same jobs by the
+same names.
 
 ## Main OS e2e keeps one preview
 
@@ -663,20 +723,20 @@ storage reset, "no longer active"), and CI's one retry absorbs it.
 
 ## Interactive trace reports
 
-The Preview OS and Main OS e2e workflows' `trace` job runs after the jobs it
+The Preview OS and Main OS e2e workflows' CI trace job runs after the jobs it
 needs, whatever their outcome, and posts two commit statuses whose **Details**
 open the report in the browser:
 
 - **CI trace**: the time to green or red. The report shows workflow → jobs →
   setup/test phases → shell steps → Playwright attempts and Vitest tests.
-- **Playwright report**: the e2e job's Playwright HTML report, when the suite
-  ran.
+- **Playwright report**: the Browser specs job's Playwright HTML report, when
+  the suite ran.
 
-A PR's statuses are on its head commit, main's on the pushed commit. Retrying
-one job (`depot ci retry <run-id> --job <job-id>`) re-runs that job alone, so
-after retrying e2e, retry the run's trace job too: it re-collects the trace and
-re-posts both statuses at the new uploads. A dispatch with `action=e2e` runs
-its own trace job. See
+A PR's statuses are on its head commit, main's on the pushed commit. Re-running
+a failed suite (`depot ci retry <run-id> --failed --workflow <workflow-id>`)
+re-runs the trace job with it, which re-collects the trace and re-posts both
+statuses at the new uploads; Depot refuses `--job` for a job whose trace job
+has started. A dispatch of `test`, `e2e` or `specs` runs its own trace job. See
 [CI traces](./ci-traces.md) for the timing model, the viewer, replay commands
 and OTLP JSON export.
 
@@ -684,9 +744,8 @@ and OTLP JSON export.
 
 `pr-ttg.yml` runs `scripts/ci/pr-ttg-guard.ts` every hour. It reads from
 Depot's API how long each pull request push waited for its checks: Lint and
-Typecheck, Test, and Preview OS when the push touched the preview's paths. The
-wait runs from the run's creation (about the push) to the end of the last
-check, the Preview OS trace job included:
+Typecheck, Test, and Preview OS. The wait runs from the run's creation (about
+the push) to the end of the last check, the Preview OS trace job included:
 
 - **Time to green**: the pushes whose checks all passed on their first
   execution.
@@ -694,10 +753,11 @@ check, the Preview OS trace job included:
   first execution's end, so flakes count. A push whose Test or Lint was
   cancelled because the PR's next push superseded it is left out.
 
-Pushes are split by what their Preview OS e2e job ran, which its suite summary
-names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow rows
-skipped, every row (including summaries written before the `slow` tag, when
-every row ran), no summary (e2e never ran), and no Preview OS. The job log
+Pushes are split by what their Preview OS E2E tests job ran, which its suite
+summary names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow
+rows skipped, every row (including summaries written before the `slow` tag, when
+every row ran), no summary (e2e never ran), and no Preview OS (E2E tests
+skipped, since the push changed no preview path). The job log
 prints each group's p50 and p90 over the last 24 hours and 7 days, and the
 share of Preview OS pushes that ran the slow rows. Each push is a PostHog event,
 `pr checks settled`.
@@ -723,8 +783,8 @@ week: runs older than that list none ([test evidence](test-evidence.md)). An
 artifact whose name starts with `public-` can be opened by anyone at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
 ([CI traces](./ci-traces.md#the-viewer)), so upload only files intended to be public.
 
-The Preview OS and Main OS e2e jobs print Playwright's report into the job log
-after Vitest's, and upload two artifacts even when the suite fails:
+The Preview OS and Main OS e2e Browser specs jobs print Playwright's report
+into the job log, and upload two artifacts even when the suite fails:
 
 - `public-playwright-report`: Playwright's HTML report
   (`test-results/playwright-html`), kept about a week. The **Playwright report**
