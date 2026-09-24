@@ -102,8 +102,8 @@ export function previewUrl(previewName: string): string {
 }
 
 /** Every preview-owned resource is `<worker>-<preview>-<binding>`, the name wrangler's preview
- *  auto-provisioning gives the KV namespaces and the R2 bucket; the D1 database and the Artifacts
- *  namespace follow it by hand. */
+ *  auto-provisioning gives the KV namespaces and the R2 bucket; the Artifacts namespace follows it
+ *  by hand. */
 export const previewResourceName = (previewName: string, binding: string): string =>
   `${PREVIEW_PARENT.workerName}-${previewName}-${binding}`;
 

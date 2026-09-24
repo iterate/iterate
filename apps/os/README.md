@@ -44,7 +44,7 @@ before deploying so the generated Wrangler configuration matches the selected en
 
 ```sh
 pnpm --dir apps/os build
-pnpm --dir apps/os deploy -- --env <environment>
+pnpm --dir apps/os run deploy --env <environment>
 ```
 
 Production uses `https://os.iterate.com` as its OAuth issuer and

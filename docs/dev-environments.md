@@ -6,13 +6,13 @@ How local development, preview environments, and identities work.
 
 Every deployed environment is an entry in the root **`envs.ts`** (hostnames,
 worker names, accounts, resource IDs) plus a Doppler config of the same name
-carrying its secrets. `pnpm --dir apps/os deploy -- --env prd` deploys
+carrying its secrets. `pnpm --dir apps/os run deploy --env prd` deploys
 production; `preview` is the parent Worker every per-PR preview branches from
 (`pnpm preview deploy`, below); `dev` runs a fully-local server and never
 deploys. Scripts never branch on environment names; envs.ts + the config
 supply everything.
 
-Local dev is **fully local**: D1, KV and Durable Objects run in miniflare
+Local dev is **fully local**: Durable Objects, KV and R2 run in miniflare
 inside your worktree's `apps/os/.wrangler/state`, the server listens on
 `http://localhost:8788` (or the `--port` you pass), and there is no external
 dependency at all: the OS worker is its own OAuth issuer, and `pnpm dev` hands
@@ -23,8 +23,9 @@ running inside wrangler's workerd — production-shaped by construction.
 Nothing is contested between worktrees: twenty agents on one machine each run
 their own isolated environment, each on its own port.
 
-Identity lives in the **platform's own directory** (users, organizations and
-projects in the deployment's D1). A deployment signs people in with whichever
+Identity lives in the **platform's control plane** (users, organizations and
+projects in the `CONTROL_PLANE` Durable Object's own SQLite; see
+`apps/os/SELF-HOSTING.md`). A deployment signs people in with whichever
 mechanisms its `APP_CONFIG.login` enables: a global password, a mailed code,
 Google, or Cloudflare. Two deployment secrets let you act as anyone, instantly:
 the **password** (`login.password`) signs in as whatever email you type, and
@@ -302,7 +303,7 @@ Each preview is a complete, isolated stack on the dev/preview Cloudflare
 account: a Cloudflare Worker Preview of the parent `os-next-preview`, named
 `pr<n>-<branch slug>`, at
 `https://pr<n>-<branch slug>-os-next-preview.iterate-dev-preview.workers.dev`,
-with Durable Objects, KV, R2, D1 and an Artifacts namespace of its own. The
+with Durable Objects, KV, R2 and an Artifacts namespace of its own. The
 five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
 own parents, wired to it. Previews use workers.dev and have no project hosts:
 projects are paths on the one origin. The recipe is cloudflare-os's
@@ -389,8 +390,8 @@ by side (`pnpm preview e2e`). Every push reruns both; a run with no successful
 deploy runs no e2e rather than reporting green.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes the
-preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, and the
-client previews.
+preview, its Artifacts namespace, KV namespaces and R2 bucket (and any D1 an
+older preview left behind), and the client previews.
 
 Preview cleanliness is an **invariant of birth**, not a promise about exits:
 every preview is created with resources of its own, so no PR ever inherits
@@ -512,7 +513,7 @@ the parent's two secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`, the
 its Dash when deployed) come from the per-preview Wrangler config
 `preview.ts` writes. Clients need no registration: each identifies itself by
 its client-metadata URL, so the platform preview and its clients need no
-deploy-time coordination. The deploy creates the preview's D1 and Artifacts
+deploy-time coordination. The deploy creates the preview's Artifacts
 namespace; KV and R2 are provisioned per preview by Wrangler.
 
 More detail on the environments themselves: `envs.ts` (`osEnvs.preview`, the

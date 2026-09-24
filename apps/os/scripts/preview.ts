@@ -239,7 +239,7 @@ async function writePullRequestSection(prNumber: string, section: string): Promi
   );
 }
 
-// ── the D1 (not auto-provisioned: created here, deleted here) ──────────────────────────────────
+// ── leftover D1s (no preview creates one any more; deletePreview and the sweep delete them) ─────
 
 type D1Row = { uuid: string; name: string; created_at?: string };
 
@@ -644,9 +644,9 @@ async function deployPreview(
   apps: StartApp[],
 ) {
   assertFreshInstall();
-  // The apps' vite builds run beside os-next's build, the D1 and the wrangler install.
-  // Attach rejection handlers immediately: OS Next's build and deployment can take minutes, and
-  // an app build may fail before we reach the point where its result is consumed.
+  // The apps' vite builds run beside os-next's build, their rejection handlers attached at once: OS
+  // Next's build and deployment can take minutes, and an app build may fail before its result is
+  // consumed.
   const appBuilds = Promise.allSettled(apps.map((app) => buildStartApp(app, "preview")));
   await buildOsNext("preview");
   const appBuildResults = await appBuilds;
@@ -679,9 +679,10 @@ async function deployPreview(
   }
 }
 
-/** The preview, then everything it owned, each found by its name: its D1 and its Artifacts
- *  namespace (this script created them), its KV namespaces and its R2 bucket (wrangler provisioned
- *  them; see WRANGLER_PACKAGE for why its delete leaves them). One already gone is the expected case. */
+/** The preview, then everything it owned, each found by its name: its Artifacts namespace (this
+ *  script created it), any `db` D1 a preview from before the control plane moved to a Durable Object
+ *  left behind, its KV namespaces and its R2 bucket (wrangler provisioned them; see WRANGLER_PACKAGE
+ *  for why its delete leaves them). One already gone is the expected case. */
 async function deletePreview(cf: Cf, previewName: string, wrangler: string): Promise<void> {
   await deleteWorkerPreview(PREVIEW_PARENT, previewName, wrangler);
   await deleteDatabase(cf, previewResourceName(previewName, "db"));
