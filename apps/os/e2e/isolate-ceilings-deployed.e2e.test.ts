@@ -36,7 +36,8 @@
 // `.overloaded` + `.durableObjectReset` stamped, and the ctx recovers on the very next call.
 
 import { beforeAll, expect, test } from "vitest";
-import { append, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { append, freshCtx, openItx, rejection } from "./support/client.ts";
 import {
   MiB,
   OOMER_SOURCE,
@@ -223,7 +224,7 @@ test.sequential(
       "a 9 MiB append",
       60_000,
     );
-    expect(codeOf(error)).toBe("EVENT_TOO_LARGE");
+    expect(errorCode(error)).toBe("EVENT_TOO_LARGE");
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
     const [next] = await append(itx, { type: "after" });
     expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
@@ -320,7 +321,7 @@ crashHunt(
       r.ok
         ? []
         : [
-            `${String(r.e?.message ?? r.e).slice(0, 300)} [code=${codeOf(r.e)} reset=${isDurableObjectReset(r.e)}]`,
+            `${String(r.e?.message ?? r.e).slice(0, 300)} [code=${errorCode(r.e)} reset=${isDurableObjectReset(r.e)}]`,
           ],
     );
     expect(
@@ -355,7 +356,7 @@ crashHunt(
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await settle(itx.invoke("itx.facets.get('hoarder').snapshot()"));
       expect(r.ok, `snapshot attempt ${attempt} unexpectedly succeeded`).toBe(false);
-      expect(codeOf((r as { e: any }).e)).toBe("REDUCE_CHECKPOINT_TOO_LARGE"); // ours, coded — no raw SQLITE_TOOBIG
+      expect(errorCode((r as { e: any }).e)).toBe("REDUCE_CHECKPOINT_TOO_LARGE"); // ours, coded — no raw SQLITE_TOOBIG
       expect(String((r as { e: any }).e?.message)).toMatch(
         /over the .*ceiling of one storage cell/,
       );

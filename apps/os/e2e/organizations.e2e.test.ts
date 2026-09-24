@@ -7,7 +7,8 @@
 // reach, and the two folds. Every row mints its own person, organization and project; the files
 // run in parallel.
 import { expect, test } from "vitest";
-import { adminCredentials, codeOf, rejection, session, until } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { adminCredentials, rejection, session, until } from "./support/client.ts";
 import { freshDnsSafeProjectSlug } from "./support/project-host.ts";
 
 /** A signed-in person: the admin fixture acting `as` them (src/session.ts finds-or-creates the user
@@ -107,7 +108,7 @@ test("a slug another organization holds is refused: a second person's projects.c
     "a second organization's same slug",
     30_000,
   );
-  expect(codeOf(refused)).toBe("PROJECT_NAME_TAKEN");
+  expect(errorCode(refused)).toBe("PROJECT_NAME_TAKEN");
   expect(refused.message).toMatch(/already taken/);
   // a refused request makes nothing on the way: no project, and not even the person's first
   // organization (the slug is checked before one is made)
@@ -145,7 +146,7 @@ test("organizations.rename answers the new name and the record follows; delete i
     "deleting an organization that holds a project",
     30_000,
   );
-  expect(codeOf(refused)).toBe("INVALID_INPUT");
+  expect(errorCode(refused)).toBe("INVALID_INPUT");
   expect(refused.message).toMatch(/still holds 1 project/);
   expect((await api.organizations.list()).map((row: { id: string }) => row.id)).toContain(org.id);
   // an empty organization goes: the row, and the membership off the owner's account
@@ -158,7 +159,7 @@ test("organizations.rename answers the new name and the record follows; delete i
   expect((await api.organizations.list()).map((row: { id: string }) => row.id)).toEqual([org.id]);
   await until("the membership off the account", async () => !(await memberships(api))[empty.id]);
   // the deleted organization's context is no longer the person's to hold
-  expect(codeOf(await rejection(api.organizations.get(empty.id).whoami(), "a deleted org"))).toBe(
+  expect(errorCode(await rejection(api.organizations.get(empty.id).whoami(), "a deleted org"))).toBe(
     "FORBIDDEN",
   );
 });
@@ -175,7 +176,7 @@ test("organizations.addMember gives a second person the organization — their l
   using project = await owner.projects.create({ project: slug, orgId: org.id });
   const { projectId } = await project.whoami();
   // before: the guest reaches nothing of it (the reach is re-read once before a refusal)
-  expect(codeOf(await rejection(guest.projects.get(projectId).whoami(), "a stranger"))).toBe(
+  expect(errorCode(await rejection(guest.projects.get(projectId).whoami(), "a stranger"))).toBe(
     "FORBIDDEN",
   );
   await owner.organizations.addMember(org.id, { userId: guestId, role: "member" });
@@ -218,7 +219,7 @@ test("organizations.addMember gives a second person the organization — their l
   });
   // a member reaches; only an owner runs the organization
   expect(
-    codeOf(
+    errorCode(
       await rejection(
         guest.organizations.rename(org.id, { name: "Not the guest's to rename" }),
         "a member renaming",
@@ -246,7 +247,7 @@ test("organizations.addMember gives a second person the organization — their l
   await until(
     "the guest no longer reaches the project",
     async () =>
-      codeOf(await rejection(guest.projects.get(projectId).whoami(), "the removed guest")) ===
+      errorCode(await rejection(guest.projects.get(projectId).whoami(), "the removed guest")) ===
       "FORBIDDEN",
     REACH_MEMO_BOUND_MS,
   );
@@ -262,7 +263,7 @@ test("organizations.addMember gives a second person the organization — their l
     "removing the only owner",
     30_000,
   );
-  expect(codeOf(refused)).toBe("INVALID_INPUT");
+  expect(errorCode(refused)).toBe("INVALID_INPUT");
   expect(refused.message).toMatch(/at least one owner/);
   expect(
     await until("the owner still on the account", async () => (await memberships(owner))[org.id]),

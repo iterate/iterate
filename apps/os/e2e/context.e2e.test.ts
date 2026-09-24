@@ -17,7 +17,8 @@
 //     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
 
 import { expect, test } from "vitest";
-import { append, codeOf, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { append, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
 import { fetchProjectHost, ingressHostname, subdomainsOnly } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
@@ -93,7 +94,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
 test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api hop", async () => {
   const itx = openItx(freshCtx("codemiss"));
   const err = await rejection(itx.invoke(["itx", "nope", ["thing"]]));
-  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(err.message).toMatch(/no rewrite rule matches/);
 });
 
@@ -102,7 +103,7 @@ test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", a
   const itx = openItx(freshCtx("codepause"));
   await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
   const err = await rejection(append(itx, { type: "mark", payload: { n: 1 } }));
-  expect(codeOf(err)).toBe("STREAM_PAUSED");
+  expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused");
 });
 

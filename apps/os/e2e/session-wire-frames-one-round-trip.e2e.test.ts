@@ -12,20 +12,8 @@
 // dotted chains through a live provider cost one push, and the disposal contract.
 
 import { expect, test } from "vitest";
-import {
-  adminCredentials,
-  codeOf,
-  freshCtx,
-  openItx,
-  presence,
-  rawSession,
-  rejection,
-  rpcStubRewriteRuleMatches,
-  session,
-  sleep,
-  subscriptions,
-  until,
-} from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { adminCredentials, freshCtx, openItx, presence, rawSession, rejection, rpcStubRewriteRuleMatches, session, sleep, subscriptions, until } from "./support/client.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
 // ─────────────────────────────── the wire instrument ───────────────────────────────
@@ -378,7 +366,7 @@ test("disposal: `using` on the /api session stub recalls its lent stubs at scope
     async () => !(await rpcStubRewriteRuleMatches(observer)).includes("itx.scoped"),
   );
   const err = await rejection(observer.invoke("itx.scoped.hello()"));
-  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH"); // default-deny, seen from another session
+  expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH"); // default-deny, seen from another session
 });
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {

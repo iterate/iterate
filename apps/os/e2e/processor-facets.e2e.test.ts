@@ -28,18 +28,8 @@
 // subscribe handle's compare-and-set undo is __workers-tests__/do-doors.test.ts.)
 
 import { expect, test } from "vitest";
-import {
-  append,
-  codeOf,
-  freshCtx,
-  openItx,
-  processorNames,
-  readAll,
-  readHead,
-  rejection,
-  subscriptions,
-  until,
-} from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { append, freshCtx, openItx, processorNames, readAll, readHead, rejection, subscriptions, until } from "./support/client.ts";
 import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 // ── the spine: reduces and the facet address ──
@@ -403,7 +393,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
 
   // the stream is paused: a further append refuses at the door, coded, with the breaker's reason
   const err = await rejection(append(itx, { type: "more" }));
-  expect(codeOf(err)).toBe("STREAM_PAUSED");
+  expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused: breaker: durable events exceeded the bucket");
   // the core snapshot shows the same truth
   const core = await itx.invoke("itx.facets.get('core').snapshot()");

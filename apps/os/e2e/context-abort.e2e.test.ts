@@ -15,7 +15,8 @@
 //     with its storage, and the context's incarnation is the same
 //   • a rewrite rule masks `abort` like any name; a jail's bare null takes both verbs away
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, readAll, rejection, sleep } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { freshCtx, openItx, readAll, rejection, sleep } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
@@ -137,7 +138,7 @@ test("scope: a user's session aborts only the projects it reaches — another pr
   const otherId = await registerProject(freshDnsSafeProjectSlug("abort-other"));
   const { api, principal } = await oauthSession(projectId, member);
 
-  expect(codeOf(await rejection(api.projects.get(otherId).abort("reach")))).toBe("FORBIDDEN");
+  expect(errorCode(await rejection(api.projects.get(otherId).abort("reach")))).toBe("FORBIDDEN");
   // `cd` resolves a PATH of the project the handle holds; the other project's own context name is
   // just a path here, and the reset lands in this project, attributed to the member.
   const spelled = api.projects.get(projectId).cd(`/${otherId}.iterate/`);
@@ -188,13 +189,13 @@ test("itx.facets.abort(name) resets that facet from the host: a call hung on it 
     source: { principal: { actor: "admin" } },
   });
   const cutOff = await rejection(hung, "the hung call");
-  expect(codeOf(cutOff)).toBe("FACET_ABORTED");
+  expect(errorCode(cutOff)).toBe("FACET_ABORTED");
   expect(cutOff.message).toMatch(/facet "counter" was aborted: stuck/);
   // A fresh instance (its memory at zero) over the same storage, addressed by bare name (the memo).
   expect(await itx.facets.get("counter").bump()).toEqual({ inMemory: 1, durable: 3 });
   expect(wakes(await readAll(itx))).toBe(wakesBefore);
 
-  expect(codeOf(await rejection(itx.facets.abort("never-hosted")))).toBe("NO_FACET");
+  expect(errorCode(await rejection(itx.facets.abort("never-hosted")))).toBe("NO_FACET");
   expect((await rejection(itx.facets.abort("core"))).message).toMatch(/core reduce/);
 });
 
@@ -205,8 +206,8 @@ test("a rewrite rule masks abort like any name, a jail's bare null takes both ve
 
   const jail = root.cd("/jail");
   await jail.provide("itx", null);
-  expect(codeOf(await rejection(jail.abort("jailed")))).toBe("NO_ITX_EXPRESSION_MATCH");
-  expect(codeOf(await rejection(jail.facets.abort("secret")))).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(await rejection(jail.abort("jailed")))).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(await rejection(jail.facets.abort("secret")))).toBe("NO_ITX_EXPRESSION_MATCH");
   // Loaded code that reaches the jail meets the jail's table.
   expect(await root.workers.get({ source: SAY }).say("itx.cd('./jail').abort()")).toMatchObject({
     error: expect.stringMatching(/is masked/),

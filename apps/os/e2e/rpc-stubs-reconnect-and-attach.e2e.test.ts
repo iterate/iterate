@@ -23,21 +23,8 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import {
-  append,
-  codeOf,
-  collector,
-  freshCtx,
-  openItx,
-  presence,
-  readAll,
-  rejection,
-  rpcStubRewriteRuleMatches,
-  ruleMatchAtRest,
-  sleep,
-  subscriptions,
-  until,
-} from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { append, collector, freshCtx, openItx, presence, readAll, rejection, rpcStubRewriteRuleMatches, ruleMatchAtRest, sleep, subscriptions, until } from "./support/client.ts";
 import { Tools } from "./support/targets.ts";
 
 // ── reconnect at the same spelling ──
@@ -142,9 +129,9 @@ test("disposing a STALE provide handle leaves its replacement serving; only the 
   second[Symbol.dispose]();
   const denied = await until("the un-set landed", async () => {
     const e = await rejection(itx.invoke("itx.tool.echo('z')"));
-    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the recall's window — keep waiting
+    return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the recall's window — keep waiting
   });
-  expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
 test("an EXPRESSION rule's handle disposed after a live provider took its match over un-sets nothing — the live rule and its stub keep serving", async () => {
@@ -254,12 +241,12 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED �
     itx.provide("itx.refused", new Tools("refused")),
     "provide on a paused stream",
   );
-  expect(codeOf(provideError)).toBe("STREAM_PAUSED");
+  expect(errorCode(provideError)).toBe("STREAM_PAUSED");
   const subscribeError = await rejection(
     itx.subscribe({ name: "refused", target: () => undefined }),
     "subscribe on a paused stream",
   );
-  expect(codeOf(subscribeError)).toBe("STREAM_PAUSED");
+  expect(errorCode(subscribeError)).toBe("STREAM_PAUSED");
 
   await append(itx, { type: "events.iterate.com/stream/resumed" });
   await itx.provide("itx.refused", new Tools("resumed"));

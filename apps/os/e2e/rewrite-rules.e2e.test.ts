@@ -27,19 +27,8 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import {
-  adminCredentials,
-  append,
-  codeOf,
-  freshCtx,
-  openItx,
-  readAll,
-  rejection,
-  ruleMatchAtRest,
-  session,
-  sleep,
-  until,
-} from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { adminCredentials, append, freshCtx, openItx, readAll, rejection, ruleMatchAtRest, session, sleep, until } from "./support/client.ts";
 
 // ── the reserved root ──
 
@@ -91,7 +80,7 @@ test("a DENY: provide(match, null) at a built-in's name masks it; the physical d
   await itx.kv.put("k", "v");
   const deny = await itx.provide("itx.kv", null);
   const refused = await rejection(itx.kv.get("k"));
-  expect(codeOf(refused)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(refused)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(String((refused as Error).message)).toMatch(/is masked/);
   expect(await itx.builtins.kv.get("k")).toBe("v");
   expect(await itx.rewriteRules.get("itx.kv")).toEqual({
@@ -107,7 +96,7 @@ test("a DENY: provide(match, null) at a built-in's name masks it; the physical d
     (await itx.rewriteRules.get("itx.kv"))?.target === "itx.builtins.kv" ? true : undefined,
   );
   expect(await itx.kv.get("k")).toBe("v");
-  expect(codeOf(await rejection(itx.kv.put("k", "w")))).toBe("NO_ITX_EXPRESSION_MATCH"); // the partial mask stands
+  expect(errorCode(await rejection(itx.kv.put("k", "w")))).toBe("NO_ITX_EXPRESSION_MATCH"); // the partial mask stands
   // a pinned physical target under the root is a GRANT of exactly that call (the rewrite-rule reduce, stream/core-processor.ts): the row is
   // stored — and re-opens the prefix the partial mask closed
   await itx.provide("itx.kv.put", "itx.builtins.kv.put");
@@ -165,7 +154,7 @@ test("rewriteRules.list() under a bare row WITH a target still shows every impli
   expect(await itx.builtins.rewriteRules.list()).toEqual([
     { match: "itx", target: null, context: "/" },
   ]);
-  expect(codeOf(await rejection(itx.whoami()))).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(await rejection(itx.whoami()))).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
 // An EXPRESSION handle's undo is compare-and-set on the row's target: `#removeRuleInBackground`
@@ -220,7 +209,7 @@ test("resolve(call) is the pure chain, and THE LAW holds: invoke(call) ≡ invok
     expect(await itx.invoke(chain.at(-1)!)).toEqual(await itx.invoke(call));
   }
   // a refused call resolves to the same refusal (the chain is what would run — nothing runs)
-  expect(codeOf(await rejection(itx.rewriteRules.resolve("itx.nope.x()")))).toBe(
+  expect(errorCode(await rejection(itx.rewriteRules.resolve("itx.nope.x()")))).toBe(
     "NO_ITX_EXPRESSION_MATCH",
   );
   // live args: the string is the pure part, the args the live part
@@ -253,7 +242,7 @@ test("A BARE `itx` ROW WITH A TARGET at a child: a live capability answers every
     const row = await root.cd("/x").builtins.rewriteRules.get("itx");
     return row === null ? true : undefined;
   });
-  expect(codeOf(await rejection(root.cd("/x").kv.get("k")))).toBe("NO_ITX_EXPRESSION_MATCH"); // nothing project-level is implicit at a child
+  expect(errorCode(await rejection(root.cd("/x").kv.get("k")))).toBe("NO_ITX_EXPRESSION_MATCH"); // nothing project-level is implicit at a child
 });
 
 test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; the platform never spells a short name", async () => {
@@ -272,7 +261,7 @@ test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; 
   await itx.provide("itx.rpcStubs", null);
   await itx.provide("itx.tool", () => "still served");
   expect(await itx.tool()).toBe("still served");
-  expect(codeOf(await rejection(itx.rpcStubs.list()))).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(await rejection(itx.rpcStubs.list()))).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(await itx.builtins.rpcStubs.list()).toContain("itx.tool");
   const events = await readAll(itx);
   const ruleTargets = events
@@ -388,7 +377,7 @@ test("a NON-CANONICAL match spelling through the provide door is stored CANONICA
   expect(await itx.invoke(["itx", ["ghost"]])).toMatchObject({ projectId: ctx }); // and rewritten
   await itx.provide("itx.ghost", null); // the canonical spelling is what the un-set finds
   const err = await rejection(itx.invoke(["itx", ["ghost"]]));
-  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(err.message).toContain("no rewrite rule matches");
 });
 
@@ -456,6 +445,6 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
   expect(await itx.invoke(["itx", ["hello"]])).toMatchObject({ projectId: ctx });
   // and the refused match is no row at all (default-deny answers there)
   const missErr = await rejection(itx.invoke(["itx", ["broken"]]));
-  expect(codeOf(missErr)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(missErr)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(await itx.rewriteRules.get("itx.broken")).toBeNull();
 });

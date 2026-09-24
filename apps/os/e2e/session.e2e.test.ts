@@ -4,21 +4,8 @@ import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import {
-  adminCredentials,
-  codeOf,
-  freshCtx,
-  mcpCall,
-  publicSession,
-  openItx,
-  processorNames,
-  readAll,
-  rejection,
-  session,
-  sleep,
-  until,
-  workerUrl,
-} from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { adminCredentials, freshCtx, mcpCall, publicSession, openItx, processorNames, readAll, rejection, session, sleep, until, workerUrl } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectUrl,
@@ -54,7 +41,7 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
   expect(events.find((e) => e.type === "note" && e.payload?.n === 2)?.source?.principal).toEqual({
     actor: "admin",
   });
-  expect(codeOf(await rejection(api.projects.get(`${projectId}-other`).whoami()))).toBe(
+  expect(errorCode(await rejection(api.projects.get(`${projectId}-other`).whoami()))).toBe(
     "FORBIDDEN",
   );
   const bad = await fetch(workerUrl("/api"), {
@@ -85,10 +72,10 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new UndiciWebSocket(url);
   using bare = newWebSocketRpcSession<IterateRpcTarget>(socket as unknown as WebSocket);
-  expect(codeOf(await rejection(bare.authenticate({ type: "from-server-cookie" })))).toBe(
+  expect(errorCode(await rejection(bare.authenticate({ type: "from-server-cookie" })))).toBe(
     "UNAUTHENTICATED",
   );
-  expect(codeOf(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` })))).toBe(
+  expect(errorCode(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` })))).toBe(
     "INVALID_CREDENTIALS",
   );
   using api = bare.authenticate({ type: "bearer", token });
@@ -116,7 +103,7 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   using bareWithCookie = newWebSocketRpcSession<IterateRpcTarget>(
     withCookie as unknown as WebSocket,
   );
-  expect(codeOf(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" })))).toBe(
+  expect(errorCode(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" })))).toBe(
     "UNAUTHENTICATED",
   );
   expect(await bareWithCookie.authenticate({ type: "bearer", token }).whoami()).toEqual(principal);
@@ -278,7 +265,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const api = publicSession(token);
   expect(await api.whoami()).toEqual(principal);
   expect((await api.projects.list()).map((project) => project.id)).toEqual([projectId]);
-  expect(codeOf(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
+  expect(errorCode(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
 
   // /mcp: the one tool is `run`; this token reaches exactly one project, so `run(script)` omits it
   const ran = await mcpCall(

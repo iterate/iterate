@@ -18,22 +18,8 @@
 // the SUBSCRIPTIONS table, never a rewrite rule.
 
 import { expect, test } from "vitest";
-import {
-  adminCredentials,
-  codeOf,
-  freshCtx,
-  openItx,
-  presence,
-  rawSession,
-  readAll,
-  rejection,
-  rpcStubRewriteRuleMatches,
-  ruleMatchAtRest,
-  session,
-  sleep,
-  subscriptions,
-  until,
-} from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { adminCredentials, freshCtx, openItx, presence, rawSession, readAll, rejection, rpcStubRewriteRuleMatches, ruleMatchAtRest, session, sleep, subscriptions, until } from "./support/client.ts";
 import { HangTools, Tools } from "./support/targets.ts";
 
 const RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
@@ -137,7 +123,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
       observer.invoke(["itx", "ghosttool", ["hello"]]),
       `call #${attempt} after the provider's session died`,
     );
-    expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+    expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect(await ruleEventsAt(observer, "itx.ghosttool")).toEqual([
     { target: ["itx", "builtins", "rpcStubs", ["get", "itx.ghosttool"]] },
@@ -155,7 +141,7 @@ test("a hand-configured rule naming a key nobody lent answers RPC_STUB_OFFLINE �
   expect(await rpcStubRewriteRuleMatches(itx)).toContain("itx.laterTool");
   expect(await presence(itx)).not.toContain("itx.later");
   const err = await rejection(itx.invoke("itx.laterTool.hello()"), "call on an un-lent key");
-  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
+  expect(errorCode(err)).toBe("RPC_STUB_OFFLINE");
   // Lend the key from another session (no rewrite of its own — the hand-configured rule names it).
   await openItx(ctx).provide("itx.later", new Tools("later"));
   await until("the key present", async () => (await presence(itx)).includes("itx.later"));
@@ -185,7 +171,7 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
 
   // RPC_STUB_OFFLINE in flight: the rule matched when the call went out; the transport died under it.
   const err = await rejection(inFlight, "in-flight invoke on a dying provider", 20_000);
-  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
+  expect(errorCode(err)).toBe("RPC_STUB_OFFLINE");
   // ...then the session's death is detected at the edge (onRpcBroken): the transport leaves
   // presence and the disposed handle un-sets the rule, so a fresh call is default-deny.
   await until(
@@ -194,7 +180,7 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   );
   await until("the rule un-set with the dead session", async () => {
     const again = await rejection(observer.invoke("itx.hanger.hello()"), "a fresh call");
-    return codeOf(again) === "NO_ITX_EXPRESSION_MATCH";
+    return errorCode(again) === "NO_ITX_EXPRESSION_MATCH";
   });
   expect(await rpcStubRewriteRuleMatches(observer)).not.toContain("itx.hanger");
 });
@@ -225,13 +211,13 @@ test("a call in the window between a lender's recall and the DO's un-set is refu
       answers.push(
         s.status === "fulfilled"
           ? String(s.value)
-          : (codeOf(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
+          : (errorCode(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
       );
     const denied = await until("the un-set landed", async () => {
       const e = await rejection(itx.invoke("itx.tool.hello()"));
-      return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
+      return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
     });
-    expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+    expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect(answers.filter((a) => a.startsWith("UNCODED"))).toEqual([]);
   for (const a of answers)
@@ -279,7 +265,7 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
     const dropped: Record<string, string | undefined> = {};
     settled.forEach((s, i) => {
       if (s.status === "fulfilled") answers.push(s.value);
-      else dropped[matches[i]] = codeOf(s.reason);
+      else dropped[matches[i]] = errorCode(s.reason);
     });
     return { answers, dropped };
   };
@@ -447,7 +433,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
   );
   for (const match of ["itx.tool0", "itx.k0", "itx.k5"]) {
     const err = await rejection(observer.invoke(`${match}.hello()`), `call on ${match}`);
-    expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+    expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 });

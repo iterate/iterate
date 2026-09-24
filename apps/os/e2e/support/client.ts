@@ -311,10 +311,6 @@ export async function rejection(
   return out.e as Error & { code?: string };
 }
 
-/** The machine-readable error channel (lib.ts): classify by code, never by message. */
-export const codeOf = (e: unknown): string | undefined =>
-  typeof e === "object" && e && "code" in e ? String((e as { code: unknown }).code) : undefined;
-
 /** A subscriber callback recording every delivery (deep-cloned — capnweb payloads must not be read
  *  after the callback's turn). Works verbatim as a push target and behind a cursor-lane hook. */
 export function collector() {

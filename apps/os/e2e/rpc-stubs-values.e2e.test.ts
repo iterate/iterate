@@ -18,7 +18,8 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, rejection, until } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { freshCtx, openItx, rejection, until } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 import { SlackReplayTarget } from "./support/targets.ts";
 
@@ -288,7 +289,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
     const e = await rejection(
       itx.invoke(["itx", "slack", "chat", ["postMessage", { channel: "#x", text: "y" }]]),
     );
-    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
+    return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
   });
-  expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
 });

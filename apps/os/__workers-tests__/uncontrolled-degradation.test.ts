@@ -35,7 +35,6 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { afterAll, expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/next/expression";
 import { errorCode } from "iterate/next/lib";
-const codeOf = errorCode;
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
@@ -483,8 +482,8 @@ test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its off
   const waitErr = await rejectionOf(() =>
     s.invoke(["itx", ["waitForEvent", { type: "never", afterOffset: 0, timeoutMs: 100 }]]),
   );
-  expect(codeOf(readErr)).toBe("EVENT_UNREADABLE");
-  expect(codeOf(waitErr)).toBe("EVENT_UNREADABLE");
+  expect(errorCode(readErr)).toBe("EVENT_UNREADABLE");
+  expect(errorCode(waitErr)).toBe("EVENT_UNREADABLE");
   expect(readErr?.message).toContain(String(seed)); // it names the offset to read on from
   // …and read(seed) skips it: the seed row is the only durable, so the next page is empty and at head.
   expect(((await s.read(seed)) as { events: unknown[] }).events).toEqual([]);
