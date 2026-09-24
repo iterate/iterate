@@ -207,6 +207,26 @@ test("a push hung on a facet whose row is removed is that removal — logged, ne
   expect(issueLines(errors)).toEqual([]);
 });
 
+test("a claim released after its facet was deleted leaves no facet-ran row for a birth to start", async () => {
+  const ctx = "prj_facet_release_after_delete";
+  const { probe } = await hostedOn(ctx);
+  await probe();
+  await stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name, target: null },
+  });
+  expect(await ranRow(ctx)).toBeUndefined(); // the deletion took it
+  // What the facet's own release does when it lands after that (processors.claim, from the facet).
+  await stub(ctx).invoke(["itx", "processors", ["claim", name, null]], [], {
+    principal: null,
+    app: true,
+  });
+  expect(await ranRow(ctx)).toBeUndefined();
+});
+
+const ranRow = (ctx: string) =>
+  runInDurableObject(stub(ctx), (_instance, state) => state.storage.kv.get(`facet-ran:${name}`));
+
 async function hostedOn(ctx: string) {
   await stub(ctx).append({
     type: "events.iterate.com/stream/subscription-configured",

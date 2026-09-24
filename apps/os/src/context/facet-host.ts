@@ -241,7 +241,13 @@ export class FacetHost {
   claim(name: string, at: number | null): void {
     this.#facetRevived(name);
     this.#claimFacetAlarm(name, at);
-    this.#markRan(name); // a facet that claims, or releases, is running
+    // A facet that claims, or releases, is running — unless it is gone: a release can land after
+    // the facet's deletion took its memo.
+    if (
+      firstPartyFacetClassOf(name) ||
+      this.#deps.ctx.storage.kv.get(`facet:${name}`) !== undefined
+    )
+      this.#markRan(name);
   }
 
   /** The alarm pass's third job — THE DUE CLAIMS: each is spent first (a claim is one revive, never
@@ -434,6 +440,8 @@ export class FacetHost {
       await withTimeout(start(), FACET_START_WATCHDOG_MS, `facet "${name}" start`);
       return true;
     } catch (error) {
+      // A facet no longer hosted here (its memo gone with a deletion) is owed no start.
+      if (errorCode(error) === "NO_FACET") return true;
       console.warn({
         event: isFacetStartPlatformFailure(error)
           ? "facet.platform-failure-start"
