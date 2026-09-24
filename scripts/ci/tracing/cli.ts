@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { z } from "zod";
+import { DEPOT_ORG } from "../depot.ts";
 import { assembleTrace, jobKeyInWorkflow, Workflow, renderTrace, stepCommands } from "./tracing.ts";
 
 /** The workflows whose runs are traced: the per-PR preview's deploy and e2e jobs. */
@@ -169,7 +170,7 @@ export default class CiTrace {
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        "x-depot-org": org,
+        "x-depot-org": DEPOT_ORG,
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
@@ -206,7 +207,6 @@ export function duration(milliseconds: number) {
   const seconds = Math.round(milliseconds / 1000);
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
-const org = "0p91s0lz49";
 const LogPage = z.object({
   lines: z
     .array(

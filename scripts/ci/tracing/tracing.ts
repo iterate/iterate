@@ -5,6 +5,7 @@ import { relative } from "node:path";
 import type { Reporter, TestCase, TestResult } from "@playwright/test/reporter";
 import { parse } from "yaml";
 import { z } from "zod";
+import { DEPOT_ORG } from "../depot.ts";
 
 /** Measured work inside a CI step. Parallel operations keep their own parent. */
 export async function traceOperation<T>(
@@ -224,7 +225,7 @@ export function assembleTrace(
       "ci.source.sha": workflow.headSha,
       "ci.workflow.sha": workflow.sha,
       "ci.source.ref": workflow.ref,
-      "ci.url": `https://depot.dev/orgs/0p91s0lz49/workflows/${workflow.workflowId}`,
+      "ci.url": `https://depot.dev/orgs/${DEPOT_ORG}/workflows/${workflow.workflowId}`,
       "ci.evidence":
         "Depot timestamps; shell and test lifecycle markers. Uninstrumented action time remains in its enclosing job/phase.",
     },
@@ -304,7 +305,7 @@ export function assembleTrace(
           "ci.evidence": attempt.finishedAt
             ? "Depot timestamps"
             : "incomplete; end bounded by workflow finish",
-          "ci.url": `https://depot.dev/orgs/0p91s0lz49/workflows/${workflow.workflowId}?job=${job.jobId}&attempt=${attempt.attemptId}`,
+          "ci.url": `https://depot.dev/orgs/${DEPOT_ORG}/workflows/${workflow.workflowId}?job=${job.jobId}&attempt=${attempt.attemptId}`,
         },
         attempt.status === "failed",
       );
