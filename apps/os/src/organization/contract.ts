@@ -1,7 +1,8 @@
 // src/organization/contract.ts — THE ORGANIZATION: its context, `/organizations/<orgId>` in the
 // deployment-global namespace, where the FACTS about it land — created, renamed, deleted, a member
-// added or removed, a project created in it — each landed by the session on the context
-// (session.ts `foldPlatformFacts`) right after the control-plane database writes the row,
+// added or removed, an invitation link created, accepted or revoked, a project created in it — each
+// landed by the session on the context (session.ts `foldPlatformFacts`) right after the
+// control-plane database writes the row,
 // stamped with whoever asked: the audit lives where it happened, attributed to who asked and through
 // which connection. This file is the only place those events and their payloads are spelled; processor.ts
 // folds them into the record a member reads through `session.organizations.get(orgId)`'s live
@@ -58,9 +59,9 @@ export const OrganizationContract = defineProcessorContract({
   slug: "organization",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "3",
+  version: "4",
   description:
-    "The organization's record: created, renamed, deleted, its members, every project created in it, and the catalog of its own secrets.",
+    "The organization's record: created, renamed, deleted, its members, its pending invitation links, every project created in it, and the catalog of its own secrets.",
   /** THE REDUCED STATE — the organization's record, folded from the facts below: what a member
    *  reads through live state. */
   stateSchema: z.object({
@@ -70,6 +71,20 @@ export const OrganizationContract = defineProcessorContract({
     /** Who belongs, by user id: the role, and since when. Bounded per organization. */
     members: z
       .record(z.string(), z.object({ role: OrganizationRole, since: z.string() }))
+      .default({}),
+    /** The invitation links still open, by invitation id — created and neither accepted nor
+     *  revoked (an expired one stays until revoked: the dash says it expired). The link's secret
+     *  is never here: the control-plane database holds its hash, and the owner saw it once. */
+    invitations: z
+      .record(
+        z.string(),
+        z.object({
+          role: OrganizationRole,
+          emailHint: z.string().nullable(),
+          expiresAt: z.string(),
+          createdAt: z.string(),
+        }),
+      )
       .default({}),
     /** Every project created in the organization, by id: its slug and when. Bounded per
      *  organization — what the dash's tree lists under it. */
@@ -103,6 +118,25 @@ export const OrganizationContract = defineProcessorContract({
         "A person's membership ended — on the organization's log and on the person's account (platform fact).",
       payloadSchema: MemberRemoved,
     },
+    "events.iterate.com/organization/invitation-created": {
+      description:
+        "An owner created an invitation link: whoever accepts it first joins in `role`, until `expiresAt` (platform fact).",
+      payloadSchema: z.object({
+        invitationId: z.string().min(1),
+        role: OrganizationRole,
+        emailHint: z.string().nullable(),
+        expiresAt: z.string(),
+      }),
+    },
+    "events.iterate.com/organization/invitation-accepted": {
+      description:
+        "A person accepted an invitation link and joined; `member-added` follows (platform fact).",
+      payloadSchema: z.object({ invitationId: z.string().min(1), userId: z.string().min(1) }),
+    },
+    "events.iterate.com/organization/invitation-revoked": {
+      description: "An owner withdrew an invitation link before anyone used it (platform fact).",
+      payloadSchema: z.object({ invitationId: z.string().min(1) }),
+    },
     "events.iterate.com/organization/project-created": {
       description: "A project was created in the organization (platform fact).",
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
@@ -117,6 +151,9 @@ export const OrganizationContract = defineProcessorContract({
     "events.iterate.com/organization/deleted",
     "events.iterate.com/organization/member-added",
     "events.iterate.com/organization/member-removed",
+    "events.iterate.com/organization/invitation-created",
+    "events.iterate.com/organization/invitation-accepted",
+    "events.iterate.com/organization/invitation-revoked",
     "events.iterate.com/organization/project-created",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",

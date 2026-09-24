@@ -7,7 +7,8 @@
 // DO runs one synchronous block at a time). Reads scale later behind an eventual KV cache in front of
 // this object. The tables are the truth; every read is a query, every write ONE SYNCHRONOUS BLOCK —
 // the check and the insert with no `await` between them. No `await` in this file: a unit test drives
-// it over node:sqlite (catalog.test.ts).
+// it over node:sqlite (catalog.test.ts) — so the clock comes in as `now` (epoch ms) and an
+// invitation's token comes in already hashed (session.ts mints and hashes it).
 import { codedError } from "iterate/next/lib";
 import type { Caller as PrincipalCaller } from "iterate/next/principal";
 import type { SqlStorageHandle } from "iterate/next/stream/processor";
@@ -35,7 +36,7 @@ export const projectSlug = (name: string) =>
 /** An email's address — THE ONE spelling: trimmed, lower-cased. */
 const emailAddress = (email: string) => email.trim().toLowerCase();
 
-const newId = (prefix: "user" | "org" | "prj") =>
+const newId = (prefix: "user" | "org" | "prj" | "inv") =>
   `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 
 export type UserRecord = { id: string; email: string };
@@ -55,6 +56,26 @@ export type OrganizationRecord = {
   projects: number;
 };
 export type MemberRecord = { userId: string; email: string; role: OrganizationRole };
+/** An invitation to an organization, as its owners see it: the link's own secret is never stored,
+ *  only its SHA-256 (`token_hash`), so an invitation is shown once — at creation — and afterwards
+ *  known by `id`. `emailHint` is who the owner meant it for: a note, not a check — the link admits
+ *  whoever signs in with it, once. `expiresAt` is ISO. */
+export type InvitationRecord = {
+  id: string;
+  orgId: string;
+  role: OrganizationRole;
+  emailHint: string | null;
+  expiresAt: string;
+};
+/** Where an invitation stands at `now`: open, used, withdrawn, or past its time. */
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+/** What the person holding a link sees before accepting: the organization it opens, the role, and
+ *  whether it can still be used — `member` when they already belong. */
+export type InvitationPreview = InvitationRecord & {
+  orgName: string;
+  status: InvitationStatus;
+  member: boolean;
+};
 /** What a person can access: their organizations and every project of those, with their role. */
 export type AccessibleRecord = { organizations: OrganizationRecord[]; projects: ProjectRecord[] };
 
@@ -71,6 +92,10 @@ export class ControlPlaneDatabase {
       "CREATE INDEX IF NOT EXISTS memberships_user ON memberships (user_id)",
       "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, org_id TEXT NOT NULL)",
       "CREATE INDEX IF NOT EXISTS projects_org ON projects (org_id)",
+      // An invitation link: the token's hash is the lookup (the token itself is never stored),
+      // the id the owners' handle. Single use: `accepted_by` is set once. Times are epoch ms.
+      "CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, org_id TEXT NOT NULL, role TEXT NOT NULL, email_hint TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER, accepted_by TEXT, accepted_at INTEGER)",
+      "CREATE INDEX IF NOT EXISTS invitations_org ON invitations (org_id)",
     ])
       sql.exec(statement);
   }
@@ -246,6 +271,7 @@ export class ControlPlaneDatabase {
         `This organization still holds ${projects} project${projects === 1 ? "" : "s"}.`,
       );
     this.sql.exec("DELETE FROM memberships WHERE org_id = ?", organizationId);
+    this.sql.exec("DELETE FROM invitations WHERE org_id = ?", organizationId);
     this.sql.exec("DELETE FROM organizations WHERE id = ?", organizationId);
   }
 
@@ -281,6 +307,138 @@ export class ControlPlaneDatabase {
       userId,
     );
     return userId;
+  }
+
+  /** A new invitation link to an organization the caller owns: `tokenHash` is the SHA-256 of the
+   *  secret the link carries (session.ts `mintInvitationToken`), `expiresAt` epoch ms. */
+  createInvitation(
+    caller: Caller,
+    organizationId: string,
+    input: { tokenHash: string; role: OrganizationRole; emailHint?: string; expiresAt: number },
+    now: number,
+  ): InvitationRecord {
+    this.#requireOwner(caller, organizationId, "invite people to");
+    if (input.expiresAt <= now)
+      throw codedError("INVALID_INPUT", "An invitation expires in the future.");
+    const id = newId("inv");
+    this.sql.exec(
+      "INSERT INTO invitations (id, token_hash, org_id, role, email_hint, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      id,
+      input.tokenHash,
+      organizationId,
+      input.role,
+      input.emailHint || null,
+      caller.principal!.actor,
+      now,
+      input.expiresAt,
+    );
+    return this.#invitationById(id)!.record;
+  }
+
+  /** Withdraw an invitation of an organization the caller owns; again is a no-op. One already
+   *  accepted is a membership now — removed as one, not revoked. */
+  revokeInvitation(
+    caller: Caller,
+    organizationId: string,
+    invitationId: string,
+    now: number,
+  ): InvitationRecord {
+    this.#requireOwner(caller, organizationId, "revoke an invitation to");
+    const found = this.#invitationById(invitationId);
+    if (!found || found.record.orgId !== organizationId)
+      throw codedError("INVALID_INPUT", "No such invitation to this organization.");
+    if (found.acceptedBy)
+      throw codedError(
+        "INVALID_INPUT",
+        "This invitation was already accepted; remove the member instead.",
+      );
+    if (found.revokedAt === null)
+      this.sql.exec("UPDATE invitations SET revoked_at = ? WHERE id = ?", now, invitationId);
+    return found.record;
+  }
+
+  /** What a link opens, for the person holding it — null for a token no invitation hashes to (or
+   *  whose organization is gone). `userId` is the reader, for `member`. */
+  invitation(tokenHash: string, userId: string | null, now: number): InvitationPreview | null {
+    const found = this.#invitationByToken(tokenHash);
+    const organization = found && this.organization(found.record.orgId);
+    if (!found || !organization) return null;
+    return {
+      ...found.record,
+      orgName: organization.name,
+      status: invitationStatus(found, now),
+      member: Boolean(userId && this.#role(found.record.orgId, userId)),
+    };
+  }
+
+  /** The caller joins the organization a link opens, in its role. SINGLE USE: the first person to
+   *  accept consumes it; that same person again is answered the same while they still belong,
+   *  anyone else is refused, as is a revoked or expired link. A person who already belongs keeps
+   *  their role and leaves the link unused — it was meant for someone else (`accepted: false`).
+   *  `role` is the membership as it stands now (a later promotion included), so the session can
+   *  land the facts again on a retry without rewinding it. */
+  acceptInvitation(
+    caller: Caller,
+    tokenHash: string,
+    now: number,
+  ): { invitation: InvitationRecord; userId: string; role: OrganizationRole; accepted: boolean } {
+    const userId = this.#requireUser(caller, "accept an invitation");
+    const found = this.#invitationByToken(tokenHash);
+    if (!found || !this.organization(found.record.orgId))
+      throw codedError("INVALID_INPUT", "This invitation link is not valid.");
+    const { orgId } = found.record;
+    const role = this.#role(orgId, userId);
+    // the same person again, still a member: the answer they had (removed since, the link is spent)
+    if (found.acceptedBy === userId && role)
+      return { invitation: found.record, userId, role, accepted: true };
+    const status = invitationStatus(found, now);
+    if (status !== "pending")
+      throw codedError(
+        "INVALID_INPUT",
+        status === "accepted"
+          ? "This invitation was already used by someone else."
+          : status === "revoked"
+            ? "This invitation was revoked."
+            : "This invitation has expired.",
+      );
+    if (role) return { invitation: found.record, userId, role, accepted: false };
+    this.#insertMembership(orgId, userId, found.record.role);
+    this.sql.exec(
+      "UPDATE invitations SET accepted_by = ?, accepted_at = ? WHERE id = ?",
+      userId,
+      now,
+      found.record.id,
+    );
+    return { invitation: found.record, userId, role: found.record.role, accepted: true };
+  }
+
+  #invitationById(invitationId: string) {
+    return this.#invitationWhere("id = ?", invitationId);
+  }
+  #invitationByToken(tokenHash: string) {
+    return this.#invitationWhere("token_hash = ?", tokenHash);
+  }
+  #invitationWhere(where: string, binding: string): InvitationRow | null {
+    const row = this.#rows<{
+      id: string;
+      orgId: string;
+      role: OrganizationRole;
+      emailHint: string | null;
+      expiresAt: number;
+      revokedAt: number | null;
+      acceptedBy: string | null;
+    }>(
+      `SELECT id, org_id AS orgId, role, email_hint AS emailHint, expires_at AS expiresAt, revoked_at AS revokedAt, accepted_by AS acceptedBy FROM invitations WHERE ${where}`,
+      binding,
+    )[0];
+    if (!row) return null;
+    const { revokedAt, acceptedBy, expiresAt, ...rest } = row;
+    return {
+      record: { ...rest, expiresAt: new Date(expiresAt).toISOString() },
+      expiresAtMs: expiresAt,
+      revokedAt,
+      acceptedBy,
+    };
   }
 
   /** A project named `project` (slugified into its hostname label): in the organization named (a
@@ -381,4 +539,18 @@ export class ControlPlaneDatabase {
     if (this.#role(organizationId, actor) !== "owner")
       throw codedError("FORBIDDEN", `Only an owner can ${verb} an organization.`);
   }
+}
+
+type InvitationRow = {
+  record: InvitationRecord;
+  expiresAtMs: number;
+  revokedAt: number | null;
+  acceptedBy: string | null;
+};
+
+/** Used beats withdrawn beats expired: an accepted link stays accepted whatever its clock says. */
+function invitationStatus(row: InvitationRow, now: number): InvitationStatus {
+  if (row.acceptedBy) return "accepted";
+  if (row.revokedAt !== null) return "revoked";
+  return row.expiresAtMs <= now ? "expired" : "pending";
 }

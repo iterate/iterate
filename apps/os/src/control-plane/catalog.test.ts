@@ -140,6 +140,111 @@ test("organizations: deleted only while it holds no project; then it and its mem
   expect(c.accessibleTo(bob.id).organizations.map(({ id }) => id)).toEqual([org.id]);
 });
 
+test("invitations: an owner creates a link — the record by id, never the hash; the holder previews the organization; a stranger or a member cannot create one, nor one already expired", () => {
+  const { c, ada, bob, org, invitation } = invited();
+  expect(invitation).toEqual({
+    id: expect.stringMatching(/^inv_[0-9a-f]{32}$/),
+    orgId: org.id,
+    role: "member",
+    emailHint: "bob@example.com",
+    expiresAt: new Date(NOW + DAY).toISOString(),
+  });
+  expect(c.invitation("hash-1", bob.id, NOW)).toEqual({
+    ...invitation,
+    orgName: "Booper",
+    status: "pending",
+    member: false,
+  });
+  expect(c.invitation("hash-1", ada.id, NOW)).toMatchObject({ member: true });
+  expect(c.invitation("hash-nobody", bob.id, NOW)).toBeNull();
+  const create =
+    (caller: Caller, expiresAt = NOW + DAY) =>
+    () =>
+      c.createInvitation(caller, org.id, { tokenHash: "hash-2", role: "owner", expiresAt }, NOW);
+  expect(refusal(create(as(bob)))).toMatchObject({ code: "FORBIDDEN" });
+  c.addMember(as(ada), org.id, { userId: bob.id, role: "member" });
+  expect(refusal(create(as(bob)))).toMatchObject({ code: "FORBIDDEN" });
+  expect(refusal(create(as(ada), NOW))).toMatchObject({ code: "INVALID_INPUT" });
+});
+
+test("invitations: accepted, the person joins in the link's role — once: again by them is the same answer (with the role as it stands now), a second person is refused, and a member removed since cannot reuse it", () => {
+  const { c, ada, bob, carol, org, invitation } = invited("owner");
+  expect(c.acceptInvitation(as(bob), "hash-1", NOW + 1)).toEqual({
+    invitation,
+    userId: bob.id,
+    role: "owner",
+    accepted: true,
+  });
+  expect(c.accessibleTo(bob.id)).toMatchObject({
+    organizations: [{ id: org.id, name: "Booper", role: "owner", projects: 0 }],
+  });
+  // idempotent for the one who accepted
+  expect(c.acceptInvitation(as(bob), "hash-1", NOW + 2)).toEqual({
+    invitation,
+    userId: bob.id,
+    role: "owner",
+    accepted: true,
+  });
+  // single use: a second person is refused and joins nothing
+  expect(refusal(() => c.acceptInvitation(as(carol), "hash-1", NOW + 3))).toMatchObject({
+    message: "This invitation was already used by someone else.",
+  });
+  expect(c.accessibleTo(carol.id)).toMatchObject({ organizations: [] });
+  expect(c.invitation("hash-1", carol.id, NOW + 3)).toMatchObject({ status: "accepted" });
+  // once used it is a membership: revoked it is not, removed it is — and the link stays spent
+  expect(refusal(() => c.revokeInvitation(as(ada), org.id, invitation.id, NOW))).toMatchObject({
+    message: "This invitation was already accepted; remove the member instead.",
+  });
+  c.removeMember(as(ada), org.id, { userId: bob.id });
+  expect(refusal(() => c.acceptInvitation(as(bob), "hash-1", NOW + 4))).toMatchObject({
+    message: "This invitation was already used by someone else.",
+  });
+});
+
+test("invitations: expired or revoked, a link is refused and joins nobody; revoked again is a no-op; only an owner of that organization revokes", () => {
+  const { c, ada, bob, org, invitation } = invited();
+  expect(c.invitation("hash-1", bob.id, NOW + DAY)).toMatchObject({ status: "expired" });
+  expect(refusal(() => c.acceptInvitation(as(bob), "hash-1", NOW + DAY))).toMatchObject({
+    message: "This invitation has expired.",
+  });
+  expect(refusal(() => c.revokeInvitation(as(bob), org.id, invitation.id, NOW))).toMatchObject({
+    code: "FORBIDDEN",
+  });
+  const other = c.createOrganization(as(ada), { name: "Other" });
+  expect(refusal(() => c.revokeInvitation(as(ada), other.id, invitation.id, NOW))).toMatchObject({
+    message: "No such invitation to this organization.",
+  });
+  expect(c.revokeInvitation(as(ada), org.id, invitation.id, NOW)).toEqual(invitation);
+  expect(c.revokeInvitation(as(ada), org.id, invitation.id, NOW + 1)).toEqual(invitation);
+  expect(c.invitation("hash-1", bob.id, NOW)).toMatchObject({ status: "revoked" });
+  expect(refusal(() => c.acceptInvitation(as(bob), "hash-1", NOW))).toMatchObject({
+    message: "This invitation was revoked.",
+  });
+  expect(c.accessibleTo(bob.id)).toMatchObject({ organizations: [] });
+});
+
+test("invitations: a person who already belongs keeps their role and leaves the link open; the operator accepts nothing; a deleted organization's links name nothing", () => {
+  const { c, ada, bob, org } = invited("member");
+  // the owner opening their own link neither demotes them nor spends it
+  expect(c.acceptInvitation(as(ada), "hash-1", NOW)).toMatchObject({
+    role: "owner",
+    accepted: false,
+  });
+  expect(c.members(org.id)).toEqual([{ userId: ada.id, email: ada.email, role: "owner" }]);
+  expect(c.invitation("hash-1", bob.id, NOW)).toMatchObject({ status: "pending" });
+  expect(refusal(() => c.acceptInvitation(admin, "hash-1", NOW))).toMatchObject({
+    code: "FORBIDDEN",
+  });
+  expect(refusal(() => c.acceptInvitation(as(bob), "hash-nobody", NOW))).toMatchObject({
+    message: "This invitation link is not valid.",
+  });
+  c.deleteOrganization(as(ada), org.id);
+  expect(c.invitation("hash-1", bob.id, NOW)).toBeNull();
+  expect(refusal(() => c.acceptInvitation(as(bob), "hash-1", NOW))).toMatchObject({
+    message: "This invitation link is not valid.",
+  });
+});
+
 test("projects: a slug is one project across every organization: the same organization's again is the same project, another's is refused before anything is made", () => {
   const { c, person } = catalog();
   const ada = person("ada@example.com");
@@ -231,3 +336,23 @@ const refusal = (thunk: () => unknown) => {
   }
   throw new Error("expected a refusal");
 };
+
+const NOW = Date.parse("2030-01-01T00:00:00Z");
+const DAY = 86_400_000;
+
+/** Ada's organization and one open link to it (`hash-1`), expiring in a day; Bob and Carol, who
+ *  belong to nothing. */
+function invited(role: "owner" | "member" = "member") {
+  const { c, person } = catalog();
+  const ada = person("ada@example.com");
+  const bob = person("bob@example.com");
+  const carol = person("carol@example.com");
+  const org = c.createOrganization(as(ada), { name: "Booper" });
+  const invitation = c.createInvitation(
+    as(ada),
+    org.id,
+    { tokenHash: "hash-1", role, emailHint: "bob@example.com", expiresAt: NOW + DAY },
+    NOW,
+  );
+  return { c, ada, bob, carol, org, invitation };
+}

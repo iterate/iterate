@@ -1,12 +1,14 @@
 // /organizations/<organization> — its settings: the name (renamed here, by an owner), the id, its
-// projects, its members (added by user id and removed here, by an owner), billing (nothing to bill
-// yet), and the danger zone — delete, once it holds no project. Everything shown is the tree's
+// projects, its members (removed here, by an owner), its invitation links (an owner creates one to
+// copy and send, and revokes the ones still open — the person who opens it joins on
+// /invitations/<token>), billing (nothing to bill yet), and the danger zone — delete, once it holds
+// no project. Everything shown is the tree's
 // (components/organization-tree.tsx): the organization's own live state, the person's role from
 // the account's memberships — a rename, a membership, a project lands here without a reload. An
 // organization the tree does not hold is not found.
 import { useEffect, useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, notFound, useNavigate } from "@tanstack/react-router";
-import { UserMinus, UserPlus } from "lucide-react";
+import { Check, Copy, Link2, UserMinus, X } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -246,6 +248,9 @@ function OrganizationSettingsFor({
         onError={setError}
         onLeaving={onLeaving}
       />
+      {owner && canWrite && tree.source === "live" ? (
+        <Invitations org={org} onError={setError} />
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle>Billing</CardTitle>
@@ -293,9 +298,9 @@ function OrganizationSettingsFor({
   );
 }
 
-/** Who belongs, from the organization's record — and, for an owner, add one by user id (there is
- *  no user search: the id is what the person copies from their account menu) or remove one. The
- *  rows follow the record: a membership shows the moment its fact lands. */
+/** Who belongs, from the organization's record — and, for an owner, remove one (people join by an
+ *  invitation link: `<Invitations>`). The rows follow the record: a membership shows the moment
+ *  its fact lands. */
 function Members({
   org,
   self,
@@ -315,25 +320,10 @@ function Members({
 }) {
   const { api } = shell.useRouteContext();
   const navigate = useNavigate();
-  const [userId, setUserId] = useState("");
-  const [role, setRole] = useState<OrganizationRole>("member");
   const [busy, setBusy] = useState<string | null>(null);
   const members = Object.entries(org.members).sort(
     ([idA, a], [idB, b]) => a.since.localeCompare(b.since) || idA.localeCompare(idB),
   );
-  async function add(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    onError(null);
-    setBusy("add");
-    try {
-      await api.organizations.addMember(org.id, { userId: userId.trim(), role });
-      setUserId("");
-    } catch (caught) {
-      onError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setBusy(null);
-    }
-  }
   async function remove(memberId: string) {
     onError(null);
     setBusy(memberId);
@@ -406,44 +396,211 @@ function Members({
           </div>
         </CardContent>
       ) : null}
-      {canManage ? (
-        <CardFooter>
-          <form onSubmit={add} className="flex w-full flex-wrap items-end gap-3">
-            <Field className="min-w-64 flex-1">
-              <FieldLabel htmlFor="member-user-id">Add a member by user id</FieldLabel>
+    </Card>
+  );
+}
+
+/** An owner's INVITATION LINKS: create one — a role, how long it stays open, and optionally who it
+ *  is for (a note, never checked) — and copy it: it is shown this once (the platform keeps only its
+ *  hash), so a lost link is revoked and made again. Below, the links still open, from the
+ *  organization's record, each revocable; an accepted one leaves the list as its member joins the
+ *  table above. */
+function Invitations({
+  org,
+  onError,
+}: {
+  org: TreeOrganization;
+  onError: (error: string | null) => void;
+}) {
+  const { api } = shell.useRouteContext();
+  const [role, setRole] = useState<OrganizationRole>("member");
+  const [expiresInDays, setExpiresInDays] = useState(7);
+  const [emailHint, setEmailHint] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ link: string; emailHint: string | null } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const pending = Object.entries(org.invitations).sort(
+    ([idA, a], [idB, b]) => a.createdAt.localeCompare(b.createdAt) || idA.localeCompare(idB),
+  );
+  async function create(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onError(null);
+    setBusy("create");
+    try {
+      const invitation = await api.organizations.createInvitation(org.id, {
+        role,
+        expiresInDays,
+        emailHint: emailHint.trim() || undefined,
+      });
+      setCreated({
+        link: new URL(`/invitations/${invitation.token}`, window.location.origin).href,
+        emailHint: invitation.emailHint,
+      });
+      setCopied(false);
+      setEmailHint("");
+    } catch (caught) {
+      onError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function copy(link: string) {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch (caught) {
+      onError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+  async function revoke(invitationId: string) {
+    onError(null);
+    setBusy(invitationId);
+    try {
+      await api.organizations.revokeInvitation(org.id, { invitationId });
+    } catch (caught) {
+      onError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Invite people</CardTitle>
+        <CardDescription>
+          Create a link and send it. The first person to open it and sign in joins with the role you
+          pick. Each link works once.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-6">
+        <form onSubmit={create} className="flex w-full flex-wrap items-end gap-3">
+          <Field className="min-w-56 flex-1">
+            <FieldLabel htmlFor="invitation-email-hint">For (optional)</FieldLabel>
+            <Input
+              id="invitation-email-hint"
+              type="email"
+              placeholder="name@example.com"
+              autoComplete="off"
+              value={emailHint}
+              onChange={(event) => setEmailHint(event.target.value)}
+            />
+          </Field>
+          <Field className="w-32">
+            <FieldLabel htmlFor="invitation-role">Role</FieldLabel>
+            <NativeSelect
+              id="invitation-role"
+              className="w-full"
+              value={role}
+              onChange={(event) => setRole(event.target.value as OrganizationRole)}
+            >
+              <NativeSelectOption value="member">member</NativeSelectOption>
+              <NativeSelectOption value="owner">owner</NativeSelectOption>
+            </NativeSelect>
+          </Field>
+          <Field className="w-36">
+            <FieldLabel htmlFor="invitation-expiry">Expires in</FieldLabel>
+            <NativeSelect
+              id="invitation-expiry"
+              className="w-full"
+              value={String(expiresInDays)}
+              onChange={(event) => setExpiresInDays(Number(event.target.value))}
+            >
+              <NativeSelectOption value="1">1 day</NativeSelectOption>
+              <NativeSelectOption value="7">7 days</NativeSelectOption>
+              <NativeSelectOption value="30">30 days</NativeSelectOption>
+            </NativeSelect>
+          </Field>
+          <Button type="submit" disabled={Boolean(busy)}>
+            {busy === "create" ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <Link2 data-icon="inline-start" />
+            )}
+            Create invite link
+          </Button>
+        </form>
+        {created ? (
+          <div
+            role="status"
+            data-testid="invitation-link"
+            className="flex flex-col gap-2 rounded-md border bg-muted/40 p-3 text-sm"
+          >
+            <span>
+              Copy this link now{created.emailHint ? ` and send it to ${created.emailHint}` : ""}.
+              It is not shown again.
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
               <Input
-                id="member-user-id"
-                placeholder="user_…"
-                autoComplete="off"
-                spellCheck={false}
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-                required
+                readOnly
+                aria-label="Invite link"
+                className="min-w-0 flex-1 font-mono text-xs"
+                value={created.link}
+                onFocus={(event) => event.currentTarget.select()}
               />
-            </Field>
-            <Field className="w-32">
-              <FieldLabel htmlFor="member-role">Role</FieldLabel>
-              <NativeSelect
-                id="member-role"
-                className="w-full"
-                value={role}
-                onChange={(event) => setRole(event.target.value as OrganizationRole)}
+              <Button type="button" size="sm" onClick={() => void copy(created.link)}>
+                {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
+                {copied ? "Copied" : "Copy link"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                aria-label="Dismiss"
+                onClick={() => setCreated(null)}
               >
-                <NativeSelectOption value="member">member</NativeSelectOption>
-                <NativeSelectOption value="owner">owner</NativeSelectOption>
-              </NativeSelect>
-            </Field>
-            <Button type="submit" disabled={Boolean(busy) || !userId.trim()}>
-              {busy === "add" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <UserPlus data-icon="inline-start" />
-              )}
-              Add member
-            </Button>
-          </form>
-        </CardFooter>
-      ) : null}
+                <X />
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {pending.length ? (
+          <div className="overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>For</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Expires</TableHead>
+                  <TableHead className="w-0" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pending.map(([invitationId, invitation]) => (
+                  <TableRow key={invitationId} data-testid="organization-invitation">
+                    <TableCell>
+                      {invitation.emailHint || (
+                        <span className="text-muted-foreground">Anyone with the link</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{invitation.role}</TableCell>
+                    <TableCell className="text-muted-foreground tabular-nums">
+                      {Date.parse(invitation.expiresAt) <= Date.now() ? (
+                        <Badge variant="outline">expired</Badge>
+                      ) : (
+                        new Date(invitation.expiresAt).toLocaleDateString()
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={Boolean(busy)}
+                        onClick={() => void revoke(invitationId)}
+                      >
+                        {busy === invitationId ? <Spinner data-icon="inline-start" /> : null}
+                        Revoke
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No open invite links.</p>
+        )}
+      </CardContent>
     </Card>
   );
 }

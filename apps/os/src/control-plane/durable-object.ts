@@ -46,6 +46,9 @@ export class ControlPlaneDurableObject extends DurableObject {
   accessibleTo(userId: string) {
     return this.#db.accessibleTo(userId);
   }
+  invitation(tokenHash: string, userId: string | null) {
+    return this.#db.invitation(tokenHash, userId, Date.now());
+  }
 
   createUser(input: { email: string }) {
     return this.#write(() => this.#db.createUser(input));
@@ -71,6 +74,21 @@ export class ControlPlaneDurableObject extends DurableObject {
   }
   removeMember(caller: Caller, organizationId: string, input: { userId: string }) {
     return this.#write(() => this.#db.removeMember(caller, organizationId, input));
+  }
+  createInvitation(
+    caller: Caller,
+    organizationId: string,
+    input: { tokenHash: string; role: OrganizationRole; emailHint?: string; expiresAt: number },
+  ) {
+    return this.#write(() => this.#db.createInvitation(caller, organizationId, input, Date.now()));
+  }
+  revokeInvitation(caller: Caller, organizationId: string, invitationId: string) {
+    return this.#write(() =>
+      this.#db.revokeInvitation(caller, organizationId, invitationId, Date.now()),
+    );
+  }
+  acceptInvitation(caller: Caller, tokenHash: string) {
+    return this.#write(() => this.#db.acceptInvitation(caller, tokenHash, Date.now()));
   }
   createProject(
     caller: Caller,

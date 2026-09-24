@@ -13,6 +13,8 @@ import type { ControlPlaneDurableObject } from "./durable-object.ts";
 import type {
   AccessibleRecord,
   Caller as ControlPlaneCaller,
+  InvitationPreview,
+  InvitationRecord,
   MemberRecord,
   OrganizationRecord,
   ProjectRecord,
@@ -165,6 +167,10 @@ export class ControlPlane {
   listMembers(organizationId: string): Promise<MemberRecord[]> {
     return this.#call("members", organizationId);
   }
+  /** What an invitation link opens, for `userId` (null: nobody signed in) — by the token's hash. */
+  getInvitation(tokenHash: string, userId: string | null): Promise<InvitationPreview | null> {
+    return this.#call("invitation", tokenHash, userId);
+  }
   /** A user by id or by email. */
   getUser(ref: string): Promise<UserRecord | null> {
     return this.#call("user", ref);
@@ -249,6 +255,39 @@ export class ControlPlane {
     );
     this.#forget(userId);
     return userId;
+  }
+  createInvitation(
+    caller: Caller,
+    organizationId: string,
+    input: { tokenHash: string; role: OrganizationRole; emailHint?: string; expiresAt: number },
+  ): Promise<InvitationRecord> {
+    return this.#call("createInvitation", callerOf(caller), organizationId, input);
+  }
+  revokeInvitation(
+    caller: Caller,
+    organizationId: string,
+    invitationId: string,
+  ): Promise<InvitationRecord> {
+    return this.#call("revokeInvitation", callerOf(caller), organizationId, invitationId);
+  }
+  /** The caller joins the organization the link opens; their access is re-read at once. */
+  async acceptInvitation(
+    caller: Caller,
+    tokenHash: string,
+  ): Promise<{
+    invitation: InvitationRecord;
+    userId: string;
+    role: OrganizationRole;
+    accepted: boolean;
+  }> {
+    const accepted = await this.#call<{
+      invitation: InvitationRecord;
+      userId: string;
+      role: OrganizationRole;
+      accepted: boolean;
+    }>("acceptInvitation", callerOf(caller), tokenHash);
+    this.#forget(accepted.userId);
+    return accepted;
   }
   /** A project: the catalog claims the slug and mints the id; the caller (session.ts) then opens the
    *  project's own creation saga on its root. */

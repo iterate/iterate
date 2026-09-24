@@ -17,6 +17,7 @@ import { Route as AuthActivityRouteImport } from "./routes/_auth/activity.tsx";
 import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects/index.tsx";
 import { Route as AuthOrganizationsIndexRouteImport } from "./routes/_auth/organizations/index.tsx";
 import { Route as AuthOrganizationsOrgIdRouteImport } from "./routes/_auth/organizations/$orgId.tsx";
+import { Route as AuthInvitationsTokenRouteImport } from "./routes/_auth/invitations.$token.tsx";
 import { Route as AuthProjectsSlugRouteRouteImport } from "./routes/_auth/projects/$slug/route.tsx";
 import { Route as AuthProjectsSlugIndexRouteImport } from "./routes/_auth/projects/$slug/index.tsx";
 import { Route as AuthProjectsSlugSecretsRouteImport } from "./routes/_auth/projects/$slug/secrets.tsx";
@@ -63,6 +64,11 @@ const AuthOrganizationsOrgIdRoute = AuthOrganizationsOrgIdRouteImport.update({
   path: "/organizations/$orgId",
   getParentRoute: () => AuthRoute,
 } as any);
+const AuthInvitationsTokenRoute = AuthInvitationsTokenRouteImport.update({
+  id: "/invitations/$token",
+  path: "/invitations/$token",
+  getParentRoute: () => AuthRoute,
+} as any);
 const AuthProjectsSlugRouteRoute = AuthProjectsSlugRouteRouteImport.update({
   id: "/projects/$slug",
   path: "/projects/$slug",
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
   "/projects/$slug": typeof AuthProjectsSlugRouteRouteWithChildren;
+  "/invitations/$token": typeof AuthInvitationsTokenRoute;
   "/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/organizations/": typeof AuthOrganizationsIndexRoute;
   "/projects/": typeof AuthProjectsIndexRoute;
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   "/activity": typeof AuthActivityRoute;
   "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
+  "/invitations/$token": typeof AuthInvitationsTokenRoute;
   "/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/organizations": typeof AuthOrganizationsIndexRoute;
   "/projects": typeof AuthProjectsIndexRoute;
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   "/_auth/home": typeof AuthHomeRoute;
   "/_auth/sessions": typeof AuthSessionsRoute;
   "/_auth/projects/$slug": typeof AuthProjectsSlugRouteRouteWithChildren;
+  "/_auth/invitations/$token": typeof AuthInvitationsTokenRoute;
   "/_auth/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/_auth/organizations/": typeof AuthOrganizationsIndexRoute;
   "/_auth/projects/": typeof AuthProjectsIndexRoute;
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | "/home"
     | "/sessions"
     | "/projects/$slug"
+    | "/invitations/$token"
     | "/organizations/$orgId"
     | "/organizations/"
     | "/projects/"
@@ -164,6 +174,7 @@ export interface FileRouteTypes {
     | "/activity"
     | "/home"
     | "/sessions"
+    | "/invitations/$token"
     | "/organizations/$orgId"
     | "/organizations"
     | "/projects"
@@ -180,6 +191,7 @@ export interface FileRouteTypes {
     | "/_auth/home"
     | "/_auth/sessions"
     | "/_auth/projects/$slug"
+    | "/_auth/invitations/$token"
     | "/_auth/organizations/$orgId"
     | "/_auth/organizations/"
     | "/_auth/projects/"
@@ -253,6 +265,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthOrganizationsOrgIdRouteImport;
       parentRoute: typeof AuthRoute;
     };
+    "/_auth/invitations/$token": {
+      id: "/_auth/invitations/$token";
+      path: "/invitations/$token";
+      fullPath: "/invitations/$token";
+      preLoaderRoute: typeof AuthInvitationsTokenRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
     "/_auth/projects/$slug": {
       id: "/_auth/projects/$slug";
       path: "/projects/$slug";
@@ -322,6 +341,7 @@ interface AuthRouteChildren {
   AuthHomeRoute: typeof AuthHomeRoute;
   AuthSessionsRoute: typeof AuthSessionsRoute;
   AuthProjectsSlugRouteRoute: typeof AuthProjectsSlugRouteRouteWithChildren;
+  AuthInvitationsTokenRoute: typeof AuthInvitationsTokenRoute;
   AuthOrganizationsOrgIdRoute: typeof AuthOrganizationsOrgIdRoute;
   AuthOrganizationsIndexRoute: typeof AuthOrganizationsIndexRoute;
   AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
@@ -333,6 +353,7 @@ const AuthRouteChildren: AuthRouteChildren = {
   AuthHomeRoute: AuthHomeRoute,
   AuthSessionsRoute: AuthSessionsRoute,
   AuthProjectsSlugRouteRoute: AuthProjectsSlugRouteRouteWithChildren,
+  AuthInvitationsTokenRoute: AuthInvitationsTokenRoute,
   AuthOrganizationsOrgIdRoute: AuthOrganizationsOrgIdRoute,
   AuthOrganizationsIndexRoute: AuthOrganizationsIndexRoute,
   AuthProjectsIndexRoute: AuthProjectsIndexRoute,
