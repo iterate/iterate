@@ -6,8 +6,8 @@
 // access is kept five seconds — dropped at once here for the person a command was made by or for —
 // and a refusal is never memoized: a project not in a memoized access set is re-read once before it
 // is refused, so a creation is reachable at once.
-import type { Caller } from "../caller.ts";
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
+import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
 import { isRetryableTransportError } from "../retryable-error.ts";
