@@ -392,24 +392,36 @@ export class FacetHost {
    *  use. A start that fails leaves the facet stopped, and is logged; the platform defect at facet
    *  start (`isFacetStartPlatformFailure`) as such. Never throws. */
   async #start(name: string): Promise<void> {
+    const steps: ItxExpression = [["listPublicMethods"]];
+    const startedIfRefused = (error: unknown) => {
+      if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
+        throw error;
+    };
     const start = async () => {
       const firstPartyClassName = firstPartyFacetClassOf(name);
-      const started = await this.#materialize(
-        name,
-        firstPartyClassName,
-        firstPartyClassName ? undefined : this.#facetStartupMemoFor(name, undefined),
-        { platformStart: true },
-      );
-      await this.#call(started, name, [["listPublicMethods"]], {
-        watchdogMs: FACET_START_WATCHDOG_MS,
-        restartOnTimeout: false,
-      }).catch((error: unknown) => {
-        if (
-          !(error instanceof TypeError && error.message.includes("does not implement the method"))
-        )
-          throw error;
+      const facetStartupMemo = firstPartyClassName
+        ? undefined
+        : this.#facetStartupMemoFor(name, undefined);
+      const started = await this.#materialize(name, firstPartyClassName, facetStartupMemo, {
+        platformStart: true,
       });
-      started.recordLoadedIdentity?.();
+      try {
+        await this.#call(started, name, steps, {
+          watchdogMs: FACET_START_WATCHDOG_MS,
+          restartOnTimeout: false,
+        }).catch(startedIfRefused);
+        started.recordLoadedIdentity?.();
+      } catch (error) {
+        // The platform defect at facet start (an alarm-woken incarnation's loaded facet, above all)
+        // is recovered as a call's is: a fresh loaded identity and one more start.
+        if (!this.#isRecoverableFacetFailure(name, error, started)) throw error;
+        await this.#afterEarlierRecoveries(name, () =>
+          this.#recover(name, firstPartyClassName, facetStartupMemo, steps, {
+            failedOn: started,
+            error,
+          }).catch(startedIfRefused),
+        );
+      }
     };
     try {
       // The whole start, its source resolved included, under the watchdog: a birth waits on it.
@@ -687,6 +699,8 @@ export class FacetHost {
     let { failedOn, error } = failure;
     let retriedOnReplacement = false;
     let restarted = false;
+    // Written once the attempt ran, as its loaded identity is: nothing between the abort and the start.
+    let recordRestart: (() => void) | undefined;
     for (;;) {
       // Removed or reconfigured while this waited: never abort the newer facet (#materialize's check).
       if (facetStartupMemo && this.#facetStartupMemoByName.get(name) !== facetStartupMemo)
@@ -708,7 +722,7 @@ export class FacetHost {
         this.#liveFacetNames.delete(name);
         failedOn.retireLoadedIdentity?.();
         const restarts = this.restarts(name) + 1;
-        this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+        recordRestart = () => this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
         console.warn({
           event: "facet.platform-failure-retry",
           namespace: "iterate-context",
@@ -730,6 +744,8 @@ export class FacetHost {
         error = attemptError;
       } finally {
         attempt.recordLoadedIdentity?.();
+        recordRestart?.();
+        recordRestart = undefined;
       }
     }
   }
