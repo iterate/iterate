@@ -97,7 +97,7 @@ test("the trace job collects the deploy and e2e jobs", async () => {
   });
 });
 
-test("on main, the trace covers the parent, deploy and e2e while delete and alert still run", async () => {
+test("on main, the trace covers the parent, deploy and e2e while alert still runs", async () => {
   await using depot = await tracedWorkflow({
     workflowName: "Main OS e2e",
     workflowPath: "main-os-e2e.yml",
@@ -105,8 +105,7 @@ test("on main, the trace covers the parent, deploy and e2e while delete and aler
       ["parent", "finished", 3, 60],
       ["deploy", "finished", 61, 100],
       ["e2e", "finished", 101, 240],
-      ["delete", "running", 241, 0],
-      ["alert", "queued", 0, 0],
+      ["alert", "running", 241, 0],
       ["trace", "running", 241, 0],
     ],
     needs: ["parent", "deploy", "e2e"],

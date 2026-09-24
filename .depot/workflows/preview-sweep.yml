@@ -1,8 +1,9 @@
 # THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the previews
 # of os-preview and of the apps on top whose PR closed without a delete, that went stale, or
-# that were hand-named and left idle, plus any per-preview resource that outlived its preview. The
-# rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a failed cleanup,
-# from leaking a preview.
+# that were hand-named and left idle, plus any per-preview resource that outlived its preview. A CI
+# workflow's own preview (`main`, `latency`, `real-model`) goes only once that workflow has not
+# deployed it for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a
+# failed cleanup, from leaking a preview.
 #
 # A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
 # goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a

@@ -66,6 +66,10 @@ A platform preview is named `pr<n>-<branch slug>` under the `os-preview` parent 
 has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the
 preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
 see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
+Main OS e2e, the latency guard and the real-model suite each keep one preview, `main`, `latency` and
+`real-model`, which every run redeploys in place, its readiness gate held 150 s (`--settle 150`)
+past the window the previous version still answers in
+([why](../../docs/depot-ci.md#main-os-e2e-keeps-one-preview)). Leave those names to CI.
 
 A new Durable Object class needs care. An existing preview cannot gain a class it lacked when it was
 created: `wrangler preview` fails with Cloudflare 10061 ("Cannot create binding for class … not

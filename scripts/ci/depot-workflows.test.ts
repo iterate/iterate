@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
@@ -597,6 +598,39 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
     "working-directory": "apps/os",
     run: "doppler run -- pnpm preview delete",
   });
+});
+
+// Each CI workflow of main that deploys a preview keeps one of its own, never brand-new
+// (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS; docs/depot-ci.md#main-os-e2e-keeps-one-preview):
+// it redeploys it in place one run at a time, the gate held past the old version's window, and
+// never deletes it.
+test("each CI workflow that deploys a preview redeploys its own in place, one run at a time, and never deletes it", () => {
+  const ownPreviews = depotWorkflowFiles.flatMap((file) => {
+    const workflow = loadWorkflow(file);
+    const preview = workflow.env?.PREVIEW_NAME;
+    return preview ? [{ file, preview, workflow }] : [];
+  });
+  expect(Object.fromEntries(ownPreviews.map(({ file, preview }) => [preview, file]))).toEqual({
+    main: ".depot/workflows/main-os-e2e.yml",
+    latency: ".depot/workflows/os-latency.yml",
+    "real-model": ".depot/workflows/os-real-model.yml",
+  });
+  expect(ownPreviews.map(({ preview }) => preview).toSorted()).toEqual(
+    [...CI_WORKFLOW_PREVIEWS.keys()].toSorted(),
+  );
+  for (const { file, workflow } of ownPreviews) {
+    expect(workflow.concurrency, file).toMatchObject({ "cancel-in-progress": false });
+    const steps = Object.values(workflow.jobs).flatMap((job) => job.steps || []);
+    const runs = steps.map((step) => step.run || "");
+    // the gate holds past the window an in-place redeploy's old version still answers in
+    expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview deploy --settle \d{3}$/));
+    expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview delete-superseded$/));
+    expect(runs, file).not.toContainEqual(expect.stringMatching(/pnpm preview (delete|reset)$/));
+    expect(
+      steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),
+      file,
+    ).toEqual([]);
+  }
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job

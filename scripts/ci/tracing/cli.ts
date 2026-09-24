@@ -12,7 +12,7 @@ import {
   tracedJobs,
 } from "./tracing.ts";
 
-/** The workflows whose runs are traced: a PR's preview, and main's e2e run of a throwaway one. */
+/** The workflows whose runs are traced: a PR's preview, and main's e2e run on its own. */
 const TRACED_WORKFLOWS = ["preview-os.yml", "main-os-e2e.yml"];
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */

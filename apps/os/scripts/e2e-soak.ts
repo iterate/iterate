@@ -5,17 +5,25 @@
 //   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
 //   pnpm e2e:soak --runs 100 --preview soak-mine     (the preview's URL; WORKER_BASE_URL wins)
 //   pnpm e2e:soak --runs 10 --fresh-previews soak-fresh-<tag>
+//   pnpm e2e:soak --runs 10 --redeploy soak-<tag> [--gap <seconds>] [--settle <seconds>]
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
 // e2e/support/global-setup.ts reads them out of it.
 //
 // THE FIRST MINUTES OF A PREVIEW (`--fresh-previews <prefix>`): each run deploys a brand-new Worker
 // Preview `<prefix>-<n>` (scripts/preview.ts deploy --apps none, its readiness gate included), runs
-// the e2e project against it at once, and deletes it — the shape of main's e2e run, a `main-<sha>`
-// preview per push, which a soak preview redeployed in place never has (2026-09-24: bursts of
-// `internal error; reference = …` on brand-new previews only, scripts/preview-readiness.ts). A
-// deploy that fails is counted and named, never a skipped run. No perf run in this mode: the
-// budgets measure a warm worker.
+// the e2e project against it at once, and deletes it — the shape main's e2e run had until it kept
+// one preview, a `main-<sha>` per push, which a preview redeployed in place never has (2026-09-24:
+// bursts of `internal error; reference = …` on brand-new previews only,
+// scripts/preview-readiness.ts). A deploy that fails is counted and named, never a skipped run. No
+// perf run in this mode: the budgets measure a warm worker.
+//
+// MAIN'S SHAPE SINCE IT KEEPS ONE PREVIEW (`--redeploy <preview>`): each run redeploys the named
+// preview IN PLACE (the same deploy, gate included), runs the e2e project against it at once, and
+// never deletes it — Main OS e2e's run on `main` (preview-sweep.ts CI_WORKFLOW_PREVIEWS). Deploy the
+// preview once beforehand and let it age: a preview created minutes ago is still brand-new. `--gap`
+// waits that long after each run before the next redeploy: on main, a run's e2e job ends about
+// 90 s before the next queued run redeploys (the parent's deploy and the build come first).
 //
 // Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json, then
 // the perf project (the latency and throughput budgets, perf/**) to output/soak/perf-<n>.json — after
@@ -41,21 +49,36 @@ function parseArgs(argv: string[]) {
   let filter: string | undefined;
   let preview: string | undefined;
   let freshPreviews: string | undefined;
+  let redeploy: string | undefined;
+  let gapSeconds = 0;
+  let settle: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--runs") runs = Number(argv[++i]);
     else if (argv[i] === "--filter") filter = argv[++i];
     else if (argv[i] === "--preview") preview = argv[++i];
     else if (argv[i] === "--fresh-previews") freshPreviews = argv[++i];
+    else if (argv[i] === "--redeploy") redeploy = argv[++i];
+    else if (argv[i] === "--gap") gapSeconds = Number(argv[++i]);
+    else if (argv[i] === "--settle") settle = argv[++i];
     else throw new Error(`unknown argument ${argv[i]}`);
   }
   if (!Number.isInteger(runs) || runs < 1) throw new Error("--runs must be a positive integer");
-  if (freshPreviews && (preview || process.env.WORKER_BASE_URL))
-    throw new Error("--fresh-previews deploys its own worker: no --preview or WORKER_BASE_URL");
-  return { runs, filter, preview, freshPreviews };
+  if ((freshPreviews || redeploy) && (preview || process.env.WORKER_BASE_URL))
+    throw new Error(
+      "--fresh-previews and --redeploy deploy their own worker: no --preview or WORKER_BASE_URL",
+    );
+  if (freshPreviews && redeploy) throw new Error("--fresh-previews or --redeploy, not both");
+  if (!(Number.isFinite(gapSeconds) && gapSeconds >= 0) || (gapSeconds && !redeploy))
+    throw new Error("--gap takes a number of seconds, and only with --redeploy");
+  if (settle && !freshPreviews && !redeploy)
+    throw new Error("--settle is the deploy's (scripts/preview.ts): only with a deploying mode");
+  return { runs, filter, preview, freshPreviews, redeploy, gapSeconds, settle };
 }
 
-const { runs, filter, preview, freshPreviews } = parseArgs(process.argv.slice(2));
-if (!freshPreviews) {
+const { runs, filter, preview, freshPreviews, redeploy, gapSeconds, settle } = parseArgs(
+  process.argv.slice(2),
+);
+if (!freshPreviews && !redeploy) {
   // An explicit WORKER_BASE_URL wins; otherwise the named preview (os-e2e-soak.yml deploys it first).
   process.env.WORKER_BASE_URL ||= preview ? previewUrl(resolvePreviewName({ name: preview })) : "";
   if (!process.env.WORKER_BASE_URL)
@@ -160,9 +183,14 @@ const wall: number[] = [];
 const perfWall: number[] = [];
 const deployFailures: { run: number; preview: string; status: number | null }[] = [];
 for (let n = 1; n <= runs; n++) {
+  // the name scripts/preview.ts will give it, so the URL below is the one it deploys
   if (freshPreviews) {
-    // the name scripts/preview.ts will give it, so the URL below is the one it deploys
-    freshPreviewRun(n, resolvePreviewName({ name: `${freshPreviews}-${n}` }));
+    deployedRun(n, resolvePreviewName({ name: `${freshPreviews}-${n}` }), { remove: true });
+    continue;
+  }
+  if (redeploy) {
+    if (n > 1 && gapSeconds) spawnSync("sleep", [String(gapSeconds)]);
+    deployedRun(n, resolvePreviewName({ name: redeploy }), { remove: false });
     continue;
   }
   let started = Date.now();
@@ -190,9 +218,9 @@ writeFileSync(
   path.join(OUT, "summary.json"),
   JSON.stringify({ runs, wallMs: wall, perfWallMs: perfWall, deployFailures, rows }, null, 2),
 );
-if (freshPreviews)
+if (freshPreviews || redeploy)
   console.log(
-    `\n${runs} brand-new preview(s); ${deployFailures.length} deploy(s) failed${deployFailures.map((failure) => `\n  run ${failure.run}: ${failure.preview} (exit ${failure.status})`).join("")}`,
+    `\n${runs} ${freshPreviews ? "brand-new preview(s)" : "in-place redeploy(s)"}; ${deployFailures.length} deploy(s) failed${deployFailures.map((failure) => `\n  run ${failure.run}: ${failure.preview} (exit ${failure.status})`).join("")}`,
   );
 const flaky = rows.filter((r) => r.failed > 0).sort((a, b) => b.failed - a.failed);
 console.log(
@@ -210,9 +238,10 @@ const slow = rows
 console.log("slowest rows (max ms):");
 for (const r of slow) console.log(`  ${r.maxMs}  ${r.file}  ${r.title.slice(0, 100)}`);
 
-/** One `--fresh-previews` run: a brand-new preview, the e2e project against it, the preview deleted
- *  whatever happened. The deploy's and the delete's output stream through. */
-function freshPreviewRun(n: number, preview: string) {
+/** One `--fresh-previews` or `--redeploy` run: the preview deployed (brand-new, or again in place),
+ *  the e2e project against it at once, then — a fresh preview only — the preview deleted whatever
+ *  happened. The deploy's and the delete's output stream through. */
+function deployedRun(n: number, preview: string, { remove }: { remove: boolean }) {
   const pnpmPreview = (command: string, ...args: string[]) =>
     spawnSync("pnpm", ["preview", command, "--name", preview, ...args], {
       cwd: ROOT,
@@ -220,7 +249,12 @@ function freshPreviewRun(n: number, preview: string) {
       stdio: ["ignore", "inherit", "inherit"],
     }).status;
   try {
-    const deployed = pnpmPreview("deploy", "--apps", "none");
+    const deployed = pnpmPreview(
+      "deploy",
+      "--apps",
+      "none",
+      ...(settle ? ["--settle", settle] : []),
+    );
     if (deployed !== 0) {
       deployFailures.push({ run: n, preview, status: deployed });
       console.log(`run ${n}/${runs}: ${preview} did not deploy (exit ${deployed})`);
@@ -233,8 +267,10 @@ function freshPreviewRun(n: number, preview: string) {
       `run ${n}/${runs}: ${preview} e2e ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow ?? "?"} failed`,
     );
   } finally {
-    const deleted = pnpmPreview("delete");
-    if (deleted !== 0) console.warn(`run ${n}/${runs}: deleting ${preview} exited ${deleted}`);
+    if (remove) {
+      const deleted = pnpmPreview("delete");
+      if (deleted !== 0) console.warn(`run ${n}/${runs}: deleting ${preview} exited ${deleted}`);
+    }
   }
 }
 

@@ -56,7 +56,7 @@ test("runs on a schedule, on every main push that could change the platform's sp
   expect(latency.on.workflow_dispatch?.inputs).toHaveProperty("budget-scale");
 });
 
-test("measures a throwaway preview of its own, deleted whatever happened", () => {
+test("measures a preview of its own, redeployed in place, never deleted", () => {
   const measure = runs("measure").join("\n");
   const order = [
     "doppler run -- pnpm preview delete-superseded",
@@ -69,12 +69,11 @@ test("measures a throwaway preview of its own, deleted whatever happened", () =>
   expect(order).toEqual(order.toSorted((a, b) => a - b));
   // nothing but the one parent's preview: no app on top, no PR
   expect(JSON.stringify(latency)).not.toContain("PREVIEW_PR_NUMBER");
-  expect(latency.jobs.delete).toMatchObject({ if: "always()", needs: "measure" });
-  expect(runs("delete")).toContain("doppler run -- pnpm preview delete");
-  // one preview per run attempt, a shape supersededMainPreviews knows (apps/os/scripts/preview-sweep.ts)
-  expect(latency.env).toMatchObject({
-    PREVIEW_NAME: "latency-${{ github.run_id }}-${{ github.run_attempt }}",
-  });
+  // one preview for every run, a CI workflow's own, never brand-new
+  // (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS)
+  expect(latency.env).toMatchObject({ PREVIEW_NAME: "latency" });
+  expect(Object.keys(latency.jobs)).toEqual(["measure"]);
+  expect(measure).not.toMatch(/pnpm preview (delete|reset)$/m);
 });
 
 test("the judge reads the report the perf suite wrote and keeps the state the next run reads", () => {

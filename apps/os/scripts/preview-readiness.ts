@@ -15,6 +15,13 @@
 // deadline passes. Every miss is a warn whose `event` is `preview.platform-failure-readiness`
 // (docs/engineering-invariants.md), naming what answered: the upgrade's HTTP status and body, or
 // the RPC error. A preview still missing at the deadline fails the deploy with those misses.
+//
+// AN IN-PLACE REDEPLOY has its own window: its Durable Objects keep running the previous version on
+// some hosts for up to ~100 s after `wrangler preview` starts (Workers Logs, 48 soak redeploys), then
+// reset with "Durable Object reset because its code was updated.", failing every call in flight. The rounds pass meanwhile, since the
+// old version answers them. On 2026-09-24 the ControlPlane singleton answered 238 calls of a soak's
+// e2e run on the old version, then reset and failed 16 rows. `holdMs` keeps the rounds going that long
+// (every probe's `whoami` reads the ControlPlane), so the reset lands on a probe instead of on e2e.
 import { randomBytes, randomUUID } from "node:crypto";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
@@ -24,12 +31,19 @@ import { WebSocket } from "undici";
  *  at once; throws, naming the misses, when `deadlineMs` passes first. */
 export function awaitPreviewReady(
   url: string,
-  options: { adminSecret: string; width: number; consecutive: number; deadlineMs: number },
+  options: {
+    adminSecret: string;
+    width: number;
+    consecutive: number;
+    deadlineMs: number;
+    holdMs?: number;
+  },
 ) {
   return awaitFullRounds(() => probeRound(url, options), {
     label: url,
     consecutive: options.consecutive,
     deadlineMs: options.deadlineMs,
+    holdMs: options.holdMs,
     pauseMs: 1_000,
   });
 }
@@ -37,17 +51,25 @@ export function awaitPreviewReady(
 /** The gate's loop over any round of probes (preview-readiness.test.ts drives it with fakes): a
  *  round with a miss resets the streak, logs one `preview.platform-failure-readiness` warn per miss
  *  and pauses `pauseMs`; the deadline is checked before each round, so a round (every probe at most
- *  20 s) is the most it can overrun by. */
+ *  20 s) is the most it can overrun by. With `holdMs`, the rounds go on until that long has passed
+ *  too, the streak still whole at the end, ten pauses apart once it is. */
 export async function awaitFullRounds(
   round: () => Promise<ProbeOutcome[]>,
-  options: { label: string; consecutive: number; deadlineMs: number; pauseMs: number },
+  options: {
+    label: string;
+    consecutive: number;
+    deadlineMs: number;
+    pauseMs: number;
+    holdMs?: number;
+  },
 ) {
+  const holdMs = options.holdMs || 0;
   const started = Date.now();
   const misses: (ProbeMiss & { atMs: number })[] = [];
   let probes = 0;
   let streak = 0;
   let rounds = 0;
-  while (streak < options.consecutive) {
+  while (streak < options.consecutive || Date.now() - started < holdMs) {
     if (Date.now() - started > options.deadlineMs)
       throw new Error(
         `preview ${options.label} was not ready within ${options.deadlineMs / 1000} s: ${misses.length} of ${probes} probes missed, the last ${streak} round(s) answered in full\n${misses
@@ -76,10 +98,12 @@ export async function awaitFullRounds(
     }
     streak = missed.length === 0 ? streak + 1 : 0;
     if (missed.length > 0) await new Promise((resolve) => setTimeout(resolve, options.pauseMs));
+    else if (streak >= options.consecutive && Date.now() - started < holdMs)
+      await new Promise((resolve) => setTimeout(resolve, options.pauseMs * 10));
   }
   const ms = Date.now() - started;
   console.log(
-    `readiness ok: ${options.label} answered ${options.consecutive} full round(s) in a row after ${(ms / 1000).toFixed(1)} s (${rounds} rounds, ${misses.length} of ${probes} probes missed)`,
+    `readiness ok: ${options.label} answered ${options.consecutive} full round(s) in a row after ${(ms / 1000).toFixed(1)} s${holdMs ? `, held ${holdMs / 1000} s` : ""} (${rounds} rounds, ${misses.length} of ${probes} probes missed)`,
   );
   return { rounds, misses, ms };
 }

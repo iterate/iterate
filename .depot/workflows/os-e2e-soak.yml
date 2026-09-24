@@ -10,7 +10,10 @@
 # main's worker). Delete a named preview when done: `pnpm --dir apps/os preview delete --name <preview>`.
 # THE FIRST MINUTES OF A PREVIEW: --input fresh-previews=true deploys a brand-new preview for every
 # run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — main's
-# e2e shape, a `main-<sha>` preview per push. Dispatch several at once for more previews per hour.
+# e2e shape before it kept one preview. Dispatch several at once for more previews per hour.
+# MAIN'S SHAPE NOW: --input redeploy=true redeploys `preview` in place before every run and runs e2e
+# against it at once, never deleting it (e2e-soak.ts --redeploy) — Main OS e2e on `main`. Deploy the
+# preview once and let it age first: one created minutes ago is still brand-new.
 # DISPATCH ON A REF NOTHING WILL PUSH TO: a push to the dispatched branch cancels the running soak
 # (2026-09-24: two 25-run soaks of a PR branch died at run 2 when the PR was rebased) — push the
 # commit to a branch of its own (`git push origin <sha>:refs/heads/soak/<name>`) and dispatch that.
@@ -53,6 +56,21 @@ on:
         required: false
         type: string
         default: "0"
+      redeploy:
+        description: "true: every run redeploys `preview` in place and runs e2e against it at once (no perf)"
+        required: false
+        type: string
+        default: "false"
+      gap:
+        description: With redeploy, seconds to wait after each run before the next redeploy
+        required: false
+        type: string
+        default: "0"
+      settle:
+        description: With redeploy or fresh-previews, the deploy's --settle (seconds the readiness gate holds)
+        required: false
+        type: string
+        default: "0"
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
@@ -79,7 +97,7 @@ jobs:
       # `soak` worker three merges older failed one row in every run of a hundred). An explicit
       # worker-base-url is soaked as given.
       - name: Deploy the soak preview from this ref
-        if: inputs.worker-base-url == '' && inputs.fresh-previews != 'true'
+        if: inputs.worker-base-url == '' && inputs.fresh-previews != 'true' && inputs.redeploy != 'true'
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -101,8 +119,13 @@ jobs:
           # one prefix per dispatch, so dispatches running side by side never share a preview
           FRESH_PREVIEWS: ${{ inputs.fresh-previews == 'true' && format('sf-{0}', github.run_id) || '' }}
           RUN_RESIDENCY_TIMING: ${{ inputs.residency-timing }}
+          REDEPLOY: ${{ inputs.redeploy }}
+          GAP: ${{ inputs.gap }}
+          SETTLE: ${{ inputs.settle }}
         run: |
-          if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS"); else target=(--preview "$PREVIEW"); fi
+          if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS" --settle "${SETTLE:-0}")
+          elif [ "$REDEPLOY" = true ]; then target=(--redeploy "$PREVIEW" --gap "${GAP:-0}" --settle "${SETTLE:-0}")
+          else target=(--preview "$PREVIEW"); fi
           doppler run -- pnpm e2e:soak --runs "$RUNS" "${target[@]}" ${FILTER:+--filter "$FILTER"}
       - name: Upload the per-run reports and the summary
         if: always()
