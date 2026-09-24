@@ -641,7 +641,7 @@ describe("Depot validation capacity", () => {
       "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
     );
     // One thread for fixes too: at the default one per core, every JS worker starts its own
-    // type-aware service and grandfather-rule git spawns, and a 16-core machine hits spawn ENOMEM.
+    // type-aware service, and a 16-core machine hits spawn ENOMEM.
     // Measured at 1, 4, 8 and 12 threads, more threads were no faster.
     expect(scripts?.["lint:fix"]).toBe("oxlint . --fix --threads 1");
   });

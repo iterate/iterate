@@ -1,9 +1,8 @@
-# Simple truthiness for new code
+# Simple truthiness
 
-`iterate/simple-truthiness-check` uses `grandfatherRule` with an inclusive
-**2026-09-11 00:00 UTC** author-date cutoff. September 8 caught 405 violations;
-this later cutoff keeps the initial fixes small. Changed and uncommitted lines
-are always checked. See [grandfatherRule](../grandfather-rule.md).
+`iterate/simple-truthiness-check` checks every line. Where `""` and `undefined`
+(or missing and `undefined`) really mean different things, keep the precise
+check and say why in a comment next to it.
 
 ```ts
 // Prefer direct properties.
