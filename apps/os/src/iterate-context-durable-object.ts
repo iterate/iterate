@@ -51,7 +51,7 @@ import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-p
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   ITX_PLATFORM_ORIGIN_HEADER,
-  itxExpressionEndingInFetch,
+  itxExpressionFetchCall,
   RpcStubFetchServer,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
@@ -1099,7 +1099,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)`, "" from a project host (the project's ingress target) or dotted text
     // or JSON from a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
-    // as its one runtime arg; the routing header is stripped so it never reaches the capability or
+    // as its last arg (`itxExpressionFetchCall`); the routing header is stripped so it never reaches the capability or
     // egress); everything else is EGRESS.
     // LOADED CODE's fetch (`ItxEntrypoint.fetch` set the header): neither the rpc-stub pager
     // WebSocket nor the rpc-stub fetch upgrade — both append rows past every table — and the
@@ -1168,7 +1168,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ...(app && { app: true as const }),
         });
         const result = await this.#callerStorage.run(caller, () =>
-          this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
+          this.#itxExpressionResolver.invoke(itxExpressionFetchCall(itxExpression, forwarded)),
         );
         return result instanceof Response
           ? result
@@ -1178,8 +1178,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
         // anything else a 500 — the message alone every way, the stack REPORTED, never served.
         const code = errorCode(error);
+        // A lent stub that went offline mid-call (a tunnel's laptop asleep) is the upstream's
+        // absence, a 502 — the expected outcome, never a platform fault.
         const status =
-          code === "NO_ITX_EXPRESSION_MATCH" ? 404 : code === "FACET_NO_UPGRADE" ? 400 : 500;
+          code === "NO_ITX_EXPRESSION_MATCH"
+            ? 404
+            : code === "FACET_NO_UPGRADE"
+              ? 400
+              : code === "RPC_STUB_OFFLINE"
+                ? 502
+                : 500;
         if (status === 500)
           reportIssue("iterate-context.expression-fetch", error, {
             itxExpression: itxExpressionHeader,

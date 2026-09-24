@@ -10,6 +10,7 @@
 // WHERE each one may be hosted is context/first-party-facet-placement.ts's rules.
 export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountDurableObject",
+  "ingress-routes": "IngressRoutesDurableObject",
   organization: "OrganizationDurableObject",
   project: "ProjectDurableObject",
   repo: "RepoDurableObject",

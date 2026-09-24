@@ -711,7 +711,7 @@ export async function lendRpcStubOverPager(
 //
 //   1. Some capabilities are FETCH-SHAPED: `(request: Request) => Promise<Response>`. They are
 //      ALWAYS called through a terminal `fetch` — `itx.site.fetch(request)`, never a method of
-//      any other name. `itxExpressionEndingInFetch` (below) is the one normalizer that enforces the
+//      any other name. `itxExpressionFetchCall` (below) is the one normalizer that enforces the
 //      spelling for an `x-itx-expression` fetch; `terminalFetchOf` is the one reader of the shape a LIVE call
 //      carries.
 //
@@ -803,17 +803,14 @@ function splitTerminalFetch(
   return null;
 }
 
-/** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
- *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
- *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
- *  carrying expression args is a LOUD error: the author meant something a fetch cannot do. */
-export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
+/** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1) carrying the
+ *  live `request` as its LAST argument: `itx.site` and `itx.site.fetch` are `itx.site.fetch(request)`,
+ *  and a `fetch` call's own expression args come first — `itx.ingressRoutes.fetch('blog')` is
+ *  `itx.ingressRoutes.fetch('blog', request)`. The Request is never expression data: it rides in
+ *  here, as the one live value. */
+export function itxExpressionFetchCall(expr: ItxExpression, request: Request): ItxExpression {
   const terminal = splitTerminalFetch(expr);
-  if (terminal && terminal.fetchArgs.length > 0)
-    throw new Error(
-      `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(terminal.fetchArgs)})`,
-    );
-  return [...(terminal?.steps ?? expr), "fetch"];
+  return [...(terminal?.steps ?? expr), ["fetch", ...(terminal?.fetchArgs ?? []), request]];
 }
 
 /** A LIVE call that is the terminal fetch carrying the one Request — `[..., ["fetch", request]]`, or
@@ -875,8 +872,15 @@ const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
   `itx-fetch-upgrade-${side}:${upgradeId}`;
 
 /** The transport's answer when the provider upgraded: the socket already rides the dedicated
- *  leg, so only this marker crosses the RPC hop. */
-type FetchUpgradeMarker = { webSocketUpgrade: true };
+ *  leg, so only this marker crosses the RPC hop — with the provider's 101 headers the eyeball's 101
+ *  must repeat (`FETCH_UPGRADE_RESPONSE_HEADERS`). */
+type FetchUpgradeMarker = { webSocketUpgrade: true; headers: [name: string, value: string][] };
+
+/** The provider's 101 response headers the eyeball's 101 carries: the subprotocol it chose. A browser
+ *  that asked for one (Vite's HMR client asks for `vite-hmr`) fails the handshake on a 101 that names
+ *  none. Not `Sec-WebSocket-Extensions`: the eyeball socket is the runtime's own, which negotiates its
+ *  extensions itself; nor `Sec-WebSocket-Accept`, the runtime's too. */
+const FETCH_UPGRADE_RESPONSE_HEADERS = ["sec-websocket-protocol"];
 
 /** What `serve` needs from the borrowed rpc stub: the fetch dial. */
 type RpcStubFetchTransport = {
@@ -931,6 +935,7 @@ async function dialRpcStubFetch(
 ): Promise<Response | FetchUpgradeMarker> {
   const response = (await providerFetch(request)) as {
     status?: number;
+    headers?: Headers;
     webSocket?: ClientWebSocket | null;
   };
   const providerSocket = response?.webSocket;
@@ -964,7 +969,12 @@ async function dialRpcStubFetch(
   wire(providerSocket, leg as unknown as ClientWebSocket);
   wire(leg as unknown as ClientWebSocket, providerSocket);
   providerSocket.accept?.();
-  return { webSocketUpgrade: true };
+  const headers: [string, string][] = [];
+  for (const name of FETCH_UPGRADE_RESPONSE_HEADERS) {
+    const value = response.headers?.get(name);
+    if (value) headers.push([name, value]);
+  }
+  return { webSocketUpgrade: true, headers };
 }
 
 /** DO SIDE of an rpc-stub fetch: the upgrade leg, the eyeball pair, and the frame/close forwarding
@@ -988,19 +998,25 @@ export class RpcStubFetchServer {
   ): Promise<unknown> {
     const upgradeId = crypto.randomUUID();
     const result = await transport.fetch(upgradeId, itxExpressionSteps, request);
-    if ((result as Partial<FetchUpgradeMarker> | null)?.webSocketUpgrade !== true) return result;
-    return this.#acceptUpgradeSocket("eyeball", upgradeId);
+    const marker = result as Partial<FetchUpgradeMarker> | null;
+    if (marker?.webSocketUpgrade !== true) return result;
+    return this.#acceptUpgradeSocket("eyeball", upgradeId, marker.headers || []);
   }
 
   /** Mint + hibernatably accept ONE side of an upgrade (tagged and attached for peer routing),
-   *  answering a real 101 carrying the other half of the pair. */
-  #acceptUpgradeSocket(side: "eyeball" | "leg", upgradeId: string): Response {
+   *  answering a real 101 carrying the other half of the pair and `headers` (the eyeball's: the
+   *  provider's subprotocol). */
+  #acceptUpgradeSocket(
+    side: "eyeball" | "leg",
+    upgradeId: string,
+    headers: [string, string][],
+  ): Response {
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [upgradeTag(side, upgradeId)]);
     pair[1].serializeAttachment({
       fetchUpgrade: { upgradeId, side },
     } satisfies FetchUpgradeAttachment);
-    return new Response(null, { status: 101, webSocket: pair[0] });
+    return new Response(null, { status: 101, webSocket: pair[0], headers });
   }
 
   /** PARTIAL FETCH: accept the transport's dedicated upgrade leg (opened mid-dial, carrying the
@@ -1009,7 +1025,7 @@ export class RpcStubFetchServer {
     const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an ABSENT header (null) means "not this request"; a present-but-empty one is malformed input that must fall through to the parse/tag below and be refused, never quietly treated as absent (the same present-vs-absent distinction the DO's `fetch` keeps)
     if (upgradeId === null) return null;
-    return this.#acceptUpgradeSocket("leg", upgradeId);
+    return this.#acceptUpgradeSocket("leg", upgradeId, []);
   }
 
   /** Route one WebSocket message: TRUE = an upgrade frame, forwarded RAW to its peer socket
