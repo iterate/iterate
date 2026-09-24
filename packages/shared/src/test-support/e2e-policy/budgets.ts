@@ -50,14 +50,14 @@ export const E2E_ROW_BUDGET_MS = 60_000;
 
 /**
  * The longest timeout an e2e row that runs on every PR may declare: a hung row holds the run for
- * its timeout, twice with `E2E_CI_RETRIES`. scripts/ci/e2e-policy.test.ts reads every row's
- * declared timeout; only a row tagged `slow` goes higher.
+ * its timeout, twice with `E2E_CI_RETRIES`. Only a row tagged `slow` goes higher.
  */
 export const E2E_ROW_TIMEOUT_CEILING_MS = 90_000;
 
 /**
- * The longest fixed wait (`sleep`, `setTimeout`) an e2e row that runs on every PR may make. A row
- * that has to wait out real platform time (a quiet minute, a sweep, an alarm) is a `slow` row.
+ * The longest fixed wait (`sleep`, `setTimeout`) an e2e row that runs on every PR may make
+ * (scripts/ci/e2e-policy.test.ts). A row that has to wait out real platform time (a quiet minute,
+ * a sweep, an alarm) is a `slow` row.
  */
 export const E2E_SLEEP_CEILING_MS = 30_000;
 
@@ -70,9 +70,8 @@ export const E2E_SLOW_ROW_TIMEOUT_MS = 300_000;
 
 /**
  * The longest timeout an e2e row may declare: `E2E_SLOW_ROW_TIMEOUT_MS` when it is tagged `slow`,
- * else `E2E_ROW_TIMEOUT_CEILING_MS`. scripts/ci/e2e-policy.test.ts holds every row to it from source,
- * and apps/os/e2e/support/setup.ts holds each row of a run against a preview to it before the row
- * starts.
+ * else `E2E_ROW_TIMEOUT_CEILING_MS`. apps/os/e2e/support/setup.ts holds each row of a run against a
+ * preview to it before the row starts.
  */
 export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
   return row.slow ? E2E_SLOW_ROW_TIMEOUT_MS : E2E_ROW_TIMEOUT_CEILING_MS;
