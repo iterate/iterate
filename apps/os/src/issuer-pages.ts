@@ -5,6 +5,10 @@
 // a CSP nonce, and serves the public files beside them. The platform's API and OAuth endpoints are
 // owned by the Worker and never reach it.
 
+import {
+  deploymentEnvironment,
+  environmentFaviconSvg,
+} from "@iterate-com/ui/lib/environment-favicon";
 import { isSameOriginBrowserRequest } from "iterate/next/lib";
 import type { Env, Handler } from "./env.ts";
 import { withIssuerRequest } from "./issuer-request-context.server.ts";
@@ -76,6 +80,7 @@ export const issuerHandler: Handler = {
     }
     if (request.method !== "GET" && request.method !== "HEAD")
       return new Response("Not found", { status: 404 });
+    if (pathname === "/favicon.svg") return favicon(request, env);
     // Vite emits hashed Start assets under /assets; the Worker still owns the platform origin.
     if (
       publicFiles.has(pathname) ||
@@ -89,3 +94,17 @@ export const issuerHandler: Handler = {
     return new Response("Not found", { status: 404 });
   },
 };
+
+/** This deployment's tab icon, for pages on other origins: the SDK's gate pages
+ *  (iterate/next/app-server) link their issuer's. Production's is the logo itself; a per-PR preview
+ *  or local dev draws its badge (@iterate-com/ui/lib/environment-favicon), read from the host this
+ *  request reached, as the issuer's own pages do. */
+function favicon(request: Request, env: Env) {
+  const url = new URL(request.url);
+  const environment = deploymentEnvironment(url.hostname);
+  if (environment.kind === "production")
+    return env.ASSETS.fetch(new Request(new URL("/iterate-logo.svg", url), request));
+  return new Response(environmentFaviconSvg(environment), {
+    headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=3600" },
+  });
+}

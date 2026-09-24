@@ -1,6 +1,7 @@
-import { createRootRoute, HeadContent, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
+import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
+import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
 import css from "../styles.css?url";
 /** The worker's PostHog project key (envs.ts, prd only; wrangler var `POSTHOG_PROJECT_KEY`). */
 const posthogProjectKey = createServerFn().handler(async () => {
@@ -30,7 +31,7 @@ function Root() {
   return (
     <html lang="en">
       <head>
-        <HeadContent />
+        <EnvironmentHeadContent productionIcon="/client-logo.svg" />
       </head>
       <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
         <AppProviders posthogApiKey={apiKey || undefined}>
