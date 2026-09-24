@@ -1,10 +1,30 @@
 // The one shell for the client apps (agents, notes, voice, dash): the sidebar (the project
 // switcher in its header, the app's own navigation in its body, the collapse button and the account
 // menu in its footer, the rail) and the page beside it under a header row that carries the phone's
-// sidebar trigger. Router-agnostic on purpose:
+// sidebar trigger — and ⌘K, a palette over the projects and the sidebar's pages
+// (app-shell-palette.tsx). Router-agnostic on purpose:
 // the app hands over hrefs and its current location, nothing from TanStack comes in here.
-import { useEffect, useRef, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, LogOutIcon } from "lucide-react";
+import {
+  AppShellPalette,
+  PaletteHeaderButton,
+  PaletteSidebarButton,
+  usePaletteShortcut,
+} from "./app-shell-palette.tsx";
+import {
+  plainLeftClick,
+  readSidebarNav,
+  type SidebarNavItem,
+} from "./app-shell-palette-entries.ts";
 import { Avatar, AvatarFallback } from "./avatar.tsx";
 import {
   DropdownMenu,
@@ -88,6 +108,13 @@ export function AppShell({
     () => !document.cookie.split("; ").includes("sidebar_state=false"),
     () => true,
   );
+  // the palette: the sidebar's navigation as it read when ⌘K opened it, null while closed
+  const navRef = useRef<HTMLDivElement>(null);
+  const [palette, setPalette] = useState<SidebarNavItem[] | null>(null);
+  const openPalette = () => setPalette(readSidebarNav(navRef.current));
+  usePaletteShortcut(
+    useCallback(() => setPalette((open) => (open ? null : readSidebarNav(navRef.current))), []),
+  );
   return (
     <SidebarProvider defaultOpen={defaultOpen} className="h-svh">
       {/* outside <Sidebar>: on a phone its children live in a Sheet that remounts when opened */}
@@ -102,8 +129,10 @@ export function AppShell({
             onNavigate={onNavigate}
             actions={switcherActions}
           />
+          <PaletteSidebarButton onOpen={openPalette} />
         </SidebarHeader>
-        <SidebarContent>{nav}</SidebarContent>
+        {/* ⌘K lists what the sidebar shows here — on a desktop; a phone's lists the projects alone */}
+        <SidebarContent ref={navRef}>{nav}</SidebarContent>
         <SidebarFooter>
           <CollapseButton />
           <AccountMenu email={account.email} actions={accountActions} />
@@ -113,10 +142,19 @@ export function AppShell({
       <SidebarInset className="min-w-0 overflow-hidden">
         <header className="flex shrink-0 items-center gap-3 px-4 pt-2.5 pb-1">
           <SidebarTrigger className="-ml-1 md:hidden" />
+          <PaletteHeaderButton onOpen={openPalette} />
           {header}
         </header>
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
       </SidebarInset>
+      <AppShellPalette
+        nav={palette}
+        onClose={() => setPalette(null)}
+        projects={projects}
+        activeProjectId={activeProjectId}
+        projectHref={projectHref}
+        onNavigate={onNavigate}
+      />
     </SidebarProvider>
   );
 }
@@ -239,19 +277,6 @@ function ProjectSwitcher({
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
-  );
-}
-
-/** A plain left click — not a modified one (cmd/ctrl/shift/alt: a new tab or window), not the
- *  middle button, not one something else already handled. */
-function plainLeftClick(event: MouseEvent<HTMLAnchorElement>) {
-  return (
-    !event.defaultPrevented &&
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
   );
 }
 
