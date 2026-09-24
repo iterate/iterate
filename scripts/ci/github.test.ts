@@ -38,6 +38,24 @@ test("asks a PATCH again after the connection drops", async () => {
   );
 });
 
+test("throws GitHub's last failure once every delay is spent", async () => {
+  using fixture = githubAnswering(
+    json(502, { message: "Bad gateway" }),
+    json(503, { message: "Unavailable" }),
+    json(500, { message: "Server Error" }),
+    json(504, { message: "Gateway timeout" }),
+  );
+
+  await expect(fixture.github.rest.pulls.get({ ...repo, pull_number: 2899 })).rejects.toMatchObject(
+    {
+      name: "HttpError",
+      status: 504,
+    },
+  );
+  expect(fixture.fetch).toHaveBeenCalledTimes(4);
+  expect(fixture.warn.mock.calls.map(([entry]) => entry.status)).toEqual([502, 503, 500]);
+});
+
 test("never asks a POST again: a 5xx may have landed, and a repeat would create a second one", async () => {
   using fixture = githubAnswering(unexpectedError());
 
