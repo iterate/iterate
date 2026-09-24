@@ -118,12 +118,9 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- One-click login links: the legacy auth worker's `/test-login` endpoint, which
-  signed a test address in server-side and seeded a `pr<N>` user and project,
-  went with `apps/auth` in #2837. Its principle carries on in the preview's PR
-  body section: every hosted client (Dash, Agents, Notes, Voice) is deployed
-  next to the platform preview and wired to it, so a reviewer opens a client
-  from the PR body and signs in with any email and the preview's password
+- One-click login: every hosted client (Dash, Agents, Notes, Voice, Kit) is
+  deployed next to the platform preview and wired to it, so a reviewer opens a
+  client from the PR body and signs in with any email and the preview's password
   (Doppler `project-worker/preview`, `APP_CONFIG.login.password`; every preview
   inherits its parent's). That grants nothing the password doesn't already
   grant.
@@ -136,9 +133,7 @@ read secrets.
   The ref resolves to a commit before the request is recorded, so recovery
   always uses the same source (`apps/os/docs/project-creation.md`). A template
   that cannot be fetched, or has no `worker.ts`, fails the creation visibly
-  (`project/create-failed`) instead of silently going stock. The legacy
-  `login_hint`/`project_hint` URL and the `-template-<name>` slug convention
-  went with the legacy platform.
+  (`project/create-failed`) instead of silently going stock.
 
 The issuer is part of the platform: there is no separate auth deployment to
 keep in step. Working on sign-in or consent means working on `apps/os`
@@ -201,11 +196,8 @@ needs a project a particular user can reach creates it as that user through the
 operator session: `session().authenticate(adminCredentials({ email })).projects.create({ project })`,
 as `apps/os/e2e/support/project-host.ts` does.
 
-`pnpm getin` automated the legacy version of this for local dev: it found (or
-started) the worktree's dev server, got or created a `test` project, minted
-matching claims and opened the signed-in URL. `scripts/getin.ts` went with
-#2837. Today the path is two steps and needs no tooling: `pnpm dev`, then
-`http://localhost:8788/login` with any email and `dev`.
+For local dev: `pnpm dev`, then `http://localhost:8788/login` with any email and
+password `dev`.
 
 A signed-in _human_ never gets stuck on the missing organization: the Dash
 and the consent page both create one on the way.
@@ -221,8 +213,9 @@ The root Playwright config runs every app's browser specs from the root
 `specs/` directory, and `pnpm spec` runs them from the repo root. It has one
 project per app host: `os` (Desktop Chrome, `specs/os/`), `os-phone` (Pixel 7,
 with touch, for the sign-in and consent specs), `notes` (`specs/notes/`,
-skipped unless `NOTES_BASE_URL` is set) and `suite` (the flake sentinel and
-the harness's own specs). Select one with `pnpm spec --project=os-phone`.
+skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
+skipped locally unless `VOICE_BASE_URL` is set) and `suite` (the flake sentinel
+and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
 `pnpm dev -- --port <DEMO_PORT, default 8788>`, reuses an already running
 server outside CI, and waits on `/version`.
@@ -255,9 +248,7 @@ parent's (`apps/os/e2e/support/deployed-target.ts`). An explicit
 is unset, Playwright boots the local dev server. It never infers credentials
 from redirects.
 
-The legacy `mobile` project (Expo Web and phone-sized baselines under
-`specs/mobile/`) went with the mobile app in #2837. The `os-phone` project is its
-successor for phone-width browser coverage of the platform's own pages.
+The `os-phone` project covers the platform's own pages at phone width.
 
 ### Minting in production
 
@@ -368,8 +359,7 @@ only when main goes red or green again. Its runs never cancel each other: the
 pushes that land during a run queue behind it, collapsed to the newest, so
 every run that starts reaches a verdict unless someone cancels it by hand. A
 job that hangs until its timeout counts as red. The full mutating proof is each
-PR's preview. The legacy fleet's main preview runs (a `main-preview` lease,
-`preview-main.yml`) went with it in #2837.
+PR's preview.
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**
 drives isolate-ceiling rows against prd (`os-next-crash-hunt.yml`), the hourly
@@ -382,7 +372,7 @@ worker (next story).
 
 Opening or pushing a PR that touches preview-relevant paths (the Preview OS
 workflow's `paths:` list; see [Depot CI](depot-ci.md)) runs the **Preview OS**
-workflow. **deploy** builds and deploys the platform preview and all four
+workflow. **deploy** builds and deploys the platform preview and all five
 clients, then writes the URL and the operations into the PR body's managed
 section. **e2e** then runs as its own job against that deployment, and only
 once the deploy succeeded: the Vitest e2e suite and the Playwright specs side
@@ -400,21 +390,10 @@ failed cleanup), the sweep collects both the preview and any orphaned resource.
 
 ### Story 2: run what CI runs, locally
 
-```bash
-cd apps/os
-
-# same lifecycle as CI for PR 1234 (deploy, then e2e):
-doppler run --project project-worker --config preview -- \
-  pnpm preview deploy --pr 1234 --name <branch> --apps all
-doppler run --project project-worker --config preview -- \
-  pnpm preview e2e --pr 1234 --name <branch>
-
-# destroy the preview's state and redeploy, or remove it:
-doppler run --project project-worker --config preview -- pnpm preview reset --pr 1234 --name <branch>
-doppler run --project project-worker --config preview -- pnpm preview delete --pr 1234 --name <branch>
-```
-
-These address the same preview CI deployed for the PR (the name is the same),
+The `pnpm preview` commands CI runs (`deploy`, `e2e`, `reset`, `delete`,
+`sweep`) run from `apps/os` under the parent Doppler config; they are in
+[apps/os/README.md](../apps/os/README.md). Given the PR's number and branch,
+they address the same preview CI deployed for the PR (the name is the same),
 so a local run redeploys it in place rather than fighting CI.
 
 For a focused flake hunt, reuse the exact deployment and run one test file or
@@ -430,8 +409,11 @@ WORKER_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -
 # the whole suite N times, tallying every row that did not pass every time
 WORKER_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
   pnpm e2e:soak --runs 25 --filter session
+```
 
-# one spec, repeated
+One spec, repeated, from the repo root (`pnpm spec` is the root's script):
+
+```bash
 DEMO_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
   pnpm spec specs/os/auth.spec.ts --repeat-each 25
 ```
@@ -519,25 +501,14 @@ namespace; KV and R2 are provisioned per preview by Wrangler.
 More detail on the environments themselves: `envs.ts` (`osEnvs.preview`, the
 parent) and `apps/os/README.md`.
 
-## Tunnels and webhooks
+## Public webhooks
 
-Inbound webhooks (Slack, GitHub) and third-party OAuth callbacks need a
-public HTTPS hostname — that's the only reason to add a public local URL to
-fully-local dev.
+Inbound webhooks (Slack, GitHub) and third-party OAuth callbacks need a public
+HTTPS hostname, which fully-local dev does not have. Work that needs one runs
+against a deployed preview (every preview has one on workers.dev) or
+production; a Slack-facing test runs against a deployed environment, not
+plain-localhost dev.
 
-The legacy platform had one: the iterate public local gateway (`apps/tunnels`,
-a standalone captun worker at `tunnels.iterate.com`) and the captun Vite plugin
-that published `https://<name>.tunnels.iterate.com` for a dev server. Their
-source went with #2837, and nothing in the retained code uses them. Today, work
-that needs a public HTTPS URL runs against a deployed preview (every preview
-has one on workers.dev) or production.
-
-The principle stands: public URLs are not scarce, but webhook-source
-configuration is (a Slack app points at exactly one delivery URL at a time), so
-give any such integration a stable, named target rather than a per-run one.
-
-## Slack end-to-end testing
-
-The retained platform has no Slack end-to-end suite; the legacy Slack tests
-and their docs went with #2837. Slack requires public HTTPS webhooks, so any
-Slack-facing test runs against a deployed environment, not plain-localhost dev.
+Public URLs are not scarce, but webhook-source configuration is (a Slack app
+points at exactly one delivery URL at a time), so give any such integration a
+stable, named target rather than a per-run one.

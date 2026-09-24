@@ -32,9 +32,7 @@ For common developer pitfalls, instead of littering your test code with defensiv
 
 ## Videos
 
-When features are exercised by playwright specs, you can capture videos of them simply by running `VIDEO_MODE=1 pnpm spec -g whichever-test`. This will capture a video annotated with mouse movements, click pointers, dead-air speedup, and brief pauses for meaningful actions. It uses [middlewright](https://github.com/iterate/middlewright).
-
-Rendering runs `ffmpeg` after the test and needs libass for captions: on macOS `brew install ffmpeg-full`, which is keg-only, so put `$(brew --prefix ffmpeg-full)/bin` first on `PATH`. Output lands under `test-results/playwright-output/<test-title-dir>/`: `video-rendered.webm` (the demo), `video-raw.webm`, and a `video-mode.html` frame-stepper, all attached to the HTML report. `test.step` titles become captions, and `page.videoMode.setStartTime()` in a spec overrides the automatic start trim. Against a PR's preview: `doppler run --project project-worker --config preview -- env DEMO_BASE_URL=<preview url> VIDEO_MODE=1 pnpm spec -g whichever-test`.
+`VIDEO_MODE=1 pnpm spec -g whichever-test` records a spec as a demo annotated with mouse movements, click pointers, dead-air speedup and brief pauses for meaningful actions ([middlewright](https://github.com/iterate/middlewright)). Setup (`ffmpeg-full`), output paths and running it against a preview: [Video mode](../docs/testing.md#video-mode-recorded-spec-demos-for-prs).
 
 ## Screenshots
 

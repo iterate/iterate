@@ -54,7 +54,7 @@ backup. `capture --config-repo /absolute/path/to/checkout` explicitly selects a
 replacement local Git repository's `main` branch. Commit any intended changes
 there before capture. The current repository API supports regular UTF-8 files;
 capture refuses binary files, executable modes, symlinks and submodules it could
-not restore exactly. Restore does not build or adapt legacy OS source code.
+not restore exactly.
 
 Seeds intentionally omit stream histories, derived state, user/org secrets,
 OAuth sessions and grants, other repositories, files in R2, agents and workspaces.

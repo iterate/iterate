@@ -2,20 +2,24 @@
 
 The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns the Worker, OAuth issuer, project contexts, streams, and loaded code.
 
-| Path               | Purpose                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `apps/os`          | Platform, issuer pages, integration tests, preview tooling    |
-| `apps/dash`        | Projects, organizations, sessions, and personal access tokens |
-| `apps/agents`      | Agent conversations and inspection                            |
-| `apps/notes`       | Notes client                                                  |
-| `apps/voice`       | Voice client                                                  |
-| `apps/kit`         | Device installer and firmware using the platform              |
-| `packages/iterate` | `iterate/next/*` SDK                                          |
-| `packages/ui`      | Components used by the apps                                   |
-| `packages/shared`  | Shared configuration, events, and test telemetry              |
-| `specs`            | Browser specs across the apps (`pnpm spec`)                   |
-| `scripts`          | Deployment helpers and CI support                             |
-| `lint`, `rules`    | Review and lint rules                                         |
+| Path                     | Purpose                                                         |
+| ------------------------ | --------------------------------------------------------------- |
+| `apps/os`                | Platform, issuer pages, integration tests, preview tooling      |
+| `apps/dash`              | Projects, organizations, sessions, and personal access tokens   |
+| `apps/agents`            | Agent conversations and inspection                              |
+| `apps/notes`             | Notes client                                                    |
+| `apps/voice`             | Voice client                                                    |
+| `apps/kit`               | Device installer and firmware using the platform                |
+| `apps/spa`               | Static SPA archetype; also hosts the browser extension download |
+| `apps/browser-extension` | Chrome side panel that lends a browser to a project             |
+| `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
+| `packages/iterate`       | `iterate/next/*` SDK                                            |
+| `packages/ui`            | Components used by the apps                                     |
+| `packages/shared`        | Shared configuration, events, and test telemetry                |
+| `configs-next`           | Config repository templates copied into new projects            |
+| `specs`                  | Browser specs across the apps (`pnpm spec`)                     |
+| `scripts`                | Deployment helpers and CI support                               |
+| `lint`, `rules`          | Review and lint rules                                           |
 
 ```sh
 pnpm install

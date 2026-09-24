@@ -2,10 +2,11 @@
 
 Six `iterate/*` rules keep a test file flat and readable: the file opens with a
 `test(...)`, every test owns its state, and a failure prints the object, not one
-field of it. They came from the legacy e2e lane ([#1361](https://github.com/iterate/iterate/pull/1361),
-re-armed in [#1965](https://github.com/iterate/iterate/pull/1965)) and are armed on
-every `*.test.ts` and `*.test.tsx` in the repository: each workspace's unit tests,
-the os Workers lane and the e2e lane.
+field of it. They were introduced in
+[#1361](https://github.com/iterate/iterate/pull/1361), re-armed in
+[#1965](https://github.com/iterate/iterate/pull/1965), and are armed on every
+`*.test.ts` and `*.test.tsx` in the repository: each workspace's unit tests, the
+os Workers lane and the e2e lane.
 
 Each rule but `prefer-test-over-it` (which no line violates) is wrapped in
 [grandfatherRule](grandfather-rule.md) with an inclusive **2026-09-23 23:59:59 UTC**
@@ -34,11 +35,10 @@ shared closure state and lifecycle hooks grow. Put the group in the title
   `test.sequential(...)`, and a table of them is `test.sequential.for(rows)(...)`.
   Sequential rows run one at a time, in file order, while the file's other rows
   stay concurrent. `apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts` is
-  the model. Prefer a row that owns its state over an ordered one: the legacy
-  e2e lane ran concurrently with no ordered rows, because every test created its
-  own project.
+  the model. Prefer a row that owns its state over an ordered one: a test that
+  creates its own project needs no ordering.
 - **Gated suites.** `describe.skipIf(cond)` becomes `test.skipIf(cond)` on each
-  test, as the legacy Slack suite did.
+  test.
 - **Tables.** `describe.for`/`describe.each` become `test.for` with object rows
   ([Vitest patterns](../docs/vitest-patterns.md)).
 
@@ -49,13 +49,16 @@ shared closure state and lifecycle hooks grow. Put the group in the title
   where the helper returns an object with `[Symbol.dispose]` or
   `[Symbol.asyncDispose]`. Several resources go on one `AsyncDisposableStack`.
   The lint tests here (`createOxlintFixture`) are the model.
-- **Vitest globals** (`vi.useRealTimers()`, `vi.unstubAllGlobals()`,
-  `vi.restoreAllMocks()` after each test) are restored by the lane's config
-  (`unstubGlobals`, `unstubEnvs`, `restoreMocks`), or per test with
-  `onTestFinished(...)` inside the test that changed them.
-- **Setup every file of a lane needs** (the Workers lane's directory schema)
-  belongs in that lane's `setupFiles`. Setup one file needs is an idempotent call
-  at the top of each test that needs it.
+- **Vitest globals** (fake timers, `vi.stubGlobal`, `vi.stubEnv`, `vi.spyOn`)
+  are restored per test with `onTestFinished(...)` inside the test that changed
+  them (`vi.useRealTimers()`, `vi.unstubAllGlobals()`, `vi.unstubAllEnvs()`,
+  `spy.mockRestore()`). Only apps/kit's config restores them itself
+  (`unstubGlobals`, `restoreMocks`).
+- **Setup every file of a lane needs** (the os e2e lane's
+  `setupFiles: ["./e2e/support/setup.ts"]`, which injects the shared worker's
+  URL and disposes each test's sessions) belongs in that lane's `setupFiles`.
+  Setup one file needs is an idempotent call at the top of each test that needs
+  it.
 
 ## No vi.mock
 
@@ -66,10 +69,10 @@ argument (`apps/os/src/context/rpc-stubs.test.ts` injects its `waitUntil`).
 `vi.fn()`, `vi.spyOn(...)` and `vi.stubGlobal(...)` are not module mocks.
 
 For `cloudflare:workers`: the os unit project aliases it to
-[`src/test/cloudflare-workers-shim.ts`](../apps/os/src/test/cloudflare-workers-shim.ts),
-as the legacy unit lane did. A module whose only platform dependency is a base
-class (`RpcTarget`, `WorkerEntrypoint`, `DurableObject`) loads in node with no
-`vi.mock` in the test file. Behaviour that needs the real runtime belongs in
+[`src/test/cloudflare-workers-shim.ts`](../apps/os/src/test/cloudflare-workers-shim.ts).
+A module whose only platform dependency is a base class (`RpcTarget`,
+`WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the
+test file. Behaviour that needs the real runtime belongs in
 the Workers lane (`apps/os/__workers-tests__/`).
 
 ## Exact equality

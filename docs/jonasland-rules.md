@@ -67,26 +67,12 @@ Similarly, when some other approach didn't work, mention the other approach and 
 
 Don't let people wonder "why is this fence here?"
 
-# Naming / Identifiers
+# Naming, slugs and IDs
 
-Use explicit names.
-
-Don't use all-caps acronyms in identifiers. So makeOrpcUrl instead of makeORPCURL
-
-Make sure identifiers are greppable. For instance, try to re-use the exact term that is used elsewhere in the codebase. E.g. don't create a camel cased wrapper envVarName for ENV_VAR_NAME . Just use ENV_VAR_NAME everywhere, so it's easy to find all references.
-
-Don't use fancy names - just use names that clearly describe what something is. For example a WebhookReceiver is good - it receives webhook HTTP requests and validates them.
+See [identifiers](identifiers.md).
 
 # Abstractions
 
 Abstractions need to be easy to explain and well motivated in comments and examples.
 
 We want to have _few_ abstractions.
-
-# Handling of slugs and IDs
-
-- We use "slugs" as unique identifiers in many places, because they are url-safe
-- Project slugs come from `projectSlug` in `apps/os/src/control-plane/catalog.ts`
-- On a technical level, slugs CAN be changed! Esp project slugs.
-- So for stable identifiers (e.g. for durable object names), always use IDs
-- IDs are minted with a type prefix (`prj_<hex>`, `org_<hex>`) by `newId` in `apps/os/src/control-plane/catalog.ts`; see [identifiers](identifiers.md)

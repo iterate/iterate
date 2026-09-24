@@ -25,7 +25,7 @@ test("the headline is one sentence about $/day; the table and the breach are rep
         pageUsdPerHour: 10,
         failure: null,
         summary: {
-          // Erased slots: nothing ran overnight, and the last activity was yesterday.
+          // No preview in use: nothing ran overnight, and the last activity was yesterday.
           activeTime: {
             ceilingDoHours: 500,
             hours: [{ hour: "2026-09-03T23:00:00Z", doHours: 1 }],

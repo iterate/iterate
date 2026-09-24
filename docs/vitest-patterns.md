@@ -6,16 +6,17 @@ previews / prd, and the canonical env vars — see [Testing](testing.md).
 
 ## Core Principles
 
-- Use vi mocks and vi fake timers for time-based assertions
+- Use `vi.useFakeTimers()` for time-based assertions and injected fakes (`vi.fn`,
+  `vi.spyOn`, `vi.stubGlobal`) for dependencies; never `vi.mock`
 - Prefer table-based tests with hand-written literal expectations (`test.for`
   with object rows) over snapshots
 - Tests are colocated next to source files as `*.test.ts`
 
 ## Test-style lint rules
 
-Every `*.test.ts(x)` is linted for the legacy e2e lane's style: flat files with
-top-level `test(...)` calls (no `describe`), helpers below the tests, no
-lifecycle hooks, no `vi.mock`, `test` rather than `it`, and
+Every `*.test.ts(x)` is linted for one style: flat files with top-level
+`test(...)` calls (no `describe`), helpers below the tests, no lifecycle hooks,
+no `vi.mock`, `test` rather than `it`, and
 `expect(object).toMatchObject({ property })` rather than
 `expect(object.property).toBe(...)`. Existing lines are grandfathered; new and
 changed lines comply. [The rules and what to write instead](../lint/test-style-rules.md)
@@ -35,8 +36,7 @@ test.for([
   { user: "Bob", role: "user", canDelete: false },
   { user: "Charlie", role: "guest", canDelete: false },
 ])("$user with $role role", ({ user, role, canDelete }) => {
-  const permissions = getPermissions(role);
-  expect(permissions.canDelete).toBe(canDelete);
+  expect(getPermissions(role)).toMatchObject({ canDelete });
 });
 ```
 
@@ -52,6 +52,23 @@ of a structure matters, assert that part (`toMatchObject`, or pick the fields)
 instead of snapshotting the whole thing.
 
 ## Polling and Waiting for Conditions
+
+The Workers lane and the e2e lane each poll with their own
+`until(label, fn, timeoutMs?)`, lane-local by design
+([test helper layers](testing.md#where-test-helpers-live)):
+`apps/os/__workers-tests__/support.ts` and `apps/os/e2e/support/client.ts`.
+`until` returns the first value that is neither `undefined` nor `false`, and
+throws `until(<label>): timed out …` once `timeoutMs` passes (10s in the
+Workers lane, 20s in e2e, whose copy also polls through a throwing `fn`):
+
+```typescript
+const row = await until("subscription row", async () =>
+  (await subscriptions(itx)).find((s) => s.name === name),
+);
+```
+
+Unit tests, which cannot import those helpers, use `expect.poll` and
+`vi.waitFor`.
 
 ### expect.poll() - Recommended for async assertions
 
@@ -92,7 +109,7 @@ test("should wait for condition", async () => {
   await vi.waitFor(
     async () => {
       const data = await fetchData();
-      expect(data.ready).toBe(true);
+      expect(data).toMatchObject({ ready: true });
     },
     { timeout: 5000, interval: 100 },
   );
@@ -100,7 +117,7 @@ test("should wait for condition", async () => {
   // Can include multiple assertions
   const result = await vi.waitFor(async () => {
     const response = await api.call();
-    expect(response.status).toBe(200);
+    expect(response).toMatchObject({ status: 200 });
     expect(response.data).toHaveProperty("id");
     return response.data;
   });

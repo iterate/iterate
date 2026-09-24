@@ -14,8 +14,8 @@ import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
  * To use it, write a *normal* test body, and use a regex that you know the test (unfortunately) will fail with.
  *
  * ```ts
- * const fail = createFailing(test, /SAME-BOOT STALENESS/);
- * fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+ * const fail = createFailing(test, /SAME-BOOT STALENESS/, { timeoutMs: 240_000 });
+ * fail("a userspace facet rebuilds on a source commit", async () => {
  *   // asserts the DESIRED behavior; today it throws the matched error
  * });
  * ```
@@ -40,13 +40,11 @@ import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
  * through the body — chiefly a runner-level test timeout on a hung body —
  * counts as the expected one. The wrapper therefore races the body against
  * its own 30s deadline and reports a timeout as NOT-the-pinned-failure (red),
- * so a hang cannot vanish into a vacuous pass. The default sits below the
- * runner timeouts of the lanes that set one (apps/os e2e: 60s; workers: 120s)
- * — it must, or the runner fires first and the blind spot returns. A lane on
- * vitest's default 5s timeout (apps/os unit) must pass a `timeoutMs` below
- * it. A pin whose body legitimately needs longer raises it via
- * `options.timeoutMs`, still kept BELOW the runner's own test timeout for the
- * same reason.
+ * so a hang cannot vanish into a vacuous pass. The wrapper sets the runner's
+ * own test timeout to that deadline plus a second (vitest through the
+ * `timeout` option, playwright through `test.setTimeout`), so the runner never
+ * fires first and the blind spot stays closed. A pin whose body legitimately
+ * needs longer raises `options.timeoutMs`.
  *
  * Write the body so the pinned bug produces a DISTINCTIVE error (throw a
  * purpose-built message rather than relying on a generic assertion diff), and
