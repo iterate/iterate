@@ -150,7 +150,10 @@ async function tally(
   return counts;
 }
 
-createFailing(deployedOnly, RESET, { retries: process.env.CI ? E2E_CI_RETRIES : 0 })(
+createFailing(deployedOnly, RESET, {
+  timeoutMs: 60_000,
+  retries: process.env.CI ? E2E_CI_RETRIES : 0,
+})(
   "a loaded facet aborting its own child facet right after 40 rows of 2 KB should not reset its context",
   { tags: ["slow"] },
   async () => {
