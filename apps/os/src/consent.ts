@@ -1,4 +1,9 @@
-import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-provider";
+import {
+  AuthorizationError,
+  CimdFetchError,
+  type AuthRequest,
+  type ClientInfo,
+} from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
@@ -129,6 +134,8 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
+      const testLinkApproval = await this.#testLinkApproval(request, client);
+      if (testLinkApproval) return { kind: "redirect", location: testLinkApproval.redirectTo };
       const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
@@ -212,49 +219,89 @@ export class ConsentRpcTarget extends RpcTarget {
             request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
         ),
       );
-      const clientName = client?.clientName ?? request.clientId;
-      const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
-        request,
-        userId: this.#grant.userId,
-        metadata: clientDisplay(client, request.clientId),
-        scope,
-        revokeExistingGrants: false,
-        props: {
-          kind: "app",
-          userId: this.#grant.userId,
-          email: this.#grant.email,
-          projects: allProjects ? null : granted,
-          deadline: Date.now() + 30 * 24 * 3600_000,
-        } satisfies GrantProps,
-      });
-      // The fact of the approval, on the person's account context, stamped with them and the
-      // issuer grant they approved through.
-      publishPlatformFacts(
-        {
-          contextNamespace: env.ITERATE_CONTEXT,
-          waitUntil: (promise) => this.#ctx.waitUntil(promise),
-        },
-        { account: this.#grant.userId },
-        {
-          type: "events.iterate.com/account/consent-approved",
-          payload: {
-            clientId: request.clientId,
-            clientName,
-            projects: allProjects ? null : granted,
-            scopes: scope,
-          } satisfies ConsentApproved,
-        },
-        {
-          principal: { actor: this.#grant.userId, email: this.#grant.email },
-          grant: this.#grant.grantId,
-        },
-      );
-      return approved;
+      return await this.#complete(request, client, allProjects ? null : granted, scope);
     } catch (error) {
       const failure = authorizationFailure(error);
       return failure.kind === "redirect"
         ? { redirectTo: failure.location }
         : { error: failure.description };
     }
+  }
+
+  /** Grant `client` the `projects` (null = every current and future one) and `scope`, and record
+   *  the fact of the approval on the person's account context, stamped with them and the issuer
+   *  grant they approved through. */
+  async #complete(
+    request: AuthRequest,
+    client: ClientInfo | null,
+    projects: string[] | null,
+    scope: string[],
+  ) {
+    const env = this.#env;
+    const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
+      request,
+      userId: this.#grant.userId,
+      metadata: clientDisplay(client, request.clientId),
+      scope,
+      revokeExistingGrants: false,
+      props: {
+        kind: "app",
+        userId: this.#grant.userId,
+        email: this.#grant.email,
+        projects,
+        deadline: Date.now() + 30 * 24 * 3600_000,
+      } satisfies GrantProps,
+    });
+    publishPlatformFacts(
+      {
+        contextNamespace: env.ITERATE_CONTEXT,
+        waitUntil: (promise) => this.#ctx.waitUntil(promise),
+      },
+      { account: this.#grant.userId },
+      {
+        type: "events.iterate.com/account/consent-approved",
+        payload: {
+          clientId: request.clientId,
+          clientName: client?.clientName ?? request.clientId,
+          projects,
+          scopes: scope,
+        } satisfies ConsentApproved,
+      },
+      {
+        principal: { actor: this.#grant.userId, email: this.#grant.email },
+        grant: this.#grant.grantId,
+      },
+    );
+    return approved;
+  }
+
+  /** ONE CLICK, NOT TWO: an issuer session a preview's test link started (issuer-session.ts
+   *  `testLinkResponse`) approves, without the Allow page, a sibling app preview the link signed —
+   *  an authorization that returns to the app's own `/.auth/callback` at one of the grant's
+   *  `testLink.clients` (the redirect, not the client id: an app previewed on https is its CIMD
+   *  client, one on localhost registers itself — iterate/next/app-session.ts — and either way the
+   *  code can only land at that app) — once the test person's project (`pr<N>`, CI's seed) exists,
+   *  with the scopes the app asked for and "All my projects": the person is a throwaway preview
+   *  identity, and a grant narrowed to named projects could not create another in the Dash.
+   *  Anything else (another app, no project yet, every other session) gets the page. */
+  async #testLinkApproval(request: AuthRequest, client: ClientInfo | null) {
+    const testLink = this.#grant.testLink;
+    if (!testLink) return null;
+    const returnsTo = new URL(request.redirectUri);
+    if (returnsTo.pathname !== "/.auth/callback" || !testLink.clients.includes(returnsTo.origin))
+      return null;
+    const project = await new ControlPlane(this.#env.CONTROL_PLANE).getProject(testLink.project);
+    if (!project) return null;
+    // `expected`: CI may have seeded the project on another isolate moments ago (the specs do)
+    const { projects, projectBound } = await projectsForClient(
+      this.#env,
+      this.#addresses.platformOrigin,
+      request.clientId,
+      this.#grant.userId,
+      [project.id],
+    );
+    // a project host's own client is bound to its one project: never "All my projects"
+    if (projectBound || !projects.some((reachable) => reachable.id === project.id)) return null;
+    return this.#complete(request, client, null, request.scope);
   }
 }

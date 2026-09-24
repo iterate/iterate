@@ -86,7 +86,9 @@ doppler run --project project-worker --config preview -- \
 ```
 
 Use `e2e` in place of `deploy` to test an existing preview. `reset` destroys that preview's state
-before redeploying; `delete` removes it. CI publishes URLs and operation links in the PR body.
+before redeploying; `delete` removes it. CI publishes URLs and operation links in the PR body,
+with one-click `Sign in ↗` links as the PR's test person, `pr<N>@preview.iterate.test`
+([dev environments](../../docs/dev-environments.md), `src/test-link.ts`).
 For an operational change, verify the preview's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
 

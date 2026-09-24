@@ -2,10 +2,12 @@ import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
 import { OAuthScope } from "iterate/next/oauth-scopes";
 import { clientDisplay } from "./client-display.ts";
-import { platformAddressesOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import { redeemTestLink } from "./test-link.ts";
 
 /** Verified Google login and explicitly enabled test/administrator login call this tail.
  * Its grant is the issuer's sole browser identity: ordinary storage, public token
@@ -17,8 +19,9 @@ export async function startIssuerSession(
   request: Request,
   user: UserRecord,
   next: string,
-  /** what the identity provider said about the person (Google's profile); an email sign-in has none */
-  profile: { picture?: string; name?: string } = {},
+  /** what the grant carries beyond the person: what the identity provider said about them
+   *  (Google's profile; an email sign-in has none), and a test link's pre-approved clients */
+  extras: Pick<GrantProps, "picture" | "name" | "testLink"> = {},
 ) {
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin, api } = addresses;
@@ -50,8 +53,9 @@ export async function startIssuerSession(
       kind: "issuer",
       userId: user.id,
       email: user.email,
-      picture: profile.picture,
-      name: profile.name,
+      picture: extras.picture,
+      name: extras.name,
+      testLink: extras.testLink,
       projects: null,
       deadline: Date.now() + 30 * 24 * 3600_000,
     } satisfies GrantProps,
@@ -59,4 +63,38 @@ export async function startIssuerSession(
   const result = await flow.session.complete(new URL(approved.redirectTo).search);
   if (result.error) throw new Error(result.error);
   return { setCookie: flow.setCookie, location: result.next! };
+}
+
+/** `GET /.auth/test-link?t=` (test-link.ts; routed by worker.ts on the platform origin): a
+ *  preview's one-click sign-in. The pure decision refuses what is not this deployment's to honour;
+ *  a good link finds or creates its test person, starts the issuer session exactly as a password
+ *  sign-in does — stamped with the link's sibling app clients, which consent.ts then approves
+ *  without the Allow page — and sends the browser to the link's `next`. The password-attempt
+ *  counters are never touched: a shared link clicked many times locks nobody out. */
+export async function testLinkResponse(request: Request, env: Env) {
+  const config = appConfigOf(env);
+  const decision = await redeemTestLink(new URL(request.url).searchParams.get("t"), {
+    testLink: config.login.testLink,
+    key: config.secrets.key.exposeSecret(),
+    platformOrigin: platformAddressesOf(env, request).platformOrigin,
+    now: Date.now(),
+  });
+  if (decision.status !== 302)
+    return new Response(`${decision.message}\n`, {
+      status: decision.status,
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+    });
+  const user = await new ControlPlane(env.CONTROL_PLANE).ensureUser(decision.email);
+  const { setCookie } = await startIssuerSession(env, request, user, "/login", {
+    testLink: { clients: decision.clients, project: decision.project },
+  });
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: decision.next,
+      "set-cookie": setCookie,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
 }

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import JSON5 from "json5";
 import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
+import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
 /** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts, as the
  *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
@@ -143,6 +144,8 @@ export function viteWranglerConfig(
           hostname: "localhost",
         }),
         ...(options.localDev && {
+          // one-click sign-in links (src/test-link.ts) — the specs' test-link.spec.ts mints one
+          APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
           APP_CONFIG: JSON.stringify({
             login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
             secrets: { adminBearer: "dev-admin-api-secret" },

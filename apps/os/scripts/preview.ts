@@ -13,6 +13,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { newWebSocketRpcSession } from "capnweb";
+import { WebSocket } from "undici";
 import { z } from "zod";
 import { osEnvs, type OsEnv } from "../../../envs.ts";
 import {
@@ -33,6 +35,8 @@ import {
 } from "../../../scripts/lib/start-app.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
+import { parseAppConfig } from "../src/app-config.ts";
+import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
 import {
   deleteArtifactsNamespace,
@@ -573,6 +577,11 @@ async function deployPreview(
       apps: appPreviews,
       // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
       testedCommit: process.env.PREVIEW_TESTED_COMMIT,
+      signIn: prNumber
+        ? await traceOperation("Seed sign-in", () =>
+            previewSignIn(ctx, { url, prNumber, apps: appPreviews }),
+          )
+        : undefined,
     };
     mkdirSync(OUTPUT_DIR, { recursive: true });
     writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
@@ -582,6 +591,80 @@ async function deployPreview(
   } finally {
     wrangler.cleanup();
   }
+}
+
+/** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): seed the PR's test person and
+ *  project, mint the links, and smoke the heading's. The person is `pr<N>@preview.iterate.test`,
+ *  the project `pr<N>` — created as them through the operator's bearer (`as`), the same idempotent
+ *  call as e2e/support/project-host.ts `registerProject`, so the Dash link lands inside it. Each
+ *  link is signed with the preview's own key for this preview's origin, expires in 14 days (every
+ *  push mints a fresh one) and pre-approves this run's app previews (consent.ts: no Allow page).
+ *  The heading's lands in the Dash's `/projects/pr<N>` when the Dash was previewed, else on the
+ *  issuer's own `/login` ("Signed in as"). Neither the seed nor the smoke ever fails the deploy:
+ *  they log, and the section says when the seed failed. */
+async function previewSignIn(
+  ctx: EnvContext<OsEnv>,
+  preview: { url: string; prNumber: string; apps: { name: string; url: string }[] },
+) {
+  // The preview's two inherited secrets, parsed the way the worker parses them (uploadPreviewSecrets).
+  const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
+  const { email, project } = testLinkIdentityOf(preview.prNumber);
+  let seeded = false;
+  try {
+    const socketUrl = new URL("/api", preview.url);
+    socketUrl.protocol = "wss:";
+    const socket = new WebSocket(socketUrl);
+    // Undici implements the WebSocket transport; Workers' ambient type has extra unrelated members.
+    // The one call it makes, typed here: `iterate/next/api`'s types need the worker's lib, which
+    // tsconfig.scripts.json does not load.
+    using rpc = newWebSocketRpcSession<{
+      authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {
+        projects: { create(input: { project: string }): Promise<unknown> };
+      };
+    }>(socket as unknown as globalThis.WebSocket);
+    try {
+      await rpc
+        .authenticate({
+          type: "admin-secret",
+          secret: config.secrets.adminBearer.exposeSecret(),
+          as: { email },
+        })
+        .projects.create({ project });
+    } finally {
+      socket.close();
+    }
+    seeded = true;
+    console.log(`sign-in: seeded ${email} with project ${project}`);
+  } catch (error) {
+    console.warn(`sign-in: seeding ${email} with project ${project} failed: ${describe(error)}`);
+  }
+  const clients = preview.apps.map((app) => new URL(app.url).origin);
+  const link = async (next: string) =>
+    `${preview.url}${TEST_LINK_PATH}?${new URLSearchParams({
+      t: await mintTestLink({
+        key: config.secrets.key.exposeSecret(),
+        audience: preview.url,
+        email,
+        next,
+        clients,
+        expiresAt: Date.now() + 14 * 24 * 3600_000,
+      }),
+    })}`;
+  const landing = (app: { name: string; url: string }) =>
+    app.name === "dash" ? `${app.url}/projects/${project}` : app.url;
+  const dash = preview.apps.find((app) => app.name === "dash");
+  const heading = await link(dash ? landing(dash) : `${preview.url}/login`);
+  const apps = Object.fromEntries(
+    await Promise.all(preview.apps.map(async (app) => [app.name, await link(landing(app))])),
+  );
+  const smoke = await fetch(heading, { redirect: "manual" }).catch((error: unknown) => error);
+  if (smoke instanceof Response && smoke.status === 302 && smoke.headers.has("set-cookie"))
+    console.log(`sign-in: the heading link signs in (302 to ${smoke.headers.get("location")})`);
+  else
+    console.warn(
+      `sign-in: the heading link did not sign in: ${smoke instanceof Response ? `${smoke.status} ${await smoke.text()}` : describe(smoke)}`,
+    );
+  return { heading, apps, email, project, seeded };
 }
 
 /** The preview, then everything it owned, each found by its name: its Artifacts namespace (this

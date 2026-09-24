@@ -1,7 +1,8 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the app it names, the files host, the config worker), the MCP origin, then the platform origin's
-// own paths (`/version`, the secret-OAuth callback, Google identity, `/mcp`, the browser adapter's
-// `/api` and `/.auth/*`) and, last, the OAuth provider with the issuer's pages as its catch-all.
+// own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, Google
+// identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
+// the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
@@ -15,6 +16,8 @@ import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
+import { testLinkResponse } from "./issuer-session.ts";
+import { TEST_LINK_PATH } from "./test-link.ts";
 import {
   appConfigOf,
   platformAddressesOf,
@@ -250,6 +253,10 @@ export default {
     // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
     if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
+    // A preview's one-click sign-in (test-link.ts): a 404 wherever `login.testLink` is off — prd,
+    // and every deployment on its own domain, which app-config.ts refuses it on.
+    if (url.pathname === TEST_LINK_PATH && request.method === "GET")
+      return testLinkResponse(request, env);
     // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
     // this origin.
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });

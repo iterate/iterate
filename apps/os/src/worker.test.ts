@@ -1,6 +1,7 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the one object becomes,
 // what is refused by name, the per-env memo, the derived keys), the platform's own endpoints (the public
-// protocol origins, `/version`, and under path routing the platform's own paths never a project).
+// protocol origins, `/version`, a preview's `/.auth/test-link`, and under path routing the platform's
+// own paths never a project).
 // The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
 // module and its own table.
 
@@ -21,6 +22,7 @@ import {
   type AppConfig,
 } from "./app-config.ts";
 import type { Env } from "./env.ts";
+import { mintTestLink, TEST_LINK_PATH } from "./test-link.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws, warns? }`.
@@ -458,6 +460,32 @@ describe("public protocol origins", () => {
     expect((await request("https://os.test/login", paths)).status).toBe(200);
     // the consent page is a Start route too (its sign-in redirect is issuer-bootstrap.test.ts's)
     expect((await request("https://os.test/oauth2/auth?client_id=x", paths)).status).toBe(200);
+  });
+
+  test("a preview's one-click sign-in link (test-link.ts) is a 404 on prd, a plain 403 on another preview", async () => {
+    const pr123 = "https://pr123-feature-os-preview.iterate-dev-preview.workers.dev";
+    const pr124 = "https://pr124-other-os-preview.iterate-dev-preview.workers.dev";
+    const link = (audience: string) =>
+      mintTestLink({
+        key: "secrets-key",
+        audience,
+        email: "pr123@preview.iterate.test",
+        next: `${pr123}/login`,
+        clients: [],
+        expiresAt: Date.now() + 60_000,
+      });
+    expect(
+      await request(
+        `https://os.iterate.com${TEST_LINK_PATH}?t=${await link("https://os.iterate.com")}`,
+      ),
+    ).toMatchObject({ status: 404 });
+    const refused = await request(`${pr124}${TEST_LINK_PATH}?t=${await link(pr123)}`, {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: pr124,
+      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+    });
+    expect(refused).toMatchObject({ status: 403 });
+    expect(await refused.text()).toBe(`This sign-in link is for ${pr123}, not this deployment.\n`);
   });
 
   test("the issuer's pages admit only their own methods, HTML requests and same-origin posts", async () => {
