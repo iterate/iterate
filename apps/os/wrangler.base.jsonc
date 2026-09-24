@@ -56,9 +56,9 @@
   // NO Artifacts simulator — the binding is a proxy to the real product on the block's account — so
   // the local lane (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
   // (created by hand), so local runs never write repos into prd's. A deployment's is envs.ts
-  // `artifactsNamespace`; a preview's is `os-next-preview-<name>-repos`, created and deleted with
+  // `artifactsNamespace`; a preview's is `os-preview-<name>-repos`, created and deleted with
   // the preview (scripts/preview.ts).
-  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-next-dev-repos" }],
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-dev-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
   // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be

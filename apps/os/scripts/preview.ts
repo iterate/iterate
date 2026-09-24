@@ -16,7 +16,7 @@ import process from "node:process";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
 import { z } from "zod";
-import { osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
   runAsync,
@@ -99,11 +99,12 @@ const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
 const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--dry-run]`;
 
-/** The parent's Doppler config (project-worker/preview), downloaded — the Cloudflare credentials for
- *  its account and the two secrets every preview inherits — the way ensure-resources and erase-data
- *  resolve theirs. Refuses a Doppler account that is not the parent's. */
+/** The parent's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
+ *  Cloudflare credentials for its account and the two secrets every preview inherits — the way
+ *  ensure-resources and erase-data resolve theirs. Refuses a Doppler account that is not the
+ *  parent's. */
 const parentContext = () =>
-  resolveEnvContext({ envs: osEnvs, dopplerProject: "project-worker", env: "preview" });
+  resolveEnvContext({ envs: osEnvs, dopplerProject: OS_DOPPLER_PROJECT, env: "preview" });
 
 // ── process helpers (cloudflare-os) ────────────────────────────────────────────────────────────
 
@@ -919,7 +920,8 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
     );
     for (const preview of listed) appPreviews.push({ app, name: preview.name });
   }
-  const workerNames = (await cf<{ id: string }[]>("/workers/scripts")).map((script) => script.id);
+  const scripts = await cf<{ id: string; created_on?: string }[]>("/workers/scripts");
+  const workerNames = scripts.map((script) => script.id);
   const resourceSuffixes = previewResourceSuffixes();
   // The pull requests the rules read: a preview's (rule 2), a leftover D1's or Artifacts namespace's
   // (rule 6).
@@ -942,6 +944,7 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const plan = planPreviewSweep({
     now: Date.now(),
     workerNames,
+    parentCreatedAt: scripts.find((script) => script.id === PREVIEW_PARENT.workerName)?.created_on,
     resourceSuffixes,
     previews: previews.map((preview) => ({
       name: preview.name,

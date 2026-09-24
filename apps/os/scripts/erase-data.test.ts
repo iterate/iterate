@@ -48,7 +48,7 @@ beforeEach(() => {
   ]);
   fixture.cf.mockReset().mockImplementation(async (route: string, init?: RequestInit) => {
     if (route === "/workers/scripts")
-      return [{ id: "os-next-preview" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
+      return [{ id: "os-preview" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
     if (route === "/workers/scripts/old-worker/settings")
       return { bindings: [{ name: "OAUTH_KV", type: "kv_namespace", namespace_id: "oauth" }] };
     if (route.endsWith("/settings"))
@@ -77,10 +77,10 @@ beforeEach(() => {
     secrets: { CLOUDFLARE_API_TOKEN: "test-token" },
     cf: fixture.cf,
     env: {
-      workerName: "os-next-preview",
+      workerName: "os-preview",
       cloudflareAccountId: "test-account",
-      resourceNamePrefix: "os-next-preview",
-      artifactsNamespace: "os-next-preview-repos",
+      resourceNamePrefix: "os-preview",
+      artifactsNamespace: "os-preview-repos",
       resources: { oauthKvId: "oauth", itxKvId: "itx" },
     },
   });

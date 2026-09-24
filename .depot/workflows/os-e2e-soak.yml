@@ -3,7 +3,7 @@
 # (apps/os/perf, alone on the wire), and tally every row that did not pass every time
 # (apps/os/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
-#     --ref <branch> --input runs=100 --input worker-base-url=https://soak-os-next-preview.iterate-dev-preview.workers.dev
+#     --ref <branch> --input runs=100 --input worker-base-url=https://soak-os-preview.iterate-dev-preview.workers.dev
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
 # difference), and CI is the environment whose flakes matter.
 name: OS e2e soak
@@ -21,7 +21,7 @@ on:
         description: The deployed worker to run against (a preview of main; never prd by default)
         required: false
         type: string
-        default: https://soak-os-next-preview.iterate-dev-preview.workers.dev
+        default: https://soak-os-preview.iterate-dev-preview.workers.dev
       filter:
         description: Optional vitest filter (a file or title fragment) to soak a subset
         required: false
@@ -53,7 +53,7 @@ jobs:
       # tests against a `soak` worker three merges older failed one row in every run of a hundred).
       # An explicit worker-base-url is soaked as given.
       - name: Deploy the soak preview from this ref
-        if: inputs.worker-base-url == 'https://soak-os-next-preview.iterate-dev-preview.workers.dev'
+        if: inputs.worker-base-url == 'https://soak-os-preview.iterate-dev-preview.workers.dev'
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

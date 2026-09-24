@@ -4,7 +4,7 @@
 #   deploy              every push: deploys the PR merged into main (GitHub's test merge commit;
 #                       the head alone when the PR conflicts, scripts/ci/preview-tested-commit.ts)
 #                       as a preview named `pr<n>-<branch slug>` of the parent worker
-#                       os-next-preview, and writes the URL, the tested commit and the operations
+#                       os-preview, and writes the URL, the tested commit and the operations
 #                       into the PR body
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       then their test telemetry and flake records as artifacts

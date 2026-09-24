@@ -32,7 +32,7 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
       ],
     }),
   ).toMatchInlineSnapshot(`
-    "🚨 prd fault page: os-next-prd, 30 min to 07:30 UTC <@U067G4QRFK2>
+    "🚨 prd fault page: os-prd, 30 min to 07:30 UTC <@U067G4QRFK2>
     • 13 5xx responses: garple.com 7, lispwoso.com 6
     • 1815 platform-failure heals: project 1279, repo 536
     • 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2
@@ -105,12 +105,12 @@ test.for([
     row.history.map((message) => ({
       ts: String(Date.parse(message.at) / 1000),
       bot_id: message.bot_id,
-      text: ":rotating_light: prd fault page: os-next-prd, 30 min to 07:00 UTC",
+      text: ":rotating_light: prd fault page: os-prd, 30 min to 07:00 UTC",
     })),
   );
   const expected = row.serverErrors
     ? page({ serverErrors: [["https://lispwoso.com/", row.serverErrors]] })
-    : "os-next-prd is quiet";
+    : "os-prd is quiet";
   await expect(
     alarm({ now, windowEnd: now, cloudflare: credentials, slack: () => slack.client }),
   ).resolves.toBe(expected);

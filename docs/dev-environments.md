@@ -244,7 +244,7 @@ deployed runs:
 pnpm spec
 
 # deployed preview: the Doppler config supplies the preview's APP_CONFIG
-DEMO_BASE_URL=https://pr<n>-<branch slug>-os-next-preview.iterate-dev-preview.workers.dev \
+DEMO_BASE_URL=https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev \
   doppler run --project project-worker --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
@@ -302,9 +302,9 @@ There is no fleet to expand: every PR gets its own preview, and nothing is
 pooled or leased.
 
 Each preview is a complete, isolated stack on the dev/preview Cloudflare
-account: a Cloudflare Worker Preview of the parent `os-next-preview`, named
+account: a Cloudflare Worker Preview of the parent `os-preview`, named
 `pr<n>-<branch slug>`, at
-`https://pr<n>-<branch slug>-os-next-preview.iterate-dev-preview.workers.dev`,
+`https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev`,
 with Durable Objects, KV, R2 and an Artifacts namespace of its own. The
 five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
 own parents, wired to it and to each other: each signs in against it, and every link
@@ -420,7 +420,7 @@ For a focused flake hunt, reuse the exact deployment and run one test file or
 one test repeatedly without redeploying (from `apps/os`):
 
 ```bash
-PREVIEW=https://pr1234-<branch slug>-os-next-preview.iterate-dev-preview.workers.dev
+PREVIEW=https://pr1234-<branch slug>-os-preview.iterate-dev-preview.workers.dev
 
 # one Vitest file, one test (paths are relative to apps/os)
 WORKER_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
@@ -471,11 +471,11 @@ previews from deploying over you and PR cleanups from deleting your work:
 ```bash
 cd apps/os
 doppler run --project project-worker --config preview -- pnpm preview deploy --name exp-<you>
-# → https://exp-<you>-os-next-preview.iterate-dev-preview.workers.dev
+# → https://exp-<you>-os-preview.iterate-dev-preview.workers.dev
 
 # sign in there with any email and the preview password, drive it as operator,
 # or run the specs against it:
-DEMO_BASE_URL=https://exp-<you>-os-next-preview.iterate-dev-preview.workers.dev \
+DEMO_BASE_URL=https://exp-<you>-os-preview.iterate-dev-preview.workers.dev \
   doppler run --project project-worker --config preview -- pnpm spec
 
 # delete it when done; otherwise the sweep takes it 24 h after its last deploy
@@ -511,7 +511,7 @@ deletion is logged in the job that made it.
 
 A preview's configuration is **inherited, not provisioned**: every preview gets
 the parent's two secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`, the
-`os-next-preview` Worker's Previews settings, from Doppler
+`os-preview` Worker's Previews settings, from Doppler
 `project-worker/preview`), and its own `urls` (its origin, projects as paths,
 its Dash when deployed) come from the per-preview Wrangler config
 `preview.ts` writes. Clients need no registration: each identifies itself by

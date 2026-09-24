@@ -24,7 +24,7 @@ export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
 
 /** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
  *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
- *  that worker — os-next-preview on the dev/preview account (envs.ts). Nothing reads its data. */
+ *  that worker — os-preview on the dev/preview account (envs.ts). Nothing reads its data. */
 export const PREVIEW_PARENT = osEnvs.preview!;
 
 /** cloudflare-os's limit: the slug is the URL's first label, and KV/R2 names carry it too. */
@@ -139,7 +139,7 @@ export function previewResourceSuffixes(
 }
 
 /** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
- *  for a name of another shape: the parent's own (`os-next-preview-repos`), another worker's,
+ *  for a name of another shape: the parent's own (`os-preview-repos`), another worker's,
  *  another binding's. How the sweep reads a leftover resource (scripts/preview-sweep.ts). */
 export function previewNameOfResource(resourceName: string, binding: string) {
   const prefix = `${PREVIEW_PARENT.workerName}-`;
@@ -158,8 +158,8 @@ export function changedApps(changedPaths: string[], apps = APPS) {
 
 // ── the PR body's managed section ──────────────────────────────────────────────────────────────
 
-const SECTION_BEGIN = "<!-- os-next-preview:begin -->";
-const SECTION_END = "<!-- os-next-preview:end -->";
+const SECTION_BEGIN = "<!-- os-preview:begin -->";
+const SECTION_END = "<!-- os-preview:end -->";
 
 /** Replace the managed section between the markers, or append one. Everything a person wrote
  *  around it is kept verbatim. */

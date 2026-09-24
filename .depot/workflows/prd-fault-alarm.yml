@@ -1,4 +1,4 @@
-# Prd fault alarm: every 15 minutes, reads the last half hour of os-next-prd's
+# Prd fault alarm: every 15 minutes, reads the last half hour of os-prd's
 # Workers Logs and pages Slack #error-pulse (a top-level message mentioning
 # Jonas, at most hourly) on any 5xx, a burst of platform-failure heals, or any
 # error. The page is the alarm: the run goes red only when it could not read
@@ -37,7 +37,7 @@ jobs:
         run: |-
           for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; sleep 5; done
           doppler --version
-      - name: Read os-next-prd's logs, page on a fault
+      - name: Read os-prd's logs, page on a fault
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run

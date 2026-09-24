@@ -1,5 +1,5 @@
 # THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the previews
-# of os-next-preview and of the apps on top whose PR closed without a delete, that went stale, or
+# of os-preview and of the apps on top whose PR closed without a delete, that went stale, or
 # that were hand-named and left idle, plus any per-preview resource that outlived its preview. The
 # rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a failed cleanup,
 # from leaking a preview.
