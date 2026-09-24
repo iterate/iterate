@@ -356,7 +356,7 @@ test("firmwareManifest: refuses a chip other than the ESP32-S3", () => {
 
 const ninjaOutput = {
   directory: "/tmp/kit-firmware/build",
-  // `ninja -t inputs all build.ninja`: sorted, shell-quoted when needed
+  // `ninja -t inputs all`: sorted, shell-quoted when needed
   inputs: [
     "../../../work/iterate/apps/kit/firmware/components/core/src/core.c",
     "/work/iterate/apps/kit/firmware/devices/havpe/assets/call_ended.wav",
@@ -364,6 +364,17 @@ const ninjaOutput = {
     "/work/iterate/apps/kit/firmware/targets/stackchan/CMakeLists.txt",
     "/opt/esp-idf/components/esp_system/startup.c",
     "esp-idf/avatar/generated-sounds/sounds_generated.inc",
+    "",
+  ].join("\n"),
+  // `ninja -t query build.ninja`: the CMake files build.ninja is regenerated from
+  regeneration: [
+    "build.ninja:",
+    "  input: RERUN_CMAKE",
+    "    | /work/iterate/apps/kit/firmware/targets/stackchan/CMakeLists.txt",
+    "    | /work/iterate/apps/kit/firmware/targets/common/components.cmake",
+    "    || /work/iterate/apps/kit/firmware/devices/zectrix_note4/extra.cmake",
+    "  outputs:",
+    "    all",
     "",
   ].join("\n"),
   // `ninja -t deps`: each object's headers, indented four spaces
@@ -383,7 +394,9 @@ test("ninjaPaths: every listed and reported path, resolved against the build dir
     "/work/iterate/apps/kit/firmware/components/core/src/core.c",
     "/work/iterate/apps/kit/firmware/devices/havpe/assets/call_ended.wav",
     "/work/iterate/apps/kit/firmware/devices/satellite1/it's here.c",
+    "/work/iterate/apps/kit/firmware/devices/zectrix_note4/extra.cmake",
     "/work/iterate/apps/kit/firmware/platforms/host/include/esp_log.h",
+    "/work/iterate/apps/kit/firmware/targets/common/components.cmake",
     "/work/iterate/apps/kit/firmware/targets/stackchan/CMakeLists.txt",
   ]);
 });
@@ -395,19 +408,23 @@ test("filesOutsideInputs: tracked files outside the device's inputs, never untra
     "apps/kit/firmware/components/core/include/iterate/kit/core.h",
     "apps/kit/firmware/devices/havpe/assets/call_ended.wav",
     "apps/kit/firmware/devices/satellite1/it's here.c",
+    "apps/kit/firmware/devices/zectrix_note4/extra.cmake",
     "apps/kit/firmware/platforms/host/include/esp_log.h",
+    "apps/kit/firmware/targets/common/components.cmake",
     "apps/kit/firmware/targets/stackchan/CMakeLists.txt",
   ]);
   // stackchan's inputs: everything but the other boards and the host platform
   const covered = new Set([
     "apps/kit/firmware/components/core/src/core.c",
     "apps/kit/firmware/components/core/include/iterate/kit/core.h",
+    "apps/kit/firmware/targets/common/components.cmake",
     "apps/kit/firmware/targets/stackchan/CMakeLists.txt",
   ]);
 
   expect(filesOutsideInputs({ read, tracked, covered })).toEqual([
     "apps/kit/firmware/devices/havpe/assets/call_ended.wav",
     "apps/kit/firmware/devices/satellite1/it's here.c",
+    "apps/kit/firmware/devices/zectrix_note4/extra.cmake",
     "apps/kit/firmware/platforms/host/include/esp_log.h",
   ]);
 });

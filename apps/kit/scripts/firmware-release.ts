@@ -25,8 +25,8 @@
 // - The binary partition table: https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-guides/partition-tables.html
 //   (written by components/partition_table/gen_esp32part.py, `STRUCT_FORMAT = b'<2sBBLL16sL'`)
 // - The esp-web-tools manifest: https://esphome.github.io/esp-web-tools/
-// - ninja's `-t inputs` and `-t deps`: https://ninja-build.org/manual.html#_extra_tools (ESP-IDF 5.4.2
-//   ships ninja 1.12.1)
+// - ninja's `-t inputs`, `-t query` and `-t deps`: https://ninja-build.org/manual.html#_extra_tools
+//   (`ninjaPaths` explains why the CMake inputs come from `-t query`)
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -349,13 +349,25 @@ export function firmwareManifest(input: {
 }
 
 /**
- * Every file a finished ninja build read, as absolute paths. `ninja -t inputs all build.ninja` lists
- * the graph's inputs, which include custom-command DEPENDS and the CMake files `build.ninja` is
- * regenerated from, one per line and shell-quoted when needed (`'a b'`, `'it'\''s'`). `ninja -t deps`
- * lists the headers each compile reported, indented four spaces under the object they built. Relative
- * paths are relative to the build directory.
+ * Every file a finished ninja build read, as absolute paths, from three of ninja's tools (relative
+ * paths are relative to the build directory):
+ *
+ * - `inputs`: `ninja -t inputs all`, the graph's inputs (sources and custom-command DEPENDS), one per
+ *   line and shell-quoted when needed (`'a b'`, `'it'\''s'`);
+ * - `regeneration`: `ninja -t query build.ninja`, whose `input:` lines (`    path`, `    | path`,
+ *   `    || path`) are the CMake files `build.ninja` is regenerated from. `-t inputs build.ninja` would
+ *   list them on ninja 1.12, but 1.13 leaves out every file a phony edge produces
+ *   (https://github.com/ninja-build/ninja/blob/v1.13.2/src/graph.cc#L764-L784), and CMake declares
+ *   each of its inputs phony so that deleting one is not an error. The Depot image's
+ *   /usr/local/bin/ninja is 1.13.2 and comes before ESP-IDF's 1.12.1 on PATH;
+ * - `deps`: `ninja -t deps`, the headers each compile reported, indented four spaces under the object.
  */
-export function ninjaPaths(input: { directory: string; inputs: string; deps: string }) {
+export function ninjaPaths(input: {
+  directory: string;
+  inputs: string;
+  regeneration: string;
+  deps: string;
+}) {
   const listed = input.inputs
     .split("\n")
     .filter(Boolean)
@@ -364,11 +376,25 @@ export function ninjaPaths(input: { directory: string; inputs: string; deps: str
         ? line.slice(1, -1).replaceAll("'\\''", "'")
         : line,
     );
+  // `build.ninja:`, `  input: RERUN_CMAKE`, the inputs indented four spaces, then `  outputs:`
+  const query = input.regeneration.split("\n");
+  const afterRule = query.slice(query.findIndex((line) => line.startsWith("  input: ")) + 1);
+  const regeneration = afterRule
+    .slice(
+      0,
+      afterRule.findIndex((line) => !line.startsWith("    ")),
+    )
+    .map((line) => line.slice(4).replace(/^\|\|? /, ""));
+  if (regeneration.length === 0) {
+    throw new Error(`ninja -t query build.ninja names no inputs:\n${input.regeneration}`);
+  }
   const reported = input.deps
     .split("\n")
     .filter((line) => line.startsWith("    "))
     .map((line) => line.slice(4));
-  return new Set([...listed, ...reported].map((path) => resolve(input.directory, path)));
+  return new Set(
+    [...listed, ...regeneration, ...reported].map((path) => resolve(input.directory, path)),
+  );
 }
 
 /**
@@ -454,7 +480,8 @@ export function buildFirmwareRelease(input: {
     .flatMap((directory) => [
       ...ninjaPaths({
         directory,
-        inputs: output("ninja", ["-C", directory, "-t", "inputs", "all", "build.ninja"], repoRoot),
+        inputs: output("ninja", ["-C", directory, "-t", "inputs", "all"], repoRoot),
+        regeneration: output("ninja", ["-C", directory, "-t", "query", "build.ninja"], repoRoot),
         deps: output("ninja", ["-C", directory, "-t", "deps"], repoRoot),
       }),
     ])
@@ -476,25 +503,8 @@ export function buildFirmwareRelease(input: {
   const ownFiles = read.filter((file) => file.startsWith(`${FIRMWARE_DIRECTORY}/`));
   // a path mismatch between ninja and git would otherwise make the check vacuous
   if (!ownFiles.includes(`${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt`)) {
-    // TEMPORARY diagnostics (PR #2934): how the regeneration statement names its inputs
-    const head = (text: string) => text.split("\n").slice(0, 25).join("\n");
     throw new Error(
-      [
-        `ninja listed no ${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt; the input check proves nothing.`,
-        `It listed ${read.length} paths, ${ownFiles.length} under ${FIRMWARE_DIRECTORY}.`,
-        `which ninja: ${output("sh", ["-c", "command -v ninja; ninja --version"], repoRoot)}`,
-        "ninja -t inputs build.ninja:",
-        head(output("ninja", ["-C", build, "-t", "inputs", "build.ninja"], repoRoot)),
-        "ninja -t inputs all build.ninja, the CMake files:",
-        head(
-          output("ninja", ["-C", build, "-t", "inputs", "all", "build.ninja"], repoRoot)
-            .split("\n")
-            .filter((line) => /CMakeLists|\.cmake|idf_component/.test(line))
-            .join("\n"),
-        ),
-        "ninja -t query build.ninja:",
-        head(output("ninja", ["-C", build, "-t", "query", "build.ninja"], repoRoot)),
-      ].join("\n"),
+      `ninja listed no ${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt, so the input check would prove nothing.`,
     );
   }
   console.log(
