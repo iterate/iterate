@@ -8,34 +8,16 @@ import type {
   TestCase,
   TestResult,
 } from "@playwright/test/reporter";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import PlaywrightTelemetryReporter from "./playwright-telemetry-reporter.ts";
 
-const originalArtifactDirectory = process.env.TEST_TELEMETRY_ARTIFACT_DIR;
-const originalFlakeRecordDirectory = process.env.FLAKE_RECORD_DIR;
-const originalTelemetryKind = process.env.TEST_TELEMETRY_KIND;
-const originalTelemetryLane = process.env.TEST_TELEMETRY_LANE;
-
-beforeEach(() => {
-  delete process.env.TEST_TELEMETRY_KIND;
-  delete process.env.TEST_TELEMETRY_LANE;
-  // Never let a CI run's real record dir catch this file's synthetic flakes.
-  delete process.env.FLAKE_RECORD_DIR;
-});
-
-afterEach(() => {
-  restoreEnv("TEST_TELEMETRY_ARTIFACT_DIR", originalArtifactDirectory);
-  restoreEnv("FLAKE_RECORD_DIR", originalFlakeRecordDirectory);
-  restoreEnv("TEST_TELEMETRY_KIND", originalTelemetryKind);
-  restoreEnv("TEST_TELEMETRY_LANE", originalTelemetryLane);
-});
-
 test("records every Playwright attempt and nested step without uploading", async () => {
+  isolateTelemetryEnvironment();
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-"));
-  process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
   const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
-  process.env.FLAKE_RECORD_DIR = flakeRecordDirectory;
+  vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory);
   const firstResult = {
     retry: 0,
     status: "failed",
@@ -135,8 +117,9 @@ test("records every Playwright attempt and nested step without uploading", async
 });
 
 test("keeps Playwright's raw result status separate from its expected outcome", async () => {
+  isolateTelemetryEnvironment();
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-expected-"));
-  process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
   const failedAsExpected = {
     retry: 0,
     status: "failed",
@@ -173,9 +156,10 @@ test("keeps Playwright's raw result status separate from its expected outcome", 
 });
 
 test("a plain spec that failed every attempt leaves an unexpected-error flake record", async () => {
-  process.env.TEST_TELEMETRY_ARTIFACT_DIR = mkdtempSync(join(tmpdir(), "playwright-hard-fail-"));
+  isolateTelemetryEnvironment();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", mkdtempSync(join(tmpdir(), "playwright-hard-fail-")));
   const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
-  process.env.FLAKE_RECORD_DIR = flakeRecordDirectory;
+  vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory);
   const attempt = (retry: number) =>
     ({
       retry,
@@ -227,8 +211,9 @@ test("a plain spec that failed every attempt leaves an unexpected-error flake re
 });
 
 test("preserves timed-out runs and run-level Playwright errors", async () => {
+  isolateTelemetryEnvironment();
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-timeout-"));
-  process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
   const reporter = new PlaywrightTelemetryReporter();
   reporter.onBegin(
     { rootDir: "/repo/specs" } as FullConfig,
@@ -256,8 +241,9 @@ test("preserves timed-out runs and run-level Playwright errors", async () => {
 });
 
 test("preserves interrupted attempts whose unfinished Playwright steps use negative durations", async () => {
+  isolateTelemetryEnvironment();
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-interrupted-"));
-  process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
   const interruptedResult = {
     retry: 0,
     status: "interrupted",
@@ -314,7 +300,13 @@ test("preserves interrupted attempts whose unfinished Playwright steps use negat
   rmSync(artifactDirectory, { recursive: true });
 });
 
-function restoreEnv(name: string, value: string | undefined) {
-  if (value) process.env[name] = value;
-  else delete process.env[name];
+/** Each test starts from a clean telemetry environment, and every variable it stubs is restored
+ *  when it finishes. Never let a CI run's real record dir catch this file's synthetic flakes. */
+function isolateTelemetryEnvironment() {
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
+  vi.stubEnv("TEST_TELEMETRY_LANE", undefined);
+  vi.stubEnv("FLAKE_RECORD_DIR", undefined);
 }

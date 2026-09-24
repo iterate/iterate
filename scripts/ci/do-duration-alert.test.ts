@@ -69,11 +69,10 @@ test("the headline is one sentence about $/day; the table and the breach are rep
   // Current usage is the last complete hour (04:00 at 05:41): 812 DO-hours × 24 × $0.005625,
   // above 05:00 projected to a full hour (401 × 60/41 = 587). dev/preview had no row for
   // either hour, so it is $0. $4.57/h is under prd's $12/h page tier.
-  expect(thread.headline).toBe(
-    "We're spending $110/day on durable objects based on current usage ($0 dev/preview, $110 prd)",
-  );
-  expect(thread.details).toBe(
-    [
+  expect(thread).toMatchObject({
+    headline:
+      "We're spending $110/day on durable objects based on current usage ($0 dev/preview, $110 prd)",
+    details: [
       "```",
       "account      latest hour             today (DO-hours)  hours over ceiling  pinned invocations",
       "dev/preview  23:00 → 1 (~$0.01/h)    0 ≈ $0.00         0/0 over 500        —",
@@ -81,16 +80,16 @@ test("the headline is one sentence about $/day; the table and the breach are rep
       "```",
       links,
     ].join("\n"),
-  );
-  expect(thread.replies).toEqual([
-    [
-      "🚨 Durable Objects hours over 600. account: prd. Now 1.4× the ceiling (~$4.57/h).",
-      "Latest: 04:00 → 812 (~$4.57/h)",
-      "Also pinned: os-prd  wallTimeP99=1.94h",
-      links,
-    ].join("\n"),
-  ]);
-  expect(thread.pages).toEqual([]);
+    replies: [
+      [
+        "🚨 Durable Objects hours over 600. account: prd. Now 1.4× the ceiling (~$4.57/h).",
+        "Latest: 04:00 → 812 (~$4.57/h)",
+        "Also pinned: os-prd  wallTimeP99=1.94h",
+        links,
+      ].join("\n"),
+    ],
+    pages: [],
+  });
 });
 
 test("an hour over the ceiling earlier today is in the table without a fresh reply", () => {
@@ -121,10 +120,11 @@ test("an hour over the ceiling earlier today is in the table without a fresh rep
     ],
   });
 
-  expect(thread.replies).toEqual([]);
-  expect(thread.headline).toBe(
-    "We're spending $0.40/day on durable objects based on current usage ($0.40 dev/preview)",
-  );
+  expect(thread).toMatchObject({
+    replies: [],
+    headline:
+      "We're spending $0.40/day on durable objects based on current usage ($0.40 dev/preview)",
+  });
   expect(thread.details).toContain(
     "dev/preview  04:00 → 3 (~$0.02/h)  2,268 ≈ $13       1/3 over 500        —",
   );
@@ -146,15 +146,16 @@ test("a probe that could not run is said so in the sentence and as a reply, neve
     ],
   });
 
-  expect(thread.headline).toBe(
-    "🧪 TEST RUN — We're spending $0/day on durable objects based on current usage (dev/preview: probe failed)",
-  );
+  expect(thread).toMatchObject({
+    headline:
+      "🧪 TEST RUN — We're spending $0/day on durable objects based on current usage (dev/preview: probe failed)",
+    pages: [],
+  });
   expect(thread.details).toContain(
     "dev/preview  probe failed: Cloudflare GraphQL errors: authentication error",
   );
   expect(thread.replies).toHaveLength(1);
   expect(thread.replies[0]).toContain("⚠️ DO duration probe FAILED to run. account: dev/preview.");
-  expect(thread.pages).toEqual([]);
 });
 
 // The 2026-09-21 os-next preview pin runaway, hour by hour (dev/preview: ceiling 500 DO-hours
@@ -272,20 +273,22 @@ test("a page names the rate, the multiple, Jonas and the top spenders; a test ru
   };
 
   // 8,307 DO-hours/hour × $0.005625 = $46.73/h; 5,520 → $31.05/h; 2,311 → $13.00/h; 16 → $0.09/h.
-  expect(renderDailyThread({ ...input, testRun: false }).pages).toEqual([
-    {
-      label: "dev/preview",
-      text: [
-        "🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2>",
-        "Top spenders, trailing hour:",
-        "• os-next-preview_pr2828-control-plane-cleanup_IterateContextDurableObject  ~$31/h",
-        "• os-next-preview_pr2847-investigate-li-e10d90_IterateContextDurableObject  ~$13/h",
-        "• os-preview-7_SandboxLiteDurableObject  ~$0.09/h",
-        `Pages again in 3h while it lasts; hourly readings are in today's "We're spending" thread.`,
-        links,
-      ].join("\n"),
-    },
-  ]);
+  expect(renderDailyThread({ ...input, testRun: false })).toMatchObject({
+    pages: [
+      {
+        label: "dev/preview",
+        text: [
+          "🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2>",
+          "Top spenders, trailing hour:",
+          "• os-next-preview_pr2828-control-plane-cleanup_IterateContextDurableObject  ~$31/h",
+          "• os-next-preview_pr2847-investigate-li-e10d90_IterateContextDurableObject  ~$13/h",
+          "• os-preview-7_SandboxLiteDurableObject  ~$0.09/h",
+          `Pages again in 3h while it lasts; hourly readings are in today's "We're spending" thread.`,
+          links,
+        ].join("\n"),
+      },
+    ],
+  });
   expect(renderDailyThread({ ...input, testRun: true }).pages[0]?.text.split("\n")[0]).toBe(
     "🧪 TEST RUN — 🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling.",
   );
@@ -323,6 +326,7 @@ test.for([
     headlineTs: "100.0",
     details: "new table",
   });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra Slack write or field must fail
   expect(slack.writes).toEqual(expected);
 });
 
@@ -377,6 +381,7 @@ test.for([
     }),
   ).resolves.toBe(posted);
   // A page is top-level: no thread_ts.
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a thread_ts on the page must fail
   expect(slack.writes).toEqual(
     posted ? [["chat.postMessage", { channel: "C1", text: page.text }]] : [],
   );

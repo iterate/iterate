@@ -1,6 +1,6 @@
 // principal.test.ts — the signed-claims codec as a table: what verifies, what does not; the admin
 // secret's compare; and the cookie header — read back, refused.
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import {
   cookieValueOf,
   signClaims,
@@ -77,70 +77,69 @@ for (const { header, name, becomes } of cookieRows)
     expect(cookieValueOf(header, name)).toBe(becomes);
   });
 
-describe("stampCaller — the platform's attribution on an event", () => {
-  const event: { type: string; payload: { n: number }; source?: Record<string, unknown> } = {
-    type: "x",
-    payload: { n: 1 },
-  };
-  test("a person through a grant: source.principal and source.grant, a client-supplied stamp replaced", () => {
-    expect(
-      stampCaller(
-        {
-          ...event,
-          source: {
-            principal: { actor: "forged" },
-            grant: "grant_forged",
-            processor: { slug: "p", version: "1" },
-          },
+// ── stampCaller — the platform's attribution on an event ──
+const event: { type: string; payload: { n: number }; source?: Record<string, unknown> } = {
+  type: "x",
+  payload: { n: 1 },
+};
+test("a person through a grant: source.principal and source.grant, a client-supplied stamp replaced", () => {
+  expect(
+    stampCaller(
+      {
+        ...event,
+        source: {
+          principal: { actor: "forged" },
+          grant: "grant_forged",
+          processor: { slug: "p", version: "1" },
         },
-        { principal: { actor: "user_1", email: "a@b.c" }, grant: "grant_abc" },
-      ),
-    ).toEqual({
-      ...event,
-      source: {
-        processor: { slug: "p", version: "1" },
-        principal: { actor: "user_1", email: "a@b.c" },
-        grant: "grant_abc",
       },
-    });
+      { principal: { actor: "user_1", email: "a@b.c" }, grant: "grant_abc" },
+    ),
+  ).toEqual({
+    ...event,
+    source: {
+      processor: { slug: "p", version: "1" },
+      principal: { actor: "user_1", email: "a@b.c" },
+      grant: "grant_abc",
+    },
   });
-  test("the admin secret: a principal, no grant key at all", () => {
-    expect(stampCaller(event, { principal: { actor: "admin" } })).toEqual({
-      ...event,
-      source: { principal: { actor: "admin" } },
-    });
+});
+test("the admin secret: a principal, no grant key at all", () => {
+  expect(stampCaller(event, { principal: { actor: "admin" } })).toEqual({
+    ...event,
+    source: { principal: { actor: "admin" } },
   });
-  test("nobody (the kernel, an anonymous session): a client's stamp is dropped; an empty source is dropped whole", () => {
-    expect(
-      stampCaller(
-        { ...event, source: { principal: { actor: "forged" }, grant: "g" } },
-        { principal: null },
-      ),
-    ).toEqual(event);
-    expect(
-      stampCaller(
-        { ...event, source: { grant: "g", processor: { slug: "p", version: "1" } } },
-        { principal: null },
-      ),
-    ).toEqual({
-      ...event,
-      source: { processor: { slug: "p", version: "1" } },
-    });
+});
+test("nobody (the kernel, an anonymous session): a client's stamp is dropped; an empty source is dropped whole", () => {
+  expect(
+    stampCaller(
+      { ...event, source: { principal: { actor: "forged" }, grant: "g" } },
+      { principal: null },
+    ),
+  ).toEqual(event);
+  expect(
+    stampCaller(
+      { ...event, source: { grant: "g", processor: { slug: "p", version: "1" } } },
+      { principal: null },
+    ),
+  ).toEqual({
+    ...event,
+    source: { processor: { slug: "p", version: "1" } },
   });
-  test("a client's claim that the platform wrote its event is dropped, whoever it is", () => {
-    const claimed = { ...event, source: { platform: true } };
-    expect(stampCaller(claimed, { principal: { actor: "user_1" }, grant: "g" })).toEqual({
-      ...event,
-      source: { principal: { actor: "user_1" }, grant: "g" },
-    });
-    expect(stampCaller(claimed, { principal: null, app: true })).toEqual(event);
+});
+test("a client's claim that the platform wrote its event is dropped, whoever it is", () => {
+  const claimed = { ...event, source: { platform: true } };
+  expect(stampCaller(claimed, { principal: { actor: "user_1" }, grant: "g" })).toEqual({
+    ...event,
+    source: { principal: { actor: "user_1" }, grant: "g" },
   });
-  test("the platform writing a fact on a person's behalf: attributed to them, and stamped `platform`", () => {
-    expect(
-      stampCaller(event, { principal: { actor: "user_1" }, grant: "g", platform: true }),
-    ).toEqual({
-      ...event,
-      source: { principal: { actor: "user_1" }, grant: "g", platform: true },
-    });
+  expect(stampCaller(claimed, { principal: null, app: true })).toEqual(event);
+});
+test("the platform writing a fact on a person's behalf: attributed to them, and stamped `platform`", () => {
+  expect(
+    stampCaller(event, { principal: { actor: "user_1" }, grant: "g", platform: true }),
+  ).toEqual({
+    ...event,
+    source: { principal: { actor: "user_1" }, grant: "g", platform: true },
   });
 });

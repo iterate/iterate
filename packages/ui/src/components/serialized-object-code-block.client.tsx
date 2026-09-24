@@ -130,7 +130,7 @@ export function SerializedObjectCodeBlock({
 
     const frame = window.requestAnimationFrame(() => {
       const scrollContainer = scrollContainerRef.current;
-      if (scrollContainer == null) {
+      if (!scrollContainer) {
         return;
       }
 
@@ -247,6 +247,7 @@ function serializeData(data: unknown, format: SerializedFormat) {
       return format === "yaml" ? "undefined" : '"undefined"';
     }
 
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- `data` is any JSON value: only null itself prints as null; 0, false and "" must serialize as themselves
     if (data === null) {
       return "null";
     }

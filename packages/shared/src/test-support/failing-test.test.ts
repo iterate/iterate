@@ -162,19 +162,6 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
 
 // A failure that proves nothing is retried by the wrapper, because vitest's
 // own `retry` never reaches that outcome (see failing-test.ts).
-function pinWithRetry(bodies: Array<() => Promise<unknown>>) {
-  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-  const fake = Object.assign(vi.fn(), {
-    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-  });
-  let calls = 0;
-  createFailing(fake, /pinned/, { retries: 1, retryDelayMs: 0 })("name", async () => {
-    calls += 1;
-    return bodies[calls - 1]!();
-  });
-  return { run: () => registered[0]!(), calls: () => calls };
-}
-
 test("a failure that proves nothing re-runs the body once, and the pin holds on the retry", async () => {
   using records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -286,4 +273,18 @@ function scopedFlakeRecordDir() {
       else delete process.env.FLAKE_RECORD_DIR;
     },
   };
+}
+
+/** A createFailing pin with one retry whose attempts run `bodies` in order. */
+function pinWithRetry(bodies: Array<() => Promise<unknown>>) {
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  let calls = 0;
+  createFailing(fake, /pinned/, { retries: 1, retryDelayMs: 0 })("name", async () => {
+    calls += 1;
+    return bodies[calls - 1]!();
+  });
+  return { run: () => registered[0]!(), calls: () => calls };
 }

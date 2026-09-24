@@ -5,8 +5,6 @@ import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telem
 import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.ts";
 import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
 
-const DEFAULT_ARTIFACT_ROOT = "test-results/ci-telemetry";
-
 async function loadTestTelemetryArtifacts(rawDirectory: string) {
   const files = (await filesBelow(rawDirectory)).filter((file) => file.endsWith(".json"));
   const artifacts = await Promise.all(
@@ -140,11 +138,11 @@ if (isMainModule(import.meta.url)) {
   }
   const rootFlagIndex = process.argv.indexOf("--artifact-root");
   const artifactRoot =
-    rootFlagIndex === -1 ? DEFAULT_ARTIFACT_ROOT : process.argv[rootFlagIndex + 1];
+    rootFlagIndex === -1 ? "test-results/ci-telemetry" : process.argv[rootFlagIndex + 1];
   if (!artifactRoot || artifactRoot.startsWith("--")) {
     throw new Error("--artifact-root requires a path");
   }
-  const expectedWorkspaces = (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES ?? "")
+  const expectedWorkspaces = (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")
     .split(",")
     .map((workspace) => workspace.trim())
     .filter(Boolean);

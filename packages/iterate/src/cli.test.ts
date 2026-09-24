@@ -13,30 +13,6 @@ import { Config } from "./config.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
 const bin = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
-function cliConfig(baseUrl: string) {
-  const directory = mkdtempSync(join(tmpdir(), "iterate-next-cli-"));
-  mkdirSync(join(directory, "iterate"));
-  writeFileSync(
-    join(directory, "iterate/config.json"),
-    JSON.stringify({
-      default: "test",
-      configs: { test: { osBaseUrl: baseUrl, session: { token: "test-token" } } },
-    }),
-  );
-  return { directory, [Symbol.dispose]: () => rmSync(directory, { recursive: true, force: true }) };
-}
-function runCli(directory: string, args: string[]) {
-  return promisify(execFile)(process.execPath, [bin, ...args], {
-    env: {
-      ...process.env,
-      XDG_CONFIG_HOME: directory,
-      NO_COLOR: "1",
-      APP_CONFIG_ADMIN_API_SECRET: "",
-      ITERATE_BEARER_TOKEN: "",
-    },
-    timeout: 10_000,
-  });
-}
 
 test("bare invocation and all command help work offline", { timeout: 20_000 }, async () => {
   using config = cliConfig("http://127.0.0.1:1");
@@ -54,7 +30,7 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
 });
 
 test("OAuth uses the platform's API audience including the local port", () => {
-  expect(Config.parse({}).osBaseUrl).toBe("https://os.iterate.com");
+  expect(Config.parse({})).toMatchObject({ osBaseUrl: "https://os.iterate.com" });
   expect(oauthResourceForOsBaseUrl("http://localhost:54896/")).toBe("http://localhost:54896/api");
   expect(oauthResourceForOsBaseUrl("https://os.iterate.com")).toBe("https://os.iterate.com/api");
 });
@@ -260,7 +236,7 @@ test("failed authentication releases the websocket", async () => {
         auth: { type: "bearer", token: "bad" },
       }),
     ).rejects.toThrow("Invalid token");
-    await vi.waitFor(() => expect(server.clients.size).toBe(0));
+    await vi.waitFor(() => expect(server.clients).toMatchObject({ size: 0 }));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -360,7 +336,7 @@ test("an authentication timeout closes the transport without an unhandled RPC re
     await vi.advanceTimersByTimeAsync(20_000);
     await rejected;
     vi.useRealTimers();
-    await vi.waitFor(() => expect(server.clients.size).toBe(0));
+    await vi.waitFor(() => expect(server.clients).toMatchObject({ size: 0 }));
   } finally {
     vi.useRealTimers();
     for (const socket of server.clients) socket.terminate();
@@ -433,3 +409,29 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+function cliConfig(baseUrl: string) {
+  const directory = mkdtempSync(join(tmpdir(), "iterate-next-cli-"));
+  mkdirSync(join(directory, "iterate"));
+  writeFileSync(
+    join(directory, "iterate/config.json"),
+    JSON.stringify({
+      default: "test",
+      configs: { test: { osBaseUrl: baseUrl, session: { token: "test-token" } } },
+    }),
+  );
+  return { directory, [Symbol.dispose]: () => rmSync(directory, { recursive: true, force: true }) };
+}
+
+function runCli(directory: string, args: string[]) {
+  return promisify(execFile)(process.execPath, [bin, ...args], {
+    env: {
+      ...process.env,
+      XDG_CONFIG_HOME: directory,
+      NO_COLOR: "1",
+      APP_CONFIG_ADMIN_API_SECRET: "",
+      ITERATE_BEARER_TOKEN: "",
+    },
+    timeout: 10_000,
+  });
+}

@@ -75,7 +75,7 @@ export interface RetriedTestTelemetry {
 export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): FlakeRecord | null {
   // Missing expectedState means a plain test: vitest only reports options for
   // tests that set any, and both wrappers always do (fails mode).
-  if (test.expectedState !== undefined && test.expectedState !== "passed") return null;
+  if (test.expectedState && test.expectedState !== "passed") return null;
   const outcome = test.passedAfterRetry
     ? "retried-pass"
     : failedOutright(test)
@@ -88,7 +88,7 @@ export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): Fla
     outcome,
     durationMs: test.durationMs,
     at: test.startedAt || new Date().toISOString(),
-    ...(test.firstFailure === undefined ? {} : { error: test.firstFailure }),
+    error: test.firstFailure,
   };
 }
 
@@ -115,7 +115,8 @@ function failedOutright(test: RetriedTestTelemetry) {
  * the repo root — would find nothing.
  */
 export async function appendFlakeRecord(record: FlakeRecord): Promise<void> {
-  const dir = typeof process === "undefined" ? undefined : process.env.FLAKE_RECORD_DIR;
+  // Outside Node (a Workers or browser test lane) there is no `process` global at all.
+  const dir = globalThis.process?.env.FLAKE_RECORD_DIR;
   if (!dir) return;
   try {
     const { appendFileSync, mkdirSync } = await import("node:fs");
