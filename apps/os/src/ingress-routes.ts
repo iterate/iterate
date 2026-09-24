@@ -108,32 +108,35 @@ export type IngressRouteTable = Record<
 export type IngressRoute = IngressRouteTable[string] & { ingressRouteName: string };
 
 /** THE FOLD of one `ingress-route/configured` fact: the route set at the fact's offset, or deleted
- *  by a null matcher — the SAME table when nothing changes (identity is the core reduce's change
- *  signal). A malformed payload is skipped, never thrown: the append boundary refuses one today,
- *  but a root's log keeps the facts appended while the table was a facet of its own, which checked
+ *  by a null matcher — `undefined` when nothing changes (the core reduce's keep-the-state signal).
+ *  The table is written through `writable`: a fresh copy by default, the batch's DRAFT in the core
+ *  reduce (stream/core-processor.ts `draftOf`), so a page of facts copies the table once and a
+ *  core-version bump re-reduces a root's routes in the DO constructor in O(routes), not O(routes²)
+ *  (14,000 routes: ~25 s copied per fact, a reboot loop against the CPU limit; ~0.1 s as a draft).
+ *  A malformed payload is skipped, never thrown: the append boundary refuses one today, but a
+ *  root's log keeps the facts appended while the table was a facet of its own, which checked
  *  nothing at append — and one route that does not compile must not break every request's match. */
 export function reduceIngressRouteConfigured(
   table: IngressRouteTable,
   event: { offset: number; payload?: unknown },
-): IngressRouteTable {
+  writable: (table: IngressRouteTable) => IngressRouteTable = (table) => ({ ...table }),
+): IngressRouteTable | undefined {
   const parsed = IngressRouteConfiguredPayload.safeParse(event.payload);
-  if (!parsed.success) return table;
+  if (!parsed.success) return undefined;
   const { ingressRouteName, requestMatcher, target, authRequirement, priority } = parsed.data;
-  if (!requestMatcher) {
-    if (!Object.hasOwn(table, ingressRouteName)) return table;
-    const { [ingressRouteName]: _deleted, ...rest } = table;
-    return rest;
-  }
-  return {
-    ...table,
-    [ingressRouteName]: {
+  if (!requestMatcher && !Object.hasOwn(table, ingressRouteName)) return undefined;
+  const next = writable(table);
+  // A DNS label is never `__proto__`: an assignment makes an own key, `constructor` included.
+  if (!requestMatcher) delete next[ingressRouteName];
+  else
+    next[ingressRouteName] = {
       requestMatcher,
       target: target!, // the schema refuses a matcher without a target
       authRequirement: authRequirement || null,
       priority: priority || 0,
       configuredOffset: event.offset,
-    },
-  };
+    };
+  return next;
 }
 
 /** THE MATCH: the first route whose every matcher field holds for `request` — by priority, highest

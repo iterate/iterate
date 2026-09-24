@@ -374,8 +374,10 @@ export function reduceCoreEvent(
         : { ...state, ingressTarget: target };
     }
     case "events.iterate.com/ingress-route/configured": {
-      const ingressRoutes = reduceIngressRouteConfigured(state.ingressRoutes, event);
-      return ingressRoutes === state.ingressRoutes ? undefined : { ...state, ingressRoutes };
+      const ingressRoutes = reduceIngressRouteConfigured(state.ingressRoutes, event, (table) =>
+        draftOf(table, draftTables),
+      );
+      return ingressRoutes && { ...state, ingressRoutes };
     }
     case "events.iterate.com/stream/append-scheduled":
     case "events.iterate.com/stream/append-schedule-cancelled":

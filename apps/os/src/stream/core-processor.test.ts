@@ -330,6 +330,33 @@ test("ingress routes: a root whose core checkpoint predates the table (13.0.0, w
   });
 });
 
+test(
+  "ingress routes: a core-version bump re-reduces a root's routes in O(routes) per page — 14,000 routes (a core checkpoint of ~2 MB) in well under the CPU limit, where copying the table per fact took ~25 s on a laptop",
+  { timeout: 60_000 },
+  () => {
+    const storage = nodeSqliteDurableObjectStorage();
+    const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
+    const before = new Stream(deps);
+    for (let first = 0; first < 14_000; first += 500)
+      before.append(
+        ...Array.from({ length: 500 }, (_, i) =>
+          normalizeControlEvent({ type: routeType, payload: numberedRoute(first + i) }, "/"),
+        ),
+      );
+    before.storage.reduceCheckpoints.write(
+      CoreContract.slug,
+      { reducerVersion: "13.0.0", reducedThroughOffset: before.highestDurableOffset() },
+      undefined,
+      false,
+    );
+    const startedAt = performance.now();
+    const rebuilt = new Stream(deps);
+    const rereduceMs = performance.now() - startedAt;
+    expect(Object.keys(rebuilt.coreReducedState.ingressRoutes)).toHaveLength(14_000);
+    expect(rereduceMs).toBeLessThan(5_000);
+  },
+);
+
 // ── the rewrite-rule table — a MAP by match ──
 
 test("rewrite rules: configured sets a PARSED rule (string at rest, structured in state) under its canonical match", () => {
@@ -710,8 +737,20 @@ test("purity: an event the reduce does not know → undefined (keep the state)",
 // ── reduceCoreEventBatch — a batch's draft tables never leak into the state it was given ──
 
 test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the input state and its tables are untouched — and a second batch over the result leaves the first result untouched too", () => {
-  const first = [configured(1, "a"), rule(2, "itx.x", "itx.kv"), configured(3, "b")];
-  const second = [configured(4, "a", "itx.y.f"), rule(5, "itx.x", null), configured(6, "b", null)];
+  const first = [
+    configured(1, "a"),
+    rule(2, "itx.x", "itx.kv"),
+    configured(3, "b"),
+    at(4, routeType, numberedRoute(1)),
+    at(5, routeType, numberedRoute(2)),
+  ];
+  const second = [
+    configured(6, "a", "itx.y.f"),
+    rule(7, "itx.x", null),
+    configured(8, "b", null),
+    at(9, routeType, { ingressRouteName: "route-1", requestMatcher: null }),
+    at(10, routeType, { ...numberedRoute(2), priority: 5 }),
+  ];
   const initial = CoreContract.initialState();
   const afterFirst = reduceCoreEventBatch(first, initial, onError);
   expect(afterFirst).toEqual(reduceAll(first));
@@ -725,6 +764,9 @@ test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the inp
   expect(afterSecond.subscriptions).not.toBe(afterFirst.subscriptions);
   // oxlint-disable-next-line iterate/prefer-object-property-match -- identity: not the same table object
   expect(afterSecond.itxExpressionRewriteRules).not.toBe(afterFirst.itxExpressionRewriteRules);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- identity: not the same table object
+  expect(afterSecond.ingressRoutes).not.toBe(afterFirst.ingressRoutes);
+  expect(Object.keys(afterSecond.ingressRoutes)).toEqual(["route-2"]);
 });
 
 test("reduceCoreEventBatch: a batch that touches nothing hands the SAME state back (identity is the host's change signal — no checkpoint rewrite, no live delta)", () => {
@@ -1198,6 +1240,15 @@ function configured(offset: number, name: string, target: string | null = "itx.x
 /** A durable rewrite-rule-configured for `match`. */
 function rule(offset: number, match: string, target: string | null): StreamEvent {
   return at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
+}
+
+/** The payload of route `route-<n>`: requests on routing slug `s<n>` go to `itx.t<n>`. */
+function numberedRoute(n: number) {
+  return {
+    ingressRouteName: `route-${n}`,
+    requestMatcher: { routingSlug: `s${n}` },
+    target: ["itx", `t${n}`],
+  };
 }
 
 function onError(error: unknown, event: StreamEvent) {

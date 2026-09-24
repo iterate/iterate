@@ -95,14 +95,18 @@ test.for<{ name: string; facts: unknown[]; table: IngressRouteTable }>([
   expect(tableOf(facts)).toEqual(table);
 });
 
-test("reduceIngressRouteConfigured: a fact that changes nothing answers the SAME table (the core reduce's change signal)", () => {
+test("reduceIngressRouteConfigured: a fact that changes nothing answers undefined (the core reduce's keep-the-state signal); one that changes answers a new table and leaves the given one as it was", () => {
   const table = tableOf([blog]);
-  expect(reduceIngressRouteConfigured(table, { offset: 9, payload: blogDeleted })).not.toBe(table);
-  const empty = {};
-  expect(reduceIngressRouteConfigured(empty, { offset: 9, payload: blogDeleted })).toBe(empty);
-  expect(reduceIngressRouteConfigured(table, { offset: 9, payload: { nonsense: true } })).toBe(
-    table,
-  );
+  const before = structuredClone(table);
+  expect(reduceIngressRouteConfigured(table, { offset: 9, payload: blogDeleted })).toEqual({});
+  expect(reduceIngressRouteConfigured(table, { offset: 9, payload: blogPublic })).toMatchObject({
+    "tunnel-blog": { priority: 5, configuredOffset: 9 },
+  });
+  expect(table).toEqual(before);
+  expect(reduceIngressRouteConfigured({}, { offset: 9, payload: blogDeleted })).toBeUndefined();
+  expect(
+    reduceIngressRouteConfigured(table, { offset: 9, payload: { nonsense: true } }),
+  ).toBeUndefined();
 });
 
 /** The table the match rows read: a route per matcher kind, two tied on priority. */
@@ -203,7 +207,7 @@ test("matchIngressRoute: an empty table, or no route whose matcher holds, is nul
 /** The table the `configured` facts with these payloads fold to, the first at offset 1. */
 function tableOf(payloads: unknown[]): IngressRouteTable {
   return payloads.reduce<IngressRouteTable>(
-    (table, payload, i) => reduceIngressRouteConfigured(table, { offset: i + 1, payload }),
+    (table, payload, i) => reduceIngressRouteConfigured(table, { offset: i + 1, payload }) ?? table,
     {},
   );
 }
