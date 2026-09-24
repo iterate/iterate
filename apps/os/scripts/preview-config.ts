@@ -323,6 +323,22 @@ export function splicePreviewSuite(body: string, status: PreviewSuiteStatus) {
   });
 }
 
+/** Whether another suite's job may still overwrite this suite's line: the two jobs write at once,
+ *  each a read, a splice and a PATCH, and a PATCH made from a read that predates this line's write
+ *  drops it. Once every other suite's line names this line's commit, their writes have landed and
+ *  none can: so only the first of the two to finish waits to look again (scripts/preview.ts
+ *  `writePullRequestBody`), never the one that decides the run's time to green. */
+export function suiteLineMayBeOverwritten(body: string, status: PreviewSuiteStatus) {
+  const commit = `on \`${status.commit.slice(0, 9)}\``;
+  return SUITE_ORDER.some((suite) => {
+    if (suite === status.suite) return false;
+    const [begin, end] = suiteMarkers(suite);
+    const from = body.indexOf(begin);
+    const to = body.indexOf(end, from);
+    return from < 0 || to < from || !body.slice(from, to).includes(commit);
+  });
+}
+
 /** A deploy's status writes around its steps. The PR body has no conditional update, so the last
  *  write wins (scripts/preview.ts `writePullRequestBody`): `deploying` goes out beside the steps,
  *  which do not wait for GitHub, and what follows it lands after it — `deploy failed` here, and the

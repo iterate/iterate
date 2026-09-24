@@ -77,6 +77,7 @@ import {
   splicePreviewStatus,
   splicePreviewSuite,
   splicePullRequestBody,
+  suiteLineMayBeOverwritten,
   templateQuickLaunches,
   writePreviewWranglerConfig,
   type PreviewStatus,
@@ -249,11 +250,15 @@ const repository = () => requireEnv("GITHUB_REPOSITORY");
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
  *  re-splicing onto whatever is there now converges on both edits within a few rounds. `what` names
- *  the write in the log: the whole preview section, or its status line alone. */
+ *  the write in the log: the whole preview section, its status line, or a suite's line. A writer
+ *  that may run at the same moment (the other suite's job: `mayBeOverwritten`, given the body just
+ *  written) waits out that writer's read and PATCH before it reads back, since a PATCH made from a
+ *  read that predates this write drops it. */
 async function writePullRequestBody(
   prNumber: string,
   what: string,
   splice: (body: string) => string,
+  mayBeOverwritten: (body: string) => boolean = () => false,
 ) {
   const route = `/repos/${repository()}/pulls/${prNumber}`;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -261,8 +266,10 @@ async function writePullRequestBody(
     const body = splice(before);
     if (body === before) return console.log(`PR #${prNumber}'s body already carries ${what}`);
     await github(route, { method: "PATCH", body: { body } });
+    if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
     const after = (await github<{ body: string | null }>(route)).body || "";
-    if (after === body) return console.log(`wrote ${what} into the body of PR #${prNumber}`);
+    if (splice(after) === after)
+      return console.log(`wrote ${what} into the body of PR #${prNumber}`);
     console.warn(
       `PR #${prNumber}'s body changed under the write (attempt ${attempt}); re-splicing`,
     );
@@ -293,11 +300,20 @@ async function writeStatus(
       ? `the ${PREVIEW_SUITES[status.suite]} line (${status.state})`
       : `the preview status (${status.state})`;
   const stamp = { commit: checkedOutCommit(), runUrl: process.env.DEPOT_JOB_URL, at: new Date() };
-  await writePullRequestBody(prNumber, what, (body) =>
+  const write =
     "suite" in status
-      ? splicePreviewSuite(body, { ...status, ...stamp })
-      : splicePreviewStatus(body, { ...status, ...stamp }),
-  ).catch((error: unknown) => console.warn(`could not write ${what}: ${describe(error)}`));
+      ? writePullRequestBody(
+          prNumber,
+          what,
+          (body) => splicePreviewSuite(body, { ...status, ...stamp }),
+          (body) => suiteLineMayBeOverwritten(body, { ...status, ...stamp }),
+        )
+      : writePullRequestBody(prNumber, what, (body) =>
+          splicePreviewStatus(body, { ...status, ...stamp }),
+        );
+  await write.catch((error: unknown) =>
+    console.warn(`could not write ${what}: ${describe(error)}`),
+  );
 }
 
 // ── leftover D1s (no preview creates one any more; deletePreview and the sweep delete them) ─────

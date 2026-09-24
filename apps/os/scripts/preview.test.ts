@@ -23,6 +23,7 @@ import {
   splicePreviewStatus,
   splicePreviewSuite,
   splicePullRequestBody,
+  suiteLineMayBeOverwritten,
   templateQuickLaunches,
   type PreviewStatus,
   type PreviewSuiteStatus,
@@ -322,6 +323,23 @@ test("the two suites' jobs write their own lines, in either order, under the sta
   expect(deploying).not.toContain("os-preview-e2e");
   expect(deploying).not.toContain("os-preview-specs");
   expect(splicePreviewStatus(deploying, deployed)).toBe(body);
+});
+
+// Both suites' jobs write at once. Only the first to finish, which finds no line of the other for
+// its commit, waits to look again; the second finds the first's and writes over nothing.
+test("a suite's line may be overwritten until the other suite's line names the same commit", () => {
+  const e2e = { ...deployed, runUrl: undefined, suite: "e2e" as const, state: "passed" as const };
+  const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
+  expect(suiteLineMayBeOverwritten(splicePreviewSuite(body, e2e), e2e)).toBe(true);
+  const withSpecs = splicePreviewSuite(body, { ...e2e, suite: "specs", state: "failed" });
+  expect(suiteLineMayBeOverwritten(splicePreviewSuite(withSpecs, e2e), e2e)).toBe(false);
+  // the other suite's line from an earlier commit is an earlier run's: its job may still write
+  const olderSpecs = splicePreviewSuite(body, {
+    ...e2e,
+    suite: "specs",
+    commit: "ddddddddd0123",
+  });
+  expect(suiteLineMayBeOverwritten(splicePreviewSuite(olderSpecs, e2e), e2e)).toBe(true);
 });
 
 test("a suite's line without a status line goes at the top of the section, or is the section", () => {
