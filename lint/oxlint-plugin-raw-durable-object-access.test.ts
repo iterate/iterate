@@ -1,6 +1,6 @@
 // iterate/no-raw-durable-object-binding-access: inside apps/os/src, a raw `env.X.getByName(...)`
 // is privileged platform authority, allowed only in Durable Objects, entrypoints, capability files,
-// iterate-context.ts and the edge doors. Rows are files in one temp project linted once by the real
+// iterate-context.ts and the edge entry points. Rows are files in one temp project linted once by the real
 // oxlint binary; `reported` says whether the rule flags that file.
 
 import { spawnSync } from "node:child_process";
@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, test } from "vitest";
 
-test("raw env.X.getByName is allowed only in apps/os's doors and Durable Objects", () => {
+test("raw env.X.getByName is allowed only in apps/os's edge entry points and Durable Objects", () => {
   const rows = [
     {
       path: "apps/os/src/new-route.ts",

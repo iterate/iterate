@@ -51,7 +51,7 @@ test("the Notes app works through a project config worker, and its session there
   const { adminApiSecret, ingressRouting, osBaseUrl: origin } = readOsPlaywrightAuthConfig();
   // parked: under `paths` routing (every preview) Notes cannot be proxied at /projects/<p>/notes/:
   // it ignores ITERATE_BASE_PATH_HEADER, its links and assets are root-absolute — #2908, pending the
-  // path-routed hosting decision. No CI lane runs this until then. — revisit by 2026-10-21
+  // path-routed hosting decision. No CI job runs this until then. — revisit by 2026-10-21
   test.skip(
     ingressRouting?.type !== "subdomains",
     "Notes is not base-path aware under a proxied project path (#2908)",

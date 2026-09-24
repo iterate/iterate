@@ -1,9 +1,8 @@
-// specs/os/mini-app.spec.ts — a no-build userspace mini-app (Preact + capnweb from esm.sh, ONE HTML
-// file) served by a project. Proves the "super simple mini-app" path end to end: install the app
-// worker on a project with ONE itx.provide, open its project host, and a note round-trips through the
-// app's OWN capnweb API (backed by the project's itx.kv). SWAPPABLE via DEMO_BASE_URL like the other
-// specs; the signed-in person and their project are the forged-session fixture's, so it works local
-// and deployed.
+// A no-build userspace mini-app (Preact + capnweb from esm.sh, ONE HTML file) served by a project.
+// Proves the "super simple mini-app" path end to end: install the app worker on a project with ONE
+// itx.provide, open its project host, and a note round-trips through the app's OWN capnweb API
+// (backed by the project's itx.kv). SWAPPABLE via DEMO_BASE_URL like the other specs; the signed-in
+// person and their project are the signed-in session fixture's, so it works local and deployed.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { transformSync } from "esbuild";

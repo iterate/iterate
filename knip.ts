@@ -9,7 +9,7 @@ function makeOsNextWorkspace(): WorkspaceConfig {
     entry: [
       "src/worker.ts!",
       "src/client/**/*.{ts,tsx}",
-      // the e2e lane's test files are entries; e2e/support/** is project code, so an unused support
+      // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
       // export is reported
       "e2e/**/*.e2e.test.ts",
       "__workers-tests__/**/*.ts",

@@ -6,11 +6,10 @@
 //
 // Scope of the implementation (deliberate, proportionate): a scope-walk over
 // the function's unresolved references (`scope.through`) plus a `using`
-// declaration scan. References that the configured lint env resolves as
-// globals (node/builtin) are allowed — the rule's job is catching test-file
-// captures and downlevel-hazard syntax, not re-modeling the workerd global
-// surface. Anything subtler is the runtime guard's job
-// (assertSelfContainedScriptSource in itx-script-builder.ts).
+// declaration scan. oxlint leaves every global unresolved, so the rule
+// allowlists the script isolate's globals by name (SCRIPT_ISOLATE_GLOBALS) —
+// its job is catching test-file captures and downlevel-hazard syntax, not
+// re-modeling the workerd global surface.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

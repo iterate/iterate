@@ -108,7 +108,7 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
     // where the project will live, in the deployment's own routing: a subdomain under the
     // hostname, or a path on this origin — a local worker routes by subdomain under localhost; a
-    // deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does (specs/setup.ts)
+    // deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e suite does (specs/setup.ts)
     if (ingressRouting?.type === "subdomains")
       await page
         .getByText(
