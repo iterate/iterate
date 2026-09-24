@@ -63,6 +63,10 @@ export type AccessGrant = Omit<z.infer<typeof TokenProps>, "kind"> & {
   kind: GrantProps["kind"] | "personal";
   scope: string[];
   expiresAt: number;
+  /** When the person's account last recorded a use of the grant (epoch ms, `grantUses`), as the
+   *  admission's own read of the account found it; absent when it never has. `recordGrantUse`
+   *  reads it. */
+  lastUsedAt?: number;
 };
 
 export type Authorization = {
@@ -130,22 +134,26 @@ export async function accountStateOf(env: Env, userId: string): Promise<AccountS
   }
 }
 
-async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
-  return Boolean((await accountStateOf(env, userId)).endedGrants[grantId]);
-}
-
 /** Whether `grant` still admits its bearer: its token unexpired, its deadline not passed, its
  * person's email one `login.allowedEmails` admits, and no end on the person's account. A fresh read of the account on each admission — never memoized: provider
  * KV expiry/deletion alone cannot deny a token during propagation or a refresh racing with logout,
  * and a memo here would let a revoked grant through for its life. (The live socket's 30 s
  * re-check, rpc.ts, is the one lag anywhere.) */
 export async function grantIsLive(env: Env, grant: AccessGrant): Promise<boolean> {
-  return (
-    grant.expiresAt > Date.now() &&
-    grant.deadline > Date.now() &&
-    emailAllowed(appConfigOf(env).login.allowedEmails, grant.email) &&
-    !(await grantIsRevoked(env, grant.userId, grant.grantId))
-  );
+  return Boolean(await liveGrantAccount(env, grant));
+}
+
+/** The person's account as `grantIsLive` reads it, or null when the grant no longer admits its
+ *  bearer: an admission keeps what the read found (`lastUsedAt`) instead of reading it again. */
+async function liveGrantAccount(env: Env, grant: AccessGrant): Promise<AccountState | null> {
+  if (
+    grant.expiresAt <= Date.now() ||
+    grant.deadline <= Date.now() ||
+    !emailAllowed(appConfigOf(env).login.allowedEmails, grant.email)
+  )
+    return null;
+  const account = await accountStateOf(env, grant.userId);
+  return account.endedGrants[grant.grantId] ? null : account;
 }
 
 /** THE PLATFORM'S TOKEN VALIDATOR, for either resource (api.ts hosts both with it). Three bearers:
@@ -260,17 +268,22 @@ export async function authorizationForToken(
   return null;
 }
 
-/** How often a grant's use is recorded: once an hour per grant per isolate, so the account's log
- *  stays a summary and the sessions page's "last used" is right to the hour. */
+/** How often a grant's use is recorded: once an hour per grant, so the account's log stays a
+ *  summary and the sessions page's "last used" is right to the hour. What says a use is recent is
+ *  the account itself, as the admission read it (`lastUsedAt`), since a fresh isolate (every deploy
+ *  starts them) has no memo of its own. The isolate's memo covers what that read cannot: a held
+ *  socket (rpc.ts), whose admission is as old as the socket. */
 const GRANT_USE_MEMO_MS = 3600_000;
 const grantUseRecordedAt = new Map<string, number>();
 
 /** A grant's use, as a fact on the person's account (`account/grant-used`, src/account/contract.ts)
- *  — off the response path (every caller `waitUntil`s it), at most hourly per grant per isolate. */
+ *  — off the response path (every caller `waitUntil`s it), at most hourly per grant. Revocation
+ *  reads nothing here: every admission reads the account's `endedGrants` whatever this skips. */
 export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void> {
   const now = Date.now();
   const key = `${grant.userId}:${grant.grantId}`;
-  if ((grantUseRecordedAt.get(key) ?? 0) > now - GRANT_USE_MEMO_MS) return;
+  const recordedAt = Math.max(grant.lastUsedAt ?? 0, grantUseRecordedAt.get(key) ?? 0);
+  if (recordedAt > now - GRANT_USE_MEMO_MS) return;
   grantUseRecordedAt.set(key, now);
   try {
     await appendPlatformFacts(
@@ -306,7 +319,7 @@ export function authorizationServerFetch(
 }
 
 /** The provider's rows for a grant go — AFTER its end landed on the person's account and was
- * awaited (grants.ts): from that fact on every admission is refused (`grantIsRevoked`), so a
+ * awaited (grants.ts): from that fact on every admission is refused (`grantIsLive`), so a
  * provider cleanup that fails costs nothing but a row the provider's own expiry reaps. */
 export async function revokeGrant(
   env: Env,
@@ -373,12 +386,13 @@ async function authorizationOf(
   const props = TokenProps.safeParse(token.props);
   if (!props.success || props.data.userId !== token.userId) return null;
   const grant = { ...props.data, scope: token.scope, expiresAt: token.expiresAt * 1000 };
-  if (!(await grantIsLive(env, grant))) return null;
+  const account = await liveGrantAccount(env, grant);
+  if (!account) return null;
   return {
     principal: { actor: grant.userId, email: grant.email },
     // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
     reach: { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
-    grant,
+    grant: { ...grant, lastUsedAt: account.grantUses[grant.grantId]?.at },
   };
 }
 
@@ -426,6 +440,7 @@ async function personalAccessTokenAdmission(
     grantId: named.id,
     scope: ["iterate"],
     expiresAt,
+    lastUsedAt: account.grantUses[named.id]?.at,
   };
   return {
     ok: true,
@@ -455,7 +470,7 @@ async function grantLifetime(
   const parsed = GrantProps.safeParse(input.props);
   if (!parsed.success || parsed.data.userId !== input.userId)
     throw refused("props_invalid", "The session is no longer active.");
-  if (await grantIsRevoked(env, input.userId, input.grantId))
+  if ((await accountStateOf(env, input.userId)).endedGrants[input.grantId])
     throw refused("grant_ended", "The session is no longer active.");
   const grant = parsed.data;
   if (!emailAllowed(appConfigOf(env).login.allowedEmails, grant.email))

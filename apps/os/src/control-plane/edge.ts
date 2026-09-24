@@ -51,14 +51,16 @@ export class ControlPlaneUnavailableError extends Error {
   /** the Durable Object method read (`project`, `accessibleTo`, …) */
   readonly method: string;
   readonly waitedMs: number;
-  /** The cause's transport flag, kept: oauth-store.ts asks a cut grant read again once. */
+  /** The cause's transport flag, kept (oauth-store.ts asks a cut grant read again once), or true
+   *  for a read a holder's deadline gave up on (`readDeadlineMs`): it may answer when asked again.
+   *  An own property, so it reaches an /api client beside the message (iterate/lib's error channel). */
   readonly retryable: boolean;
-  constructor(input: { method: string; waitedMs: number; cause: Error }) {
-    const { method, waitedMs, cause } = input;
+  constructor(input: { method: string; waitedMs: number; cause: Error; retryable?: boolean }) {
+    const { method, waitedMs, cause, retryable = isRetryableTransportError(cause) } = input;
     super(`The control plane failed ${method}: ${cause.message}`, { cause });
     this.method = method;
     this.waitedMs = waitedMs;
-    this.retryable = isRetryableTransportError(cause);
+    this.retryable = retryable;
   }
 }
 
@@ -86,13 +88,24 @@ const accessMemo = new Map<string, { at: number; value: Promise<AccessibleRecord
 const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: caller.grant });
 
 /** The control plane as the edge holds it — ONE per request (worker.ts, rpc.ts), over the
- *  `CONTROL_PLANE` binding. */
+ *  `CONTROL_PLANE` binding.
+ *
+ *  `readDeadlineMs`: how long this holder waits for a read before it throws
+ *  ControlPlaneUnavailableError (retryable). `/api` sets one (rpc.ts): its caller is a client that
+ *  can ask again, where a read that hangs would hold the call until the transport gives up. A
+ *  project host's admission sets none: a copy stands in for its slow reads, and with no copy a
+ *  slow answer is still the answer (last-known-project.ts). */
 export class ControlPlane {
   readonly #namespace: DurableObjectNamespace<ControlPlaneDurableObject>;
   #stub: DurableObjectStub<ControlPlaneDurableObject>;
-  constructor(namespace: DurableObjectNamespace<ControlPlaneDurableObject>) {
+  readonly #readDeadlineMs: number | undefined;
+  constructor(
+    namespace: DurableObjectNamespace<ControlPlaneDurableObject>,
+    { readDeadlineMs }: { readDeadlineMs?: number } = {},
+  ) {
     this.#namespace = namespace;
     this.#stub = namespace.getByName("global");
+    this.#readDeadlineMs = readDeadlineMs;
   }
 
   /** ONE method of the registry DO, awaited here so a pipelined RPC promise is never held (a copy of
@@ -115,8 +128,49 @@ export class ControlPlane {
     }
   }
 
-  /** ONE read (`#call`): failed on the platform's side, it throws ControlPlaneUnavailableError. */
-  async #read<T>(method: string, ...args: unknown[]): Promise<T> {
+  /** ONE read (`#call`): failed on the platform's side, or unanswered at this holder's
+   *  `readDeadlineMs`, it throws ControlPlaneUnavailableError. */
+  #read<T>(method: string, ...args: unknown[]): Promise<T> {
+    return this.#withinDeadline(method, this.#request<T>(method, ...args));
+  }
+
+  /** `read`, or ControlPlaneUnavailableError (retryable) once this holder's `readDeadlineMs` has
+   *  passed without its answer, logged as `control-plane.platform-failure-read-deadline`
+   *  (scripts/ci/prd-fault-alarm.ts pages on a burst). The read itself runs on: a memo that holds
+   *  it (`accessibleTo`) still gets its answer, for holders with no deadline as well. */
+  async #withinDeadline<T>(method: string, read: Promise<T>): Promise<T> {
+    const deadlineMs = this.#readDeadlineMs;
+    if (!deadlineMs) return read;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        read,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            console.warn({
+              event: "control-plane.platform-failure-read-deadline",
+              method,
+              waitedMs: deadlineMs,
+            });
+            reject(
+              new ControlPlaneUnavailableError({
+                method,
+                waitedMs: deadlineMs,
+                cause: new Error(`no answer within ${deadlineMs} ms`),
+                retryable: true,
+              }),
+            );
+          }, deadlineMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** The read itself, with no deadline: what an isolate memo keeps, since holders with and without
+   *  a deadline share it. */
+  async #request<T>(method: string, ...args: unknown[]): Promise<T> {
     const started = Date.now();
     try {
       return await this.#call<T>(method, ...args);
@@ -207,9 +261,10 @@ export class ControlPlane {
     )
       return null;
     const memoized = hostnameMemo.get(hostname);
-    if (memoized && Date.now() - memoized.at < 30_000) return memoized.value;
+    if (memoized && Date.now() - memoized.at < 30_000)
+      return this.#withinDeadline("projectByHostname", memoized.value);
     const candidates = customHostnameCandidatesOf(hostname);
-    const value = this.#read<{ hostname: string; project: ProjectRecord } | null>(
+    const value = this.#request<{ hostname: string; project: ProjectRecord } | null>(
       "projectByHostname",
       candidates.map((candidate) => candidate.hostname),
     ).then((found) => {
@@ -225,7 +280,7 @@ export class ControlPlane {
     });
     value.catch(() => hostnameMemo.delete(hostname));
     hostnameMemo.set(hostname, { at: Date.now(), value });
-    return value;
+    return this.#withinDeadline("projectByHostname", value);
   }
 
   /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a
@@ -239,11 +294,12 @@ export class ControlPlane {
   /** What a person can access — memoized; `fresh` bypasses the memo (the re-read before a refusal). */
   accessibleTo(userId: string, fresh = false): Promise<AccessibleRecord> {
     const memoized = accessMemo.get(userId);
-    if (!fresh && memoized && Date.now() - memoized.at < 5_000) return memoized.value;
-    const value = this.#read<AccessibleRecord>("accessibleTo", userId);
+    if (!fresh && memoized && Date.now() - memoized.at < 5_000)
+      return this.#withinDeadline("accessibleTo", memoized.value);
+    const value = this.#request<AccessibleRecord>("accessibleTo", userId);
     value.catch(() => accessMemo.delete(userId)); // a failed read is nobody's answer — its caller sees it
     accessMemo.set(userId, { at: Date.now(), value });
-    return value;
+    return this.#withinDeadline("accessibleTo", value);
   }
 
   /** Whether `reach` reaches `ref` — the admission behind `projects.get` (session.ts), a `/mcp`
@@ -261,6 +317,26 @@ export class ControlPlane {
       reaches(await this.accessibleTo(reach.userId)) ||
       reaches(await this.accessibleTo(reach.userId, true))
     );
+  }
+
+  /** The id of the project `ref` (its id or its slug) names, when `reach` reaches it, else null:
+   *  `reachesProject` for a caller that names a project by what a person types (`projects.get`,
+   *  session.ts; a `/mcp` tool's `project`). A user's reach finds the project in their access
+   *  record, which holds every slug they can reach, so a slug costs no catalog read; the record is
+   *  re-read once before a refusal, as `reachesProject` does. The admin's and a named reach resolve
+   *  `ref` through the catalog (`projectIdOf`). */
+  async reachableProjectId(reach: Reach, ref: string): Promise<string | null> {
+    if (reach === "every" || !("userId" in reach)) {
+      const id = await this.projectIdOf(ref);
+      return (await this.reachesProject(reach, id)) ? id : null;
+    }
+    const named = (record: AccessibleRecord) =>
+      record.projects.find((project) => project.id === ref || project.slug === ref);
+    const project =
+      named(await this.accessibleTo(reach.userId)) ??
+      named(await this.accessibleTo(reach.userId, true));
+    if (!project || (reach.projectIds && !reach.projectIds.includes(project.id))) return null;
+    return project.id;
   }
 
   /** The projects `reach` reaches: every one for the admin secret; the user's, with their role;

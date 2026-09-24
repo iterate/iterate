@@ -5,7 +5,8 @@
 // own hostname) straight on the control plane's Durable Object, so the worker under test (Vite's
 // built worker, in this isolate) has never looked either up — a fresh isolate, as the deploy's were
 // — then makes that Durable Object's reads throw what the outage threw, lose their connection, or
-// not answer until the row lets them.
+// not answer until the row lets them. An /api session's reads have no copies and give up at their
+// own 3 s deadline instead (src/rpc.ts).
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
@@ -304,6 +305,48 @@ test("a signed-in visitor whose access read fails while admission read through: 
       message: failed("throws", "accessibleTo"),
     },
   ]);
+});
+
+test("/api while the control plane's reads hang: projects.get answers a retryable ControlPlaneUnavailableError at its 3 s deadline, logged once, and the late answer serves the next call", async () => {
+  const session = await signedInSession(
+    `api-deadline-${crypto.randomUUID().slice(0, 8)}@example.com`,
+  );
+  const slug = `api-deadline-${crypto.randomUUID().slice(0, 8)}`;
+  const { projectId } = await (
+    await session.projects.create({ project: slug })
+  ).invoke(["itx", ["whoami"]]);
+  // past the five seconds the worker keeps a person's access (edge.ts), so it is read
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 6_000);
+  const outage = await failReads("hangs", ["accessibleTo"]);
+  const warn = vi.spyOn(console, "warn");
+  onTestFinished(() => warn.mockRestore());
+
+  const started = performance.now();
+  const refusal = await session.projects.get(slug).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  const waited = performance.now() - started;
+  expect(refusal).toMatchObject({ retryable: true, method: "accessibleTo", waitedMs: 3_000 });
+  expect(String(refusal)).toContain(
+    "The control plane failed accessibleTo: no answer within 3000 ms",
+  );
+  expect(waited).toBeGreaterThanOrEqual(2_900);
+  expect(waited).toBeLessThan(WAIT_MS.hangs);
+  expect(controlPlaneWarns(warn)).toEqual([
+    {
+      event: "control-plane.platform-failure-read-deadline",
+      method: "accessibleTo",
+      waitedMs: 3_000,
+    },
+  ]);
+
+  // the read ran on: its answer lands in the memo the next call reads
+  await outage.end();
+  using project = await session.projects.get(slug);
+  expect(await project.invoke(["itx", ["whoami"]])).toMatchObject({ projectId });
 });
 
 /** The warns a project host's admission logs (`control-plane.*`): the context Durable Objects this

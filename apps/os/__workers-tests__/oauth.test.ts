@@ -1,4 +1,4 @@
-import { createExecutionContext } from "cloudflare:test";
+import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -8,7 +8,8 @@ import { appSession } from "iterate/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { projectsForClient } from "../src/consent.ts";
-import { accountStateOf, authorizationForToken } from "../src/oauth.ts";
+import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
+import { accountStateOf, authorizationForToken, recordGrantUse } from "../src/oauth.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
@@ -24,7 +25,7 @@ import {
   restoreMembership,
   rpc,
 } from "./oauth-support.ts";
-import { controlPlane, loginPassword, ORIGIN } from "./support.ts";
+import { controlPlane, controlPlaneStub, loginPassword, ORIGIN, until } from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
@@ -256,6 +257,149 @@ test("login.allowedEmails: a live grant whose email the list stops naming is ref
     principal: { actor: flow.user.id },
   });
   expect(await authorizationForToken(listing("*@iterate.com"), token, addresses, "api")).toBeNull();
+});
+
+test("a use the account recorded within the hour is not recorded again by another isolate, and the grant is refused at its very next request once it ends", async () => {
+  fetchReachesThisWorker();
+  const flow = await grant([`${ORIGIN}/api`]);
+  const token = flow.token!.access_token;
+  const [userId, grantId] = token.split(":") as [string, string];
+  const bearer = { Authorization: `Bearer ${token}` };
+  const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+  // the worker admits the token and records its use, off the response path
+  expect(await call("/api", { method: "POST", body: "", headers: bearer })).toMatchObject({
+    status: 200,
+  });
+  const usedAt = await until(
+    "the use on the account",
+    async () => (await accountStateOf(env, userId)).grantUses[grantId]?.at,
+  );
+  // This file's copy of oauth.ts has no memo of that use, as a fresh isolate has none: its
+  // admission reads the use off the account, and records it no second time.
+  const admitted = await authorizationForToken(env, token, addresses, "api");
+  expect(admitted?.grant).toMatchObject({ grantId, lastUsedAt: usedAt });
+  await recordGrantUse(env, admitted!.grant!);
+  expect((await accountStateOf(env, userId)).grantUses).toMatchObject({
+    [grantId]: { at: usedAt },
+  });
+  // Ended: the very next admission reads the end, here and at the worker, whatever use it recorded.
+  await endGrantOnAccount(userId, grantId);
+  expect(await authorizationForToken(env, token, addresses, "api")).toBeNull();
+  expect(await call("/api", { method: "POST", body: "", headers: bearer })).toMatchObject({
+    status: 401,
+  });
+});
+
+test("the consent page's Authorize form admits the issuer session once its form has arrived: a session that ends while the form is on its way issues no code", async () => {
+  fetchReachesThisWorker();
+  const flow = await grant([`${ORIGIN}/api`]);
+  const client = await helpers().createClient({
+    clientName: "Consent form",
+    redirectUris: ["https://client.test/callback"],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
+  });
+  const { query } = await authorizationRequest(client.clientId, [`${ORIGIN}/api`]);
+  const form = new URLSearchParams({ project: flow.oauthA.id, scope: "iterate" }).toString();
+  const authorize = (body: BodyInit) =>
+    call(`/oauth2/auth?${query}`, {
+      method: "POST",
+      headers: {
+        Origin: ORIGIN,
+        cookie: flow.cookie,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+  const approved = await authorize(form);
+  expect(approved).toMatchObject({ status: 303 });
+  expect(approved.headers.get("location")).toMatch(/^https:\/\/client\.test\/callback\?code=/);
+
+  // The same form again, sent only once the worker is reading it and the session has ended since:
+  // the approval reads the session no second time, so an admission made before the form arrived
+  // would approve with a session that ended while the client was still sending.
+  const issuerToken = await appSession(
+    env.BROWSER_SESSION,
+    new Request(ORIGIN, { headers: { cookie: flow.cookie } }),
+  )!.bearer();
+  const [userId, issuerGrantId] = issuerToken!.split(":") as [string, string];
+  let reading = false;
+  let send!: () => void;
+  const sent = new Promise<void>((resolve) => (send = resolve));
+  const slowForm = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        reading = true;
+        await sent;
+        controller.enqueue(new TextEncoder().encode(form));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const refusing = authorize(slowForm);
+  await until("the worker reading the form", () => reading);
+  await endGrantOnAccount(userId, issuerGrantId);
+  send();
+  const refused = await refusing;
+  expect(refused).toMatchObject({ status: 303 });
+  expect(refused.headers.get("location")).toBe(
+    `/login?${new URLSearchParams({ next: `/oauth2/auth?${query}` })}`,
+  );
+});
+
+test("an MCP tool call finds a project named by slug in the person's access record, with no catalog read; only a request answered with instructions reads the project list", async () => {
+  fetchReachesThisWorker();
+  const flow = await grant([`${ORIGIN}/mcp`]);
+  const token = flow.token!.access_token;
+  const reads = await runInDurableObject(
+    controlPlaneStub(),
+    (instance: ControlPlaneDurableObject) => {
+      const prototype = Object.getPrototypeOf(instance) as ControlPlaneDurableObject;
+      return {
+        project: vi.spyOn(prototype, "project"),
+        accessibleTo: vi.spyOn(prototype, "accessibleTo"),
+      };
+    },
+  );
+  onTestFinished(() => {
+    reads.project.mockRestore();
+    reads.accessibleTo.mockRestore();
+  });
+  expect(
+    await tool(token, "run", {
+      project: "oauth-a",
+      script: "async (itx) => (await itx.whoami()).projectId",
+    }),
+  ).toMatchObject({
+    body: { result: { isError: false, structuredContent: { result: flow.oauthA.id } } },
+  });
+  // a member's project the grant did not select, by slug: refused as outside the grant
+  const outside = await tool(token, "run", { project: "oauth-b", script: "async () => 1" });
+  expect(outside).toMatchObject({ body: { result: { isError: true } } });
+  expect(outside.text).toContain("outside this token's grant");
+  expect(reads.project).not.toHaveBeenCalledWith("oauth-a");
+  expect(reads.project).not.toHaveBeenCalledWith("oauth-b");
+  // Past the five seconds the worker keeps a person's access (edge.ts): a list reads nothing, and
+  // the handshake, whose answer carries the instructions, reads the person's access once.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 6_000);
+  reads.accessibleTo.mockClear();
+  expect(await mcp(token, "tools/list", {})).toMatchObject({ status: 200 });
+  expect(reads.accessibleTo).not.toHaveBeenCalled();
+  const initialized = await mcp(token, "initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "oauth-test", version: "1.0.0" },
+  });
+  expect(initialized).toMatchObject({
+    body: {
+      result: { instructions: expect.stringContaining("This token reaches one project, oauth-a") },
+    },
+  });
+  expect(reads.accessibleTo).toHaveBeenCalledOnce();
 });
 
 test("a refresh a second after the code exchange reads the grant the exchange wrote, whatever copy KV serves", async () => {
@@ -835,7 +979,13 @@ function kvServesFirstWrites(): Map<string, string> {
   return firstWrites;
 }
 
-async function tool(token: string, name: string, args: object = {}) {
+function tool(token: string, name: string, args: object = {}) {
+  return mcp(token, "tools/call", { name, arguments: args });
+}
+
+/** One JSON-RPC request to `/mcp` with `token`, and its answer: the status, the text and, on a 200,
+ *  the response message (read off the event stream when the answer is one). */
+async function mcp(token: string, method: string, params: object) {
   const response = await call("/mcp", {
     method: "POST",
     headers: {
@@ -843,12 +993,7 @@ async function tool(token: string, name: string, args: object = {}) {
       "content-type": "application/json",
       Accept: "application/json, text/event-stream",
     },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name, arguments: args },
-    }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   const text = await response.text();
   return {

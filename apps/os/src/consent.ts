@@ -110,7 +110,16 @@ export class ConsentRpcTarget extends RpcTarget {
   readonly #grant: AccessGrant;
   /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
   readonly #addresses: PlatformAddresses;
-  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant, addresses: PlatformAddresses) {
+  /** Whether this target serves one call of the request whose own admission just read the grant
+   *  live (consent-page.server.ts, `browserAuthorization`), rather than a session (rpc.ts). */
+  readonly #admittedThisRequest: boolean;
+  constructor(
+    env: Env,
+    ctx: ExecutionContext,
+    grant: AccessGrant,
+    addresses: PlatformAddresses,
+    { admittedThisRequest }: { admittedThisRequest: boolean },
+  ) {
     super();
     if (grant.kind !== "issuer")
       throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
@@ -118,10 +127,14 @@ export class ConsentRpcTarget extends RpcTarget {
     this.#ctx = ctx;
     this.#grant = grant;
     this.#addresses = addresses;
+    this.#admittedThisRequest = admittedThisRequest;
   }
   async #request(query: unknown) {
-    // Issuing a new grant must not spend the live transport's revocation grace.
-    if (!(await grantIsLive(this.#env, this.#grant)))
+    // Issuing a new grant must not spend the live transport's revocation grace: a session's consent
+    // outlives the admission that made it (a socket's while it is open, a batch's behind the calls
+    // before it), so it reads the grant again. The consent page's request (consent-page.server.ts)
+    // read the account afresh to admit the grant just before this call, and reads it no second time.
+    if (!this.#admittedThisRequest && !(await grantIsLive(this.#env, this.#grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const search = z.string().parse(query).replace(/^\?/, "");
     return parseAuthorization(

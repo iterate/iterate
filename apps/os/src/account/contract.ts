@@ -61,9 +61,9 @@ export type PersonalAccessTokenMinted = z.infer<typeof PersonalAccessTokenMinted
  *  on, every admission of it is refused (oauth.ts reads `endedGrants`). */
 export const GrantEnded = z.object({ grantId: z.string().min(1) });
 export type GrantEnded = z.infer<typeof GrantEnded>;
-/** `events.iterate.com/account/grant-used`: the grant was presented — at most once an hour per
- *  grant per isolate (oauth.ts `recordGrantUse`), so the log stays a summary; what the sessions
- *  page shows as "last used". */
+/** `events.iterate.com/account/grant-used`: the grant was presented — about once an hour per
+ *  grant at most (oauth.ts `recordGrantUse`), so the log stays a summary; what the sessions page
+ *  shows as "last used". */
 export const GrantUsed = z.object({ grantId: z.string().min(1), at: z.number() });
 export type GrantUsed = z.infer<typeof GrantUsed>;
 /** `events.iterate.com/account/consent-approved`: the person approved a client at consent

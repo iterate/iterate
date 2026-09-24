@@ -33,9 +33,9 @@ export async function describeConsent(
   const signedIn = await issuerSignIn(request, env);
   if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${authorization}`) });
   const addresses = platformAddressesOf(env, request);
-  const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses).describe(
-    authorization,
-  );
+  const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
+    admittedThisRequest: true,
+  }).describe(authorization);
   if (view.kind === "redirect") throw redirect({ href: view.location });
   return { view, platformOrigin: addresses.platformOrigin };
 }
@@ -105,20 +105,25 @@ const ConsentApproval = z.object({
 /** POST /oauth2/auth — the page's Authorize form, posted to the authorization URL itself so the
  *  query is the one the client sent. The browser follows the 303 to the client's redirect URI,
  *  whatever its scheme. A request that cannot be approved as posted returns to the page, which
- *  describes it afresh. */
+ *  describes it afresh. The form is read before the issuer session is admitted: the approval reads
+ *  the session no second time (`admittedThisRequest`), so no body the client sends slowly may
+ *  stand between that admission and the grant it approves. */
 export async function approveConsentForm(request: Request, env: Env, ctx: ExecutionContext) {
   const authorization = new URL(request.url).search;
   const seeOther = (location: string) =>
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
+  const form = await request.formData().catch(() => null);
   const signedIn = await issuerSignIn(request, env);
   if (!signedIn) return seeOther(signInHref(`/oauth2/auth${authorization}`));
-  const form = await request.formData().catch(() => null);
   const approval = ConsentApproval.safeParse({
     project: form?.getAll("project"),
     scope: form?.getAll("scope"),
   });
   if (!approval.success) return new Response("Invalid consent form", { status: 400 });
-  const consent = new ConsentRpcTarget(env, ctx, signedIn.grant, platformAddressesOf(env, request));
+  const addresses = platformAddressesOf(env, request);
+  const consent = new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
+    admittedThisRequest: true,
+  });
   const approved = await consent.approve({
     query: authorization,
     projects: approval.data.project,

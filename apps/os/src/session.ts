@@ -985,11 +985,11 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   }
 
   /** The project's root context ("/"), by its minted id (`prj_<hex>`) or its slug (a URL's
-   *  `/projects/<slug>`, a hostname's label) — the control plane resolves either (`projectIdOf`), and
-   *  the id alone goes on: the DO name's host, a grant's list, `whoami()`. A project only — a
-   *  context name belongs to `cd`. Outside this session's reach is FORBIDDEN; so is the global
-   *  namespace's id (it is no project). The admin secret alone addresses a project the catalog
-   *  never heard of, by id (a fresh context of its own). */
+   *  `/projects/<slug>`, a hostname's label) — the control plane resolves either as it checks the
+   *  reach (`reachableProjectId`), and the id alone goes on: the DO name's host, a grant's list,
+   *  `whoami()`. A project only — a context name belongs to `cd`. Outside this session's reach is
+   *  FORBIDDEN; so is the global namespace's id (it is no project). The admin secret alone
+   *  addresses a project the catalog never heard of, by id (a fresh context of its own). */
   async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
@@ -1003,8 +1003,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
       );
     const { controlPlane } = this.#session.input;
     const { reach } = this.#session.authority;
-    const id = await controlPlane.projectIdOf(address.projectId);
-    if (!(await controlPlane.reachesProject(reach, id)))
+    const id = await controlPlane.reachableProjectId(reach, address.projectId);
+    if (!id)
       throw codedError(
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(reach)}`,
