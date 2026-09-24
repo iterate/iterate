@@ -186,6 +186,32 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toMatchObject({ status: 400 });
 });
 
+test("a refresh a second after the code exchange reads the grant the exchange wrote, whatever copy KV serves", async () => {
+  fetchReachesThisWorker();
+  // KV serves a location's cached copy of a key for up to 60 s after another location wrote a new
+  // one. CI, 2026-09-23: consent ran at IAD, the code exchange at EWR, and the CLI's refresh a second
+  // later at IAD read the grant as consent wrote it, with no refresh token yet: `invalid_grant:
+  // Invalid refresh token`. Every KV read here is that location's: a key's first write.
+  const firstWrites = kvServesFirstWrites();
+  const flow = await grant([`${ORIGIN}/api`]);
+  // the model is the worker's own KV: the client registration and the access token went through it
+  expect(firstWrites.size).toBeGreaterThan(0);
+  const refresh = await call("/oauth2/token", {
+    method: "POST",
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: flow.token!.refresh_token,
+      client_id: flow.clientId,
+    }),
+  });
+  expect(refresh, await refresh.clone().text()).toMatchObject({ status: 200 });
+  const renewed = await refresh.json<{ access_token: string }>();
+  const admitted = await call("/api", {
+    headers: { Authorization: `Bearer ${renewed.access_token}` },
+  });
+  expect(admitted).not.toMatchObject({ status: 401 });
+});
+
 test("issuer login uses the same revocable API session and has no independent identity cookie", async () => {
   fetchReachesThisWorker();
   const flow = await grant([`${ORIGIN}/api`]);
@@ -794,6 +820,30 @@ function fetchReachesThisWorker() {
   onTestFinished(() => {
     spy.mockRestore();
   });
+}
+
+/** `OAUTH_KV` as a location that cached every key at its first write: each read answers that
+ *  write, whatever was written since (until the test finishes). Answers the first writes by key. */
+function kvServesFirstWrites(): Map<string, string> {
+  const kv = env.OAUTH_KV;
+  const firstWrites = new Map<string, string>();
+  const put = kv.put.bind(kv);
+  const get = kv.get.bind(kv) as (key: string, options?: unknown) => Promise<unknown>;
+  const puts = vi.spyOn(kv, "put").mockImplementation(async (key, value, options) => {
+    if (typeof value === "string" && !firstWrites.has(key)) firstWrites.set(key, value);
+    await put(key, value, options);
+  });
+  const gets = vi.spyOn(kv, "get").mockImplementation((async (key: string, options?: unknown) => {
+    const first = firstWrites.get(key);
+    if (!first) return get(key, options);
+    const type = typeof options === "string" ? options : (options as { type?: string })?.type;
+    return type === "json" ? JSON.parse(first) : first;
+  }) as never);
+  onTestFinished(() => {
+    puts.mockRestore();
+    gets.mockRestore();
+  });
+  return firstWrites;
 }
 
 function call(path: string, init?: RequestInit) {

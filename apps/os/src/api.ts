@@ -1,8 +1,7 @@
-import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { OAuthScope } from "iterate/next/oauth-scopes";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env, Handler } from "./env.ts";
-import { authorizationOf, recordGrantUse, providerOptions } from "./oauth.ts";
+import { authorizationOf, providerFetch, recordGrantUse } from "./oauth.ts";
 import { rpcResponse } from "./rpc.ts";
 import { mcpResponse } from "./mcp.ts";
 
@@ -56,9 +55,5 @@ export function oauthResponse(
     request.headers.get("upgrade")?.toLowerCase() === "websocket"
   )
     return rpcResponse(request, env, ctx, null);
-  return new OAuthProvider(providerOptions(env, addresses, protectedApi, defaultHandler)).fetch(
-    request,
-    env,
-    ctx,
-  );
+  return providerFetch(env, addresses, request, ctx, { apiHandler: protectedApi, defaultHandler });
 }

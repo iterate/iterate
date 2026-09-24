@@ -98,7 +98,8 @@
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 
-  // OAUTH_KV = the in-process OAuth AS's provider store (grants/tokens/DCR clients).
+  // OAUTH_KV = the in-process OAuth AS's tokens and DCR clients (its grants are in the control plane,
+  // src/oauth-store.ts), and the sign-in challenges.
   "kv_namespaces": [
     // itx.kv backing — project-prefixed (the D8 portability proof point).
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },

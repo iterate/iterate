@@ -21,6 +21,7 @@ import type {
   UserRecord,
 } from "./catalog.ts";
 import type { IdentityProvider } from "./contract.ts";
+import type { OAuthGrantListing } from "./oauth-grants.ts";
 
 /** Membership-derived access, optionally capped to selected projects. The administrator alone
  *  reaches every project; explicit empty selections reach none. */
@@ -300,6 +301,26 @@ export class ControlPlane {
     projectMemo.set(project.slug, project);
     this.#forget(caller.principal?.actor);
     return project;
+  }
+
+  // ── the OAuth provider's grants (oauth-grants.ts), for its store (oauth-store.ts) ──
+
+  /** A grant's JSON as last written, or null. */
+  oauthGrant(key: string): Promise<string | null> {
+    return this.#call("oauthGrant", key);
+  }
+  listOAuthGrants(
+    prefix: string,
+    options: { cursor?: string; limit?: number },
+  ): Promise<OAuthGrantListing> {
+    return this.#call("listOAuthGrants", prefix, options);
+  }
+  /** `expiresAt`: epoch seconds, or null for a grant that never expires. */
+  putOAuthGrant(key: string, value: string, expiresAt: number | null): Promise<void> {
+    return this.#call("putOAuthGrant", key, value, expiresAt);
+  }
+  deleteOAuthGrant(key: string): Promise<void> {
+    return this.#call("deleteOAuthGrant", key);
   }
 
   #forget(...userIds: (string | undefined)[]): void {
