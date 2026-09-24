@@ -332,14 +332,14 @@ export class FacetHost {
     const reset = ran.filter(
       (name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name),
     );
-    const started = await Promise.all(
-      ran.map((name) =>
-        reset.includes(name)
-          ? this.#restart(name, () =>
-              this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context reborn"),
-            )
-          : this.#start(name),
-      ),
+    const started = await this.#restartAll(
+      ran.map((name) => ({
+        name,
+        abort: reset.includes(name)
+          ? () =>
+              this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context reborn")
+          : null,
+      })),
     );
     // A claimed one still runs, and one whose start failed is owed a start by the next birth or
     // sweep: their rows stay.
@@ -359,12 +359,12 @@ export class FacetHost {
     const reset = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
       key.slice("facet-ran:".length),
     ).filter((name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name));
-    const started = await Promise.all(
-      reset.map((name) =>
-        this.#restart(name, () =>
+    const started = await this.#restartAll(
+      reset.map((name) => ({
+        name,
+        abort: () =>
           this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context quiet"),
-        ),
-      ),
+      })),
     );
     reset.forEach((name, i) => {
       if (!started[i]) return; // its start failed: its row stays, a start still owed
@@ -385,14 +385,28 @@ export class FacetHost {
   }
 
   /** THE PLATFORM'S ABORT, always this: `abort` (a `#abortFacetIfRunning`, and what the caller
-   *  books beside it) and a `#start` right after it, both under `blockConcurrencyWhile`, so no other
-   *  event commits in between (FACET_START_WATCHDOG_MS). Never throws: a callback that throws there
-   *  resets the object. */
-  #restart(name: string, abort: () => void): Promise<boolean> {
+   *  books beside it) and a `#start` right after it (`#restartAll`). */
+  async #restart(name: string, abort: () => void): Promise<boolean> {
+    const [started] = await this.#restartAll([{ name, abort }]);
+    return started!;
+  }
+
+  /** Every facet's `abort` (none for one only started), then every start, and only once every
+   *  start settled what the starts owe written (a new loaded identity, a restart count) — all under
+   *  `blockConcurrencyWhile`, so no commit, this context's own or another event's, lands between a
+   *  facet's stop and its start (FACET_START_WATCHDOG_MS). Answers whether each facet started.
+   *  Never throws: a callback that throws there resets the object. */
+  #restartAll(restarts: { name: string; abort: (() => void) | null }[]): Promise<boolean[]> {
     return this.#deps.ctx.blockConcurrencyWhile(async () => {
-      abort();
-      this.#liveFacetNames.delete(name);
-      return this.#start(name);
+      for (const { name, abort } of restarts) {
+        if (!abort) continue;
+        abort();
+        this.#liveFacetNames.delete(name);
+      }
+      const owed: (() => void)[] = [];
+      const started = await Promise.all(restarts.map(({ name }) => this.#start(name, owed)));
+      for (const write of owed) write();
+      return started;
     });
   }
 
@@ -402,7 +416,7 @@ export class FacetHost {
    *  use. The platform defect at facet start (`isFacetStartPlatformFailure`) is recovered as a
    *  call's is. A start that still fails leaves the facet stopped, is logged, and answers false:
    *  its `facet-ran` row stays for the next birth or sweep to start it. Never throws. */
-  async #start(name: string): Promise<boolean> {
+  async #start(name: string, owed: (() => void)[]): Promise<boolean> {
     const steps: ItxExpression = [["listPublicMethods"]];
     // A start's call never restarts the facet it starts: a timeout ends it, as a failure does.
     const watchdog = { watchdogMs: FACET_START_WATCHDOG_MS, restartOnTimeout: false };
@@ -420,7 +434,7 @@ export class FacetHost {
       });
       try {
         await this.#call(started, name, steps, watchdog).catch(startedIfRefused);
-        started.recordLoadedIdentity?.();
+        if (started.recordLoadedIdentity) owed.push(started.recordLoadedIdentity);
       } catch (error) {
         // The platform defect at facet start (an alarm-woken incarnation's loaded facet, above all)
         // is recovered as a call's is: a fresh loaded identity and one more start.
@@ -433,6 +447,7 @@ export class FacetHost {
             steps,
             { failedOn: started, error },
             watchdog,
+            owed,
           ).catch(startedIfRefused),
         );
       }
@@ -661,16 +676,22 @@ export class FacetHost {
         if (!this.#isRecoverableFacetFailure(name, error, materialized)) throw error;
         // The platform failure (the predicate's doc), or a restart for one: recovered below, one
         // recovery of this facet at a time.
-        return await this.#afterEarlierRecoveries(name, () =>
-          this.#recover(
-            name,
-            firstPartyClassName,
-            facetStartupMemo,
-            itxExpressionSteps,
-            { failedOn: materialized, error },
-            FACET_CALL_WATCHDOG,
-          ),
-        );
+        const owed: (() => void)[] = [];
+        try {
+          return await this.#afterEarlierRecoveries(name, () =>
+            this.#recover(
+              name,
+              firstPartyClassName,
+              facetStartupMemo,
+              itxExpressionSteps,
+              { failedOn: materialized, error },
+              FACET_CALL_WATCHDOG,
+              owed,
+            ),
+          );
+        } finally {
+          for (const write of owed) write();
+        }
       }
     } finally {
       this.#facetWorkInFlight--;
@@ -719,12 +740,11 @@ export class FacetHost {
     itxExpressionSteps: ItxExpression,
     failure: { failedOn: MaterializedFacet; error: unknown },
     watchdog: { watchdogMs: number; restartOnTimeout: boolean },
+    owed: (() => void)[],
   ): Promise<unknown> {
     let { failedOn, error } = failure;
     let retriedOnReplacement = false;
     let restarted = false;
-    // Written once the attempt ran, as its loaded identity is: nothing between the abort and the start.
-    let recordRestart: (() => void) | undefined;
     for (;;) {
       // Removed or reconfigured while this waited: never abort the newer facet (#materialize's check).
       if (facetStartupMemo && this.#facetStartupMemoByName.get(name) !== facetStartupMemo)
@@ -746,7 +766,9 @@ export class FacetHost {
         this.#liveFacetNames.delete(name);
         failedOn.retireLoadedIdentity?.();
         const restarts = this.restarts(name) + 1;
-        recordRestart = () => this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+        // Written once the attempt ran (`owed`), as its loaded identity is: nothing between the
+        // abort and the start.
+        owed.push(() => this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts));
         console.warn({
           event: "facet.platform-failure-retry",
           namespace: "iterate-context",
@@ -767,9 +789,7 @@ export class FacetHost {
         failedOn = attempt;
         error = attemptError;
       } finally {
-        attempt.recordLoadedIdentity?.();
-        recordRestart?.();
-        recordRestart = undefined;
+        if (attempt.recordLoadedIdentity) owed.push(attempt.recordLoadedIdentity);
       }
     }
   }
