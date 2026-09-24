@@ -28,10 +28,31 @@ const MemberAdded = z.object({
   userId: z.string().min(1),
   role: OrganizationRole,
 });
-export type MemberAdded = z.infer<typeof MemberAdded>;
 /** `organization/member-removed` — the mirror, on both logs. */
 const MemberRemoved = z.object({ orgId: z.string().min(1), userId: z.string().min(1) });
-export type MemberRemoved = z.infer<typeof MemberRemoved>;
+
+type Memberships = Record<string, { role: OrganizationRole; since: string }>;
+
+/** The membership fold both logs share — the organization's `members` keyed by user, the account's
+ *  `memberships` keyed by organization. The latest role is the row; the first membership's time
+ *  stays. The same role again is a no-op (undefined). */
+export function reduceMembership(
+  map: Memberships,
+  key: string,
+  role: OrganizationRole,
+  at: string,
+): Memberships | undefined {
+  const known = map[key];
+  if (known?.role === role) return undefined;
+  return { ...map, [key]: { role, since: known?.since ?? at } };
+}
+
+/** A membership's removal from either map; undefined when there was none. */
+export function dropMembership(map: Memberships, key: string): Memberships | undefined {
+  if (!map[key]) return undefined;
+  const { [key]: _gone, ...rest } = map;
+  return rest;
+}
 
 export const OrganizationContract = defineProcessorContract({
   slug: "organization",

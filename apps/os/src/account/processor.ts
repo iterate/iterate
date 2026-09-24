@@ -10,6 +10,7 @@ import {
   type ReduceArgs,
   StreamProcessor,
 } from "iterate/next/stream/processor";
+import { dropMembership, reduceMembership } from "../organization/contract.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { AccountContract, type AccountState } from "./contract.ts";
 
@@ -27,69 +28,64 @@ export class AccountProcessor extends StreamProcessor<
     // `Caller.platform`): the person can append any type to their own context, and that one stays on
     // the log, attributed to them, and changes nothing.
     if (event.source?.platform !== true) return undefined;
-    if (event.type === "events.iterate.com/account/authenticated")
-      return { ...state, authentications: [...state.authentications, event.payload] };
-    if (event.type === "events.iterate.com/account/grant-minted") {
-      const { grantId, ...token } = event.payload;
-      if (state.personalAccessTokens[grantId]) return undefined; // minted once
-      // Both facts are published after the fact, in whatever order they land: an end already
-      // recorded closes the row as it is born.
-      const endedAt = state.endedGrants[grantId]?.at ?? null;
-      return {
-        ...state,
-        personalAccessTokens: {
-          ...state.personalAccessTokens,
-          [grantId]: { ...token, mintedAt: event.createdAt, endedAt },
-        },
-      };
-    }
-    if (event.type === "events.iterate.com/account/grant-ended") {
-      const { grantId } = event.payload;
-      if (state.endedGrants[grantId]) return undefined; // ended once
-      const token = state.personalAccessTokens[grantId];
-      return {
-        ...state,
-        endedGrants: { ...state.endedGrants, [grantId]: { at: event.createdAt } },
-        ...(token && {
+    switch (event.type) {
+      case "events.iterate.com/account/authenticated":
+        return { ...state, authentications: [...state.authentications, event.payload] };
+      case "events.iterate.com/account/grant-minted": {
+        const { grantId, ...token } = event.payload;
+        if (state.personalAccessTokens[grantId]) return undefined; // minted once
+        // Both facts are published after the fact, in whatever order they land: an end already
+        // recorded closes the row as it is born.
+        const endedAt = state.endedGrants[grantId]?.at ?? null;
+        return {
+          ...state,
           personalAccessTokens: {
             ...state.personalAccessTokens,
-            [grantId]: { ...token, endedAt: event.createdAt },
+            [grantId]: { ...token, mintedAt: event.createdAt, endedAt },
           },
-        }),
-      };
+        };
+      }
+      case "events.iterate.com/account/grant-ended": {
+        const { grantId } = event.payload;
+        if (state.endedGrants[grantId]) return undefined; // ended once
+        const token = state.personalAccessTokens[grantId];
+        return {
+          ...state,
+          endedGrants: { ...state.endedGrants, [grantId]: { at: event.createdAt } },
+          ...(token && {
+            personalAccessTokens: {
+              ...state.personalAccessTokens,
+              [grantId]: { ...token, endedAt: event.createdAt },
+            },
+          }),
+        };
+      }
+      case "events.iterate.com/account/grant-used": {
+        const { grantId, at } = event.payload;
+        if ((state.grantUses[grantId]?.at ?? 0) >= at) return undefined; // only forward
+        return { ...state, grantUses: { ...state.grantUses, [grantId]: { at } } };
+      }
+      case "events.iterate.com/account/consent-approved":
+        return {
+          ...state,
+          consents: [...state.consents, { ...event.payload, at: event.createdAt }],
+        };
+      case "events.iterate.com/organization/member-added": {
+        const { orgId, role } = event.payload;
+        const memberships = reduceMembership(state.memberships, orgId, role, event.createdAt);
+        return memberships && { ...state, memberships };
+      }
+      case "events.iterate.com/organization/member-removed": {
+        const memberships = dropMembership(state.memberships, event.payload.orgId);
+        return memberships && { ...state, memberships };
+      }
+      case "events.iterate.com/secret/set":
+      case "events.iterate.com/secret/deleted": {
+        const secrets = reduceSecretCatalog(state.secrets, event);
+        return secrets && { ...state, secrets };
+      }
+      default:
+        return undefined;
     }
-    if (event.type === "events.iterate.com/account/grant-used") {
-      const { grantId, at } = event.payload;
-      if ((state.grantUses[grantId]?.at ?? 0) >= at) return undefined; // only forward
-      return { ...state, grantUses: { ...state.grantUses, [grantId]: { at } } };
-    }
-    if (event.type === "events.iterate.com/account/consent-approved")
-      return { ...state, consents: [...state.consents, { ...event.payload, at: event.createdAt }] };
-    if (event.type === "events.iterate.com/organization/member-added") {
-      // The latest role is the row; the first membership's time stays. The same role again is a no-op.
-      const { orgId, role } = event.payload;
-      const known = state.memberships[orgId];
-      if (known?.role === role) return undefined;
-      return {
-        ...state,
-        memberships: {
-          ...state.memberships,
-          [orgId]: { role, since: known?.since ?? event.createdAt },
-        },
-      };
-    }
-    if (event.type === "events.iterate.com/organization/member-removed") {
-      if (!state.memberships[event.payload.orgId]) return undefined;
-      const { [event.payload.orgId]: _gone, ...memberships } = state.memberships;
-      return { ...state, memberships };
-    }
-    if (
-      event.type === "events.iterate.com/secret/set" ||
-      event.type === "events.iterate.com/secret/deleted"
-    ) {
-      const secrets = reduceSecretCatalog(state.secrets, event);
-      return secrets && { ...state, secrets };
-    }
-    return undefined;
   }
 }

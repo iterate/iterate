@@ -10,7 +10,12 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import { reduceSecretCatalog } from "../secret/contract.ts";
-import { OrganizationContract, type OrganizationState } from "./contract.ts";
+import {
+  dropMembership,
+  OrganizationContract,
+  reduceMembership,
+  type OrganizationState,
+} from "./contract.ts";
 
 export class OrganizationProcessor extends StreamProcessor<
   OrganizationState,
@@ -35,22 +40,13 @@ export class OrganizationProcessor extends StreamProcessor<
       case "events.iterate.com/organization/deleted":
         return state.deletedAt ? undefined : { ...state, deletedAt: event.createdAt };
       case "events.iterate.com/organization/member-added": {
-        // The latest role is the row; the first membership's time stays. The same role again is a no-op.
         const { userId, role } = event.payload;
-        const known = state.members[userId];
-        if (known?.role === role) return undefined;
-        return {
-          ...state,
-          members: {
-            ...state.members,
-            [userId]: { role, since: known?.since ?? event.createdAt },
-          },
-        };
+        const members = reduceMembership(state.members, userId, role, event.createdAt);
+        return members && { ...state, members };
       }
       case "events.iterate.com/organization/member-removed": {
-        if (!state.members[event.payload.userId]) return undefined;
-        const { [event.payload.userId]: _gone, ...members } = state.members;
-        return { ...state, members };
+        const members = dropMembership(state.members, event.payload.userId);
+        return members && { ...state, members };
       }
       case "events.iterate.com/organization/project-created": {
         const { projectId, slug } = event.payload;
