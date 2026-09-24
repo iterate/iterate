@@ -33,9 +33,9 @@ export async function describeConsent(
   const signedIn = await issuerSignIn(request, env);
   if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${authorization}`) });
   const addresses = platformAddressesOf(env, request);
-  const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses).describe(
-    authorization,
-  );
+  const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
+    admittedThisRequest: true,
+  }).describe(authorization);
   if (view.kind === "redirect") throw redirect({ href: view.location });
   return { view, platformOrigin: addresses.platformOrigin };
 }
@@ -118,7 +118,10 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
     scope: form?.getAll("scope"),
   });
   if (!approval.success) return new Response("Invalid consent form", { status: 400 });
-  const consent = new ConsentRpcTarget(env, ctx, signedIn.grant, platformAddressesOf(env, request));
+  const addresses = platformAddressesOf(env, request);
+  const consent = new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
+    admittedThisRequest: true,
+  });
   const approved = await consent.approve({
     query: authorization,
     projects: approval.data.project,

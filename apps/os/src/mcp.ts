@@ -1,5 +1,6 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
+import { z } from "zod";
 import { codedError, errorCode } from "iterate/lib";
 import { platformAddressesOf } from "./app-config.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
@@ -32,8 +33,8 @@ async function projectOfToolCall(
         "FORBIDDEN",
         `project ${JSON.stringify(requested)}: the deployment-global namespace is no project`,
       );
-    const id = await controlPlane.projectIdOf(projectId);
-    if (!(await controlPlane.reachesProject(reach, id)))
+    const id = await controlPlane.reachableProjectId(reach, projectId);
+    if (!id)
       throw codedError(
         "FORBIDDEN",
         `project ${JSON.stringify(requested)} is outside this token's grant`,
@@ -68,7 +69,8 @@ const runInstructions = [
 ].join("\n\n");
 
 /** Initialization includes usage guidance and the projects this token reaches, so the client can
- *  select one before running a script. Read from the control plane, like the tool's project check. */
+ *  select one before running a script. Read from the control plane, like the tool's project check,
+ *  and only for a request whose answer carries them (`answersWithInstructions`). */
 async function serverInstructions(controlPlane: ControlPlane, reach: Reach): Promise<string> {
   const projects = await controlPlane.reachableProjects(reach);
   const reachable =
@@ -89,13 +91,14 @@ async function buildServer(
   env: Env,
   authorization: Authorization,
   platformOrigin: string,
+  instructed: boolean,
 ): Promise<McpServer> {
   const controlPlane = new ControlPlane(env.CONTROL_PLANE);
   const { reach, principal, grant } = authorization;
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
-    { instructions: await serverInstructions(controlPlane, reach) },
+    instructed ? { instructions: await serverInstructions(controlPlane, reach) } : {},
   );
 
   mcpServer.registerTool(
@@ -164,9 +167,27 @@ async function buildServer(
   return mcpServer;
 }
 
-/** The shared bearer gate has established this principal and reach. */
-export function mcpResponse(request: Request, env: Env, authorization: Authorization) {
+/** The shared bearer gate has established this principal and reach. Serving is stateless (the
+ *  SDK's `createMcpHandler` builds a server per HTTP request), so each POST builds its own. */
+export async function mcpResponse(request: Request, env: Env, authorization: Authorization) {
+  const instructed = await answersWithInstructions(request);
   return createMcpHandler(() =>
-    buildServer(env, authorization, platformAddressesOf(env, request).platformOrigin),
+    buildServer(env, authorization, platformAddressesOf(env, request).platformOrigin, instructed),
   ).fetch(request);
+}
+
+/** A JSON-RPC request whose answer carries the server's instructions: the 2025 handshake's
+ *  `initialize` and the 2026-07-28 revision's `server/discover` (the SDK's `Server._oninitialize`
+ *  and `_ondiscover`, @modelcontextprotocol/server 2.0.0). */
+const InstructedRequest = z.object({ method: z.enum(["initialize", "server/discover"]) });
+
+/** Whether `request` (a message or a batch) asks for an answer that carries the instructions: a
+ *  tool call, a list or a notification does not, so it reads no project list. Read from a copy, so
+ *  the SDK reads and refuses the body as it always does. */
+async function answersWithInstructions(request: Request) {
+  const body: unknown = await request
+    .clone()
+    .json()
+    .catch(() => null);
+  return [body].flat().some((message) => InstructedRequest.safeParse(message).success);
 }

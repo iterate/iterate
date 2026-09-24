@@ -110,7 +110,7 @@ export async function rpc(
 
 /** THE REVOCATION TRUTH, landed by hand: `account/grant-ended` on the person's account — the fact
  *  grants.ts `end` awaits before it touches the provider — with the provider's rows left as they
- *  are, so what denies the token next is the account alone (oauth.ts `grantIsRevoked`). */
+ *  are, so what denies the token next is the account alone (oauth.ts `grantIsLive`). */
 export async function endGrantOnAccount(userId: string, grantId: string): Promise<void> {
   const account = stub(`global.iterate/users/${userId}`);
   await account.invoke(["itx", "processors", ["enable", "account"]]);
