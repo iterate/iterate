@@ -3,7 +3,7 @@ import { auth } from "./auth.ts";
 
 // An empty Origin is foreign, like any other that is not this one; only an absent Origin (a
 // non-browser client) is trusted (lib.ts isSameOriginBrowserRequest).
-test.each([
+test.each<{ headers: Record<string, string>; status: number }>([
   { headers: { origin: "" }, status: 403 },
   { headers: { origin: "https://evil.example" }, status: 403 },
   { headers: { origin: "null" }, status: 403 },

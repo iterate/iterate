@@ -118,7 +118,7 @@
   ],
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.next.json && tsc -p tsconfig.cli.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.next.json && tsc --noEmit -p tsconfig.cli.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.next.json && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },

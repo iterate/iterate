@@ -1,0 +1,12 @@
+{
+  // The src/next unit tests, with tsconfig.next.json's Worker settings (vitest runs them untyped).
+  "extends": "./tsconfig.next.json",
+  "files": [],
+  "include": ["src/next/**/*.test.ts", "src/next/**/*.test.tsx"],
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "emitDeclarationOnly": false,
+    "types": ["@cloudflare/workers-types/experimental", "node"]
+  }
+}

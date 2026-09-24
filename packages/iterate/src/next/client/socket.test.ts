@@ -9,8 +9,10 @@ function fakeSocketClass(failures: number) {
     static constructions() {
       return constructions;
     }
-    constructor(public readonly url: string | URL) {
+    readonly url: string | URL;
+    constructor(url: string | URL) {
       super();
+      this.url = url;
       constructions += 1;
       const outcome = constructions <= failures ? "close" : "open";
       queueMicrotask(() => this.dispatchEvent(new Event(outcome)));
