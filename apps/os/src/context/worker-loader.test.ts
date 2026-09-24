@@ -297,6 +297,31 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   expect(produced).toBe(4);
 });
 
+test("retire(): a burst of calls that failed on one identity retires it once, and a late retire from a replaced identity never sends the next generation back to it", async () => {
+  const { env } = fakeLoaderEnv();
+  const opts = {
+    env,
+    deployId: "deploy-1",
+    platformOrigin: null,
+    itxEntrypoint: {} as Fetcher,
+    kind: "worker" as const,
+    owner: "prj_retire.iterate/",
+    source: { "cap.js": "export default {}" },
+    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
+    where: "workers.get",
+  };
+  // two calls on generation 0 meet the clone-version failure together: one retirement
+  const [a, b] = await Promise.all([prepareConfinedWorker(opts), prepareConfinedWorker(opts)]);
+  a.retire();
+  b.retire();
+  const recovered = await prepareConfinedWorker(opts);
+  expect(recovered).toMatchObject({ loaderId: `${a.loaderId}#1` });
+  // generation 1 fails too; a call still in flight on generation 0 fails late
+  recovered.retire();
+  a.retire();
+  expect(await prepareConfinedWorker(opts)).toMatchObject({ loaderId: `${a.loaderId}#2` });
+});
+
 test("prepare resolves the identity without asking the loader; load() is the one call that does, and a repeat is the loader's cache to answer", async () => {
   const { env, keys, warm } = fakeLoaderEnv();
   const prepared = await prepareConfinedWorker({
