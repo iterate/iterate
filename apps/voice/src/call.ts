@@ -7,18 +7,8 @@ import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
 
 const T = "events.iterate.com/voice-agent/";
 
-/** The slice of a context stub the call uses (capnweb pipelines every one of these). */
-export type CallItx = {
-  invoke(expression: unknown): Promise<unknown>;
-  append(...events: object[]): Promise<unknown>;
-  subscribe(input: {
-    name: string;
-    consumes: string[];
-    target: (events: unknown[], range: unknown) => void;
-  }): Promise<{ [Symbol.dispose](): void }>;
-};
-
-export type CallFact = { at: number; text: string };
+/** `id` counts up per call: the list key (one subscription batch can report several facts at once). */
+export type CallFact = { id: number; text: string };
 
 /** What this browser saw of the call, counted here because the relay cannot see the last hop. */
 export type CallStats = {
@@ -31,10 +21,8 @@ export type CallStats = {
 };
 
 export type Call = {
-  streamPath: string;
-  activation: string;
   /** The conversation's context — what `useLiveState` subscribes to. */
-  itx: CallItx;
+  itx: ReturnType<Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>["cd"]>;
   stats: CallStats;
   hangUp(): Promise<void>;
 };
@@ -58,7 +46,8 @@ export async function startCall(input: {
       `This project's voice agent isn't answering (${error instanceof Error ? error.message : String(error)}).`,
     );
   });
-  const call = (project as unknown as { cd(path: string): CallItx }).cd(streamPath);
+  const call = project.cd(streamPath);
+  let factId = 0;
   const stats: CallStats = {
     micFramesSent: 0,
     micFramesDropped: 0,
@@ -93,18 +82,18 @@ export async function startCall(input: {
           }
         } else if (kind === "conversation-accepted") {
           stats.handshakeMs = Number(p.handshakeTookMs);
-          onFact({ at: Date.now(), text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
+          onFact({ id: factId++, text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
         } else if (kind === "conversation-ended") {
           audio.onFrame = null;
-          onFact({ at: Date.now(), text: `ended: ${String(p.reason)}` });
+          onFact({ id: factId++, text: `ended: ${String(p.reason)}` });
         } else {
-          onFact({ at: Date.now(), text: `${kind}: ${JSON.stringify(p).slice(0, 160)}` });
+          onFact({ id: factId++, text: `${kind}: ${JSON.stringify(p).slice(0, 160)}` });
         }
       }
     },
   });
   await setup;
-  onFact({ at: Date.now(), text: `call started on ${streamPath}` });
+  onFact({ id: factId++, text: `call started on ${streamPath}` });
   let sending = 0;
   audio.onFrame = (pcm) => {
     // Fire and forget, twenty a second; a slow link drops frames rather than queueing them.
@@ -131,8 +120,6 @@ export async function startCall(input: {
       .catch(() => undefined);
   }, 20_000);
   return {
-    streamPath,
-    activation,
     itx: call,
     stats,
     async hangUp() {
