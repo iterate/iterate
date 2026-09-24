@@ -1,20 +1,17 @@
-import { env, SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import type { Env } from "../src/env.ts";
-import { SRC_ECHO_APP } from "./support.ts";
-
-const bindings = env as unknown as Env;
-const ADMIN = { type: "admin-secret", secret: bindings.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
+import { ORIGIN, SRC_ECHO_APP } from "./support.ts";
+const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
 const sessions: Disposable[] = [];
 const call = (url: string, init?: RequestInit) =>
-  SELF.fetch(new Request(url, { redirect: "manual", ...init }));
+  exports.default.fetch(new Request(url, { redirect: "manual", ...init }));
 afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
 });
 async function api() {
-  const response = await call("https://control.test/api", {
+  const response = await call(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket" },
   });
   response.webSocket!.accept();
@@ -47,7 +44,12 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
   for (const host of ["echo--routing-shapes", "echo.routing-shapes"]) {
     const seen = await call(`https://${host}.projects.test/`, forged);
     expect(seen.status, await seen.clone().text()).toBe(200);
-    expect(await seen.json()).toEqual({ principal: null, authorization: null, app: "echo" });
+    expect(await seen.json()).toEqual({
+      principal: null,
+      authorization: null,
+      cookie: null,
+      app: "echo",
+    });
   }
   // the apex: the bundled ConfigWorker's fetch — the project's bare homepage
   const apex = await call("https://routing-shapes.projects.test/", forged);
@@ -99,7 +101,7 @@ test("x-iterate-app is the fetch lane's, on every door: loaded code forging it o
 
 test("under the base, only a project host: a hostname that fails the grammar is 421 — never the control plane; the platform host itself is unaffected", async () => {
   // `site--prj_1` (an `_`), `a.b.c` (deeper than `<app>.<project>`), `--x` (no app label): none is
-  // a project host, and none may be a working platform origin on a name the platform never chose
+  // a project host, and none may be a working platform ORIGIN on a name the platform never chose
   for (const host of ["site--prj_1", "a.b.c", "--x"]) {
     const res = await call(`https://${host}.projects.test/login`, {
       method: "POST",
@@ -108,5 +110,5 @@ test("under the base, only a project host: a hostname that fails the grammar is 
     expect(res.status, host).toBe(421);
     expect(res.headers.get("set-cookie"), host).toBeNull();
   }
-  expect((await call("https://control.test/version")).status).toBe(200);
+  expect(await call(`${ORIGIN}/version`)).toMatchObject({ status: 200 });
 });

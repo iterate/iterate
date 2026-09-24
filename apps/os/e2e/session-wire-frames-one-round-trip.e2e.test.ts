@@ -1,3 +1,4 @@
+// session-wire-frames-one-round-trip.e2e.test.ts — WIRE-LEVEL: EXACT capnweb frames (counts +
 // direction) against the real worker. The client's WebSocket is OURS (instrumented send + message
 // listeners record every frame with direction and order) and is handed to `newWebSocketRpcSession(ws)`.
 //
@@ -11,9 +12,9 @@
 // dotted chains through a live provider cost one push, and the disposal contract.
 
 import { expect, test } from "vitest";
+import { errorCode } from "iterate/next/lib";
 import {
   adminCredentials,
-  codeOf,
   freshCtx,
   openItx,
   presence,
@@ -377,7 +378,7 @@ test("disposal: `using` on the /api session stub recalls its lent stubs at scope
     async () => !(await rpcStubRewriteRuleMatches(observer)).includes("itx.scoped"),
   );
   const err = await rejection(observer.invoke("itx.scoped.hello()"));
-  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH"); // default-deny, seen from another session
+  expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH"); // default-deny, seen from another session
 });
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {

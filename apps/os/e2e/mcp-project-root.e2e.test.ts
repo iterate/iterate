@@ -3,7 +3,7 @@
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { openItx, readAll, until, workerUrl } from "./support/client.ts";
+import { mcpCall, openItx, readAll, until, workerUrl } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectUrl,
@@ -30,41 +30,8 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     .authenticate({ type: "from-server-cookie" })
     .grants.mint({ name: "MCP root regression", projects: [projectId] });
   const grantId = token.split(":")[1]!;
-  const oldPath = `/mcp/inbound/grants/${grantId}`;
-  // Historical connection facts and transcripts remain readable, but MCP no longer uses them.
-  await root.append({
-    type: "events.iterate.com/project/mcp-connection-created",
-    payload: { grantId, path: oldPath },
-  });
-  await root.cd(oldPath).append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: "itx.repos", target: null },
-  });
-  const oldEvents = await readAll(root.cd(oldPath));
-  let id = 0;
-  const request = async (method: string, params: unknown, bearer = token) => {
-    const response = await fetch(process.env.MCP_BASE_URL || workerUrl("/mcp"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-    });
-    const body = await response.text();
-    expect(response.status, body).toBe(200);
-    const message = response.headers.get("content-type")?.includes("text/event-stream")
-      ? JSON.parse(
-          body
-            .split("\n")
-            .find((line) => line.startsWith("data: "))!
-            .slice(6),
-        )
-      : JSON.parse(body);
-    expect(message.error, body).toBeUndefined();
-    return message.result;
-  };
+  const request = (method: string, params: unknown, bearer = token) =>
+    mcpCall(method, params, bearer);
   const run = (script: string, project?: string) =>
     request("tools/call", { name: "run", arguments: { script, project } });
   const success = async (script: string) => {
@@ -162,22 +129,6 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
       .filter((e) => e.type === "events.iterate.com/context/run-settled")
       .every((e) => e.payload.settlement.status === "succeeded"),
   ).toBe(true);
-  expect(
-    events.filter((e) => e.type === "events.iterate.com/project/mcp-connection-created"),
-  ).toHaveLength(1); // only the historical fixture
-  const capabilities = await success("async (itx) => itx.rewriteRules.list()");
-  expect(capabilities.some((rule: { match: string }) => rule.match === "itx.mcpConnections")).toBe(
-    false,
-  );
-  // Rereading an idle context can wake its Durable Object. Only lifecycle wakes may be new;
-  // no MCP request, settlement, rewrite or other application event belongs on this old stream.
-  const oldAfter = await readAll(root.cd(oldPath));
-  expect(oldAfter.slice(0, oldEvents.length)).toEqual(oldEvents);
-  expect(
-    oldAfter
-      .slice(oldEvents.length)
-      .every((event) => event.type === "events.iterate.com/stream/woken"),
-  ).toBe(true);
 
   // Two grants execute on the same root; attribution distinguishes their requests.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint for a separate MCP connection.
@@ -199,15 +150,6 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   expect(
     afterSecond.filter((e) => e.type === "events.iterate.com/context/run-requested").at(-1)?.source,
   ).toEqual({ principal, grant: secondGrantId });
-  expect(
-    afterSecond.filter((e) => e.type === "events.iterate.com/project/mcp-connection-created"),
-  ).toHaveLength(1);
-  // Reading a previously unused context creates its stream lifecycle events, but no MCP runs.
-  expect(
-    (await readAll(root.cd(`/mcp/inbound/grants/${secondGrantId}`))).filter(
-      (event) => !event.type.startsWith("events.iterate.com/stream/"),
-    ),
-  ).toEqual([]);
 
   const otherEvents = await readAll(openItx(other));
   const denied = await run(
@@ -226,5 +168,4 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   expect(masked.isError).toBe(true);
   expect(masked.content[0].text).toContain("masked");
   expect(description).toContain("root `itx` handle");
-  expect(description).not.toContain("/mcp/inbound/");
 });

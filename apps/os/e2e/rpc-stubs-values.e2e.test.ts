@@ -18,7 +18,8 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, rejection, until } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { freshCtx, openItx, rejection, until } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 import { SlackReplayTarget } from "./support/targets.ts";
 
@@ -37,8 +38,6 @@ test("client A: provide('itx.runOnMyComputer', async fn) · client B: await itx.
   expect(await otherClient.runOnMyComputer("ls", ["-la"])).toBe("stdout of ls -la");
   expect(ran).toEqual([["ls", ["-la"]]]);
 });
-
-// ── a callback fires back: get demo → rpc target → callLater(timeoutMs, cb) ──
 
 // ── the provider: get demo → Timer with callLater(timeoutMs, cb) ──
 class Timer extends RpcTarget {
@@ -70,8 +69,6 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
     pinged = true;
   });
   await until("capnweb callback fired", () => pinged);
-  // capnweb client: itx.demo.timer.callLater(cb) — the callback fired back in the client
-  expect(pinged).toBe(true);
 
   // ── lane 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
   const SRC_CONSUMER = {
@@ -94,12 +91,10 @@ export default class Consumer extends WorkerEntrypoint {
   const ran = await itx.workers.get({ source: SRC_CONSUMER }).run();
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
-  const got = await until("worker callback appended to the stream", async () => {
+  await until("worker callback appended to the stream", async () => {
     const page = await itx.invoke(["itx", ["readEvents", 0, 500]]);
     return page.events.find((e: { type: string }) => e.type === "pinged-from-worker");
   });
-  // dynamic worker: env.ITX.get().demo.timer.callLater(cb) — the callback ran back inside the worker
-  expect(got).toBeTruthy();
 
   demo[Symbol.dispose](); // recall the stub and un-set its rule
 });
@@ -146,7 +141,6 @@ class ToolsRich extends RpcTarget {
   }
 }
 
-// A throw in any invoke below fails the test.
 test("rich values through the longest path: Date, bytes, callbacks, RpcTarget args, Request/Response", async () => {
   const ctx = freshCtx("rich");
   const itxA = openItx(ctx);
@@ -169,7 +163,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   ]);
   expect(cbResult).toBe("A:43"); // A called B's callback (42→43) and returned
 
-  // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
+  // 4. the STATELESS RUN LANE (a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
   await itxB.invoke(`itx.append({ type: 'noop' })`); // ensure the stream exists
   await itxB.provide("itx.probe", ["itx", "workers", ["get", { source: SOURCES.probe }]]);
@@ -222,7 +216,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 1. THE HEADLINE: the NATURAL DOTTED spelling every client writes — plain property access on the
   //    capnweb stub — replayed end to end (slack → chat → postMessage). This is the prototype-hop
-  //    dotted surface (context/expression.ts): unknown segments accumulate into ONE
+  //    dotted surface (iterate/next/expression.ts): unknown segments accumulate into ONE
   //    invoke dispatch. No client SDK, just capnweb.
   const posted = await itx.slack.chat.postMessage({ channel: "#general", text: "hello from itx" });
   expect(posted?.ok).toBe(true);
@@ -281,14 +275,14 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 5. the PROVIDER disposes its handle → the stub is recalled AND the rule is un-set. The un-set
   //    lands one append after the pager's close, so a call in that window is refused CODED
-  //    (RPC_STUB_OFFLINE: the rule still names a stub that is gone — review round 2, edge#13); once it
+  //    (RPC_STUB_OFFLINE: the rule still names a stub that is gone); once it
   //    lands, default-deny answers NO_ITX_EXPRESSION_MATCH — the un-set REMOVES the rule.
   slackProvided[Symbol.dispose]();
   const denied = await until("the dispose propagated", async () => {
     const e = await rejection(
       itx.invoke(["itx", "slack", "chat", ["postMessage", { channel: "#x", text: "y" }]]),
     );
-    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
+    return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
   });
-  expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
 });

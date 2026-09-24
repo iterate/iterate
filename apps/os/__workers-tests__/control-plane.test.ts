@@ -1,27 +1,25 @@
-import { env, SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AccountState } from "../src/account/contract.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
-import type { Env } from "../src/env.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { controlPlaneStub, SRC_ECHO_APP, stub } from "./support.ts";
+import { adminSession, controlPlaneStub, ORIGIN, refused, SRC_ECHO_APP, stub } from "./support.ts";
 
-const origin = "https://control.test";
-const secret = (env as unknown as Env).APP_CONFIG_SECRETS__ADMIN_BEARER!;
-const password = (env as unknown as Env).APP_CONFIG_LOGIN__PASSWORD!;
+const secret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
+const password = env.APP_CONFIG_LOGIN__PASSWORD!;
 const sessions: Disposable[] = [];
-/** The sign-in page's own post — same-origin, a form — with or without a browser's cookie. */
+/** The sign-in page's own post — same-ORIGIN, a form — with or without a browser's cookie. */
 const postLogin = (form: Record<string, string>, cookie?: string) =>
-  SELF.fetch(`${origin}/login`, {
+  exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: cookie ? { Origin: origin, cookie } : { Origin: origin },
+    headers: cookie ? { Origin: ORIGIN, cookie } : { Origin: ORIGIN },
     body: new URLSearchParams(form),
   });
 afterEach(() => {
@@ -29,19 +27,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A bare `/api` socket, authenticated in-band with the admin secret — every project, or `as` a user. */
-async function operator(email?: string) {
-  const response = await SELF.fetch(`${origin}/api`, {
-    headers: { Upgrade: "websocket" },
-  });
-  expect(response.status).toBe(101);
-  response.webSocket!.accept();
-  const root = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  sessions.push(root);
-  return root.authenticate({ type: "admin-secret", secret, ...(email && { as: { email } }) });
-}
 type Session = Awaited<ReturnType<typeof operator>>;
 
 /** A read of the control-plane database — the `CONTROL_PLANE` singleton Durable Object's tables
@@ -74,27 +59,7 @@ const organizationState = async (session: Session, orgId: string) =>
       state: OrganizationState;
     }
   ).state;
-/** `thunk` is REFUSED with `code`: an entity's refusal crosses its own log as
- *  `request-failed { code }` and is rethrown coded at the edge; the edge's own refusal is coded
- *  before anything lands. try/catch, not `.rejects`: a capnweb stub is a custom thenable. */
-async function refused(
-  thunk: () => Promise<unknown>,
-  code: string,
-  message?: RegExp,
-): Promise<void> {
-  let refusal: unknown;
-  try {
-    await thunk();
-  } catch (error) {
-    refusal = error;
-  }
-  expect(refusal, `expected a ${code} refusal, but it was allowed`).toBeDefined();
-  expect((refusal as { code?: string }).code).toBe(code);
-  if (message) expect((refusal as Error).message).toMatch(message);
-}
-
 // Public OAuth lifecycle and browser clients are covered by oauth.test.ts.
-// These tests retain the directory and ingress invariants of the former cookie API.
 test("the directory keeps creation, listing, membership and event attribution coherent", async () => {
   const ada = await operator("Ada@directory.test");
   const principal = await ada.whoami();
@@ -338,13 +303,13 @@ test("concurrent restores through the control plane: one slug never answers a di
 
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    SELF.fetch(new Request(input, init)),
+    exports.default.fetch(new Request(input, init)),
   );
   // the bearer signs nobody in: the operator door is `/api` and `/mcp`, not the sign-in page
-  const bearerLogin = await SELF.fetch(`${origin}/login`, {
+  const bearerLogin = await exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: { Authorization: `Bearer ${secret}`, Origin: origin },
+    headers: { Authorization: `Bearer ${secret}`, Origin: ORIGIN },
     body: new URLSearchParams({ email: "fixture@directory.test", next: "/" }),
   });
   expect(bearerLogin.status).not.toBe(302);
@@ -352,7 +317,7 @@ test("a bare /api socket carries no session until a credential is verified in-ba
   const login = await postLogin({
     email: "fixture@directory.test",
     password,
-    next: "https://elsewhere.test", // another origin is not a place to continue to: the page's own
+    next: "https://elsewhere.test", // another ORIGIN is not a place to continue to: the page's own
   });
   expect(login.status).toBe(302);
   expect(login.headers.get("location")).toBe("/");
@@ -362,15 +327,17 @@ test("a bare /api socket carries no session until a credential is verified in-ba
     .split(";")[0]!;
   expect(
     (
-      await SELF.fetch(`${origin}/api`, {
+      await exports.default.fetch(`${ORIGIN}/api`, {
         method: "POST",
         body: "",
-        headers: { cookie, Origin: origin },
+        headers: { cookie, Origin: ORIGIN },
       })
     ).status,
   ).toBe(200);
   // a bare socket — no cookie, no bearer on the upgrade — holds nothing until a credential is verified
-  const response = await SELF.fetch(`${origin}/api`, { headers: { Upgrade: "websocket" } });
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket" },
+  });
   response.webSocket!.accept();
   using api = newWebSocketRpcSession<IterateRpcTarget>(response.webSocket! as unknown as WebSocket);
   await expect(api.authenticate({ type: "from-server-cookie" })).rejects.toThrow(
@@ -381,7 +348,7 @@ test("a bare /api socket carries no session until a credential is verified in-ba
   );
   expect(
     (
-      await SELF.fetch(`${origin}/login`, {
+      await exports.default.fetch(`${ORIGIN}/login`, {
         method: "POST",
         headers: { Origin: "https://evil.test" },
         body: new URLSearchParams({ email: "attacker@directory.test" }),
@@ -389,11 +356,12 @@ test("a bare /api socket carries no session until a credential is verified in-ba
     ).status,
   ).toBe(403);
   expect(
-    (await SELF.fetch(`${origin}/.auth/logout`, { method: "GET", redirect: "manual" })).status,
+    (await exports.default.fetch(`${ORIGIN}/.auth/logout`, { method: "GET", redirect: "manual" }))
+      .status,
   ).toBe(405);
   expect(
     (
-      await SELF.fetch(`${origin}/.auth/logout`, {
+      await exports.default.fetch(`${ORIGIN}/.auth/logout`, {
         method: "POST",
         headers: { Origin: "https://evil.test" },
       })
@@ -403,15 +371,14 @@ test("a bare /api socket carries no session until a credential is verified in-ba
 
 test("password sign-in: the email and the password make an ordinary user session; a wrong password is refused in place; without a mailbox there is no email sign-in", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    SELF.fetch(new Request(input, init)),
+    exports.default.fetch(new Request(input, init)),
   );
-  const bindings = env as unknown as Env;
   // no mailbox binding: the deployment offers no email sign-in at all (the password stays)
   await expect(
-    startLoginCode({ ...bindings, EMAIL: undefined }, "someone@directory.test", null),
+    startLoginCode({ ...env, EMAIL: undefined }, "someone@directory.test", null),
   ).rejects.toThrow();
   // The page renders the offered sign-ins in its initial HTML.
-  const page = await SELF.fetch(`${origin}/login?next=/sessions`);
+  const page = await exports.default.fetch(`${ORIGIN}/login?next=/sessions`);
   expect(page.status).toBe(200);
   const html = await page.text();
   expect(html).toContain("Use password instead");
@@ -425,12 +392,14 @@ test("password sign-in: the email and the password make an ordinary user session
     next: "/sessions",
   });
   expect(wrong.status).toBe(303);
-  const bounced = new URL(wrong.headers.get("location")!, origin);
+  const bounced = new URL(wrong.headers.get("location")!, ORIGIN);
   expect(bounced.pathname).toBe("/login");
   expect(bounced.searchParams.get("next")).toBe("/sessions");
   expect(bounced.searchParams.get("error")).toBeTruthy();
   expect(bounced.searchParams.get("method")).toBe("password");
-  const retryPage = await SELF.fetch(`${origin}/login${bounced.search}`).then((r) => r.text());
+  const retryPage = await exports.default
+    .fetch(`${ORIGIN}/login${bounced.search}`)
+    .then((r) => r.text());
   expect(retryPage).toContain("Test-Login@directory.test");
   expect(retryPage).toContain("That password");
   expect(wrong.headers.get("set-cookie") ?? "").not.toMatch(/__Host-itx-session=/);
@@ -445,8 +414,8 @@ test("password sign-in: the email and the password make an ordinary user session
   const session = login.headers
     .getSetCookie()
     .find((cookie) => cookie.startsWith("__Host-itx-session="))!;
-  const response = await SELF.fetch(`${origin}/api`, {
-    headers: { Upgrade: "websocket", Origin: origin, Cookie: session.split(";")[0]! },
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: session.split(";")[0]! },
   });
   expect(response.status).toBe(101);
   response.webSocket!.accept();
@@ -462,20 +431,20 @@ test("password sign-in: the email and the password make an ordinary user session
 
 test("password sign-in rests an address after five wrong tries: the sixth is refused as too many, right or wrong", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    SELF.fetch(new Request(input, init)),
+    exports.default.fetch(new Request(input, init)),
   );
   const email = "limited@directory.test";
   const errors: string[] = [];
   for (let attempt = 0; attempt < 6; attempt++) {
     const refused = await postLogin({ email, password: "wrong", next: "/" });
     expect(refused.status).toBe(303);
-    errors.push(new URL(refused.headers.get("location")!, origin).searchParams.get("error") ?? "");
+    errors.push(new URL(refused.headers.get("location")!, ORIGIN).searchParams.get("error") ?? "");
   }
   expect(errors.slice(0, 5).every((error) => error && !/too many/i.test(error))).toBe(true);
   expect(errors[5]).toMatch(/too many/i);
   const late = await postLogin({ email, password, next: "/" });
   expect(late.status).toBe(303);
-  expect(new URL(late.headers.get("location")!, origin).searchParams.get("error")).toMatch(
+  expect(new URL(late.headers.get("location")!, ORIGIN).searchParams.get("error")).toMatch(
     /too many/i,
   );
   // another address is untouched by that one's tries
@@ -518,30 +487,42 @@ test("project ingress strips forged internal authority and never exposes platfor
   using target = await admin.projects.create({ project: "directory-ingress" });
   await target.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const host = "https://echo--directory-ingress.projects.test/";
-  const response = await SELF.fetch(host, {
+  const response = await exports.default.fetch(host, {
     headers: {
       "x-itx-principal": JSON.stringify({ actor: "admin" }),
       "x-itx-expression": "itx.append",
       "x-itx-rpc-stub-pager": encodeURIComponent(
         JSON.stringify({ rpcStubKey: "forged", appendEvents: [{ type: "forged" }] }),
       ),
-      cookie:
-        "__Host-itx-control-plane-session=forged; __Host-itx-project-session=legacy; theme=dark",
+      cookie: "__Host-itx-login=forged; theme=dark",
     },
   });
-  expect(await response.json()).toEqual({ principal: null, authorization: null, app: "echo" });
+  expect(await response.json()).toEqual({
+    principal: null,
+    authorization: null,
+    cookie: "theme=dark",
+    app: "echo",
+  });
   expect((await target.readEvents(0, 100)).events.some((event) => event.type === "forged")).toBe(
     false,
   );
   expect(
-    await (await SELF.fetch(host, { headers: { Authorization: `Bearer ${secret}` } })).json(),
+    await (
+      await exports.default.fetch(host, { headers: { Authorization: `Bearer ${secret}` } })
+    ).json(),
   ).toEqual({
     principal: { actor: "admin" },
     authorization: null,
+    cookie: null,
     app: "echo",
   });
   expect(
-    (await SELF.fetch(host, { headers: { Authorization: "Bearer unrecognized" } })).status,
+    (await exports.default.fetch(host, { headers: { Authorization: "Bearer unrecognized" } }))
+      .status,
   ).toBe(401);
-  expect((await SELF.fetch("https://unknown.projects.test/")).status).toBe(421);
+  expect(await exports.default.fetch("https://unknown.projects.test/")).toMatchObject({
+    status: 421,
+  });
 });
+
+const operator = (email?: string) => adminSession(sessions, email);

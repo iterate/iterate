@@ -1,8 +1,9 @@
+// push-delivery-no-dropped-warns.e2e.test.ts — the three pins that read the WORKER'S CONSOLE: the
 // delivery loop emits `delivery.push.dropped` for a push that fails with anything but
 // RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's
 // cold catch-up would heal a dropped push before a snapshot could tell). Logs are worker-global, so
-// this file boots its OWN worker (support/log-harness.ts) and every row is `test.sequential`: a
+// this file boots its OWN worker (support/own-worker.ts) and every row is `test.sequential`: a
 // sibling running at the same time would write into the very log these rows count. Every other e2e
 // file speaks to the shared worker through support/client.ts, its rows concurrent.
 
@@ -11,8 +12,8 @@ import { dirname } from "node:path";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import {
-  append,
   collector,
+  durableCountsByType,
   freshCtx,
   presence,
   processorNames,
@@ -20,18 +21,19 @@ import {
   readHead,
   sleep,
   subscriptions,
+  tallySnapshot,
   until,
 } from "./support/client.ts";
-import { startLoggedWorker, type LoggedWorker } from "./support/log-harness.ts";
+import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
 import { projectHostsAreLocal } from "./support/project-host.ts";
 import { E2E_ADMIN_API_SECRET } from "./support/worker-config.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
-let worker: LoggedWorker;
+let worker: OwnWorker;
 const localSequential = test.skipIf(!projectHostsAreLocal()).sequential;
 beforeAll(async () => {
   if (!projectHostsAreLocal()) return;
-  worker = await startLoggedWorker();
+  worker = await startOwnWorker();
 }, 120_000);
 afterAll(async () => {
   await worker?.stop();
@@ -41,16 +43,6 @@ const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length
 /** Every delivery-side error line the loop can emit: a dropped push, a dispatch issue. */
 const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.(deliver|cursor)|NO_FACET/g;
 const deliveryErrors = () => countMatches(worker.logs(), DELIVERY_ERRORS);
-const tallySnapshot = async (itx: any): Promise<any> =>
-  itx.invoke("itx.facets.get('tally').snapshot()");
-/** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
-/** What a "*" processor reduces: every durable event, each incarnation's `stream/woken` included
- *  (processor.ts `consumesEvent`). */
-const durableCountsByType = (events: any[]): Record<string, number> => {
-  const counts: Record<string, number> = {};
-  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
-  return counts;
-};
 
 localSequential(
   "enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit",
@@ -78,13 +70,13 @@ localSequential(
   async () => {
     const itx = await worker.itx(freshCtx("middrive"));
     await enableFixtureProcessor(itx, "tally");
-    await append(itx, { type: "warm" }); // one delivery so the facet exists
+    await itx.append({ type: "warm" }); // one delivery so the facet exists
     const headWarm = await readHead(itx);
     await until("tally warm", async () => ((await tallySnapshot(itx)) as any).offset >= headWarm);
 
     // the burst + the disable, racing (in-flight pushes vs facet delete)
     const burst = Array.from({ length: 10 }, (_, i) =>
-      append(itx, { type: "burst", payload: { i } }),
+      itx.append({ type: "burst", payload: { i } }),
     );
     const disabled = itx.processors.disable("tally");
     await Promise.all([...burst, disabled]); // appends must all survive the disable
@@ -94,7 +86,7 @@ localSequential(
     // bounded burst at the disable moment, but NOTHING new may appear afterwards
     await sleep(500);
     const beforeErrors = deliveryErrors();
-    for (let i = 0; i < 10; i++) await append(itx, { type: "post", payload: { i } });
+    for (let i = 0; i < 10; i++) await itx.append({ type: "post", payload: { i } });
     await sleep(700);
     expect(deliveryErrors()).toBe(beforeErrors); // no NEW delivery errors
 
@@ -145,8 +137,7 @@ localSequential(
     // ours: every push to that stub is an RPC call whose arguments live in the DO until it settles,
     // and a stalled reader never settles one — so the DO's in-flight ledger (DELIVERY_IN_FLIGHT_BUDGET_CHARS,
     // 32 MiB) DROPS the pushes past it with a `delivery.push.dropped` warn naming the budget, keeping
-    // the DO's memory bounded whatever the edge and the socket absorb (BUILD-LOG 2026-09-04; before the
-    // ledger this row pinned "no warn at all" — 60 MiB silently in flight). And the close half (close →
+    // the DO's memory bounded whatever the edge and the socket absorb. And the close half (close →
     // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing the
     // key; capnweb disposes the session's SubscriptionHandleRpcTarget → the ROW is removed) is proven live below.
     const ctx = freshCtx("overflow");
@@ -161,7 +152,7 @@ localSequential(
     const c = collector();
     await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });
     // one probe proves the lane end-to-end BEFORE the stall
-    await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
+    await itx.append({ type: "flood", ephemeral: true, payload: { probe: true } });
     await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
     // the victim's row is a PUSH row (pure data — target `itx.builtins.rpcStubs.get('subscription:victim')`,
     // no cursor); whether that stub is ONLINE is the registry's fact, read separately
@@ -190,8 +181,7 @@ localSequential(
     let floodedBytes = 0;
     let stubDropped = false;
     for (let i = 0; i < 120 && !stubDropped; i++) {
-      await append(
-        itx,
+      await itx.append(
         { type: "flood", ephemeral: true, payload: { i, chunk } },
         { type: "flood", ephemeral: true, payload: { i: i + 0.5, chunk } },
       );
@@ -241,7 +231,7 @@ localSequential(
     await until("the victim's row removed with its session", async () =>
       (await subscriptions(itx)).every((r) => r.name !== "victim"),
     );
-    await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
+    await itx.append({ type: "flood", ephemeral: true, payload: { afterKill: true } });
     await sleep(300);
     expect(droppedWarns()).toBe(droppedAfterFlood); // nothing new: no push to a dead stub, no warn
     expect(await subscriptions(itx)).toEqual([]);

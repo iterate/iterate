@@ -1,3 +1,4 @@
+// e2e/support/global-setup.ts — boots the REAL worker ONCE for the whole vitest E2E run
 // (one worker, addressed by URL, shared by every file — no per-file boot). It
 // builds through the production build hook, runs in local workerd with local KV / Durable
 // Objects / the Worker Loader, and tests speak to it EXACTLY like production clients — capnweb over
@@ -30,9 +31,6 @@ declare module "vitest" {
      *  local worker's (worker-config.ts), a deployed worker's `login.password` handed to the run as
      *  LOGIN_PASSWORD (never in the tree). */
     loginPassword: string;
-    /** An OpenAI key for the deployed stories that speak to the real default model (set as the test
-     *  project's `openai` secret); empty locally, and when the run has none. */
-    openaiApiKey: string;
     /** How the worker reaches projects (src/app-config.ts `urls.ingressRouting`), as JSON: subdomains
      *  under `localhost` for the local worker, the deployed worker's routing otherwise. Injected into
      *  the worker thread's env so support/project-host.ts reads it (vitest worker threads do NOT
@@ -60,9 +58,6 @@ export default async function setup(project: TestProject): Promise<() => Promise
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
     project.provide("adminApiSecret", target.adminApiSecret);
     project.provide("loginPassword", target.loginPassword);
-    // The OpenAI key a deployed story sets as a project's `openai` secret (the agent's default
-    // model speaks to OpenAI); absent, those stories skip. Never needed locally: the fake model.
-    project.provide("openaiApiKey", process.env.OPENAI_API_KEY || "");
     project.provide("ingressRouting", target.ingressRouting);
     project.provide("mcpBaseUrl", target.mcpBaseUrl);
     return async () => {};
@@ -71,7 +66,6 @@ export default async function setup(project: TestProject): Promise<() => Promise
     root: PACKAGE_DIR,
     workers: [{ config: e2eWorkerConfig() }],
   });
-  project.provide("openaiApiKey", "");
   const { url } = await server.listen();
   await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
   project.provide("workerBaseUrl", url.href);

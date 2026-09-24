@@ -16,7 +16,7 @@
 //     remote never pins the context DO) — behind a rewrite rule by name; the remote is THIS worker's own
 //     /api (another project; the admin bearer on the POST), so the proof runs identically locally and deployed
 //   • DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining: `facets.get(name, spec).demo.timer
-//     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (context/expression.ts),
+//     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (iterate/next/expression.ts),
 //     never a bare Proxy (NonPipelinable over Workers RPC, workerd#6873) — and the callback fires back
 //     inside the caller, on the capnweb lane AND from worker B via env.ITX.get()
 //   • Kenton's persistent-stub machinery IN USE: a hosted DO stores its live itx handle (the
@@ -331,8 +331,6 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
       clientPinged = true;
     });
   await until("capnweb client callback fired", () => clientPinged, 30_000);
-  // capnweb client: facets.get('counterA', aRef).demo.timer.callLater(cb) — callback fired back in the client
-  expect(clientPinged).toBe(true);
 
   // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
   const ran = await itx.workers.get({ source: SRC_WORKER_B }).run(aRef);
@@ -340,7 +338,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   expect(ran?.ran).toBe(true);
   expect(ran?.pinged).toBe(true);
 
-  const got = await until(
+  await until(
     "worker B's callback appended to the stream",
     async () => {
       const page = await itx.invoke(["itx", ["readEvents", 0, 500]]);
@@ -348,8 +346,6 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
     },
     30_000,
   );
-  // dynamic worker B: the callback effect (stream append) is observable at the client
-  expect(got).toBeTruthy();
 });
 
 // ── the persistent stub ──

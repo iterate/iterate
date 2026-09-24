@@ -1,11 +1,16 @@
 import { expect } from "vitest";
 import { adminCredentials, readAll, session, until } from "./support/client.ts";
-import { fetchProjectUrl, localOnly, projectUrl } from "./support/project-host.ts";
+import {
+  fetchProjectUrl,
+  freshDnsSafeProjectSlug,
+  localOnly,
+  projectUrl,
+} from "./support/project-host.ts";
 
 localOnly(
   "website identity, pinned revisions, a commit publishes, and explicit publication still agrees",
   async () => {
-    const slug = `website-${Date.now()}`;
+    const slug = freshDnsSafeProjectSlug("website");
     const root = session().authenticate(adminCredentials()).projects.create({ project: slug });
     const identity = await root.cd("/agents/website-test").whoami();
     expect(identity.projectSlug).toBe(slug);
@@ -23,8 +28,7 @@ localOnly(
       const source = (joke: string) =>
         `import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { fetch() { return new Response(${JSON.stringify(joke)}); } }`;
       // A COMMIT IS THE PUBLICATION: the repo facet cross-posts `repo/commit-completed` to `/`, and the
-      // project processor points the apex at the new commit (project/processor.ts) — the agent's job
-      // used to end with an append on `/` it cannot make from its sandbox; now it ends with the commit.
+      // project processor points the apex at the new commit (project/processor.ts).
       const first = await repo.writeFile("worker.ts", source("Elephants fear the mouse."));
       await until("the first commit published", async () =>
         (await fetchProjectUrl(apex)).text === "Elephants fear the mouse." ? true : undefined,
@@ -103,10 +107,6 @@ localOnly(
       const live = await fetchProjectUrl(apex);
       expect(live.status).toBe(200);
       expect(live.text).toBe("Elephants fear the mouse.");
-      expect(
-        (await root.subscriptions.list()).filter((s: { name: string }) => s.name === "config"),
-      ).toEqual([]);
-      expect(await root.rewriteRules.get("itx." + "worker")).toBe(null);
     }
   },
 );

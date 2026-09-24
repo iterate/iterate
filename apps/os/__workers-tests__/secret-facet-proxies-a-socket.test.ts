@@ -13,18 +13,13 @@
 import { runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
+import { petshopBaseUrl, petshopLegacyBearer } from "../e2e/support/petshop.ts";
 import { stub, until } from "./support.ts";
 
-const SHOP = "https://dummy-petshop.iterate.workers.dev";
+const SHOP = petshopBaseUrl();
 
 test("a WebSocket 101 through a secret: the caller's context forwards to /secrets/shop, whose facet dials the petshop's capnweb door with the bearer substituted and hands the 101 back; frames round-trip; the use is a fact with status 101; aborting the facet closes the socket 1006", async () => {
-  const login = await fetch(`${SHOP}/api/legacy-login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: "secret-facet-ws@example.com", password: "correct-horse" }),
-  });
-  expect(login.status).toBe(200);
-  const { accessToken } = (await login.json()) as { accessToken: string };
+  const accessToken = await petshopLegacyBearer("secret-facet-ws@example.com");
 
   const project = "prj_secret_facet_socket";
   const secret = stub(`${project}.iterate/secrets/shop`);
@@ -87,13 +82,7 @@ test("an app's fetch expression inherits WebSocket egress through its parent con
       },
     ],
   ]);
-  const login = await fetch(`${SHOP}/api/legacy-login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: "voice-parent-ws@example.com", password: "correct-horse" }),
-  });
-  expect(login.status).toBe(200);
-  const { accessToken } = (await login.json()) as { accessToken: string };
+  const accessToken = await petshopLegacyBearer("voice-parent-ws@example.com");
   await root.invoke(["itx", "secrets", ["set", "/secrets/shop", accessToken, { urls: [SHOP] }]]);
   const response = await child.fetch(
     new Request(`${SHOP}/capnweb`, {

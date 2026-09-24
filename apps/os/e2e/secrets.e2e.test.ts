@@ -20,8 +20,16 @@
 
 import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
-import { freshCtx, openItx, processorNames, readAll, runId, workerUrl } from "./support/client.ts";
-import { petshopBaseUrl } from "./support/petshop.ts";
+import {
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  runId,
+  until,
+  workerUrl,
+} from "./support/client.ts";
+import { petshopBaseUrl, petshopLegacyBearer } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
@@ -300,18 +308,6 @@ export default class Echo extends WorkerEntrypoint {
   30_000,
 );
 
-/** The `secret/used` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
- *  facet appends them off the response path, so polled briefly. */
-async function usedFacts(secret: any, expected = 1): Promise<unknown[]> {
-  for (let i = 0; ; i += 1) {
-    const facts = (await readAll(secret))
-      .filter((e) => e.type === "events.iterate.com/secret/used")
-      .map((e) => e.payload);
-    if (facts.length >= expected || i > 40) return facts;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-}
-
 test("a use is a fact: an egress through a secret appends `secret/used` on the secret's path with the request as received and the status — the value never enters a log; a refusal is no use", async () => {
   const itx = openItx(freshCtx("secrets-used"));
   const origin = new URL(workerUrl("/version")).origin;
@@ -344,16 +340,7 @@ deployedOnly(
   "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door dialled from a NESTED context (`/agents/dialler`), whose egress forwards the upgrade to /secrets/shop and its facet substitutes the bearer, dials, and hands the 101 back; the capnweb call answers over it; the use is a fact on the secret's path with status 101",
   async () => {
     const shop = petshopBaseUrl();
-    const login = await fetch(`${shop}/api/legacy-login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        email: `secret-ws-${runId()}@example.com`,
-        password: "correct-horse",
-      }),
-    });
-    expect(login.status).toBe(200);
-    const { accessToken } = (await login.json()) as { accessToken: string };
+    const accessToken = await petshopLegacyBearer(`secret-ws-${runId()}@example.com`);
     const itx = openItx(freshCtx("secrets-ws"));
     await itx.secrets.set("/secrets/shop", accessToken, { urls: [shop] });
     const wsUrl = `${shop.replace(/^http/, "ws")}/capnweb`;
@@ -548,3 +535,18 @@ test("one request, one secret: a request naming two secrets is refused at egress
   expect(await usedFacts(itx.cd("/secrets/a"), 0)).toEqual([]);
   expect(await usedFacts(itx.cd("/secrets/b"), 0)).toEqual([]);
 });
+
+/** The `secret/used` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
+ *  facet appends them off the response path, so polled briefly. */
+function usedFacts(secret: any, expected = 1): Promise<unknown[]> {
+  return until(
+    "secret/used facts",
+    async () => {
+      const facts = (await readAll(secret))
+        .filter((e) => e.type === "events.iterate.com/secret/used")
+        .map((e) => e.payload);
+      return facts.length >= expected ? facts : undefined;
+    },
+    10_000,
+  );
+}

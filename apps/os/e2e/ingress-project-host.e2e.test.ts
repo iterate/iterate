@@ -121,7 +121,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const apexRoot = projectUrl({ project: slug, path: "/" });
   const bare = await fetchProjectUrl(apexRoot);
   expect(bare.status, bare.text).toBe(404);
-  expect(bare.text).toMatch(/no site yet|not configured/); // the deployed worker may run the older wording
+  expect(bare.text).toMatch(/no site yet/);
   await itx.append({
     type: "events.iterate.com/project/ingress-configured",
     payload: {
@@ -162,7 +162,7 @@ localOnly(
     // A custom hostname reaches its project, but needs an explicit ingress target.
     const bare = await fetchProjectHost("custom-apex.test", "/");
     expect(bare.status, bare.text).toBe(404);
-    expect(bare.text).toMatch(/no site yet|not configured/); // the deployed worker may run the older wording
+    expect(bare.text).toMatch(/no site yet/);
     await itx.append({
       type: "events.iterate.com/project/ingress-configured",
       payload: {
@@ -259,7 +259,7 @@ deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app"
   expect(echo).toBe("site-echo:hi");
 });
 
-// ADMISSION (wave 0, issue 1): a hostname for a project the control plane's catalog does not know is
+// ADMISSION: a hostname for a project the control plane's catalog does not know is
 // 421 at the edge, before any project Durable Object is dialled — a stranger's label under the
 // wildcard mints nothing.
 test("an address for a project the catalog does not know is 421, and its label is never an app", async () => {

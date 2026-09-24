@@ -11,7 +11,8 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, rejection, until } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { freshCtx, openItx, rejection, until } from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
 const MODEL = "@cf/meta/llama-3.2-1b-instruct";
@@ -154,7 +155,7 @@ test("the door end to end: `@` is refused in a match, in a call, and outside a t
   // …and a masked `itx.ai` refuses the dream, coded, while `itx.builtins.ai` is the physical door
   await itx.provide("itx.fable", `itx.ai.run('${MODEL}', @)`);
   await itx.provide("itx.ai", null);
-  expect(codeOf(await rejection(itx.fable({ prompt: "hi" })))).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(await rejection(itx.fable({ prompt: "hi" })))).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
 // DEPLOYED-TARGET MODE only (support/global-setup.ts): a local boot never calls the real binding.

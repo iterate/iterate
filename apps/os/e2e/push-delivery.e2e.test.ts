@@ -1,3 +1,4 @@
+// push-delivery.e2e.test.ts — PUSH delivery: a live callback (`subscribe({ target: fn })`, a stub lent
 // to `itx.rpcStubs` under `subscription:<name>`) OWNS ITS PROGRESS, so the one delivery loop pushes it
 // `(events, { after, through })` fire-and-forget — no cursor row, no retry, no ack. (`consumes` is the
 // ONE filter rule, consumesEvent — src/stream/processor.test.ts; the pins that read the worker's
@@ -18,21 +19,19 @@
 //     is what you compare
 
 import { expect, test } from "vitest";
-import { append, collector, freshCtx, openItx, sleep, until } from "./support/client.ts";
+import { collector, freshCtx, openItx, sleep, until } from "./support/client.ts";
 
 // ── ranges chain; the filter; removal; a throwing callback; anonymous names ──
-
-const row = async (itx: any, name: string): Promise<any> => itx.subscriptions.get(name);
 
 test("delivered ranges CHAIN across a consumes-filtered quiet gap", async () => {
   const itx = openItx(freshCtx("chain"));
   const c = collector();
   await itx.subscribe({ name: "chain", consumes: ["hit"], target: c.fn });
-  const [hit1] = await append(itx, { type: "hit" });
+  const [hit1] = await itx.append({ type: "hit" });
   await until("first delivery", () => c.invocations.length >= 1);
   // five durable non-matching events — a quiet gap the subscriber's filter skips entirely
-  for (let i = 0; i < 5; i++) await append(itx, { type: "miss", payload: { i } });
-  const [hit2] = await append(itx, { type: "hit" });
+  for (let i = 0; i < 5; i++) await itx.append({ type: "miss", payload: { i } });
+  const [hit2] = await itx.append({ type: "hit" });
   await until("second delivery", () => c.invocations.length >= 2);
   await sleep(300);
   expect(c.invocations.length).toBe(2); // the misses must produce NO empty sends
@@ -51,8 +50,8 @@ test("consumes naming an ephemeral type opts in; the consumes-less default exclu
   const dflt = collector(); // no consumes — durable events only
   await itx.subscribe({ name: "opted-in", consumes: ["chunk"], target: optedIn.fn });
   await itx.subscribe({ name: "default", target: dflt.fn });
-  const [chunk] = await append(itx, { type: "chunk", ephemeral: true, payload: { n: 1 } });
-  const [note] = await append(itx, { type: "note" });
+  const [chunk] = await itx.append({ type: "chunk", ephemeral: true, payload: { n: 1 } });
+  const [note] = await itx.append({ type: "note" });
   await until("opted-in got the ephemeral", () => optedIn.offsets().includes(chunk.offset));
   await until("default got the durable", () => dflt.offsets().includes(note.offset));
   await sleep(300);
@@ -66,16 +65,16 @@ test("subscribe({ name, target: null }) stops deliveries at the removal offset",
   const itx = openItx(freshCtx("bye"));
   const c = collector();
   await itx.subscribe({ name: "bye", consumes: ["mark"], target: c.fn });
-  const [m1] = await append(itx, { type: "mark" });
-  const [m2] = await append(itx, { type: "mark" });
+  const [m1] = await itx.append({ type: "mark" });
+  const [m2] = await itx.append({ type: "mark" });
   await until("both pre-removal marks", () => c.offsets().length >= 2);
   await itx.subscribe({ name: "bye", target: null });
-  await append(itx, { type: "mark" });
-  await append(itx, { type: "mark" });
+  await itx.append({ type: "mark" });
+  await itx.append({ type: "mark" });
   await sleep(600);
   // nothing at or beyond the removal offset may arrive — the row died inside the removal commit
   expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
-  expect(await row(itx, "bye")).toBeNull();
+  expect(await itx.subscriptions.get("bye")).toBeNull();
 });
 
 test("a throwing subscriber callback never hurts the producer and is never retried", async () => {
@@ -91,14 +90,14 @@ test("a throwing subscriber callback never hurts the producer and is never retri
     },
   });
   await itx.subscribe({ name: "witness", consumes: ["mark"], target: witness.fn });
-  const [m1] = await append(itx, { type: "mark" }); // resolves — the producer is unaffected
-  const [m2] = await append(itx, { type: "mark" });
+  const [m1] = await itx.append({ type: "mark" }); // resolves — the producer is unaffected
+  const [m2] = await itx.append({ type: "mark" });
   await until("witness got both", () => witness.offsets().length >= 2);
   await until("thrower was offered both", () => throws >= 2);
   await sleep(700); // a retry storm would keep incrementing
   expect(throws).toBe(2); // exactly one offer per batch — fire-and-forget means no ladder here
   expect([...witness.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
-  expect((await row(itx, "thrower")).cursor).toBeUndefined(); // no cursor, so nothing to halt
+  expect((await itx.subscriptions.get("thrower")).cursor).toBeUndefined(); // no cursor, so nothing to halt
 });
 
 test("concurrent anonymous subscribes get unique names and never shadow each other", async () => {
@@ -109,7 +108,7 @@ test("concurrent anonymous subscribes get unique names and never shadow each oth
   const s1 = await itx.subscribe({ consumes: ["ping"], target: a.fn });
   const s2 = await itx.subscribe({ consumes: ["ping"], target: b.fn });
   expect(await s1.name).not.toBe(await s2.name); // `name` is a getter on the handle — one hop each
-  const [ping] = await append(itx, { type: "ping" });
+  const [ping] = await itx.append({ type: "ping" });
   await until(
     "both anonymous subscribers received the event",
     () => a.offsets().includes(ping.offset) && b.offsets().includes(ping.offset),
@@ -157,7 +156,7 @@ test("ephemeral flood: all chunks delivered exactly once, batched, under latency
       ephemeral: true,
       payload: { seq: seq + i, sentAtMs: Date.now(), pad },
     }));
-    appendCalls.push(append(itx, ...batch));
+    appendCalls.push(itx.append(...batch));
   }
   await Promise.all(appendCalls);
   const appendsDoneAtMs = Date.now();
@@ -212,14 +211,14 @@ test("200 push subscribers — one append fans out to all 200 in under 2s, exact
   }
   // warm ping: pages all 200 stubs in (cold materialization is not the fan-out cost)
   const tWarm = Date.now();
-  await append(itx, { type: "ping", payload: { round: 1 } });
+  await itx.append({ type: "ping", payload: { round: 1 } });
   // setup, not the claim: paging 200 lent stubs in took over 30 s once in a hundred soak runs
   // (2026-09-22, run 55) — the measured rounds below keep their own budgets
   await until("warm round complete", () => received >= 200, 60_000);
   const coldWallMs = Date.now() - tWarm;
   // the measured round: steady-state fan-out of ONE append across 200 subscribers
   const t0 = Date.now();
-  await append(itx, { type: "ping", payload: { round: 2 } });
+  await itx.append({ type: "ping", payload: { round: 2 } });
   // An UNRELATED call during the fan-out: 200 pushes never head-of-line-block the stream.
   const whoT0 = Date.now();
   await itx.whoami();
@@ -277,7 +276,7 @@ test("50 userspace processors: one append fans out to all 50 in <5s while the st
 
   // ONE append → the delivery loop pushes all 50 facets.
   const t0 = performance.now();
-  const [marker] = await append(itx, { type: "fanout-marker" });
+  const [marker] = await itx.append({ type: "fanout-marker" });
 
   // Responsiveness DURING the fan-out: an unrelated call must not be head-of-line blocked.
   const whoT0 = performance.now();
@@ -311,7 +310,7 @@ test("an append of 900 events in one batch arrives as ONE callback invocation (b
   const c = collector();
   await itx.subscribe({ name: "bulk", consumes: ["bulk"], target: c.fn });
   const batch = Array.from({ length: 900 }, (_, i) => ({ type: "bulk", payload: { i } }));
-  const committed = await append(itx, ...batch);
+  const committed = await itx.append(...batch);
   expect(committed).toHaveLength(900);
   await until("all 900 delivered", () => c.offsets().length >= 900, 30_000);
   expect(c.invocations).toHaveLength(1); // ONE commit = ONE delivery — the batch is never split

@@ -1,4 +1,5 @@
-import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -12,25 +13,20 @@ import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oaut
 import { rpcResponse } from "../src/rpc.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { loginPassword, stub } from "./support.ts";
-
-const bindings = env as unknown as Env;
-const ORIGIN = "https://control.test";
-const adminSecret = bindings.APP_CONFIG_SECRETS__ADMIN_BEARER!;
+import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
+const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const sessions: Disposable[] = [];
 const call = (path: string, init?: RequestInit) => {
   const headers = new Headers(init?.headers);
   if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
-  return SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }));
+  return exports.default.fetch(
+    new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }),
+  );
 };
-const helpers = () =>
-  oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${ORIGIN}/`)));
-/** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows. */
-const controlPlane = () => new ControlPlane(bindings.CONTROL_PLANE);
 
 beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    SELF.fetch(new Request(input, init)),
+    exports.default.fetch(new Request(input, init)),
   );
 });
 afterEach(() => {
@@ -62,23 +58,6 @@ async function rpc(
   const boundAt = Date.now();
   const root = transport.authenticate({ type: credential });
   return { root, closed, boundAt };
-}
-
-/** A bare `/api` socket authenticated in-band with the admin secret — the operator, or `as` a
- *  person (src/session.ts): how the fixture makes a person's projects and changes a membership. */
-async function actingAs(email?: string) {
-  const response = await call("/api", { headers: { Upgrade: "websocket" } });
-  expect(response.status).toBe(101);
-  response.webSocket!.accept();
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  sessions.push(transport);
-  return transport.authenticate({
-    type: "admin-secret",
-    secret: adminSecret,
-    ...(email && { as: { email } }),
-  });
 }
 
 /** THE REVOCATION TRUTH, landed by hand: `account/grant-ended` on the person's account — the fact
@@ -199,7 +178,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   });
   for (const resource of resources) query.append("resource", resource);
   const issuerSession = appSession(
-    bindings.BROWSER_SESSION,
+    env.BROWSER_SESSION,
     new Request(ORIGIN, { headers: { cookie } }),
   )!;
   const { root: approver } = await rpc((await issuerSession.bearer())!);
@@ -238,7 +217,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
 }
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
-  // CIMD is the console's own path (browser-session.ts), but standard MCP clients (the MCP Inspector,
+  // CIMD is the apps' own path (iterate/next/app-server.ts), but standard MCP clients (the MCP Inspector,
   // Claude's connector) require dynamic registration — so both are advertised, on every deployment.
   const metadata = await (
     await call("/.well-known/oauth-authorization-server")
@@ -416,7 +395,7 @@ test("issuer login uses the same revocable API session and has no independent id
   expect(fresh.headers.has("set-cookie")).toBe(false);
 });
 
-test.each(["revoked", "membership"])(
+test.for(["revoked", "membership"])(
   "a live session loses held capabilities after %s within 60 seconds",
   async (reason) => {
     const flow = await grant([`${ORIGIN}/api`]);
@@ -490,19 +469,19 @@ test("a socket holding no project re-checks its grant every thirty seconds and r
 
 test("a live session rides out a deploy's Durable Object reset during its re-check", async () => {
   const flow = await grant([`${ORIGIN}/api`]);
-  // THE GUARD FROM SOURCE (src/rpc.ts), not through SELF: SELF serves the built worker, whose own
+  // THE GUARD FROM SOURCE (src/rpc.ts), not through `exports.default`: it serves the built worker, whose own
   // copy of ControlPlane a spy on the source class never sees. Same admission as /api's.
   const request = new Request(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket", Origin: ORIGIN },
   });
   const executionContext = createExecutionContext();
   const authorization = await authorizationForToken(
-    bindings,
+    env,
     executionContext,
     flow.token!.access_token,
-    platformAddressesOf(bindings, request),
+    platformAddressesOf(env, request),
   );
-  const response = await rpcResponse(request, bindings, executionContext, authorization);
+  const response = await rpcResponse(request, env, executionContext, authorization);
   expect(response).toMatchObject({ status: 101 });
   response.webSocket!.accept();
   const transport = newWebSocketRpcSession<IterateRpcTarget>(
@@ -554,7 +533,7 @@ test("console and project browsers use the same CIMD flow and independent grants
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
       return new Response("Unavailable", { status: 503 });
-    return SELF.fetch(request);
+    return exports.default.fetch(request);
   });
   const issuerLogin = await call("/login", {
     method: "POST",
@@ -574,17 +553,19 @@ test("console and project browsers use the same CIMD flow and independent grants
   const logins = [];
   try {
     for (const origin of [ORIGIN, "https://notes--browser-a.projects.test"]) {
-      const metadata = await SELF.fetch(`${origin}/.auth/client.json`);
+      const metadata = await exports.default.fetch(`${origin}/.auth/client.json`);
       expect(metadata.status).toBe(200);
       let cookie = issuerCookie;
       if (origin !== ORIGIN) {
-        const start = await SELF.fetch(`${origin}/.auth/login?next=/`, { redirect: "manual" });
+        const start = await exports.default.fetch(`${origin}/.auth/login?next=/`, {
+          redirect: "manual",
+        });
         cookie = start.headers.get("set-cookie")!.split(";")[0]!;
         const authorize = new URL(start.headers.get("location")!);
         expect(authorize.origin).toBe(ORIGIN);
         expect(authorize.searchParams.get("client_id")).toBe(`${origin}/.auth/client.json`);
         const issuer = appSession(
-          bindings.BROWSER_SESSION,
+          env.BROWSER_SESSION,
           new Request(ORIGIN, { headers: { cookie: issuerCookie } }),
         )!;
         const { root: approver } = await rpc((await issuer.bearer())!);
@@ -596,19 +577,19 @@ test("console and project browsers use the same CIMD flow and independent grants
         for (const field of ["state", "iss"]) {
           const invalid = new URL(approve.redirectTo);
           invalid.searchParams.delete(field);
-          const rejected = await SELF.fetch(invalid.href, {
+          const rejected = await exports.default.fetch(invalid.href, {
             redirect: "manual",
             headers: { cookie },
           });
           expect(rejected.status).toBe(400);
         }
-        const callback = await SELF.fetch(approve.redirectTo, {
+        const callback = await exports.default.fetch(approve.redirectTo, {
           redirect: "manual",
           headers: { cookie },
         });
         expect(callback.status, await callback.clone().text()).toBe(303);
       }
-      const response = await SELF.fetch(`${origin}/api`, {
+      const response = await exports.default.fetch(`${origin}/api`, {
         headers: { cookie, Origin: origin, Upgrade: "websocket" },
       });
       expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
@@ -632,15 +613,21 @@ test("console and project browsers use the same CIMD flow and independent grants
       // The cookie's authority is same-origin only: a cross-site request goes on BARE and meets the
       // OAuth gate's 401 (a bare WebSocket would authenticate in-band instead — e2e/session).
       expect(
-        (await SELF.fetch(`${origin}/api`, { headers: { cookie, Origin: "https://evil.test" } }))
-          .status,
+        (
+          await exports.default.fetch(`${origin}/api`, {
+            headers: { cookie, Origin: "https://evil.test" },
+          })
+        ).status,
       ).toBe(401);
       logins.push({ origin, cookie, root });
     }
-    const upgrade = await SELF.fetch(`${logins[1]!.origin}/.auth/login?scope=iterate%20account`, {
-      headers: { cookie: logins[1]!.cookie },
-      redirect: "manual",
-    });
+    const upgrade = await exports.default.fetch(
+      `${logins[1]!.origin}/.auth/login?scope=iterate%20account`,
+      {
+        headers: { cookie: logins[1]!.cookie },
+        redirect: "manual",
+      },
+    );
     expect(upgrade.status).toBe(200);
     expect(upgrade.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
     expect(await upgrade.text()).toContain('method="post"');
@@ -763,10 +750,10 @@ test("console and project browsers use the same CIMD flow and independent grants
       /Session not found/,
     );
     // a foreign grant ends nothing: no end lands on the account
-    expect((await accountStateOf(bindings, user.id)).endedGrants["foreign-grant"]).toBeUndefined();
+    expect((await accountStateOf(env, user.id)).endedGrants["foreign-grant"]).toBeUndefined();
     await consoleLogin.root.grants.end(personalId!);
     // the end is on the account — the revocation truth — and the list no longer carries the grant
-    expect((await accountStateOf(bindings, user.id)).endedGrants[personalId!]).toEqual({
+    expect((await accountStateOf(env, user.id)).endedGrants[personalId!]).toEqual({
       at: expect.any(String),
     });
     expect(
@@ -776,15 +763,15 @@ test("console and project browsers use the same CIMD flow and independent grants
       (await tool(personal.token, "run", { project: browserA.id, script: "async () => 1" })).status,
     ).toBe(401);
     const cookieRequest = new Request(`${ORIGIN}/`, { headers: { cookie: consoleLogin.cookie } });
-    const heldSession = appSession(bindings.BROWSER_SESSION, cookieRequest)!;
+    const heldSession = appSession(env.BROWSER_SESSION, cookieRequest)!;
     const bearerBefore = await heldSession.bearer();
     const providerFailure = vi
       .spyOn(OAuthProvider.prototype, "fetch")
       .mockResolvedValueOnce(new Response("Unavailable", { status: 503 }));
     const failedAdmissionContext = createExecutionContext();
-    await expect(
-      browserAuthorization(bindings, cookieRequest, failedAdmissionContext),
-    ).rejects.toThrow(/Token admission failed \(503\)/);
+    await expect(browserAuthorization(env, cookieRequest, failedAdmissionContext)).rejects.toThrow(
+      /Token admission failed \(503\)/,
+    );
     await waitOnExecutionContext(failedAdmissionContext);
     providerFailure.mockRestore();
     expect(await heldSession.bearer()).toBe(bearerBefore);
@@ -813,7 +800,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     const app = logins[1]!;
     expect(
       (
-        await SELF.fetch(`${app.origin}/api`, {
+        await exports.default.fetch(`${app.origin}/api`, {
           headers: { cookie: app.cookie, Origin: app.origin, Upgrade: "websocket" },
         })
       ).status,
@@ -837,7 +824,7 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
   const target = await controlPlane().createProject(caller, { project: "wildcard-consent" });
   await controlPlane().createProject(caller, { project: "other-consent" });
   const configured = {
-    ...bindings,
+    ...env,
     APP_CONFIG_URLS__PROJECT_WILDCARD: JSON.stringify({
       hostname: "iterate.com",
       project: "wildcard-consent",
@@ -876,3 +863,7 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
     expect(firstParty).toMatchObject({ projectBound: false });
   }
 });
+
+const actingAs = (email?: string) => adminSession(sessions, email);
+
+const helpers = () => oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));

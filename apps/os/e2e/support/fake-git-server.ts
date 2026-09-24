@@ -5,7 +5,7 @@
 // `deepen N` → one pack in sideband-1 frames) and `receive-pack` (one ref update, compare-and-swapped
 // on the tip, answered with a report-status). Per repo — keyed by the Artifacts NAME in the URL,
 // `/<name>.git/git-upload-pack` — an object store (oid → object) and the tip of `main` (undefined =
-// unborn). Auth is ignored. `fetches(name)` counts the `command=fetch` requests served — the FULL
+// unborn). Auth is ignored. `totalFetches()` counts the `command=fetch` requests served — the FULL
 // snapshot fetches the repo facet's memo avoids; an `ls-refs` is not one. `commit`/`seed` land a
 // commit from OUTSIDE any facet — "someone else pushed" — through the same codecs the facet uses.
 // Reached from inside local workerd through the dynamic worker's outbound fetch (the context DO's
@@ -75,8 +75,8 @@ export class FakeGitServer {
   #port = 0;
 
   /** Listen on 127.0.0.1, an ephemeral port; unref'd, so a server a test forgets never holds vitest. */
-  async start(): Promise<{ port: number }> {
-    if (this.#server) return { port: this.#port };
+  async start(): Promise<void> {
+    if (this.#server) return;
     const server = createServer((request, response) => {
       this.#handle(request, response).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -92,11 +92,6 @@ export class FakeGitServer {
     server.unref();
     this.#server = server;
     this.#port = (server.address() as AddressInfo).port;
-    return { port: this.#port };
-  }
-
-  get port(): number {
-    return this.#port;
   }
 
   async close(): Promise<void> {
@@ -130,10 +125,6 @@ export class FakeGitServer {
     return [...this.#repos.keys()];
   }
 
-  /** How many `command=fetch` requests `name` has served (never an `ls-refs`). */
-  fetches(name: string): number {
-    return this.#repo(name).fetches;
-  }
   /** The fetches served across every repo. */
   totalFetches(): number {
     let total = 0;

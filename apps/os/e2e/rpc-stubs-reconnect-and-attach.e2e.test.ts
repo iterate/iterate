@@ -21,11 +21,9 @@
 //     resume the same calls land (the attach's atomicity at the DO's door — 409 + code, no socket, no
 //     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
 
-import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
+import { errorCode } from "iterate/next/lib";
 import {
-  append,
-  codeOf,
   collector,
   freshCtx,
   openItx,
@@ -41,17 +39,6 @@ import {
 import { Tools } from "./support/targets.ts";
 
 // ── reconnect at the same spelling ──
-
-class EchoTools extends RpcTarget {
-  #tag: string;
-  constructor(tag: string) {
-    super();
-    this.#tag = tag;
-  }
-  echo(s: string): string {
-    return `echo-${this.#tag}:${s}`;
-  }
-}
 
 // The reconnect one layer up: a LIVE SUBSCRIBER is a stub lent under
 // `subscription:<name>` plus one subscription row naming it. Re-subscribing the same name
@@ -130,8 +117,8 @@ test("a live subscriber re-subscribes under the same name — the transport is r
 test("disposing a STALE provide handle leaves its replacement serving; only the live handle's dispose un-sets the match", async () => {
   const ctx = freshCtx("stale-lease");
   const itx = openItx(ctx);
-  const first = await itx.provide("itx.tool", new EchoTools("first"));
-  const second = await itx.provide("itx.tool", new EchoTools("second"));
+  const first = await itx.provide("itx.tool", new Tools("first"));
+  const second = await itx.provide("itx.tool", new Tools("second"));
   await until(
     "the reconnect serves",
     async () => (await itx.invoke("itx.tool.echo('x')")) === "echo-second:x" || undefined,
@@ -142,16 +129,16 @@ test("disposing a STALE provide handle leaves its replacement serving; only the 
   second[Symbol.dispose]();
   const denied = await until("the un-set landed", async () => {
     const e = await rejection(itx.invoke("itx.tool.echo('z')"));
-    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the recall's window — keep waiting
+    return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the recall's window — keep waiting
   });
-  expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
 test("an EXPRESSION rule's handle disposed after a live provider took its match over un-sets nothing — the live rule and its stub keep serving", async () => {
   const ctx = freshCtx("stale-expression-lease");
   const observer = openItx(ctx);
   const expressionHandle = await openItx(ctx).provide("itx.m", "itx.kv"); // session A: a pure-data rule
-  await openItx(ctx).provide("itx.m", new EchoTools("live")); // session B takes the match over (one rule per match)
+  await openItx(ctx).provide("itx.m", new Tools("live")); // session B takes the match over (one rule per match)
   await until(
     "the live stub serves",
     async () => (await observer.invoke("itx.m.echo('a')")) === "echo-live:a" || undefined,
@@ -239,7 +226,7 @@ test("subscribe({ target: fn }): the row is appended INSIDE the pager attach —
   ]);
   expect(rowEvent.offset).toBeLessThan(attachedOffset);
   // The row delivers: a mark lands on the live callback through the pager the attach opened.
-  await append(observer, { type: "mark", payload: { n: 1 } });
+  await observer.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered", () => deliveries.types().includes("mark"));
 });
 
@@ -248,24 +235,24 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED �
   // the coded capnweb error a client classifies by; the attach itself is pinned at the DO's door.
   const ctx = freshCtx("attach-refused");
   const itx = openItx(ctx);
-  await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
+  await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
 
   const provideError = await rejection(
     itx.provide("itx.refused", new Tools("refused")),
     "provide on a paused stream",
   );
-  expect(codeOf(provideError)).toBe("STREAM_PAUSED");
+  expect(errorCode(provideError)).toBe("STREAM_PAUSED");
   const subscribeError = await rejection(
     itx.subscribe({ name: "refused", target: () => undefined }),
     "subscribe on a paused stream",
   );
-  expect(codeOf(subscribeError)).toBe("STREAM_PAUSED");
+  expect(errorCode(subscribeError)).toBe("STREAM_PAUSED");
 
-  await append(itx, { type: "events.iterate.com/stream/resumed" });
+  await itx.append({ type: "events.iterate.com/stream/resumed" });
   await itx.provide("itx.refused", new Tools("resumed"));
   const marks = collector();
   await itx.subscribe({ name: "refused", target: marks.fn, consumes: ["mark"] });
   expect(await itx.invoke("itx.refused.hello()")).toBe("hello-from-resumed");
-  await append(itx, { type: "mark", payload: { n: 1 } });
+  await itx.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
 });

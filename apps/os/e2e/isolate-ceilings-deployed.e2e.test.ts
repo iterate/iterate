@@ -8,11 +8,11 @@
 // over 32 MiB cannot leave the DO over Workers RPC — "Serialized RPC arguments or return values are
 // limited to 32MiB"; the node twin with a heap-capped child is src/stream/memory-budget.test.ts). The
 // CRASH HUNT is deployed-only, OPT-IN (`RUN_ISOLATE_CRASH_HUNT=1`), and DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api
-// edge): it must NEVER point at anything but the throwaway POC worker — every row uses a FRESH ctx =
-// its own DO, a reset clears only in-memory state (the durable log survives). It runs beside its
-// sibling files like every other: what it measures it measures on its own contexts. ONE seeded context (24 × 6 MiB = 144 MiB,
-// more than the isolate) serves every read-driven row; a DO reset between them is fine — the next call
-// re-materializes the context. Pins:
+// edge): a reset touches only the contexts this file creates, and clears only in-memory state (the
+// durable log survives). It runs beside its sibling files like every other: what it measures it
+// measures on its own contexts. ONE seeded context (24 × 6 MiB = 144 MiB, more than the isolate)
+// serves every read-driven row; a DO reset between them is fine — the next call re-materializes the
+// context; every other row uses a FRESH ctx, its own DO. Pins:
 //   • read: a client pages the 144 MiB log — every page fits the isolate and the RPC cap (the server
 //     decides the page size), every body byte-identical
 //   • CONCURRENT READERS (an accepted limit, deliberately not defended): 24 sessions paging the log at
@@ -21,8 +21,6 @@
 //   • facet catch-up: a processor enabled over the 144 MiB log reduces every event through its
 //     loopback read; append: one event past the platform ceiling is refused at the door,
 //     EVENT_TOO_LARGE, nothing written, no offset burnt
-//   • SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes DROPPED past the DO's
-//     in-flight budget (DELIVERY_IN_FLIGHT_BUDGET_CHARS) — the producer floods on, the DO never resets
 //   • LARGE EPHEMERAL FAN-OUT (a documented limit): 30 × 7 MiB ephemerals to 10 co-located facets MAY
 //     reset the parent — facet memory in the shared isolate the parent's JS cannot bound — but the ctx
 //     is serviceable immediately after, never poisoned
@@ -32,18 +30,14 @@
 //     REDUCE_CHECKPOINT_TOO_LARGE on every call, the parent fully serviceable — never a reset
 //   • LOADED-ISOLATE OOM: a runaway WorkerEntrypoint OOMs its OWN isolate (`.overloaded`, no
 //     `.durableObjectReset`) and the parent DO is untouched
+// (The SLOW LIVE CLIENT row is isolate-ceilings-slow-client.e2e.test.ts.)
 // Every reset arrives as `Durable Object's isolate exceeded its memory limit and was reset.` with
 // `.overloaded` + `.durableObjectReset` stamped, and the ctx recovers on the very next call.
 
 import { beforeAll, expect, test } from "vitest";
-import { append, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
-import {
-  MiB,
-  OOMER_SOURCE,
-  blob,
-  isDurableObjectReset,
-  settle,
-} from "./support/isolate-ceilings.ts";
+import { errorCode } from "iterate/next/lib";
+import { freshCtx, openItx, rejection } from "./support/client.ts";
+import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
 import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 /** The CRASH HUNT rows: they push the isolate to its 128 MiB ceiling (the GC's timing decides) and saturate the
@@ -74,7 +68,7 @@ beforeAll(async () => {
   const itx = openItx(seededCtx);
   seededOffsets = [];
   for (let n = 0; n < EVENT_COUNT; n++) {
-    const [event] = await append(itx, { type: "blob", payload: { n, blob: blobFor(n) } });
+    const [event] = await itx.append({ type: "blob", payload: { n, blob: blobFor(n) } });
     seededOffsets.push(event.offset as number);
   }
 }, 600_000);
@@ -105,10 +99,6 @@ test.sequential(
 
 // ── the crash hunt's helpers and INLINE fixture sources ──
 
-/** A blob of `chars` code units — the payload that fills a body toward the 8 MiB append ceiling. */
-/** The stamped signal of an UNCONTROLLED reset (platform-facts.md §4): `.durableObjectReset` after the
- *  DO → edge → capnweb hops, or the raw message if a hop dropped the stamp. NOT a loaded-isolate OOM
- *  ("Worker exceeded memory limit.", `.overloaded` only) and NOT a facet wedge (SQLITE_TOOBIG). */
 /** Retry a call while the platform answers "Durable Object is overloaded. Requests queued for too
  *  long." — its backpressure after a burst (a queue draining), never a reset and never poisoning; any
  *  other failure propagates at once. Bounded: ~15 s. */
@@ -126,8 +116,6 @@ async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Settle a promise to a tagged outcome so a reset never escapes as an unhandled rejection (the e2e
- *  config only forgives WebSocket/RPC-session noise; a `durableObjectReset` message would be fatal). */
 /** Read one context to its durable head, paging by the server's byte budget. */
 async function pageToHead(itx: any): Promise<number> {
   let after = 0;
@@ -140,7 +128,7 @@ async function pageToHead(itx: any): Promise<number> {
   }
 }
 
-// ── INLINE fixture sources (this file may add its own; support/sources.ts is not edited) ──
+// ── INLINE fixture sources ──
 
 /** A facet processor that COUNTS blob events — the fan-out target (its push is a loopback RPC copy). */
 const SINK_SOURCE = {
@@ -160,6 +148,14 @@ export class HoarderDurableObject extends StreamProcessorDurableObject { process
 };
 
 /** A stateless WorkerEntrypoint that allocates unboundedly — its OWN loaded isolate's memory limit. */
+const OOMER_SOURCE = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Oomer extends WorkerEntrypoint {
+  async ping() { return "pong"; }
+  async oom() { const a = []; for (;;) a.push(new Array(1e6).fill(1)); }
+}`,
+};
+
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
 // RED BY DESIGN — an ACCEPTED client-behaviour limit, deliberately NOT defended (2026-09-07). WHY
@@ -217,37 +213,26 @@ test.sequential(
   { timeout: 120_000 },
   async () => {
     const itx = openItx(freshCtx("membudget-door"));
-    const [marker] = await append(itx, { type: "marker" });
+    const [marker] = await itx.append({ type: "marker" });
     const error = await rejection(
-      append(itx, { type: "blob", payload: { blob: "z".repeat(9 * MiB) } }),
+      itx.append({ type: "blob", payload: { blob: "z".repeat(9 * MiB) } }),
       "a 9 MiB append",
       60_000,
     );
-    expect(codeOf(error)).toBe("EVENT_TOO_LARGE");
+    expect(errorCode(error)).toBe("EVENT_TOO_LARGE");
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
-    const [next] = await append(itx, { type: "after" });
+    const [next] = await itx.append({ type: "after" });
     expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
   },
 );
 
-// STILL RED after two DO-side attempts (live-50 delivery budgets 16→8, live-51 classifying facets
-// as push rows at catch-up so onCommit never pins their batches on the delivery record). Diagnosis
-// (deployed): the SAME 30 × 7 MiB burst to 0 facets is ABSORBED (workerd paces the arg
-// deserialization), and even 3 facets RESET — so it is the FAN-OUT, not the raw args, and it is not
-// facet-count-linear. Neither delivery-retention bound nor the pushed-batch fix closes it,
-// which places the dominant term OUTSIDE the parent's delivery accounting: a FACET is a same-worker
-// facet that SHARES the parent's 128 MiB isolate (reference: DO isolate ceiling is shared by
-// co-located instances and same-worker facets), so each pushed 7 MiB event is DESERIALIZED into the
-// facet's context in the shared isolate, plus the loaded facet script's own base memory — memory the
-// parent's JS cannot bound. Likely needs a platform-level lever (a facet-push concurrency-of-one
-// gate that also waits on the facet-side turn, a smaller ephemeral ceiling for fan-out, or accepting
-// it as a client-behavior limit per the trusted-client doctrine). The WANTED (no reset) is the target.
 crashHunt(
   "LARGE EPHEMERAL FAN-OUT (documented limit): a burst of 30 × 7 MiB ephemerals fanned to 10 facets MAY reset the parent — co-located facet memory in the shared isolate — but the reset is TRANSIENT: the ctx is serviceable immediately after (core snapshot + a small append both land), never poisoned",
   { timeout: 300_000 },
   async () => {
     // A DOCUMENTED LIMIT (c), not a red pin: three DO-side attempts (delivery budgets 16→8, classify
-    // facets at catch-up, a facet-push serial gate) did NOT close this. Deployed diagnosis: 0 facets
+    // facets at catch-up, a facet-push serial gate) did NOT close this; what is left is platform-level
+    // (a facet-push gate that also waits on the facet-side turn, a smaller ephemeral ceiling). Deployed diagnosis: 0 facets
     // is ABSORBED (workerd paces the arg deserialization), 3+ facets RESET, and one-large-push-at-a-
     // time still resets — so the dominant term is CO-LOCATED FACET memory. A facet is a same-worker
     // facet sharing the parent's 128 MiB isolate, so each pushed 7 MiB event deserializes INTO the
@@ -265,7 +250,7 @@ crashHunt(
       });
     const results = await Promise.all(
       Array.from({ length: 30 }, (_, i) =>
-        settle(append(itx, { type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
+        settle(itx.append({ type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
       ),
     );
     const reset = results.some((r) => !r.ok && isDurableObjectReset(r.e));
@@ -273,7 +258,7 @@ crashHunt(
       `LARGE EPHEMERAL FAN-OUT: the burst ${reset ? "reset" : "did not reset"} the parent this run`,
     );
     // The controlled part: whatever the burst did, the ctx is serviceable and unpoisoned right after —
-    // the durable log survives an isolate reset (this subsumes the old RECOVERY row). "Right after"
+    // the durable log survives an isolate reset. "Right after"
     // allows the platform's own backpressure to drain: while the burst's queue empties, a call may be
     // refused with "Durable Object is overloaded. Requests queued for too long." — a queue-full
     // refusal, not a poisoned context — so the recovery is retried for a few seconds.
@@ -282,8 +267,8 @@ crashHunt(
       () => recovered.invoke("itx.facets.get('core').snapshot()") as Promise<{ offset: number }>,
     );
     expect(snapshot.offset).toBeGreaterThan(0);
-    const [ev] = await retryWhileOverloaded(() =>
-      append(recovered, { type: "fan-out-recovery-marker" }),
+    const [ev] = await retryWhileOverloaded<any[]>(() =>
+      recovered.append({ type: "fan-out-recovery-marker" }),
     );
     expect(ev.offset).toBeGreaterThan(0);
   },
@@ -297,8 +282,7 @@ crashHunt(
 // Workers-RPC copy; whether the eight land in ONE edge isolate is the platform's routing). Observed
 // 2026-09-04: 8/8 twice, then 7/8 four times, then 8/8 — so this row asserts what holds EITHER way:
 // no DO resets, every commit that landed is whole, and any loss is that one edge close (the
-// assertion message names each). The audit's "least-isolated tenant" (oom-audit item 4/27); the
-// fix is an edge-side in-flight budget, on the menu.
+// assertion message names each). The fix is an edge-side in-flight budget.
 crashHunt(
   "CONCURRENT BIG APPENDS: 8 sessions each commit a 28 MiB batch (4 × 7 MiB) to its own ctx at once — a session may lose its socket to the shared /api edge (1006), but no DO ever resets and every landed batch is whole",
   { timeout: 300_000 },
@@ -306,8 +290,7 @@ crashHunt(
     const results = await Promise.all(
       Array.from({ length: 8 }, () => openItx(freshCtx("degrade-edge"))).map((itx) =>
         settle(
-          append(
-            itx,
+          itx.append(
             ...Array.from({ length: 4 }, (_, j) => ({
               type: "blob",
               payload: { j, blob: blob(7 * MiB) },
@@ -320,7 +303,7 @@ crashHunt(
       r.ok
         ? []
         : [
-            `${String(r.e?.message ?? r.e).slice(0, 300)} [code=${codeOf(r.e)} reset=${isDurableObjectReset(r.e)}]`,
+            `${String(r.e?.message ?? r.e).slice(0, 300)} [code=${errorCode(r.e)} reset=${isDurableObjectReset(r.e)}]`,
           ],
     );
     expect(
@@ -346,7 +329,7 @@ crashHunt(
     const ctx = freshCtx("degrade-poison");
     const itx = openItx(ctx);
     for (let n = 0; n < 16; n++)
-      await append(itx, { type: "blob", payload: { n, blob: blob(4 * MiB) } });
+      await itx.append({ type: "blob", payload: { n, blob: blob(4 * MiB) } });
     await itx.processors.enable("hoarder", {
       source: HOARDER_SOURCE,
       className: "HoarderDurableObject",
@@ -355,14 +338,14 @@ crashHunt(
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await settle(itx.invoke("itx.facets.get('hoarder').snapshot()"));
       expect(r.ok, `snapshot attempt ${attempt} unexpectedly succeeded`).toBe(false);
-      expect(codeOf((r as { e: any }).e)).toBe("REDUCE_CHECKPOINT_TOO_LARGE"); // ours, coded — no raw SQLITE_TOOBIG
+      expect(errorCode((r as { e: any }).e)).toBe("REDUCE_CHECKPOINT_TOO_LARGE"); // ours, coded — no raw SQLITE_TOOBIG
       expect(String((r as { e: any }).e?.message)).toMatch(
         /over the .*ceiling of one storage cell/,
       );
       expect(isDurableObjectReset((r as { e: any }).e)).toBe(false); // the facet wedged; the DO did not reset
     }
     // The parent is intact: a fresh session's append lands.
-    const [ev] = await append(openItx(ctx), { type: "after-poison" });
+    const [ev] = await openItx(ctx).append({ type: "after-poison" });
     expect(ev.offset).toBeGreaterThan(0);
   },
 );
@@ -383,7 +366,7 @@ deployedOnly.sequential(
     expect(e?.overloaded === true || /exceeded memory limit/i.test(String(e?.message))).toBe(true);
     expect(isDurableObjectReset(e)).toBe(false); // the loaded isolate died, not the parent DO
     // The parent is intact: a small append lands on the same session.
-    const [ev] = await append(itx, { type: "after-loaded-oom" });
+    const [ev] = await itx.append({ type: "after-loaded-oom" });
     expect(ev.offset).toBeGreaterThan(0);
   },
 );

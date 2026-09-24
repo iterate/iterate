@@ -13,33 +13,30 @@
 //     --config preview -- pnpm --dir apps/os e2e context-watchdog
 import { expect, test } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
-import { freshCtx, openItx, presence, readAll, sleep } from "./support/client.ts";
+import {
+  EVICTION_IDLES,
+  freshCtx,
+  idleAcrossEvictions,
+  openItx,
+  presence,
+  readAll,
+  sleep,
+} from "./support/client.ts";
 import { projectHostsAreLocal } from "./support/project-host.ts";
 import { Tools } from "./support/targets.ts";
 
 const HELD = "events.iterate.com/context/held-resident-while-idle";
 const WOKEN = "events.iterate.com/stream/woken";
-const IDLES = 3;
-
-/** Wake the context IDLES times with a 12 s idle between (the platform evicts an idle actor in
- *  ~10 s, context-residency.e2e.test.ts), then read its log. */
-async function logAcrossIdles(itx: any): Promise<any[]> {
-  for (let i = 0; i < IDLES; i++) {
-    await sleep(12_000);
-    await itx.whoami();
-  }
-  return readAll(itx);
-}
 const incarnations = (events: any[]): number[] =>
   events.filter((event) => event.type === WOKEN).map((event) => event.payload.incarnation);
 
 test("an armed watchdog does not hold an idle context: evicted in every idle, and its alarm fired in none", async () => {
   const itx = openItx(freshCtx("watchdog_idle"));
   await itx.whoami(); // arms the watchdog
-  const events = await logAcrossIdles(itx);
+  const events = await idleAcrossEvictions(itx);
   // One incarnation per idle, numbered consecutively: no watchdog wake came between them.
   const woken = incarnations(events);
-  expect(woken.length).toBeGreaterThanOrEqual(IDLES + 1);
+  expect(woken.length).toBeGreaterThanOrEqual(EVICTION_IDLES + 1);
   expect(woken).toEqual(woken.map((_, i) => woken[0]! + i));
   expect(events.filter((event) => event.type === HELD)).toEqual([]);
 }, 90_000);
@@ -48,8 +45,8 @@ test("an armed watchdog does not hold a context with a pager socket open: it hib
   const itx = openItx(freshCtx("watchdog_pager"));
   await itx.whoami();
   await itx.provide("itx.watchdogPager", new Tools("watchdog"));
-  const events = await logAcrossIdles(itx);
-  expect(incarnations(events).length).toBeGreaterThanOrEqual(IDLES + 1);
+  const events = await idleAcrossEvictions(itx);
+  expect(incarnations(events).length).toBeGreaterThanOrEqual(EVICTION_IDLES + 1);
   expect(await presence(itx)).toEqual(["itx.watchdogPager"]); // the socket stayed open throughout
   expect(events.filter((event) => event.type === HELD)).toEqual([]);
 }, 90_000);

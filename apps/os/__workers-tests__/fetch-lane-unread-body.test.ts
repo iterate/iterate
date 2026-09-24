@@ -4,7 +4,7 @@
 // (https://github.com/cloudflare/workerd/issues/918). Local workerd does not surface that error, so
 // these rows pin what the pipe must preserve; the error itself is proven on a deployed worker.
 
-import { SELF } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { adminCredentials, openSession, SRC_ECHO_APP } from "./support.ts";
 
@@ -28,7 +28,7 @@ test("a project host POST reaches an app that ignores its body (200) and one tha
   await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   await itx.provide("itx.apps.body", ["itx", "workers", ["get", { source: SRC_BODY_ECHO_APP }]]);
 
-  const ignored = await SELF.fetch(
+  const ignored = await exports.default.fetch(
     "https://echo--unread-body.projects.test/wp-json/batch/v1",
     streamed('{"requests":[]}'),
   );
@@ -36,7 +36,7 @@ test("a project host POST reaches an app that ignores its body (200) and one tha
   expect(await ignored.json()).toMatchObject({ app: "echo" });
 
   const payload = "x".repeat(256 * 1024);
-  const echoed = await SELF.fetch(
+  const echoed = await exports.default.fetch(
     "https://body--unread-body.projects.test/upload",
     streamed(payload),
   );

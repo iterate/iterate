@@ -1,7 +1,7 @@
 // context.e2e.test.ts — the CONTEXT across the /api hop: its built-in roots, the error grammar, and the
 // natural dotted client surface — deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb
 // stub (`itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`): only fixed members are real
-// methods along the path; the prototype hop (context/expression.ts) turns every unknown segment into
+// methods along the path; the prototype hop (iterate/next/expression.ts) turns every unknown segment into
 // ONE accumulated `invoke(expression)` dispatch. Pins:
 //   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
 //     and answers 421 (never the control plane); the codec's own charset gate is the unit lane's
@@ -17,7 +17,8 @@
 //     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
 
 import { expect, test } from "vitest";
-import { append, codeOf, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
+import { errorCode } from "iterate/next/lib";
+import { freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
 import { fetchProjectHost, ingressHostname, subdomainsOnly } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
@@ -93,16 +94,16 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
 test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api hop", async () => {
   const itx = openItx(freshCtx("codemiss"));
   const err = await rejection(itx.invoke(["itx", "nope", ["thing"]]));
-  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(err.message).toMatch(/no rewrite rule matches/);
 });
 
 test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", async () => {
   // enforcement refusals ride the same coded channel end to end
   const itx = openItx(freshCtx("codepause"));
-  await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
-  const err = await rejection(append(itx, { type: "mark", payload: { n: 1 } }));
-  expect(codeOf(err)).toBe("STREAM_PAUSED");
+  await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
+  expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused");
 });
 
@@ -180,20 +181,18 @@ test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing
   // A wrong guess at a live provider's surface propagates the RAW capnweb reject — it still ERRORS
   // (that's the contract), just without a re-grammared "did not resolve to a function".
   const { itx } = await slackRig(freshCtx("miss"));
-  const err = await rejection(
+  await rejection(
     itx.slack.api.postMessage({ channel: "#x", text: "y" }),
     "dotted call through an invented namespace",
   );
-  expect(String(err.message || err)).toBeTruthy();
 });
 
 test("a leaf miss through the EXPLICIT door also rejects", async () => {
   const { itx } = await slackRig(freshCtx("leaf"));
-  const err = await rejection(
+  await rejection(
     itx.invoke(["itx", "slack", "chat", ["nosuchMethod", { channel: "#x", text: "y" }]]),
     "explicit-door call on a method the bridge never had",
   );
-  expect(String(err.message || err)).toBeTruthy();
 });
 
 test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {

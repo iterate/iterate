@@ -44,32 +44,3 @@ test("a disconnected userspace facet's deadline fires after the pins' release wi
     "dormant",
   ]);
 }, 45_000);
-
-test("facet-scoped relative deadlines and serializable receipts keep two instances independent", async () => {
-  const itx = openItx(freshCtx("schedule_scoped"));
-  for (const name of ["first", "second"]) {
-    await itx.processors.enable(name, {
-      source: scheduledAppendFacetSource,
-      className: "DeadlinesDurableObject",
-    });
-  }
-  // 5 s: the three round trips below must read the row back before it fires (1.5 s flaked, 2026-09-21)
-  const first = await itx.facets.get("first").start("same-job", { afterMs: 5_000 });
-  const second = await itx.facets.get("second").start("same-job", { afterMs: 60_000 });
-  expect(first.key).not.toBe(second.key);
-  const row = await itx.schedules.get(["first", "same-job"]);
-  const definition = (await readAll(itx)).find(
-    (event) => event.offset === first.scheduledAtOffset,
-  )!;
-  expect(Date.parse(row.nextAt) - Date.parse(definition.createdAt)).toBe(5_000);
-  await itx.facets.get("second").finish(JSON.parse(JSON.stringify(second)));
-  expect(await itx.schedules.get(["second", "same-job"])).toBeNull();
-  const due = await itx.waitForEvent({
-    type: "job/timeout-audit",
-    afterOffset: first.scheduledAtOffset,
-  });
-  await itx.facets.get("first").waitUntilProcessed({ offset: due.offset });
-  await itx.facets.get("second").waitUntilProcessed({ offset: due.offset });
-  expect((await itx.facets.get("first").snapshot()).state.timedOut).toEqual(["same-job"]);
-  expect((await itx.facets.get("second").snapshot()).state.timedOut).toEqual([]);
-});

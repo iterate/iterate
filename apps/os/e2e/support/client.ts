@@ -1,7 +1,7 @@
 // e2e/support/client.ts — THE E2E client: open a capnweb session to the one shared worker (URL and
 // admin secret from global-setup, via WORKER_BASE_URL and ADMIN_API_SECRET) for a FRESH ctx per test,
 // exactly like a production client. This is the whole "how a test reaches the worker" surface, plus
-// the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
+// the idioms the files share (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -45,6 +45,41 @@ export const adminCredentials = (as?: {
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
+/** MCP's protocol endpoint (global-setup: `<worker>/mcp`, or a deployed worker's own MCP origin). */
+const mcpUrl = (): string => {
+  const url = process.env.MCP_BASE_URL;
+  if (!url) throw new Error("MCP_BASE_URL unset — the e2e globalSetup/setup did not run");
+  return url;
+};
+
+let mcpRequestId = 0;
+/** One MCP JSON-RPC call with `bearer`, answered as JSON or as an event stream; hands back the
+ *  `result` and throws on a non-200 answer or a JSON-RPC `error`. */
+export async function mcpCall(method: string, params: unknown, bearer: string): Promise<any> {
+  const response = await fetch(mcpUrl(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${bearer}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++mcpRequestId, method, params }),
+  });
+  const body = await response.text();
+  if (response.status !== 200)
+    throw new Error(`MCP ${method} answered ${response.status}: ${body}`);
+  const message = response.headers.get("content-type")?.includes("text/event-stream")
+    ? JSON.parse(
+        body
+          .split("\n")
+          .find((line) => line.startsWith("data: "))!
+          .slice(6),
+      )
+    : JSON.parse(body);
+  if (message.error) throw new Error(`MCP ${method} failed: ${body}`);
+  return message.result;
+}
+
 /** THE RUN'S ID — one value for the whole `pnpm e2e` run, minted by global-setup and handed to every
  *  vitest worker process (support/setup.ts sets `E2E_RUN_ID` from it; a caller may pin it — a commit
  *  sha in CI). Every identifier a test mints carries it, so no two runs against one deployment can
@@ -62,6 +97,13 @@ export const runId = (): string =>
 /** THIS vitest worker process, within the run. Files run in parallel in separate processes, each
  *  with its own `counter` starting at 0, so the slot is what keeps two processes' ids apart. */
 export const workerSlot = (): string => process.env.VITEST_WORKER_ID || "0";
+
+let repoCounter = 0;
+/** A repo path unique to this run — one segment under `/e2e`, inside Artifacts' name grammar
+ *  (`[a-zA-Z0-9._-]+`, never `--`). */
+export const freshRepoPath = (prefix: string): string =>
+  // Per run and per worker process, never random: a collision would delete a sibling's repo.
+  `/e2e/${prefix}-${runId()}-${workerSlot()}-${repoCounter++}`;
 
 let counter = 0;
 /** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own):
@@ -163,14 +205,8 @@ export const disposeFileSessions = (): void => dispose(fileTransports);
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-// ── the stream, through the ONE dispatch door ──
+// ── the stream ──
 
-/** `itx.append(...events)` spelled as an expression — one commit, one receipt per input. */
-export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invoke(["itx", ["append", ...events]]);
-
-/** EVERY durable row of the log — paged on `scannedThroughOffset` until the page says it reached the
- *  head (a page is bounded by rows AND by bytes, so one page is not the log). */
 /** A rewrite-rule event's `match` AT REST is the parsed prefix (the append boundary canonicalizes
  *  it the way it does the target); the keys these tests provide are plain dotted names, so joining
  *  the segments spells the key back. */
@@ -179,6 +215,8 @@ export const ruleMatchAtRest = (event: { payload?: { match?: unknown } }) => {
   return Array.isArray(match) ? match.join(".") : "";
 };
 
+/** EVERY durable row of the log — paged on `scannedThroughOffset` until the page says it reached the
+ *  head (a page is bounded by rows AND by bytes, so one page is not the log). */
 export const readAll = async (itx: any): Promise<any[]> => {
   const all: any[] = [];
   for (let after = 0; ; ) {
@@ -187,6 +225,25 @@ export const readAll = async (itx: any): Promise<any[]> => {
     if (page.atHead === true || page.scannedThroughOffset <= after) return all;
     after = page.scannedThroughOffset;
   }
+};
+
+/** A log as its repo facts' short type names, in order (`repo/created`, …; a processor row's
+ *  `stream/…` fact is not one). */
+export const repoFactTypes = (log: { type: string }[]): string[] =>
+  log
+    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
+    .map((e) => e.type.replace("events.iterate.com/", ""));
+
+/** What the `tally` fixture (support/sources.ts) has reduced so far. */
+export const tallySnapshot = (itx: any): Promise<any> =>
+  itx.invoke("itx.facets.get('tally').snapshot()");
+
+/** What a "*" processor reduces: every durable event, each incarnation's `stream/woken` included
+ *  (processor.ts `consumesEvent`). */
+export const durableCountsByType = (events: any[]): Record<string, number> => {
+  const counts: Record<string, number> = {};
+  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
+  return counts;
 };
 
 /** The DURABLE head — the last durable row's offset, NOT scannedThroughOffset (ephemerals such as
@@ -222,8 +279,8 @@ export async function rpcStubRewriteRuleMatches(itx: any): Promise<string[]> {
     .map((rule) => rule.match);
 }
 
-/** Enabled processors = subscriptions that HOST a facet (M1 marks the row `hostedFacet`; the source
- *  is no longer in the target) and push its processEventBatch. */
+/** Enabled processors = subscriptions that HOST a facet (the row is marked `hostedFacet`; the source
+ *  is not in the target) and push its processEventBatch. */
 export async function processorNames(itx: any): Promise<string[]> {
   return (await subscriptions(itx))
     .filter((s) => s.hostedFacet && /\.processEventBatch$/.test(s.target))
@@ -255,6 +312,20 @@ export const until = async <T>(
   }
 };
 
+/** How many idles `idleAcrossEvictions` waits out. */
+export const EVICTION_IDLES = 3;
+
+/** Wake the context EVICTION_IDLES times with an idle gap between, then read its log — one
+ *  `stream/woken` per incarnation. The platform evicts an idle actor in ~10 s (measured 2026-09-22:
+ *  0/6 at 10 s, 48/48 at 12 s+), so each 12 s gap should cost one eviction. */
+export async function idleAcrossEvictions(itx: any): Promise<any[]> {
+  for (let i = 0; i < EVICTION_IDLES; i++) {
+    await sleep(12_000);
+    await itx.whoami();
+  }
+  return readAll(itx);
+}
+
 /** Await a promise that MUST reject promptly; hands back the error for inspection (its `code` is
  *  the machine-readable channel, lib.ts). Throws if it fulfils, or is still pending at the
  *  deadline — a hang is a bug, never a wait. */
@@ -276,10 +347,6 @@ export async function rejection(
     throw new Error(`${label}: resolved (${JSON.stringify(out.v)}) — expected a rejection`);
   return out.e as Error & { code?: string };
 }
-
-/** The machine-readable error channel (lib.ts): classify by code, never by message. */
-export const codeOf = (e: unknown): string | undefined =>
-  typeof e === "object" && e && "code" in e ? String((e as { code: unknown }).code) : undefined;
 
 /** A subscriber callback recording every delivery (deep-cloned — capnweb payloads must not be read
  *  after the callback's turn). Works verbatim as a push target and behind a cursor-lane hook. */

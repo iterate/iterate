@@ -11,6 +11,19 @@ export const petshopBaseUrl = (): string =>
     "",
   );
 
+/** A live bearer for `email` at the shop's pets API — a legacy-login token (120 s TTL), so mint one
+ *  per test that needs it. */
+export async function petshopLegacyBearer(email: string): Promise<string> {
+  const response = await fetch(`${petshopBaseUrl()}/api/legacy-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password: "correct-horse" }),
+  });
+  if (!response.ok)
+    throw new Error(`pet shop legacy-login answered ${response.status} at ${petshopBaseUrl()}`);
+  return ((await response.json()) as { accessToken: string }).accessToken;
+}
+
 const backdoorHeaders = (): Record<string, string> => {
   const secret = process.env.PETSHOP_BACKDOOR_SECRET?.trim();
   return secret ? { "x-petshop-backdoor": secret } : {};
@@ -51,7 +64,7 @@ export const petshopRegisterPublicClient = (redirectUri: string): Promise<{ clie
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      client_name: "os-next e2e",
+      client_name: "os e2e",
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],

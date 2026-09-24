@@ -26,6 +26,7 @@
 
 import { beforeAll, describe, expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, runId, workerUrl } from "./support/client.ts";
+import { petshopBaseUrl, petshopLegacyBearer } from "./support/petshop.ts";
 import {
   deployedOnly,
   deployedSubdomainsOnly,
@@ -59,9 +60,7 @@ deployedSubdomainsOnly(
 // The pet-shop rows share one gate: the deployed shop must answer before any of them runs (a shop that
 // is down fails the block loudly instead of failing eight rows on eight timeouts).
 describe("against the deployed pet shop", () => {
-  const PETSHOP = (
-    process.env.PETSHOP_BASE_URL || "https://dummy-petshop.iterate.workers.dev"
-  ).replace(/\/+$/, "");
+  const PETSHOP = petshopBaseUrl();
   const PETSHOP_WS = PETSHOP.replace(/^http/, "ws");
 
   /** The shop's pets as its API objects spell them. */
@@ -72,17 +71,9 @@ describe("against the deployed pet shop", () => {
   const shopper = (who: string): string => `${who}-${runId()}@example.com`;
 
   /** A live bearer for `owner` (a legacy-login token: 120 s TTL, minted fresh for every test that needs one). */
-  async function bearerFor(owner: string): Promise<{ authorization: string }> {
-    const response = await fetch(`${PETSHOP}/api/legacy-login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: owner, password: "correct-horse" }),
-    });
-    if (!response.ok)
-      throw new Error(`pet shop legacy-login answered ${response.status} at ${PETSHOP}`);
-    const { accessToken } = (await response.json()) as { accessToken: string };
-    return { authorization: `Bearer ${accessToken}` };
-  }
+  const bearerFor = async (owner: string) => ({
+    authorization: `Bearer ${await petshopLegacyBearer(owner)}`,
+  });
 
   /** The connector options, as the ONE spelling a rule target or a call can carry. */
   const withHeaders = (headers: Record<string, string>) => JSON.stringify({ headers });

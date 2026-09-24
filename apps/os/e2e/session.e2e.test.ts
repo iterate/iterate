@@ -3,11 +3,12 @@
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
+import { errorCode } from "iterate/next/lib";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
   adminCredentials,
-  codeOf,
   freshCtx,
+  mcpCall,
   publicSession,
   openItx,
   processorNames,
@@ -53,7 +54,7 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
   expect(events.find((e) => e.type === "note" && e.payload?.n === 2)?.source?.principal).toEqual({
     actor: "admin",
   });
-  expect(codeOf(await rejection(api.projects.get(`${projectId}-other`).whoami()))).toBe(
+  expect(errorCode(await rejection(api.projects.get(`${projectId}-other`).whoami()))).toBe(
     "FORBIDDEN",
   );
   const bad = await fetch(workerUrl("/api"), {
@@ -84,12 +85,12 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new UndiciWebSocket(url);
   using bare = newWebSocketRpcSession<IterateRpcTarget>(socket as unknown as WebSocket);
-  expect(codeOf(await rejection(bare.authenticate({ type: "from-server-cookie" })))).toBe(
+  expect(errorCode(await rejection(bare.authenticate({ type: "from-server-cookie" })))).toBe(
     "UNAUTHENTICATED",
   );
-  expect(codeOf(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` })))).toBe(
-    "INVALID_CREDENTIALS",
-  );
+  expect(
+    errorCode(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` }))),
+  ).toBe("INVALID_CREDENTIALS");
   using api = bare.authenticate({ type: "bearer", token });
   const [whoami, projects] = await Promise.all([api.whoami(), api.projects.list()]); // pipelined
   expect(whoami).toEqual(principal);
@@ -107,17 +108,17 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   ]);
   expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
   // THE BROWSER'S ACTUAL SHAPE: the page that just did the OAuth dance also carries the platform's
-  // own login cookie, from another origin. The cookie lends it nothing (CSRF — iterate/next/app-server
-  // used to answer 403 here); the socket opens bare and the token still works in-band.
+  // own login cookie, from another origin. The cookie lends it nothing (CSRF); the socket opens bare
+  // and the token still works in-band.
   const withCookie = new UndiciWebSocket(url, {
     headers: { ...issuerHeaders, Origin: "http://spa.example" },
   });
   using bareWithCookie = newWebSocketRpcSession<IterateRpcTarget>(
     withCookie as unknown as WebSocket,
   );
-  expect(codeOf(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" })))).toBe(
-    "UNAUTHENTICATED",
-  );
+  expect(
+    errorCode(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" }))),
+  ).toBe("UNAUTHENTICATED");
   expect(await bareWithCookie.authenticate({ type: "bearer", token }).whoami()).toEqual(principal);
   // the HTTP form stays behind the gate: the console's sign-in probe reads this 401
   const probe = await fetch(workerUrl("/api"), { method: "POST", body: "" });
@@ -277,28 +278,15 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const api = publicSession(token);
   expect(await api.whoami()).toEqual(principal);
   expect((await api.projects.list()).map((project) => project.id)).toEqual([projectId]);
-  expect(codeOf(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
+  expect(errorCode(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
 
   // /mcp: the one tool is `run`; this token reaches exactly one project, so `run(script)` omits it
-  const mcp = process.env.MCP_BASE_URL || workerUrl("/mcp");
-  const mcpHeaders = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  const ran = await fetch(mcp, {
-    method: "POST",
-    headers: mcpHeaders,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
-    }),
-  });
-  const ranBody = await ran.text();
-  expect(ran.status, ranBody).toBe(200);
-  expect(ranBody).toContain(projectId); // itx.whoami() names the project the token reaches
+  const ran = await mcpCall(
+    "tools/call",
+    { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
+    token,
+  );
+  expect(JSON.stringify(ran)).toContain(projectId); // itx.whoami() names the project the token reaches
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
@@ -333,11 +321,6 @@ test("a personal access token — one OAuth grant the account mints — is the u
       result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
     },
   });
-  expect(
-    (await readAll(api.projects.get(projectId))).some(
-      (e) => e.type === "events.iterate.com/project/mcp-connection-created",
-    ),
-  ).toBe(false);
   // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
   // the issuer session it was minted through (best-effort and async: wait for it)
   const accountEvents = async () => {
@@ -374,9 +357,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
   expect(endedApi.status).toBe(401);
   await endedApi.body?.cancel();
-  const endedMcp = await fetch(mcp, { method: "POST", headers: mcpHeaders, body: "{}" });
-  expect(endedMcp.status).toBe(401);
-  await endedMcp.body?.cancel();
+  await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
   expect((await fetchProjectUrl(echoOf(slug), bearer)).status).toBe(401);
   // … and the end is the account's fact too
   const ended = await until("the end is on the account context", async () =>

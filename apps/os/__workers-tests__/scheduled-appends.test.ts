@@ -19,7 +19,7 @@ async function read(ctx: string) {
   };
 }
 
-test.each([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", version: "1" } }])(
+test.for([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", version: "1" } }])(
   "live and replayed occurrences preserve absent attribution fields: %j",
   async (source) => {
     const ctx = `prj_schedule_source_${Object.keys(source)[0]}`;
@@ -144,11 +144,6 @@ test("more than one alarm budget of due work drains in bounded batches", async (
 test("a two-due plus one-future pass leaves only the future alarm", async () => {
   const ctx = "prj_scheduled_no_empty_wake";
   const s = stub(ctx);
-  // Remove the default subscriber so this checks the scheduler's own alarm, without delivery work.
-  await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: { name: "config", target: null },
-  });
   const future = "2035-01-01T01:00:00Z";
   await s.append(
     ...[at, at, future].map((deadline, i) => ({
@@ -230,7 +225,7 @@ test("a failed interval stays parked across later alarms", async () => {
   ).toHaveLength(1);
 });
 
-test.each(["once", "interval"])(
+test.for(["once", "interval"])(
   "a %s occurrence survives a post-commit effect failure without being parked or repeated",
   async (kind) => {
     const ctx = `prj_scheduled_effect_${kind}`;
@@ -318,8 +313,8 @@ test("a cold context SUPERSEDES a stale physical alarm nothing durable wants: it
   });
   await evictDurableObject(s);
   await s.invoke("itx.schedules.list()");
-  // The stale time is gone at once (the constructor's reconcile); what may stand is the wake
-  // record's delivery claim, 20 s out, until the config row acks it, and the residency watchdog's.
+  // The stale time is gone at once (the constructor's reconcile); what may stand is a later one, the
+  // residency watchdog's.
   const alarm = await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm());
   expect(alarm === null || alarm > deadline).toBe(true);
   await until(

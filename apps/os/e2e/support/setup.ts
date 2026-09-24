@@ -11,7 +11,6 @@ process.env.ADMIN_API_SECRET = inject("adminApiSecret");
 process.env.LOGIN_PASSWORD = inject("loginPassword");
 process.env.PROJECT_INGRESS_ROUTING = inject("ingressRouting");
 process.env.MCP_BASE_URL = inject("mcpBaseUrl");
-process.env.OPENAI_API_KEY = inject("openaiApiKey");
 // The run's id, the same in every worker process: client.ts folds it into every identifier a test mints.
 process.env.E2E_RUN_ID = inject("runId");
 

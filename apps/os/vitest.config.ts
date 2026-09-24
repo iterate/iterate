@@ -1,10 +1,11 @@
-// THE vitest config — the ONE way to run everything (`pnpm test`); pick a lane with `--project`.
-// Five PROJECTS (vitest's own word), each a genuinely different execution context:
+// THE vitest config; pick a lane with `--project` (`pnpm test` runs unit + workers, `pnpm e2e` and
+// `pnpm bench` the other two). Four PROJECTS (vitest's own word), each a genuinely different
+// execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
-//               under test is Vite's built dist/server/index.js — SELF.fetch, never
-//               a source import of the Start entry.
+//               under test is Vite's built dist/server/index.js — `exports.default.fetch`
+//               from cloudflare:workers, never a source import of the Start entry.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
@@ -71,7 +72,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["src/**/*.test.ts", "examples/**/*.test.ts", "scripts/*.test.ts"],
+          include: ["src/**/*.test.ts", "scripts/*.test.ts"],
           // The edge and DO modules reach the control plane, whose OAuth provider imports
           // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
@@ -100,7 +101,6 @@ export default defineConfig({
           // cold-start lesson, scaled up).
           testTimeout: 120_000,
           hookTimeout: 120_000,
-          onUnhandledError,
         },
       },
       {
@@ -133,7 +133,6 @@ export default defineConfig({
           // 2026-09-21), so the `e2e` script passes `--sequence.concurrent`. `maxConcurrency` IS per
           // project: the default 5 would run a 21-row file in five waves.
           maxConcurrency: 32,
-          onUnhandledError,
         },
       },
       {

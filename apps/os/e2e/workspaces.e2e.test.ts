@@ -14,21 +14,22 @@
 // (support/fake-git-server.ts) behind a FAKE `itx.cfArtifacts` proxy lent to each repo's context
 // (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
 // the real wire codec to it. Those rows are `localOnly` — the fake remote listens on THIS machine's
-// loopback, which a deployed worker's egress cannot reach (403); against the deployed worker the
-// last test runs the same story on real Artifacts (`WORKER_BASE_URL=https://os.iterate.com pnpm e2e
-// workspaces`).
+// loopback, which a deployed worker's egress cannot reach (403). The "against real Artifacts" row runs
+// the same story on the real binding in every lane (the local worker binds Artifacts too).
 
-import { expect, test } from "vitest";
-import { freshCtx, openItx, processorNames, readAll, rejection } from "./support/client.ts";
-import { FakeArtifacts, type FakeCommit } from "./support/fake-artifacts.ts";
+import { expect, test, type TestContext } from "vitest";
+import type { RepoLogEntry } from "../src/repo/git-wire.ts";
+import {
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  rejection,
+  repoFactTypes,
+} from "./support/client.ts";
+import { FakeArtifacts } from "./support/fake-artifacts.ts";
 import { localOnly } from "./support/project-host.ts";
 
-/** A log as its repo facts' short type names, in order (the processor row, a `stream/…` fact, is
- *  not one). */
-const types = (log: { type: string }[]) =>
-  log
-    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
-    .map((e) => e.type.replace("events.iterate.com/", ""));
 /** The same for the workspace's own facts. */
 const workspaceTypes = (log: { type: string }[]) =>
   log
@@ -38,13 +39,16 @@ const workspaceTypes = (log: { type: string }[]) =>
 const SEED = { "/repos/config": { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };
 
 /** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.cfArtifacts` lent to
- *  each repo's context, and the workspace at `/workspaces/<name>`, created too. */
+ *  each repo's context, and the workspace at `/workspaces/<name>`, created too; the fake closes when
+ *  the test finishes. */
 async function workspaceOverFakeArtifacts(
+  { onTestFinished }: TestContext,
   name: string,
   seed: Record<string, Record<string, string>> = SEED,
 ) {
   const itx = openItx(freshCtx("ws"));
   const artifacts = await FakeArtifacts.start(seed);
+  onTestFinished(() => artifacts.close());
   for (const path of Object.keys(seed)) {
     await itx.cd(path).provide("itx.cfArtifacts", artifacts);
     await itx.repos.create(path);
@@ -56,8 +60,8 @@ async function workspaceOverFakeArtifacts(
 
 localOnly(
   "reads fall through to the mounted repo at its tip; a write shadows; the merged listing and the status say which is which",
-  async () => {
-    const { workspace } = await workspaceOverFakeArtifacts("one");
+  async (context) => {
+    const { workspace } = await workspaceOverFakeArtifacts(context, "one");
     expect(await workspace.mounts()).toEqual({ "/repos/config": { repo: "/repos/config" } });
     expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
     expect(await workspace.readFile("/repos/config/missing.ts")).toBeNull();
@@ -97,8 +101,8 @@ localOnly(
 
 localOnly(
   "gitCommit lands one mount's changes as ONE commit on its repo and clears the overlay; the fall-through then reads the new tip; gitLog shows it",
-  async () => {
-    const { workspace, artifacts } = await workspaceOverFakeArtifacts("two");
+  async (context) => {
+    const { workspace, artifacts } = await workspaceOverFakeArtifacts(context, "two");
     await workspace.writeFile("/repos/config/notes/log.md", "# log\n- one\n");
     await workspace.deleteFile("/repos/config/worker.ts");
     await workspace.writeFile("/workspace/scratch.md", "mine"); // scratch never commits
@@ -119,7 +123,7 @@ localOnly(
       "/workspace/scratch.md",
     ]);
     expect(
-      (await workspace.gitLog({ scope: "/repos/config" })).map((c: FakeCommit) => c.message),
+      (await workspace.gitLog({ scope: "/repos/config" })).map((c: RepoLogEntry) => c.message),
     ).toEqual(["notes + drop the worker", "seed"]);
     expect((await rejection(workspace.gitCommit({ message: "again" }))).message).toMatch(
       /nothing to commit/,
@@ -129,8 +133,8 @@ localOnly(
 
 localOnly(
   "deleteFile whites a repo file out until committed; revert lifts the whiteout, and a shadowing write",
-  async () => {
-    const { workspace } = await workspaceOverFakeArtifacts("three");
+  async (context) => {
+    const { workspace } = await workspaceOverFakeArtifacts(context, "three");
     expect(await workspace.deleteFile("/repos/config/worker.ts")).toBe(true);
     expect(await workspace.readFile("/repos/config/worker.ts")).toBeNull();
     expect(await workspace.listAllFiles()).toEqual(["/repos/config/notes/log.md"]);
@@ -144,8 +148,8 @@ localOnly(
   },
 );
 
-test("itx.workspaces.create(path) lands the request and ONE certificate on its path, the same certificate on /, and the catalog lists it; a workspace not created refuses before it stores anything", async () => {
-  const { itx } = await workspaceOverFakeArtifacts("four");
+test("itx.workspaces.create(path) lands the request and ONE certificate on its path, the same certificate on /, and the catalog lists it; a workspace not created refuses before it stores anything", async (context) => {
+  const { itx } = await workspaceOverFakeArtifacts(context, "four");
   const events = await readAll(itx.cd("/workspaces/four"));
   const born = (log: { type: string; payload?: unknown }[]) =>
     log.filter((e) => e.type === "events.iterate.com/workspace/created").map((e) => e.payload);
@@ -192,8 +196,8 @@ test("itx.workspaces.create(path) lands the request and ONE certificate on its p
 
 localOnly(
   "a repo beneath another's path wins beneath it: the listing, reads and status route to the longest mount; a commit never spans mounts",
-  async () => {
-    const { workspace, artifacts } = await workspaceOverFakeArtifacts("nested", {
+  async (context) => {
+    const { workspace, artifacts } = await workspaceOverFakeArtifacts(context, "nested", {
       "/repos/config": { "worker.ts": "w", "vendor/x.txt": "from config" },
       "/repos/config/vendor": { "y.txt": "from lib" },
     });
@@ -234,8 +238,8 @@ localOnly(
 
 localOnly(
   "a workspace is its path: a second session opens the same overlay, uncommitted work included",
-  async () => {
-    const { itx } = await workspaceOverFakeArtifacts("five");
+  async (context) => {
+    const { itx } = await workspaceOverFakeArtifacts(context, "five");
     await itx.workspaces.get("/workspaces/five").writeFile("/workspace/draft.md", "draft");
     const again = openItx((await itx.whoami()).projectId);
     expect(await again.workspaces.get("/workspaces/five").readFile("/workspace/draft.md")).toBe(
@@ -251,9 +255,10 @@ localOnly(
 
 localOnly(
   "the Notes app's story, spelled as apps/notes spells it: create the repo and the workspace (idempotent), read the file through the workspace, write it and commit ONE commit on the repo's main",
-  async () => {
+  async ({ onTestFinished }) => {
     const itx = openItx(freshCtx("notes"));
     const artifacts = await FakeArtifacts.start();
+    onTestFinished(() => artifacts.close());
     await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
     const REPO = "/repos/config";
     const WORKSPACE = "/workspaces/notes";
@@ -286,7 +291,7 @@ localOnly(
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "notes/log.md": "# log\n- one\n" });
     // The next load reads the committed file at the new tip; nothing more was appended by the loads.
     expect(await load()).toEqual({ note: "# log\n- one\n", tip: committed.commitOid });
-    expect(types(await readAll(itx.cd(REPO)))).toEqual([
+    expect(repoFactTypes(await readAll(itx.cd(REPO)))).toEqual([
       "repo/create-requested",
       "repo/created",
       "repo/commit-completed",
@@ -308,7 +313,7 @@ localOnly(
     ).toMatchObject({ commitOid: committed.commitOid, changedPaths: [] });
     expect(
       (await itx.invoke(["itx", "repos", ["get", REPO], ["log"]])).map(
-        (c: FakeCommit) => c.message,
+        (c: RepoLogEntry) => c.message,
       ),
     ).toEqual(["notes: save"]);
   },
@@ -345,7 +350,7 @@ test("against real Artifacts: nested paths through the workspace — a repo file
     await workspace.gitCommit({ message: "drop the worker" });
     expect(await repo.listFiles()).toMatchObject({ paths: ["notes/log.md"] });
     expect(
-      (await workspace.gitLog({ scope: "/repos/config" })).map((c: FakeCommit) => c.message),
+      (await workspace.gitLog({ scope: "/repos/config" })).map((c: RepoLogEntry) => c.message),
     ).toEqual(["drop the worker", "notes", "write worker.ts"]);
     expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual([
       "/repos/config",

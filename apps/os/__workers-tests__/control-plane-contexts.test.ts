@@ -20,7 +20,7 @@ import type { RpcStub } from "capnweb";
 import { describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { adminCredentials, openSession, stub, until } from "./support.ts";
+import { adminCredentials, openSession, refused, stub, until } from "./support.ts";
 
 /** A signed-in human's session: the admin fixture with `as` upserts the user and vends their session
  *  (src/session.ts `IterateRpcTarget.authenticate`). The bare `openSession()` door is `any` (it also
@@ -29,21 +29,6 @@ import { adminCredentials, openSession, stub, until } from "./support.ts";
 async function userSession(email: string) {
   const root: RpcStub<IterateRpcTarget> = await openSession();
   return root.authenticate({ ...adminCredentials(), as: { email } });
-}
-
-/** Assert `thunk` is REFUSED with the FORBIDDEN code (the code the refusal must carry, so a broken
- *  pipeline or a typo never passes as a refusal). Explicit try/catch, not `expect().rejects`,
- *  because a capnweb stub is a custom thenable `.rejects` doesn't handle. Under a `test.fails` the
- *  thunk resolving is what keeps the expected-fail passing while that gap is open. */
-async function refuses(thunk: () => Promise<unknown>): Promise<void> {
-  let refusal: unknown;
-  try {
-    await thunk();
-  } catch (error) {
-    refusal = error;
-  }
-  expect(refusal, "expected this to be refused, but it was allowed — still insecure").toBeDefined();
-  expect((refusal as { code?: string }).code).toBe("FORBIDDEN");
 }
 
 describe("shape — a global context is an ordinary context (passing)", () => {
@@ -158,24 +143,25 @@ describe("security requirements — the global namespace is not navigable", () =
     const admin = await (await openSession()).authenticate(adminCredentials());
     const b = await userSession("traverse-b@sec.test");
     const bId = (await b.whoami()).actor;
-    await refuses(() => admin.organizations.get(`../users/${bId}`));
-    await refuses(() => admin.organizations.get(".."));
-    await refuses(() => admin.organizations.get(`x/../users/${bId}`));
+    await refused(() => admin.organizations.get(`../users/${bId}`), "FORBIDDEN");
+    await refused(() => admin.organizations.get(".."), "FORBIDDEN");
+    await refused(() => admin.organizations.get(`x/../users/${bId}`), "FORBIDDEN");
   });
 
   test("a user cannot READ another user's context", async () => {
     const a = await userSession("read-a@sec.test");
     const b = await userSession("read-b@sec.test");
     const bId = (await b.whoami()).actor;
-    await refuses(() => a.user.cd(`/users/${bId}`).invoke(["itx", ["readEvents"]]));
+    await refused(() => a.user.cd(`/users/${bId}`).invoke(["itx", ["readEvents"]]), "FORBIDDEN");
   });
 
   test("a user cannot APPEND to another user's context", async () => {
     const a = await userSession("write-a@sec.test");
     const b = await userSession("write-b@sec.test");
     const bId = (await b.whoami()).actor;
-    await refuses(() =>
-      a.user.cd(`/users/${bId}`).invoke(["itx", ["append", { type: "intrusion" }]]),
+    await refused(
+      () => a.user.cd(`/users/${bId}`).invoke(["itx", ["append", { type: "intrusion" }]]),
+      "FORBIDDEN",
     );
   });
 
@@ -282,12 +268,12 @@ describe("security requirements — the global namespace is not navigable", () =
 
   test("a user cannot reach the global ROOT context — not by cd, not through the project catalog", async () => {
     const a = await userSession("root-reach@sec.test");
-    await refuses(() => a.user.cd("/").invoke(["itx", ["readEvents"]]));
-    await refuses(() => a.projects.get("global").invoke(["itx", ["readEvents"]]));
+    await refused(() => a.user.cd("/").invoke(["itx", ["readEvents"]]), "FORBIDDEN");
+    await refused(() => a.projects.get("global").invoke(["itx", ["readEvents"]]), "FORBIDDEN");
     // The admin's catalog is every project — but the global namespace is no project.
     const root = await openSession();
     const admin = await root.authenticate(adminCredentials());
-    await refuses(() => admin.projects.get("global").invoke(["itx", ["readEvents"]]));
+    await refused(() => admin.projects.get("global").invoke(["itx", ["readEvents"]]), "FORBIDDEN");
   });
 
   test("a project named 'global' cannot collide with the deployment-global namespace: its id is minted, only its slug is the word — and `projects.get('global')` stays refused", async () => {
@@ -307,7 +293,7 @@ describe("security requirements — the global namespace is not navigable", () =
       { id: who.projectId, slug: "global" },
     ]);
     // The word itself still names no project at the catalog.
-    await refuses(() => s.projects.get("global").invoke(["itx", ["readEvents"]]));
+    await refused(() => s.projects.get("global").invoke(["itx", ["readEvents"]]), "FORBIDDEN");
     // And a context that IS the project reads its own log, not the global root's.
     const [mark] = (await named.invoke(["itx", ["append", { type: "collide-mark" }]])) as {
       type: string;
@@ -323,7 +309,7 @@ describe("security requirements — the global namespace is not navigable", () =
     const a = await userSession("org-a@sec.test");
     const b = await userSession("org-b@sec.test");
     const org = await a.organizations.create({ name: "a's org" });
-    await refuses(() => b.organizations.get(org.id).invoke(["itx", ["readEvents"]]));
+    await refused(() => b.organizations.get(org.id).invoke(["itx", ["readEvents"]]), "FORBIDDEN");
   });
 
   test("a rule written into your own context cannot navigate for you: `itx.spy ⇒ itx.cd('/users/<other>').readEvents` is refused inside the DO", async () => {
@@ -331,13 +317,13 @@ describe("security requirements — the global namespace is not navigable", () =
     const b = await userSession("spy-b@sec.test");
     const bId = (await b.whoami()).actor;
     using _spy = await a.user.provide("itx.spy", `itx.cd('/users/${bId}').readEvents`);
-    await refuses(() => a.user.invoke("itx.spy()"));
+    await refused(() => a.user.invoke("itx.spy()"), "FORBIDDEN");
     // The same rule aimed at the root is refused too — a person's hop, whatever the target.
     using _rootSpy = await a.user.provide("itx.rootSpy", "itx.cd('/').readEvents");
-    await refuses(() => a.user.invoke("itx.rootSpy()"));
+    await refused(() => a.user.invoke("itx.rootSpy()"), "FORBIDDEN");
   });
 
-  test("a subscription written into your own context cannot append into another user's: the kernel's delivery runs under no principal, but its one hop is the config funnel — the row HALTS", async () => {
+  test("a subscription written into your own context cannot append into another user's: the kernel's delivery runs under no principal, so the append is refused — the row HALTS", async () => {
     const a = await userSession("launder-a@sec.test");
     const b = await userSession("launder-b@sec.test");
     const bId = (await b.whoami()).actor;
@@ -360,11 +346,8 @@ describe("security requirements — the global namespace is not navigable", () =
     expect(bPage.events.some((event) => event.type === "smuggled")).toBe(false);
   });
 
-  test("user contexts have no implicit global subscription", async () => {
+  test("a user's builtins cd('/') is refused", async () => {
     const a = await userSession("funnel@sec.test");
-    await a.user.invoke(["itx", ["append", { type: "mark" }]]);
-    const rows = (await a.user.invoke("itx.subscriptions.list()")) as { name: string }[];
-    expect(rows.map((row) => row.name)).not.toContain("config");
     await expect(a.user.invoke("itx.builtins.cd('/').kv.list()")).rejects.toThrow("never by path");
   });
 
@@ -443,7 +426,7 @@ describe("security requirements — the global namespace is not navigable", () =
   });
 
   // parked: these need machinery from later increments (the privileged account facet and the
-  // transport-admission gate — the deferred path-mask enforcement pass, item B2), so they are
+  // transport-admission gate — the deferred path-mask enforcement pass), so they are
   // documented as skips rather than expected-fails — revisit by 2026-11-15
   test.skip("the account facet's processEventBatch is not client-callable (needs the privileged account facet)", () => {});
   test.skip("a user cannot SUBSCRIBE to another user's log via the pager (needs the transport-admission gate)", () => {});

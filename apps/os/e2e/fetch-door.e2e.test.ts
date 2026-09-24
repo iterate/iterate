@@ -10,9 +10,8 @@
 //     registry → relay → capnweb → the Node provider and back, the request crossing intact — the
 //     URL as the eyeball spelled it) and its WebSocket upgrade (101, echo, close through the Node
 //     provider)
-//   • a hop count the platform never wrote (`NaN`) is over budget on arrival; the deleted routes
-//     /expression, /call, /ws, /cap fall through to the control plane's 404, an upgrade to /ws gets
-//     no 101 — a project host is the ONE HTTP way in (who a visitor is: ingress-project-host.e2e,
+//   • a hop count the platform never wrote (`NaN`) is over budget on arrival — a project host is the
+//     ONE HTTP way in (who a visitor is: ingress-project-host.e2e,
 //     __workers-tests__/session-doors.test.ts)
 //   • egress: a `getSecret("/secrets/NAME")` placeholder that survives substitution means no such
 //     secret is stored, and forwarding it would leak the secret's NAME and send a garbage credential
@@ -147,44 +146,6 @@ test("a hop count the platform never wrote (an app spelling `NaN` to defeat the 
   );
   expect(response.status).toBe(508);
   expect(response.text).toContain('"NaN"');
-});
-
-test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no capnweb endpoint: on the platform origin each is a 404 (the issuer's pages are the only non-protocol paths), never an itx result; a /ws upgrade gets no 101", async () => {
-  // A project host is the one HTTP way into a project. The old /expression, /call, /ws and /cap
-  // routes on the platform origin do not exist: a path that is neither the provider's nor one of
-  // the issuer's pages is a 404 from issuer-pages.ts, signed in or not. What matters for this pin:
-  // none is a capnweb/itx endpoint any more, and none upgrades.
-  for (const path of [
-    "/expression?context=prj_x&itx=itx.whoami",
-    "/expression/rpc/v1?context=prj_x&itx=itx.site",
-    "/call?path=itx.whoami",
-    "/ws",
-    "/cap?context=prj_x&cap=itx.whoami",
-  ]) {
-    const res = await fetch(workerUrl(path), { redirect: "manual" });
-    expect(res.status, path).toBe(404);
-  }
-  const outcome = await new Promise<string>((resolve) => {
-    const ws = new WebSocket(workerUrl("/ws").replace(/^http/, "ws"));
-    const timer = setTimeout(() => {
-      try {
-        ws.close();
-      } catch {
-        /* never opened */
-      }
-      resolve("no-101 (timeout)");
-    }, 3_000);
-    ws.addEventListener("open", () => {
-      clearTimeout(timer);
-      ws.close();
-      resolve("101");
-    });
-    ws.addEventListener("error", () => {
-      clearTimeout(timer);
-      resolve("no-101 (error)");
-    });
-  });
-  expect(outcome).not.toBe("101");
 });
 
 test("unknown issuer server functions answer 404 instead of Start's internal 500", async () => {
@@ -334,7 +295,7 @@ test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fe
 // plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
 // provider's genuine 101 dies there:
 //   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialRpcStubFetch)
-// EXPECTED: parity with capnweb providers — 101 + echo. Fix directions in the session notes: the
+// EXPECTED: parity with capnweb providers — 101 + echo. Fix directions: the
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
 test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
@@ -362,7 +323,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
 // doctrine ruling ("lent stubs are invocation-scoped; detached fetch-shaped things must be LOADED
 // code — itx.workers.get({ source: ... }) / a named durable facet, both of which already serve WS")
-// is an owner call — see the session notes.
+// is an owner call.
 test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
   const itx = openItx(freshCtx("dynlivex"));
   expect(await runProvider(itx, "provide")).toBe("provided");

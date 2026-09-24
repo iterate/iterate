@@ -35,11 +35,9 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { afterAll, expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/next/expression";
 import { errorCode } from "iterate/next/lib";
-const codeOf = errorCode;
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
-const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
 // ── THE PIN GUARD (see the header) ──
 
@@ -166,8 +164,8 @@ export class FineDurableObject extends FacetDurableObject {
 
 // ═══════════════════════════════ A. THE CELL CAP ═══════════════════════════════
 
-/** A rewrite-rule target that carries a `workers.get({ source })` spec inline: post-M1 a HOSTED facet's
- *  source is elided from core state, but a `workers.get` source is not (oom-audit.md item 6) — so
+/** A rewrite-rule target that carries a `workers.get({ source })` spec inline: a HOSTED facet's
+ *  source is elided from core state, but a `workers.get` source is not — so
  *  each such rule adds its whole source to the core checkpoint's state cell. */
 const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
   "itx",
@@ -180,7 +178,7 @@ const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
 // (REDUCE_CHECKPOINT_TOO_LARGE — ReduceCheckpointTable measures the state BEFORE the write), naming
 // the cell, the size, the ceiling and "nothing was written". BORN RED: SQLite's own `string or blob
 // too big: SQLITE_TOOBIG` crossed the hop with no code, no cap named, from a write already inside
-// the transaction (flipped with the one-row checkpoint, BUILD-LOG 2026-09-04). The ceiling is the
+// the transaction (flipped with the one-row checkpoint). The ceiling is the
 // documented production cell (2 MB), so local workerd (4 MiB) and the edge now refuse alike.
 test("A1 — core state over the checkpoint ceiling: the configure is refused coded, REDUCE_CHECKPOINT_TOO_LARGE, in our words", async () => {
   const ctx = "prj_ud_corecap_message";
@@ -243,7 +241,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
 // WHAT IT DIES OF: the hosting row LANDS (a 4.5 MiB event is under the 8 MiB append ceiling), then
 // `FacetHost#callFacet`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
 // SQLITE_TOOBIG` — at the enable-time catch-up AND on every push after it. Worse than a refusal:
-// with no memo, every push takes the M1 recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
+// with no memo, every push takes the recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
 // and re-parses the 4.5 MiB event out of SQLite, and dies at the same put. `snapshot()` rejects with
 // the same raw text. Production's cell is 2 MB, so a 2–8 MiB processor bundle is exactly this row.
 test.fails("A3 — a hosting spec whose source is over the cell cap but under the append ceiling LANDS, then can never materialize: every push re-reads the event and dies of the raw SQLITE_TOOBIG at the facet memo", async () => {
@@ -288,7 +286,7 @@ test.fails("A4 — a facet whose checkpoint outgrows the cell ceiling is refused
   let last = 0;
   for (let i = 0; i < 4; i++) {
     last = offsetOf(await s.append({ type: "blob", payload: { blob: `${i}:` + "x".repeat(MiB) } }));
-    await settle(200);
+    await sleep(200);
   }
   const ceiling = /over the \d+-char ceiling of one storage cell/;
   await untilIssue("subscription-delivery.deliver", ceiling);
@@ -469,7 +467,7 @@ const corruptRow = (ctx: string, offset: number) =>
 // WHAT IT DIES OF: `SyntaxError: Unexpected token 'o', "not json" is not valid JSON` — V8's parser,
 // from `Stream.read`'s `JSON.parse` of the cell, naming NO offset. Every reader pages through
 // `read`: the client's own `read`, `waitForEvent`'s history scan, every facet's catch-up and gap
-// repair, the cursor lane's pages, the M1 memo recovery. One bad cell, every reader dead, no way to
+// repair, the cursor lane's pages, the memo recovery. One bad cell, every reader dead, no way to
 // tell WHICH row from the message.
 // An unparseable stored body is coded EVENT_UNREADABLE naming its offset, so a reader can read on
 // past it — BORN RED as V8's raw `is not valid JSON` from `read()` / waitForEvent's scan, naming
@@ -483,15 +481,15 @@ test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its off
   const waitErr = await rejectionOf(() =>
     s.invoke(["itx", ["waitForEvent", { type: "never", afterOffset: 0, timeoutMs: 100 }]]),
   );
-  expect(codeOf(readErr)).toBe("EVENT_UNREADABLE");
-  expect(codeOf(waitErr)).toBe("EVENT_UNREADABLE");
+  expect(errorCode(readErr)).toBe("EVENT_UNREADABLE");
+  expect(errorCode(waitErr)).toBe("EVENT_UNREADABLE");
   expect(readErr?.message).toContain(String(seed)); // it names the offset to read on from
   // …and read(seed) skips it: the seed row is the only durable, so the next page is empty and at head.
   expect(((await s.read(seed)) as { events: unknown[] }).events).toEqual([]);
 });
 
 // WHAT IT DIES OF: the same SyntaxError — from the CONSTRUCTOR. A core contract version bump
-// discards the checkpoint (`readReduceCheckpoint` gates the state on `reducerVersion`) and
+// discards the checkpoint (src/stream/stream.ts gates the state on `reducerVersion`) and
 // re-reduces the log from offset 0 in `new Stream(…)`; the re-reduce pages `read`, `read` dies at the
 // bad cell, the constructor throws, and it throws again on every wake — `runInDurableObject`
 // included, so there is no door left to repair the row through. Staged here by writing a foreign
@@ -524,7 +522,7 @@ test("C3 — that row under a core version bump: the constructor's re-reduce ski
 // line — never fatal. BORN RED: the constructor read mark 0, decided the store was VIRGIN,
 // re-appended `stream/created` over offset 1 and died of `UNIQUE constraint failed: events.offset`
 // on EVERY wake, every door, `runInDurableObject` included — bricked, no operator door. Flipped
-// with the SQL storage module (BUILD-LOG 2026-09-04).
+// with the SQL storage module.
 test("D1 — the core checkpoint row lost: the constructor re-derives the mark from the rows, re-reduces the log, and the context wakes", async () => {
   const ctx = "prj_ud_cursor_lost";
   const s = stub(ctx);
@@ -599,7 +597,7 @@ async function walkLadder(
     for (let i = 0; i < fires; i++) {
       vi.setSystemTime(Date.now() + 40 * 60_000);
       if (await runDurableObjectAlarm(stub(ctx))) fired++;
-      await settle(30);
+      await sleep(30);
       row = await subscriptionRow(ctx, "u");
       if (row?.halted) break;
     }
@@ -697,3 +695,5 @@ test.fails("F1 — deleteAll() under a live incarnation: the tables are gone, th
   // WANTED: the stream notices its store was reset and starts over, or refuses in its own words.
   expect(errs.append).toBeUndefined();
 });
+
+const sleep = (ms = 150) => new Promise((r) => setTimeout(r, ms));

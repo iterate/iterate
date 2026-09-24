@@ -2,15 +2,14 @@
 // runs beside the rest: a live subscriber whose callback never resolves, and the producer that floods past
 // the DO's in-flight budget. Deployed-only, like the rest of isolate-ceilings-deployed.
 import { expect } from "vitest";
-import { append, freshCtx, openItx } from "./support/client.ts";
+import { freshCtx, openItx } from "./support/client.ts";
 import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
 // A stalled live subscriber (a callback that never returns) no longer resets the PRODUCER: past the
 // DO's in-flight budget (subscription-delivery.ts DELIVERY_IN_FLIGHT_BUDGET_CHARS) its pushes are
-// DROPPED with a warn (the client heals by read), so the producer floods on. BORN RED: each
-// fire-and-forget push stayed in flight, retaining its bytes on the DO until it reset at ~125 × 1 MiB
-// (flipped 2026-09-04, the per-context ledger).
+// DROPPED with a warn (the client heals by read), so the producer floods on. Without that budget each
+// fire-and-forget push stays in flight, retaining its bytes on the DO until it resets at ~125 × 1 MiB.
 deployedOnly(
   "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
   { timeout: 300_000 },
@@ -34,7 +33,7 @@ deployedOnly(
       while (next < 160 && !reset) {
         const i = next++;
         const r = await settle(
-          append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
+          producer.append({ type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
         );
         if (!r.ok) {
           if (isDurableObjectReset(r.e)) reset = r.e;

@@ -1,5 +1,5 @@
 // rpc-stubs-lend-recall-and-offline.e2e.test.ts — the two-layer stub machinery LIVE
-// (src/context/rpc-stubs.ts + rpc-stubs.ts + iterate-context.ts). TWO different
+// (src/context/rpc-stubs.ts + iterate-context.ts). TWO different
 // things, two lifetimes: an RPC STUB is physical — `itx.provide(match, stub)` LENDS a client's rpc
 // stub to the `itx.rpcStubs` built-in under the key = the canonical match (it lives until the handle
 // is disposed or its session ends); an ITX-EXPRESSION REWRITE RULE is pure data —
@@ -18,9 +18,9 @@
 // the SUBSCRIPTIONS table, never a rewrite rule.
 
 import { expect, test } from "vitest";
+import { errorCode } from "iterate/next/lib";
 import {
   adminCredentials,
-  codeOf,
   freshCtx,
   openItx,
   presence,
@@ -64,7 +64,7 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
   ]);
 
   // Second LIVE session, same key → the newest transport wins (when its pager opens,
-  // rpc-stub-directory drops every OTHER same-key pager with reason "replaced"), and the provide
+  // `RpcStubDirectory` drops every OTHER same-key pager with reason "replaced"), and the provide
   // appends its rule event like any other — NO dedupe: the log grows by exactly one
   // rewrite-rule-configured, and the MAP still holds exactly one rule at the match.
   await openItx(ctx).provide("itx.dupTool", new Tools("two"));
@@ -124,7 +124,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
     "the stub gone from presence",
     async () => !(await presence(observer)).includes("itx.ghosttool"),
   );
-  // THE RULE IS SESSION-SCOPED: capnweb disposed the ProvidedRpcStub handle with the session, and
+  // THE RULE IS SESSION-SCOPED: capnweb disposed the `RewriteRuleHandleRpcTarget` with the session, and
   // its recall appended `rewrite-rule-configured { match, target: itx.builtins.<match…> }` — the
   // removal spelling, restoring the row to the platform default beneath (none here). Calls on the
   // match are default-deny again — NO_ITX_EXPRESSION_MATCH, never a lingering offline row.
@@ -137,7 +137,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
       observer.invoke(["itx", "ghosttool", ["hello"]]),
       `call #${attempt} after the provider's session died`,
     );
-    expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+    expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect(await ruleEventsAt(observer, "itx.ghosttool")).toEqual([
     { target: ["itx", "builtins", "rpcStubs", ["get", "itx.ghosttool"]] },
@@ -155,7 +155,7 @@ test("a hand-configured rule naming a key nobody lent answers RPC_STUB_OFFLINE �
   expect(await rpcStubRewriteRuleMatches(itx)).toContain("itx.laterTool");
   expect(await presence(itx)).not.toContain("itx.later");
   const err = await rejection(itx.invoke("itx.laterTool.hello()"), "call on an un-lent key");
-  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
+  expect(errorCode(err)).toBe("RPC_STUB_OFFLINE");
   // Lend the key from another session (no rewrite of its own — the hand-configured rule names it).
   await openItx(ctx).provide("itx.later", new Tools("later"));
   await until("the key present", async () => (await presence(itx)).includes("itx.later"));
@@ -185,7 +185,7 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
 
   // RPC_STUB_OFFLINE in flight: the rule matched when the call went out; the transport died under it.
   const err = await rejection(inFlight, "in-flight invoke on a dying provider", 20_000);
-  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
+  expect(errorCode(err)).toBe("RPC_STUB_OFFLINE");
   // ...then the session's death is detected at the edge (onRpcBroken): the transport leaves
   // presence and the disposed handle un-sets the rule, so a fresh call is default-deny.
   await until(
@@ -194,7 +194,7 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   );
   await until("the rule un-set with the dead session", async () => {
     const again = await rejection(observer.invoke("itx.hanger.hello()"), "a fresh call");
-    return codeOf(again) === "NO_ITX_EXPRESSION_MATCH";
+    return errorCode(again) === "NO_ITX_EXPRESSION_MATCH";
   });
   expect(await rpcStubRewriteRuleMatches(observer)).not.toContain("itx.hanger");
 });
@@ -225,13 +225,13 @@ test("a call in the window between a lender's recall and the DO's un-set is refu
       answers.push(
         s.status === "fulfilled"
           ? String(s.value)
-          : (codeOf(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
+          : (errorCode(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
       );
     const denied = await until("the un-set landed", async () => {
       const e = await rejection(itx.invoke("itx.tool.hello()"));
-      return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
+      return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
     });
-    expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+    expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect(answers.filter((a) => a.startsWith("UNCODED"))).toEqual([]);
   for (const a of answers)
@@ -279,7 +279,7 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
     const dropped: Record<string, string | undefined> = {};
     settled.forEach((s, i) => {
       if (s.status === "fulfilled") answers.push(s.value);
-      else dropped[matches[i]] = codeOf(s.reason);
+      else dropped[matches[i]] = errorCode(s.reason);
     });
     return { answers, dropped };
   };
@@ -307,7 +307,7 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
 });
 
 // Concurrent provides at one key collapse to ONE live transport. The reconciliation happens when
-// each pager opens (rpc-stub-directory drops every OTHER same-key pager then, reason "replaced"),
+// each pager opens (`RpcStubDirectory` drops every OTHER same-key pager then, reason "replaced"),
 // so at any settled moment exactly one transport carries the key. The rule table is a MAP: four
 // provides append four identical rule events, and the map holds exactly ONE rule at the match.
 test("concurrent provides at one key collapse to ONE live transport; the map holds ONE rule at the match and the survivor serves", async () => {
@@ -355,13 +355,13 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
   await until("the lent subscriber has a transport", async () =>
     (await presence(observer)).includes(rpcStubKey),
   );
-  // the ROW landed (awaited configure); a subscription is NOT a rewrite rule (config-funnel row first)
+  // the ROW landed (awaited configure); a subscription is NOT a rewrite rule
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([subscriptionName]);
   expect(await rpcStubRewriteRuleMatches(observer)).toEqual([]);
 
   await observer.subscribe({ name: subscriptionName, target: null });
 
-  // `target: null` = remove the row (awaited — the table is back to the config baseline on return)
+  // `target: null` = remove the row (awaited — the table is empty again on return)
   // + recall this session's stub under it (the relay's dispose closes the pager; the DO drops the
   // transport a beat later — poll presence). Two lifetimes, one explicit exit.
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
@@ -387,7 +387,6 @@ test("disposing a SubscriptionHandleRpcTarget removes its row and recalls its st
   await until("the scoped subscriber delivered", () => c.delivered === 1);
 
   subscription[Symbol.dispose](); // a wire release: the server disposes the handle → row removed, stub recalled
-  // the scoped row gone = the table back to the config baseline (the config-funnel row is permanent)
   await until("the scoped row gone", async () => (await subscriptions(observer)).length === 0);
   await until("the stub gone from presence", async () => (await presence(observer)).length === 0);
   await observer.append({ type: "mark" });
@@ -447,7 +446,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
   );
   for (const match of ["itx.tool0", "itx.k0", "itx.k5"]) {
     const err = await rejection(observer.invoke(`${match}.hello()`), `call on ${match}`);
-    expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+    expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 });

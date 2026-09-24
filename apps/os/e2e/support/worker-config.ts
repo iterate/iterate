@@ -1,5 +1,5 @@
 // Read Vite's built Worker config with Wrangler's parser and patch it for createTestHarness.
-// Shared by the E2E global setup, the log harness and path ingress tests.
+// Shared by the E2E global setup and support/own-worker.ts.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,13 +17,16 @@ export const E2E_ADMIN_API_SECRET = "e2e-admin-api-secret";
 export const E2E_LOGIN_PASSWORD = "e2e-password";
 /** The local worker's ingress: project hosts hang under `localhost` (support/project-host.ts reaches
  *  them with a Host header). */
-export const E2E_INGRESS_ROUTING: IngressRouting = { type: "subdomains", hostname: "localhost" };
+export const E2E_INGRESS_ROUTING: NonNullable<IngressRouting> = {
+  type: "subdomains",
+  hostname: "localhost",
+};
 
 /** Vite's local built config patched with absolute paths and test credentials. The control-plane
  *  Durable Object and OAuth KV remain local. `ingressRouting` chooses subdomains or paths for project requests. */
 export function e2eWorkerConfig(
   platformOrigin = "http://127.0.0.1",
-  ingressRouting: IngressRouting = E2E_INGRESS_ROUTING,
+  ingressRouting: NonNullable<IngressRouting> = E2E_INGRESS_ROUTING,
 ): Unstable_RawConfig {
   const {
     rawConfig: { env: _deployments, ...rawConfig },
@@ -49,7 +52,7 @@ export function e2eWorkerConfig(
     vars: {
       ...vars,
       APP_CONFIG_URLS__OS: platformOrigin,
-      ...(ingressRouting && { APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(ingressRouting) }),
+      APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(ingressRouting),
       // One custom hostname (a project's apex outside the base) for the ingress test that proves the
       // custom-hostname branch; the project it names is registered by that test.
       APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES: JSON.stringify({
