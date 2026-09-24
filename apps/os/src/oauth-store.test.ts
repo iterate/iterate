@@ -1,6 +1,7 @@
 // src/oauth-store.test.ts — the provider's store over a fake control plane: a grant call cut at the
 // transport is asked once more, on a fresh stub. A deploy's reset of the control plane's Durable
-// Object is expected; any other cut is logged as a platform failure the prd fault alarm counts.
+// Object is expected; any other cut is logged as a platform failure the prd fault alarm counts. A
+// call that stalls is named while it waits.
 import { expect, onTestFinished, test, vi } from "vitest";
 import { providerStore } from "./oauth-store.ts";
 
@@ -58,6 +59,42 @@ test("a refusal that is no transport failure is not asked again", async () => {
     () => Promise.resolve('{"id":"never read"}'),
   ]);
   await expect(store.get("grant:user_a:g1", "text")).rejects.toThrow(/no such table/);
+});
+
+test("a grant read or a KV write still waiting after five seconds names its step while it waits", async () => {
+  vi.useFakeTimers();
+  const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => {
+    vi.useRealTimers();
+    warns.mockRestore();
+  });
+  let answerGrant!: (value: string) => void;
+  let confirmPut!: () => void;
+  const store = providerStore({
+    CONTROL_PLANE: {
+      getByName: () => ({ oauthGrant: () => new Promise((r) => (answerGrant = r)) }),
+    } as never,
+    OAUTH_KV: { put: () => new Promise<void>((r) => (confirmPut = r)) } as unknown as KVNamespace,
+  });
+  const read = store.get("grant:user_a:g1", { type: "json" });
+  const write = store.put("token:user_a:g1:t1", "{}", { expirationTtl: 3600 });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(warns).toHaveBeenCalledTimes(2);
+  expect(warns).toHaveBeenNthCalledWith(1, {
+    event: "oauth.step-slow",
+    step: "grant-store-get",
+    waitedMs: 5_000,
+  });
+  expect(warns).toHaveBeenNthCalledWith(2, {
+    event: "oauth.step-slow",
+    step: "kv-put",
+    keyKind: "token",
+    waitedMs: 5_000,
+  });
+  answerGrant('{"id":"g1"}');
+  confirmPut();
+  expect(await read).toEqual({ id: "g1" });
+  await write;
 });
 
 /** The store over a control plane whose every stub answers `oauthGrant` with the next of

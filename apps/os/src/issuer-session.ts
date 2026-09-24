@@ -27,7 +27,8 @@ const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
  *    bounds it at 10 s), its call was cut at the transport (a Durable Object reset, a lost
  *    connection), or the token endpoint answered a status instead of a token (a 500 when its own
  *    grant checks failed) — logs a warn `issuer.platform-failure-sign-in` with its `reason`, which
- *    the prd fault alarm counts;
+ *    the prd fault alarm counts. It names the person, so a timeout joins the line the token
+ *    request logged about the hop it was still waiting on (`oauth.step-slow`, oauth.ts);
  *  - anything else is a defect of ours, reported at error level (`issuer.code-exchange-failed`),
  *    which the prd fault alarm pages on. The person still lands on the sign-in page, not a 1101.
  * The earlier steps' failures throw. */
@@ -100,10 +101,12 @@ export async function startIssuerSession(
         reason,
         message: error instanceof Error ? error.message : String(error),
         waitedMs: Date.now() - exchangeStarted,
+        userId: user.id,
       });
     else
       reportIssue("issuer.code-exchange-failed", error, {
         waitedMs: Date.now() - exchangeStarted,
+        userId: user.id,
       });
     return null;
   });
