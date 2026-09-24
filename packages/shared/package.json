@@ -25,7 +25,7 @@
     "./name-suggestions": "./src/name-suggestions.ts",
     "./config-repo-template/reference": "./src/config-repo-template/reference.ts",
     "./config-repo-template/github": "./src/config-repo-template/github.ts",
-    "./config-repo-template/git-wire": "./src/config-repo-template/git-wire.ts"
+    "./git-wire": "./src/git-wire.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

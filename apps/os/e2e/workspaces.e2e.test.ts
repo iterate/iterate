@@ -18,7 +18,7 @@
 // the same story on the real binding in every environment (the local worker binds Artifacts too).
 
 import { expect, test, type TestContext } from "vitest";
-import type { RepoLogEntry } from "../src/repo/git-wire.ts";
+import type { RepoLogEntry } from "../src/repo/durable-object.ts";
 import {
   freshCtx,
   openItx,
