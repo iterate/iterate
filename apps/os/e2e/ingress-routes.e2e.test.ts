@@ -84,13 +84,21 @@ test("itx.ingressRoutes.set refuses a malformed route (INVALID_INPUT) before it 
     expect(await rejection(itx.ingressRoutes.set(name, route)), name).toMatchObject({
       code: "INVALID_INPUT",
     });
+  // The route's own facts, not the log's head: the root's log also takes facts nobody here asked
+  // for, e.g. a child context's `context/child-created` landing between two reads.
+  const routeFacts = async () =>
+    (await itx.readEvents()).events.filter(
+      (event: { type: string; offset: number }) =>
+        event.type === "events.iterate.com/ingress-route/configured",
+    );
   const route = { requestMatcher: { url: { pathname: "/api/*" } }, target: "itx.api" };
   await itx.ingressRoutes.set("api", route);
-  const head = (await itx.readEvents()).events.at(-1).offset;
+  const facts = await routeFacts();
+  expect(facts).toHaveLength(1);
   await itx.ingressRoutes.set("api", route);
-  expect((await itx.readEvents()).events.at(-1)).toMatchObject({ offset: head });
+  expect(await routeFacts()).toEqual(facts);
   expect(await itx.ingressRoutes.list()).toMatchObject([
-    { ingressRouteName: "api", target: ["itx", "api"], configuredOffset: head },
+    { ingressRouteName: "api", target: ["itx", "api"], configuredOffset: facts[0]?.offset },
   ]);
 });
 
