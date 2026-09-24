@@ -212,7 +212,7 @@ test("the setup prompt an agent follows is served beside the pages, and the land
   expect(prompt.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
   const text = await prompt.text();
   expect(text).toContain("CLOUDFLARE_ENV=self-host pnpm --filter os build");
-  expect(text).toContain("wrangler deploy --config apps/os/dist/server/wrangler.json");
+  expect(text).toContain("wrangler deploy --config dist/server/wrangler.json");
   expect(text).toContain("/mcp");
   expect(text).toContain("dash.iterate.com/.auth/connect?issuer=");
   const page = await (await exports.default.fetch(`${ORIGIN}/`)).text();
