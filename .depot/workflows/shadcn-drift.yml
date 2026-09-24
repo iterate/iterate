@@ -1,8 +1,10 @@
 # SHADCN DRIFT (scripts/ci/shadcn-drift.ts check): packages/ui's vendored shadcn files are byte for byte
 # what the pinned CLI's `shadcn add <item> -o` writes (packages/ui/AGENTS.md). A pull request that
-# touches one of them, components.json, the pin (packages/ui/package.json) or this check asks the CLI
-# for its dry run against shadcn's live registry, and fails on any difference, printing each file's
-# diff. The fix is a refresh (`pnpm tsx scripts/ci/shadcn-drift.ts refresh`), never a hand edit.
+# touches one of them, an input of the CLI (components.json, the pin in packages/ui/package.json,
+# the tsconfig.json it resolves aliases with, the globals.css it merges an item's CSS into) or this
+# check asks the CLI's dry run for the exact content `add` would write, from shadcn's live registry,
+# and fails on any file whose bytes differ, printing each file's diff. The fix is a refresh
+# (`pnpm tsx scripts/ci/shadcn-drift.ts refresh`), never a hand edit.
 #
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
@@ -20,6 +22,8 @@ on:
       - scripts/ci/shadcn-drift.ts
       - packages/ui/components.json
       - packages/ui/package.json
+      - packages/ui/tsconfig.json
+      - packages/ui/src/styles/globals.css
       - packages/ui/src/components/alert-dialog.tsx
       - packages/ui/src/components/avatar.tsx
       - packages/ui/src/components/badge.tsx
@@ -48,6 +52,7 @@ on:
       - packages/ui/src/components/textarea.tsx
       - packages/ui/src/components/tooltip.tsx
       - packages/ui/src/hooks/use-mobile.ts
+      - packages/ui/src/lib/utils.ts
   workflow_dispatch: {}
 concurrency:
   group: shadcn-drift-${{ github.event.pull_request.number || github.ref }}

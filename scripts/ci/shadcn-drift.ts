@@ -2,7 +2,9 @@
 // packages/ui keeps shadcn's base-nova components byte for byte as `shadcn add <item> -o` writes them,
 // and customises them at the call site or in a wrapper, never in the file. This asks the pinned CLI
 // (packages/ui's `shadcn` devDependency) what `add` would write today, from shadcn's live registry:
-// its dry run marks each file `skip (identical)`, `overwrite` or `create`.
+// its dry run's `--view` prints each file's exact content, and whether it would `skip`, `overwrite`
+// or `create` it. The CLI's `skip` means identical after it normalises line endings and trims
+// leading and trailing whitespace, so the bytes are compared here too.
 //
 // `check` (.depot/workflows/shadcn-drift.yml, a pull request that touches a vendored file or the
 // pin) fails on any difference and prints the CLI's diff of each file. Either someone edited a
@@ -17,11 +19,16 @@
 //   pnpm tsx scripts/ci/shadcn-drift.ts report [--dry-run]
 //   pnpm tsx scripts/ci/shadcn-drift.ts refresh
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
 
-/** The registry items packages/ui vendors: what `shadcn add` is asked for. */
+/** The registry items packages/ui vendors: what `shadcn add` is asked for. Each writes
+ *  src/components/<item>.tsx, but for `utils`: src/lib/utils.ts, `export { cn } from "cn"`, which
+ *  components.json's `aliases.utils` names and the CLI rewrites a registry item's `@/lib/utils`
+ *  import to (the AI Elements items still import `cn` that way). */
 export const SHADCN_ITEMS = [
   "alert-dialog",
   "avatar",
@@ -49,38 +56,64 @@ export const SHADCN_ITEMS = [
   "tabs",
   "textarea",
   "tooltip",
+  "utils",
 ];
 
 /** The files those items write, their registry dependencies (input-group for command, use-mobile
- *  for sidebar) included. The oxlint and oxfmt ignore lists, knip's and the drift check's path
- *  filter name the same files (shadcn-drift.test.ts). */
+ *  for sidebar) included. The oxlint and oxfmt ignore lists, the `rules/` exclusions and the drift
+ *  check's path filter name the same files (shadcn-drift.test.ts). */
 export const VENDORED_FILES = [
-  ...SHADCN_ITEMS.map((item) => `packages/ui/src/components/${item}.tsx`),
+  ...SHADCN_ITEMS.filter((item) => item !== "utils").map(
+    (item) => `packages/ui/src/components/${item}.tsx`,
+  ),
   "packages/ui/src/components/input-group.tsx",
   "packages/ui/src/hooks/use-mobile.ts",
+  "packages/ui/src/lib/utils.ts",
 ].sort();
 
-/** Each file in the dry run's summary, by its path in the repository, and what `add` would do to
- *  it; and whether the items carry CSS for globals.css. Pure. */
-export function parseDryRun(output: string) {
-  const files = [...output.matchAll(/^│ [=~+] (\S+)\s+(skip|overwrite|create)\b/gm)].map(
-    ([, path, action]) => ({ path: `packages/ui/${path}`, action: action! }),
-  );
-  return { files, css: /^├ CSS$/m.test(output) };
+/** Our own stylesheet, into which the CLI merges an item's CSS: only whether it would, is compared. */
+const GLOBALS_CSS = "packages/ui/src/styles/globals.css";
+
+/** Each file in the output of `add <items> --dry-run --view src/`, by its path in the repository:
+ *  what `add` would do to it and the exact content it would write. The CLI prints a file as
+ *  `├ <path> (<action>) <n> lines`, then its lines in a box, each after `│ │ `. Throws when a box
+ *  does not hold the line count its header gives. Pure. */
+export function parseView(output: string) {
+  const lines = output.split("\n");
+  const files: { path: string; action: string; content: string }[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const header = /^├ (\S+) \((\w+)\) (\d+) lines$/.exec(lines[index]!);
+    if (!header) continue;
+    const [, path, action, count] = header;
+    const content: string[] = [];
+    // skip the header and the box's `│ ┌───` top; the box ends at `│ └───`
+    for (index += 2; index < lines.length && !lines[index]!.startsWith("│ └"); index++)
+      content.push(lines[index]!.replace(/^│ │ ?/, ""));
+    if (content.length !== Number(count))
+      throw new Error(`shadcn --view printed ${content.length} of ${path}'s ${count} lines`);
+    files.push({ path: `packages/ui/${path}`, action: action!, content: content.join("\n") });
+  }
+  return files;
 }
 
-/** What differs from upstream: each vendored file `add` would overwrite or create, a file it
- *  writes that is not on the vendored list, and a vendored file it no longer writes. Pure. */
-export function driftOf(files: { path: string; action: string }[]) {
+/** What differs from upstream: each vendored file whose bytes are not what `add` would write, a
+ *  file `add` writes that is not on the vendored list, a vendored file it no longer writes, and CSS
+ *  it would merge into globals.css. `current` reads a file in the repository, or undefined. Pure. */
+export function driftOf(
+  files: { path: string; action: string; content: string }[],
+  current: (path: string) => string | undefined,
+) {
   const written = new Set(files.map((file) => file.path));
   return [
-    ...files
-      .filter((file) => file.action !== "skip")
-      .map((file) =>
-        VENDORED_FILES.includes(file.path)
-          ? `${file.path} (${file.action})`
-          : `${file.path} (${file.action}, not on the vendored list)`,
-      ),
+    ...files.flatMap((file) => {
+      if (file.path === GLOBALS_CSS)
+        return file.action === "skip" ? [] : [`${file.path} (${file.action})`];
+      if (!VENDORED_FILES.includes(file.path))
+        return [`${file.path} (${file.action}, not on the vendored list)`];
+      if (current(file.path) === file.content) return [];
+      // the CLI skips a file that differs only in line endings or surrounding whitespace
+      return [`${file.path} (${file.action === "skip" ? "whitespace" : file.action})`];
+    }),
     ...VENDORED_FILES.filter((path) => !written.has(path)).map(
       (path) => `${path} (upstream no longer writes it)`,
     ),
@@ -121,25 +154,32 @@ export function upstreamReport(input: {
     .join("\n");
 }
 
+const repoRoot = resolve(import.meta.dirname, "../..");
+
 /** Runs the pinned CLI in packages/ui with `args` after `add <every item>`. */
 function shadcnAdd(args: string[]) {
   return spawnSync(
     "pnpm",
     ["--dir", "packages/ui", "exec", "shadcn", "add", ...SHADCN_ITEMS, ...args],
     {
+      cwd: repoRoot,
       encoding: "utf8",
       env: { ...process.env, NO_COLOR: "1" },
+      // the --view output holds every vendored file
+      maxBuffer: 64 * 1024 * 1024,
     },
   );
 }
 
-/** The dry run, retried twice when the CLI could not produce its summary (the registry is a network
- *  call). Throws after the third failure. */
+/** Every file `add` would write, with its content (parseView), retried twice when the CLI could not
+ *  print them (the registry is a network call). Throws after the third failure. */
 async function dryRun() {
   for (let attempt = 1; ; attempt++) {
-    const run = shadcnAdd(["--dry-run"]);
+    // `--view <path>` shows every file whose path contains it, CSS included, with no cap on count
+    const run = shadcnAdd(["--dry-run", "--view", "src/"]);
     const output = `${run.stdout}${run.stderr}`;
-    if (run.status === 0 && /^├ Files \(\d+\)/m.test(output)) return output;
+    if (run.status === 0 && /^└ Run without --dry-run to apply\.$/m.test(output))
+      return parseView(output);
     console.warn(`shadcn add --dry-run, attempt ${attempt}/3, exited ${run.status}:\n${output}`);
     if (attempt === 3) throw new Error("could not ask the shadcn registry what `add` would write");
     await sleep(attempt * 15_000);
@@ -147,21 +187,25 @@ async function dryRun() {
 }
 
 async function drift() {
-  const { files, css } = parseDryRun(await dryRun());
-  const found = driftOf(files);
-  if (css) {
-    const diff = shadcnAdd(["--dry-run", "--diff", "src/styles/globals.css"]).stdout;
-    if (!diff.includes("No changes.")) found.push("packages/ui/src/styles/globals.css (update)");
-  }
-  return found;
+  return driftOf(await dryRun(), (path) => {
+    const file = resolve(repoRoot, path);
+    return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  });
 }
 
 async function check() {
   const found = await drift();
   if (found.length === 0)
-    return console.log(`${VENDORED_FILES.length} vendored files match upstream`);
+    return console.log(`${VENDORED_FILES.length} vendored files match upstream byte for byte`);
   for (const line of found) {
     console.log(`\n${line}`);
+    if (line.endsWith(" (whitespace)")) {
+      console.log(
+        "Differs from upstream only in line endings or leading or trailing whitespace, which the " +
+          "CLI's diff ignores.",
+      );
+      continue;
+    }
     const path = line.split(" ")[0]!.replace(/^packages\/ui\//, "");
     console.log(shadcnAdd(["--dry-run", "--diff", path]).stdout);
   }

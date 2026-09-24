@@ -504,9 +504,10 @@ const plugin: StrictPlugin = {
       meta: {
         docs: {
           description:
-            "Require icon-size <Button>s to carry a title at the call site: it is their hover text, and " +
-            "their accessible name when there is no aria-label. The vendored shadcn Button passes title " +
-            "through and derives nothing (packages/ui/AGENTS.md). The off-the-shelf " +
+            "Require icon-size <Button>s, and <SidebarTrigger>s (the vendored sidebar's icon-sm Button), " +
+            "to carry a title at the call site: it is their hover text, and their accessible name when " +
+            "there is no aria-label. The vendored shadcn Button passes title through and derives " +
+            "nothing (packages/ui/AGENTS.md). The off-the-shelf " +
             "jsx-a11y/control-has-associated-label rule can't do this: it assumes any " +
             "uppercase-component child (e.g. a lucide icon) might render a text label.",
         },
@@ -515,7 +516,9 @@ const plugin: StrictPlugin = {
       create: (context) => {
         return {
           JSXOpeningElement: (node: any) => {
-            if (node.name.type !== "JSXIdentifier" || node.name.name !== "Button") return;
+            if (node.name.type !== "JSXIdentifier") return;
+            const component = node.name.name;
+            if (component !== "Button" && component !== "SidebarTrigger") return;
             // A spread might supply size and/or title; can't tell statically.
             if (node.attributes.some((attribute: any) => attribute.type !== "JSXAttribute")) return;
 
@@ -523,7 +526,12 @@ const plugin: StrictPlugin = {
               node.attributes.find(
                 (attribute: any) => getJSXAttributeName(attribute.name) === name,
               );
-            const size = findAttribute("size")?.value;
+            // SidebarTrigger renders <Button size="icon-sm"> around a PanelLeft icon, upstream's
+            // sr-only "Toggle Sidebar" its only text.
+            const size =
+              component === "SidebarTrigger"
+                ? { type: "Literal", value: "icon-sm" }
+                : findAttribute("size")?.value;
             if (size?.type !== "Literal" || typeof size.value !== "string") return;
             if (!size.value.startsWith("icon")) return;
 
@@ -535,7 +543,7 @@ const plugin: StrictPlugin = {
             context.report({
               node,
               message:
-                `An icon-only <Button size="${size.value}"> has no visible text, so hovering users get ` +
+                `An icon-only <${component} size="${size.value}"> has no visible text, so hovering users get ` +
                 `nothing. Add title="..." (it is the accessible name too, unless aria-label differs).`,
             });
           },

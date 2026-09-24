@@ -1,55 +1,76 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { matchesGlob, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { driftOf, parseDryRun, upstreamReport, VENDORED_FILES } from "./shadcn-drift.ts";
+import { driftOf, parseView, upstreamReport, VENDORED_FILES } from "./shadcn-drift.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
-// `shadcn add <items> --dry-run` from shadcn@4.21.0, NO_COLOR, cut to three files.
-const dryRunOutput = `- Resolving items.
-┌ shadcn add alert-dialog, avatar, command (dry run)
+// `shadcn add <items> --dry-run --view src/` from shadcn@4.21.0, NO_COLOR, cut to two files: the
+// box's `│ │ ` before an empty line keeps its trailing space.
+const viewOutput = `- Resolving items.
+┌ shadcn add skeleton, utils (dry run)
 │
-├ Files (3) =1 skip, ~1 overwrite, +1 new
-│ = src/components/avatar.tsx         skip (identical)
-│ ~ src/hooks/use-mobile.ts           overwrite
-│ + src/components/input-group.tsx    create
+├ src/components/skeleton.tsx (overwrite) 4 lines
+│ ┌──────────────────────────────────────────────
+│ │ import { cn } from "cn"
+│ │ 
+│ │   export { Skeleton }
+│ │ 
+│ └──────────────────────────────────────────────
 │
-├ Dependencies (1)
-│ + cn
-│
-│ 3 files, 1 dep
+├ src/lib/utils.ts (skip) 2 lines
+│ ┌──────────────────────────────────────────────
+│ │ export { cn } from "cn"
+│ │ 
+│ └──────────────────────────────────────────────
 │
 └ Run without --dry-run to apply.
 `;
 
-test("reads each file of the dry run's summary by its repository path", () => {
-  expect(parseDryRun(dryRunOutput)).toEqual({
-    files: [
-      { path: "packages/ui/src/components/avatar.tsx", action: "skip" },
-      { path: "packages/ui/src/hooks/use-mobile.ts", action: "overwrite" },
-      { path: "packages/ui/src/components/input-group.tsx", action: "create" },
-    ],
-    css: false,
-  });
-  expect(parseDryRun(`${dryRunOutput}├ CSS\n│ + Updated src/styles/globals.css\n`)).toMatchObject({
-    css: true,
-  });
+test("reads each file of the dry run's view by its repository path, with its exact content", () => {
+  expect(parseView(viewOutput)).toEqual([
+    {
+      path: "packages/ui/src/components/skeleton.tsx",
+      action: "overwrite",
+      content: 'import { cn } from "cn"\n\n  export { Skeleton }\n',
+    },
+    { path: "packages/ui/src/lib/utils.ts", action: "skip", content: 'export { cn } from "cn"\n' },
+  ]);
+  expect(() => parseView(viewOutput.replace("(skip) 2 lines", "(skip) 3 lines"))).toThrow(
+    /printed 2 of src\/lib\/utils.ts's 3 lines/,
+  );
 });
 
-test("no drift when the CLI would skip every vendored file", () => {
-  expect(driftOf(VENDORED_FILES.map((path) => ({ path, action: "skip" })))).toEqual([]);
+test("no drift when every vendored file holds upstream's bytes and globals.css needs nothing", () => {
+  const { files, current } = inSync();
+  expect(driftOf(files, current)).toEqual([]);
+  const css = {
+    path: "packages/ui/src/styles/globals.css",
+    action: "skip",
+    content: "@theme {}\n",
+  };
+  expect(driftOf([...files, css], current)).toEqual([]);
 });
 
-test("drift names an overwritten file, a file off the list, and a file upstream stopped writing", () => {
-  const files = VENDORED_FILES.filter((path) => !path.endsWith("/input-group.tsx")).map((path) => ({
-    path,
-    action: path.endsWith("/button.tsx") ? "overwrite" : "skip",
-  }));
-  files.push({ path: "packages/ui/src/components/kbd.tsx", action: "create" });
-  expect(driftOf(files)).toEqual([
+test("drift names an overwritten file, whitespace the CLI ignores, a file off the list, a file upstream stopped writing, and CSS", () => {
+  const { files, repository, current } = inSync();
+  const button = files.find((file) => file.path.endsWith("/button.tsx"))!;
+  Object.assign(button, { action: "overwrite", content: "upstream's button\n" });
+  repository.set(
+    "packages/ui/src/components/skeleton.tsx",
+    "packages/ui/src/components/skeleton.tsx\n\n",
+  );
+  const withoutInputGroup = files.filter((file) => !file.path.endsWith("/input-group.tsx"));
+  withoutInputGroup.push(
+    { path: "packages/ui/src/components/kbd.tsx", action: "create", content: "kbd\n" },
+    { path: "packages/ui/src/styles/globals.css", action: "update", content: "@theme {}\n" },
+  );
+  expect(driftOf(withoutInputGroup, current)).toEqual([
     "packages/ui/src/components/button.tsx (overwrite)",
+    "packages/ui/src/components/skeleton.tsx (whitespace)",
     "packages/ui/src/components/kbd.tsx (create, not on the vendored list)",
+    "packages/ui/src/styles/globals.css (update)",
     "packages/ui/src/components/input-group.tsx (upstream no longer writes it)",
   ]);
 });
@@ -115,10 +136,38 @@ test.for([
   expect(read()).toEqual(expect.arrayContaining(VENDORED_FILES));
 });
 
+// A rule in rules/ applies where a `files` glob matches and no `!` glob excludes (AGENTS.md).
+test("every rules/ rule whose globs match a vendored file excludes it", () => {
+  const rules = readdirSync(resolve(repoRoot, "rules"), { recursive: true, encoding: "utf8" })
+    .filter((path) => path.endsWith(".md"))
+    .map((path) => {
+      const frontMatter = /^---\n([\s\S]*?)\n---\n/.exec(read(`rules/${path}`))?.[1] || "";
+      // YAML front matter: `files` is the rule's list of globs, `!` ones excluding
+      return { path, files: (parseYaml(frontMatter) as { files?: string[] } | null)?.files };
+    })
+    .filter((rule) => rule.files);
+  expect(rules.length).toBeGreaterThan(0);
+  const applied = rules.flatMap(({ path, files }) =>
+    VENDORED_FILES.filter(
+      (file) =>
+        files!.some((glob) => !glob.startsWith("!") && matchesGlob(file, glob)) &&
+        !files!.some((glob) => glob.startsWith("!") && matchesGlob(file, glob.slice(1))),
+    ).map((file) => `rules/${path}: ${file}`),
+  );
+  expect(applied).toEqual([]);
+});
+
 function read(path: string) {
   return readFileSync(resolve(repoRoot, path), "utf8");
 }
 
 function json(path: string) {
   return JSON.parse(read(path)) as { ignorePatterns: string[] };
+}
+
+/** Upstream's content for every vendored file, and the repository holding exactly that. */
+function inSync() {
+  const files = VENDORED_FILES.map((path) => ({ path, action: "skip", content: `${path}\n` }));
+  const repository = new Map(files.map((file) => [file.path, file.content]));
+  return { files, repository, current: (path: string) => repository.get(path) };
 }

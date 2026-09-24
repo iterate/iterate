@@ -142,7 +142,7 @@ export function AppShell({
       </Sidebar>
       <SidebarInset className="min-w-0 overflow-hidden">
         <header className="flex shrink-0 items-center gap-3 px-4 pt-2.5 pb-1">
-          <SidebarTrigger className="-ml-1 md:hidden" />
+          <SidebarTrigger className="-ml-1 md:hidden" title="Toggle sidebar" />
           <PaletteHeaderButton onOpen={openPalette} />
           {header}
         </header>

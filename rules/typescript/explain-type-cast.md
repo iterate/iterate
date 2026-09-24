@@ -10,6 +10,7 @@ files:
     "!**/vitest*.config.*",
     "!packages/ui/src/components/{alert-dialog,avatar,badge,breadcrumb,button,card,checkbox,command,dialog,dropdown-menu,empty,field,input,input-group,label,native-select,select,separator,sheet,sidebar,skeleton,sonner,spinner,table,tabs,textarea,tooltip}.tsx",
     "!packages/ui/src/hooks/use-mobile.ts",
+    "!packages/ui/src/lib/utils.ts",
   ]
 ---
 

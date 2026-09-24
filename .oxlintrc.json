@@ -48,6 +48,7 @@
     "packages/ui/src/components/textarea.tsx",
     "packages/ui/src/components/tooltip.tsx",
     "packages/ui/src/hooks/use-mobile.ts",
+    "packages/ui/src/lib/utils.ts",
     "**/routeTree.gen.ts",
     "**/*.d.ts",
     "**/node_modules/",

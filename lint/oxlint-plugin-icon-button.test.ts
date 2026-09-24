@@ -116,3 +116,27 @@ test("rejects an empty title", () => {
 
   fixture.run(["empty-title.tsx"], { expectFailure: true });
 });
+
+test("treats SidebarTrigger as the icon-size Button it renders", () => {
+  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
+  fixture.write(
+    "sidebar-trigger.tsx",
+    [
+      "declare const SidebarTrigger: any;",
+      'export const toggle = <SidebarTrigger className="md:hidden" />;',
+      "",
+    ].join("\n"),
+  );
+  const result = fixture.run(["sidebar-trigger.tsx"], { expectFailure: true });
+  expect(result.stdout + result.stderr).toMatch(/<SidebarTrigger size="icon-sm">/);
+
+  fixture.write(
+    "sidebar-trigger.tsx",
+    [
+      "declare const SidebarTrigger: any;",
+      'export const toggle = <SidebarTrigger className="md:hidden" title="Toggle sidebar" />;',
+      "",
+    ].join("\n"),
+  );
+  fixture.run(["sidebar-trigger.tsx"]);
+});
