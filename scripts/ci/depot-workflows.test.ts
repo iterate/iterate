@@ -229,7 +229,7 @@ describe("Depot deployment safety", () => {
     });
   });
 
-  test("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
+  test("runs OS and Notes stateful proofs only against an isolated preview", () => {
     const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
     const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
