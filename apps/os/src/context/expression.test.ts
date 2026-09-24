@@ -142,74 +142,66 @@ describe("walkSteps + resolve", () => {
 // ── the resolver releases the sessions its walk held ── `ItxExpressionResolver#invoke` over the
 // step walk's `rpcSessionsSteppedPast` (iterate/next/expression.ts): a session-holding value a walk
 // stepped past is released once the answer is in, and a rejected answer is released too.
-describe("the resolver releases the sessions its walk held", () => {
-  /** A stub an awaited call answered with (a facet's collection): it holds its session until
-   *  disposed — as iterate-context.ts registers the native RpcStub. */
-  class FakeRpcStub {}
-  registerRpcSessionBrand(FakeRpcStub);
-
-  test("the resolver releases what its walk stepped past once the answer is in; the answer stays the caller's", async () => {
-    const order: string[] = [];
-    // the project facet's collection, as `facets.get('project').repos()` answers it: awaited, a stub
-    const collection = Object.assign(new FakeRpcStub(), {
-      list: () => ({
-        then(resolve: (paths: string[]) => void) {
-          order.push("answer settled");
-          resolve(["/repos/a"]);
-        },
-      }),
-      [Symbol.dispose]: () => order.push("collection released"),
-    });
-    const resolver = new ItxExpressionResolver({
-      builtIns: { facets: { get: () => ({ repos: async () => collection }) } },
-      rewriteRules: () => [],
-      implicitRoots: new Set(BUILT_IN_ROOTS),
-      path: "/",
-      caller: () => ({ principal: null }),
-    });
-    expect(await resolver.invoke("itx.facets.get('project').repos().list()")).toEqual(["/repos/a"]);
-    expect(order).toEqual(["answer settled", "collection released"]);
+test("the resolver releases what its walk stepped past once the answer is in; the answer stays the caller's", async () => {
+  const order: string[] = [];
+  // the project facet's collection, as `facets.get('project').repos()` answers it: awaited, a stub
+  const collection = Object.assign(new FakeRpcStub(), {
+    list: () => ({
+      then(resolve: (paths: string[]) => void) {
+        order.push("answer settled");
+        resolve(["/repos/a"]);
+      },
+    }),
+    [Symbol.dispose]: () => order.push("collection released"),
   });
+  const resolver = new ItxExpressionResolver({
+    builtIns: { facets: { get: () => ({ repos: async () => collection }) } },
+    rewriteRules: () => [],
+    implicitRoots: new Set(BUILT_IN_ROOTS),
+    path: "/",
+    caller: () => ({ principal: null }),
+  });
+  expect(await resolver.invoke("itx.facets.get('project').repos().list()")).toEqual(["/repos/a"]);
+  expect(order).toEqual(["answer settled", "collection released"]);
+});
 
-  test("the resolver releases a walk's answer that REJECTS — its caller gets the rejection, never the promise — and never one that arrives", async () => {
-    // A Workers-RPC call that threw keeps its callee's session open until its promise is disposed:
-    // the project facet's collection refusing `delete` held the project's root resident (2026-09-23).
-    const released: string[] = [];
-    class FakeCallPromise {
-      constructor(
-        readonly chain: string,
-        readonly outcome: { error: Error } | { value: unknown },
-      ) {}
-      then(resolve: (value: unknown) => void, reject: (error: unknown) => void): void {
-        if ("error" in this.outcome) reject(this.outcome.error);
-        else resolve(this.outcome.value);
-      }
-      [Symbol.dispose](): void {
-        released.push(this.chain);
-      }
+test("the resolver releases a walk's answer that REJECTS — its caller gets the rejection, never the promise — and never one that arrives", async () => {
+  // A Workers-RPC call that threw keeps its callee's session open until its promise is disposed:
+  // the project facet's collection refusing `delete` held the project's root resident (2026-09-23).
+  const released: string[] = [];
+  class FakeCallPromise {
+    constructor(
+      readonly chain: string,
+      readonly outcome: { error: Error } | { value: unknown },
+    ) {}
+    then(resolve: (value: unknown) => void, reject: (error: unknown) => void): void {
+      if ("error" in this.outcome) reject(this.outcome.error);
+      else resolve(this.outcome.value);
     }
-    registerPipelinedRpcBrand(FakeCallPromise);
-    registerRpcSessionBrand(FakeCallPromise);
-    const collection = {
-      delete: (path: string) =>
-        new FakeCallPromise(`delete(${path})`, { error: new Error(`${path}: not created`) }),
-      list: () => new FakeCallPromise("list()", { value: ["/w"] }),
-    };
-    const resolver = new ItxExpressionResolver({
-      builtIns: { facets: { get: () => ({ workspaces: async () => collection }) } },
-      rewriteRules: () => [],
-      implicitRoots: new Set(BUILT_IN_ROOTS),
-      path: "/",
-      caller: () => ({ principal: null }),
-    });
-    await expect(
-      resolver.invoke("itx.facets.get('project').workspaces().delete('/never')"),
-    ).rejects.toThrow("/never: not created");
-    expect(released).toEqual(["delete(/never)"]);
-    expect(await resolver.invoke("itx.facets.get('project').workspaces().list()")).toEqual(["/w"]);
-    expect(released).toEqual(["delete(/never)"]); // the answer that arrived is the caller's
+    [Symbol.dispose](): void {
+      released.push(this.chain);
+    }
+  }
+  registerPipelinedRpcBrand(FakeCallPromise);
+  registerRpcSessionBrand(FakeCallPromise);
+  const collection = {
+    delete: (path: string) =>
+      new FakeCallPromise(`delete(${path})`, { error: new Error(`${path}: not created`) }),
+    list: () => new FakeCallPromise("list()", { value: ["/w"] }),
+  };
+  const resolver = new ItxExpressionResolver({
+    builtIns: { facets: { get: () => ({ workspaces: async () => collection }) } },
+    rewriteRules: () => [],
+    implicitRoots: new Set(BUILT_IN_ROOTS),
+    path: "/",
+    caller: () => ({ principal: null }),
   });
-
+  await expect(
+    resolver.invoke("itx.facets.get('project').workspaces().delete('/never')"),
+  ).rejects.toThrow("/never: not created");
+  expect(released).toEqual(["delete(/never)"]);
+  expect(await resolver.invoke("itx.facets.get('project').workspaces().list()")).toEqual(["/w"]);
+  expect(released).toEqual(["delete(/never)"]); // the answer that arrived is the caller's
 });
 
 // ── an answer leaves a context holding nothing of its session ── what the context's RPC `invoke`
@@ -358,3 +350,8 @@ describe("an answer leaves a context holding nothing of its session", () => {
     expect(materializeItxHandleReference({ ok: true }, () => undefined)).toEqual({ ok: true });
   });
 });
+
+/** A stub an awaited call answered with (a facet's collection): it holds its session until
+ *  disposed — as iterate-context.ts registers the native RpcStub. */
+class FakeRpcStub {}
+registerRpcSessionBrand(FakeRpcStub);
