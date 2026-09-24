@@ -1,6 +1,6 @@
 // The six test-style rules (lint/test-style-rules.md), one row per rule: the source a test file
 // might contain, and the lines the rule reports. Each row runs the real oxlint binary on a temp
-// file outside Git, where grandfatherRule exempts nothing.
+// file outside the repository, where lint/grandfathered.json exempts nothing.
 
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";

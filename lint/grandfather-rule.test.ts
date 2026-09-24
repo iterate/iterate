@@ -1,258 +1,186 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
-import { grandfatherRule } from "./grandfather-rule.ts";
+import { nextBaseline } from "./grandfather-baseline.ts";
+import { grandfatheredRules, readBaseline, type GrandfatheredLines } from "./grandfather-rule.ts";
+import plugin from "./oxlint-plugin-iterate.ts";
 
-test("grandfathers through the inclusive author-date cutoff, despite shifted line numbers", () => {
-  using fixture = createFixture();
+test("grandfathers the listed lines wherever they move, and checks every other line", () => {
+  using fixture = createFixture({ "fixture/old": { "input.ts": ["const BAD_OLD = 1;"] } });
+  fixture.write("// inserted above\nconst BAD_OLD = 1;\nconst BAD_NEW = 2;\n");
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"], stale: false });
+});
+
+test("each entry covers one report, so a copied violation is new", () => {
+  using fixture = createFixture({ "fixture/old": { "input.ts": ["const BAD_OLD = 1;"] } });
+  fixture.write("const BAD_OLD = 1;\n{\n  const BAD_OLD = 1;\n}\n");
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_OLD"], stale: false });
+});
+
+test("an edited line is new, and its entry is stale until pnpm lint:baseline drops it", () => {
+  using fixture = createFixture({ "fixture/old": { "input.ts": ["const BAD_OLD = 1;"] } });
+  fixture.write("const BAD_OLD = 2;\n");
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_OLD"], stale: true });
+  fixture.write("const goodOLD = 1;\n");
+  expect(fixture.lint()).toMatchObject({ status: 1, names: [], stale: true });
+});
+
+test("an entry covers only its own rule and file", () => {
+  using fixture = createFixture({ "fixture/old": { "input.ts": ["const BAD_OLD = 1;"] } });
   fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.write("const BAD_OLD = 1;\nconst BAD_BOUNDARY = 2;\n");
-  fixture.commit("2021-01-01T00:00:00Z");
-  fixture.write(
-    "// inserted above old declarations\nconst BAD_OLD = 1;\nconst BAD_BOUNDARY = 2;\nconst BAD_NEW = 3;\n",
-  );
-  fixture.commit("2021-01-01T00:00:01Z");
-
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
-});
-
-test("checks unstaged and staged edits even when the cutoff is in the future", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\nconst BAD_EDITED = 2;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.write("const BAD_OLD = 1;\nconst BAD_EDITED = 3;\nconst BAD_ADDED = 4;\n");
-  writeFileSync(
-    fixture.plugin,
-    readFileSync(fixture.plugin, "utf8").replace("2021-01-01", "2999-01-01"),
-  );
-
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
-  fixture.git(["add", "input.ts"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
-});
-
-test("checks files without committed history and files outside Git", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_UNTRACKED = 1;\n");
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
-  fixture.git(["add", "input.ts"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
-  fixture.git(["reset"]);
-  fixture.git(["add", "plugin.ts"]);
-  fixture.git(["commit", "--quiet", "-m", "Plugin only"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
-  fixture.git(["add", "input.ts"]);
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
-  rmSync(join(fixture.root, ".git"), { recursive: true });
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  writeFileSync(join(fixture.root, "other.ts"), "const BAD_OLD = 1;\n");
+  fixture.armStrictRule();
+  const { status, output, names } = fixture.lint(["input.ts", "other.ts"]);
+  expect({
+    status,
+    names,
+    strict: [...output.matchAll(/Strict (BAD_\w+)/g)].map((match) => match[1]),
+  }).toEqual({ status: 1, names: ["BAD_OLD"], strict: ["BAD_OLD", "BAD_OLD"] });
 });
 
 test("uses explicit report locations before node locations, including location-only reports", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.write("const BAD_OLD = 1;\nconst BAD_NEW = 2;\n");
-  fixture.commit("2022-01-01T00:00:00Z");
-  const plugin = readFileSync(fixture.plugin, "utf8");
+  using fixture = createFixture({
+    "fixture/old": { "input.ts": ["const BAD_A = 1;", "const BAD_A = 1;"] },
+  });
+  fixture.write("const BAD_A = 1;\nconst BAD_B = 2;\n");
+  const source = readFileSync(fixture.plugin, "utf8");
   writeFileSync(
     fixture.plugin,
-    plugin.replace("{ node, messageId:", "{ node, loc: { line: 1, column: 0 }, messageId:"),
+    source.replace("{ node, messageId:", "{ node, loc: { line: 1, column: 0 }, messageId:"),
   );
-  expect(fixture.lint()).toMatchObject({ status: 0, names: [] });
+  expect(fixture.lint()).toMatchObject({ status: 0, names: [], stale: false });
   writeFileSync(
     fixture.plugin,
-    plugin.replace(
+    source.replace(
       "{ node, messageId:",
       "{ loc: { start: { line: 2, column: 0 }, end: { line: 2, column: 5 } }, messageId:",
     ),
   );
-  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_OLD", "BAD_NEW"] });
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_A", "BAD_B"], stale: true });
 });
 
 test("keeps rule metadata and fixes, fixing only new violations", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
+  using fixture = createFixture({ "fixture/old": { "input.ts": ["const BAD_OLD = 1;"] } });
   fixture.write("const BAD_OLD = 1;\nconst BAD_NEW = 2;\n");
-  expect(fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
+  expect(fixture.lint(["input.ts", "--fix"])).toMatchObject({ status: 0, names: [] });
   expect(readFileSync(fixture.file, "utf8")).toBe("const BAD_OLD = 1;\nconst goodNEW = 2;\n");
 });
 
-test("checks shallow boundary lines whose true author date is unavailable", () => {
-  using fixture = createFixture();
+test("pnpm lint:baseline's report-all mode reports grandfathered violations and no stale entries", () => {
+  using fixture = createFixture({
+    "fixture/old": { "input.ts": ["const BAD_OLD = 1;", "const BAD_GONE = 1;"] },
+  });
   fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.write("const BAD_OLD = 1;\n// second commit\n");
-  fixture.commit("2020-06-01T00:00:00Z");
-  fixture.git([
-    "clone",
-    "--quiet",
-    "--depth=1",
-    "file://" + fixture.root,
-    join(fixture.root, "shallow"),
-  ]);
-  expect(fixture.lint()).toMatchObject({ status: 0, names: [] });
-  expect(fixture.lint("shallow/input.ts")).toMatchObject({ status: 1, names: ["BAD_OLD"] });
-});
-
-test("resolves history in linked worktrees", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.git(["worktree", "add", "--detach", join(fixture.root, "linked"), "HEAD"]);
-  expect(fixture.lint("linked/input.ts")).toMatchObject({ status: 0, names: [] });
-});
-
-test("surfaces Git failures instead of silently exempting violations", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.git(["config", "blame.ignoreRevsFile", "missing-ignore-revs"]);
-  expect(fixture.lint()).toMatchObject({
+  expect(fixture.lint(["input.ts"], { LINT_BASELINE_REPORT_ALL: "1" })).toMatchObject({
     status: 1,
-    output: expect.stringContaining("missing-ignore-revs"),
+    names: ["BAD_OLD"],
+    stale: false,
   });
 });
 
-test("handles renamed paths containing Git pathspec characters", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.git(["mv", "input.ts", "input[1].ts"]);
-  fixture.git(["commit", "--quiet", "-m", "Rename file"]);
-  expect(fixture.lint("input[1].ts")).toMatchObject({ status: 0, names: [] });
+test("pnpm lint:baseline only drops entries, each kept by at most one current report", () => {
+  const previous = {
+    "iterate/a": { "x.ts": ["copy", "copy", "gone"], "deleted.ts": ["old"] },
+    "iterate/b": { "x.ts": ["kept"] },
+  };
+  const current = {
+    "iterate/a": { "x.ts": ["copy", "new"], "y.ts": ["new"] },
+    "iterate/b": { "x.ts": ["kept", "kept"] },
+    "iterate/c": { "z.ts": ["new", "armed"] },
+  };
+  expect(nextBaseline(previous, current, [])).toEqual({
+    "iterate/a": { "x.ts": ["copy"] },
+    "iterate/b": { "x.ts": ["kept"] },
+  });
+  expect(nextBaseline(previous, current, ["iterate/c"])).toMatchObject({
+    "iterate/c": { "z.ts": ["armed", "new"] },
+  });
 });
 
-test("rules sharing one blame of a file each apply their own cutoff", () => {
-  using fixture = createFixture();
-  fixture.write("const BAD_OLD = 1;\n");
-  fixture.commit("2020-01-01T00:00:00Z");
-  fixture.write("const BAD_OLD = 1;\nconst BAD_MID = 2;\n");
-  fixture.commit("2020-09-01T00:00:00Z");
-  const plugin = readFileSync(fixture.plugin, "utf8");
-  writeFileSync(
-    fixture.plugin,
-    plugin.replace(
-      "rules: { old: grandfatherRule({",
-      `rules: {
-        strict: grandfatherRule({
-          allowedUpTo: new Date("2020-06-01"),
-          create(context) {
-            return { Identifier(node) {
-              if (node.name.startsWith("BAD_")) context.report({ node, message: "Strict " + node.name });
-            } };
-          },
-        }),
-        old: grandfatherRule({`,
-    ),
-  );
-  const config = JSON.parse(readFileSync(join(fixture.root, ".oxlintrc.json"), "utf8"));
-  config.rules["fixture/strict"] = "error";
-  writeFileSync(join(fixture.root, ".oxlintrc.json"), JSON.stringify(config));
-
-  const { status, output } = fixture.lint();
-  expect({
-    status,
-    strict: [...output.matchAll(/Strict (BAD_\w+)/g)].map((match) => match[1]),
-  }).toEqual({ status: 1, strict: ["BAD_MID"] });
-  expect(fixture.lint()).toMatchObject({ names: [] });
-});
-
-test("rejects invalid cutoff dates", () => {
-  expect(() => grandfatherRule({ allowedUpTo: new Date("invalid"), create: () => ({}) })).toThrow(
-    "valid allowedUpTo date",
-  );
-});
-
-test("every cutoff in the plugin is past, so no committed violation is exempt by date alone", () => {
-  // A future cutoff exempts every line committed before it, so CI (which lints committed lines)
-  // cannot fail on the rule until that date: lint/grandfather-rule.md.
-  const cutoffs = readdirSync(import.meta.dirname, { recursive: true, encoding: "utf8" })
-    .filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts"))
-    .flatMap((path) => [
-      ...readFileSync(join(import.meta.dirname, path), "utf8").matchAll(
-        /allowedUpTo(?::| =) new Date\("([^"]+)"\)/gi,
-      ),
-    ])
-    .map((match) => match[1]!);
-  expect(cutoffs.length).toBeGreaterThan(0);
-  expect(cutoffs.filter((cutoff) => new Date(cutoff).getTime() > Date.now())).toEqual([]);
+test("the repository baseline lists debt for exactly the grandfathered rules, in files that exist", () => {
+  const { root, lines } = readBaseline();
+  const grandfathered = Object.entries(plugin.rules)
+    .filter(([, rule]) => grandfatheredRules.has(rule))
+    .map(([name]) => `iterate/${name}`);
+  // A rule whose debt reaches zero drops its grandfatherRule wrapper: lint/grandfather-rule.md.
+  expect(Object.keys(lines).sort()).toEqual(grandfathered.sort());
+  expect(
+    Object.values(lines)
+      .flatMap((files) => Object.keys(files))
+      .filter((path) => !existsSync(join(root, path))),
+  ).toEqual([]);
 });
 
 const repoRoot = resolve(import.meta.dirname, "..");
 
-function createFixture() {
+function createFixture(baseline: GrandfatheredLines) {
   const root = mkdtempSync(join(tmpdir(), "grandfather-rule-"));
   const file = join(root, "input.ts");
+  const plugin = join(root, "plugin.ts");
+  writeFileSync(join(root, "grandfathered.json"), JSON.stringify(baseline));
   writeFileSync(
-    join(root, "plugin.ts"),
+    plugin,
     `
+    import { readFileSync } from "node:fs";
     import { grandfatherRule } from ${JSON.stringify(join(repoRoot, "lint/grandfather-rule.ts"))};
+    const baseline = {
+      root: ${JSON.stringify(root)},
+      lines: JSON.parse(readFileSync(${JSON.stringify(join(root, "grandfathered.json"))}, "utf8")),
+    };
+    const report = (message) => (context) => ({ Identifier(node) {
+      if (node.name.startsWith("BAD_")) context.report({ node, message: message + " " + node.name });
+    } });
     export default {
       meta: { name: "fixture" },
-      rules: { old: grandfatherRule({
-        allowedUpTo: new Date("2021-01-01"),
-        meta: { type: "suggestion", fixable: "code", messages: { banned: "Found {{name}}" } },
-        create(context) {
-          return { Identifier(node) {
-            if (!node.name.startsWith("BAD_")) return;
-            context.report({ node, messageId: "banned", data: { name: node.name },
-              fix(fixer) { return fixer.replaceText(node, "good" + node.name.slice(4)); }
-            });
-          } };
-        }
-      }) }
+      rules: {
+        strict: { create: report("Strict") },
+        old: grandfatherRule({
+          meta: { type: "suggestion", fixable: "code", messages: { banned: "Found {{name}}" } },
+          create(context) {
+            return { Identifier(node) {
+              if (!node.name.startsWith("BAD_")) return;
+              context.report({ node, messageId: "banned", data: { name: node.name },
+                fix(fixer) { return fixer.replaceText(node, "good" + node.name.slice(4)); }
+              });
+            } };
+          }
+        }, baseline),
+      },
     };
   `,
   );
-  writeFileSync(
-    join(root, ".oxlintrc.json"),
-    JSON.stringify({
-      categories: { correctness: "off" },
-      jsPlugins: [join(root, "plugin.ts")],
-      rules: { "fixture/old": "error" },
-    }),
-  );
-  function git(args: string[], env: Record<string, string> = {}) {
-    const result = spawnSync("git", args, {
-      cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, ...env },
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    return result.stdout.trim();
-  }
-  git(["init", "--quiet"]);
-  git(["config", "user.name", "Lint Test"]);
-  git(["config", "user.email", "lint@test.invalid"]);
+  const config = join(root, ".oxlintrc.json");
+  const rules: Record<string, string> = { "fixture/old": "error" };
+  const writeConfig = () =>
+    writeFileSync(
+      config,
+      JSON.stringify({ categories: { correctness: "off" }, jsPlugins: [plugin], rules }),
+    );
+  writeConfig();
   return {
     root,
     file,
-    plugin: join(root, "plugin.ts"),
-    git,
+    plugin,
     write(contents: string) {
       writeFileSync(file, contents);
     },
-    commit(date: string) {
-      git(["add", "input.ts"]);
-      git(["commit", "--quiet", "-m", "Change source"], {
-        GIT_AUTHOR_DATE: date,
-        GIT_COMMITTER_DATE: "2025-01-01T00:00:00Z",
-      });
+    armStrictRule() {
+      rules["fixture/strict"] = "error";
+      writeConfig();
     },
-    lint(...args: string[]) {
+    lint(args = ["input.ts"], env: Record<string, string> = {}) {
       const result = spawnSync(
         join(repoRoot, "node_modules/.bin/oxlint"),
-        ["input.ts", "--config", join(root, ".oxlintrc.json"), "--threads", "1", ...args],
-        { cwd: root, encoding: "utf8" },
+        [...args, "--config", config, "--threads", "1"],
+        { cwd: root, encoding: "utf8", env: { ...process.env, ...env } },
       );
       const output = result.stdout + result.stderr;
       return {
         status: result.status,
         names: [...output.matchAll(/Found (BAD_\w+)/g)].map((match) => match[1]),
+        stale: output.includes("that no longer occur. Run `pnpm lint:baseline`"),
         output,
       };
     },

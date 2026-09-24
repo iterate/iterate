@@ -1,0 +1,2008 @@
+{
+  "iterate/helpers-after-tests": {
+    "apps/agents/__workers-tests__/agent-revive.test.ts": [
+      "class ParkingModel extends RpcTarget {",
+      "const read = async (ctx: string) =>",
+      "const short = (log: StreamEvent[]) =>"
+    ],
+    "apps/agents/voice/delegation-turn.test.ts": [
+      "async function turn(replies: string[], scriptResults: string[] = []) {"
+    ],
+    "apps/agents/voice/install.test.ts": ["const project = () => ({"],
+    "apps/agents/voice/screen.test.ts": [
+      "const info = (width: number, height: number) =>",
+      "function rgbaPng(width: number, height: number, rgba: number[]) {"
+    ],
+    "apps/agents/voice/worker.test.ts": [
+      "function harness(image = png(3, 0), infoOverride = {}) {",
+      "function png(channels: 3 | 4, filter: number) {"
+    ],
+    "apps/kit/src/device-auth.test.ts": ["function fixture() {"],
+    "apps/os/__workers-tests__/alarm-and-pins.test.ts": [
+      "async function disableCounter(ctx: string, name = \"counter\"): Promise<void> {",
+      "async function enableCounter(ctx: string, name = \"counter\"): Promise<void> {",
+      "async function untilRow(",
+      "async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Record<string, any>> {",
+      "const durableCount = async (ctx: string): Promise<number> =>",
+      "const snapCounter = (ctx: string, name = \"counter\") =>",
+      "const stateOf = (ctx: string): Promise<Record<string, any>> =>"
+    ],
+    "apps/os/__workers-tests__/context-runs.test.ts": [
+      "const openScriptRuns = async (ctx: string) =>",
+      "const read = async (ctx: string): Promise<StreamEvent[]> =>",
+      "const runEvents = async (ctx: string) =>"
+    ],
+    "apps/os/__workers-tests__/control-plane.test.ts": [
+      "const accountState = async (session: Session) =>",
+      "const catalog = (method: string, ...args: unknown[]) =>",
+      "const globalLog = async (path: string) =>",
+      "const organizationState = async (session: Session, orgId: string) =>",
+      "const postLogin = (form: Record<string, string>, cookie?: string) =>"
+    ],
+    "apps/os/__workers-tests__/do-doors.test.ts": [
+      "async function deniedCode(itx: any, call: string): Promise<string | undefined> {",
+      "class Alive extends RpcTarget {",
+      "const rewriteRuleEventCount = async (ctx: string): Promise<number> =>",
+      "const rewriteRulesOf = async (ctx: string): Promise<Record<string, RewriteRuleRow>> =>",
+      "const rpcStubPagersOf = async (ctx: string): Promise<number> =>"
+    ],
+    "apps/os/__workers-tests__/ephemeral-offset-reuse.test.ts": [
+      "const hostedFacet = (source: Record<string, string>, cls: string, name: string): ItxExpression => [",
+      "const page = async (ctx: string): Promise<Page> =>",
+      "const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));"
+    ],
+    "apps/os/__workers-tests__/facet-abort-heals-cut-off-work.test.ts": [
+      "async function hostedOn(ctx: string) {",
+      "const issueLines = (errors: { mock: { calls: unknown[][] } }) =>"
+    ],
+    "apps/os/__workers-tests__/facet-class-loads-at-startup.test.ts": [
+      "async function tapLoader(ctx: string): Promise<LoaderTap> {",
+      "async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000): Promise<void> {",
+      "const hostHello = (ctx: string) =>",
+      "const warmHello = (ctx: string) =>"
+    ],
+    "apps/os/__workers-tests__/facet-clone-version-heals.test.ts": [
+      "const flakyFacetSource = (message: string) => /* js */ `"
+    ],
+    "apps/os/__workers-tests__/facet-public-methods.test.ts": [
+      "async function byExpression(call: () => Promise<unknown>): Promise<string> {"
+    ],
+    "apps/os/__workers-tests__/facets-never-answer-a-socket.test.ts": [
+      "async function projectWithAppFacet(project: string) {"
+    ],
+    "apps/os/__workers-tests__/fetch-lane-unread-body.test.ts": [
+      "const streamed = (text: string): RequestInit =>"
+    ],
+    "apps/os/__workers-tests__/first-party-facet-placement.test.ts": [
+      "async function outcomeOf(call: () => Promise<unknown>): Promise<string> {",
+      "async function signedInSession(email: string) {"
+    ],
+    "apps/os/__workers-tests__/forged-facet-inputs.test.ts": [
+      "async function attempted(call: () => Promise<unknown>): Promise<\"answered\" | \"refused\"> {",
+      "async function projectWithSecret(email: string, slug: string) {",
+      "async function projectWithTally(email: string, slug: string) {",
+      "const forgedEvent = (offset: number, type: string, payload: unknown) => ({"
+    ],
+    "apps/os/__workers-tests__/hibernation-at-scale.test.ts": [
+      "async function incarnationNow(): Promise<number> {",
+      "async function releasePinsLikeProduction(): Promise<void> {",
+      "async function state(): Promise<TransportState> {"
+    ],
+    "apps/os/__workers-tests__/identity.test.ts": [
+      "async function identityLogin(",
+      "const encode = (value: unknown) =>"
+    ],
+    "apps/os/__workers-tests__/issuer-bootstrap.test.ts": [
+      "async function connect(headers: Record<string, string>) {",
+      "const person = async (email: string) => (await operator()).users.create({ email });"
+    ],
+    "apps/os/__workers-tests__/oauth.test.ts": [
+      "async function endGrantOnAccount(userId: string, grantId: string): Promise<void> {",
+      "async function grant(resources: string[], projects: string[] = [\"oauth-a\"]) {",
+      "async function removeMembership(orgId: string, userId: string): Promise<void> {",
+      "async function restoreMembership(orgId: string, userId: string): Promise<void> {",
+      "async function rpc(",
+      "async function tool(token: string, name: string, args: object = {}) {",
+      "const call = (path: string, init?: RequestInit) => {"
+    ],
+    "apps/os/__workers-tests__/password-and-code-sign-in.test.ts": [
+      "const withCookie = (setCookie: string) =>"
+    ],
+    "apps/os/__workers-tests__/residency-watchdog.test.ts": [
+      "async function touchedAt(ctx: string, t0: number): Promise<void> {",
+      "const alarmOf = (ctx: string): Promise<number | null> =>",
+      "const incarnationOf = (ctx: string): Promise<number> =>",
+      "const read = async (ctx: string, includeEphemeral = false): Promise<StreamEvent[]> =>"
+    ],
+    "apps/os/__workers-tests__/rpc-stub-pager-attach.test.ts": [
+      "class LentAnswer extends RpcTarget {",
+      "const openPager = (ctx: string, rpcStubKey: string, appendEvents: StreamEventInput[] = []) =>",
+      "const presence = (ctx: string) =>",
+      "const ruleAt = (ctx: string, match: string) =>",
+      "const ruleFor = (rpcStubKey: string): StreamEventInput => ({",
+      "const transportState = async (ctx: string) =>"
+    ],
+    "apps/os/__workers-tests__/rpc-stub-pager-drop.test.ts": [
+      "const rpcStubPagers = async (ctx: string) =>"
+    ],
+    "apps/os/__workers-tests__/scheduled-appends.test.ts": [
+      "async function fire(ctx: string, now = Date.parse(at)) {",
+      "async function read(ctx: string) {"
+    ],
+    "apps/os/__workers-tests__/session-doors.test.ts": [
+      "async function api() {",
+      "const call = (url: string, init?: RequestInit) =>"
+    ],
+    "apps/os/__workers-tests__/uncontrolled-degradation.test.ts": [
+      "async function facetThatCannotStart(",
+      "async function rejectionOf(fn: () => unknown): Promise<ObservedError | undefined> {",
+      "async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {",
+      "async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {",
+      "async function walkLadder(",
+      "const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [",
+      "const corruptRow = (ctx: string, offset: number) =>",
+      "const disableProcessorByEvent = (ctx: string, name: string) =>",
+      "const drainIssues = (): IssueLine[] => issues.splice(0);",
+      "const enableProcessorByEvent = (",
+      "const facetStartupMemoPresent = (ctx: string, name: string) =>",
+      "const hostingTarget = (name: string, source: string, className: string): ItxExpression => [",
+      "const offsetOf = (appended: unknown): number => (appended as { offset: number }[])[0].offset;",
+      "const snapshotOf = (ctx: string, name: string) =>",
+      "const subscriptionRow = (ctx: string, name: string) =>",
+      "const untilIssue = (failureSite: string, pattern: RegExp, timeoutMs = 10_000): Promise<IssueLine> =>"
+    ],
+    "apps/os/__workers-tests__/ws-fetch-live-101.test.ts": [
+      "async function createProject(project: string) {",
+      "async function provideLiveSite(project: string): Promise<{ site: LiveSite; host: string }> {",
+      "class GreetingSite extends RpcTarget {",
+      "class LiveSite extends RpcTarget {"
+    ],
+    "apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts": [
+      "class FakeAi extends RpcTarget {",
+      "class FakeAiGateway extends RpcTarget {"
+    ],
+    "apps/os/e2e/browser-root.e2e.test.ts": ["class FakeBrowser extends RpcTarget {"],
+    "apps/os/e2e/cfartifacts.e2e.test.ts": [
+      "async function allRepoPaths(itx: ReturnType<typeof openItx>): Promise<string[]> {"
+    ],
+    "apps/os/e2e/config-worker.e2e.test.ts": [
+      "const source = (version: string) => `import { ConfigWorker } from \"./processor.js\";"
+    ],
+    "apps/os/e2e/context-abort.e2e.test.ts": ["const wakes = (events: { type: string }[]) =>"],
+    "apps/os/e2e/context-residency.e2e.test.ts": [
+      "async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: string }> {",
+      "const carelessHolder = (itx: any, method: string, ...args: unknown[]) =>",
+      "const facetStartedAt = async (facet: any): Promise<number> =>",
+      "const stillAnswers = (call: () => Promise<unknown>) =>"
+    ],
+    "apps/os/e2e/context-watchdog.e2e.test.ts": [
+      "const incarnations = (events: any[]): number[] =>"
+    ],
+    "apps/os/e2e/context.e2e.test.ts": [
+      "async function liveRig(ctx: string, name: string) {",
+      "async function slackRig(ctx: string) {"
+    ],
+    "apps/os/e2e/cursor-delivery.e2e.test.ts": [
+      "async function cursorSubscribe(",
+      "async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {",
+      "class Hook extends RpcTarget {",
+      "const HOOKED_SOURCE = (hook: string) => ({",
+      "const digested = async (itx: any): Promise<number> => Number((await itx.kv.get(\"digested\")) ?? 0);",
+      "const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>",
+      "const ledgerLog = async (itx: any): Promise<LedgerEntry[]> =>",
+      "const ledgerSubscribe = async (itx: any, firstCall: \"throw\" | \"hold\"): Promise<void> => {"
+    ],
+    "apps/os/e2e/fetch-door.e2e.test.ts": [
+      "class HttpDevice extends RpcTarget {",
+      "class WsDevice extends RpcTarget {",
+      "const egress = (query: string, headers?: Record<string, string>): Promise<Response> =>",
+      "const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>"
+    ],
+    "apps/os/e2e/files.e2e.test.ts": [
+      "const bytesOf = (text: string) => new TextEncoder().encode(text);",
+      "const textOf = (bytes: Uint8Array) => new TextDecoder().decode(bytes);"
+    ],
+    "apps/os/e2e/ingress-project-host.e2e.test.ts": [
+      "const siteRule = () => [\"itx\", \"workers\", [\"get\", { source: SRC_SITE }]];"
+    ],
+    "apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts": [
+      "async function pageToHead(itx: any): Promise<number> {",
+      "async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {",
+      "const blobFor = (n: number): string => String.fromCharCode(97 + (n % 26)).repeat(EVENT_CHARS);"
+    ],
+    "apps/os/e2e/live-state-chains-client-side.e2e.test.ts": [
+      "async function watchedLiveState<S>(",
+      "const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;"
+    ],
+    "apps/os/e2e/organizations.e2e.test.ts": [
+      "const memberships = async (api: any) =>",
+      "const person = (email: string) => session().authenticate(adminCredentials({ email }));",
+      "const record = async (organization: any) =>"
+    ],
+    "apps/os/e2e/rewrite-rules.e2e.test.ts": ["class Override extends RpcTarget {"],
+    "apps/os/e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts": [
+      "const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string | null }[]> =>"
+    ],
+    "apps/os/e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts": [
+      "async function watchAttached(ctx: string) {"
+    ],
+    "apps/os/e2e/rpc-stubs-values.e2e.test.ts": [
+      "class Demo extends RpcTarget {",
+      "class Notebook extends RpcTarget {",
+      "class Timer extends RpcTarget {",
+      "class ToolsA extends RpcTarget {",
+      "class ToolsRich extends RpcTarget {",
+      "const replayOnto = (sdk: Record<PropertyKey, unknown>) =>"
+    ],
+    "apps/os/e2e/secrets-connections.e2e.test.ts": [
+      "const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path: string) => {",
+      "const refreshedFacts = async (secret: ReturnType<typeof openItx>): Promise<unknown[]> =>"
+    ],
+    "apps/os/e2e/secrets.e2e.test.ts": [
+      "const changesOf = async (itx: any): Promise<unknown[]> =>"
+    ],
+    "apps/os/e2e/session-wire-frames-one-round-trip.e2e.test.ts": [
+      "const kindOf = (data: string): string => {",
+      "const tally = (frames: WireFrame[]): Record<string, number> => {",
+      "function expectOneRoundTrip(frames: WireFrame[], label: string): void {",
+      "function wireSession(): InstrumentedWire {"
+    ],
+    "apps/os/e2e/stream.e2e.test.ts": [
+      "const nested = (n: number): unknown => {",
+      "const nestedLiteral = (n: number): string => \"[\".repeat(n) + \"0\" + \"]\".repeat(n);",
+      "const read = (",
+      "const readOne = async (itx: any, offset: number) =>"
+    ],
+    "apps/os/e2e/workers-and-facets.e2e.test.ts": ["const entrypoint = (body: string) =>"],
+    "apps/os/e2e/workspaces.e2e.test.ts": [
+      "async function workspaceOverFakeArtifacts(",
+      "const workspaceTypes = (log: { type: string }[]) =>"
+    ],
+    "apps/os/scripts/preview-sweep.test.ts": [
+      "const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();",
+      "const input = (overrides: Partial<PreviewSweepInput>): PreviewSweepInput => ({"
+    ],
+    "apps/os/scripts/project-seed.test.ts": ["async function archive() {"],
+    "apps/os/src/alarm-coordinator.test.ts": [
+      "function setup(deadlines: (number | null)[] = []) {"
+    ],
+    "apps/os/src/context/cf-artifacts.test.ts": [
+      "const scoped = (namespace: ArtifactsNamespace, projectId: string) =>",
+      "function recordingNamespace(existing: string[] = []) {"
+    ],
+    "apps/os/src/context/expression.test.ts": [
+      "const resolverOver = (s: ReturnType<typeof scope>, ...rewriteRules: ItxExpressionRewriteRule[]) =>",
+      "const rewriteRule = (match: string, target: string): ItxExpressionRewriteRule => ({",
+      "const scope = () => {"
+    ],
+    "apps/os/src/context/facet-public-methods.test.ts": [
+      "abstract class ChatroomDurableObject extends FacetDurableObject {",
+      "abstract class SendingProcessorDurableObject extends StreamProcessorDurableObject {"
+    ],
+    "apps/os/src/context/first-party-facet-placement.test.ts": [
+      "function contextAddress(context: string) {",
+      "function refusalOf(assert: () => void): string | undefined {"
+    ],
+    "apps/os/src/context/itx-expression-rewriting.test.ts": [
+      "const chain = (rules: string[], call: string): string[] | string => {",
+      "const fakeBuiltIns = () => {",
+      "const restoreRuleTarget = (match: ItxExpressionInput): ItxExpression => [",
+      "const runs = (rules: string[], call: string): string => {",
+      "const setup = () => {",
+      "const table = (rows: string[]): ItxExpressionRewriteRule[] =>"
+    ],
+    "apps/os/src/context/rpc-stubs.test.ts": [
+      "async function relayOverFakeDurableObject(",
+      "class FakePagerWebSocket {",
+      "const directory = () =>",
+      "function fakeBorrowedRpcStub(answer: () => Promise<unknown>) {"
+    ],
+    "apps/os/src/context/worker-loader.test.ts": [
+      "const fakeLoaderEnv = () => {",
+      "const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) => {"
+    ],
+    "apps/os/src/first-party-facets.test.ts": [
+      "const target = (getStep: unknown[]): ItxExpression =>"
+    ],
+    "apps/os/src/project/processor.test.ts": [
+      "const committed = (path: string, commitOid: string) => ({",
+      "const processor = () =>",
+      "const repoBorn = (path: string) => ({ type: \"events.iterate.com/repo/created\", payload: { path } });",
+      "const secretDeleted = (path: string) => ({",
+      "const secretSet = (path: string, urls: string[], refresh?: string) => ({",
+      "const workspaceBorn = (path: string) => ({"
+    ],
+    "apps/os/src/project/templates.test.ts": [
+      "async function create(fixture: ReturnType<typeof project>, template?: string) {",
+      "function project(existing?: Record<string, string>) {"
+    ],
+    "apps/os/src/secrets.test.ts": [
+      "const scripted = (answer: (exchange: Exchange) => Response) => {"
+    ],
+    "apps/os/src/session-teardown.test.ts": [
+      "const undo = (log: string[], label: string) => ({ dispose: () => void log.push(label) });"
+    ],
+    "apps/os/src/stream/core-processor.test.ts": [
+      "const at = (offset: number, type: string, payload?: Record<string, unknown>): StreamEvent => ({",
+      "const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState()): CoreState =>"
+    ],
+    "apps/os/src/stream/memory-budget.test.ts": [
+      "const expectSurvived = (run: ScenarioRun, what: string) =>",
+      "const runCoreRowsUntilCellCap = () =>",
+      "function runScenario(name: ScenarioName, args: Record<string, number>): ScenarioRun {"
+    ],
+    "apps/os/src/stream/processor.test.ts": [
+      "class CaughtUpProbeProcessor extends StreamProcessor<{ n: number }> {",
+      "class CountProcessor extends StreamProcessor<{ ticks: number }> {",
+      "class CounterProcessor extends StreamProcessor<{ ticks: number }> {",
+      "class EffectOnlyProcessor extends StreamProcessor<Record<string, never>> {",
+      "const CountContract = (version: string) =>",
+      "const caughtUpProbe = (readFails?: Error) => {",
+      "const collectingSink = () => {",
+      "const setup = () => {",
+      "function ev(offset: number, type = \"t\"): StreamEvent {"
+    ],
+    "apps/os/src/stream/scheduled-appends.test.ts": [
+      "const scheduled = (key = \"reminder\", at = \"2030-01-01T00:00:00Z\") =>",
+      "function setup() {"
+    ],
+    "apps/os/src/stream/stream.test.ts": [
+      "const persistedDurableMark = (storage: DurableObjectStorageSlice): number | undefined => {",
+      "const persistedEventRows = (storage: DurableObjectStorageSlice): number =>",
+      "const persistedIncarnation = (storage: DurableObjectStorageSlice): number =>",
+      "function bareStream("
+    ],
+    "apps/os/src/stream/subscription-delivery.test.ts": [
+      "const blobIndexes = (push: { events: StreamEvent[] }) =>",
+      "const facetTarget = (name: string): ItxExpression => [",
+      "const haltFactsFor = (stream: Stream, name: string): StreamEvent[] =>",
+      "const ns = (events: { payload?: { n?: number } }[]) => events.map((e) => e.payload?.n ?? -1);",
+      "function incarnation(",
+      "function stuckFacetRig(previous?: { storage: DurableObjectStorageSlice }) {"
+    ],
+    "packages/iterate/src/cli.test.ts": [
+      "function cliConfig(baseUrl: string) {",
+      "function runCli(directory: string, args: string[]) {"
+    ],
+    "packages/iterate/src/next/app-server.test.ts": [
+      "function login(path: string, scopes: string[]) {"
+    ],
+    "packages/iterate/src/next/app-session.test.ts": ["function fixture() {"],
+    "packages/iterate/src/next/client/live-state.test.ts": [
+      "const settle = async () => {",
+      "function harness() {"
+    ],
+    "packages/iterate/src/next/lib.test.ts": ["const roundtrip = (a: unknown, b: unknown) => {"],
+    "packages/shared/src/test-support/failing-test.test.ts": [
+      "function pinWithRetry(bodies: Array<() => Promise<unknown>>) {"
+    ],
+    "packages/ui/src/components/context-view/filters.test.tsx": [
+      "const at = (offset: number, type: string, payload?: unknown, actor?: string): ContextViewEvent => ({"
+    ],
+    "packages/ui/src/components/context-view/folds.test.tsx": [
+      "const at = (offset: number, type: string, payload?: unknown, iso = \"2026-09-21T19:00:00.000Z\") =>"
+    ]
+  },
+  "iterate/no-describe": {
+    "apps/agents/runtime/processor.test.ts": [
+      "describe(\"AgentProcessor — the reduce\", () => {",
+      "describe(\"the assistant's output, parsed (the codemode-tag grammar, codemode-format.ts)\", () => {",
+      "describe(\"the capability tree the model reads\", () => {",
+      "describe(\"the conversation as the model reads it (buildChatMessages)\", () => {"
+    ],
+    "apps/agents/src/lib/agent-events.test.ts": [
+      "describe(\"adaptContextRuns — the context's runs in the reducer's vocabulary\", () => {"
+    ],
+    "apps/dummy-petshop/src/capnweb.test.ts": ["describe(\"capnweb door\", () => {"],
+    "apps/dummy-petshop/src/gateway.test.ts": [
+      "describe(\"bearerTokenFromHeader (/gateway-header shape)\", () => {",
+      "describe(\"gateway hello\", () => {",
+      "describe(\"gateway identify\", () => {",
+      "describe(\"handleUpgradeAuth (header + subprotocol shapes)\", () => {",
+      "describe(\"subprotocolAuth (/gateway-subprotocol shape)\", () => {"
+    ],
+    "apps/dummy-petshop/src/github-app.test.ts": [
+      "describe(\"GitHub App installation webhooks\", () => {",
+      "describe(\"GitHub App installation-token minting\", () => {"
+    ],
+    "apps/dummy-petshop/src/graphql-login.test.ts": [
+      "describe(\"graphql session-login door\", () => {"
+    ],
+    "apps/dummy-petshop/src/mcp.test.ts": ["describe(\"mcp endpoint\", () => {"],
+    "apps/dummy-petshop/src/rpc.test.ts": [
+      "describe(\"OpenAPI (REST-shaped) handler\", () => {",
+      "describe(\"oRPC handler\", () => {",
+      "describe(\"openapi.json\", () => {"
+    ],
+    "apps/dummy-petshop/src/seal.test.ts": ["describe(\"seal/unseal\", () => {"],
+    "apps/dummy-petshop/src/worker.test.ts": [
+      "describe(\"authorize\", () => {",
+      "describe(\"backdoor lock\", () => {",
+      "describe(\"expiry, refresh, revocation\", () => {",
+      "describe(\"gateway routes\", () => {",
+      "describe(\"index\", () => {",
+      "describe(\"legacy login (email + password, no refresh grant)\", () => {",
+      "describe(\"mcp oauth (RFC 9728 / 8414 / 7591 + PKCE)\", () => {",
+      "describe(\"token endpoint outage (backdoor-scheduled)\", () => {",
+      "describe(\"token exchange\", () => {",
+      "describe(\"webhooks\", () => {"
+    ],
+    "apps/kit/src/firmware/config-image.test.ts": [
+      "describe(\"encodeDeviceConfiguration\", () => {",
+      "describe(\"normalizeOsBaseUrl\", () => {"
+    ],
+    "apps/os/__workers-tests__/control-plane-contexts.test.ts": [
+      "describe(\"account — foundation shape (passing)\", () => {",
+      "describe(\"security requirements — the global namespace is not navigable\", () => {",
+      "describe(\"shape — a global context is an ordinary context (passing)\", () => {"
+    ],
+    "apps/os/e2e/library-connectors.e2e.test.ts": [
+      "describe(\"against the deployed pet shop\", () => {"
+    ],
+    "apps/os/scripts/preview-sweep.test.ts": [
+      "describe(\"which previews are stale (rules 1–3)\", () => {",
+      "describe(\"which resources are orphans (rules 4–6); previews soak and pr2847-x are listed, and a worker os-next-preview-2 exists\", () => {"
+    ],
+    "apps/os/scripts/preview.test.ts": [
+      "describe(\"the PR body's managed section\", () => {",
+      "describe(\"the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes)\", () => {",
+      "describe(\"the preview name (cloudflare-os: pr<n>-<branch slug>)\", () => {",
+      "describe(\"the preview's wrangler config (a pure transform of Vite's built config)\", () => {",
+      "describe(\"which apps on top a preview run deploys\", () => {"
+    ],
+    "apps/os/src/account/processor.test.ts": [
+      "describe(\"AccountProcessor — the account state folded from facts\", () => {"
+    ],
+    "apps/os/src/client/presence/processor.test.ts": [
+      "describe(\"PresenceProcessor — ticks are reduced, pokes are runtime-only\", () => {"
+    ],
+    "apps/os/src/context/browser.test.ts": ["describe(\"unwrapBrowserRunQuickAction\", () => {"],
+    "apps/os/src/context/cf-artifacts.test.ts": [
+      "describe(\"repoArtifactName — the Artifacts repo a path is backed by\", () => {"
+    ],
+    "apps/os/src/context/expression.test.ts": [
+      "describe(\"an answer leaves a context holding nothing of its session\", () => {",
+      "describe(\"walkSteps + resolve\", () => {"
+    ],
+    "apps/os/src/context/itx-expression-rewriting.test.ts": [
+      "describe(\"`@` round-trips the codec (targets only): parse → print → parse; the one reserved literal\", () => {",
+      "describe(\"built-in resolution + default-deny\", () => {",
+      "describe(\"describeRewriteRules — the effective table as `rewriteRules.list()` shows it\", () => {",
+      "describe(\"matchItxExpressionPrefix — one match against one call\", () => {",
+      "describe(\"resolveItxExpression — the call that runs\", () => {",
+      "describe(\"rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary\", () => {",
+      "describe(\"rowsNamingRpcStub — decided against a frozen table, whatever the configuration order\", () => {",
+      "describe(\"targets round-trip the codec: rewrite → print → reduce → parse\", () => {",
+      "describe(\"the anonymous call step round-trips the codec\", () => {",
+      "describe(\"the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too\", () => {",
+      "describe(\"the rule table — a MAP by match: set replaces, null masks or deletes, the platform-equivalent target restores\", () => {"
+    ],
+    "apps/os/src/context/rpc-stubs.test.ts": [
+      "describe(\"a borrowed stub after a rejected call\", () => {",
+      "describe(\"a pager that closes under a live session\", () => {"
+    ],
+    "apps/os/src/control-plane/catalog.test.ts": [
+      "describe(\"organizations\", () => {",
+      "describe(\"people\", () => {",
+      "describe(\"projects\", () => {"
+    ],
+    "apps/os/src/library.test.ts": [
+      "describe(\"buildLibrary — live connections are memoized per context\", () => {",
+      "describe(\"capnweb\", () => {",
+      "describe(\"connectToCapnweb, batch transport\", () => {",
+      "describe(\"connectToMcp\", () => {",
+      "describe(\"connectToOpenApi\", () => {",
+      "describe(\"mcp\", () => {",
+      "describe(\"openapi\", () => {",
+      "describe(\"run\", () => {",
+      "describe(\"the library boundary\", () => {",
+      "describe(\"the library\", () => {",
+      "describe(\"the runner's settlement\", () => {"
+    ],
+    "apps/os/src/organization/processor.test.ts": [
+      "describe(\"OrganizationProcessor — the organization's record folded from facts\", () => {"
+    ],
+    "apps/os/src/project/processor.test.ts": [
+      "describe(\"ProjectProcessor — the apex follows the config repo\", () => {",
+      "describe(\"ProjectProcessor — the reduce\", () => {"
+    ],
+    "apps/os/src/repo/git-wire.test.ts": ["describe(\"the tree codec against git's ids\", () => {"],
+    "apps/os/src/repo/processor.test.ts": ["describe(\"RepoProcessor — the reduce\", () => {"],
+    "apps/os/src/secret/processor.test.ts": ["describe(\"SecretProcessor — the reduce\", () => {"],
+    "apps/os/src/stream/core-processor.test.ts": [
+      "describe(\"configure — ONE event: set, replace, or remove\", () => {",
+      "describe(\"identity, incarnation, the pause latch\", () => {",
+      "describe(\"purity\", () => {",
+      "describe(\"reduceCoreEventBatch — a batch's draft tables never leak into the state it was given\", () => {",
+      "describe(\"rule 8 at a CHILD (nothing project-level implicit; the bare null; the grant through the wall)\", () => {",
+      "describe(\"the builtins root, as the reduce sees it: masks, the platform-equivalent target, hosting on the RESOLVED target\", () => {",
+      "describe(\"the contract\", () => {",
+      "describe(\"the ingress target — project/ingress-configured, normalized at the append boundary\", () => {",
+      "describe(\"the platform rows a null MASKS (kept) vs a plain delete\", () => {",
+      "describe(\"the rewrite-rule table — a MAP by match\", () => {",
+      "describe(\"the scriptRuns table — by the request's offset: requested opens, settled closes, nothing else\", () => {",
+      "describe(\"the subscriptions table — by name\", () => {"
+    ],
+    "apps/os/src/stream/processor-rules.test.ts": [
+      "describe(\"ephemeral windows and repair\", () => {",
+      "describe(\"live state with a projection that throws only sometimes\", () => {",
+      "describe(\"rule 2 — per-event barrier under slow blockers\", () => {",
+      "describe(\"rule 3 — runInBackground never blocks the batch commit\", () => {",
+      "describe(\"rule 4 — one durable commit per batch, all-or-nothing\", () => {",
+      "describe(\"rule 5 — exactly one caughtUp per at-head batch\", () => {",
+      "describe(\"version bump re-reduce — a reducer that throws\", () => {",
+      "describe(\"version bump re-reduce\", () => {",
+      "describe(\"waitUntilProcessed\", () => {"
+    ],
+    "apps/os/src/stream/processor.test.ts": [
+      "describe(\"consumesEvent — THE ONE consumes rule (engine, delivery loop, inline reduces)\", () => {",
+      "describe(\"contract payload validation\", () => {",
+      "describe(\"contract\", () => {",
+      "describe(\"delivery.caughtUp is tied to the SHOWN head\", () => {",
+      "describe(\"emit rules + idempotency\", () => {",
+      "describe(\"ephemeral events\", () => {",
+      "describe(\"eviction honors the persisted cursor\", () => {",
+      "describe(\"live state (the delta patches on the wire)\", () => {",
+      "describe(\"live state emission failure is contained\", () => {",
+      "describe(\"reduce cache + re-reduce\", () => {",
+      "describe(\"rule 3 — the claim: work in flight ⇒ the context owes this processor a revive\", () => {",
+      "describe(\"the concurrency contract\", () => {",
+      "describe(\"waitUntilProcessed — resolution and failure modes\", () => {"
+    ],
+    "apps/os/src/stream/subscription-delivery.test.ts": [
+      "describe(\"a cursor row's ephemerals come from the stream's ring: an ephemeral delivery that FAILS is retried from it, and the next ephemeral reaches the row before any durable lands\", () => {",
+      "describe(\"a rule re-point re-classifies a row\", () => {",
+      "describe(\"a superseded evaluation can neither classify nor invoke its replacement\", () => {",
+      "describe(\"an operator's resume wakes a halted FACET row now — the facet catches up from the log itself\", () => {",
+      "describe(\"halt once, for the right row\", () => {",
+      "describe(\"the delivery loop's claim on the DO's alarm (`deadlines()`): exactly the persisted time — the claim written as an attempt begins, a ladder rung, a claim a death left\", () => {",
+      "describe(\"the pending push is bounded\", () => {",
+      "describe('a wake reaches every \"*\" row and leaves nothing armed', () => {"
+    ],
+    "apps/os/src/worker.test.ts": [
+      "describe(\"appConfigOf — once per env object\", () => {",
+      "describe(\"parseAppConfig\", () => {",
+      "describe(\"public protocol origins\", () => {",
+      "describe(\"the derived keys\", () => {"
+    ],
+    "apps/os/src/workspace/processor.test.ts": [
+      "describe(\"WorkspaceProcessor — the reduce\", () => {"
+    ],
+    "packages/iterate/src/next/app-server.test.ts": [
+      "describe(\"/.auth/login with a session the platform honours\", () => {",
+      "describe(\"a browser CONNECTED to another issuer stays there\", () => {"
+    ],
+    "packages/iterate/src/next/client/socket.test.ts": [
+      "describe(\"openSocketWithRetry\", () => {"
+    ],
+    "packages/iterate/src/next/lib.test.ts": [
+      "describe(\"diff + applyPatch\", () => {",
+      "describe(\"isSameOriginBrowserRequest\", () => {"
+    ],
+    "packages/iterate/src/next/principal.test.ts": [
+      "describe(\"stampCaller — the platform's attribution on an event\", () => {"
+    ],
+    "packages/iterate/src/next/project-ingress.test.ts": [
+      "describe(\"customProjectHostOf\", () => {",
+      "describe(\"projectAddressOf — paths\", () => {",
+      "describe(\"projectAddressOf — subdomains\", () => {",
+      "describe(\"projectUrlOf\", () => {"
+    ],
+    "packages/iterate/src/next/sdk/record-pipelined-steps.test.ts": [
+      "describe(\"recordPipelinedSteps\", () => {"
+    ],
+    "packages/shared/src/name-suggestions.test.ts": [
+      "describe(\"suggestOrganizationName\", () => {",
+      "describe(\"suggestOrganizationNameFromEmail\", () => {"
+    ],
+    "packages/shared/src/posthog/posthog.test.ts": ["describe(\"proxyPosthogRequest\", () => {"],
+    "packages/ui/src/components/context-view/context-view-search.test.ts": [
+      "describe(\"ContextViewState\", () => {"
+    ],
+    "packages/ui/src/components/context-view/filters.test.tsx": [
+      "describe(\"filterEvents\", () => {",
+      "describe(\"payloadSummary\", () => {"
+    ],
+    "packages/ui/src/components/context-view/folds.test.tsx": [
+      "describe(\"foldEvents\", () => {",
+      "describe(\"the same fact is the same sentence\", () => {"
+    ],
+    "scripts/ci/depot-workflows.test.ts": [
+      "describe(\"Depot credential boundaries\", () => {",
+      "describe(\"Depot deployment safety\", () => {",
+      "describe(\"Depot validation capacity\", () => {"
+    ],
+    "scripts/ci/pr-dashboard.test.ts": ["describe(\"findDashboardState\", () => {"],
+    "scripts/lib/cloudflare-429-retry.test.ts": [
+      "describe(\"fetchCloudflareWith429Retry\", () => {"
+    ],
+    "scripts/lib/deploy-helpers.test.ts": [
+      "describe(\"runAsync\", () => {",
+      "describe(\"runCloudflareCommandWith429Retry\", () => {",
+      "describe(\"smokeResponse\", () => {"
+    ],
+    "scripts/lib/do-reset.test.ts": [
+      "describe(\"detachExternalDurableObjectBindings\", () => {",
+      "describe(\"resetWorkerDurableObjects\", () => {"
+    ],
+    "scripts/lib/start-app.test.ts": [
+      "describe(\"a start app's preview config (a pure transform of the built wrangler.json)\", () => {"
+    ]
+  },
+  "iterate/no-lifecycle-hooks": {
+    "apps/agents/voice/agent.test.ts": ["beforeAll(async () => {"],
+    "apps/agents/voice/worker.test.ts": ["beforeAll(async () => {"],
+    "apps/dummy-petshop/src/capnweb.test.ts": ["afterEach(() => vi.unstubAllGlobals());"],
+    "apps/dummy-petshop/src/gateway.test.ts": ["afterEach(() => {"],
+    "apps/dummy-petshop/src/github-app.test.ts": ["beforeAll(async () => {"],
+    "apps/dummy-petshop/src/graphql-login.test.ts": ["afterEach(() => vi.useRealTimers());"],
+    "apps/dummy-petshop/src/worker.test.ts": ["afterEach(() => {"],
+    "apps/os/__workers-tests__/context-abort-and-the-watchdog.test.ts": ["afterEach(() => {"],
+    "apps/os/__workers-tests__/control-plane.test.ts": ["afterEach(() => {"],
+    "apps/os/__workers-tests__/facet-abort-heals-cut-off-work.test.ts": ["afterEach(() => {"],
+    "apps/os/__workers-tests__/first-party-facet-placement.test.ts": ["afterAll(() => {"],
+    "apps/os/__workers-tests__/hibernation-at-scale.test.ts": ["beforeAll(async () => {"],
+    "apps/os/__workers-tests__/identity.test.ts": ["afterEach(() => vi.restoreAllMocks());"],
+    "apps/os/__workers-tests__/issuer-bootstrap.test.ts": [
+      "afterEach(() => {",
+      "beforeEach(() => {"
+    ],
+    "apps/os/__workers-tests__/oauth.test.ts": ["afterEach(() => {", "beforeEach(() => {"],
+    "apps/os/__workers-tests__/residency-watchdog.test.ts": ["afterEach(() => {"],
+    "apps/os/__workers-tests__/session-doors.test.ts": ["afterEach(() => {"],
+    "apps/os/__workers-tests__/uncontrolled-degradation.test.ts": [
+      "afterAll(() => consoleErrorSpy.mockRestore());"
+    ],
+    "apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts": ["beforeAll(async () => {"],
+    "apps/os/e2e/iterate-cli.e2e.test.ts": ["beforeAll(async () => {"],
+    "apps/os/e2e/library-connectors.e2e.test.ts": ["beforeAll(async () => {"],
+    "apps/os/e2e/path-ingress.e2e.test.ts": ["afterAll(async () => {", "beforeAll(async () => {"],
+    "apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts": [
+      "afterAll(async () => {",
+      "beforeAll(async () => {"
+    ],
+    "apps/os/scripts/erase-data.test.ts": ["afterEach(() => {", "beforeEach(() => {"],
+    "apps/os/src/context/rpc-stubs.test.ts": ["afterEach(() => vi.useRealTimers());"],
+    "apps/os/src/library.test.ts": [
+      "afterEach(() => vi.useRealTimers());",
+      "beforeEach(() => vi.useFakeTimers());"
+    ],
+    "apps/os/src/project/templates.test.ts": ["beforeEach(() => vi.resetAllMocks());"],
+    "apps/os/src/repo/git-wire.test.ts": ["afterEach(() => vi.unstubAllGlobals());"],
+    "packages/iterate/src/next/app-session.test.ts": ["afterEach(() => vi.unstubAllGlobals());"],
+    "packages/shared/src/posthog/posthog.test.ts": ["afterEach(() => vi.unstubAllGlobals());"],
+    "packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.test.ts": [
+      "afterEach(() => {"
+    ],
+    "scripts/ci/playwright-telemetry-reporter.test.ts": ["afterEach(() => {", "beforeEach(() => {"],
+    "scripts/lib/deploy-helpers.test.ts": ["afterEach(() => vi.unstubAllGlobals());"]
+  },
+  "iterate/no-shouting-constants": {
+    "apps/kit/src/firmware/config-image.ts": ["const CONFIG_MAGIC = \"ITERKIT1\";"],
+    "packages/ui/src/components/events/agent-ui-reducer.ts": [
+      "const AGENT_LLM_REQUEST_REQUESTED = \"events.iterate.com/agent/llm-request-requested\";",
+      "const AGENT_LLM_REQUEST_SETTLED = \"events.iterate.com/agent/llm-request-settled\";",
+      "const AGENT_LLM_RESPONSE_CHUNKS = \"events.iterate.com/agent/llm-response-chunks\";",
+      "const AGENT_PAUSED = \"events.iterate.com/agent/paused\";",
+      "const AGENT_RESUMED = \"events.iterate.com/agent/resumed\";",
+      "const AGENT_SUMMARY_UPDATED = \"events.iterate.com/agent/summary-updated\";",
+      "const LLM_IDLE_WITHOUT_COMPLETION_ERROR =",
+      "const SCRIPT_DEADLINE_WITHOUT_COMPLETION_ERROR =",
+      "const SCRIPT_EXECUTION_COMPLETED = \"events.iterate.com/capability-host/script-run-settled\";",
+      "const SCRIPT_EXECUTION_REQUESTED = \"events.iterate.com/capability-host/script-run-requested\";",
+      "const SCRIPT_IDLE_WITHOUT_COMPLETION_ERROR =",
+      "const STREAM_PAUSED = \"events.iterate.com/stream/paused\";",
+      "const STREAM_RESUMED = \"events.iterate.com/stream/resumed\";",
+      "const STREAM_WAKE_LABEL = \"Stream durable object woke\";",
+      "const STREAM_WOKEN = \"events.iterate.com/stream/woken\";"
+    ],
+    "scripts/ci/upload-test-telemetry.ts": [
+      "const DEFAULT_ARTIFACT_ROOT = \"test-results/ci-telemetry\";"
+    ],
+    "scripts/lib/cloudflare-429-retry.ts": ["const DEFAULT_MAX_RETRY_AFTER_MS = 120_000;"],
+    "scripts/lib/do-reset.ts": ["const SETTINGS_SCAN_CONCURRENCY = 10;"]
+  },
+  "iterate/no-vi-mock": {
+    "apps/os/scripts/erase-data.test.ts": [
+      "vi.mock(\"../../../scripts/lib/do-reset.ts\", () => ({",
+      "vi.mock(\"../../../scripts/lib/env-context.ts\", async (importOriginal) => ({"
+    ],
+    "apps/os/src/project/templates.test.ts": [
+      "vi.mock(\"@iterate-com/shared/config-repo-template/github\", () => ({"
+    ],
+    "apps/os/src/worker.test.ts": ["vi.mock(\"@tanstack/react-start/server-entry\", () => ({"]
+  },
+  "iterate/prefer-object-property-match": {
+    "apps/agents/__workers-tests__/agent-revive.test.ts": [
+      "expect(model.calls).toBe(1); // stalled, not settled: nobody is running the open request"
+    ],
+    "apps/agents/e2e/agents-partner-response-stream.e2e.test.ts": [
+      "expect(failedAi.calls).toBe(1);",
+      "expect(failedSseAi.calls).toBe(1);",
+      "expect(maskedAi.calls).toBe(0);",
+      "expect(nullBodyAi.calls).toBe(1);",
+      "expect(partnerAi.calls).toBe(1); // the project's override, rather than the physical binding",
+      "expect(workersAi.calls).toBe(1); // the same override law holds for the @cf stream shape"
+    ],
+    "apps/agents/e2e/agents-streamed.e2e.test.ts": [
+      "expect(",
+      "expect(windows.invocations[0]!.events[0]!.payload).toEqual({"
+    ],
+    "apps/agents/e2e/agents.e2e.test.ts": [
+      "expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);",
+      "expect(asked.payload.files).toEqual([",
+      "expect(defaultPrompt!.role).toBe(\"system\");",
+      "expect(message.role).toBe(\"user\");",
+      "expect(settled.payload.settlement).toEqual({ status: \"succeeded\" }); // no result — undefined, not null",
+      "expect(settledScript.payload.settlement).toEqual({",
+      "expect(settled[3]!.result).toBe(404); // raw fetch: the lane found no `itx.fetch` row",
+      "expect(settled[8]!.result).toEqual([{ name: \"ship.com\", price: 42 }]); // the one grant, still the owner's",
+      "expect(settled[9]!.result).toEqual([]); // the library root granted physically: its hops are the platform's"
+    ],
+    "apps/agents/e2e/voice-agent.e2e.test.ts": [
+      "expect(clock.identity.path).toBe(`${streamPath}/sandbox`);",
+      "expect(published.status).toBe(200);",
+      "expect(websiteAnswer.payload.content).toBe(\"The horse joke is live on your website.\");"
+    ],
+    "apps/agents/runtime/processor.test.ts": ["expect(message!.content).toBe("],
+    "apps/agents/src/lib/agent-events.test.ts": ["expect(activity.steps).toEqual(["],
+    "apps/agents/voice/agent.test.ts": [
+      "expect(emitted.at(-1).payload.content).toBe(\"Yes, 49 divided by 7 is 7.\");"
+    ],
+    "apps/agents/voice/delegation-turn.test.ts": [
+      "expect(completions[0]![0]!.role).toBe(\"system\");",
+      "expect(result.content).toBe(\"The change was saved, but I haven't verified the live website yet.\");",
+      "expect(result.content).toBe(\"The current time in London is 12:00.\");",
+      "expect(result.hangUp).toBe(false);"
+    ],
+    "apps/agents/voice/worker.test.ts": [
+      "expect(events.find((event) => event.type === contextType).payload.content).toBe(",
+      "expect(new Set(chunks.map((chunk) => chunk.uploadId)).size).toBe(1);",
+      "expect(options.waitForSelector.selector).toBe('[data-iterate-screen-assets=\"ready\"]');",
+      "expect(options.waitForSelector.timeout).toBe(5000);"
+    ],
+    "apps/dummy-petshop/src/capnweb.test.ts": [
+      "expect(direct.status).toBe(401);",
+      "expect(listed.owner).toBe(\"Jonas\");",
+      "expect(new URL(posts[0].url).pathname).toBe(\"/capnweb\");",
+      "expect(posts[0].method).toBe(\"POST\");",
+      "expect(response.status).toBe(400);"
+    ],
+    "apps/dummy-petshop/src/gateway.test.ts": [
+      "expect(parse(reaction.send)[0].op).toBe(\"invalid\");",
+      "expect(parse(reaction.send)[0].op).toBe(\"invalid\");",
+      "expect(parse(reaction.send)[0].op).toBe(\"invalid\");",
+      "expect(parse(reaction.send)[0].op).toBe(\"invalid\");",
+      "expect(parse(reaction.send)[0].op).toBe(\"invalid\");",
+      "expect(parsed.selected).toBe(GATEWAY_SUBPROTOCOL);",
+      "expect(parsed.selected).toBe(GATEWAY_SUBPROTOCOL);",
+      "expect(parsed.token).toBe(token);",
+      "expect(parsed.token).toBe(token);",
+      "expect(reaction.close).toEqual({",
+      "expect(reaction.identified).toBe(false);",
+      "expect(reaction.identified).toBe(true);",
+      "expect(state.identified).toBe(false);",
+      "expect(state.identified).toBe(true);"
+    ],
+    "apps/dummy-petshop/src/github-app.test.ts": [
+      "expect((await mintInstallationToken(shop, \"no-such-installation\", jwt)).status).toBe(401);",
+      "expect((await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, \"not.a.jwt\")).status).toBe(",
+      "expect(created.status).toBe(201);",
+      "expect(delivery.signature).toBe(fired.signature);",
+      "expect(delivery.signature).toBe(hexHmac(\"wh-secret-123\", delivery.body));",
+      "expect(fired.installationId).toBe(DEFAULT_INSTALLATION_ID);",
+      "expect(fired.signature).not.toBe(hexHmac(\"wh-secret-123\", fired.payload));",
+      "expect(fired.signature).toBe(hexHmac(\"wh-secret-123\", fired.payload));",
+      "expect(fired.status).toBe(200);",
+      "expect(keyless.status).toBe(401);",
+      "expect(me.status).toBe(200);",
+      "expect(minted.status).toBe(201);",
+      "expect(minted.status).toBe(201);",
+      "expect(noAuth.status).toBe(401);",
+      "expect(pets.status).toBe(200);",
+      "expect(registered.status).toBe(201);",
+      "expect(response.status).toBe(400);",
+      "expect(response.status).toBe(401);",
+      "expect(response.status).toBe(401);",
+      "expect(response.status).toBe(401);"
+    ],
+    "apps/dummy-petshop/src/graphql-login.test.ts": [
+      "expect((await api(shop, \"/api/me\", fresh)).status).toBe(401);",
+      "expect((await api(shop, \"/api/me\", token)).status).toBe(200);",
+      "expect((await api(shop, \"/api/me\", token)).status).toBe(401);",
+      "expect(me.status).toBe(200);",
+      "expect(nameless.status).toBe(400);",
+      "expect(pets.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(session.accessToken).toEqual(expect.any(String));",
+      "expect(session.failures).toEqual(["
+    ],
+    "apps/dummy-petshop/src/mcp.test.ts": [
+      "expect(response.ok).toBe(true);",
+      "expect(response.status).toBe(401);"
+    ],
+    "apps/dummy-petshop/src/rpc.test.ts": [
+      "expect((await shop.call(\"/api/v2/pets\")).status).toBe(401);",
+      "expect((await shop.call(\"/openapi.json\")).status).toBe(401);",
+      "expect(body.owner).toBe(\"Jonas\");",
+      "expect(doc.paths[\"/pets\"].get.summary).toBe(\"List the account's pets\");",
+      "expect(doc.paths[\"/pets\"].post.summary).toBe(\"Add a pet to the account\");",
+      "expect(doc.paths[\"/pets/{id}\"].get.summary).toBe(\"Fetch one pet by id\");",
+      "expect(listed.owner).toBe(\"Jonas\");",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(401);"
+    ],
+    "apps/dummy-petshop/src/worker.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect((await attempt()).status).toBe(400);",
+      "expect((await attempt()).status).toBe(500);",
+      "expect((await attempt()).status).toBe(500);",
+      "expect(bare.status).toBe(401);",
+      "expect(dead.status).toBe(0);",
+      "expect(delivery.signature).toBe(hexHmac(webhookSigningSecret, delivery.body));",
+      "expect(fire.status).toBe(200);",
+      "expect(first.status).toBe(200);",
+      "expect(good.status).toBe(200);",
+      "expect(junk.status).toBe(400);",
+      "expect(mcp.status).toBe(200);",
+      "expect(me.status).toBe(200);",
+      "expect(missing.status).toBe(400);",
+      "expect(receiver.received[0].signature).not.toBe(",
+      "expect(receiver.received[1].signature).toBe(",
+      "expect(refreshed.status).toBe(200);",
+      "expect(refreshed.status).toBe(200);",
+      "expect(refreshed.status).toBe(200);",
+      "expect(registration.token_endpoint_auth_method).toBe(\"none\");",
+      "expect(rejected.status).toBe(400);",
+      "expect(replay.status).toBe(400);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(200);",
+      "expect(response.status).toBe(201);",
+      "expect(response.status).toBe(302);",
+      "expect(response.status).toBe(302);",
+      "expect(response.status).toBe(400);",
+      "expect(response.status).toBe(400);",
+      "expect(response.status).toBe(400);",
+      "expect(response.status).toBe(400);",
+      "expect(response.status).toBe(401);",
+      "expect(response.status).toBe(426);",
+      "expect(response.status).toBe(expectedStatus);",
+      "expect(result.signature).toBe(delivery.signature);",
+      "expect(result.status).toBe(200);",
+      "expect(revoke.status).toBe(200);",
+      "expect(rotated.webhookSigningSecret).not.toBe(oldSecret);",
+      "expect(token.status).toBe(200);",
+      "expect(token.status).toBe(400);",
+      "expect(tokens.expires_in).toBe(7);",
+      "expect(tokens.expires_in).toBe(DEFAULT_ACCESS_TTL_SECONDS);",
+      "expect(wrong.status).toBe(401);"
+    ],
+    "apps/kit/src/device-auth.test.ts": ["expect(new Set(ids).size).toBe(3);"],
+    "apps/kit/src/firmware/device-client.test.ts": [
+      "expect(clients[0].client_id).not.toBe(clients[1].client_id);",
+      "expect(response.status).toBe(200);"
+    ],
+    "apps/os/__workers-tests__/alarm-and-pins.test.ts": [
+      "expect((await snapCounter(ctx)).state.n).toBe(await durableCount(ctx)); // the wake record reached the \"*\" facet exactly once",
+      "expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);",
+      "expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction",
+      "expect(after.state.n).toBe(await durableCount(ctx)); // rebuilt from the whole log — no stale-checkpoint skip",
+      "expect(after.state.n).toBe(await durableCount(ctx)); // still exact (idempotent re-drive, no replay effects)",
+      "expect(after.state.n).toBe(before.state.n + 20);",
+      "expect(after.state.n).toBe(before.state.n); // reduced state preserved",
+      "expect(before.state.n).toBe(await durableCount(ctx));",
+      "expect(before.state.n).toBe(await durableCount(ctx)); // every durable event counted, no double/no loss",
+      "expect(dropped.rpcStubPagers).toBe(K - 1);",
+      "expect(evicted.rpcStubPagers).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone",
+      "expect(q.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub (evict precondition)"
+    ],
+    "apps/os/__workers-tests__/context-runs.test.ts": [
+      "expect((await runEvents(ROOT)).at(-1)!.payload).toEqual({",
+      "expect((await until(\"the first is settled\", () => settledFor(first.offset))).payload).toEqual({",
+      "expect((await until(\"the second is settled\", () => settledFor(second.offset))).payload).toEqual({",
+      "expect(log.find((e) => e.offset === after[1]!.offset - 1)!.type).toBe(",
+      "expect(settled.payload).toEqual({",
+      "expect(settled.payload).toEqual({"
+    ],
+    "apps/os/__workers-tests__/control-plane-contexts.test.ts": [
+      "expect((await b.user.kv.list()).keys).toEqual([]);",
+      "expect(appended[0]!.type).toBe(\"note\");",
+      "expect(fact.type).toBe(\"events.iterate.com/account/authenticated\");",
+      "expect(mark.type).toBe(\"collide-mark\");",
+      "expect(me.email).toBe(\"shape-user@sec.test\");",
+      "expect(who.projectId).not.toBe(\"global\");"
+    ],
+    "apps/os/__workers-tests__/control-plane.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect((await accountState(ada)).memberships).toEqual({",
+      "expect((await postLogin({ email: \"unlimited@directory.test\", password, next: \"/\" })).status).toBe(",
+      "expect(bearerLogin.status).not.toBe(302);",
+      "expect(bounced.pathname).toBe(\"/login\");",
+      "expect(late.status).toBe(303);",
+      "expect(login.status).toBe(302);",
+      "expect(login.status).toBe(302);",
+      "expect(page.status).toBe(200);",
+      "expect(record.members).toEqual({",
+      "expect(record.name).toBe(\"Ada's organization\");",
+      "expect(refused.status).toBe(303);",
+      "expect(response.status).toBe(101);",
+      "expect(wrong.status).toBe(303);"
+    ],
+    "apps/os/__workers-tests__/do-doors.test.ts": [
+      "expect(afterResume.type).toBe(\"after-resume\");",
+      "expect(mark.offset).toBe(3);",
+      "expect(snap.offset).toBe(2); // created and woken"
+    ],
+    "apps/os/__workers-tests__/ephemeral-offset-reuse.test.ts": [
+      "expect(after.state.n).toBe(mid.state.n + 2);",
+      "expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head",
+      "expect(mid.state.n).toBe(5);",
+      "expect(p0.events.at(-1)!.type).toBe(\"note\");",
+      "expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only",
+      "expect(p1.events.at(-1)!.offset).toBe(highestDurableOffset + 2);",
+      "expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓",
+      "expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset + 1);"
+    ],
+    "apps/os/__workers-tests__/facet-class-loads-at-startup.test.ts": [
+      "expect(again.calls).toBe(1);",
+      "expect(again.calls).toBe(1);",
+      "expect(again.instance).not.toBe(first.instance);",
+      "expect(first.calls).toBe(1);"
+    ],
+    "apps/os/__workers-tests__/facet-clone-version-heals.test.ts": [
+      "expect(snap.state.n).toBe(durable); // every durable event counted once — no double, no loss"
+    ],
+    "apps/os/__workers-tests__/facet-from-exports.test.ts": [
+      "expect(seen.classKind).toBe(\"DurableObjectClass\");",
+      "expect(seen.entryKind).toBe(\"LoopbackDurableObjectNamespace\");",
+      "expect(seen.snapshot.state).toEqual({"
+    ],
+    "apps/os/__workers-tests__/facet-props.test.ts": [
+      "expect(seen.identity.exportsKind).toBe(\"object\");",
+      "expect(seen.identity.idName).toBe(seen.props.iterateContextName);",
+      "expect(seen.identity.props).toEqual(seen.props);"
+    ],
+    "apps/os/__workers-tests__/facets-never-answer-a-socket.test.ts": [
+      "expect(page.status).toBe(200);",
+      "expect(plain.status).toBe(200);",
+      "expect(upgrade.status).toBe(400);"
+    ],
+    "apps/os/__workers-tests__/fetch-lane-unread-body.test.ts": [
+      "expect(echoed.status).toBe(200);",
+      "expect(ignored.status).toBe(200);"
+    ],
+    "apps/os/__workers-tests__/forged-facet-inputs.test.ts": [
+      "expect((await snapshot()).state.ticks).toBe(2);",
+      "expect(before.state.ticks).toBe(1);"
+    ],
+    "apps/os/__workers-tests__/hibernation-at-scale.test.ts": [
+      "expect(evicted.borrowedRpcStubs).toBe(0);",
+      "expect(evicted.borrowedRpcStubs).toBe(0); // every borrowed stub died with the instance",
+      "expect(evicted.dormant).toBe(true);",
+      "expect(evicted.rpcStubPagesInFlight).toBe(0);",
+      "expect(s.borrowedRpcStubs).toBe(0);",
+      "expect(s.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub",
+      "expect(s.dormant).toBe(true);",
+      "expect(s.dormant).toBe(true);"
+    ],
+    "apps/os/__workers-tests__/identity.test.ts": [
+      "expect((await identityLogin(\"google\")).status).toBe(303);",
+      "expect(api.status).toBe(200);",
+      "expect(begin.status).toBe(302);",
+      "expect(google.id).not.toBe(cloudflare.id);",
+      "expect(oldEmail.id).not.toBe(fixture.id);",
+      "expect(response.status).toBe(303);",
+      "expect(response.status).toBe(303);",
+      "expect(response.status).toBe(400);",
+      "expect(response.status).toBe(status);",
+      "expect(response.status).toBe(status);",
+      "expect(response.status, await response.clone().text()).toBe(303);",
+      "expect(response.status, await response.clone().text()).toBe(303);"
+    ],
+    "apps/os/__workers-tests__/issuer-bootstrap.test.ts": [
+      "expect(",
+      "expect(",
+      "expect((await api.info()).principal).toEqual({ actor: user.id, email: user.email });",
+      "expect((await app.info()).scopes).toEqual([\"iterate\", \"account\", \"organizations:write\"]);",
+      "expect((await app.info()).scopes).toEqual([\"iterate\"]);",
+      "expect((await full.info()).scopes).toEqual([\"iterate\", \"account\", \"organizations:write\"]);",
+      "expect((await fullOther.whoami()).path).toBe(`/organizations/${created.id}`);",
+      "expect((await narrow.info()).scopes).toEqual([\"iterate\"]);",
+      "expect((await narrowOwn.whoami()).path).toBe(`/organizations/${org.id}`);",
+      "expect(approved.status).toBe(303);",
+      "expect(crossSite.status).toBe(403);",
+      "expect(exchange.status, await exchange.clone().text()).toBe(200);",
+      "expect(exchange.status, await exchange.clone().text()).toBe(200);",
+      "expect(exchange.status, await exchange.clone().text()).toBe(200);",
+      "expect(exchange.status, await exchange.clone().text()).toBe(200);",
+      "expect(invalid.kind).toBe(\"redirect\");",
+      "expect(login.location).toBe(next);",
+      "expect(page.status).toBe(200);",
+      "expect(page.status).toBe(307);",
+      "expect(page.status, page.headers.get(\"location\") ?? \"\").toBe(200);",
+      "expect(post.status).toBe(303);",
+      "expect(prompt.status).toBe(200);",
+      "expect(response.status, response.status === 101 ? \"\" : await response.text()).toBe(101);",
+      "expect(selected.status).toBe(200);",
+      "expect(sibling.status).toBe(404);",
+      "expect(view.kind).toBe(\"consent\");",
+      "expect(view.kind).toBe(\"consent\");",
+      "expect(view.projectBound).toBe(true);",
+      "expect(view.scopes[0]!.required).toBe(true);"
+    ],
+    "apps/os/__workers-tests__/oauth.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect((await bySlug.whoami()).projectId).toBe(flow.oauthA.id);",
+      "expect((await call(\"/api\", { headers: { Authorization: \"Bearer wrong\" } })).status).toBe(401);",
+      "expect((await grant([resource])).error).toBe(\"invalid_target\");",
+      "expect((await root.whoami()).actor).toBe(flow.user.id);",
+      "expect((await root.whoami()).actor).toBe(flow.user.id); // still live: it holds nothing to lose",
+      "expect((await tool(\"wrong\", \"run\", { project: \"x\", script: \"async () => 1\" })).status).toBe(401);",
+      "expect((await tool(token, \"run\", { script: \"async () => 1\" })).status).toBe(200);",
+      "expect(authorize.origin).toBe(ORIGIN);",
+      "expect(broaden.status).toBe(400);",
+      "expect(callback.status, await callback.clone().text()).toBe(303);",
+      "expect(challenge.status).toBe(401);",
+      "expect(failedLogout.status).toBe(503);",
+      "expect(fresh.status).toBe(303);",
+      "expect(logout.status).toBe(303);",
+      "expect(logout.status).toBe(303);",
+      "expect(metadata.authorization_endpoint).toBe(`${ORIGIN}/oauth2/auth`);",
+      "expect(metadata.client_id_metadata_document_supported).toBe(true);",
+      "expect(metadata.code_challenge_methods_supported).toEqual([\"S256\"]);",
+      "expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth2/register`);",
+      "expect(metadata.status).toBe(200);",
+      "expect(metadata.token_endpoint).toBe(`${ORIGIN}/oauth2/token`);",
+      "expect(refresh.status, await refresh.clone().text()).toBe(200);",
+      "expect(registered.status).toBe(201);",
+      "expect(rejected.status).toBe(400);",
+      "expect(repeatedLogin.status).toBe(303);",
+      "expect(response.status, await (response.status === 101 ? \"\" : response.text())).toBe(101);",
+      "expect(response.status, response.status === 101 ? \"\" : await response.text()).toBe(101);",
+      "expect(tokenResponse.status, JSON.stringify(token)).toBe(200);",
+      "expect(upgrade.status).toBe(200);"
+    ],
+    "apps/os/__workers-tests__/password-and-code-sign-in.test.ts": [
+      "expect(message.from).toBe(\"iterate <login@control.test>\");",
+      "expect(message.to).toBe(\"person@real-mailbox.dev\");"
+    ],
+    "apps/os/__workers-tests__/project-seed.test.ts": [
+      "expect((await decryptSecretMaterial(restored.material, restored, keys)).material).toEqual(",
+      "expect((await project.whoami()).projectId).toBe(id);",
+      "expect(exported.context).toBe(`${oldId}.iterate${path}`);",
+      "expect(opened.material).toEqual(material);",
+      "expect(restored.material.ciphertext).not.toBe(exported.material.ciphertext);"
+    ],
+    "apps/os/__workers-tests__/residency-watchdog.test.ts": [
+      "expect((await waiting).type).toBe(\"wd/release\");"
+    ],
+    "apps/os/__workers-tests__/rpc-stub-pager-attach.test.ts": [
+      "expect((await transportState(ctx)).rpcStubPagers).toBe(0);",
+      "expect((await transportState(ctx)).rpcStubPagers).toBe(0);",
+      "expect((await transportState(ctx)).rpcStubPagers).toBe(1);",
+      "expect((await transportState(ctx)).rpcStubPagers).toBe(1);",
+      "expect((await transportState(ctx)).rpcStubPagesInFlight).toBe(1);",
+      "expect(body.code).toBe(\"STREAM_PAUSED\");",
+      "expect(malformed.status).toBe(400);",
+      "expect(ok.status).toBe(101);",
+      "expect(ok.status).toBe(101);",
+      "expect(pager.status).toBe(101);",
+      "expect(pager.status).toBe(101);",
+      "expect(refused.status).toBe(409);"
+    ],
+    "apps/os/__workers-tests__/secret-facet-proxies-a-socket.test.ts": [
+      "expect(response.status).toBe(101);",
+      "expect(response.status, response.status === 101 ? \"upgraded\" : await response.text()).toBe(101);",
+      "expect(used.payload).toEqual({ method: \"GET\", url: `${SHOP}/capnweb`, status: 101 });"
+    ],
+    "apps/os/__workers-tests__/session-doors.test.ts": [
+      "expect((await call(\"https://other--routing-shapes.projects.test/\")).status).toBe(404);",
+      "expect(apex.status).toBe(404);",
+      "expect(res.status, host).toBe(421);",
+      "expect(routed.status, await routed.clone().text()).toBe(200);",
+      "expect(seen.body.app).toBe(\"echo\");",
+      "expect(seen.status).toBe(200);",
+      "expect(seen.status, await seen.clone().text()).toBe(200);"
+    ],
+    "apps/os/__workers-tests__/uncontrolled-degradation.test.ts": [
+      "expect(((await s.read(seed)) as { events: unknown[] }).events).toEqual([]);",
+      "expect(core.offset).toBe(a); // reduced through rule A, not a phantom B"
+    ],
+    "apps/os/__workers-tests__/ws-fetch-live-101.test.ts": [
+      "expect(page.status).toBe(200);",
+      "expect(res.status).toBe(101);",
+      "expect(res.status).toBe(101);",
+      "expect(res.status).toBe(101);"
+    ],
+    "apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts": [
+      "expect(fake.calls).toEqual([",
+      "expect(fake.calls).toEqual([{ model: \"@cf/x\", inputs: { prompt: \"hi\" }, options: undefined }]);"
+    ],
+    "apps/os/e2e/browser-root.e2e.test.ts": [
+      "expect(fake.calls).toEqual([{ action: \"markdown\", options: { url: \"https://example.com\" } }]);"
+    ],
+    "apps/os/e2e/cfartifacts.e2e.test.ts": [
+      "expect(second.changedPaths).toEqual([\"worker.ts\", \"notes/log.md\"]); // deletes land first",
+      "expect(second.commitOid).not.toBe(first.commitOid);"
+    ],
+    "apps/os/e2e/context-abort.e2e.test.ts": ["expect((await child.abort()).payload).toEqual({});"],
+    "apps/os/e2e/context-residency.e2e.test.ts": [
+      "expect((await keeper(\"useStashed\")).projectId).toEqual(expect.any(String));",
+      "expect(again.state).toEqual({ messages: [] }); // in memory, as it always was: gone with the instance"
+    ],
+    "apps/os/e2e/context-watchdog.e2e.test.ts": [
+      "expect(records[0].payload.incarnation).toBe(incarnations(heldEvents)[0]);"
+    ],
+    "apps/os/e2e/context.e2e.test.ts": [
+      "expect((raced as any[])[0].type).toBe(\"self-ping\");",
+      "expect(answer.status, answer.text).toBe(421);",
+      "expect(snap.state.counts).toEqual(baseline.state.counts);"
+    ],
+    "apps/os/e2e/cursor-delivery.e2e.test.ts": [
+      "expect(c.invocations[1].range.after).toBe(c.invocations[0].range.through);",
+      "expect(c.invocations[before].range.after).toBe(m1.offset); // the range starts surgically at the cursor",
+      "expect(fromHistory.cursor.attempt).toBe(0);",
+      "expect(halted.attempts).toBe(1); // retryable: false → one attempt, not fifteen",
+      "expect(r.cursor.attempt).toBe(0);",
+      "expect(r.cursor.attempt).toBe(0);",
+      "expect(row3.cursor.attempt).toBe(0);",
+      "expect(row3.target).toBe(\"itx.digest.processEventBatch\"); // stored as written — the loop classifies the target by what it EVALUATES to",
+      "expect(rowAfter.cursor.attempt).toBe(0);"
+    ],
+    "apps/os/e2e/fetch-door.e2e.test.ts": [
+      "expect(device.saw).toEqual([`POST ${seen.host}${seen.pathname}${seen.search} body=ping`]);",
+      "expect(page.status, page.text).toBe(200);",
+      "expect(plain.text).toBe(\"http-fallback\");",
+      "expect(res.status).toBe(502);",
+      "expect(res.status).toBe(502);",
+      "expect(res.status, res.text).toBe(201);",
+      "expect(res.text).toBe(\"pong-from-node-provider\");",
+      "expect(response.status).toBe(508);",
+      "expect(response.status, id).toBe(404);",
+      "expect(ws.closeCode).toBe(1000);",
+      "expect(ws.closeCode).toBe(1000);",
+      "expect(ws.echo).toBe(\"device-echo:hello-device\");",
+      "expect(ws.echo).toBe(\"site-echo:hello-from-eyeball\");",
+      "expect(ws.opened).toBe(true);",
+      "expect(ws.opened).toBe(true);"
+    ],
+    "apps/os/e2e/files.e2e.test.ts": [
+      "expect((await b.r2.list()).objects).toEqual([]);",
+      "expect((await fetchProjectUrl(`${download.url}x`)).status).toBe(403);",
+      "expect((await fetchProjectUrl(address)).status).toBe(400);",
+      "expect((await fetchProjectUrl(download.url, {}, { method: \"HEAD\" })).status).toBe(200);",
+      "expect((await fetchProjectUrl(download.url, {}, { method: \"PUT\", body: \"x\" })).status).toBe(403);",
+      "expect((await fetchProjectUrl(download.url.replace(slug, other))).status).toBe(403);",
+      "expect((await fetchProjectUrl(empty.url)).status).toBe(404);",
+      "expect((await fetchProjectUrl(fractional.url)).status).toBe(200);",
+      "expect((await fetchProjectUrl(upload.url)).status).toBe(403);",
+      "expect(got.range).toEqual({ offset: 1, length: 3 });",
+      "expect(got.status).toBe(200);",
+      "expect(got.text).toBe(\"# hello world\");",
+      "expect(page.truncated).toBe(true);",
+      "expect(put.status).toBe(200);",
+      "expect(ranged.status).toBe(206);",
+      "expect(ranged.text).toBe(\"hello\");",
+      "expect(rest.truncated).toBe(false);"
+    ],
+    "apps/os/e2e/ingress-project-host.e2e.test.ts": [
+      "expect(",
+      "expect((JSON.parse(echoed.text) as { app: string | null }).app).toBe(\"site\");",
+      "expect(answer.status, answer.text).toBe(421);",
+      "expect(apex.status, apex.text).toBe(200);",
+      "expect(apex.status, apex.text).toBe(200);",
+      "expect(asset.status, asset.text).toBe(200);",
+      "expect(bare.status, bare.text).toBe(404);",
+      "expect(bare.status, bare.text).toBe(404);",
+      "expect(dotted.status, dotted.text).toBe(200);",
+      "expect(echo.status, echo.text).toBe(200);",
+      "expect(echoed.status, echoed.text).toBe(200);",
+      "expect(missing.status, missing.text).toBe(404);",
+      "expect(page.status, page.text).toBe(200);",
+      "expect(seen.app).toBe(\"site\");",
+      "expect(seen.cookie).toBe(\"theme=dark\");",
+      "expect(seen.principal).toEqual(principal);",
+      "expect(unknown.status, unknown.text).toBe(421);"
+    ],
+    "apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts": [
+      "expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing",
+      "expect(r.ok).toBe(false);",
+      "expect(r.ok, `snapshot attempt ${attempt} unexpectedly succeeded`).toBe(false);",
+      "expect(recovered.ok, \"the seeded ctx must recover after the storm and still page to head\").toBe("
+    ],
+    "apps/os/e2e/iterate-cli.e2e.test.ts": ["expect(callback.status).toBe(200);"],
+    "apps/os/e2e/library-connectors.e2e.test.ts": [
+      "expect((await conn.listPets()).owner).toBe(shopper(\"capnweb-batch\"));",
+      "expect((await conn.listPets()).owner).toBe(shopper(\"capnweb-ws\"));",
+      "expect(listed.owner).toBe(shopper(\"mcp\"));",
+      "expect(listed.owner).toBe(shopper(\"openapi\"));"
+    ],
+    "apps/os/e2e/live-state-chains-client-side.e2e.test.ts": [
+      "expect(chat.applied).toBe(2);",
+      "expect(chat.applied).toBe(2);",
+      "expect(chat.dropped).toBe(1);",
+      "expect(chat.reseeds).toBe(0);",
+      "expect(chat.store.get()!.messages[1].text).toBe(\"again\");",
+      "expect(door.rev).toBe(chat.store.rev());",
+      "expect(proc.applied).toBe(2);",
+      "expect(proc.reseeds).toBe(0);",
+      "expect(proc.store.get()!.marks).toBe(0);",
+      "expect(store.get()!.lastPokeMs).toBe(0);",
+      "expect(store.get()!.ticks).toBe(1);"
+    ],
+    "apps/os/e2e/loaded-code.e2e.test.ts": [
+      "expect((await root.cd(\"/x\").workers.get({ source: PROBE }).fetchUrl(target)).status).toBe("
+    ],
+    "apps/os/e2e/mcp-project-root.e2e.test.ts": [
+      "expect(commit.commitOid).toEqual(expect.any(String));",
+      "expect(denied.isError).toBe(true);",
+      "expect(masked.isError).toBe(true);",
+      "expect(noted.isError, JSON.stringify(noted)).toBe(false);",
+      "expect(noted.structuredContent.result.commitOid).toEqual(expect.any(String));",
+      "expect(read.isError, JSON.stringify(read)).toBe(false);",
+      "expect(read.structuredContent.result).toBe(",
+      "expect(result.isError, JSON.stringify(result)).toBe(false);",
+      "expect(secondRun.isError, JSON.stringify(secondRun)).toBe(false);",
+      "expect(started.isError, JSON.stringify(started)).toBe(false);",
+      "expect(started.structuredContent.result.capabilities).toEqual("
+    ],
+    "apps/os/e2e/organizations.e2e.test.ts": [
+      "expect((await again.whoami()).projectId).toBe(projectId);",
+      "expect((await guest.projects.get(projectId).whoami()).projectId).toBe(projectId);",
+      "expect((await project.whoami()).projectSlug).toBe(slug);"
+    ],
+    "apps/os/e2e/path-ingress.e2e.test.ts": [
+      "expect(",
+      "expect(",
+      "expect((await fetch(`${origin}/api`, { method: \"POST\", body: \"\" })).status).toBe(401);",
+      "expect((await fetch(`${origin}/mcp`)).status).toBe(401);",
+      "expect((await fetch(`${origin}/version`)).status).toBe(200);",
+      "expect(answer.status, await answer.clone().text()).toBe(200);",
+      "expect(apex.status, await apex.clone().text()).toBe(404);",
+      "expect(served.status, await served.clone().text()).toBe(200);"
+    ],
+    "apps/os/e2e/processor-facets.e2e.test.ts": [
+      "expect(core.state.paused).toEqual({ reason: \"breaker: durable events exceeded the bucket\" });",
+      "expect(paused.payload).toEqual({ reason: \"breaker: durable events exceeded the bucket\" });",
+      "expect(rebuilt.state.counts.mark).toBe(1);",
+      "expect(row.hostedFacet).toEqual({ name: \"tally\", className: \"TallyDurableObject\", restarts: 0 });",
+      "expect(row.target).toBe(\"itx.builtins.facets.get('tally').processEventBatch\"); // the platform's spelling, minus the source",
+      "expect(s1.state.counts.mark).toBe(2);",
+      "expect(s2.state.counts).toEqual(expected); // exact — the re-enable neither reset nor doubled",
+      "expect(s2.state.counts.mark).toBe(3);",
+      "expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log",
+      "expect(snap.state.counts).toEqual(expected);",
+      "expect(snap.state.counts.mark).toBe(1);",
+      "expect(snap.state.counts.mark).toBe(2);",
+      "expect(snap.state.counts.seen).toBe(3);"
+    ],
+    "apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts": [
+      "expect(snap.state.counts).toEqual(expected);",
+      "expect(snap.state.counts.burst).toBe(10);",
+      "expect(snap.state.counts.post).toBe(10);"
+    ],
+    "apps/os/e2e/push-delivery.e2e.test.ts": [
+      "expect(c.invocations[0].range.through).toBe(committed[899].offset);",
+      "expect(d2.range.after).toBe(d1.range.through);",
+      "expect(d2.range.through).toBe(hit2.offset);",
+      "expect(new Set(received.map((r) => r.seq)).size).toBe(TOTAL); // every seq exactly once"
+    ],
+    "apps/os/e2e/repos.e2e.test.ts": [
+      "expect((await itx.cfArtifacts.list()).repos).toEqual([{ path: \"/repos/config\" }]);",
+      "expect(artifacts.created).toEqual([\"/repos/config\", \"/vendor/lib\"]);",
+      "expect(artifacts.created).toEqual([\"/repos/config\"]); // by its path",
+      "expect(artifacts.deleted).toEqual([\"/repos/gone\"]);",
+      "expect(artifacts.deleted).toEqual([\"/repos/gone\"]); // the Artifacts repo went, by its path",
+      "expect(artifacts.snapshots).toBe(0);",
+      "expect(artifacts.snapshots).toBe(1);",
+      "expect(artifacts.snapshots).toBe(2);",
+      "expect(artifacts.snapshots).toBe(3);",
+      "expect(artifacts.snapshots).toBe(4);",
+      "expect(first.changedPaths).toEqual([\"worker.ts\", \"notes/log.md\"]);",
+      "expect(fourth.changedPaths).toEqual([\"worker.ts\"]);",
+      "expect(second.changedPaths).toEqual([\"worker.ts\", \"c.txt\"]);",
+      "expect(second.commitOid).toBe(artifacts.remoteTip(\"/repos/config\"));"
+    ],
+    "apps/os/e2e/rewrite-rules.e2e.test.ts": [
+      "expect(live.seen).toEqual([{ type: \"t\", payload: { n: 2 } }]);",
+      "expect(snap.state.itxExpressionRewriteRules[\"itx.llm.run('special')\"].match).toEqual(["
+    ],
+    "apps/os/e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts": [
+      "expect(both.dropped).toEqual({ \"itx.ghost\": \"RPC_STUB_OFFLINE\" }); // the un-lent key, dropped BY the offline rejection",
+      "expect(c.delivered).toBe(1); // nothing reaches a disposed subscription"
+    ],
+    "apps/os/e2e/rpc-stubs-values.e2e.test.ts": [
+      "expect(listed.channels[0].name).toBe(\"general\");"
+    ],
+    "apps/os/e2e/scheduled-appends-dormant.e2e.test.ts": [
+      "expect((await reconnected.facets.get(\"deadlines\").snapshot()).state.timedOut).toEqual(["
+    ],
+    "apps/os/e2e/scheduled-appends.e2e.test.ts": [
+      "expect((await facet.snapshot()).state).toEqual({ timedOut: [\"invoice\"], audited: [\"invoice\"] });",
+      "expect((await facet.snapshot()).state).toEqual({ timedOut: [\"slow\"], audited: [\"slow\"] });",
+      "expect((await itx.facets.get(\"reminders\").snapshot()).state).toEqual({ reminded: [\"123\"] });",
+      "expect((await itx.schedules.get(\"held\")).source.principal.actor).toBe(\"admin\");",
+      "expect((await itx.schedules.get([\"deadlines\", \"slow\"])).scheduledAtOffset).toBe(",
+      "expect(current.scheduledAtOffset).toBe(replacement.scheduledAtOffset);",
+      "expect(definition.source.processor.whileProcessing.offset).toBe(opened.offset);",
+      "expect(due.source.schedule.definedBy.principal.actor).toBe(\"admin\");",
+      "expect(due.source.schedule.definedBy.processor.slug).toBe(\"reminders\");",
+      "expect(due.source.schedule.scheduledAtOffset).toBe(definition.offset);",
+      "expect(due.type).toBe(\"past/due\");",
+      "expect(occurrence[0].source.schedule).toEqual({",
+      "expect(occurrence[1].offset).toBe(occurrence[0].offset + 1);",
+      "expect(receipt.offset).toBe(definition.offset);",
+      "expect(second.source.schedule.scheduledAtOffset).toBe(receipt.scheduledAtOffset);"
+    ],
+    "apps/os/e2e/secrets-connections.e2e.test.ts": [
+      "expect((await bearerCall(itx, \"/secrets/petshop\", \"/api/me\")).status).toBe(401);",
+      "expect((await bearerCall(itx, \"/secrets/petshop\", \"/api/me\")).status).toBe(502);",
+      "expect((await bearerCall(itx, \"/secrets/petshop\", \"/api/pets\")).status).toBe(200);",
+      "expect((await fetch(back)).status).toBe(401);",
+      "expect((await fetch(back, member)).status).toBe(200);",
+      "expect((await fetch(forged)).status).toBe(400);",
+      "expect(consent.status).toBe(302);",
+      "expect(consent.status).toBe(302);",
+      "expect(done.status, await done.text()).toBe(200);",
+      "expect(done.status, said).toBe(200);",
+      "expect(elsewhere.status).toBe(502);",
+      "expect(pets.status).toBe(200);",
+      "expect(refused.status, await refused.text()).toBe(400);"
+    ],
+    "apps/os/e2e/secrets.e2e.test.ts": [
+      "expect((await x.facets.get(\"secret\").snapshot()).state).toEqual({",
+      "expect(field.status).toBe(200);",
+      "expect(plain.status).toBe(200);",
+      "expect(refused.status).toBe(502);",
+      "expect(res.status).toBe(200);",
+      "expect(res.status).toBe(502);",
+      "expect(res.status).toBe(502);",
+      "expect(res.status).toBe(502);",
+      "expect(res.status).toBe(502); // the refused set stored no value, so the secret's facet finds none for `ghost` and refuses before the terminal fetch — the request never leaves",
+      "expect(snapshot1.state).toEqual({ material: { offset: set1.offset }, deletion: null });"
+    ],
+    "apps/os/e2e/session-wire-frames-one-round-trip.e2e.test.ts": [
+      "expect(listed.channels).toEqual([{ id: \"C1\", name: \"general\" }]);",
+      "expect(who.path).toBe(\"/\");",
+      "expect(who.path).toBe(\"/\");"
+    ],
+    "apps/os/e2e/session.e2e.test.ts": [
+      "expect((await again.whoami()).projectId).toBe(projectId);",
+      "expect((await api.projects.get(project).whoami()).projectId).toBe(project);",
+      "expect((await fetchProjectUrl(echoOf(otherSlug), bearer)).status).toBe(403);",
+      "expect((await fetchProjectUrl(echoOf(slug), bearer)).status).toBe(401);",
+      "expect((await itx.repos.get(\"/repos/config\").listFiles()).paths).toEqual([",
+      "expect((await itx.whoami()).projectId).toBe(project);",
+      "expect(bad.status).toBe(401);",
+      "expect(covered.status, covered.text).toBe(200);",
+      "expect(created.payload).toEqual({}); // existence only",
+      "expect(ended.source).toEqual({",
+      "expect(endedApi.status).toBe(401);",
+      "expect(minted.payload).toEqual({",
+      "expect(minted.source).toEqual({",
+      "expect(principal.email).toBe(member.email);",
+      "expect(probe.status).toBe(401);",
+      "expect(requested.payload).toEqual({ slug, orgId: \"org_admin\" });",
+      "expect(resp.status).toBe(200);",
+      "expect(revoked.status).toBe(401);",
+      "expect(runPair[0].source).toEqual({ principal, grant: grant!.id });",
+      "expect(runPair[1].payload).toEqual({",
+      "expect(versionRes.status).toBe(200);"
+    ],
+    "apps/os/e2e/stream.e2e.test.ts": [
+      "expect(across.scannedThroughOffset).toBe(d4.offset);",
+      "expect(after.offset).toBe(big[0].offset + 1); // and with its successor",
+      "expect(batch[1].offset).toBe(orig.offset); // the hit answers with the ORIGINAL identity",
+      "expect(batch[2].offset).toBe(batch[0].offset + 1); // the hit did not burn an offset in between",
+      "expect(big[0].offset).toBe(before.offset + 1); // dense with its predecessor",
+      "expect(committed.payload.blob).toBe(blob); // the echo is the in-memory object — always intact",
+      "expect(exact.scannedThroughOffset).toBe(d4.offset);",
+      "expect(full.scannedThroughOffset).toBe(durables[2].offset);",
+      "expect(got.payload).toEqual({ via: \"entrypoint\" });",
+      "expect(got.type).toBe(\"ping\");",
+      "expect(k2.offset).toBe(k1.offset);",
+      "expect(new Set(offsets).size).toBe(20);",
+      "expect(new Set(offsets).size).toBe(offsets.length); // no offset assigned twice",
+      "expect(next.offset).toBe(marker.offset + 1);",
+      "expect(page.events).toEqual([]);",
+      "expect(page.events[0].payload).toEqual({ projectId: ctx, path: \"/\" });",
+      "expect(page1.scannedThroughOffset).toBe(big.offset); // the EVENT offset — never a chunk row's",
+      "expect(page2.scannedThroughOffset).toBe(e5.offset);",
+      "expect(pair[1].offset).toBe(pair[0].offset);",
+      "expect(probe.offset).toBe(marker.offset + 1);",
+      "expect(receipts[0].offset).toBe(3);",
+      "expect(receipts[0].type).toBe(\"hello\");",
+      "expect(retry.offset).toBe(first.offset); // same key + same body = same event",
+      "expect(short.scannedThroughOffset).toBe(durables[2].offset);",
+      "expect(snap.state.counts.dup).toBe(1);",
+      "expect(snap.state.createdAt).toBe(page.events[0].createdAt);"
+    ],
+    "apps/os/e2e/website-publication.e2e.test.ts": [
+      "expect(identity.projectSlug).toBe(slug);",
+      "expect(identity.projectUrl).toBe(apex.href);",
+      "expect(live.status).toBe(200);",
+      "expect(live.text).toBe(\"Elephants fear the mouse.\");",
+      "expect(published.at(-1)!.payload.target[2][1].source).toEqual(["
+    ],
+    "apps/os/e2e/workers-and-facets.e2e.test.ts": [
+      "expect(codeStore.produced).toEqual([\"greet\", \"greet\"]);",
+      "expect(codeStore.produced).toEqual([\"greet\"]);",
+      "expect(codeStore.produced).toEqual([]);",
+      "expect(facetCodeStore.produced).toBe(1);"
+    ],
+    "apps/os/e2e/workspaces.e2e.test.ts": [
+      "expect(artifacts.created).toEqual([\"/repos/config\"]);",
+      "expect(commit.changedPaths).toEqual([\"/repos/config/notes/log.md\", \"/repos/config/worker.ts\"]);",
+      "expect(commit.changedPaths).toEqual([\"/repos/config/vendor/z.txt\"]);"
+    ],
+    "apps/os/scripts/erase-data.test.ts": [
+      "expect(fixture.operations).toEqual([",
+      "expect(fixture.operations).toEqual([\"retire\"]);",
+      "expect(fixture.operations).toEqual([\"retire\"]);",
+      "expect(fixture.operations).toEqual([]);",
+      "expect(fixture.operations).toEqual([]);",
+      "expect(fixture.operations).toEqual([]);",
+      "expect(fixture.parked).toBe(true);"
+    ],
+    "apps/os/scripts/preview-sweep.test.ts": [
+      "expect(plan.orphans).toEqual([]);",
+      "expect(plan.previews).toEqual([expect.objectContaining({ name: \"pr7-x\", verdict: \"stale\" })]);",
+      "expect(plan.previews).toEqual([expect.objectContaining({ name: preview, verdict })]);"
+    ],
+    "apps/os/scripts/preview.test.ts": [
+      "expect(config.assets).toEqual(template.assets);",
+      "expect(config.main).toBe(\"index.js\");",
+      "expect(config.migrations).toEqual([",
+      "expect(config.name).toBe(\"os-next-preview\");",
+      "expect(config.no_bundle).toBe(true);",
+      "expect(config.previews.artifacts).toEqual([",
+      "expect(config.previews.kv_namespaces).toEqual([{ binding: \"ITX_KV\" }, { binding: \"OAUTH_KV\" }]);",
+      "expect(config.previews.r2_buckets).toEqual([{ binding: \"FILES\" }]);",
+      "expect(config.previews.vars).toEqual({",
+      "expect(withDash.previews.vars.APP_CONFIG_URLS__DASH).toBe(dashOrigin);"
+    ],
+    "apps/os/src/alarm-coordinator.test.ts": [
+      "expect(alarms.snapshot().passInProgress).toBe(true);"
+    ],
+    "apps/os/src/context/cf-artifacts.test.ts": [
+      "expect((await repo.createToken(\"read\", 60)).plaintext).toBe(\"read-prj_a.repos--config-60\");",
+      "expect((await repo.createToken(\"write\", 60)).plaintext).toBe(\"write-prj_a.repos--config-60\");"
+    ],
+    "apps/os/src/context/expression.test.ts": [
+      "expect(s.log).toEqual([\"move 10 @robot-arm-1\"]);",
+      "expect(stub.released).toBe(1);"
+    ],
+    "apps/os/src/context/itx-expression-rewriting.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(events.at(-1)!.payload).toEqual({",
+      "expect(events.at(-1)!.payload).toEqual({"
+    ],
+    "apps/os/src/context/paths.test.ts": [
+      "expect(DurableObjectNameCodec.parse(id).projectId).toBe(id);",
+      "expect(DurableObjectNameCodec.parse(n).name).toBe(n);",
+      "expect(DurableObjectNameCodec.parse(n).projectId).toBe(\"prj_demo\");",
+      "expect(DurableObjectNameCodec.parse(name).name).toBe(\"prj_t.iterate/\");"
+    ],
+    "apps/os/src/context/rpc-stubs.test.ts": [
+      "expect(fake.dials).toBe(4); // the first dial and three re-dials",
+      "expect(fake.disposed).toBe(1);",
+      "expect(fake.disposed).toBe(redialed ? 0 : 1);",
+      "expect(fake.lends).toBe(1);",
+      "expect(replacement.disposed).toBe(false);",
+      "expect(stub.calls).toBe(1); // never called again",
+      "expect(stub.calls).toBe(2);",
+      "expect(stub.disposed).toBe(dropped);"
+    ],
+    "apps/os/src/context/worker-loader.test.ts": [
+      "expect(a.loaderId).not.toBe(b.loaderId); // content decides",
+      "expect(again.loaderId).toBe(after.loaderId);",
+      "expect(before.loaderId).not.toBe(after.loaderId);",
+      "expect(first.loaderId).toBe(",
+      "expect(first.loaderId).toBe(",
+      "expect(named.loaderId).toBe(JSON.stringify([\"worker\", \"deploy-1\", null, \"prj_u.iterate/\", \"v7\"]));",
+      "expect(new Set(keys).size).toBe(2);",
+      "expect(new Set(keys).size).toBe(2);",
+      "expect(new Set(keys).size).toBe(2); // the dead id and its one recovered generation",
+      "expect(recovered.loaderId).toBe(",
+      "expect(warm.size).toBe(1); // one isolate under the id, however often it is asked for"
+    ],
+    "apps/os/src/control-plane/catalog.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(c.accessibleTo(ada.id).projects).toEqual([{ ...dawg, role: \"owner\" }]);",
+      "expect(c.accessibleTo(bob.id).organizations).toEqual([",
+      "expect(c.accessibleTo(bob.id).organizations).toEqual([]);",
+      "expect(c.createProject(as(ada), { project: \"two\" }).orgId).toBe(first.orgId);",
+      "expect(c.renameOrganization(as(ada), org.id, \"Booper Inc\").name).toBe(\"Booper Inc\");",
+      "expect(carol.id).not.toBe(ada.id);",
+      "expect(refusal(() => c.createProject(as(bob), { project: \"dawg\" })).code).toBe(",
+      "expect(refusal(() => c.removeMember(as(ada), org.id, { userId: ada.id })).message).toBe(",
+      "expect(refusal(() => c.renameOrganization(as(bob), org.id, \"Mine\")).code).toBe(\"FORBIDDEN\");",
+      "expect(refusal(() => restore(\"empty\", \"\")).code).toBe(\"INVALID_INPUT\");",
+      "expect(restore(\"garple\", \"prj_garple\").id).toBe(\"prj_garple\");"
+    ],
+    "apps/os/src/library.test.ts": [
+      "expect(conn.serverInfo().serverInfo).toEqual({ name: \"fake\", version: \"0\" });",
+      "expect(conn.serverInfo().serverInfo).toEqual({ name: \"plain\" });",
+      "expect(op.parameters).toEqual([",
+      "expect(request.method).toBe(row.method);",
+      "expect(request.url).toBe(row.url);",
+      "expect(requests[0].body.params.protocolVersion).toBe(\"2025-03-26\");",
+      "expect(requests[0].method).toBe(\"POST\");",
+      "expect(requests[0].url).toBe(\"https://staging.example/api/pets/1\");",
+      "expect(requests[1].url).toBe(\"https://api--prj-x.worker.example/v2/api/pets/5?rev=3\");",
+      "expect(requests[1].url).toBe(\"https://api--prj-x.worker.example/v2/pets/5?rev=3\");"
+    ],
+    "apps/os/src/project/processor.test.ts": ["expect("],
+    "apps/os/src/project/templates.test.ts": ["expect(fixture.order).toEqual(["],
+    "apps/os/src/secrets.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(",
+      "expect(encrypted.algorithm).toBe(\"AES-256-GCM+SECRET-V1\");",
+      "expect(provider.exchanges).toEqual([",
+      "expect(pub.exchanges[0]!.body).toBe(",
+      "expect(record.refresh).toEqual({",
+      "expect(refresh.exchanges[0]!.body).toBe(",
+      "expect(sent.variables).toEqual({"
+    ],
+    "apps/os/src/stream/core-processor.test.ts": [
+      "expect(",
+      "expect((event.payload as { target: unknown }).target).toEqual(target);",
+      "expect(CoreContract.slug).toBe(\"core\");",
+      "expect(afterSecond.itxExpressionRewriteRules).not.toBe(afterFirst.itxExpressionRewriteRules);",
+      "expect(afterSecond.subscriptions).not.toBe(afterFirst.subscriptions); // a fresh draft, not a shared table",
+      "expect(closed.scriptRuns).toEqual({});",
+      "expect(configure({ name: \"all\", target: \"itx.digest.processEventBatch\" }).payload).toEqual({",
+      "expect(event.payload).toEqual({",
+      "expect(halted.subscriptions.digest.halted).toEqual({",
+      "expect(paused.paused).toEqual({ reason: \"maintenance\" });",
+      "expect(plain.subscriptions.digest.configuredAtOffset).toBe(1);",
+      "expect(plain.subscriptions.digest.resumed).toEqual({ atOffset: 4 });",
+      "expect(reduceAll([at(1, \"events.iterate.com/stream/paused\")]).paused).toEqual({",
+      "expect(reduceAll([at(1, \"events.iterate.com/stream/paused\", {})]).paused).toEqual({",
+      "expect(reduceAll([e]).subscriptions).toEqual({",
+      "expect(reduceAll([remove(2, null)], masked).itxExpressionRewriteRules).toEqual({});",
+      "expect(reduceAll([remove(3, 2)], replaced).subscriptions).toEqual({}); // the row's own handle",
+      "expect(reduceAll([remove(3, parse(\"itx.tab2\"))], replaced).itxExpressionRewriteRules).toEqual(",
+      "expect(reduceAll([requested(5)]).scriptRuns).toEqual({",
+      "expect(rehalted.subscriptions.digest.halted).toEqual({ afterOffset: 9, attempts: 1 });",
+      "expect(rows().h).toEqual({",
+      "expect(rows().tally.configuredAtOffset).toBe(events[0].offset);",
+      "expect(rows().w.configuredAtOffset).toBe(events[1].offset);",
+      "expect(rows()[`odd${i}`].target).toEqual(target);",
+      "expect(s.createdAt).toBe(born.createdAt);",
+      "expect(s.incarnation).toBe(2);",
+      "expect(s.itxExpressionRewriteRules).toEqual({",
+      "expect(s.itxExpressionRewriteRules).toEqual({});",
+      "expect(s.path).toBe(\"/\");",
+      "expect(s.projectId).toBe(\"prj_t\");",
+      "expect(s.projectId).toBe(\"prj_t\");",
+      "expect(s.subscriptions.digest.configuredAtOffset).toBe(2);",
+      "expect(sought.subscriptions.digest.resumed).toEqual({ afterOffset: 8, atOffset: 3 });",
+      "expect(state.ingressTarget).toEqual(target);",
+      "expect(state.itxExpressionRewriteRules).toEqual({});",
+      "expect(state.itxExpressionRewriteRules).toEqual({});",
+      "expect(unlinked.itxExpressionRewriteRules).toEqual({});"
+    ],
+    "apps/os/src/stream/memory-budget.test.ts": [
+      "expect(run.facts.firstPushErrorCode, run.tail).toBe(\"REDUCE_CHECKPOINT_TOO_LARGE\");",
+      "expect(run.facts.refusedCode, run.tail).toBe(\"EVENT_TOO_LARGE\");",
+      "expect(run.facts.refusedCode, run.tail).toBe(\"REDUCE_CHECKPOINT_TOO_LARGE\");",
+      "expect(run.facts.waitOutcome).toBe(\"WAIT_TIMEOUT\");",
+      "expect(run.kind, `${what}: child ${run.kind} at ${ISOLATE_BUDGET_MB} MiB\\n${run.tail}`).toBe("
+    ],
+    "apps/os/src/stream/processor-rules.test.ts": [
+      "expect((await engine.snapshot()).offset).toBe(4);",
+      "expect((await engine.snapshot()).state.n).toBe(3);",
+      "expect((await engine.snapshot()).state.n).toBe(4);",
+      "expect((await engineB.snapshot()).offset).toBe(4);",
+      "expect((await engineB.snapshot()).state.n).toBe(2); // tick@1 (persisted reduce) + tick@4 — no double-consume",
+      "expect((await p.snapshot()).offset).toBe(2);",
+      "expect((await p.snapshot()).offset).toBe(3);",
+      "expect((await p.snapshot()).offset).toBe(500); // the reduce DID reach the head…",
+      "expect((await p.snapshot()).state.n).toBe(1); // the batch committed anyway",
+      "expect((await p.snapshot()).state.n).toBe(2);",
+      "expect((await p.snapshot()).state.n).toBe(3);",
+      "expect((await p.snapshot()).state.n).toBe(3); // the reduce restarted from the persisted state",
+      "expect((await p2.snapshot()).state.n).toBe(2);",
+      "expect((await p2.snapshot()).state.n).toBe(2); // re-reduced state is right…",
+      "expect((await p2.snapshot()).state.n).toBe(3); // the reduce saw it…",
+      "expect((await p3.snapshot()).state.n).toBe(2);",
+      "expect(a.seen).toEqual([\"tick@1\", \"chunk@2\", \"chunk@3\", \"tick@4\"]);",
+      "expect(a.seen).toEqual([\"tick@1\", \"chunk@2\", \"chunk@3\"]); // in-memory cursor rode to 3…",
+      "expect(b.seen).toEqual([\"tick@4\"]); // reduce calls THIS incarnation made (tick@1 came from the checkpoint)",
+      "expect(healed.patch).toEqual([{ op: \"replace\", path: \"/n\", value: 2 }]);",
+      "expect(next.from).toBe(healed.to); // linked exactly — from === the previous emission's to",
+      "expect(p.seen).toEqual([\"tick@1\", \"chunk@3\", \"tock@5\"]); // …and nothing consumed it or the noise",
+      "expect(snap.offset).toBe(3); // cursor covers the skipped event — no wedge, no retry loop",
+      "expect(snap.state.n).toBe(2); // the throwing event contributed nothing",
+      "expect(storage.writes).toBe(0); // events 1+2 fully processed, yet NOTHING persisted",
+      "expect(storage.writes).toBe(1); // and then exactly one persist",
+      "expect(storage.writes).toBe(writesAfterDurable); // the window persisted NOTHING (regression on eviction is by design)",
+      "expect(storage.writes).toBe(writesAfterDurable); // …for ZERO storage writes (the ephemeral rule)"
+    ],
+    "apps/os/src/stream/processor.test.ts": [
+      "expect((await eph.snapshot()).state.seen).toEqual([\"loud@1\", \"chunk@2\", \"chunk@3\"]);",
+      "expect((await p.snapshot()).state).toEqual({ last: 5 });",
+      "expect((await p.snapshot()).state).toEqual({ seen: [1, 2] }); // and the batch advanced past it",
+      "expect((await p.snapshot()).state).toEqual({ sum: 5 });",
+      "expect((await p.snapshot()).state.seen).toEqual([\"loud@1\", \"loud@2\", \"chunk@3\"]);",
+      "expect((await p1.snapshot()).state).toEqual({ sum: 5 }); // live: coerced",
+      "expect((await p2.snapshot()).state).toEqual({ sum: 5 });",
+      "expect((await sneaky.snapshot()).state.seen).toBe(1); // the tick — NOT the change event",
+      "expect((await star.snapshot()).state.seen).toEqual([\"loud@1\", \"loud@4\"]); // holes invisible",
+      "expect((await star.snapshot()).state.seen).toEqual([\"loud@1\"]);",
+      "expect(attempts.trace).toEqual([\"attempt 1 started\", \"at-head\"]);",
+      "expect(attempts.trace).toEqual([\"attempt 1 started\", \"claimed 20000\", \"attempt 2 started\"]);",
+      "expect(c.ephemeral).toBe(true);",
+      "expect(c.from).toBe(seed.rev); // seed → first patch, no re-seed needed",
+      "expect(c2.from).toBe(c1.to); // the silent batch did NOT break the chain",
+      "expect(contract.stateSchema.safeParse(state).success).toBe(true);",
+      "expect(ephStorage.writes).toBe(ephWrites);",
+      "expect(live.snapshot().rev).toBe(epoch);",
+      "expect(live.snapshot().rev).toBe(epoch);",
+      "expect(mem.claims).toEqual([T + 20_000, T + 40_000, T + 80_000]);",
+      "expect(mem.claims).toEqual([T + 20_000, T + 40_000]);",
+      "expect(mem.claims).toEqual([T + 20_000, null]);",
+      "expect(mem.claims).toEqual([T + 20_000]);",
+      "expect(mem.claims).toEqual([T + 20_000]);",
+      "expect(mem.claims).toEqual([T + 20_000]); // one attempt still in flight: the claim stands",
+      "expect(milestones[0].payload).toEqual({ at: 3 });",
+      "expect(p1.effects).toEqual([1, 2, 3, 4]);",
+      "expect(p1.effects).toEqual([1, 2, 3, 4]);",
+      "expect(p2.effects).toEqual([]); // and the re-reduce stayed reduce-only",
+      "expect(p2.effects).toEqual([]); // cursor honored — no replay",
+      "expect(p2.effects).toEqual([]); // the persisted cursor (4) means nothing to re-do",
+      "expect(probe.caughtUps).toBe(1);",
+      "expect(probe.caughtUps).toBe(1);",
+      "expect(processor.trace).toEqual([\"at-head ticks=0\"]); // no consumable events → eventless pass",
+      "expect(seed.state).toEqual({ count: 0 });",
+      "expect(sink.frames).toEqual([]);",
+      "expect(sink.frames).toEqual([]);",
+      "expect(sink.frames[2].from).toBe(epoch + 3);",
+      "expect(sink.frames[2].patch).toEqual([{ op: \"replace\", path: \"/n\", value: 3 }]);",
+      "expect(snap.state.n).toBe(2); // re-reduced",
+      "expect(snap.state.seen).toBe(1);",
+      "expect(starStorage.writes).toBe(starWrites);",
+      "expect(still.fired).toBe(3); // two batches ran every event to completion…"
+    ],
+    "apps/os/src/stream/scheduled-appends.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(create().stream.coreReducedState.schedules).toEqual({});",
+      "expect(create().stream.coreReducedState.schedules.reminder.scheduledAtOffset).toBe(",
+      "expect(create().stream.coreReducedState.schedules.reminder.scheduledAtOffset).toBe(second.offset);",
+      "expect(create().stream.coreReducedState.schedules[key].nextAt).toBe(expected);",
+      "expect(repeated.schedules).toEqual(state.schedules);",
+      "expect(state.schedules.tick.nextAt).toBe(\"2030-01-01T00:00:01.000Z\");",
+      "expect(state.schedules.tick.nextAt).toBe(\"2030-01-01T01:00:01.000Z\");",
+      "expect(stream.append(input)[0].offset).toBe(definition.offset);",
+      "expect(stream.coreReducedState.schedules).toEqual({});",
+      "expect(stream.coreReducedState.schedules).toEqual({});",
+      "expect(stream.coreReducedState.schedules).toEqual({});",
+      "expect(stream.coreReducedState.schedules[key].nextAt).toBe(expected);"
+    ],
+    "apps/os/src/stream/stream.test.ts": [
+      "expect(",
+      "expect((await pending).offset).toBe(receipt.offset);",
+      "expect((err as { data?: unknown }).data).toEqual({ expected: 2, actual: 4 });",
+      "expect(again.offset).toBe(a.offset);",
+      "expect(batches.at(-1)![1].offset).toBe(51);",
+      "expect(d.offset).toBe(5); // woken took 4, the durable 5 — both numbers the dead ephemerals held",
+      "expect(d.offset).toBe(52);",
+      "expect(first.coreReducedState.paused).toEqual({ reason: \"operator\" });",
+      "expect(first.storage.incarnation).toBe(1);",
+      "expect(got.ephemeral).toBe(true);",
+      "expect(got.offset).toBe(first.offset); // the FIRST match in offset order, not the newest",
+      "expect(got.offset).toBe(next.offset);",
+      "expect(got.offset).toBe(outer.offset); // the OUTER commit's event, in offset order",
+      "expect(got.offset).toBe(receipt.offset);",
+      "expect(got.offset).toBe(receipt.offset);",
+      "expect(got.payload).toEqual({ n: 1 });",
+      "expect(got.payload).toEqual({ n: 1 });",
+      "expect(got.payload).toEqual({ which: \"first\" });",
+      "expect(got.type).toBe(\"ping\");",
+      "expect(got1.offset).toBe(receipt.offset);",
+      "expect(got2.offset).toBe(receipt.offset);",
+      "expect(hello.offset).toBe(3);",
+      "expect(next.offset).toBe(2);",
+      "expect(ok.offset).toBe(2);",
+      "expect(page.events[0].payload).toEqual({ projectId: \"prj_bare\", path: \"/\" });",
+      "expect(page.events[1].payload).toEqual({ incarnation: 1, reason: \"request\" }); // no alarm was stored: a request woke it",
+      "expect(receipt.offset).toBe(1);",
+      "expect(resumed.offset).toBe(4);",
+      "expect(second.append({ type: \"mark\" })[0].type).toBe(\"mark\");",
+      "expect(second.atHead).toBe(true);",
+      "expect(second.coreReducedState.incarnation).toBe(2);",
+      "expect(second.coreReducedState.paused).toEqual({ reason: \"a breaker\" }); // the pause held; the settlement was exempt",
+      "expect(second.coreReducedState.scriptRuns).toEqual({});",
+      "expect(second.read(0).events[3].type).toBe(\"events.iterate.com/stream/woken\");",
+      "expect(second.storage.incarnation).toBe(2);",
+      "expect(stream.append({ type: \"work\" })[0].offset).toBe(5);",
+      "expect(stream.append({ type: \"work\" })[0].offset).toBe(good.offset + 1);",
+      "expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({",
+      "expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({}); // …but no rule was configured",
+      "expect(stream.coreReducedState.paused).toEqual({ reason: \"x\" });",
+      "expect(stream.coreReducedState.subscriptions).toEqual({});",
+      "expect(stream.coreReducedState.subscriptions.fine.configuredAtOffset).toBe(good.offset);",
+      "expect(stream.read(0).scannedThroughOffset).toBe(1);",
+      "expect(stream.read(0).scannedThroughOffset).toBe(4);",
+      "expect(stream.read(1).scannedThroughOffset).toBe(1);",
+      "expect(stream.read(page.scannedThroughOffset, 500, { includeEphemeral: true }).events).toEqual([",
+      "expect(stream.storage.incarnation).toBe(1);"
+    ],
+    "apps/os/src/stream/subscription-delivery.test.ts": [
+      "expect(claim.attempt).toBe(deaths);",
+      "expect(claim[1].attempt).toBe(1);",
+      "expect(claim[1].nextAttemptAtMs).toBe(first.alarms[0]); // the same instant the alarm holds: one wake, not two",
+      "expect(failed.attempt).toBe(1);",
+      "expect(fifteenth.attempt).toBe(15);",
+      "expect(first.alarms).toEqual([]);",
+      "expect(pushes.big).toEqual([[0]]);",
+      "expect(pushes.small).toEqual([[1, 2]]);",
+      "expect(pushes.small).toEqual([]);",
+      "expect(pushes.small).toEqual([]); // still waiting; no claim yet — the row was at the mark when it began",
+      "expect(rig.alarms).toEqual([]);",
+      "expect(rig.coordinator.snapshot().armedAt).toBe(rig.delivery.cursor(\"small\")!.nextAttemptAtMs);",
+      "expect(rig.deletes).toEqual([1]);",
+      "expect(rig.deletes).toEqual([1]);",
+      "expect(rig.facetMethods).toEqual([\"catchUpFromLog\"]); // the queued push never reached the facet",
+      "expect(rig.pushes).toEqual([[1], [-1]]); // `ns` reads -1 for a payload-less event",
+      "expect(rig.pushes).toEqual([[1], [2, 3]]);",
+      "expect(rig.pushes).toEqual([[1], [2]]);",
+      "expect(rig.pushes).toEqual([[1], [3, 4]]); // the loss itself is the contract",
+      "expect(rig.pushes).toEqual([[1]]); // still parked: the loop delivers one batch at a time",
+      "expect(rig.pushes).toEqual([[1]]); // tried again (and parked again)",
+      "expect(rig.pushes).toEqual([]);",
+      "expect(rig.pushes).toEqual([]); // no sixteenth call",
+      "expect(rig.pushes).toEqual([]); // the rung is not due: nothing was called",
+      "expect(rig.pushes.at(-1)!.range).toEqual({ after: durable.offset, through: second.offset });",
+      "expect(rig.pushes.at(-1)!.range).toEqual({ after: second.offset, through: third.offset });",
+      "expect(rig.pushes[0].range).toEqual({ after: offsets[0] - 1, through: offsets[3] });",
+      "expect(rig.pushes[0].range).toEqual({ after: offsets[delivered[0] - 1], through: offsets[11] });",
+      "expect(second.alarms).toEqual([]);",
+      "expect(second.alarms).toEqual([]);",
+      "expect(second.alarms).toEqual([]);",
+      "expect(second.alarms).toEqual([claim.nextAttemptAtMs]);",
+      "expect(second.alarms).toEqual([claim[1].nextAttemptAtMs]);",
+      "expect(second.deletes).toEqual([1]);",
+      "expect(second.pushes).toEqual([[1]]); // delivered again, from the cursor",
+      "expect(second.pushes).toEqual([]);",
+      "expect(second.pushes).toEqual([]); // nothing to redeliver: the ephemeral died with the ring",
+      "if (evicted) expect(rig.facetMethods).toEqual([]); // the wake does not wake a halted row"
+    ],
+    "apps/os/src/worker.test.ts": [
+      "expect((await page(\"/\", { method: \"POST\" })).status).toBe(405);",
+      "expect((await page(\"/authorize.js\")).status).toBe(404);",
+      "expect((await page(\"/capnweb.js\")).status).toBe(404);",
+      "expect((await page(\"/issuer.css\")).status).toBe(200);",
+      "expect((await page(\"/login\")).status).toBe(200);",
+      "expect((await page(\"/login\", crossSite)).status).toBe(403);",
+      "expect((await page(\"/login\", { headers: { accept: \"application/json\" } })).status).toBe(406);",
+      "expect((await page(\"/login\", { method: \"DELETE\" })).status).toBe(405);",
+      "expect((await page(\"/oauth2/auth?client_id=x\", crossSite)).status).toBe(403);",
+      "expect((await request(\"https://mcp.iterate.com/api\")).status).toBe(404);",
+      "expect((await request(\"https://mcp.iterate.com/login\")).status).toBe(404);",
+      "expect((await request(\"https://os.test/login\", paths)).status).toBe(200);",
+      "expect((await request(\"https://os.test/oauth2/auth?client_id=x\", paths)).status).toBe(200);",
+      "expect((await request(\"https://os.test/version\", paths)).status).toBe(200);",
+      "expect((await request(\"https://unconfigured.example/api\")).status).toBe(421);",
+      "expect(denied.status).toBe(401);",
+      "expect(moved.status).toBe(308);",
+      "expect(parseAppConfig(MINIMAL, \"v-123\").deployId).toBe(\"v-123\");",
+      "expect(response.status).toBe(200);"
+    ],
+    "packages/iterate/src/cli.test.ts": [
+      "await vi.waitFor(() => expect(server.clients.size).toBe(0));",
+      "await vi.waitFor(() => expect(server.clients.size).toBe(0));",
+      "expect(Config.parse({}).osBaseUrl).toBe(\"https://os.iterate.com\");"
+    ],
+    "packages/shared/src/chunked-text.test.ts": [
+      "expect(",
+      "expect(",
+      "expect(ChunkedText.safeParse(bounded).success).toBe(true);",
+      "expect(ChunkedText.safeParse(text).success).toBe(true);",
+      "expect(next.tailOffset).toBe(5);"
+    ],
+    "packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.test.ts": [
+      "expect(artifact.lanes).toEqual([expect.objectContaining({ status: \"interrupted\" })]);",
+      "expect(artifact.run.status).toBe(\"interrupted\");",
+      "expect(telemetry.context).toEqual(",
+      "expect(telemetry.lanes).toEqual([",
+      "expect(telemetry.modules).toEqual([",
+      "expect(telemetry.tests).toEqual(["
+    ],
+    "packages/shared/src/test-support/flake-test.test.ts": ["expect(result.status).toBe(1);"],
+    "scripts/ci/depot-workflows.test.ts": [
+      "expect(job[\"runs-on\"].image, `${file} job ${jobId} runs on the baked image`).toBe(",
+      "expect(job[\"runs-on\"].size).toBe(size);",
+      "expect(loadWorkflow(file).permissions).toEqual(permissions);",
+      "expect(workflow.concurrency).toEqual({",
+      "expect(workflow.concurrency).toEqual({ group, \"cancel-in-progress\": true });"
+    ],
+    "scripts/ci/do-duration-alert.test.ts": [
+      "expect(renderDailyThread({ ...input, testRun: false }).pages).toEqual([",
+      "expect(slack.writes).toEqual(",
+      "expect(slack.writes).toEqual(expected);",
+      "expect(thread.details).toBe(",
+      "expect(thread.headline).toBe(",
+      "expect(thread.headline).toBe(",
+      "expect(thread.headline).toBe(",
+      "expect(thread.pages).toEqual([]);",
+      "expect(thread.pages).toEqual([]);",
+      "expect(thread.replies).toEqual([",
+      "expect(thread.replies).toEqual([]);"
+    ],
+    "scripts/ci/posthog-events.test.ts": [
+      "expect(first.uuid).not.toBe(other.uuid);",
+      "expect(first.uuid).toBe(replay.uuid);"
+    ],
+    "scripts/lib/cloudflare-429-retry.test.ts": [
+      "expect(result.status).toBe(200);",
+      "expect(result.status).toBe(200);",
+      "expect(result.status).toBe(200);",
+      "expect(result.status).toBe(429);",
+      "expect(result.status).toBe(500);"
+    ],
+    "scripts/lib/do-reset.test.ts": [
+      "expect((part as Blob).type).toBe(\"application/json\");",
+      "expect(binding.type).toBe(\"inherit\");",
+      "expect(sidecarSettings.bindings).toEqual([]);",
+      "expect(sidecarSettings.bindings).toEqual([]);"
+    ],
+    "scripts/lib/start-app.test.ts": ["expect(config.previews).toEqual({"],
+    "specs/os/auth.spec.ts": [
+      "expect(exchange.status, await exchange.clone().text()).toBe(200);",
+      "expect(new URL(page.url()).search).toBe(flow.url.search);",
+      "expect(new URL(page.url()).search).toBe(flow.url.search);"
+    ]
+  },
+  "iterate/simple-truthiness-check": {
+    "packages/shared/src/chunked-text.ts": [
+      "if (block === undefined || (index < text.blockCount - 1 && block.length < textBlockSize)) {"
+    ],
+    "packages/shared/src/posthog/posthog.ts": [": (options.request.body ?? undefined);"],
+    "packages/shared/src/test-support/ci-telemetry.ts": [
+      "...(environment.DEPOT_JOB_URL && { depotJobUrl: environment.DEPOT_JOB_URL }),",
+      "...(environment.GITHUB_JOB && { jobName: environment.GITHUB_JOB }),",
+      "...(environment.GITHUB_WORKFLOW && { workflowName: environment.GITHUB_WORKFLOW }),",
+      "app: environment.TEST_TELEMETRY_APP ?? defaults.app,",
+      "const repository = environment.GITHUB_REPOSITORY ?? \"iterate/iterate\";",
+      "const runId = environment.GITHUB_RUN_ID ?? fallbackRunId;",
+      "if (typeof error !== \"object\" || error === null) return { message: String(error) };",
+      "lane: environment.TEST_TELEMETRY_LANE ?? defaults.lane,",
+      "testKind: environment.TEST_TELEMETRY_KIND ?? defaults.testKind,",
+      "testProject: environment.TEST_TELEMETRY_PROJECT ?? defaults.testProject,",
+      "workflowRunAttempt: environment.GITHUB_RUN_ATTEMPT ?? \"1\",",
+      "workspace: environment.TEST_TELEMETRY_WORKSPACE ?? defaults.workspace,",
+      "workspaceRoot: environment.GITHUB_WORKSPACE ?? process.cwd(),"
+    ],
+    "packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.test.ts": [
+      "if (value === undefined) delete process.env[name];"
+    ],
+    "packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts": [
+      "...(firstFailure && { firstFailure }),",
+      "...(message && { description: message }),",
+      "...(test.id && { runnerTestId: test.id }),",
+      "const errors = (result.errors ?? []).map((error) =>",
+      "if (typeof error === \"object\" && error !== null) {",
+      "process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? process.cwd();",
+      "tags: [...(test.tags ?? [])],"
+    ],
+    "packages/shared/src/test-support/flake-record.ts": [
+      "...(test.firstFailure === undefined ? {} : { error: test.firstFailure }),",
+      "const dir = typeof process === \"undefined\" ? undefined : process.env.FLAKE_RECORD_DIR;",
+      "if (test.expectedState !== undefined && test.expectedState !== \"passed\") return null;"
+    ],
+    "packages/ui/src/components/code-editor.client.tsx": [
+      "if (containerRef.current == null) return;",
+      "if (view == null) return;",
+      "placeholder == null ? [] : placeholderExt(placeholder),"
+    ],
+    "packages/ui/src/components/events/agent-ui-reducer.ts": [
+      "...(cancelReason == null ? {} : { cancelReason }),",
+      "...(errorMessage == null ? {} : { errorMessage }),",
+      "...(model == null ? {} : { model }),",
+      "...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),",
+      "...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),",
+      "...(usage.input == null ? {} : { inputTokens: usage.input }),",
+      "...(usage.output == null ? {} : { outputTokens: usage.output }),",
+      "base.live === null &&",
+      "code == null ||",
+      "const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;",
+      "const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;",
+      "const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;",
+      "const summary = options.summary ?? summarizeAgentUiActivity(activity);",
+      "executionId == null ||",
+      "extractedFromAssistantOffset === null",
+      "if (activity == null || activity === \"\") return state;",
+      "if (activity == null) return state;",
+      "if (contentType == null || filename == null || path == null || size == null || url == null) {",
+      "if (contentType == null || filename == null || path == null || size == null || url == null) {",
+      "if (contentType == null || filename == null || path == null || size == null || url == null) {",
+      "if (contentType == null || filename == null || path == null || size == null || url == null) {",
+      "if (executionId == null) return state;",
+      "if (live == null) return null;",
+      "if (match == null || match.kind !== \"llm\") return state;",
+      "if (oldestId === undefined) break;",
+      "if (payload == null || typeof requestOffset !== \"number\") return state;",
+      "if (payload == null) return state;",
+      "if (state.live != null) return { ...state.live, status: \"running\" };",
+      "if (state.live != null) {",
+      "if (state.live == null) return state;",
+      "if (state.live == null) return state;",
+      "if (state.live == null) return state;",
+      "if (state.live == null) return state;",
+      "if (state.live == null) {",
+      "if (step == null || step.kind !== \"code\") {",
+      "if (step == null || step.kind !== \"llm\") return state;",
+      "if (text == null) return state;",
+      "if (text == null) return state;",
+      "return reason == null ? {} : { reason };",
+      "return value != null && typeof value === \"object\" && !Array.isArray(value);",
+      "state.summaryActivity !== null &&",
+      "step.outcome != null",
+      "summary.interruptedWithPartialResponse && options.interruptedPartialHint != null",
+      "via: { service: actorType, ...(sender === undefined ? {} : { sender }) },",
+      "} else if (current !== undefined && current.code === null) {",
+      "} else if (current !== undefined && current.code === null) {"
+    ],
+    "packages/ui/src/components/serialized-object-code-block.client.tsx": [
+      "if (data === null) {",
+      "if (scrollContainer == null) {"
+    ],
+    "packages/ui/src/components/source-code-block.client.tsx": [
+      "codeMirrorExtensions ?? [],",
+      "if (current !== null) {",
+      "if (preserved !== null && preserved.state.doc.eq(view.state.doc)) {"
+    ],
+    "scripts/ci/test-telemetry-completeness.ts": [
+      "artifact.context.workspace === undefined ? [] : [artifact.context.workspace],"
+    ],
+    "scripts/ci/upload-test-telemetry.ts": [
+      "const expectedWorkspaces = (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES ?? \"\")"
+    ],
+    "scripts/lib/cloudflare-429-retry.ts": [
+      "const backoffMs = opts.backoffMs ?? DEFAULT_BACKOFF_MS;",
+      "const sleep = opts.sleep ?? abortableSleep;"
+    ],
+    "scripts/lib/deploy-helpers.ts": [
+      "`${command} ${args.join(\" \")} exited with ${code ?? `signal ${signal ?? \"unknown\"}`}`,",
+      "`${command} ${args.join(\" \")} exited with ${result.code ?? `signal ${result.signal ?? \"unknown\"}`}`,",
+      "const backoffMs = retryOpts.backoffMs ?? CLOUDFLARE_COMMAND_429_BACKOFF_MS;",
+      "if (value === undefined || value === \"\") missing.push(key);",
+      "retryOpts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));"
+    ],
+    "scripts/lib/env-context.ts": [
+      "options.env ?? (options.allowDopplerConfigFallback ? process.env.DOPPLER_CONFIG : undefined);"
+    ]
+  }
+}

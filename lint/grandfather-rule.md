@@ -1,10 +1,13 @@
 # Grandfather existing violations
 
+A new rule usually lands with violations it cannot fix in the same PR. `grandfatherRule` lets it
+land armed: the violations that exist today are listed in
+[`grandfathered.json`](grandfathered.json) and suppressed; every other report is an error.
+
 ```ts
 import { grandfatherRule } from "./grandfather-rule.ts";
 
 export const noShoutingConstants = grandfatherRule({
-  allowedUpTo: new Date("2026-09-10T10:04:56Z"),
   meta: {
     /* normal rule metadata */
   },
@@ -12,33 +15,36 @@ export const noShoutingConstants = grandfatherRule({
     /* normal rule listeners */
   },
 });
-
-// Or wrap a pre-built StrictRule:
-const wrapped = grandfatherRule({ allowedUpTo: new Date("2026-09-10T10:04:56Z"), ...existingRule });
 ```
 
-Reports at or before the cutoff are suppressed using the start line's Git
-**author timestamp**. An explicit report location takes precedence over the
-node location. A date-only string means midnight UTC, not the end of that day.
+`grandfathered.json` maps rule id → file → the trimmed text of each grandfathered report's
+start line, once per report:
 
-The wrapper blames the actual linted source, including unsaved edits. Changed
-and uncommitted lines always count as new. Adding lines above an unchanged
-violation does not change its age. Blame measures when the line last changed,
-not when the surrounding code first became a violation.
+```json
+{
+  "iterate/prefer-object-property-match": {
+    "apps/dummy-petshop/src/worker.test.ts": [
+      "expect(response.status).toBe(302);",
+      "expect(response.status).toBe(302);"
+    ]
+  }
+}
+```
 
-Rules keep their metadata, listeners, options, messages, suggestions and fixes.
-Suppressed reports do not apply fixes. Git runs lazily on the first report. One
-lint process blames each file text once for every grandfathered rule that
-reports on it, and asks each repository once whether HEAD exists and whether the
-clone is shallow: a Git spawn costs about 80 ms inside oxlint. New text (an edit,
-an autofix pass) is blamed afresh. A commit made while a long-lived process
-holds an unchanged text can only leave its lines checked.
+- **Moved lines stay grandfathered.** A report is matched by its line's text, not its line
+  number, so code added above it or a reindent changes nothing.
+- **Edited, copied and new lines are checked.** An edit changes the text. Each entry covers one
+  report, so a third `expect(response.status).toBe(302);` in that file is an error, and so is
+  the same line in another file.
+- **The file only shrinks.** An entry that no report uses any more is itself an error on the
+  file, until `pnpm lint:baseline` drops it. Without `--add`, that script only removes entries.
+- **A renamed file** loses its entries: rename its key in `grandfathered.json`, or fix the
+  violations. The lint tests fail on a key whose file no longer exists.
 
-Files without history and reports without a known start line are checked.
-Shallow boundary lines are also checked because their true age is unknown;
-the CI lint job fetches full history. Unexpected Git failures stop linting
-instead of silently granting exemptions. No Git fetch or write is performed.
+To arm a new rule with its existing violations, wrap it and run
+`pnpm lint:baseline --add iterate/<rule>`. When a rule's entries reach zero, drop its
+`grandfatherRule` wrapper; the lint tests fail while a grandfathered rule has no entries.
 
-Use the rule's rollout instant, in UTC, as its cutoff. A future cutoff exempts
-every line committed before it, so CI, which lints committed lines, could not
-fail on the rule until then; grandfather-rule.test.ts fails on one.
+Rules keep their metadata, listeners, options, messages, suggestions and fixes. Suppressed
+reports do not apply fixes. Linting reads no Git history, so it works the same in a shallow,
+blobless or exported checkout, and a pull request's result does not change when it is merged.

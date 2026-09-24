@@ -1,9 +1,9 @@
 # Simple truthiness for new code
 
-`iterate/simple-truthiness-check` uses `grandfatherRule` with an inclusive
-**2026-09-11 00:00 UTC** author-date cutoff. September 8 caught 405 violations;
-this later cutoff keeps the initial fixes small. Changed and uncommitted lines
-are always checked. See [grandfatherRule](../grandfather-rule.md).
+`iterate/simple-truthiness-check` uses `grandfatherRule`: the violations that
+existed when it was armed are listed in `lint/grandfathered.json`. September 8
+caught 405 violations; grandfathering them kept the initial fixes small. New and
+changed lines are always checked. See [grandfatherRule](../grandfather-rule.md).
 
 ```ts
 // Prefer direct properties.

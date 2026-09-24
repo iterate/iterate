@@ -12,6 +12,7 @@
     "preview": "pnpm --dir apps/os preview",
     "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint . --fix --threads 1",
+    "lint:baseline": "node lint/grandfather-baseline.ts",
     "knip": "knip",
     "prepare": "is-ci || husky",
     "spec": "playwright test --config playwright.config.ts",

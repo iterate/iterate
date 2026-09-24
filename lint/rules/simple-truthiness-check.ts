@@ -1,5 +1,5 @@
 // Reimplements the design from iterate/iterate#2491 (simple-truthiness-check).
-// Adds direct-property checks and a dated rollout; uses types to leave numeric,
+// Adds direct-property checks and a grandfathered rollout; uses types to leave numeric,
 // boolean and unknown-input checks alone, and deliberately offers no autofix.
 import {
   ObjectFlags,
@@ -28,7 +28,6 @@ import { grandfatherRule } from "../grandfather-rule.ts";
  * No autofix: deciding whether a distinction matters still needs a human.
  */
 export const simpleTruthinessCheckRule = grandfatherRule({
-  allowedUpTo: new Date("2026-09-11T00:00:00Z"),
   meta: {
     type: "suggestion",
     schema: [],
