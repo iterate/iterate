@@ -87,6 +87,7 @@ test("the guard reads each way a row writes a fixed wait", () => {
     'setTimeout(() => resolve("late"), 60_000);',
     'setTimeout(\n  () => reject(new Error("late")),\n  60_000,\n);',
     "await new Promise((r) => setTimeout(r, 1000));",
+    "setTimeout(() => done(1, 2), 45_000);",
     "setTimeout(tick, ms);",
     "await sleep(SEED_MS);",
   ].join("\n");
@@ -95,16 +96,18 @@ test("the guard reads each way a row writes a fixed wait", () => {
     [2, 45_000],
     [3, 60_000],
     [8, 1_000],
+    [9, 45_000],
   ]);
 });
 
 /**
- * Every `sleep(ms)`, `delay(ms)` and `setTimeout(fn, ms)` whose `ms` is a numeric literal. A timer
- * that rejects is a deadline raced against the work, not a wait, and is left out.
+ * Every `sleep(ms)`, `delay(ms)` and `setTimeout(fn, ms)` whose `ms` is a numeric literal: the last
+ * `, <number>)` before the statement's `;`, so a number inside the callback is not taken for it. A
+ * timer that rejects is a deadline raced against the work, not a wait, and is left out.
  */
 function fixedWaits(text: string) {
   const pattern =
-    /\b(?:sleep|delay)\(\s*([\d_]+)\s*\)|\bsetTimeout\(([^;]*?),\s*([\d_]+)\s*,?\s*\)/gu;
+    /\b(?:sleep|delay)\(\s*([\d_]+)\s*\)|\bsetTimeout\(([^;]*),\s*([\d_]+)\s*,?\s*\)/gu;
   return [...text.matchAll(pattern)].flatMap((match) =>
     match[2]?.includes("reject")
       ? []
