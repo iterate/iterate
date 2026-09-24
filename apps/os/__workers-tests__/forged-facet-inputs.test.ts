@@ -20,25 +20,6 @@ import { expect, test, vi } from "vitest";
 import { hmacSha256Hex } from "../src/secrets.ts";
 import { adminCredentials, signedInSession, stub } from "./support.ts";
 
-/** What a direct call came to: it answered, or it was refused (whatever refused it). */
-async function attempted(call: () => Promise<unknown>): Promise<"answered" | "refused"> {
-  try {
-    await call();
-    return "answered";
-  } catch {
-    return "refused";
-  }
-}
-
-/** A committed-looking event no log ever held, at `offset`. */
-const forgedEvent = (offset: number, type: string, payload: unknown) => ({
-  offset,
-  type,
-  payload,
-  path: "/",
-  createdAt: new Date().toISOString(),
-});
-
 /** How far past the facet's checkpoint a forged range claims the log reaches. */
 const FORGED_RANGE_LENGTH = 1000;
 
@@ -155,39 +136,13 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
 `,
 };
 
-/** A project with the tally processor enabled at `/tally` and one real tick reduced. */
-async function projectWithTally(email: string, slug: string) {
-  const session = await signedInSession(email);
-  const project = await session.projects.create({ project: slug });
-  const tally = project.cd("/tally");
-  await tally.invoke([
-    "itx",
-    "processors",
-    ["enable", "tally", { source: TALLY_SOURCE, className: "TallyDurableObject" }],
-  ]);
-  const facet = (call: unknown[]) => tally.invoke(["itx", "facets", ["get", "tally"], call]);
-  const tick = async () => {
-    const [appended] = (await tally.invoke([
-      "itx",
-      ["append", { type: "events.iterate.com/test/tick" }],
-    ])) as { offset: number }[];
-    await facet(["waitUntilProcessed", { offset: appended!.offset }]);
-  };
-  await tick();
-  return {
-    facet,
-    tick,
-    snapshot: () => facet(["snapshot"]) as Promise<Snapshot<{ ticks: number }>>,
-  };
-}
-
 test("a project member pushes forged ticks into their own loaded processor's facet: its count and checkpoint are untouched, and the next real tick still counts", async () => {
   const { facet, tick, snapshot } = await projectWithTally(
     "forged-loaded@example.com",
     "forged-loaded",
   );
   const before = await snapshot();
-  expect(before.state.ticks).toBe(1);
+  expect(before).toMatchObject({ state: { ticks: 1 } });
   const forgedThrough = before.offset + FORGED_RANGE_LENGTH;
   const forgedTicks = [1, 2, 3, 4, 5].map((n) =>
     forgedEvent(before.offset + n, "events.iterate.com/test/tick", {}),
@@ -201,7 +156,7 @@ test("a project member pushes forged ticks into their own loaded processor's fac
   expect.soft(after.state.ticks).toBe(1);
   expect.soft(after.offset).toBeLessThan(forgedThrough);
   await tick();
-  expect((await snapshot()).state.ticks).toBe(2);
+  expect(await snapshot()).toMatchObject({ state: { ticks: 2 } });
 });
 
 test("a project member cannot drive their loaded processor's catch-up or revive: both are the platform's to schedule, and neither answers a caller", async () => {
@@ -211,39 +166,6 @@ test("a project member cannot drive their loaded processor's catch-up or revive:
 });
 
 // ── the `secret` facet: only `itx.secrets` writes it ──
-
-/** A project with `/secrets/hook` set through `itx.secrets.set`, and what a caller reaches: the
- *  secret's facet directly, and whether a key verifies as the stored value. */
-async function projectWithSecret(email: string, slug: string) {
-  const session = await signedInSession(email);
-  const project = await session.projects.create({ project: slug });
-  await project.invoke([
-    "itx",
-    "secrets",
-    ["set", "/secrets/hook", "original-key", { urls: ["https://api.example.test"] }],
-  ]);
-  const verifies = async (key: string, secretPath = "/secrets/hook", field?: string) =>
-    project.invoke([
-      "itx",
-      "secrets",
-      [
-        "verifyHmac",
-        secretPath,
-        {
-          payload: "a webhook body",
-          signature: await hmacSha256Hex(key, "a webhook body"),
-          field,
-        },
-      ],
-    ]) as Promise<boolean>;
-  expect(await verifies("original-key")).toBe(true);
-  return {
-    project,
-    secretFacet: (call: unknown[]) =>
-      project.cd("/secrets/hook").invoke(["itx", "facets", ["get", "secret"], call]),
-    verifies,
-  };
-}
 
 test("a project member writes the `secret` facet directly: refused, and the value `itx.secrets.set` stored is the one that still verifies", async () => {
   const { secretFacet, verifies } = await projectWithSecret(
@@ -371,3 +293,77 @@ test("the operator's secret export takes the admin credential only over native R
     ),
   ).toBe("refused");
 });
+
+/** What a direct call came to: it answered, or it was refused (whatever refused it). */
+async function attempted(call: () => Promise<unknown>): Promise<"answered" | "refused"> {
+  try {
+    await call();
+    return "answered";
+  } catch {
+    return "refused";
+  }
+}
+
+/** A committed-looking event no log ever held, at `offset`. */
+function forgedEvent(offset: number, type: string, payload: unknown) {
+  return { offset, type, payload, path: "/", createdAt: new Date().toISOString() };
+}
+
+/** A project with the tally processor enabled at `/tally` and one real tick reduced. */
+async function projectWithTally(email: string, slug: string) {
+  const session = await signedInSession(email);
+  const project = await session.projects.create({ project: slug });
+  const tally = project.cd("/tally");
+  await tally.invoke([
+    "itx",
+    "processors",
+    ["enable", "tally", { source: TALLY_SOURCE, className: "TallyDurableObject" }],
+  ]);
+  const facet = (call: unknown[]) => tally.invoke(["itx", "facets", ["get", "tally"], call]);
+  const tick = async () => {
+    const [appended] = (await tally.invoke([
+      "itx",
+      ["append", { type: "events.iterate.com/test/tick" }],
+    ])) as { offset: number }[];
+    await facet(["waitUntilProcessed", { offset: appended!.offset }]);
+  };
+  await tick();
+  return {
+    facet,
+    tick,
+    snapshot: () => facet(["snapshot"]) as Promise<Snapshot<{ ticks: number }>>,
+  };
+}
+
+/** A project with `/secrets/hook` set through `itx.secrets.set`, and what a caller reaches: the
+ *  secret's facet directly, and whether a key verifies as the stored value. */
+async function projectWithSecret(email: string, slug: string) {
+  const session = await signedInSession(email);
+  const project = await session.projects.create({ project: slug });
+  await project.invoke([
+    "itx",
+    "secrets",
+    ["set", "/secrets/hook", "original-key", { urls: ["https://api.example.test"] }],
+  ]);
+  const verifies = async (key: string, secretPath = "/secrets/hook", field?: string) =>
+    project.invoke([
+      "itx",
+      "secrets",
+      [
+        "verifyHmac",
+        secretPath,
+        {
+          payload: "a webhook body",
+          signature: await hmacSha256Hex(key, "a webhook body"),
+          field,
+        },
+      ],
+    ]) as Promise<boolean>;
+  expect(await verifies("original-key")).toBe(true);
+  return {
+    project,
+    secretFacet: (call: unknown[]) =>
+      project.cd("/secrets/hook").invoke(["itx", "facets", ["get", "secret"], call]),
+    verifies,
+  };
+}

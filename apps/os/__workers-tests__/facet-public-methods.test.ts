@@ -114,20 +114,6 @@ const FACET_PUBLIC_METHOD_ROWS: FacetPublicMethodRow[] = [
   { facet: "plain Durable Object", method: "fetch", byExpression: "FORBIDDEN" },
 ];
 
-/** What a call by expression came to: refused by the list, or anything else — an answer, or the
- *  facet's own failure. */
-async function byExpression(call: () => Promise<unknown>): Promise<string> {
-  try {
-    await call();
-    return "reaches the facet";
-  } catch (error) {
-    const refusedByTheList =
-      errorCode(error) === "FORBIDDEN" &&
-      /is not one of its public methods/.test(error instanceof Error ? error.message : "");
-    return refusedByTheList ? "FORBIDDEN" : "reaches the facet";
-  }
-}
-
 test("a signed-in person calls each facet by itx expression: what its class lists reaches the facet, and everything else is refused FORBIDDEN", async () => {
   const session = await signedInSession("facet-public-methods@example.com");
   const organization = (await session.organizations.create({ name: "public methods org" })) as {
@@ -173,3 +159,17 @@ test("a signed-in person calls each facet by itx expression: what its class list
     });
   expect(outcomes).toEqual(FACET_PUBLIC_METHOD_ROWS);
 });
+
+/** What a call by expression came to: refused by the list, or anything else — an answer, or the
+ *  facet's own failure. */
+async function byExpression(call: () => Promise<unknown>): Promise<string> {
+  try {
+    await call();
+    return "reaches the facet";
+  } catch (error) {
+    const refusedByTheList =
+      errorCode(error) === "FORBIDDEN" &&
+      /is not one of its public methods/.test(error instanceof Error ? error.message : "");
+    return refusedByTheList ? "FORBIDDEN" : "reaches the facet";
+  }
+}

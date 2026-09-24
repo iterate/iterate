@@ -34,14 +34,14 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
       };
     },
   );
-  expect(seen.entryKind).toBe("LoopbackDurableObjectNamespace");
-  expect(seen.classKind).toBe("DurableObjectClass");
-  expect(seen.snapshot.state).toEqual({
-    creation: null,
-    repos: {},
-    workspaces: {},
-    secrets: {},
-    configRepoTip: null,
+  // Exact: the empty view is the point, so an extra key or a non-empty map must fail.
+  expect(seen).toEqual({
+    entryKind: "LoopbackDurableObjectNamespace",
+    classKind: "DurableObjectClass",
+    snapshot: {
+      offset: expect.any(Number),
+      state: { creation: null, repos: {}, workspaces: {}, secrets: {}, configRepoTip: null },
+    },
   });
 });
 

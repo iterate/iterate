@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { appSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { platformAddressesOf } from "../src/app-config.ts";
@@ -9,34 +9,8 @@ import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import { adminSession, controlPlaneStub, ORIGIN } from "./support.ts";
-const sessions: Disposable[] = [];
-beforeEach(() => {
-  // DNS transport only. Provider metadata, PKCE, exchange, storage and API are real.
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    exports.default.fetch(new Request(input, init)),
-  );
-});
-afterEach(() => {
-  for (const session of sessions.splice(0)) session[Symbol.dispose]();
-  vi.restoreAllMocks();
-});
-async function connect(headers: Record<string, string>) {
-  const response = await exports.default.fetch(`${ORIGIN}/api`, {
-    headers: { ...headers, Upgrade: "websocket" },
-  });
-  expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
-  response.webSocket!.accept();
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  sessions.push(transport);
-  return transport.authenticate({ type: "from-server-cookie" });
-}
-/** The person `email` names, found or created by the control plane — what an issuer session is
- *  started for (the sign-in's own find-or-create). */
-const person = async (email: string) => (await operator()).users.create({ email });
-
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
+  fetchReachesThisWorker();
   const user = await controlPlaneStub().linkIdentity({
     provider: "google",
     subject: "1357924680",
@@ -62,11 +36,11 @@ test("first consent creates organization and project through the ordinary sessio
   // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
   const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
   const login = await startIssuerSession(env, new Request(ORIGIN), user, next, { picture });
-  expect(login.location).toBe(next);
+  expect(login).toMatchObject({ location: next });
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
   const api = await connect(headers);
-  expect((await api.info()).principal).toEqual({ actor: user.id, email: user.email });
+  expect(await api.info()).toMatchObject({ principal: { actor: user.id, email: user.email } });
   expect(await api.organizations.list()).toEqual([]);
   expect(await api.projects.list()).toEqual([]);
   expect(await api.consent.describe(flow.url.search)).toMatchObject({
@@ -125,7 +99,7 @@ test("first consent creates organization and project through the ordinary sessio
       resource: `${ORIGIN}/mcp`,
     }),
   });
-  expect(exchange.status, await exchange.clone().text()).toBe(200);
+  expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
   const tokens = await exchange.json<{ access_token: string }>();
   expect(tokens.access_token.split(":")[0]).toBe(user.id);
   // The one MCP tool is `run`. The grant reaches the CONSENTED project and no other, proven at the
@@ -147,7 +121,7 @@ test("first consent creates organization and project through the ordinary sessio
       }),
     });
   const selected = await runTool(projectId);
-  expect(selected.status).toBe(200);
+  expect(selected).toMatchObject({ status: 200 });
   const selectedBody = await selected.text();
   expect(selectedBody).toContain(projectId);
   const unselectedBody = await (await runTool(excludedId)).text();
@@ -169,14 +143,15 @@ test("first consent creates organization and project through the ordinary sessio
     /session has ended/,
   );
   expect(
-    (await exports.default.fetch(`${ORIGIN}/api`, { method: "POST", body: "", headers })).status,
-  ).toBe(401);
+    await exports.default.fetch(`${ORIGIN}/api`, { method: "POST", body: "", headers }),
+  ).toMatchObject({ status: 401 });
   expect(
     await appSession(env.BROWSER_SESSION, new Request(ORIGIN, { headers }))!.bearer(),
   ).toBeNull();
 });
 
 test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
+  fetchReachesThisWorker();
   const user = await person("copied-client@example.com");
   const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
@@ -201,10 +176,10 @@ test("copied issuer client metadata and every scope confer app permissions but n
       resource: `${ORIGIN}/api`,
     }),
   });
-  expect(exchange.status, await exchange.clone().text()).toBe(200);
+  expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
   const token = await exchange.json<{ access_token: string }>();
   const app = await connect({ Authorization: `Bearer ${token.access_token}` });
-  expect((await app.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
+  expect(await app.info()).toMatchObject({ scopes: ["iterate", "account", "organizations:write"] });
   expect((await app.grants.list()).items).toHaveLength(2);
   const org = await app.organizations.create({ name: "Clone organization" });
   expect((await app.organizations.list()).map((org) => org.id)).toContain(org.id);
@@ -215,9 +190,10 @@ test("copied issuer client metadata and every scope confer app permissions but n
 });
 
 test("a browser landing on the platform ORIGIN is told it is headless and where the dash is", async () => {
+  fetchReachesThisWorker();
   // rendered from the configuration (wrangler.test.jsonc), never a file's hostnames
   const page = await exports.default.fetch(`${ORIGIN}/`);
-  expect(page.status).toBe(200);
+  expect(page).toMatchObject({ status: 200 });
   expect(page.headers.get("content-type")).toContain("text/html");
   expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   const html = await page.text();
@@ -230,8 +206,9 @@ test("a browser landing on the platform ORIGIN is told it is headless and where 
 });
 
 test("the setup prompt an agent follows is served beside the pages, and the landing page points at it", async () => {
+  fetchReachesThisWorker();
   const prompt = await exports.default.fetch(`${ORIGIN}/setup-prompt.md`);
-  expect(prompt.status).toBe(200);
+  expect(prompt).toMatchObject({ status: 200 });
   expect(prompt.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
   const text = await prompt.text();
   expect(text).toContain("CLOUDFLARE_ENV=self-host pnpm --filter os build");
@@ -243,6 +220,7 @@ test("the setup prompt an agent follows is served beside the pages, and the land
 });
 
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
+  fetchReachesThisWorker();
   const user = await person("custom-apex@example.com");
   const theirs = await operator(user.email);
   using apexProject = await theirs.projects.create({ project: "custom-apex-project" });
@@ -258,7 +236,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
   });
   const view = await issuer.consent.describe(flow.url.search);
   if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
-  expect(view.projectBound).toBe(true);
+  expect(view).toMatchObject({ projectBound: true });
   // the apex map names the project by slug; the view's row carries the id a ticked box submits
   expect(view.projects.map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: apexProjectId, slug: "custom-apex-project" },
@@ -266,6 +244,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
 });
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
+  fetchReachesThisWorker();
   const user = await person("ticked-scopes@example.com");
   const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
@@ -299,13 +278,13 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
         resource: `${ORIGIN}/api`,
       }),
     });
-    expect(exchange.status, await exchange.clone().text()).toBe(200);
+    expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
     const token = await exchange.json<{ access_token: string }>();
     return connect({ Authorization: `Bearer ${token.access_token}` });
   }
   // account and organizations:write unticked — and a scope the request never asked for is no scope
   const narrow = await grant(["iterate", "made-up"]);
-  expect((await narrow.info()).scopes).toEqual(["iterate"]);
+  expect(await narrow.info()).toMatchObject({ scopes: ["iterate"] });
   await expect(narrow.organizations.create({ name: "Refused organization" })).rejects.toThrow(
     /organizations:write/,
   );
@@ -315,7 +294,9 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
   // every scope ticked: the grant is narrowed to one project and still creates an organization —
   // and, holding organizations:write, lists every organization of the person, the new one included
   const full = await grant(["iterate", "account", "organizations:write"]);
-  expect((await full.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
+  expect(await full.info()).toMatchObject({
+    scopes: ["iterate", "account", "organizations:write"],
+  });
   const created = await full.organizations.create({ name: "Created by a project-narrowed grant" });
   expect((await issuer.organizations.list()).map((candidate) => candidate.id)).toContain(
     created.id,
@@ -324,18 +305,19 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
   // `organizations.get` is narrowed exactly as `list()` is: the project-bound grant without
   // organizations:write opens its project's organization and no other of the person's
   using narrowOwn = await narrow.organizations.get(org.id);
-  expect((await narrowOwn.whoami()).path).toBe(`/organizations/${org.id}`);
+  expect(await narrowOwn.whoami()).toMatchObject({ path: `/organizations/${org.id}` });
   await expect(narrow.organizations.get(created.id)).rejects.toThrow(
     /not an organization this session belongs to/,
   );
   using fullOther = await full.organizations.get(created.id);
-  expect((await fullOther.whoami()).path).toBe(`/organizations/${created.id}`);
+  expect(await fullOther.whoami()).toMatchObject({ path: `/organizations/${created.id}` });
   expect((await full.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: projectId, slug: "ticked-scopes-project" },
   ]);
 });
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
+  fetchReachesThisWorker();
   const user = await person("consent-checks@example.com");
   const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
@@ -348,10 +330,9 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   });
   flow.url.searchParams.delete("scope");
   const view = await api.consent.describe(flow.url.search);
-  expect(view.kind).toBe("consent");
+  expect(view).toMatchObject({ kind: "consent" });
   if (view.kind !== "consent") throw new Error("Expected consent");
-  expect(view.scopes.map((scope) => scope.name)).toEqual(["iterate"]);
-  expect(view.scopes[0]!.required).toBe(true);
+  expect(view).toMatchObject({ scopes: [{ name: "iterate", required: true }] });
   const cancel = new URL(view.denyLocation);
   expect(cancel.searchParams.get("error")).toBe("access_denied");
   expect(cancel.searchParams.get("state")).toBe(flow.state);
@@ -363,7 +344,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   flow.url.searchParams.delete("code_challenge");
   flow.url.searchParams.delete("code_challenge_method");
   const invalid = await api.consent.describe(flow.url.search);
-  expect(invalid.kind).toBe("redirect");
+  expect(invalid).toMatchObject({ kind: "redirect" });
   if (invalid.kind !== "redirect") throw new Error("Expected validated redirect");
   expect(new URL(invalid.location).searchParams.get("error_description")).toMatch(/must use PKCE/);
   // Without the issuer's session, the page and its Authorize form both send the browser to sign
@@ -373,20 +354,20 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   const page = await exports.default.fetch(`${ORIGIN}/oauth2/auth${flow.url.search}`, {
     redirect: "manual",
   });
-  expect(page.status).toBe(307);
+  expect(page).toMatchObject({ status: 307 });
   expect(page.headers.get("location")).toBe(signIn);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
   expect(await exports.default.fetch(`${ORIGIN}/capnweb.js`)).toMatchObject({ status: 404 });
   const sibling = await exports.default.fetch(`${ORIGIN}/authorize.json`, { redirect: "manual" });
-  expect(sibling.status).toBe(404);
+  expect(sibling).toMatchObject({ status: 404 });
   const post = await exports.default.fetch(`${ORIGIN}/oauth2/auth${flow.url.search}`, {
     method: "POST",
     headers: { Origin: ORIGIN },
     body: new FormData(),
     redirect: "manual",
   });
-  expect(post.status).toBe(303);
+  expect(post).toMatchObject({ status: 303 });
   expect(post.headers.get("location")).toBe(signIn);
   // Force the client to refresh through the real public token endpoint.
   const session = appSession(env.BROWSER_SESSION, new Request(ORIGIN, { headers }))!;
@@ -399,12 +380,12 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(refreshed).not.toBe(before);
   expect(await session.scopes()).toEqual(["iterate", "account", "organizations:write"]);
   expect(
-    (await connect({ Authorization: `Bearer ${refreshed}` }).then((api) => api.info())).principal
-      .actor,
-  ).toBe(user.id);
+    await connect({ Authorization: `Bearer ${refreshed}` }).then((api) => api.info()),
+  ).toMatchObject({ principal: { actor: user.id } });
 });
 
 test("consent omits missing, insecure and credential-bearing branding URLs", async () => {
+  fetchReachesThisWorker();
   const user = await (await operator()).users.create({ email: "branding-urls@example.com" });
   const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
@@ -433,13 +414,14 @@ test("consent omits missing, insecure and credential-bearing branding URLs", asy
       resources: [`${ORIGIN}/api`],
     });
     const view = await issuer.consent.describe(flow.url.search);
-    expect(view.kind).toBe("consent");
+    expect(view).toMatchObject({ kind: "consent" });
     expect(view.kind === "consent" && view.clientLogoUri).toBeUndefined();
     expect(view.kind === "consent" && view.clientDomain).toBeUndefined();
   }
 });
 
 test("CIMD consent shows the metadata host even when the client declares a different website", async () => {
+  fetchReachesThisWorker();
   const clientId = "https://metadata.example/oauth/client.json";
   vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
     const request = new Request(input, init);
@@ -473,6 +455,7 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
 });
 
 test("the consent page renders on the server, and Authorize posts the choice to the exact authorization URL", async () => {
+  fetchReachesThisWorker();
   const user = await controlPlaneStub().createUser({ email: "consent-page@example.com" });
   const project = await controlPlaneStub().createProject(
     { principal: { actor: user.id, email: user.email } },
@@ -494,7 +477,7 @@ test("the consent page renders on the server, and Authorize posts the choice to 
     headers: { Cookie: cookie },
     redirect: "manual",
   });
-  expect(page.status, page.headers.get("location") ?? "").toBe(200);
+  expect(page, page.headers.get("location") ?? "").toMatchObject({ status: 200 });
   const html = await page.text();
   expect(html).toContain("wants to access your account");
   expect(html).toContain("consent-page@example.com");
@@ -510,14 +493,14 @@ test("the consent page renders on the server, and Authorize posts the choice to 
     body: approval,
     redirect: "manual",
   });
-  expect(crossSite.status).toBe(403);
+  expect(crossSite).toMatchObject({ status: 403 });
   const approved = await exports.default.fetch(flow.url.href, {
     method: "POST",
     headers: { Cookie: cookie, Origin: ORIGIN },
     body: approval,
     redirect: "manual",
   });
-  expect(approved.status).toBe(303);
+  expect(approved).toMatchObject({ status: 303 });
   const callback = new URL(approved.headers.get("location")!);
   expect(callback.origin + callback.pathname).toBe(`${ORIGIN}/.auth/callback`);
   expect(callback.searchParams.get("state")).toBe(state);
@@ -535,11 +518,54 @@ test("the consent page renders on the server, and Authorize posts the choice to 
       resource: `${ORIGIN}/api`,
     }),
   });
-  expect(exchange.status, await exchange.clone().text()).toBe(200);
+  expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
   const token = await exchange.json<{ access_token: string }>();
   const app = await connect({ Authorization: `Bearer ${token.access_token}` });
-  expect((await app.info()).scopes).toEqual(["iterate"]);
+  expect(await app.info()).toMatchObject({ scopes: ["iterate"] });
   expect((await app.projects.list()).map((listed) => listed.id)).toEqual([project.id]);
 });
 
-const operator = (email?: string) => adminSession(sessions, email);
+/** An admin session — `as` the person `email` names, when given — disposed when the test finishes. */
+function operator(email?: string) {
+  const sessions: Disposable[] = [];
+  onTestFinished(() => {
+    for (const session of sessions) session[Symbol.dispose]();
+  });
+  return adminSession(sessions, email);
+}
+
+/** `fetch` reaches this worker until the test finishes — DNS transport only. Provider metadata,
+ *  PKCE, exchange, storage and API are real. */
+function fetchReachesThisWorker() {
+  const spy = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
+  onTestFinished(() => {
+    spy.mockRestore();
+  });
+}
+
+/** A session on `/api` with `headers` on the upgrade, authenticated from them; disposed when the
+ *  test finishes. */
+async function connect(headers: Record<string, string>) {
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { ...headers, Upgrade: "websocket" },
+  });
+  expect(response, response.status === 101 ? "" : await response.text()).toMatchObject({
+    status: 101,
+  });
+  response.webSocket!.accept();
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  onTestFinished(() => {
+    transport[Symbol.dispose]();
+  });
+  return transport.authenticate({ type: "from-server-cookie" });
+}
+
+/** The person `email` names, found or created by the control plane — what an issuer session is
+ *  started for (the sign-in's own find-or-create). */
+async function person(email: string) {
+  return (await operator()).users.create({ email });
+}

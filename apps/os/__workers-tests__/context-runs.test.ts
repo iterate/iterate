@@ -14,17 +14,6 @@ import { adminCredentials, openSession, releasePins, stub, until } from "./suppo
 const PROJECT = "prj_context_runs";
 const ROOT = `${PROJECT}.iterate/`;
 
-const read = async (ctx: string): Promise<StreamEvent[]> =>
-  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events;
-const runEvents = async (ctx: string) =>
-  (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/context/run-"));
-const openScriptRuns = async (ctx: string) =>
-  (
-    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
-      state: { scriptRuns: Record<string, unknown> };
-    }
-  ).state.scriptRuns;
-
 test("itx.run: the request lands first, stamped with the caller; the runner settles it naming the request's offset; the caller gets the result — one pair of events per run, on the context it ran against", async () => {
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(PROJECT);
   expect(await itx.run("async (itx) => { await itx.kv.put('n', '7'); return { n: 7 } }")).toEqual({
@@ -38,9 +27,11 @@ test("itx.run: the request lands first, stamped with the caller; the runner sett
   const [requested, settled] = pair as [StreamEvent, StreamEvent];
   expect(requested.source?.principal).toEqual({ actor: "admin" }); // who asked
   expect(settled.source?.principal).toBeUndefined(); // the context's own record
-  expect(settled.payload).toEqual({
-    requestOffset: requested.offset,
-    settlement: { status: "succeeded", result: { n: 7 } },
+  expect(settled).toMatchObject({
+    payload: {
+      requestOffset: requested.offset,
+      settlement: { status: "succeeded", result: { n: 7 } },
+    },
   });
   expect(await itx.kv.get("n")).toBe("7"); // it ran against this context
   // a throwing script: the rejection IS the settlement's error, and the log says so
@@ -50,6 +41,7 @@ test("itx.run: the request lands first, stamped with the caller; the runner sett
   });
   // a value JSON cannot carry: the round trip drops it (no result), never a phantom
   expect(await itx.run("async () => undefined")).toBeUndefined();
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a phantom `result` key must fail
   expect((await runEvents(ROOT)).at(-1)!.payload).toEqual({
     requestOffset: expect.any(Number),
     settlement: { status: "succeeded" },
@@ -75,13 +67,11 @@ test("a LITERAL run-requested appended by a Workers-RPC caller runs exactly as i
           e.type === "events.iterate.com/context/run-settled" &&
           (e.payload as { requestOffset: number }).requestOffset === requestOffset,
       );
-  expect((await until("the first is settled", () => settledFor(first.offset))).payload).toEqual({
-    requestOffset: first.offset,
-    settlement: { status: "succeeded", result: "/" },
+  expect(await until("the first is settled", () => settledFor(first.offset))).toMatchObject({
+    payload: { requestOffset: first.offset, settlement: { status: "succeeded", result: "/" } },
   });
-  expect((await until("the second is settled", () => settledFor(second.offset))).payload).toEqual({
-    requestOffset: second.offset,
-    settlement: { status: "succeeded", result: 2 },
+  expect(await until("the second is settled", () => settledFor(second.offset))).toMatchObject({
+    payload: { requestOffset: second.offset, settlement: { status: "succeeded", result: 2 } },
   });
   expect(await openScriptRuns(ROOT)).toEqual({});
 });
@@ -119,9 +109,9 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   });
   // the SAME batch as the wake record: right behind it
   const log = await read(ROOT);
-  expect(log.find((e) => e.offset === after[1]!.offset - 1)!.type).toBe(
-    "events.iterate.com/stream/woken",
-  );
+  expect(log.find((e) => e.offset === after[1]!.offset - 1)).toMatchObject({
+    type: "events.iterate.com/stream/woken",
+  });
   await new Promise((r) => setTimeout(r, 500));
   expect(await itx.kv.get("starts")).toBe("1"); // not run again
   expect(await openScriptRuns(ROOT)).toEqual({});
@@ -149,6 +139,7 @@ test.for([
         (e) => (e.payload as { requestOffset?: number }).requestOffset === requested.offset,
       ),
     );
+    // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a released live value leaves no key behind (`{ n: 1 }`, no `f`; no `result` at all)
     expect(settled.payload).toEqual({
       requestOffset: requested.offset,
       settlement: { status: "succeeded", result },
@@ -173,3 +164,20 @@ test("a script's hop to a sibling context carries the platform origin: `itx.cd(p
   expect(urls.here).toMatch(/^https:\/\/[a-z0-9-]+\.projects\.test\/$/);
   expect(urls.sibling).toMatch(/^https:\/\/site--[a-z0-9-]+\.projects\.test\/$/);
 });
+
+async function read(ctx: string): Promise<StreamEvent[]> {
+  return ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] })
+    .events;
+}
+
+async function runEvents(ctx: string) {
+  return (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/context/run-"));
+}
+
+async function openScriptRuns(ctx: string) {
+  return (
+    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
+      state: { scriptRuns: Record<string, unknown> };
+    }
+  ).state.scriptRuns;
+}

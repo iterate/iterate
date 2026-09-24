@@ -28,48 +28,20 @@ import {
 } from "../src/context/rpc-stubs.ts";
 import { adminCredentials, Echo, openSession, SRC_ECHO_APP, stub, until } from "./support.ts";
 
-/** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):
- *  the header IS the attach request — the key and the events that name it. */
-const openPager = (ctx: string, rpcStubKey: string, appendEvents: StreamEventInput[] = []) =>
-  stub(ctx).fetch("https://rpc-stub-pager.internal/", {
-    headers: {
-      Upgrade: "websocket",
-      [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
-        rpcStubKey,
-        appendEvents,
-      }),
-    },
-  });
-
-const ruleFor = (rpcStubKey: string): StreamEventInput => ({
-  type: "events.iterate.com/itx/rewrite-rule-configured",
-  payload: { match: rpcStubKey, target: ["itx", "rpcStubs", ["get", rpcStubKey]] },
-});
-
-const transportState = async (ctx: string) =>
-  (await stub(ctx).rpcStubTransportState()) as unknown as {
-    rpcStubPagers: number;
-    rpcStubPagesInFlight: number;
-  };
-const presence = (ctx: string) =>
-  stub(ctx).invoke(["itx", "rpcStubs", ["list"]]) as Promise<string[]>;
-const ruleAt = (ctx: string, match: string) =>
-  stub(ctx).invoke(["itx", "rewriteRules", ["get", match]]) as Promise<{ target: string } | null>;
-
 test("a malformed pager header is a 400; a well-formed one attaches the pager AND appends the rule that names its key — one request", async () => {
   const ctx = "prj_pager_attach";
   const malformed = await stub(ctx).fetch("https://rpc-stub-pager.internal/", {
     headers: { Upgrade: "websocket", [RPC_STUB_PAGER_WEBSOCKET_HEADER]: "never-an-attach-request" },
   });
-  expect(malformed.status).toBe(400);
+  expect(malformed).toMatchObject({ status: 400 });
   expect(await malformed.text()).toContain("malformed x-itx-rpc-stub-pager header");
-  expect((await transportState(ctx)).rpcStubPagers).toBe(0);
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 0 });
 
   const ok = await openPager(ctx, "itx.k1", [ruleFor("itx.k1")]);
-  expect(ok.status).toBe(101);
+  expect(ok).toMatchObject({ status: 101 });
   ok.webSocket!.accept();
   // The pager is attached, the key is present, and its rule exists — nothing else was called.
-  expect((await transportState(ctx)).rpcStubPagers).toBe(1);
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
   expect(await presence(ctx)).toEqual(["itx.k1"]);
   expect(await ruleAt(ctx, "itx.k1")).toMatchObject({
     match: "itx.k1",
@@ -147,21 +119,21 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
   await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
 
   const refused = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
-  expect(refused.status).toBe(409);
+  expect(refused).toMatchObject({ status: 409 });
   expect(refused.webSocket).toBeNull();
   const body = (await refused.json()) as { code: string | null; message: string };
-  expect(body.code).toBe("STREAM_PAUSED");
+  expect(body).toMatchObject({ code: "STREAM_PAUSED" });
   expect(body.message).toContain("stream paused");
   // Nothing happened: accept and append share one synchronous turn, so a refusal un-accepts.
-  expect((await transportState(ctx)).rpcStubPagers).toBe(0);
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 0 });
   expect(await presence(ctx)).toEqual([]);
   expect(await ruleAt(ctx, "itx.k2")).toBeNull();
 
   await s.append({ type: "events.iterate.com/stream/resumed" });
   const ok = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
-  expect(ok.status).toBe(101);
+  expect(ok).toMatchObject({ status: 101 });
   ok.webSocket!.accept();
-  expect((await transportState(ctx)).rpcStubPagers).toBe(1);
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
   expect(await presence(ctx)).toEqual(["itx.k2"]);
   expect((await ruleAt(ctx, "itx.k2"))?.target).toBe("itx.rpcStubs.get('itx.k2')");
   ok.webSocket!.close(1000, "test done");
@@ -182,7 +154,7 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   const ctx = "prj_pager_pause_unset";
   const s = stub(ctx);
   const pager = await openPager(ctx, "itx.k5", [ruleFor("itx.k5")]);
-  expect(pager.status).toBe(101);
+  expect(pager).toMatchObject({ status: 101 });
   pager.webSocket!.accept();
   expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.rpcStubs.get('itx.k5')");
 
@@ -211,7 +183,7 @@ test("the append door REFUSES a rule match rooted at itx.builtins (the reserved 
   });
   // and a real rule's own un-set sweep is untouched: the pager's last close un-sets itx.k7's row.
   const pager = await openPager(ctx, "itx.k7", [ruleFor("itx.k7")]);
-  expect(pager.status).toBe(101);
+  expect(pager).toMatchObject({ status: 101 });
   pager.webSocket!.accept();
   expect((await ruleAt(ctx, "itx.k7"))?.target).toBe("itx.rpcStubs.get('itx.k7')");
   pager.webSocket!.close(1000, "last pager");
@@ -219,18 +191,6 @@ test("the append door REFUSES a rule match rooted at itx.builtins (the reserved 
 });
 
 // ── a replaced pager is a reconnect, not a close ──
-
-/** What a relay lends: the `invoke(steps)` half of a BorrowedRpcStub, tagged. */
-class LentAnswer extends RpcTarget {
-  readonly #tag: string;
-  constructor(tag: string) {
-    super();
-    this.#tag = tag;
-  }
-  async invoke(itxExpressionSteps: unknown[]): Promise<string> {
-    return `${this.#tag}:${JSON.stringify(itxExpressionSteps)}`;
-  }
-}
 
 test("a pager RECONNECT while a page is in flight is a reconnect, not a close: the page (per KEY, not per socket) survives the swap and the new pager's lend answers it", async () => {
   const ctx = "prj_pager_reconnect_midpage";
@@ -255,7 +215,7 @@ test("a pager RECONNECT while a page is in flight is a reconnect, not a close: t
   ]) as Promise<unknown>;
   call.catch(() => undefined); // settled by the assertion below, never an unhandled rejection
   await until("the page reached pager #1", () => pagesSeenByFirstPager > 0);
-  expect((await transportState(ctx)).rpcStubPagesInFlight).toBe(1);
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagesInFlight: 1 });
 
   // THE RECONNECT: the client re-provides at the same key from a fresh relay. Its pager attaches
   // (the DO drops pager #1 as "replaced") and it answers pages with a lend, like any relay.
@@ -275,3 +235,53 @@ test("a pager RECONNECT while a page is in flight is a reconnect, not a close: t
     second.webSocket!.close(1000, "test done");
   }
 });
+
+/** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):
+ *  the header IS the attach request — the key and the events that name it. */
+function openPager(ctx: string, rpcStubKey: string, appendEvents: StreamEventInput[] = []) {
+  return stub(ctx).fetch("https://rpc-stub-pager.internal/", {
+    headers: {
+      Upgrade: "websocket",
+      [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
+        rpcStubKey,
+        appendEvents,
+      }),
+    },
+  });
+}
+
+function ruleFor(rpcStubKey: string): StreamEventInput {
+  return {
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: rpcStubKey, target: ["itx", "rpcStubs", ["get", rpcStubKey]] },
+  };
+}
+
+async function transportState(ctx: string) {
+  return (await stub(ctx).rpcStubTransportState()) as unknown as {
+    rpcStubPagers: number;
+    rpcStubPagesInFlight: number;
+  };
+}
+
+function presence(ctx: string) {
+  return stub(ctx).invoke(["itx", "rpcStubs", ["list"]]) as Promise<string[]>;
+}
+
+function ruleAt(ctx: string, match: string) {
+  return stub(ctx).invoke(["itx", "rewriteRules", ["get", match]]) as Promise<{
+    target: string;
+  } | null>;
+}
+
+/** What a relay lends: the `invoke(steps)` half of a BorrowedRpcStub, tagged. */
+class LentAnswer extends RpcTarget {
+  readonly #tag: string;
+  constructor(tag: string) {
+    super();
+    this.#tag = tag;
+  }
+  async invoke(itxExpressionSteps: unknown[]): Promise<string> {
+    return `${this.#tag}:${JSON.stringify(itxExpressionSteps)}`;
+  }
+}

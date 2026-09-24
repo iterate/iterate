@@ -39,19 +39,6 @@ export class AppFacetDurableObject extends FacetDurableObject {
 `;
 const APP_FACET_SPEC = { source: { "cap.js": SRC_APP_FACET }, className: "AppFacetDurableObject" };
 
-/** The project in the directory, its root context on the admin session, and the app provided at
- *  `itx.apps.app` — the rewrite rule whose target is the hosting spelling. */
-async function projectWithAppFacet(project: string) {
-  const itx = await (
-    await openSession()
-  )
-    .authenticate(adminCredentials())
-    .projects.create({ project });
-  await itx.provide("itx.apps.app", ["itx", "facets", ["get", "app", APP_FACET_SPEC]]);
-  const { projectId } = (await itx.invoke("itx.whoami()")) as { projectId: string };
-  return { ctx: projectId, host: `https://app--${project}.projects.test` };
-}
-
 test("a project host reaches a facet-hosted app over plain HTTP and RPC; a WebSocket upgrade on it is refused (400, FACET_NO_UPGRADE) and materializes nothing", async () => {
   const { ctx, host } = await projectWithAppFacet("facet-app");
 
@@ -59,13 +46,12 @@ test("a project host reaches a facet-hosted app over plain HTTP and RPC; a WebSo
   const upgrade = await exports.default.fetch(`${host}/live`, {
     headers: { Upgrade: "websocket" },
   });
-  expect(upgrade.status).toBe(400);
-  expect(upgrade.webSocket).toBeNull();
+  expect(upgrade).toMatchObject({ status: 400, webSocket: null });
   expect(await upgrade.text()).toMatch(/never a WebSocket/);
 
   // Plain HTTP through the same route: the facet's own fetch answers.
   const page = await exports.default.fetch(`${host}/index`);
-  expect(page.status).toBe(200);
+  expect(page).toMatchObject({ status: 200 });
   expect(await page.json()).toEqual({ served: "plain-http", hits: 1, path: "/index" });
   // RPC through the itx expression: the same instance (the refused upgrade never reached it).
   expect(await stub(ctx).invoke("itx.facets.get('app').hits()")).toBe(1);
@@ -99,6 +85,19 @@ test("the DO's invoke method refuses the same upgrade, coded, on a facet it has 
     ["get", "app", APP_FACET_SPEC],
     ["fetch", new Request("https://facet.internal/page")],
   ])) as Response;
-  expect(plain.status).toBe(200);
+  expect(plain).toMatchObject({ status: 200 });
   expect(await plain.json()).toMatchObject({ served: "plain-http", path: "/page" });
 });
+
+/** The project in the directory, its root context on the admin session, and the app provided at
+ *  `itx.apps.app` — the rewrite rule whose target is the hosting spelling. */
+async function projectWithAppFacet(project: string) {
+  const itx = await (
+    await openSession()
+  )
+    .authenticate(adminCredentials())
+    .projects.create({ project });
+  await itx.provide("itx.apps.app", ["itx", "facets", ["get", "app", APP_FACET_SPEC]]);
+  const { projectId } = (await itx.invoke("itx.whoami()")) as { projectId: string };
+  return { ctx: projectId, host: `https://app--${project}.projects.test` };
+}

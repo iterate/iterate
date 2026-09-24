@@ -40,17 +40,6 @@ export default class Digest extends WorkerEntrypoint {
 }
 `,
 };
-type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: number };
-const page = async (ctx: string): Promise<Page> =>
-  (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
- *  the worker's modules, literally. */
-const hostedFacet = (source: Record<string, string>, cls: string, name: string): ItxExpression => [
-  "itx",
-  "facets",
-  ["get", name, { source, className: cls }],
-];
 
 test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor along in memory and persists nothing past the durable mark; after the release + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";
@@ -73,7 +62,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   };
   const p0 = await page(ctx);
   const highestDurableOffset = p0.events.at(-1)!.offset;
-  expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓
+  expect(row0).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset } }); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
   // An alarm pass, run directly (a caught-up cursor row and a live facet arm nothing, so there is
@@ -94,12 +83,12 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   };
   // What kv held through the eviction was the mark; the fresh incarnation's woken@mark+1 is a
   // durable commit `dig` does not consume, so the cursor moved along past it without a call.
-  expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset + 1);
+  expect(rowKv).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset + 1 } });
 
   await s.append({ type: "mark" }); // woken@mark+1 (the constructor's), mark@mark+2 — durable
   await sleep(600);
   const p1 = await page(ctx);
-  expect(p1.events.at(-1)!.offset).toBe(highestDurableOffset + 2);
+  expect(p1.events.at(-1)).toMatchObject({ offset: highestDurableOffset + 2 });
   const digested = JSON.parse(
     ((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]",
   ) as string[];
@@ -146,7 +135,7 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // ephemeral tail of 2
   const p0 = await page(ctx);
   const highestDurableOffset = p0.events.at(-1)!.offset;
-  expect(p0.events.at(-1)!.type).toBe("note");
+  expect(p0.events.at(-1)).toMatchObject({ type: "note" });
   await sleep(300);
   await releasePins(ctx); // abort the idle facet (checkpoint = tick offset, durable)
   // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → catchUpFromLog() → read(cursor) → [note], scannedThroughOffset = head
@@ -156,9 +145,9 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   };
   // n = created + woken + configured + tick + note: gap repair reads the unsent
   // birth records, the push reduces tick, and this wake reads note.
-  expect(mid.state.n).toBe(5);
-  expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only
-  expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head
+  // read() proves the durable log only, so the checkpoint the wake persisted is the mark, not the head.
+  expect(mid).toMatchObject({ state: { n: 5 }, offset: highestDurableOffset });
+  expect(p0).toMatchObject({ scannedThroughOffset: highestDurableOffset });
   await sleep(400);
   await releasePins(ctx);
   await evictDurableObject(s);
@@ -175,5 +164,20 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   };
   // the pushed tick@mark+2 is reduced exactly once, and the new incarnation's woken@mark+1 — a
   // durable event like any other, pushed to the "*" row — once → n grows by exactly 2.
-  expect(after.state.n).toBe(mid.state.n + 2);
+  expect(after).toMatchObject({ state: { n: mid.state.n + 2 } });
 });
+
+type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: number };
+async function page(ctx: string): Promise<Page> {
+  return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
+ *  the worker's modules, literally. */
+function hostedFacet(source: Record<string, string>, cls: string, name: string): ItxExpression {
+  return ["itx", "facets", ["get", name, { source, className: cls }]];
+}

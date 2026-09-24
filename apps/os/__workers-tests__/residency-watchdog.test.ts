@@ -4,39 +4,13 @@
 // the alarm on demand and evicts for a fresh incarnation. The deployed half — an armed watchdog delays
 // neither eviction nor hibernation, and a real pin is recorded — is e2e/context-watchdog.e2e.test.ts.
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import { RESIDENCY_WATCHDOG_WINDOW_MS as W } from "../src/context/residency-watchdog.ts";
 import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
 import { releasePins, stub } from "./support.ts";
 
 const HELD = "events.iterate.com/context/held-resident-while-idle";
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-const read = async (ctx: string, includeEphemeral = false): Promise<StreamEvent[]> =>
-  (
-    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral }]])) as {
-      events: StreamEvent[];
-    }
-  ).events;
-const alarmOf = (ctx: string): Promise<number | null> =>
-  runInDurableObject(stub(ctx), (_instance, state) => state.storage.getAlarm());
-const incarnationOf = (ctx: string): Promise<number> =>
-  runInDurableObject(stub(ctx), (_instance, state) =>
-    Number(
-      state.storage.sql.exec("SELECT value FROM stream_meta WHERE key = 'incarnation'").one().value,
-    ),
-  );
-
-/** A fresh context, Date frozen at `t0`, touched once — the call that arms the watchdog. */
-async function touchedAt(ctx: string, t0: number): Promise<void> {
-  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
-  await stub(ctx).invoke("itx.schedules.list()");
-}
 
 test("ARMED ONCE PER QUIET WINDOW: the first inbound call arms the alarm a window out; later calls write nothing", async () => {
   const ctx = "prj_wd_armed";
@@ -76,13 +50,16 @@ test("WORK IN FLIGHT DEFERS: a call still open at the deadline re-arms a window 
   expect(await runDurableObjectAlarm(stub(ctx))).toBe(true);
   expect(await alarmOf(ctx)).toBe(t0 + 2 * W);
   await stub(ctx).append({ type: "wd/release" });
-  expect((await waiting).type).toBe("wd/release");
+  expect(await waiting).toMatchObject({ type: "wd/release" });
   expect((await read(ctx)).filter((event) => event.type === HELD)).toEqual([]);
 });
 
 test("HELD, RECORDED ONCE: resident a whole window with nothing in flight appends one durable record and one warn line, and the incarnation is never armed again", async () => {
   const ctx = "prj_wd_held";
   const warn = vi.spyOn(console, "warn");
+  onTestFinished(() => {
+    warn.mockRestore();
+  });
   const t0 = Date.now();
   await touchedAt(ctx, t0);
   const incarnation = await incarnationOf(ctx);
@@ -166,3 +143,33 @@ test("A FRESH INCARNATION WITH NOTHING DURABLE LEAVES NO ALARM", async () => {
   expect(await runDurableObjectAlarm(stub(ctx))).toBe(true);
   expect(await alarmOf(ctx)).toBeNull();
 });
+
+/** A fresh context, Date frozen at `t0` until the test finishes, touched once — the call that arms
+ *  the watchdog. */
+async function touchedAt(ctx: string, t0: number): Promise<void> {
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  await stub(ctx).invoke("itx.schedules.list()");
+}
+
+async function read(ctx: string, includeEphemeral = false): Promise<StreamEvent[]> {
+  return (
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral }]])) as {
+      events: StreamEvent[];
+    }
+  ).events;
+}
+
+function alarmOf(ctx: string): Promise<number | null> {
+  return runInDurableObject(stub(ctx), (_instance, state) => state.storage.getAlarm());
+}
+
+function incarnationOf(ctx: string): Promise<number> {
+  return runInDurableObject(stub(ctx), (_instance, state) =>
+    Number(
+      state.storage.sql.exec("SELECT value FROM stream_meta WHERE key = 'incarnation'").one().value,
+    ),
+  );
+}

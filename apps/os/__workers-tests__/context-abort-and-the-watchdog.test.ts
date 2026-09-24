@@ -5,19 +5,18 @@
 // — and leave it working. Date is faked (as in residency-watchdog.test.ts) so the window passes in a
 // moment; the deployed rows are e2e/context-abort.e2e.test.ts.
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import { RESIDENCY_WATCHDOG_WINDOW_MS as W } from "../src/context/residency-watchdog.ts";
 import { stub } from "./support.ts";
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 test("the watchdog alarm an aborted incarnation left wakes the fresh one as a no-op; the next call works and nothing is recorded", async () => {
   const ctx = "prj_abort_watchdog";
   const t0 = Date.now();
   vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   await stub(ctx).invoke("itx.schedules.list()"); // the inbound call that arms the watchdog
   const alarm = () => runInDurableObject(stub(ctx), (_instance, state) => state.storage.getAlarm());
   expect(await alarm()).toBe(t0 + W);

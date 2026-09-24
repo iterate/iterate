@@ -26,27 +26,28 @@ export class ProbeDurableObject extends DurableObject {
 `;
 
 test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async () => {
-  const seen = await runInDurableObject(stub("prj_facet_props_probe"), async (_instance, state) => {
-    const loader = env.LOADER;
-    // A fixed key: low-cardinality by construction (the loader cacheKey rule), test-lane only.
-    const worker = loader.get("probe:facet-props:v1", () => ({
-      compatibilityDate: "2026-09-01",
-      mainModule: "probe.js",
-      modules: { "probe.js": PROBE_SRC },
-    }));
-    const props = { iterateContextName: state.id.name, name: "probe" };
-    const klass = worker.getDurableObjectClass("ProbeDurableObject", { props });
-    const facet = state.facets.get("probe", () => ({ class: klass })) as unknown as {
-      identity(): Promise<{ props: unknown; idName: string | null; exportsKind: string }>;
-    };
-    return { props, identity: await facet.identity() };
-  });
+  const { props, identity } = await runInDurableObject(
+    stub("prj_facet_props_probe"),
+    async (_instance, state) => {
+      const loader = env.LOADER;
+      // A fixed key: low-cardinality by construction (the loader cacheKey rule), test-lane only.
+      const worker = loader.get("probe:facet-props:v1", () => ({
+        compatibilityDate: "2026-09-01",
+        mainModule: "probe.js",
+        modules: { "probe.js": PROBE_SRC },
+      }));
+      const props = { iterateContextName: state.id.name, name: "probe" };
+      const klass = worker.getDurableObjectClass("ProbeDurableObject", { props });
+      const facet = state.facets.get("probe", () => ({ class: klass })) as unknown as {
+        identity(): Promise<{ props: unknown; idName: string | null; exportsKind: string }>;
+      };
+      return { props, identity: await facet.identity() };
+    },
+  );
 
-  // THE claim: props minted at getDurableObjectClass arrive as ctx.props inside the facet.
-  expect(seen.identity.props).toEqual(seen.props);
+  // THE claim: props minted at getDurableObjectClass arrive as ctx.props inside the facet — exactly.
   // What else a facet can see about itself, pinned so a platform change shows up here (measured
   // 2026-09-01, workerd via wrangler 4.127.1): a facet's `ctx.id.name` is its PARENT's codec name,
   // and `ctx.exports` is populated. Props still carry the facet's own `name`, which the id cannot.
-  expect(seen.identity.idName).toBe(seen.props.iterateContextName);
-  expect(seen.identity.exportsKind).toBe("object");
+  expect(identity).toEqual({ props, idName: props.iterateContextName, exportsKind: "object" });
 });

@@ -34,73 +34,20 @@
 //       above — no waiting needed.
 
 import { evictDurableObject } from "cloudflare:test";
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { adminCredentials, Echo, openSession, releasePins, stub } from "./support.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
 
-/** The DO-only transport facts (rpcStubTransportState(): the whole in-memory socket census — physical
- *  truths, never event-derivable; `itx.rpcStubs.list()` is the edge half, PRESENCE = the
- *  keys with a transport right now. This workers lane holds the raw DO stub, so it speaks
- *  the Workers-RPC verb directly). */
-type TransportState = {
-  rpcStubPagers: number;
-  borrowedRpcStubs: number;
-  rpcStubPagesInFlight: number;
-  dormant: boolean;
-};
-async function state(): Promise<TransportState> {
-  return (await stub(CTX).rpcStubTransportState()) as unknown as TransportState;
-}
-/** Incarnation (the hibernation tell) — the core reduce's reduce of the stream/woken wake record
- *  (`itx.facets.get('core').snapshot()`; present from the constructor's wake on — every
- *  incarnation writes one before any door opens). */
-async function incarnationNow(): Promise<number> {
-  const snap = (await stub(CTX).invoke("itx.facets.get('core').snapshot()")) as {
-    state: { incarnation?: number };
-  };
-  return snap.state.incarnation ?? 0;
-}
-
-let callerItx: any; // a SEPARATE caller session (it lends nothing of its own)
-
-/** The production pins' release on demand (support.ts's `releasePins`), then the two facts this
- *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
- *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
- *  references", exactly the production #6800 pin). */
-async function releasePinsLikeProduction(): Promise<void> {
-  await releasePins(CTX);
-  const s = await state();
-  expect(s.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub
-  expect(s.dormant).toBe(true);
-}
-
-beforeAll(async () => {
-  // ONE client session carrying all 200 stubs (capnweb multiplexes; each
-  // `itx.provide('itx.cN', new Echo(N))` lends its own Echo to the `itx.rpcStubs`
-  // registry, opens its own stub pager WebSocket into the DO, and configures the pure-data rule
-  // `itx.cN ⇒ itx.rpcStubs.get('itx.cN')` — the registry is presence, the table is the rule; event
-  // volume is fine).
-  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(CTX);
-  const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
-  for (let base = 0; base < CLIENTS; base += BATCH) {
-    await Promise.all(
-      Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
-        const i = base + k;
-        return clientItx.provide(`itx.c${i}`, new Echo(i));
-      }),
-    );
-  }
-  callerItx = await (await openSession()).authenticate(adminCredentials()).projects.get(CTX);
-}, 120_000);
+// The rows run in file order and share one fleet: each continues from the state the last one left.
 
 test("SCALE ATTACH: 200 clients lend 200 stubs, the DO stays dormant, spot invokes hit the right client", async () => {
+  const callerItx = await fleetCaller();
   const s = await state();
   expect(s.rpcStubPagers).toBeGreaterThanOrEqual(CLIENTS);
   // Dormant-ish: attaching NEVER pages — 200 connected clients leave zero stubs in memory.
-  expect(s.borrowedRpcStubs).toBe(0);
-  expect(s.dormant).toBe(true);
+  expect(s).toMatchObject({ borrowedRpcStubs: 0, dormant: true });
 
   // Spot-invoke 5 random clients through the SEPARATE caller — per-client answers, no crosstalk.
   const picks = new Set<number>();
@@ -115,6 +62,7 @@ test("SCALE ATTACH: 200 clients lend 200 stubs, the DO stays dormant, spot invok
 });
 
 test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the relay back in and answers", async () => {
+  const callerItx = await fleetCaller();
   const before = await state();
   const beforeIncarnation = await incarnationNow();
   expect(before.borrowedRpcStubs).toBeGreaterThanOrEqual(5); // warm from the previous test
@@ -126,9 +74,8 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
   await evictDurableObject(stub(CTX));
 
   const evicted = await state(); // read-only probe — wakes a FRESH instance
-  expect(evicted.borrowedRpcStubs).toBe(0); // every borrowed stub died with the instance
-  expect(evicted.rpcStubPagesInFlight).toBe(0);
-  expect(evicted.dormant).toBe(true);
+  // every borrowed stub died with the instance
+  expect(evicted).toMatchObject({ borrowedRpcStubs: 0, rpcStubPagesInFlight: 0, dormant: true });
   // THE property: the hibernatable pager sockets (and their attachments — the whole routing
   // identity) survived the eviction.
   expect(evicted.rpcStubPagers).toBeGreaterThanOrEqual(CLIENTS);
@@ -149,10 +96,10 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 });
 
 test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", async () => {
+  const callerItx = await fleetCaller();
   await releasePinsLikeProduction(); // the previous test left 3+ stubs borrowed — same #6800 dance
   await evictDurableObject(stub(CTX));
-  const evicted = await state();
-  expect(evicted.borrowedRpcStubs).toBe(0);
+  expect(await state()).toMatchObject({ borrowedRpcStubs: 0 });
 
   const t0 = Date.now();
   // fan-out = PRESENCE (`itx.rpcStubs.list()` — the registry keys with a transport; each was
@@ -181,3 +128,65 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   const after = await state();
   expect(after.borrowedRpcStubs).toBeGreaterThanOrEqual(CLIENTS); // the whole fleet borrowed back in
 });
+
+let fleet: Promise<any> | undefined;
+/** The fleet every row stands on, connected once for the file by whichever row runs first: ONE
+ *  client session carrying all 200 stubs (capnweb multiplexes; each
+ *  `itx.provide('itx.cN', new Echo(N))` lends its own Echo to the `itx.rpcStubs`
+ *  registry, opens its own stub pager WebSocket into the DO, and configures the pure-data rule
+ *  `itx.cN ⇒ itx.rpcStubs.get('itx.cN')` — the registry is presence, the table is the rule; event
+ *  volume is fine). Resolves to a SEPARATE caller session (it lends nothing of its own). */
+function fleetCaller(): Promise<any> {
+  fleet ||= (async () => {
+    const clientItx = await (
+      await openSession()
+    )
+      .authenticate(adminCredentials())
+      .projects.get(CTX);
+    const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
+    for (let base = 0; base < CLIENTS; base += BATCH) {
+      await Promise.all(
+        Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
+          const i = base + k;
+          return clientItx.provide(`itx.c${i}`, new Echo(i));
+        }),
+      );
+    }
+    return await (await openSession()).authenticate(adminCredentials()).projects.get(CTX);
+  })();
+  return fleet;
+}
+
+/** The DO-only transport facts (rpcStubTransportState(): the whole in-memory socket census — physical
+ *  truths, never event-derivable; `itx.rpcStubs.list()` is the edge half, PRESENCE = the
+ *  keys with a transport right now. This workers lane holds the raw DO stub, so it speaks
+ *  the Workers-RPC verb directly). */
+type TransportState = {
+  rpcStubPagers: number;
+  borrowedRpcStubs: number;
+  rpcStubPagesInFlight: number;
+  dormant: boolean;
+};
+async function state(): Promise<TransportState> {
+  return (await stub(CTX).rpcStubTransportState()) as unknown as TransportState;
+}
+
+/** Incarnation (the hibernation tell) — the core reduce's reduce of the stream/woken wake record
+ *  (`itx.facets.get('core').snapshot()`; present from the constructor's wake on — every
+ *  incarnation writes one before any door opens). */
+async function incarnationNow(): Promise<number> {
+  const snap = (await stub(CTX).invoke("itx.facets.get('core').snapshot()")) as {
+    state: { incarnation?: number };
+  };
+  return snap.state.incarnation ?? 0;
+}
+
+/** The production pins' release on demand (support.ts's `releasePins`), then the two facts this
+ *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
+ *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
+ *  references", exactly the production #6800 pin). */
+async function releasePinsLikeProduction(): Promise<void> {
+  await releasePins(CTX);
+  // the release returned every borrowed stub
+  expect(await state()).toMatchObject({ borrowedRpcStubs: 0, dormant: true });
+}
