@@ -118,6 +118,8 @@ function KitPage() {
         }
       : skipToken,
   });
+  // Chrome and Edge on a computer, over HTTPS; without it nothing is prepared that can't be flashed
+  const webSerial = "serial" in navigator;
   const platformHost = new URL(info.platformOrigin).host;
   const preparing = useMutation({
     mutationFn: async (input: SetupInput) => {
@@ -412,11 +414,17 @@ function KitPage() {
               <Button
                 className="w-full"
                 type="submit"
-                disabled={!project || !firmware.manifest || openaiKey.isLoading}
+                disabled={!webSerial || !project || !firmware.manifest || openaiKey.isLoading}
               >
                 <UsbIcon data-icon="inline-start" />
                 Flash device
               </Button>
+              {!webSerial && (
+                <p role="alert" data-type="error" className="text-xs text-destructive">
+                  This browser can’t reach USB devices (it has no Web Serial). Open this page in
+                  Chrome or Edge on a computer.
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 The link saves device, firmware and project. Wi-Fi and the token stay private.
               </p>
@@ -434,27 +442,23 @@ function KitPage() {
 /** A dropped connection to the platform, which preparing a device retries once. */
 class ConnectionDropped extends Error {}
 
-/** A password field with a show/hide button. Whether it's shown lives in the input's own `type`:
- *  React never writes `type` again (its prop doesn't change), so the button just flips it. */
-function PasswordInput(props: ComponentProps<"input">) {
+/** A password field with a show/hide button. Whether it shows lives in the query cache (like the
+ *  wizard's flash progress), per field. */
+function PasswordInput(props: ComponentProps<"input"> & { id: string }) {
+  const queryClient = useQueryClient();
+  const shownKey = ["kit", "password-shown", props.id];
+  const shown = useQuery({ queryKey: shownKey, queryFn: skipToken, initialData: false }).data;
   return (
     <InputGroup>
-      <InputGroupInput type="password" {...props} />
+      <InputGroupInput {...props} type={shown ? "text" : "password"} />
       <InputGroupAddon align="inline-end">
         <InputGroupButton
           size="icon-xs"
           aria-label="Show password"
-          aria-pressed="false"
-          className="group/reveal"
-          onClick={(event) => {
-            const button = event.currentTarget;
-            const input = button.closest("[data-slot=input-group]")!.querySelector("input")!;
-            input.type = input.type === "password" ? "text" : "password";
-            button.setAttribute("aria-pressed", String(input.type === "text"));
-          }}
+          aria-pressed={shown}
+          onClick={() => queryClient.setQueryData(shownKey, !shown)}
         >
-          <EyeIcon className="group-aria-pressed/reveal:hidden" />
-          <EyeOffIcon className="hidden group-aria-pressed/reveal:block" />
+          {shown ? <EyeOffIcon /> : <EyeIcon />}
         </InputGroupButton>
       </InputGroupAddon>
     </InputGroup>
