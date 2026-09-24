@@ -1,7 +1,8 @@
 // session.test.ts — the platform-fact append's await-vs-best-effort split: a grant's end awaits
-// `appendPlatformFacts` (the revocation truth: a failed append must fail the verb); every other fact
-// goes through `publishPlatformFacts`, best-effort in waitUntil: a deploy's cut is a warning, any
-// other failure is reported.
+// `appendPlatformFacts` (the revocation truth: a failed append must fail the verb), and the
+// organization verbs await it FOLDED (the answer implies the fold); the account's sign-ins, mints and
+// consents go through `publishPlatformFacts`, best-effort in waitUntil: a deploy's cut is a warning,
+// any other failure is reported.
 
 import { expect, test, vi } from "vitest";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
@@ -30,6 +31,31 @@ test("an organization's facts land on its own context, folded by the organizatio
   expect(calls).toEqual([
     [["itx", "processors", ["enable", "organization"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact, fact]], [], { principal: null, platform: true }],
+  ]);
+});
+
+test("appendPlatformFacts `folded` waits on the owner's processor barrier through the last appended offset", async () => {
+  const calls: unknown[][] = [];
+  const context = {
+    invoke: async (...args: unknown[]) => {
+      calls.push(args);
+      if (calls.length === 2) return [{ offset: 7 }, { offset: 8 }];
+    },
+  };
+  const namespace = { getByName: () => context } as unknown as Parameters<
+    typeof appendPlatformFacts
+  >[0];
+  await appendPlatformFacts(
+    namespace,
+    { organization: "org_1" },
+    [fact, fact],
+    { principal: null },
+    { folded: true },
+  );
+  expect(calls.at(-1)).toEqual([
+    ["itx", "facets", ["get", "organization"], ["waitUntilProcessed", { offset: 8 }]],
+    [],
+    { principal: null },
   ]);
 });
 

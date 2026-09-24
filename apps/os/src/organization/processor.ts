@@ -2,7 +2,7 @@
 // facts into its record — its name, its members, its projects — and of its own secrets'
 // certificates (cross-posted from `/organizations/<orgId>/secrets/<name>`) into their catalog. No
 // effect: a PURE FOLD. The facts are landed by the session on the context
-// (session.ts `publishPlatformFacts`) after the control-plane database writes them. Pure, so a
+// (session.ts `foldPlatformFacts`) after the control-plane database writes them. Pure, so a
 // unit test constructs it with `new` and reduces rows (processor.test.ts).
 import {
   type ConsumedEvent,
