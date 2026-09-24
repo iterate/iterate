@@ -159,7 +159,7 @@ localOnly(
       const events = await settledLog(support, "the streamed partner-model settlement");
 
       expect(assistantWords(events)).toEqual(["A delayed streamed answer."]);
-      expect(partnerAi.calls).toBe(1); // the project's override, rather than the physical binding
+      expect(partnerAi).toMatchObject({ calls: 1 }); // the project's override, rather than the physical binding
       expect(
         events.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
           .payload,
@@ -179,7 +179,7 @@ localOnly(
       await itx.agents.get("/agents/worker-ai").message("Answer in prose.");
       const nativeEvents = await settledLog(native, "the streamed Workers AI settlement");
       expect(assistantWords(nativeEvents)).toEqual(["A native streamed answer."]);
-      expect(workersAi.calls).toBe(1); // the same override law holds for the @cf stream shape
+      expect(workersAi).toMatchObject({ calls: 1 }); // the same override law holds for the @cf stream shape
       expect(
         nativeEvents.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
           .payload,
@@ -193,7 +193,7 @@ localOnly(
       await masked.provide("itx.ai", null);
       await itx.agents.get("/agents/masked-ai").message("This must not reach the provider.");
       const maskedEvents = await settledLog(masked, "the masked model failure");
-      expect(maskedAi.calls).toBe(0);
+      expect(maskedAi).toMatchObject({ calls: 0 });
       expect(
         maskedEvents.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
           .payload,
@@ -206,7 +206,7 @@ localOnly(
       await configureModel(failed, "gpt-5.6-terra");
       await itx.agents.get("/agents/failed-partner").message("This must report provider failure.");
       const failedEvents = await settledLog(failed, "the partner HTTP failure settlement");
-      expect(failedAi.calls).toBe(1);
+      expect(failedAi).toMatchObject({ calls: 1 });
       expect(
         failedEvents.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
           .payload,
@@ -226,7 +226,7 @@ localOnly(
       await configureModel(nullBody, "gpt-5.6-terra");
       await itx.agents.get("/agents/null-body-partner").message("This has no provider body.");
       const nullBodyEvents = await settledLog(nullBody, "the null-body partner failure");
-      expect(nullBodyAi.calls).toBe(1);
+      expect(nullBodyAi).toMatchObject({ calls: 1 });
       expect(
         nullBodyEvents.find(
           (event) => event.type === "events.iterate.com/agent/llm-request-settled",
@@ -242,7 +242,7 @@ localOnly(
       await configureModel(failedSse, "gpt-5.6-terra");
       await itx.agents.get("/agents/failed-sse-partner").message("This must stop promptly.");
       const failedSseEvents = await settledLog(failedSse, "the failed SSE settlement");
-      expect(failedSseAi.calls).toBe(1);
+      expect(failedSseAi).toMatchObject({ calls: 1 });
       expect(
         failedSseEvents.find(
           (event) => event.type === "events.iterate.com/agent/llm-request-settled",

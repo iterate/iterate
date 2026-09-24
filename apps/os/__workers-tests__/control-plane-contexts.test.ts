@@ -161,7 +161,7 @@ test("a client cannot forge a platform fact in its own user context: its account
   };
   const account = () =>
     a.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]]) as Promise<AccountSnapshot>;
-  // The platform's own fact folds: this session's authentication (session.ts `foldPlatformFacts`).
+  // The platform's own fact folds: this session's authentication (session.ts `publishPlatformFacts`).
   await until("the platform's authentication fact is folded", async () =>
     (await account()).state.authentications.length > 0 ? true : undefined,
   );

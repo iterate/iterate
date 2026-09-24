@@ -92,7 +92,7 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
     .filter((e) => e.type === "events.iterate.com/agent/context-added")
     .map((e) => e.payload as { role: string; content: string });
   // The default prompt: the codemode format, the itx surface, and which project this is.
-  expect(defaultPrompt!.role).toBe("system");
+  expect(defaultPrompt).toMatchObject({ role: "system" });
   expect(defaultPrompt!.content).toMatch(/^You are an agent on the iterate platform/);
   expect(defaultPrompt!.content).toMatch(/<codemode/);
   expect(defaultPrompt!.content).toContain(
@@ -188,13 +188,15 @@ test("the loop: a person's words → the model → a script run against itx → 
   });
   expect(await itx.kv.get("answer")).toBe("42"); // the script ran against the project's itx
   const settledScript = log.find((e) => e.type === "events.iterate.com/context/run-settled");
-  expect(settledScript.payload.settlement).toEqual({
-    status: "succeeded",
-    result: { stored: true },
+  expect(settledScript.payload).toMatchObject({
+    settlement: {
+      status: "succeeded",
+      result: { stored: true },
+    },
   });
   // The second call saw the whole conversation: both prompts, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
-  expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);
+  expect(ai.calls[1]).toMatchObject({ model: WORKERS_AI_MODEL });
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
     "system", // the journaled default prompt
     "system", // the operator's
@@ -279,7 +281,8 @@ test("a script that returns nothing ends the turn: no result item, no further re
     const all = await readAll(support);
     return all.find((e) => e.type === "events.iterate.com/context/run-settled");
   });
-  expect(settled.payload.settlement).toEqual({ status: "succeeded" }); // no result — undefined, not null
+  expect(settled.payload).toMatchObject({ settlement: { status: "succeeded" } });
+  expect(settled.payload.settlement.result).toBeUndefined(); // no result — undefined, not null
   expect(await itx.kv.get("note")).toBe("written");
   await sleep(1_500);
   const log = await readAll(support);
@@ -390,20 +393,22 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
       { contentType: "text/plain", filename: "note.txt", data: btoa("a note") },
     ],
   });
-  expect(asked.payload.files).toEqual([
-    {
-      contentType: "image/png",
-      filename: "red dot.png",
-      path: expect.stringMatching(/^\/agents\/support\/[0-9a-f]{8}-red-dot\.png$/),
-      size: 73,
-    },
-    {
-      contentType: "text/plain",
-      filename: "note.txt",
-      path: expect.stringMatching(/^\/agents\/support\/[0-9a-f]{8}-note\.txt$/),
-      size: 6,
-    },
-  ]);
+  expect(asked.payload).toMatchObject({
+    files: [
+      {
+        contentType: "image/png",
+        filename: "red dot.png",
+        path: expect.stringMatching(/^\/agents\/support\/[0-9a-f]{8}-red-dot\.png$/),
+        size: 73,
+      },
+      {
+        contentType: "text/plain",
+        filename: "note.txt",
+        path: expect.stringMatching(/^\/agents\/support\/[0-9a-f]{8}-note\.txt$/),
+        size: 6,
+      },
+    ],
+  });
   // Stored for real, under the agent's path.
   expect(
     (await itx.files.list("/agents/support"))
@@ -422,7 +427,7 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
-  expect(message.role).toBe("user");
+  expect(message).toMatchObject({ role: "user" });
   expect(message.content[0]).toMatchObject({ type: "text" });
   expect(message.content[0]!.text).toMatch(
     /^What do you see\?\n\[Attached file: note\.txt \(text\/plain, 6 bytes\) — read it with `await itx\.files\.get\("\/agents\/support\/[0-9a-f]{8}-note\.txt"\)\.bytes\(\)`\]$/,
@@ -622,13 +627,13 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
   expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
   expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
   expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
-  expect(settled[3]!.result).toBe(404); // raw fetch: the lane found no `itx.fetch` row
+  expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the lane found no `itx.fetch` row
   expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
   expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
   expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
   expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
-  expect(settled[8]!.result).toEqual([{ name: "ship.com", price: 42 }]); // the one grant, still the owner's
-  expect(settled[9]!.result).toEqual([]); // the library root granted physically: its hops are the platform's
+  expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
+  expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
   // nothing moved: the root's table and the sandbox's are what the owner wrote
   expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
   expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual(

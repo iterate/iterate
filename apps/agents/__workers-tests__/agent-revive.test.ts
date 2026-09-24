@@ -22,27 +22,9 @@ import {
   until,
 } from "../../os/__workers-tests__/support.ts";
 
-/** A model whose FIRST answer waits until the test releases it (the context dies mid-call, so it
- *  arrives with nobody left to hear it) and whose second is the answer. */
-class ParkingModel extends RpcTarget {
-  calls = 0;
-  answerFirst!: (answer: { response: string }) => void;
-  readonly #first = new Promise<{ response: string }>((resolve) => (this.answerFirst = resolve));
-  run(_model: string, _inputs: unknown): Promise<{ response: string }> | { response: string } {
-    this.calls += 1;
-    return this.calls === 1 ? this.#first : { response: "42" };
-  }
-}
-
 const PROJECT = "prj_agent_revive";
 /** The agent's own context — the facet is hosted there, and so is everything it schedules. */
 const AGENT = `${PROJECT}.iterate/agents/support`;
-const read = async (ctx: string) =>
-  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events;
-const short = (log: StreamEvent[]) =>
-  log
-    .filter((e) => /agent\/|woken|revived/.test(e.type))
-    .map((e) => e.type.replace("events.iterate.com/", ""));
 
 test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model call in flight; its alarm revives the agent, which runs the open request again and settles it", async () => {
   const model = new ParkingModel();
@@ -81,7 +63,7 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   model.answerFirst({ response: "an answer nobody is left to hear" });
   await evictDurableObject(s);
   await new Promise((r) => setTimeout(r, 300));
-  expect(model.calls).toBe(1); // stalled, not settled: nobody is running the open request
+  expect(model).toMatchObject({ calls: 1 }); // stalled, not settled: nobody is running the open request
 
   // (3) THE REVIVE: time passes the claim and the alarm fires into an evicted context. The pass
   // spends the claim and calls the facet's revive(): it materializes, catches up, finds the open
@@ -116,3 +98,23 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   // the claim goes first and the alarm derived from it a moment later: wait for it the same way
   await until("no alarm owed", async () => (await owedAlarmOf(s)) === null);
 });
+
+/** A model whose FIRST answer waits until the test releases it (the context dies mid-call, so it
+ *  arrives with nobody left to hear it) and whose second is the answer. */
+class ParkingModel extends RpcTarget {
+  calls = 0;
+  answerFirst!: (answer: { response: string }) => void;
+  readonly #first = new Promise<{ response: string }>((resolve) => (this.answerFirst = resolve));
+  run(_model: string, _inputs: unknown): Promise<{ response: string }> | { response: string } {
+    this.calls += 1;
+    return this.calls === 1 ? this.#first : { response: "42" };
+  }
+}
+
+const read = async (ctx: string) =>
+  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events;
+
+const short = (log: StreamEvent[]) =>
+  log
+    .filter((e) => /agent\/|woken|revived/.test(e.type))
+    .map((e) => e.type.replace("events.iterate.com/", ""));

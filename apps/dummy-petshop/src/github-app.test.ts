@@ -10,12 +10,226 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import { beforeAll, describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID } from "./state.ts";
 import { makeShop, type Shop } from "./test/shop.ts";
 
+type AppKeys = Awaited<ReturnType<typeof generateAppKeys>>;
+
+let sharedKeysPromise: Promise<{ app: AppKeys; attacker: AppKeys }> | undefined;
+
+test("installation-token minting: a signed App JWT exchanges for an installation token that works on the API", async () => {
+  const shop = makeShop();
+  const { privateKey, publicKeyPem } = (await sharedKeys()).app;
+
+  // Register ONLY the public key against the seeded installation.
+  const registered = await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
+  expect(registered).toMatchObject({ status: 201 });
+  expect(await registered.json()).toMatchObject({
+    appId: DEFAULT_APP_ID,
+    installationId: DEFAULT_INSTALLATION_ID,
+    publicKeyPem,
+  });
+
+  const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID));
+  const minted = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
+  expect(minted).toMatchObject({ status: 201 });
+  const { token, expires_at } = await minted.json<{ token: string; expires_at: string }>();
+  expect(token).toBeTruthy();
+  expect(Date.parse(expires_at)).toBeGreaterThan(Date.now());
+
+  // The installation token names which installation it acts as, on /api/me…
+  const me = await shop.call("/api/me", bearer(token));
+  expect(me).toMatchObject({ status: 200 });
+  expect(await me.json()).toMatchObject({
+    installationId: DEFAULT_INSTALLATION_ID,
+    appId: DEFAULT_APP_ID,
+  });
+
+  // …and is a first-class bearer on the rest of the API.
+  const pets = await shop.call("/api/pets", bearer(token));
+  expect(pets).toMatchObject({ status: 200 });
+  expect(await pets.json()).toMatchObject({ owner: `installation:${DEFAULT_INSTALLATION_ID}` });
+});
+
+test("installation-token minting: registering a distinct app id + installation id mints a token naming them", async () => {
+  const shop = makeShop();
+  const { privateKey, publicKeyPem } = (await sharedKeys()).app;
+  const created = await shop.call(
+    "/__backdoor/apps",
+    postJson({ appId: "app-42", installationId: "install-42", publicKeyPem }),
+  );
+  expect(created).toMatchObject({ status: 201 });
+
+  const jwt = await signAppJwt(privateKey, appJwtClaims("app-42"));
+  const minted = await mintInstallationToken(shop, "install-42", jwt);
+  expect(minted).toMatchObject({ status: 201 });
+  const { token } = await minted.json<{ token: string }>();
+  expect(await (await shop.call("/api/me", bearer(token))).json()).toMatchObject({
+    installationId: "install-42",
+    appId: "app-42",
+  });
+});
+
+test("installation-token minting: a JWT signed by a different key than the registered one is rejected 401", async () => {
+  const shop = makeShop();
+  const { publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
+
+  const jwt = await signAppJwt(
+    (await sharedKeys()).attacker.privateKey,
+    appJwtClaims(DEFAULT_APP_ID),
+  );
+  const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
+  expect(response).toMatchObject({ status: 401 });
+  expect(await response.json()).toMatchObject({
+    error: "invalid_jwt",
+    error_description: "bad_signature",
+  });
+});
+
+test("installation-token minting: an expired App JWT is rejected 401", async () => {
+  const shop = makeShop();
+  const { privateKey, publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
+
+  const jwt = await signAppJwt(
+    privateKey,
+    appJwtClaims(DEFAULT_APP_ID, { exp: Math.floor(Date.now() / 1000) - 10 }),
+  );
+  const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
+  expect(response).toMatchObject({ status: 401 });
+  expect(await response.json()).toMatchObject({
+    error: "invalid_jwt",
+    error_description: "expired",
+  });
+});
+
+test("installation-token minting: a JWT whose iss is not the app id is rejected 401", async () => {
+  const shop = makeShop();
+  const { privateKey, publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
+
+  const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID, { iss: "some-other-app" }));
+  const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
+  expect(response).toMatchObject({ status: 401 });
+  expect(await response.json()).toMatchObject({
+    error: "invalid_jwt",
+    error_description: "issuer_mismatch",
+  });
+});
+
+test("installation-token minting: the seeded installation is keyless until a key is registered; unknown ids 401", async () => {
+  const shop = makeShop();
+  const { privateKey } = (await sharedKeys()).app;
+  const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID));
+
+  // No key registered yet → keyless installation → 401.
+  const keyless = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
+  expect(keyless).toMatchObject({ status: 401 });
+  expect(await keyless.json()).toMatchObject({ error: "invalid_installation" });
+
+  // An unknown installation id is likewise a 401.
+  expect(await mintInstallationToken(shop, "no-such-installation", jwt)).toMatchObject({
+    status: 401,
+  });
+});
+
+test("installation-token minting: a missing or malformed Authorization JWT is rejected 401", async () => {
+  const shop = makeShop();
+  const { publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
+
+  const noAuth = await shop.call(`/app/installations/${DEFAULT_INSTALLATION_ID}/access_tokens`, {
+    method: "POST",
+  });
+  expect(noAuth).toMatchObject({ status: 401 });
+  expect(await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, "not.a.jwt")).toMatchObject({
+    status: 401,
+  });
+});
+
+test("installation-token minting: registering without a public key is a 400", async () => {
+  const shop = makeShop();
+  expect(await shop.call("/__backdoor/apps", postJson({}))).toMatchObject({ status: 400 });
+});
+
+test("installation webhooks: echo mode returns a body signed with the app's webhookSecret (OS verifies this)", async () => {
+  const shop = makeShop();
+  const { publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
+
+  const fired = await (
+    await shop.call(
+      "/__backdoor/apps/fire-webhook",
+      postJson({ event: { event: "installation_repositories", action: "added" } }),
+    )
+  ).json<{ installationId: string; signature: string; payload: string }>();
+  expect(fired).toMatchObject({ installationId: DEFAULT_INSTALLATION_ID });
+  expect(JSON.parse(fired.payload)).toEqual({
+    event: "installation_repositories",
+    action: "added",
+  });
+  // The OS side verifies exactly this: sha256=<hmac-sha256(webhookSecret, rawBody)>.
+  expect(fired).toMatchObject({ signature: hexHmac("wh-secret-123", fired.payload) });
+});
+
+test("installation webhooks: badSignature deliveries do not verify against the webhookSecret", async () => {
+  const shop = makeShop();
+  const { publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
+
+  const fired = await (
+    await shop.call("/__backdoor/apps/fire-webhook", postJson({ badSignature: true }))
+  ).json<{ signature: string; payload: string }>();
+  expect(fired).not.toMatchObject({ signature: hexHmac("wh-secret-123", fired.payload) });
+});
+
+test("installation webhooks: deliver mode POSTs the x-hub-signature-256 header (GitHub shape) a receiver verifies", async () => {
+  const shop = makeShop();
+  const { publicKeyPem } = (await sharedKeys()).app;
+  await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
+  const receiver = await startReceiver();
+  try {
+    // This test is about the SIGNATURE SHAPE, not TCP reliability: a
+    // loopback fetch can transiently fail in the CI sandbox (status 0), so
+    // status 0 gets a couple of retries — a genuinely broken delivery still
+    // fails, now with the carried error instead of a bare 0.
+    let fired: { status: number; signature: string; error?: string };
+    for (let attempt = 1; ; attempt += 1) {
+      fired = await (
+        await shop.call(
+          "/__backdoor/apps/fire-webhook",
+          postJson({ url: receiver.url, event: { event: "ping" } }),
+        )
+      ).json<{ status: number; signature: string; error?: string }>();
+      if (fired.status !== 0 || attempt >= 3) break;
+      console.warn(`webhook delivery attempt ${attempt} failed: ${fired.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    expect(fired.error).toBeUndefined();
+    expect(fired).toMatchObject({ status: 200 });
+
+    const delivery = receiver.received.at(-1)!;
+    expect(delivery).toMatchObject({ signature: hexHmac("wh-secret-123", delivery.body) });
+    expect(delivery).toMatchObject({ signature: fired.signature });
+  } finally {
+    await receiver.close();
+  }
+});
+
+test("installation webhooks: firing at an unknown installation id is a 400", async () => {
+  const shop = makeShop();
+  const response = await shop.call(
+    "/__backdoor/apps/fire-webhook",
+    postJson({ installationId: "no-such-installation" }),
+  );
+  expect(response).toMatchObject({ status: 400 });
+});
+
 const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
 const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
 
 /** POST the installation-token endpoint with an App JWT in the Bearer header. */
@@ -54,15 +268,14 @@ async function generateAppKeys(): Promise<{ privateKey: CryptoKey; publicKeyPem:
   };
 }
 
-type AppKeys = Awaited<ReturnType<typeof generateAppKeys>>;
-
-let appKeys: AppKeys;
-let attackerKeys: AppKeys;
-
-beforeAll(async () => {
-  // RSA generation dominates this suite and every test only reads the keys.
-  [appKeys, attackerKeys] = await Promise.all([generateAppKeys(), generateAppKeys()]);
-}, 30_000);
+/** RSA generation dominates this suite and every test only reads the keys, so the file generates
+ * both keypairs once, on first use. */
+function sharedKeys(): Promise<{ app: AppKeys; attacker: AppKeys }> {
+  sharedKeysPromise ||= Promise.all([generateAppKeys(), generateAppKeys()]).then(
+    ([app, attacker]) => ({ app, attacker }),
+  );
+  return sharedKeysPromise;
+}
 
 /**
  * Sign an App JWT the SAME way the OS side's secrets `sign()` does: RS256 over
@@ -93,238 +306,27 @@ function appJwtClaims(
   return { iss: overrides.iss || appId, iat: now - 30, exp: overrides.exp ?? now + 540 };
 }
 
-describe("GitHub App installation-token minting", () => {
-  test("a signed App JWT exchanges for an installation token that works on the API", async () => {
-    const shop = makeShop();
-    const { privateKey, publicKeyPem } = appKeys;
+const hexHmac = (secret: string, body: string) =>
+  `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 
-    // Register ONLY the public key against the seeded installation.
-    const registered = await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-    expect(registered.status).toBe(201);
-    expect(await registered.json()).toMatchObject({
-      appId: DEFAULT_APP_ID,
-      installationId: DEFAULT_INSTALLATION_ID,
-      publicKeyPem,
-    });
-
-    const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID));
-    const minted = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-    expect(minted.status).toBe(201);
-    const { token, expires_at } = await minted.json<{ token: string; expires_at: string }>();
-    expect(token).toBeTruthy();
-    expect(Date.parse(expires_at)).toBeGreaterThan(Date.now());
-
-    // The installation token names which installation it acts as, on /api/me…
-    const me = await shop.call("/api/me", bearer(token));
-    expect(me.status).toBe(200);
-    expect(await me.json()).toMatchObject({
-      installationId: DEFAULT_INSTALLATION_ID,
-      appId: DEFAULT_APP_ID,
-    });
-
-    // …and is a first-class bearer on the rest of the API.
-    const pets = await shop.call("/api/pets", bearer(token));
-    expect(pets.status).toBe(200);
-    expect(await pets.json()).toMatchObject({ owner: `installation:${DEFAULT_INSTALLATION_ID}` });
-  });
-
-  test("registering a distinct app id + installation id mints a token naming them", async () => {
-    const shop = makeShop();
-    const { privateKey, publicKeyPem } = appKeys;
-    const created = await shop.call(
-      "/__backdoor/apps",
-      postJson({ appId: "app-42", installationId: "install-42", publicKeyPem }),
-    );
-    expect(created.status).toBe(201);
-
-    const jwt = await signAppJwt(privateKey, appJwtClaims("app-42"));
-    const minted = await mintInstallationToken(shop, "install-42", jwt);
-    expect(minted.status).toBe(201);
-    const { token } = await minted.json<{ token: string }>();
-    expect(await (await shop.call("/api/me", bearer(token))).json()).toMatchObject({
-      installationId: "install-42",
-      appId: "app-42",
-    });
-  });
-
-  test("a JWT signed by a different key than the registered one is rejected 401", async () => {
-    const shop = makeShop();
-    const { publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-
-    const jwt = await signAppJwt(attackerKeys.privateKey, appJwtClaims(DEFAULT_APP_ID));
-    const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({
-      error: "invalid_jwt",
-      error_description: "bad_signature",
-    });
-  });
-
-  test("an expired App JWT is rejected 401", async () => {
-    const shop = makeShop();
-    const { privateKey, publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-
-    const jwt = await signAppJwt(
-      privateKey,
-      appJwtClaims(DEFAULT_APP_ID, { exp: Math.floor(Date.now() / 1000) - 10 }),
-    );
-    const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({
-      error: "invalid_jwt",
-      error_description: "expired",
-    });
-  });
-
-  test("a JWT whose iss is not the app id is rejected 401", async () => {
-    const shop = makeShop();
-    const { privateKey, publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-
-    const jwt = await signAppJwt(
-      privateKey,
-      appJwtClaims(DEFAULT_APP_ID, { iss: "some-other-app" }),
-    );
-    const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({
-      error: "invalid_jwt",
-      error_description: "issuer_mismatch",
-    });
-  });
-
-  test("the seeded installation is keyless until a key is registered; unknown ids 401", async () => {
-    const shop = makeShop();
-    const { privateKey } = appKeys;
-    const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID));
-
-    // No key registered yet → keyless installation → 401.
-    const keyless = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-    expect(keyless.status).toBe(401);
-    expect(await keyless.json()).toMatchObject({ error: "invalid_installation" });
-
-    // An unknown installation id is likewise a 401.
-    expect((await mintInstallationToken(shop, "no-such-installation", jwt)).status).toBe(401);
-  });
-
-  test("a missing or malformed Authorization JWT is rejected 401", async () => {
-    const shop = makeShop();
-    const { publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-
-    const noAuth = await shop.call(`/app/installations/${DEFAULT_INSTALLATION_ID}/access_tokens`, {
-      method: "POST",
-    });
-    expect(noAuth.status).toBe(401);
-    expect((await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, "not.a.jwt")).status).toBe(
-      401,
-    );
-  });
-
-  test("registering without a public key is a 400", async () => {
-    const shop = makeShop();
-    expect(await shop.call("/__backdoor/apps", postJson({}))).toMatchObject({ status: 400 });
-  });
-});
-
-describe("GitHub App installation webhooks", () => {
-  const hexHmac = (secret: string, body: string) =>
-    `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
-
-  /** A local HTTP sink capturing the GitHub-shaped signature header + body. */
-  async function startReceiver() {
-    const received: { body: string; signature: string | null }[] = [];
-    const server = createServer((request, response) => {
-      let body = "";
-      request.on("data", (chunk) => (body += chunk));
-      request.on("end", () => {
-        received.push({
-          body,
-          signature: request.headers["x-hub-signature-256"]?.toString() ?? null,
-        });
-        response.writeHead(200).end("ok");
+/** A local HTTP sink capturing the GitHub-shaped signature header + body. */
+async function startReceiver() {
+  const received: { body: string; signature: string | null }[] = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      received.push({
+        body,
+        signature: request.headers["x-hub-signature-256"]?.toString() ?? null,
       });
+      response.writeHead(200).end("ok");
     });
-    const port = await listenOnFetchSafePort(server);
-    return {
-      url: `http://127.0.0.1:${port}/hook`,
-      received,
-      close: () => new Promise((resolve) => server.close(resolve)),
-    };
-  }
-
-  test("echo mode returns a body signed with the app's webhookSecret (OS verifies this)", async () => {
-    const shop = makeShop();
-    const { publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
-
-    const fired = await (
-      await shop.call(
-        "/__backdoor/apps/fire-webhook",
-        postJson({ event: { event: "installation_repositories", action: "added" } }),
-      )
-    ).json<{ installationId: string; signature: string; payload: string }>();
-    expect(fired.installationId).toBe(DEFAULT_INSTALLATION_ID);
-    expect(JSON.parse(fired.payload)).toEqual({
-      event: "installation_repositories",
-      action: "added",
-    });
-    // The OS side verifies exactly this: sha256=<hmac-sha256(webhookSecret, rawBody)>.
-    expect(fired.signature).toBe(hexHmac("wh-secret-123", fired.payload));
   });
-
-  test("badSignature deliveries do not verify against the webhookSecret", async () => {
-    const shop = makeShop();
-    const { publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
-
-    const fired = await (
-      await shop.call("/__backdoor/apps/fire-webhook", postJson({ badSignature: true }))
-    ).json<{ signature: string; payload: string }>();
-    expect(fired.signature).not.toBe(hexHmac("wh-secret-123", fired.payload));
-  });
-
-  test("deliver mode POSTs the x-hub-signature-256 header (GitHub shape) a receiver verifies", async () => {
-    const shop = makeShop();
-    const { publicKeyPem } = appKeys;
-    await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
-    const receiver = await startReceiver();
-    try {
-      // This test is about the SIGNATURE SHAPE, not TCP reliability: a
-      // loopback fetch can transiently fail in the CI sandbox (status 0), so
-      // status 0 gets a couple of retries — a genuinely broken delivery still
-      // fails, now with the carried error instead of a bare 0.
-      let fired: { status: number; signature: string; error?: string };
-      for (let attempt = 1; ; attempt += 1) {
-        fired = await (
-          await shop.call(
-            "/__backdoor/apps/fire-webhook",
-            postJson({ url: receiver.url, event: { event: "ping" } }),
-          )
-        ).json<{ status: number; signature: string; error?: string }>();
-        if (fired.status !== 0 || attempt >= 3) break;
-        console.warn(`webhook delivery attempt ${attempt} failed: ${fired.error}`);
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      expect(fired.error).toBeUndefined();
-      expect(fired.status).toBe(200);
-
-      const delivery = receiver.received.at(-1)!;
-      expect(delivery.signature).toBe(hexHmac("wh-secret-123", delivery.body));
-      expect(delivery.signature).toBe(fired.signature);
-    } finally {
-      await receiver.close();
-    }
-  });
-
-  test("firing at an unknown installation id is a 400", async () => {
-    const shop = makeShop();
-    const response = await shop.call(
-      "/__backdoor/apps/fire-webhook",
-      postJson({ installationId: "no-such-installation" }),
-    );
-    expect(response.status).toBe(400);
-  });
-});
+  const port = await listenOnFetchSafePort(server);
+  return {
+    url: `http://127.0.0.1:${port}/hook`,
+    received,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}

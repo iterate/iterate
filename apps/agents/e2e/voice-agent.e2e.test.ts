@@ -180,7 +180,7 @@ export default class extends WorkerEntrypoint {
       const content = String(commentary.payload.content);
       expect(content).not.toContain("ERROR:");
       const clock = JSON.parse(content.replace("Script result:\n", ""));
-      expect(clock.identity.path).toBe(`${streamPath}/sandbox`);
+      expect(clock.identity).toMatchObject({ path: `${streamPath}/sandbox` });
       expect(Date.parse(clock.time)).toBeGreaterThanOrEqual(clockStarted);
       expect(Date.parse(clock.time)).toBeLessThanOrEqual(Date.now());
       expect(
@@ -216,9 +216,11 @@ export default class extends WorkerEntrypoint {
           (event) => event.type === `${T}commentary` && event.payload.delegationId === "website",
         ),
       );
-      expect(websiteAnswer.payload.content).toBe("The horse joke is live on your website.");
+      expect(websiteAnswer.payload).toMatchObject({
+        content: "The horse joke is live on your website.",
+      });
       const published = await fetch(websiteUrl);
-      expect(published.status).toBe(200);
+      expect(published).toMatchObject({ status: 200 });
       expect(await published.text()).toContain("bad stable manners");
       const subscriptions = await call.subscriptions.list();
       for (const name of ["voice-agent", "voice-delegate"]) {
