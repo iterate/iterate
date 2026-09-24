@@ -12,7 +12,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 

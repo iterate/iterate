@@ -1,4 +1,4 @@
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
 import { getSlackClient, slackChannelIds, slackEscape } from "./slack.ts";
 

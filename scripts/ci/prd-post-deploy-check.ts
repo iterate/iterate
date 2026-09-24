@@ -11,8 +11,8 @@
 //   pnpm tsx scripts/ci/prd-post-deploy-check.ts check [--previous-version <id>] [--dry-run]
 import { setTimeout as sleep } from "node:timers/promises";
 import { createCli } from "trpc-cli";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs } from "../../envs.ts";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Production's project hosts, from envs.ts: each apex prd serves as a project's site

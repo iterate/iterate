@@ -20,7 +20,7 @@
 import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { ProbeSummary } from "./do-duration-probe.ts";
 import { getRunUrl } from "./github.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";

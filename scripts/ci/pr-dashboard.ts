@@ -1,6 +1,6 @@
 import type { RestEndpointMethodTypes } from "@octokit/rest";
 
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getOctokit, getRepo } from "./github.ts";
 import { getSlackClient, slackChannelIds, slackEscape, slackUsers } from "./slack.ts";
 

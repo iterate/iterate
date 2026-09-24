@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, matchesGlob } from "node:path";
 
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
 import ts from "typescript";
 
-import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
+import { markdownAnnotator } from "./markdown-annotator.ts";
 
 /**
  * Array order is match order: first-match-wins, most-specific globs first, so

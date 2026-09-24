@@ -856,9 +856,18 @@ importers:
       '@jridgewell/sourcemap-codec':
         specifier: ^1.5.5
         version: 1.5.5
+      '@playwright/test':
+        specifier: 1.60.0
+        version: 1.60.0
+      '@tanstack/router-generator':
+        specifier: 1.166.17
+        version: 1.166.17
       '@types/node':
         specifier: ^25.0.10
         version: 25.6.0
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

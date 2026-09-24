@@ -12,7 +12,7 @@
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay a window, post nothing
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs, PRD_ACCOUNT_ID } from "../../envs.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
