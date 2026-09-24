@@ -232,7 +232,7 @@ test("at birth: a restored alarm the sources still want, already overdue, is wri
   });
 });
 
-test("at birth: a stored time no source wants any more (a dead incarnation's watchdog or sweep, past) is superseded by a reconcile — never re-armed, never reported", () => {
+test("at birth: a stored time no source wants any more (a dead incarnation's sweep, past) is superseded by a reconcile — never re-armed, never reported", () => {
   const gone = setup([null]);
   gone.alarms.restore(T - 60_000);
   gone.alarms.rearmIfOverdue(T);
