@@ -35,6 +35,8 @@ import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { buildOs } from "./build.ts";
 import {
   APPS,
+  appPreviewOrigins,
+  appPreviewUrl,
   changedApps,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
@@ -400,10 +402,6 @@ async function deleteR2Bucket(cf: Cf, bucketName: string) {
 const isMissingWorkerError = (output: string) =>
   /This Worker does not exist on your account|code"?:\s*10007/i.test(output);
 
-/** The preview's URL, known before anything deploys (the same rule as apps/os's). */
-const appPreviewUrl = (app: StartApp, previewName: string) =>
-  `https://${previewName}-${new URL(app.envs.preview!.baseUrl).hostname}`;
-
 /** A config that names a parent worker and nothing else: enough for `wrangler preview delete`
  *  and the sweep, on a checkout that never built anything. */
 function writeParentConfig(parent: { workerName: string; cloudflareAccountId: string }) {
@@ -416,17 +414,18 @@ function writeParentConfig(parent: { workerName: string; cloudflareAccountId: st
   return file;
 }
 
-/** Build the app for the `preview` env, write its preview config with this PR's apps/os preview
- *  as the issuer, and branch a preview off the app's parent — deploying the parent from the same
- *  config the first time it is missing, as cloudflare-os's `deployBaselineWorker` does. */
+/** Write the app's preview config — this PR's apps/os preview as the issuer, this run's app
+ *  previews as the other apps (`appPreviewOrigins`) — onto its `preview` build, and branch a
+ *  preview off the app's parent, deploying the parent from the same config the first time it is
+ *  missing, as cloudflare-os's `deployBaselineWorker` does. */
 async function deployAppPreview(
   app: StartApp,
   previewName: string,
-  issuer: string,
+  input: { issuer: string; appOrigins: Record<string, string> },
   wrangler: string,
 ) {
   const root = path.resolve(import.meta.dirname, "../..", app.name);
-  const config = writeStartAppPreviewConfig(app, { issuer });
+  const config = writeStartAppPreviewConfig(app, input);
   const previewArgs = ["preview", "--name", previewName, "-c", config, "--json"];
   let result = await run(wrangler, previewArgs, { cwd: root });
   if (result.status !== 0 && isMissingWorkerError(`${result.stdout}\n${result.stderr}`)) {
@@ -556,13 +555,13 @@ function assertFreshInstall() {
 }
 
 /** The OS's own preview, from an OS build already made — its Artifacts namespace, its config
- *  (naming the PR's Dash preview when `apps` holds dash), the Previews secrets, `wrangler preview`,
- *  and the smoke that the new deployment serves. The wrangler it prepared comes back for the apps
- *  on top; the caller cleans it up (here, when this fails). */
+ *  (naming the PR's Dash preview when this run deploys one), the Previews secrets, `wrangler
+ *  preview`, and the smoke that the new deployment serves. The wrangler it prepared comes back for
+ *  the apps on top; the caller cleans it up (here, when this fails). */
 async function deployOsPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
-  apps: StartApp[],
+  dashOrigin: string | undefined,
   recreated = false,
 ): Promise<{
   wrangler: ReturnType<typeof preparePreviewWrangler>;
@@ -571,11 +570,7 @@ async function deployOsPreview(
   slug: string;
 }> {
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
-  const dash = apps.find((app) => app.name === "dash");
-  writePreviewWranglerConfig({
-    previewName,
-    dashOrigin: dash && `https://${previewName}-${new URL(dash.envs.preview!.baseUrl).hostname}`,
-  });
+  writePreviewWranglerConfig({ previewName, dashOrigin });
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;
@@ -599,7 +594,7 @@ async function deployOsPreview(
         );
         await deletePreview(ctx.cf, previewName, wrangler.command);
         wrangler.cleanup();
-        return deployOsPreview(ctx, previewName, apps, true);
+        return deployOsPreview(ctx, previewName, dashOrigin, true);
       }
       const hint = isMissingWorkerError(output)
         ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm --dir apps/os run deploy --env preview`
@@ -653,14 +648,15 @@ async function deployPreview(
     result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
   );
   if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
+  const appOrigins = appPreviewOrigins(apps, previewName);
   const { wrangler, url, deploymentId, slug } = await traceOperation("Deploy OS preview", () =>
-    deployOsPreview(ctx, previewName, apps),
+    deployOsPreview(ctx, previewName, appOrigins.dash),
   );
   try {
     const appPreviews = await Promise.all(
       apps.map((app) =>
         traceOperation(`Deploy ${app.name}`, () =>
-          deployAppPreview(app, previewName, url, wrangler.command),
+          deployAppPreview(app, previewName, { issuer: url, appOrigins }, wrangler.command),
         ),
       ),
     );

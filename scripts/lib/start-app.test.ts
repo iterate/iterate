@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { ownZones, startAppPreviewConfig } from "./start-app.ts";
+import { dashEnvs } from "../../envs.ts";
+import { ownZones, startAppPreviewConfig, startAppWorkerConfig } from "./start-app.ts";
 
 describe("a start app's preview config (a pure transform of the built wrangler.json)", () => {
   const built = {
@@ -13,6 +14,7 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
     vars: {
       ITERATE_ORIGIN: "https://os.iterate.com",
       ITERATE_DENY_ZONES: "iterate.app,iterate.com",
+      ITERATE_APP_ORIGINS: JSON.stringify({ dash: "https://dash.iterate.com" }),
     },
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
@@ -21,6 +23,7 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
   };
   const config = startAppPreviewConfig(built, {
     issuer: "https://pr123-foo-os-next-preview.iterate-dev-preview.workers.dev",
+    appOrigins: { dash: "https://pr123-foo-dash-preview.iterate-dev-preview.workers.dev" },
   });
 
   test("the top level is the parent: the build's own fields, the class as a migrations entry, no exports, no vite bookkeeping", () => {
@@ -35,13 +38,16 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
     for (const key of ["exports", "topLevelName"]) expect(config).not.toHaveProperty(key);
   });
 
-  test("the preview's own block: the session class, observability, and the worker's vars with the issuer swapped", () => {
+  test("the preview's own block: the session class, observability, and the worker's vars with the issuer and the apps swapped for this PR's", () => {
     expect(config.previews).toEqual({
       observability: { enabled: true },
       durable_objects: built.durable_objects,
       vars: {
         ITERATE_ORIGIN: "https://pr123-foo-os-next-preview.iterate-dev-preview.workers.dev",
         ITERATE_DENY_ZONES: "iterate.app,iterate.com",
+        ITERATE_APP_ORIGINS: JSON.stringify({
+          dash: "https://pr123-foo-dash-preview.iterate-dev-preview.workers.dev",
+        }),
       },
     });
   });
@@ -62,4 +68,19 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
   ]);
   // elsewhere, still the whole zone: our origins' and our project wildcard's
   expect(zones).toEqual(expect.arrayContaining(["iterate.com", "iterate.app"]));
+});
+
+test("a deployed app links to the other apps at their prd origins from envs.ts, as it signs in against prd's issuer", () => {
+  const { vars } = startAppWorkerConfig(
+    { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
+    "prd",
+  );
+  expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate.com" });
+  expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
+    dash: "https://dash.iterate.com",
+    agents: "https://agents.iterate.workers.dev",
+    notes: "https://notes.iterate.workers.dev",
+    voice: "https://voice.iterate.com",
+    kit: "https://k.iterate.com",
+  });
 });

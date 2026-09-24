@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { createFileRoute, redirect, Link } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, redirect, Link } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -19,7 +19,6 @@ import {
 } from "@iterate-com/ui/components/select";
 import { LogOutIcon, UsbIcon } from "lucide-react";
 import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
-import { dashEnvs } from "../../../../../envs.ts";
 import { FirmwareInstallButton } from "../../components/firmware-install-button.tsx";
 import {
   DEFAULT_DEVICE_ID,
@@ -58,6 +57,9 @@ export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwar
   component: KitPage,
 });
 
+/** The root loader's: this deployment's dash, when it has one (routes/__root.tsx). */
+const root = getRouteApi("__root__");
+
 const horizontalFieldClassName =
   "grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start sm:gap-4";
 
@@ -66,6 +68,7 @@ function KitPage() {
   const navigate = Route.useNavigate();
   const { api, info, deviceSession, device } = Route.useRouteContext();
   const { projects, firmware } = Route.useLoaderData();
+  const { dashOrigin } = root.useLoaderData();
   const formRef = useRef<HTMLFormElement>(null);
   const [wifiSsid, setWifiSsid] = useState("");
   const [wifiPassword, setWifiPassword] = useState("");
@@ -299,12 +302,16 @@ function KitPage() {
                 ) : (
                   <>
                     The device gets its own access token for this project. Revoke it from{" "}
-                    <a
-                      href={`${dashEnvs.prd.baseUrl}/.auth/connect?${new URLSearchParams({ issuer: info.platformOrigin, next: "/sessions", scope: "iterate account organizations:write" })}`}
-                      className="underline underline-offset-2"
-                    >
-                      your sessions
-                    </a>{" "}
+                    {dashOrigin ? (
+                      <a
+                        href={`${dashOrigin}/.auth/connect?${new URLSearchParams({ issuer: info.platformOrigin, next: "/sessions", scope: "iterate account organizations:write" })}`}
+                        className="underline underline-offset-2"
+                      >
+                        your sessions
+                      </a>
+                    ) : (
+                      "your sessions"
+                    )}{" "}
                     in OS.
                   </>
                 )}

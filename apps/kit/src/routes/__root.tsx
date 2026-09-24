@@ -1,7 +1,21 @@
 import { createRootRoute, HeadContent, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import css from "../styles.css?url";
+/** This deployment's dash, where a person revokes a device's token: the worker's
+ *  `ITERATE_APP_ORIGINS` (scripts/lib/start-app.ts — prd's from envs.ts; a per-PR preview's, the
+ *  same PR's dash preview). Null when it names none: a preview run that did not deploy the dash,
+ *  whose production dash would not know the preview's sessions. */
+const dashOrigin = createServerFn().handler(async () => {
+  const { env } = await import("cloudflare:workers");
+  const origins = z.object({ dash: z.url().optional() }).parse(JSON.parse(env.ITERATE_APP_ORIGINS));
+  return origins.dash || null;
+});
+
 export const Route = createRootRoute({
+  loader: async () => ({ dashOrigin: await dashOrigin() }),
+  staleTime: Infinity,
   head: () => ({
     meta: [
       { charSet: "utf-8" },

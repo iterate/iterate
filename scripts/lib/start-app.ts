@@ -40,6 +40,16 @@ export interface StartApp {
   envs: Record<string, StartAppEnv>;
 }
 
+/** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
+ *  `ITERATE_APP_ORIGINS` (startAppWorkerConfig) — each its envs.ts map. */
+const FIRST_PARTY_APPS = {
+  dash: dashEnvs,
+  agents: agentsEnvs,
+  notes: notesEnvs,
+  voice: voiceEnvs,
+  kit: kitEnvs,
+};
+
 /** The zone one of our own ORIGINS denies: its registrable domain — except on workers.dev, where that
  *  is the whole account's `<subdomain>.workers.dev`, shared with every worker anyone on the account
  *  deploys (a self-host tried out on it included). Nothing there is userspace: a workers.dev host is
@@ -68,7 +78,7 @@ export function ownZones(): string[] {
     if (env.projectWildcard) zones.add(env.projectWildcard.hostname);
     for (const hostname of Object.keys(env.temporaryCustomHostnames || {})) zones.add(hostname);
   }
-  for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs, kitEnvs])
+  for (const envs of Object.values(FIRST_PARTY_APPS))
     for (const env of Object.values(envs) as { baseUrl: string }[])
       zones.add(ownOriginZone(env.baseUrl));
   return [...zones].sort();
@@ -100,6 +110,15 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
       // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
       // issuer is exempt) — derived from envs.ts, never spelled twice
       ITERATE_DENY_ZONES: ownZones().join(","),
+      // the first-party apps' origins by name (JSON), what a link from one app to another follows —
+      // the dash's directory of apps, Kit's link to the sessions in the dash: prd's, as the issuer
+      // is; a per-PR preview's config names the same PR's app previews instead, only the ones that
+      // run deploys (startAppPreviewConfig)
+      ITERATE_APP_ORIGINS: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(FIRST_PARTY_APPS).map(([name, envs]) => [name, envs.prd.baseUrl]),
+        ),
+      ),
       // unset ⇒ no var, no PostHog
       ...(env?.posthogProjectKey && { POSTHOG_PROJECT_KEY: env.posthogProjectKey }),
     },
@@ -235,14 +254,16 @@ export function buildStartApp(app: StartApp, env: string) {
  *  of the built config (dist/server/wrangler.json, the `preview` env's) — the shape of
  *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
  *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
- *  and its vars with the issuer swapped for the same PR's apps/os preview. The top level is
+ *  and its vars with the issuer swapped for the same PR's apps/os preview and the other apps for
+ *  the same PR's app previews (`appOrigins`, apps/os/scripts/preview-config.ts
+ *  `appPreviewOrigins`), so a link from one to another stays in the preview. The top level is
  *  the parent worker (what `wrangler preview` branches from; deployed from this same config the
  *  first time it is missing) with the class as a legacy `migrations` entry, because the pkg.pr.new
  *  wrangler build that provisions previews predates `exports`; the `previews` block is the one
  *  preview's own — assets are not a `previews` key and are inherited from the top level. */
 export function startAppPreviewConfig(
   built: Record<string, any>,
-  input: { issuer: string },
+  input: { issuer: string; appOrigins: Record<string, string> },
 ): Record<string, unknown> {
   const { exports, topLevelName, ...config } = built;
   return {
@@ -253,14 +274,21 @@ export function startAppPreviewConfig(
       observability: config.observability,
       durable_objects: config.durable_objects,
       // Every var the built worker carries (ITERATE_DENY_ZONES among them), the issuer swapped for this
-      // PR's apps/os preview.
-      vars: { ...config.vars, ITERATE_ORIGIN: input.issuer },
+      // PR's apps/os preview and the apps' origins for this PR's app previews.
+      vars: {
+        ...config.vars,
+        ITERATE_ORIGIN: input.issuer,
+        ITERATE_APP_ORIGINS: JSON.stringify(input.appOrigins),
+      },
     },
   };
 }
 
 /** Write dist/server/wrangler.preview.json from the build and return its path. */
-export function writeStartAppPreviewConfig(app: StartApp, input: { issuer: string }): string {
+export function writeStartAppPreviewConfig(
+  app: StartApp,
+  input: { issuer: string; appOrigins: Record<string, string> },
+): string {
   const dir = path.join(fileURLToPath(app.root), "dist/server");
   const built = JSON.parse(readFileSync(path.join(dir, "wrangler.json"), "utf8"));
   const file = path.join(dir, "wrangler.preview.json");
