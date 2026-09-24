@@ -162,8 +162,32 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  pushed (project/processor.ts), and Artifacts answered that fetch, right after the push, 500 or
    *  503 (2026-09-24, the latency guard: 2 of the 8 creations that failed in ~1,470). */
   #snapshotMemo: { tip: string | null; files: Record<string, string> } | null = null;
+  /** The read AT a commit in flight, one per commitOid: every caller asking for that commit while it
+   *  runs waits on it, since its files cannot change. Dropped when it settles, so a rejection is the
+   *  next caller's to retry. The memo alone is set only once a read COMPLETES: on prd at 14:36 UTC on
+   *  2026-09-24 ~915 concurrent `modules({ commitOid })` calls for one config worker each fetched the
+   *  same pack. The loader now asks once per context (worker-loader.ts), but callers of one commit
+   *  still overlap here: several contexts, and a `getCode` Cloudflare may run more than once. */
+  #snapshotReadsAtCommit = new Map<
+    string,
+    Promise<{ tip: string | null; files: Record<string, string> }>
+  >();
   async #fresh(commitOid?: string): Promise<{ tip: string | null; files: Record<string, string> }> {
-    if (commitOid && this.#snapshotMemo?.tip === commitOid) return this.#snapshotMemo;
+    if (!commitOid) return this.#fetchSnapshot();
+    if (this.#snapshotMemo?.tip === commitOid) return this.#snapshotMemo;
+    let read = this.#snapshotReadsAtCommit.get(commitOid);
+    if (!read) {
+      read = this.#fetchSnapshot(commitOid).finally(() =>
+        this.#snapshotReadsAtCommit.delete(commitOid),
+      );
+      this.#snapshotReadsAtCommit.set(commitOid, read);
+    }
+    return read;
+  }
+  /** The snapshot at `commitOid`, or at the remote's tip: the memo when it is that tip, else one fetch. */
+  async #fetchSnapshot(
+    commitOid?: string,
+  ): Promise<{ tip: string | null; files: Record<string, string> }> {
     const transport = await this.#transport("read");
     const tip = commitOid || (await transport.tipOf(REF)) || null;
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
