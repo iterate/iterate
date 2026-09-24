@@ -1,9 +1,11 @@
 # ONE PREVIEW PER PULL REQUEST of apps/os, on Cloudflare Worker Previews — the shape of
 # cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
 # The script is apps/os/scripts/preview.ts. One job per operation, named for when it runs:
-#   deploy              every push: deploys the PR merged into main (the run's own commit, the merge
-#                       commit Depot read this file from; the head alone on a dispatch whose PR
-#                       conflicts, scripts/ci/preview-tested-commit.ts)
+#   changes             every push: whether the pull request touches a preview path
+#                       (scripts/ci/preview-os-gate.ts `previewPaths`); deploy and e2e run only if so
+#   deploy              every push that does: deploys the PR merged into main (the run's own commit,
+#                       the merge commit Depot read this file from; the head alone on a dispatch whose
+#                       PR conflicts, scripts/ci/preview-tested-commit.ts)
 #                       as a preview named `pr<n>-<branch slug>` of the parent worker
 #                       os-preview, and writes the URL, the tested commit and the operations
 #                       into the PR body, under a status line: deploying, deployed or deploy failed
@@ -13,6 +15,11 @@
 #   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
 #                       artifact plus the "CI trace" and "Playwright report" commit statuses, which
 #                       open them in the ci-reports viewer
+#   gate                always, last: **Preview OS / gate**, the one check a ruleset can require. Green
+#                       when deploy and e2e passed or had nothing to prove, and on a merge-queue group
+#                       (scripts/ci/preview-os-gate.ts `previewVerdict`, docs/depot-ci.md#merge-queue)
+# The workflow has no `paths` filter because a required check has to report on every pull request:
+# GitHub leaves one "Pending" when a filter skips its workflow.
 # "e2e" skips only when deploy did not succeed. Closing the PR deletes the preview and everything it
 # owned (preview-delete.yml); the nightly sweep of previews whose PR closed without a delete, or
 # that went stale, is preview-sweep.yml.
@@ -26,10 +33,12 @@
 # voice, kit). Pull-request runs use all so every client is usable against the platform preview;
 # auto remains available for a faster targeted manual redeploy once the clients are already
 # present. action=deploy or reset runs the deploy job and then e2e, as a push does; action=e2e runs
-# e2e alone.
+# e2e alone. After retrying one job by hand (`depot ci retry <run> --job <job>`), retry trace and gate
+# too: they read the jobs they need once, when they start.
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
 # preview-delete.yml takes the same group, so a PR's delete waits for its deploy and e2e to settle.
+# A merge-queue group has no PR number and takes its own group, named for its temporary branch.
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
@@ -47,39 +56,8 @@ on:
       - opened
       - synchronize
       - reopened
-    # preview-delete.yml runs on `closed` with this same list.
-    paths:
-      # A production-workflow change must exercise this isolated deployment:
-      # production runs deploy's non-mutating readiness probes only.
-      - .depot/workflows/deploy-os.yml
-      - .depot/workflows/deploy-dash.yml
-      - .depot/workflows/deploy-agents.yml
-      - .depot/workflows/deploy-notes.yml
-      - .depot/workflows/deploy-voice.yml
-      - .depot/workflows/deploy-kit.yml
-      - .depot/workflows/preview-os.yml
-      - apps/os/**
-      - configs/**
-      - apps/dash/**
-      - apps/agents/**
-      - apps/notes/**
-      - apps/voice/**
-      - apps/kit/**
-      # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
-      - "!apps/kit/firmware/**"
-      - specs/**
-      - playwright.config.ts
-      # apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI
-      - packages/cli/**
-      - packages/iterate/**
-      - packages/shared/**
-      - packages/ui/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - envs.ts
-      - scripts/lib/**
-      - scripts/depot-ci/**
+  # A merge-queue group: only the gate runs (docs/depot-ci.md#merge-queue).
+  merge_group: {}
   workflow_dispatch:
     inputs:
       pull-request-number:
@@ -99,7 +77,7 @@ on:
         default: all
 
 concurrency:
-  group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
+  group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -117,11 +95,39 @@ defaults:
     shell: bash
 
 jobs:
+  # WHETHER THIS PULL REQUEST GETS A PREVIEW: the files its merge commit changes against main, matched
+  # as GitHub's `paths` filter matches them. A dispatch names its operation instead, and a merge-queue
+  # group deploys nothing.
+  changes:
+    name: changes
+    if: github.event_name == 'pull_request'
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 5
+    outputs:
+      preview: ${{ steps.match.outputs.preview }}
+    steps:
+      # The run's own commit and its two parents, main and the PR head: the diff against the first
+      # parent is what this pull request changes.
+      - name: Checkout the run's own commit
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Match the changed files against the preview paths
+        id: match
+        run: node scripts/ci/preview-os-gate.ts changes
+
   deploy:
     name: deploy
+    needs: changes
+    # `always()` lets a dispatch, where changes is skipped, start it.
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
+      always() &&
+      ((github.event_name == 'pull_request' && needs.changes.outputs.preview == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset')))
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -353,3 +359,29 @@ jobs:
         run: >-
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
+
+  # THE CHECK A RULESET CAN REQUIRE (docs/depot-ci.md#merge-queue): after changes, deploy and e2e,
+  # whatever they did, so it reports on every pull request and merge-queue group. The verdict's rules
+  # are scripts/ci/preview-os-gate.ts `previewVerdict`.
+  gate:
+    name: gate
+    needs: [changes, deploy, e2e]
+    if: always()
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the run's own commit
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Decide whether Preview OS proved this change
+        env:
+          PREVIEW_GATE_EVENT: ${{ github.event_name }}
+          PREVIEW_GATE_CHANGES: ${{ needs.changes.result }}
+          PREVIEW_GATE_TOUCHED: ${{ needs.changes.outputs.preview }}
+          PREVIEW_GATE_DEPLOY: ${{ needs.deploy.result }}
+          PREVIEW_GATE_E2E: ${{ needs.e2e.result }}
+        run: node scripts/ci/preview-os-gate.ts verdict

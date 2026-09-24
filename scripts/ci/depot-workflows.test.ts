@@ -5,6 +5,7 @@ import { join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
+import { previewPaths } from "./preview-os-gate.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -211,7 +212,6 @@ test.each(
 });
 
 test("runs OS and Notes stateful proofs only against an isolated preview", () => {
-  const preview = loadWorkflow(".depot/workflows/preview-os.yml");
   const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
   for (const { file } of deploymentWorkflows) {
@@ -225,7 +225,7 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
       ).toEqual([]);
     }
   }
-  expect(preview.on?.pull_request?.paths).toEqual(
+  expect(previewPaths).toEqual(
     expect.arrayContaining([
       ".depot/workflows/deploy-os.yml",
       ".depot/workflows/deploy-notes.yml",
@@ -551,7 +551,7 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
   expect(Object.keys(workflow.on || {}).sort()).toEqual(["pull_request", "workflow_dispatch"]);
   expect(workflow).toMatchObject({
     // every PR that got a preview, and no other
-    on: { pull_request: { types: ["closed"], paths: preview.on?.pull_request?.paths } },
+    on: { pull_request: { types: ["closed"], paths: previewPaths } },
     // a delete waits for the PR's in-flight deploy and e2e instead of racing them
     concurrency: preview.concurrency,
   });
@@ -846,6 +846,19 @@ test("Preview delete checks out the close's own commit", () => {
   expect(checkout?.with?.ref).toBe(
     "${{ github.event_name == 'pull_request' && github.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}",
   );
+});
+
+// docs/depot-ci.md#merge-queue: every check a ruleset can require reports on a merge-queue group, or
+// the queue waits for it until its timeout and drops the pull request.
+test.each([
+  ".depot/workflows/lint-typecheck.yml",
+  ".depot/workflows/test.yml",
+  ".depot/workflows/preview-os.yml",
+])("%s runs on merge-queue groups and on every pull request", (file) => {
+  const workflow = loadWorkflow(file);
+  expect(workflow.on).toHaveProperty("merge_group");
+  // a `paths` filter would leave the check Pending on the pull requests it skips
+  expect(workflow.on?.pull_request?.paths).toBeUndefined();
 });
 
 test("labels unit artifacts with the pull-request head, whose merge commit the job tests", () => {

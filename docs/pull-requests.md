@@ -142,10 +142,9 @@ same three ways. The rules that survive contact:
    first line so a stale monitor is recognizable at a glance.
 
 Also know what actually blocks the merge: `gh pr view --json mergeStateStatus`
-answers `BLOCKED` (required things missing — the `main` ruleset requires
-**Lint and Typecheck / lint-typecheck** and **Test / test**), `UNSTABLE`
-(something failing that is NOT required — the Preview OS deploy and e2e are in
-this category), or `CLEAN`. A wait-for-green loop that treats `UNSTABLE` as
+answers `BLOCKED` (required things missing — the "Required CI" ruleset names
+them: `gh api repos/iterate/iterate/rulesets/18718115 --jq '.rules'`), `UNSTABLE`
+(something failing that is NOT required), or `CLEAN`. A wait-for-green loop that treats `UNSTABLE` as
 fatal waits forever on a red non-required check. GitHub does not enforce
 review-thread resolution on `main`; this doc does.
 
@@ -164,7 +163,8 @@ review-thread resolution on `main`; this doc does.
 - Preview flakiness: investigate; re-run or fix when you can. Do not use a red check as “close enough.”
 - If an unrelated flaky or pathologically slow test is quarantined under the
   [testing protocol](./testing.md#flaky-test-quarantine-protocol), the PR body
-  must prominently name the skipped test/lane and link its tracking issue. A hidden skip
+  must prominently name the skipped test or suite and link its tracking issue. A hidden skip
   is not green CI.
 - When the human asks to merge: wait for green CI **and** zero unresolved review threads, then merge (squash unless told otherwise).
+- When the ruleset requires a merge queue (its rules include `merge_queue`), `gh pr merge <n>` adds the PR to the queue instead of merging it. The queue merges once the required checks pass on the PR merged with main and every PR ahead of it, or removes the PR with a timeline entry naming the failed check. Wait for `gh pr view <n> --json state` to say `MERGED` ([Merge queue](depot-ci.md#merge-queue)).
 - Do not commit, push, open, or merge a PR unless the human asked for that action (or a standing instruction for this session clearly includes it).

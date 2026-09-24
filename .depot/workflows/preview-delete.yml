@@ -3,8 +3,8 @@
 # Artifacts namespace, KV namespaces, R2 bucket) and the client previews.
 #
 # Its own workflow, triggered only when a PR closes, so no push to an open PR carries it as a skipped
-# job. It runs for the PRs that got a preview: its `paths` are Preview OS's
-# (scripts/ci/depot-workflows.test.ts keeps them equal). It shares Preview OS's per-PR concurrency
+# job. It runs for the PRs that got a preview: its `paths` are the preview paths Preview OS's changes
+# job matches (scripts/ci/preview-os-gate.ts `previewPaths`; depot-workflows.test.ts keeps them equal). It shares Preview OS's per-PR concurrency
 # group, so a delete waits for that PR's in-flight deploy and e2e to settle instead of racing them.
 # A delete that never ran or failed is the nightly sweep's (preview-sweep.yml).
 #
@@ -25,7 +25,7 @@ on:
   pull_request:
     types:
       - closed
-    # Preview OS's pull_request paths, verbatim (preview-os.yml says why each is there).
+    # The preview paths, verbatim (scripts/ci/preview-os-gate.ts `previewPaths` says why each is there).
     paths:
       - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-dash.yml
@@ -62,7 +62,7 @@ on:
         type: string
 
 concurrency:
-  group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
+  group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || github.ref }}
   cancel-in-progress: false
 
 env:

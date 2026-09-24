@@ -4,9 +4,11 @@ on:
     branches:
       - main
   pull_request: {}
+  # A merge-queue group, so the check a ruleset requires reports on it (docs/depot-ci.md#merge-queue).
+  merge_group: {}
   workflow_dispatch: {}
 # Cancel a branch's in-flight run when a newer commit supersedes it. PRs use
-# head_ref; main and manual runs use ref_name.
+# head_ref; main, manual runs and merge-queue groups (each its own temporary branch) use ref_name.
 concurrency:
   group: lint-typecheck-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true

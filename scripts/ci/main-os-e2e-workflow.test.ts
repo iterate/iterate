@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { previewPaths } from "./preview-os-gate.ts";
 
 /** The parts of .depot/workflows/main-os-e2e.yml these tests read. */
 type MainWorkflow = {
@@ -27,16 +28,12 @@ type MainWorkflow = {
 };
 
 const main = readWorkflow("main-os-e2e.yml") as MainWorkflow;
-const preview = readWorkflow("preview-os.yml") as MainWorkflow & {
-  on: { pull_request: { paths: string[] } };
-};
+const preview = readWorkflow("preview-os.yml") as MainWorkflow;
 
 test("runs on every main push a PR preview would run for, one run at a time, never cancelled", () => {
   expect(main.on.push?.branches).toEqual(["main"]);
   expect(main.on.push?.paths).toEqual(
-    expect.arrayContaining(
-      preview.on.pull_request.paths.filter((path) => !path.includes("preview-os.yml")),
-    ),
+    expect.arrayContaining(previewPaths.filter((path) => !path.includes("preview-os.yml"))),
   );
   // every started run reaches delete and alert; Depot keeps only the newest pending push
   expect(main).toMatchObject({

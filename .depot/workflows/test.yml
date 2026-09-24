@@ -4,8 +4,11 @@ on:
     branches:
       - main
   pull_request: {}
+  # A merge-queue group, so the check a ruleset requires reports on it (docs/depot-ci.md#merge-queue).
+  merge_group: {}
 # Rapid pushes to a branch supersede each other. On PRs, head_ref identifies
-# the source branch; on main, ref_name keeps only the newest validation run.
+# the source branch; on main, ref_name keeps only the newest validation run; a
+# merge-queue group's ref_name is its own temporary branch.
 concurrency:
   group: test-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true

@@ -69,33 +69,40 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 
 ## Workflows
 
-| File                         | Runs on                                                  | What it does                                                                                            |
-| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `lint-typecheck.yml`         | PR, main push, dispatch                                  | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                  |
-| `test.yml`                   | PR, main push                                            | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
-| `loc-report.yml`             | PR, dispatch                                             | The LOC table in the PR body                                                                            |
-| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed            | The Slack PR update and the daily PR dashboard                                                          |
-| `preview-os.yml`             | PR touching the preview paths, dispatch                  | **Preview OS**: the PR's preview, its e2e job, the CI trace and report statuses                         |
-| `preview-delete.yml`         | Such a PR closing, dispatch                              | Deletes the PR's preview                                                                                |
-| `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                   |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: a throwaway preview of main, e2e and specs, trace, delete, alert                       |
-| `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                  |
-| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
-| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                |
-| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image))                                                      |
-| `do-duration-probe.yml`      | Hourly, dispatch                                         | Durable Object cost alarm for both Cloudflare accounts                                                  |
-| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                        |
-| `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                      |
-| `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
-| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against a throwaway preview of main; PostHog; pages on a change of state |
-| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state          |
-| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                    |
-| `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
-| `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                   |
+| File                         | Runs on                                                  | What it does                                                                                                                                                               |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint-typecheck.yml`         | PR, merge-queue group, main push, dispatch               | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                                                                                     |
+| `test.yml`                   | PR, merge-queue group, main push                         | **Test** (required): `pnpm test`, then the Kit firmware host tests                                                                                                         |
+| `loc-report.yml`             | PR, dispatch                                             | The LOC table in the PR body                                                                                                                                               |
+| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed            | The Slack PR update and the daily PR dashboard                                                                                                                             |
+| `preview-os.yml`             | PR, merge-queue group, dispatch                          | **Preview OS**: the PR's preview when it touches the preview paths, its e2e job, the CI trace and report statuses, and **Preview OS / gate** ([Merge queue](#merge-queue)) |
+| `preview-delete.yml`         | A PR touching the preview paths closing, dispatch        | Deletes the PR's preview                                                                                                                                                   |
+| `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                                                                                      |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: a throwaway preview of main, e2e and specs, trace, delete, alert                                                                                          |
+| `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                                                                                     |
+| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                                                                                                |
+| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                                                                                   |
+| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image))                                                                                                                         |
+| `do-duration-probe.yml`      | Hourly, dispatch                                         | Durable Object cost alarm for both Cloudflare accounts                                                                                                                     |
+| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                                                                                           |
+| `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                                                                                         |
+| `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                                                                                          |
+| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against a throwaway preview of main; PostHog; pages on a change of state                                                                    |
+| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state                                                                             |
+| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                                                                                       |
+| `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                                                                                   |
+| `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                                                                                      |
 
 Each file's header comment and `on:` block are the details.
 
 ## Commands
+
+Without a `depot login`, the organization token CI's telemetry and traces use works for reading
+runs, logs and artifacts:
+
+```bash
+export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+```
 
 Start with the built-in help when unsure:
 
@@ -561,7 +568,10 @@ the red check.
 ## Which PRs get a preview
 
 The Preview OS workflow (`.depot/workflows/preview-os.yml`, cribbed from
-cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
+cloudflare-os) runs on every pull request, and its **changes** job decides whether
+the PR gets a preview: the files the run's merge commit changes against main,
+matched against `previewPaths` in `scripts/ci/preview-os-gate.ts` as GitHub's
+`paths` filter would match them. The list: `apps/os`,
 `configs`, the five hosted clients (`apps/dash`, `apps/agents`,
 `apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `specs` and
 `playwright.config.ts`, `packages/cli` (the e2e drives the built CLI),
@@ -569,12 +579,44 @@ cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
 `envs.ts`, `scripts/lib`, `scripts/depot-ci`,
 and its own and the six production deploy workflows (OS, Dash, Agents, Notes,
 Voice, Kit: a production-workflow change must exercise the isolated
-deployment). A PR that
-touches none of them, such as docs, lint rules or Kit firmware, gets no preview
-checks at all: they never appear, rather than reporting a skip. The Preview
-delete workflow (`.depot/workflows/preview-delete.yml`) runs on the same list
-when such a PR closes; `scripts/ci/depot-workflows.test.ts` keeps the two lists
-equal.
+deployment). A PR that touches none of them, such as docs, lint rules or Kit
+firmware, gets a green **changes** and **gate**, and deploy, e2e and trace show as
+skipped. The list is not a workflow `paths` filter because a filtered-out workflow
+reports nothing, and a check a ruleset requires then stays "Pending" for good
+([Merge queue](#merge-queue)). The Preview delete workflow
+(`.depot/workflows/preview-delete.yml`) runs on the same list, as its `paths`,
+when such a PR closes; `scripts/ci/depot-workflows.test.ts` keeps the two equal.
+
+## Merge queue
+
+A pull request's checks prove the PR merged into main as main stood at its last
+push ([Which tree a pull request's CI tests](#which-tree-a-pull-requests-ci-tests)).
+Two PRs that are each green can still break main together: one renames a
+function, the other adds a call to the old name. GitHub's merge queue closes that
+gap. Once main requires it, merging a PR adds it to the queue; GitHub builds a
+temporary `gh-readonly-queue/main/pr-<n>-<sha>` branch holding main, every PR
+ahead of it and this one, and merges only when the required checks pass on that
+commit.
+
+The workflows are ready for it:
+
+- **Lint and Typecheck** and **Test** run on `merge_group`, check out the group's
+  commit (`github.sha`), and take a concurrency group named for the group's branch.
+- **Preview OS / gate** is the one Preview OS check a ruleset can require. It runs
+  on every pull request and group, after changes, deploy and e2e whatever they
+  did, and its rules are `previewVerdict` in `scripts/ci/preview-os-gate.ts`:
+  green on a PR that touches no preview path or whose deploy and e2e passed; green
+  on a merge-queue group without deploying, because the PR's own gate was green to
+  join the queue and Lint and Typecheck and Test run again on the group. Requiring
+  deploy or e2e directly would not work: GitHub counts a job skipped by its `if` as
+  passing, so a failed deploy would pass a skipped e2e
+  ([GitHub: skipped but required checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks)).
+- No `push` workflow runs on a queue branch: every `push` trigger names `main`.
+
+Whether main requires the queue, and which checks it requires, is the "Required
+CI" ruleset's (`gh api repos/iterate/iterate/rulesets/18718115`). After retrying
+one Preview OS job by hand, retry its trace and gate jobs too: each reads the jobs
+it needs once, when it starts.
 
 ## Which main pushes deploy
 
@@ -609,7 +651,7 @@ or alone on an `action=e2e` dispatch, then runs the Vitest e2e suite and the
 Playwright specs concurrently against the live preview (`runE2e` in
 `apps/os/scripts/preview.ts`). Job dependencies replace milestone signalling:
 there is no commit status to wait for, and a red e2e can run again without a
-redeploy (dispatch `action=e2e`, or retry the e2e job and then the trace job), because the preview persists
+redeploy (dispatch `action=e2e`, or retry the e2e job and then the trace and gate jobs), because the preview persists
 until the PR closes.
 
 ## Interactive trace reports

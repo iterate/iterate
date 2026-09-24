@@ -68,12 +68,68 @@ test("Preview OS deploys the PR merged into main, and e2e uses that very commit"
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
 });
 
-test("Preview OS: only the trace runs after the suite, so the next push's deploy waits for nothing else", () => {
+test("Preview OS: only the trace and the gate run after the suite, and the gate starts no deploy", () => {
   const afterSuite = Object.entries(preview.jobs).filter(([, job]) =>
     [job.needs].flat().includes("e2e"),
   );
-  expect(afterSuite.map(([jobId]) => jobId)).toEqual(["trace"]);
+  expect(afterSuite.map(([jobId]) => jobId)).toEqual(["trace", "gate"]);
+  expect(preview.jobs.gate.steps?.map((step) => step.run).filter(Boolean)).toEqual([
+    "node scripts/ci/preview-os-gate.ts verdict",
+  ]);
 });
+
+// scripts/ci/preview-os-gate.ts: the changes job decides from the run's merge commit, on pull
+// requests only; a dispatch names its operation and a merge-queue group deploys nothing.
+test("Preview OS: changes diffs the run's merge commit against its first parent", () => {
+  expect(preview.jobs.changes).toMatchObject({
+    if: "github.event_name == 'pull_request'",
+    outputs: { preview: "${{ steps.match.outputs.preview }}" },
+    steps: [
+      { uses: "actions/checkout@v4", with: { ref: "${{ github.sha }}", "fetch-depth": 2 } },
+      { id: "match", run: "node scripts/ci/preview-os-gate.ts changes" },
+    ],
+  });
+});
+
+// The gate reads every job it needs whatever they did, and hands their results to the verdict.
+test("Preview OS: the gate always runs, last, on the results of changes, deploy and e2e", () => {
+  expect(preview.jobs.gate).toMatchObject({
+    needs: ["changes", "deploy", "e2e"],
+    if: "always()",
+  });
+  expect(preview.jobs.gate.steps?.at(-1)?.env).toEqual({
+    PREVIEW_GATE_EVENT: "${{ github.event_name }}",
+    PREVIEW_GATE_CHANGES: "${{ needs.changes.result }}",
+    PREVIEW_GATE_TOUCHED: "${{ needs.changes.outputs.preview }}",
+    PREVIEW_GATE_DEPLOY: "${{ needs.deploy.result }}",
+    PREVIEW_GATE_E2E: "${{ needs.e2e.result }}",
+  });
+});
+
+// A pull request deploys when changes found a preview path; a dispatch when it asks for a deploy or
+// a reset; a merge-queue group never.
+test.each([
+  ["pull_request", "", "true", true],
+  ["pull_request", "", "false", false],
+  // changes failed: no output, no deploy, and the gate goes red on the failure
+  ["pull_request", "", "", false],
+  ["workflow_dispatch", "deploy", "", true],
+  ["workflow_dispatch", "reset", "", true],
+  ["workflow_dispatch", "e2e", "", false],
+  ["merge_group", "", "", false],
+])(
+  "Preview OS: deploy on %s action=%s with changes preview=%s runs: %s",
+  (event, action, touched, expected) => {
+    expect(
+      runs(preview.jobs.deploy.if || "", {
+        "github.event_name": event,
+        "inputs.action": action,
+        "inputs.pull-request-number": event === "workflow_dispatch" ? "123" : "",
+        "needs.changes.outputs.preview": touched,
+      }),
+    ).toBe(expected);
+  },
+);
 
 // After every deploy that succeeded, never after one that did not, and alone (deploy skipped) on
 // a dispatch with action=e2e.
@@ -86,28 +142,23 @@ test.each([
   ["workflow_dispatch", "reset", "success", true],
   ["workflow_dispatch", "reset", "failure", false],
   ["workflow_dispatch", "e2e", "skipped", true],
-])("Preview OS: e2e on %s action=%s after a %s deploy runs: %s", (event, action, result, runs) => {
-  const condition = preview.jobs.e2e.if || "";
-  const context: Record<string, string> = {
-    "github.event_name": event,
-    "inputs.action": action,
-    "inputs.pull-request-number": event === "workflow_dispatch" ? "123" : "",
-    "needs.deploy.result": result,
-  };
-  // Enough of the expression language for this condition: without a status function a job's
-  // `if` is `success() && (...)`, which a skipped or failed deploy makes false. Then always(),
-  // quoted strings, ==, !=, &&, || and parentheses are JavaScript once each context path is
-  // replaced by its value.
-  const javascript = (condition.includes("always()") ? condition : `success() && (${condition})`)
-    .replaceAll("always()", "true")
-    .replaceAll("success()", String(result === "success"))
-    .replace(/[a-z_]+(?:\.[a-z_-]+)+/g, (path) => {
-      expect(context, `${path} is not in the test's context`).toHaveProperty([path]);
-      return JSON.stringify(context[path]);
-    });
-  // oxlint-disable-next-line no-new-func -- evaluating the workflow's own condition IS the test
-  expect(new Function(`return (${javascript});`)()).toBe(runs);
-});
+])(
+  "Preview OS: e2e on %s action=%s after a %s deploy runs: %s",
+  (event, action, result, expected) => {
+    expect(
+      runs(
+        preview.jobs.e2e.if || "",
+        {
+          "github.event_name": event,
+          "inputs.action": action,
+          "inputs.pull-request-number": event === "workflow_dispatch" ? "123" : "",
+          "needs.deploy.result": result,
+        },
+        result === "success",
+      ),
+    ).toBe(expected);
+  },
+);
 
 // docs/ci-traces.md: every run step's markers, the e2e step as the Test phase, and one trace job
 // after deploy and e2e settle.
@@ -132,3 +183,21 @@ test("the CI trace collects deploy and e2e after both settle and posts its statu
   expect(order.every((index) => index >= 0)).toBe(true);
   expect(order).toEqual([...order].sort((a, b) => a - b));
 });
+
+/**
+ * Enough of the expression language for these conditions: without a status function a job's `if`
+ * is `success() && (...)`, which a skipped or failed job it needs makes false (`neededSucceeded`).
+ * Then always(), quoted strings, ==, !=, &&, || and parentheses are JavaScript once each context
+ * path is replaced by its value.
+ */
+function runs(condition: string, context: Record<string, string>, neededSucceeded = false) {
+  const javascript = (condition.includes("always()") ? condition : `success() && (${condition})`)
+    .replaceAll("always()", "true")
+    .replaceAll("success()", String(neededSucceeded))
+    .replace(/[a-z_]+(?:\.[a-z_-]+)+/g, (path) => {
+      expect(context, `${path} is not in the test's context`).toHaveProperty([path]);
+      return JSON.stringify(context[path]);
+    });
+  // oxlint-disable-next-line no-new-func -- evaluating the workflow's own condition IS the test
+  return new Function(`return (${javascript});`)() as boolean;
+}
