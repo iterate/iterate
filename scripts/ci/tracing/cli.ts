@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { z } from "zod";
 import { DEPOT_ORG } from "../depot.ts";
+import { getOctokit } from "../github.ts";
 import { assembleTrace, jobKeyInWorkflow, Workflow, renderTrace, stepCommands } from "./tracing.ts";
 
 /** The workflows whose runs are traced: the per-PR preview's deploy and e2e jobs. */
@@ -8,42 +9,26 @@ const TRACED_WORKFLOWS = ["preview-os-next.yml"];
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {
-  /** Collect preparation and tests before cleanup, excluding the finish job. */
+  /** Collect the deploy and e2e jobs of the workflow run this job belongs to. */
   async current(directory: string) {
     const source = new URL(z.string().url().parse(process.env.DEPOT_JOB_URL));
     const workflowId = z
       .string()
       .regex(/^[a-z0-9]+$/)
       .parse(source.pathname.split("/").at(-1));
-    const attemptId = z.string().min(1).parse(source.searchParams.get("attempt"));
-    // Depot's log API can lag behind this still-running job. Step outputs carry
-    // our own verdict immediately; completed producer logs still come from Depot.
-    const lines = [
-      { stepId: "tests_passed", marker: process.env.CI_TRACE_GREEN },
-      { stepId: "merge_reports", marker: process.env.CI_TRACE_VALIDATION_END },
-      { stepId: "tests_passed", marker: process.env.CI_TRACE_GREEN_END },
-    ].flatMap(({ stepId, marker }) =>
-      marker ? [{ stepKey: stepId, stepId, stepName: "", body: `@@ci-trace ${marker}` }] : [],
-    );
-    // Only the legacy finish job hands over a verdict. The Preview OS trace job runs after deploy
-    // and e2e have settled and has none, so it adds no local lines.
-    return this.write(workflowId, directory, new Map(lines.length ? [[attemptId, lines]] : []));
+    return this.write(workflowId, directory);
   }
 
   /** Build local HTML/OTLP files without publishing or changing a commit status. */
   async render(workflowId: string, directory: string) {
-    return this.write(workflowId, directory, new Map());
+    return this.write(workflowId, directory);
   }
 
-  private async write(
-    workflowId: string,
-    directory: string,
-    local: Map<string, z.infer<typeof LogPage>["lines"]>,
-  ) {
+  private async write(workflowId: string, directory: string) {
     const workflow = Workflow.parse(await this.depot("GetWorkflow", { workflowId }));
     if (workflow.repo !== repository || !TRACED_WORKFLOWS.includes(workflow.workflowPath))
       throw new Error("Only Iterate preview workflows can publish CI traces");
-    const report = await this.collect(workflow, local);
+    const report = await this.collect(workflow);
     await mkdir(directory, { recursive: true });
     await writeFile(`${directory}/trace.json`, JSON.stringify(report, null, 2));
     await writeFile(`${directory}/trace.html`, await renderTrace(report));
@@ -61,10 +46,7 @@ export default class CiTrace {
     return { directory, name };
   }
 
-  private async collect(
-    workflow: z.infer<typeof Workflow>,
-    local: Map<string, z.infer<typeof LogPage>["lines"]>,
-  ) {
+  private async collect(workflow: z.infer<typeof Workflow>) {
     const source = await fetch(
       `https://raw.githubusercontent.com/${repository}/${workflow.sha}/.depot/workflows/${workflow.workflowPath}`,
       { signal: AbortSignal.timeout(30_000) },
@@ -105,22 +87,7 @@ export default class CiTrace {
         ] as const;
       }),
     );
-    const logs = new Map(entries);
-    for (const [attemptId, lines] of local) {
-      if (
-        !workflow.jobs.some(
-          (job) =>
-            job.jobKey.endsWith(":finish") &&
-            job.attempts.some((attempt) => attempt.attemptId === attemptId),
-        )
-      )
-        throw new Error("Local verdict does not belong to this workflow's finish attempt");
-      logs.set(attemptId, [
-        ...(logs.get(attemptId) || []),
-        ...lines.map((line) => ({ ...line, command: "" })),
-      ]);
-    }
-    return assembleTrace(workflow, logs);
+    return assembleTrace(workflow, new Map(entries));
   }
 
   /**
@@ -140,7 +107,7 @@ export default class CiTrace {
     const green = attribute("ci.time_to_green_ms");
     const red = attribute("ci.time_to_red_ms");
     const status = {
-      state: green ? "success" : red ? "failure" : "error",
+      state: green ? ("success" as const) : red ? ("failure" as const) : ("error" as const),
       context: "CI trace",
       description: green
         ? `Time to green ${duration(Number(green))} · report in the job's artifacts`
@@ -149,17 +116,12 @@ export default class CiTrace {
           : `No verdict (${attribute("ci.status")}) · report in the job's artifacts`,
       target_url: z.string().url().parse(process.env.DEPOT_JOB_URL),
     };
-    const response = await fetch(`https://api.github.com/repos/${repository}/statuses/${sha}`, {
-      method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${z.string().min(1).parse(process.env.GITHUB_TOKEN)}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(status),
-      signal: AbortSignal.timeout(30_000),
+    await getOctokit().rest.repos.createCommitStatus({
+      owner: "iterate",
+      repo: "iterate",
+      sha,
+      ...status,
     });
-    if (!response.ok) throw new Error(`GitHub status returned HTTP ${response.status}`);
     return status;
   }
 
