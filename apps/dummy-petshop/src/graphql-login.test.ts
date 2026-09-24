@@ -6,34 +6,13 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { GRAPHQL_LOGIN_PASSWORD, GRAPHQL_SESSION_TTL_SECONDS } from "./graphql-login.ts";
-import { seedPets } from "./pets.ts";
-import { randomSealKey } from "./seal.ts";
-import { PetshopStateDurableObject } from "./state.ts";
-import { handlePetshopRequest, type PetshopDeps } from "./worker.ts";
-
-/** One shop "environment": the app over the real state class and an in-memory storage fake. */
-type Shop = (path: string, init?: RequestInit) => Promise<Response>;
-
-function makeShop(): Shop {
-  const blobs = new Map<string, unknown>();
-  const storage = {
-    get: async (key: string) => structuredClone(blobs.get(key)),
-    put: async (key: string, value: unknown) => void blobs.set(key, structuredClone(value)),
-  };
-  const deps: PetshopDeps = {
-    state: new PetshopStateDurableObject({ storage } as unknown as DurableObjectState, {}),
-    sealKey: randomSealKey(),
-    pets: seedPets(),
-  };
-  return (path, init) =>
-    handlePetshopRequest(new Request(`https://petshop.example${path}`, init), deps);
-}
+import { makeShop, type Shop } from "./test/shop.ts";
 
 function graphql(
   shop: Shop,
   input: { query: string; variables?: Record<string, unknown> },
 ): Promise<Response> {
-  return shop("/graphql", {
+  return shop.call("/graphql", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ query: input.query, variables: input.variables || {} }),
@@ -57,7 +36,7 @@ async function login(
 }
 
 function api(shop: Shop, path: string, token: string): Promise<Response> {
-  return shop(path, { headers: { authorization: `Bearer ${token}` } });
+  return shop.call(path, { headers: { authorization: `Bearer ${token}` } });
 }
 
 afterEach(() => vi.useRealTimers());
@@ -89,7 +68,7 @@ describe("graphql session-login door", () => {
     const shop = makeShop();
     const token = (await login(shop)).accessToken as string;
 
-    expect((await shop("/api/me")).status).toBe(401);
+    expect(await shop.call("/api/me")).toMatchObject({ status: 401 });
 
     const me = await api(shop, "/api/me", token);
     expect(me.status).toBe(200);
@@ -113,7 +92,7 @@ describe("graphql session-login door", () => {
     expect((await api(shop, "/api/me", token)).status).toBe(401);
 
     const fresh = (await login(shop)).accessToken as string;
-    await shop("/__backdoor/expire-tokens", {
+    await shop.call("/__backdoor/expire-tokens", {
       method: "POST",
       body: JSON.stringify({ clientId: "graphql-session-login" }),
     });

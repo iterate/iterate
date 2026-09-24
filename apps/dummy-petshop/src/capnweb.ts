@@ -15,8 +15,8 @@
  * exactly as it does for /mcp and /api/v2, and threads the authenticated owner
  * + request-scoped catalogue through. No in-band (capnweb-level) auth yet.
  *
- * This makes the pet shop a real remote capnweb API for the clean-room's
- * `itx.connectToCapnweb` library connector (apps/os).
+ * This makes the pet shop a real remote capnweb API for the OS's
+ * `itx.connectToCapnweb` library connector.
  */
 import { RpcTarget, newWorkersRpcResponse } from "capnweb";
 import type { Pet } from "./pets.ts";

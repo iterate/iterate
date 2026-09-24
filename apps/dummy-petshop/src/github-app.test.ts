@@ -1,11 +1,10 @@
 /**
- * Unit tests for the GitHub-App installation stand-in (design §9 P4, ADR 0006),
+ * Unit tests for the GitHub-App installation stand-in,
  * run in plain Node like worker.test.ts/gateway.test.ts. The whole loop is
  * hermetic: generate an RSA keypair in-test, register ONLY the public key with
  * petshop's App registry, sign an App JWT with the private key exactly as the OS
  * side's secrets `sign()` compute method does (RS256 over `header.payload`,
- * base64url — see apps/os/src/domains/secrets/utils.ts `computeSignatureBase64Url`
- * and its test), exchange it for an installation token, and drive the bearer API
+ * base64url), exchange it for an installation token, and drive the bearer API
  * with it. This proves petshop verifies REAL signatures and never needs — never
  * even sees — the private key.
  */
@@ -13,35 +12,15 @@ import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { beforeAll, describe, expect, test } from "vitest";
 import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
-import { seedPets } from "./pets.ts";
-import { randomSealKey } from "./seal.ts";
-import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID, PetshopStateDurableObject } from "./state.ts";
-import { handlePetshopRequest, type PetshopDeps } from "./worker.ts";
-
-/** One shop "environment": the app over the real state class and an in-memory storage fake. */
-type Shop = (path: string, init?: RequestInit) => Promise<Response>;
-
-function makeShop(): Shop {
-  const blobs = new Map<string, unknown>();
-  const storage = {
-    get: async (key: string) => structuredClone(blobs.get(key)),
-    put: async (key: string, value: unknown) => void blobs.set(key, structuredClone(value)),
-  };
-  const deps: PetshopDeps = {
-    state: new PetshopStateDurableObject({ storage } as unknown as DurableObjectState, {}),
-    sealKey: randomSealKey(),
-    pets: seedPets(),
-  };
-  return (path, init) =>
-    handlePetshopRequest(new Request(`https://petshop.example${path}`, init), deps);
-}
+import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID } from "./state.ts";
+import { makeShop, type Shop } from "./test/shop.ts";
 
 const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
 
 /** POST the installation-token endpoint with an App JWT in the Bearer header. */
 const mintInstallationToken = (shop: Shop, installationId: string, jwt: string) =>
-  shop(`/app/installations/${installationId}/access_tokens`, {
+  shop.call(`/app/installations/${installationId}/access_tokens`, {
     method: "POST",
     headers: { authorization: `Bearer ${jwt}` },
   });
@@ -120,7 +99,7 @@ describe("GitHub App installation-token minting", () => {
     const { privateKey, publicKeyPem } = appKeys;
 
     // Register ONLY the public key against the seeded installation.
-    const registered = await shop("/__backdoor/apps", postJson({ publicKeyPem }));
+    const registered = await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
     expect(registered.status).toBe(201);
     expect(await registered.json()).toMatchObject({
       appId: DEFAULT_APP_ID,
@@ -136,7 +115,7 @@ describe("GitHub App installation-token minting", () => {
     expect(Date.parse(expires_at)).toBeGreaterThan(Date.now());
 
     // The installation token names which installation it acts as, on /api/me…
-    const me = await shop("/api/me", bearer(token));
+    const me = await shop.call("/api/me", bearer(token));
     expect(me.status).toBe(200);
     expect(await me.json()).toMatchObject({
       installationId: DEFAULT_INSTALLATION_ID,
@@ -144,7 +123,7 @@ describe("GitHub App installation-token minting", () => {
     });
 
     // …and is a first-class bearer on the rest of the API.
-    const pets = await shop("/api/pets", bearer(token));
+    const pets = await shop.call("/api/pets", bearer(token));
     expect(pets.status).toBe(200);
     expect(await pets.json()).toMatchObject({ owner: `installation:${DEFAULT_INSTALLATION_ID}` });
   });
@@ -152,7 +131,7 @@ describe("GitHub App installation-token minting", () => {
   test("registering a distinct app id + installation id mints a token naming them", async () => {
     const shop = makeShop();
     const { privateKey, publicKeyPem } = appKeys;
-    const created = await shop(
+    const created = await shop.call(
       "/__backdoor/apps",
       postJson({ appId: "app-42", installationId: "install-42", publicKeyPem }),
     );
@@ -162,7 +141,7 @@ describe("GitHub App installation-token minting", () => {
     const minted = await mintInstallationToken(shop, "install-42", jwt);
     expect(minted.status).toBe(201);
     const { token } = await minted.json<{ token: string }>();
-    expect(await (await shop("/api/me", bearer(token))).json()).toMatchObject({
+    expect(await (await shop.call("/api/me", bearer(token))).json()).toMatchObject({
       installationId: "install-42",
       appId: "app-42",
     });
@@ -171,7 +150,7 @@ describe("GitHub App installation-token minting", () => {
   test("a JWT signed by a different key than the registered one is rejected 401", async () => {
     const shop = makeShop();
     const { publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
 
     const jwt = await signAppJwt(attackerKeys.privateKey, appJwtClaims(DEFAULT_APP_ID));
     const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
@@ -185,7 +164,7 @@ describe("GitHub App installation-token minting", () => {
   test("an expired App JWT is rejected 401", async () => {
     const shop = makeShop();
     const { privateKey, publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
 
     const jwt = await signAppJwt(
       privateKey,
@@ -202,7 +181,7 @@ describe("GitHub App installation-token minting", () => {
   test("a JWT whose iss is not the app id is rejected 401", async () => {
     const shop = makeShop();
     const { privateKey, publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
 
     const jwt = await signAppJwt(
       privateKey,
@@ -233,9 +212,9 @@ describe("GitHub App installation-token minting", () => {
   test("a missing or malformed Authorization JWT is rejected 401", async () => {
     const shop = makeShop();
     const { publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
 
-    const noAuth = await shop(`/app/installations/${DEFAULT_INSTALLATION_ID}/access_tokens`, {
+    const noAuth = await shop.call(`/app/installations/${DEFAULT_INSTALLATION_ID}/access_tokens`, {
       method: "POST",
     });
     expect(noAuth.status).toBe(401);
@@ -246,7 +225,7 @@ describe("GitHub App installation-token minting", () => {
 
   test("registering without a public key is a 400", async () => {
     const shop = makeShop();
-    expect((await shop("/__backdoor/apps", postJson({}))).status).toBe(400);
+    expect(await shop.call("/__backdoor/apps", postJson({}))).toMatchObject({ status: 400 });
   });
 });
 
@@ -279,10 +258,10 @@ describe("GitHub App installation webhooks", () => {
   test("echo mode returns a body signed with the app's webhookSecret (OS verifies this)", async () => {
     const shop = makeShop();
     const { publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
 
     const fired = await (
-      await shop(
+      await shop.call(
         "/__backdoor/apps/fire-webhook",
         postJson({ event: { event: "installation_repositories", action: "added" } }),
       )
@@ -299,10 +278,10 @@ describe("GitHub App installation webhooks", () => {
   test("badSignature deliveries do not verify against the webhookSecret", async () => {
     const shop = makeShop();
     const { publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
 
     const fired = await (
-      await shop("/__backdoor/apps/fire-webhook", postJson({ badSignature: true }))
+      await shop.call("/__backdoor/apps/fire-webhook", postJson({ badSignature: true }))
     ).json<{ signature: string; payload: string }>();
     expect(fired.signature).not.toBe(hexHmac("wh-secret-123", fired.payload));
   });
@@ -310,7 +289,7 @@ describe("GitHub App installation webhooks", () => {
   test("deliver mode POSTs the x-hub-signature-256 header (GitHub shape) a receiver verifies", async () => {
     const shop = makeShop();
     const { publicKeyPem } = appKeys;
-    await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
     const receiver = await startReceiver();
     try {
       // This test is about the SIGNATURE SHAPE, not TCP reliability: a
@@ -320,7 +299,7 @@ describe("GitHub App installation webhooks", () => {
       let fired: { status: number; signature: string; error?: string };
       for (let attempt = 1; ; attempt += 1) {
         fired = await (
-          await shop(
+          await shop.call(
             "/__backdoor/apps/fire-webhook",
             postJson({ url: receiver.url, event: { event: "ping" } }),
           )
@@ -342,7 +321,7 @@ describe("GitHub App installation webhooks", () => {
 
   test("firing at an unknown installation id is a 400", async () => {
     const shop = makeShop();
-    const response = await shop(
+    const response = await shop.call(
       "/__backdoor/apps/fire-webhook",
       postJson({ installationId: "no-such-installation" }),
     );

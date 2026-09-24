@@ -1,65 +1,16 @@
 /**
  * Unit tests for the pet shop's typed surfaces — the OpenAPI document, the
  * REST-shaped OpenAPI handler (/api/v2), and the oRPC RPC handler (/rpc) —
- * driven in plain Node against the real route handlers. Same fakes as
- * worker.test.ts: an in-memory storage map behind the state DO and the
- * cloudflare:workers shim. Hermetic — no network.
+ * driven in plain Node against the real route handlers over the
+ * test/shop.ts in-memory storage fake and the cloudflare:workers shim.
+ * Hermetic — no network.
  */
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { describe, expect, test } from "vitest";
-import { seedPets } from "./pets.ts";
 import type { petsRouter } from "./rpc.ts";
-import { randomSealKey } from "./seal.ts";
-import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, PetshopStateDurableObject } from "./state.ts";
-import { handlePetshopRequest, type PetshopDeps } from "./worker.ts";
-
-const ORIGIN = "https://petshop.example";
-
-/**
- * A shop instance over the real state class + in-memory storage. `call` drives
- * it by path+init; `fetch` drives it by a whole Request (what @orpc/client's
- * fetch override hands us) — both hit the same deps, so a client's writes are
- * visible to later `call`s.
- */
-function makeShop() {
-  const blobs = new Map<string, unknown>();
-  const storage = {
-    get: async (key: string) => structuredClone(blobs.get(key)),
-    put: async (key: string, value: unknown) => void blobs.set(key, structuredClone(value)),
-  };
-  const deps: PetshopDeps = {
-    state: new PetshopStateDurableObject({ storage } as unknown as DurableObjectState, {}),
-    sealKey: randomSealKey(),
-    pets: seedPets(),
-  };
-  return {
-    call: (path: string, init?: RequestInit) =>
-      handlePetshopRequest(new Request(`${ORIGIN}${path}`, init), deps),
-    fetch: (request: Request) => handlePetshopRequest(request, deps),
-  };
-}
-
-type Shop = ReturnType<typeof makeShop>;
-
-/** Run the full consent → code → token dance and return a live access token. */
-async function accessToken(shop: Shop): Promise<string> {
-  const authorize = await shop.call(
-    `/oauth/authorize?client_id=${DEFAULT_CLIENT_ID}&redirect_uri=${encodeURIComponent(`${ORIGIN}/cb`)}&approve=1&user=Jonas`,
-  );
-  const code = new URL(authorize.headers.get("location") ?? "").searchParams.get("code") ?? "";
-  const token = await shop.call("/oauth/token", {
-    method: "POST",
-    headers: { authorization: `Basic ${btoa(`${DEFAULT_CLIENT_ID}:${DEFAULT_CLIENT_SECRET}`)}` },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: `${ORIGIN}/cb`,
-    }),
-  });
-  return (await token.json<{ access_token: string }>()).access_token;
-}
+import { accessToken, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
