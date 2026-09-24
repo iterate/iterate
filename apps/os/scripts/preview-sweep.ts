@@ -164,10 +164,15 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
   return { previews, orphans };
 }
 
-/** Main's throwaway previews (.depot/workflows/main-os-e2e.yml names each `main-<short sha>`) that
- *  are not `current`: an earlier run's. Cancelling a run cancels its queued jobs, its `always()`
- *  delete included (observed 2026-09-23 on main-44db0e6), so each run deletes these before it
- *  deploys; the nightly sweep's rule 3 is the backstop. Pure. */
+/** Main's throwaway previews of the same workflow as `current` that are not `current`: an earlier
+ *  run's. Main OS e2e names each `main-<short sha>` (.depot/workflows/main-os-e2e.yml), the latency
+ *  guard `latency-<run id>-<attempt>` (os-latency.yml); neither run ever deletes the other's.
+ *  Cancelling a run cancels its queued jobs, its `always()` delete included (observed 2026-09-23 on
+ *  main-44db0e6), so each run deletes these before it deploys; the nightly sweep's rule 3 is the
+ *  backstop. A `current` of no such workflow supersedes nothing. Pure. */
 export function supersededMainPreviews(previewNames: string[], current: string) {
-  return previewNames.filter((name) => /^main-[0-9a-f]{7}$/.test(name) && name !== current);
+  const workflow = [/^main-[0-9a-f]{7}$/, /^latency-[0-9a-z]+-[0-9]+$/].find((shape) =>
+    shape.test(current),
+  );
+  return workflow ? previewNames.filter((name) => name !== current && workflow.test(name)) : [];
 }

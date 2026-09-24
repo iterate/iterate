@@ -5,7 +5,8 @@
 // deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its
 // status line), e2e (vitest and Playwright against the live preview; the status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
-// top), delete-superseded (every `main-<sha>` preview but this one: main's cancelled runs'), sweep
+// top), delete-superseded (every `main-<sha>`, or `latency-<run>-<attempt>`, preview but this one: main's
+// cancelled runs'), sweep
 // (the stale previews and the resources that outlived theirs — the rules are
 // scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";

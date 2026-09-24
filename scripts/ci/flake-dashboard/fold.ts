@@ -1,10 +1,11 @@
 // THE FLAKE DASHBOARD'S FOLD, ported from the legacy platform's flake-dashboard starter app
 // (packages/iterate/src/starter-apps/flake-dashboard/worker.ts, deleted in #2837): the reducer, the
-// transition proposal rule, the artifact parser, the issue renderer and the zip reader are that
-// app's code. The platform's Durable Object, processor host and itx GitHub integration are gone;
+// transition proposal rule, the artifact parser and the issue renderer are that app's code (its zip
+// reader is ../depot.ts `unzip` now, which the latency guard reads its state with too). The platform's Durable Object, processor host and itx GitHub integration are gone;
 // ./update.ts is the scheduled writer that feeds this fold from Depot artifacts and writes #2580.
 import type { z } from "zod";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
+import { unzip } from "../depot.ts";
 import {
   FlakeRecord,
   flakeEventTypes,
@@ -668,59 +669,4 @@ function renderUnknownFlakes(state: FlakeDashboardState): string[] {
             : "_No active unknown flakes. Passing streaks are evidence of stability, not proof that the root cause is fixed._",
         ]),
   ];
-}
-
-/**
- * Minimal zip reader on the runtime's own DecompressionStream — deliberately
- * not a dependency. The format surface is narrow by construction: one
- * producer (GitHub's artifact service), a 5MB size cap upstream, and reading
- * via the central directory (sizes come from there, so streaming-writer data
- * descriptors don't matter). No zip64 — impossible under the size cap — and
- * anything unexpected throws, which ingestion treats as a logged drop.
- */
-export async function unzip(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // The end-of-central-directory record sits at the tail, behind an optional
-  // comment (max 64KB): scan backwards for its signature.
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
-    if (view.getUint32(i, true) === 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) throw new Error("not a zip: no end-of-central-directory record");
-  const entryCount = view.getUint16(eocd + 10, true);
-  const files: Record<string, Uint8Array> = {};
-  let offset = view.getUint32(eocd + 16, true);
-  for (let i = 0; i < entryCount; i++) {
-    if (view.getUint32(offset, true) !== 0x02014b50) {
-      throw new Error("corrupt zip: bad central directory entry signature");
-    }
-    const method = view.getUint16(offset + 10, true);
-    const compressedSize = view.getUint32(offset + 20, true);
-    const nameLength = view.getUint16(offset + 28, true);
-    const extraLength = view.getUint16(offset + 30, true);
-    const commentLength = view.getUint16(offset + 32, true);
-    const localHeaderOffset = view.getUint32(offset + 42, true);
-    const name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
-    // The local header's name/extra lengths can differ from the central
-    // directory's, so the data offset comes from the local header itself.
-    const localNameLength = view.getUint16(localHeaderOffset + 26, true);
-    const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
-    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
-    // slice (not subarray): a copy backed by a plain ArrayBuffer, which both
-    // the DOM and Workers Response typings accept without assertions.
-    const data = bytes.slice(dataStart, dataStart + compressedSize);
-    if (method === 0) {
-      files[name] = data;
-    } else if (method === 8) {
-      const inflated = new Response(data).body!.pipeThrough(new DecompressionStream("deflate-raw"));
-      files[name] = new Uint8Array(await new Response(inflated).arrayBuffer());
-    } else {
-      throw new Error(`unsupported zip compression method ${method} for ${name}`);
-    }
-    offset += 46 + nameLength + extraLength + commentLength;
-  }
-  return files;
 }

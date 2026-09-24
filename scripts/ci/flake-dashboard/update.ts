@@ -14,16 +14,14 @@
 // The issue is written as the iterate GitHub App, as it was before #2837: with GITHUB_APP_ID and
 // GITHUB_APP_PRIVATE_KEY set, the writer mints an installation token that can only write issues in
 // this repository. The Depot app's job token has no Issues permission.
-import { execFile as execFileCallback } from "node:child_process";
 import { createSign } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
 import type { Octokit } from "@octokit/rest";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
-import { DEPOT_ORG, mapConcurrent } from "../depot.ts";
+import { depotCli, depotCliJson, mapConcurrent, newestArtifactFile } from "../depot.ts";
 import { createOctokit } from "../github.ts";
 import { FlakeDashboardState } from "./contract.ts";
 import {
@@ -33,10 +31,8 @@ import {
   renderBody,
   runRecordedFromArtifact,
   startFlakeDashboard,
-  unzip,
 } from "./fold.ts";
 
-const execFile = promisify(execFileCallback);
 /**
  * The workflows whose jobs upload `flake-records-<suite>`, by their `name:` (Depot lists by it).
  * scripts/ci/depot-workflows.test.ts fails when a workflow uploads flake records without being
@@ -44,7 +40,6 @@ const execFile = promisify(execFileCallback);
  * suites on main pushes needs only to be listed.
  */
 export const SUITE_WORKFLOWS = ["Test", "Preview OS", "Main OS e2e"];
-const STATE_ARTIFACT = "flake-dashboard-state";
 /** Depot lists at most 200 workflows per query; the schedule runs far more often than that fills. */
 const WORKFLOW_LIMIT = "200";
 /** How long the writer remembers a workflow after Depot last listed it. */
@@ -188,7 +183,7 @@ async function main() {
   const workflows = (
     await Promise.all(
       SUITE_WORKFLOWS.map((name) =>
-        depotJson<DepotWorkflow[]>([
+        depotCliJson<DepotWorkflow[]>([
           "ci",
           "workflow",
           "list",
@@ -216,7 +211,7 @@ async function main() {
         runIds,
         8,
         async (runId) =>
-          (await depotJson<{ artifacts: DepotArtifact[] }>(["ci", "artifacts", "list", runId]))
+          (await depotCliJson<{ artifacts: DepotArtifact[] }>(["ci", "artifacts", "list", runId]))
             .artifacts,
       )
     ).flat(),
@@ -231,7 +226,7 @@ async function main() {
         return undefined;
       }
       const file = join(downloads, `${artifact.artifact_id}.zip`);
-      await depot(["ci", "artifacts", "download", artifact.artifact_id, "--output-file", file]);
+      await depotCli(["ci", "artifacts", "download", artifact.artifact_id, "--output-file", file]);
       return runRecordedFromArtifact({
         zip: new Uint8Array(await readFile(file)),
         runId: `${artifact.run_id}-${artifact.attempt || 1}`,
@@ -286,45 +281,13 @@ async function main() {
  * still kept its fold, so failed runs count too.
  */
 async function readPreviousState(): Promise<WriterState | undefined> {
-  const repository = process.env.GITHUB_REPOSITORY || "iterate/iterate";
-  const runs = await depotJson<DepotWorkflow[]>([
-    "ci",
-    "workflow",
-    "list",
-    "--repo",
-    repository,
-    "--name",
-    "Flake dashboard",
-    "--status",
-    "finished",
-    "--status",
-    "failed",
-    "-n",
-    "20",
-  ]);
-  for (const run of runs.sort((a, b) => b.created_at.localeCompare(a.created_at))) {
-    const { artifacts } = await depotJson<{ artifacts: DepotArtifact[] }>([
-      "ci",
-      "artifacts",
-      "list",
-      run.run_id,
-    ]);
-    const artifact = artifacts.find(
-      (candidate) => candidate.workflow_id === run.workflow_id && candidate.name === STATE_ARTIFACT,
-    );
-    if (!artifact) continue;
-    const directory = await mkdtemp(join(tmpdir(), "flake-dashboard-state-"));
-    try {
-      const file = join(directory, "state.zip");
-      await depot(["ci", "artifacts", "download", artifact.artifact_id, "--output-file", file]);
-      const { "state.json": state } = await unzip(new Uint8Array(await readFile(file)));
-      if (!state) throw new Error(`${STATE_ARTIFACT} ${artifact.artifact_id} holds no state.json`);
-      return WriterState.parse(JSON.parse(new TextDecoder().decode(state)));
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  }
-  return undefined;
+  const state = await newestArtifactFile({
+    repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
+    workflow: "Flake dashboard",
+    artifact: "flake-dashboard-state",
+    file: "state.json",
+  });
+  return state ? WriterState.parse(JSON.parse(state)) : undefined;
 }
 
 /**
@@ -395,16 +358,6 @@ async function findDashboardIssue(github: Octokit, repository: { owner: string; 
 
 function signature(workflow: DepotWorkflow) {
   return `${workflow.status}:${JSON.stringify(workflow.job_counts || {})}`;
-}
-
-async function depot(args: string[]) {
-  // CI passes the organization token as DEPOT_TOKEN; a laptop uses the CLI's own login.
-  return execFile("depot", [...args, "--org", DEPOT_ORG], { maxBuffer: 50 * 1024 * 1024 });
-}
-
-async function depotJson<T>(args: string[]): Promise<T> {
-  const { stdout } = await depot([...args, "--output", "json"]);
-  return JSON.parse(stdout) as T;
 }
 
 async function writeOut(path: string, content: string) {

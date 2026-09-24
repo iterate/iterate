@@ -192,6 +192,25 @@ test.each<[string, string[], string, string[]]>([
   // PR previews and hand-named ones are never main's, even when they begin `main-`
   ["PR and branch previews", ["pr7-x", "main-branch", "main", "soak"], "main-7ea6741", []],
   ["only the run's own", ["main-7ea6741"], "main-7ea6741", []],
+  // the latency guard's and Main OS e2e's runs each delete only their own workflow's
+  [
+    "the latency guard's",
+    ["latency-94096387667921-1", "latency-94096387667990-2", "main-44db0e6", "pr7-latency-x"],
+    "latency-94096387667990-2",
+    ["latency-94096387667921-1"],
+  ],
+  [
+    "Main OS e2e's beside the guard's",
+    ["latency-44db0e6", "main-44db0e6"],
+    "main-7ea6741",
+    ["main-44db0e6"],
+  ],
+  [
+    "a hand-named current supersedes nothing",
+    ["main-44db0e6", "latency-94096387667921-1"],
+    "soak",
+    [],
+  ],
 ])("main's superseded throwaway previews: %s", (_label, names, current, superseded) => {
   expect(supersededMainPreviews(names, current)).toEqual(superseded);
 });
