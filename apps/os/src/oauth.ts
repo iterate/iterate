@@ -7,6 +7,7 @@ import {
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
+import { reportIssue } from "iterate/next/lib";
 import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./env.ts";
@@ -165,7 +166,7 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
     );
   } catch (error) {
     grantUseRecordedAt.delete(key); // the next use tries again
-    console.error("oauth.grant_use_not_recorded", { grantId: grant.grantId, error });
+    reportIssue("oauth.grant-use-not-recorded", error, { grantId: grant.grantId });
   }
 }
 
@@ -277,10 +278,9 @@ export async function revokeGrant(
   try {
     await oauthHelpers(env, addresses).revokeGrant(grant.grantId, grant.userId);
   } catch (error) {
-    console.error("oauth.revoke_cleanup_failed", {
+    reportIssue("oauth.revoke-cleanup-failed", error, {
       userId: grant.userId,
       grantId: grant.grantId,
-      error,
     });
   }
 }

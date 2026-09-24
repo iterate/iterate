@@ -209,7 +209,8 @@ export function buildLibrary(
     holdsOpenSocket: () => [...liveConnections.values()].some((c) => c.holdsSocket),
     releaseConnections: () => {
       // `close()` where a connection has one (the graceful half-close), else its dispose; a release
-      // that throws is REPORTED — a connection that will not close is a fact worth a log line.
+      // that throws is logged, not reported as an issue — the far end is any server a caller
+      // connected to, and one that will not close is a fact worth a warning, not a platform fault.
       for (const [memoKey, { connection }] of liveConnections)
         void connection
           .then((c) => {
@@ -217,7 +218,11 @@ export function buildLibrary(
             return held.close ? held.close() : held[Symbol.dispose]?.();
           })
           .catch((error: unknown) =>
-            console.warn(`releaseConnections: ${memoKey} did not close: ${String(error)}`),
+            console.warn({
+              event: "library.connection-close-failed",
+              memoKey,
+              message: String(error),
+            }),
           );
       liveConnections.clear();
     },

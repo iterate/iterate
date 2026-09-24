@@ -11,7 +11,7 @@
 //   The reserved test domains (example.com, .test, …) are never mailed, on any deployment — mail to
 //   them bounces, and a bounce costs the sender's reputation.
 import { z } from "zod";
-import { codedError } from "iterate/next/lib";
+import { codedError, reportIssue } from "iterate/next/lib";
 import { cookieValueOf } from "iterate/next/principal";
 import type { Env } from "./env.ts";
 import { appConfigOf } from "./app-config.ts";
@@ -177,7 +177,7 @@ export async function startLoginCode(
       JSON.stringify({ event: "login-code.sent", to: address, messageId: sent.messageId }),
     );
   } catch (error) {
-    console.error("login-code.send-failed", error);
+    reportIssue("login-code.send-failed", error);
     await env.OAUTH_KV.delete(key(id));
     throw codedError("INVALID_INPUT", "The code could not be sent. Try again.");
   }

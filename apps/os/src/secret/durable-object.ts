@@ -27,7 +27,7 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { EventInput } from "iterate/next/stream/processor";
 import { signClaims, verifyAdminSecret } from "iterate/next/principal";
-import { codedError } from "iterate/next/lib";
+import { codedError, reportIssue } from "iterate/next/lib";
 import {
   appConfigOf,
   atRestKeysOf,
@@ -422,7 +422,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     try {
       await this.withItx((itx) => itx.append(event));
     } catch (error) {
-      console.error("secret.fact_append_failed", { type: event.type, error: String(error) });
+      reportIssue("secret.fact-append-failed", error, { type: event.type });
     }
   }
 }
