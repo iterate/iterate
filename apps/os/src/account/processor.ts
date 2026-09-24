@@ -1,5 +1,5 @@
 // src/account/processor.ts — THE ACCOUNT PROCESSOR: the pure reduce of the account's facts into its
-// state — the membership facts the session lands here (session.ts `publishAccountFact`, after the
+// state — the membership facts the session lands here (session.ts `publishPlatformFacts`, after the
 // control-plane database writes them) among them — and of the user's own secrets' certificates (cross-posted from
 // `/users/<id>/secrets/<name>`) into their catalog; the kernel's `ProcessorEngine` drives it and
 // projects it to live state, exactly as a project processor. No effect lives here: a PURE FOLD.

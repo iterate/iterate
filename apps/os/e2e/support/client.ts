@@ -16,15 +16,15 @@ const baseUrl = (): string => {
   return u;
 };
 
-/** The worker's admin bearer (global-setup: the local worker's, or a deployed run's ADMIN_API_SECRET). */
+/** The worker's admin bearer (global-setup: the local worker's, or a deployed worker's from its APP_CONFIG). */
 const adminApiSecret = (): string => {
   const secret = process.env.ADMIN_API_SECRET;
   if (!secret) throw new Error("ADMIN_API_SECRET unset — the e2e globalSetup/setup did not run");
   return secret;
 };
 
-/** The worker's sign-in password (global-setup: the local worker's, or a deployed run's
- *  LOGIN_PASSWORD) — `POST /login` with an email and this mints a browser session (support/principal.ts). */
+/** The worker's sign-in password (global-setup: the local worker's, or a deployed worker's from its
+ *  APP_CONFIG) — `POST /login` with an email and this mints a browser session (support/principal.ts). */
 export const loginPassword = (): string => {
   const password = process.env.LOGIN_PASSWORD;
   if (!password) throw new Error("LOGIN_PASSWORD unset — the e2e globalSetup/setup did not run");

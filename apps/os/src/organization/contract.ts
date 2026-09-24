@@ -1,7 +1,7 @@
 // src/organization/contract.ts — THE ORGANIZATION: its context, `/organizations/<orgId>` in the
 // deployment-global namespace, where the FACTS about it land — created, renamed, deleted, a member
 // added or removed, a project created in it — each landed by the session on the context
-// (session.ts `publishOrganizationFact`) right after the control-plane database writes the row,
+// (session.ts `publishPlatformFacts`) right after the control-plane database writes the row,
 // stamped with whoever asked: the audit lives where it happened, attributed to who asked and through
 // which connection. This file is the only place those events and their payloads are spelled; processor.ts
 // folds them into the record a member reads through `session.organizations.get(orgId)`'s live

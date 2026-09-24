@@ -22,7 +22,7 @@ import {
   type Authorization,
 } from "./oauth.ts";
 import { ClientDisplayUrl, clientDisplay } from "./client-display.ts";
-import { appendAccountFacts, publishAccountFact } from "./session.ts";
+import { appendPlatformFacts, publishPlatformFacts } from "./session.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
@@ -72,12 +72,12 @@ export class GrantsRpcTarget extends RpcTarget {
   /** AN ACCOUNT FACT THE VERB AWAITS — a grant's end: from the moment it lands, every admission of
    *  the grant is refused (oauth.ts `grantIsRevoked` reads the account's `endedGrants`), whatever
    *  the provider's rows still say. Keyed on the grant, and stamped `source.platform`
-   *  (session.ts `appendAccountFacts`): the account folds nothing else, so an end a person appends
+   *  (session.ts `appendPlatformFacts`): the account folds nothing else, so an end a person appends
    *  themselves revokes nothing. */
   async #landGrantEnded(userId: string, grantId: string): Promise<void> {
-    await appendAccountFacts(
+    await appendPlatformFacts(
       this.#env.ITERATE_CONTEXT,
-      userId,
+      { account: userId },
       {
         type: "events.iterate.com/account/grant-ended",
         idempotencyKey: `account/grant-ended/${grantId}`,
@@ -245,7 +245,6 @@ export class GrantsRpcTarget extends RpcTarget {
       },
       props: {
         kind: "personal",
-        version: 2,
         userId: session.sub,
         email: session.email,
         projects,
@@ -282,15 +281,15 @@ export class GrantsRpcTarget extends RpcTarget {
       .parse(await response.json());
     // The provider's access token is `<userId>:<grantId>:<secret>` (oauth-provider.ts): the grant's
     // id is its middle — the only place the mint learns it. The fact of the mint, on the account.
-    // Best-effort and async (session.ts `publishAccountFact`): the provider is the truth for the
+    // Best-effort and async (session.ts `publishPlatformFacts`): the provider is the truth for the
     // grant, this is the person's record of it.
     const [, grantId = ""] = tokens.access_token.split(":");
-    publishAccountFact(
+    publishPlatformFacts(
       {
         contextNamespace: this.#env.ITERATE_CONTEXT,
         waitUntil: (promise) => this.#ctx.waitUntil(promise),
       },
-      session.sub,
+      { account: session.sub },
       {
         type: "events.iterate.com/account/grant-minted",
         idempotencyKey: `account/grant-minted/${grantId}`,

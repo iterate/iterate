@@ -25,11 +25,11 @@ declare module "vitest" {
     workerBaseUrl: string;
     /** The worker's admin bearer — what the lane's default session authenticates with
      *  (support/client.ts): the local worker's (worker-config.ts), a deployed worker's
-     *  `secrets.adminBearer` handed to the run as ADMIN_API_SECRET (never in the tree). */
+     *  `secrets.adminBearer`, read out of its APP_CONFIG (never in the tree). */
     adminApiSecret: string;
     /** The worker's sign-in password — what support/principal.ts mints a browser session with: the
-     *  local worker's (worker-config.ts), a deployed worker's `login.password` handed to the run as
-     *  LOGIN_PASSWORD (never in the tree). */
+     *  local worker's (worker-config.ts), a deployed worker's `login.password`, read out of its
+     *  APP_CONFIG (never in the tree). */
     loginPassword: string;
     /** How the worker reaches projects (src/app-config.ts `urls.ingressRouting`), as JSON: subdomains
      *  under `localhost` for the local worker, the deployed worker's routing otherwise. Injected into
@@ -50,8 +50,8 @@ export default async function setup(project: TestProject): Promise<() => Promise
   project.provide("runId", process.env.E2E_RUN_ID || randomUUID().slice(0, 8));
   // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate.com pnpm e2e`
   // runs the SAME suite against the deployed worker, no local boot. Its credentials and routing come
-  // from the deployment's APP_CONFIG in the environment (`doppler run`) and its envs.ts entry, or
-  // from an explicit ADMIN_API_SECRET / LOGIN_PASSWORD (support/deployed-target.ts).
+  // from the deployment's APP_CONFIG in the environment (`doppler run`) and its envs.ts entry
+  // (support/deployed-target.ts).
   const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
   if (deployedWorkerBaseUrl) {
     const target = deployedTarget(deployedWorkerBaseUrl);

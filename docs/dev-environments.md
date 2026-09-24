@@ -242,11 +242,9 @@ Against a deployment, the specs validate one env contract. The config reads
 the deployment's credentials out of `APP_CONFIG` (the password for sign-in, the
 operator bearer for fixture setup), its project routing and MCP origin out of
 the `envs.ts` entry the URL falls under, so a per-PR preview inherits its
-parent's (`apps/os/e2e/support/deployed-target.ts`). An explicit
-`ADMIN_API_SECRET`, `LOGIN_PASSWORD`, `PROJECT_INGRESS_ROUTING` or
-`MCP_BASE_URL` still wins. `DEMO_BASE_URL` is the only target override; when it
-is unset, Playwright boots the local dev server. It never infers credentials
-from redirects.
+parent's (`apps/os/e2e/support/deployed-target.ts`). `DEMO_BASE_URL` is the
+only target override; when it is unset, Playwright boots the local dev server.
+It never infers credentials from redirects.
 
 The `os-phone` project covers the platform's own pages at phone width.
 

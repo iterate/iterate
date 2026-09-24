@@ -287,10 +287,8 @@ Specs take the same shape with `DEMO_BASE_URL`; without it Playwright starts
 `pnpm dev` on `DEMO_PORT` (8788) and reuses an existing server locally. To run
 both suites against a preview exactly as CI does, run
 `pnpm preview e2e --pr <number> --name <branch>` from `apps/os` under the same
-Doppler config. To point a lane at any other target, keep the Doppler
-environment and set explicit overrides _inside_ it (`ADMIN_API_SECRET`,
-`LOGIN_PASSWORD`, `PROJECT_INGRESS_ROUTING`, `MCP_BASE_URL` win over what
-`APP_CONFIG` implies).
+Doppler config. A deployed target is always described by its own `APP_CONFIG`
+and its `envs.ts` entry; there are no per-run credential overrides.
 
 ## Reaching the test runner from a deployed Worker
 
@@ -316,8 +314,6 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `DEMO_BASE_URL`                               | You, the preview script                                     | THE deployment for `pnpm spec` (and the issuer for the `notes` project)                                                                           | Local `pnpm dev` on `DEMO_PORT`             |
 | `DEMO_PORT`                                   | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
 | `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`       | Doppler (`project-worker`, `preview` / `prd`)               | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
-| `ADMIN_API_SECRET`, `LOGIN_PASSWORD`          | You (explicit override)                                     | The admin bearer and sign-in password, instead of reading them out of `APP_CONFIG`                                                                | From `APP_CONFIG`                           |
-| `PROJECT_INGRESS_ROUTING`, `MCP_BASE_URL`     | You (explicit override)                                     | Project routing and the MCP origin, instead of the `envs.ts` entry                                                                                | From `envs.ts`                              |
 | `E2E_RUN_ID`                                  | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                           | Minted once per run                         |
 | `PETSHOP_BASE_URL`, `PETSHOP_BACKDOOR_SECRET` | You                                                         | Which dummy petshop the secret and connection rows dial, and its backdoor credential                                                              | `https://dummy-petshop.iterate.workers.dev` |
 | `NOTES_BASE_URL`                              | The preview script, or you                                  | The Notes deployment the `notes` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |

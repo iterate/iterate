@@ -169,13 +169,14 @@ export class ControlPlane {
 
   // ── the commands: each one call, under the caller ──
 
-  /** Find-or-create the person for an email; the operator may pin the id. */
-  createUser(caller: Caller, input: { email: string; id?: string }): Promise<UserRecord> {
-    return this.#call("createUser", callerOf(caller), input);
+  /** Find-or-create the person for an email. No caller: sign-in (`ensureUser`) and the operator's
+   *  `session.users` (session.ts refuses everyone else) are its only callers. */
+  createUser(input: { email: string }): Promise<UserRecord> {
+    return this.#call("createUser", input);
   }
   /** What sign-in calls (password-and-code-sign-in.ts, issuer-session.ts): the catalog first. */
   async ensureUser(email: string): Promise<UserRecord> {
-    return (await this.getUser(email)) ?? this.createUser({ principal: null }, { email });
+    return (await this.getUser(email)) ?? this.createUser({ email });
   }
   /** A verified sign-in's identity (identity.ts): link once by email, then by subject. The
    *  system's own write — no caller. */
@@ -185,7 +186,7 @@ export class ControlPlane {
 
   async createOrganization(
     caller: Caller,
-    input: { name: string; id?: string; ownerId?: string },
+    input: { name: string; ownerId?: string },
   ): Promise<OrganizationRecord> {
     const organization = await this.#call<OrganizationRecord>(
       "createOrganization",

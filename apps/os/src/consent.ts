@@ -23,7 +23,7 @@ import {
   type GrantProps,
 } from "./oauth.ts";
 import { clientDisplay } from "./client-display.ts";
-import { publishAccountFact } from "./session.ts";
+import { publishPlatformFacts } from "./session.ts";
 
 export type ConsentView =
   | {
@@ -211,7 +211,6 @@ export class ConsentRpcTarget extends RpcTarget {
         revokeExistingGrants: false,
         props: {
           kind: "app",
-          version: 2,
           userId: this.#grant.userId,
           email: this.#grant.email,
           projects: allProjects ? null : granted,
@@ -220,12 +219,12 @@ export class ConsentRpcTarget extends RpcTarget {
       });
       // The fact of the approval, on the person's account context, stamped with them and the
       // issuer grant they approved through.
-      publishAccountFact(
+      publishPlatformFacts(
         {
           contextNamespace: env.ITERATE_CONTEXT,
           waitUntil: (promise) => this.#ctx.waitUntil(promise),
         },
-        this.#grant.userId,
+        { account: this.#grant.userId },
         {
           type: "events.iterate.com/account/consent-approved",
           payload: {

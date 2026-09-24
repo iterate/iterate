@@ -12,16 +12,14 @@ import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
-import { appendAccountFacts } from "./session.ts";
+import { appendPlatformFacts, ownerContext } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
-/** Encrypted by the provider. Every grant is created through parseAuthorization,
- * so this version also proves the grant has a nonempty, allowed resource audience. */
+/** Encrypted by the provider. Every grant is created through parseAuthorization, so it has a
+ * nonempty, allowed resource audience. */
 export const GrantProps = z.object({
   kind: z.enum(["issuer", "app", "personal"]),
-  version: z.literal(2),
   userId: z.string().startsWith("user_"),
   email: z.string(),
   /** the identity provider's picture and display name of the person (when the provider supplies them), shown where the
@@ -90,20 +88,13 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
  *  awaits it), when each was last used. One hop to the person's own Durable Object. */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
-  const name = DurableObjectNameCodec.stringify({
-    projectId: GLOBAL_PROJECT_ID,
-    path: `/users/${userId}`,
-  });
   // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
-  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`. Dialed
-  // through the namespace as a value (session.ts's `contextNamespace` convention), not a raw
-  // `env.ITERATE_CONTEXT.getByName` — this read is the platform's own, after the token is verified.
-  const contextNamespace = env.ITERATE_CONTEXT;
-  const { state } = (await contextNamespace
-    .getByName(name)
-    .invoke(["itx", "facets", ["get", "account"], ["snapshot"]], [], { principal: null })) as {
-    state: AccountState;
-  };
+  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
+  const { state } = (await ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
+    ["itx", "facets", ["get", "account"], ["snapshot"]],
+    [],
+    { principal: null },
+  )) as { state: AccountState };
   return state;
 }
 
@@ -132,13 +123,7 @@ export async function authorizationOf(env: Env, props: unknown): Promise<Authori
     principal: { actor: grant.userId, email: grant.email },
     // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
     reach: { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
-    // The issuer's own session is the person at the issuer, not a consent: it holds every scope,
-    // whatever list it was minted with — a cookie from before a scope existed still creates
-    // organizations on the consent page.
-    grant:
-      grant.kind === "issuer"
-        ? { ...grant, scope: ["iterate", "account", "organizations:write"] }
-        : grant,
+    grant,
   };
 }
 
@@ -155,9 +140,9 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
   if ((grantUseRecordedAt.get(key) ?? 0) > now - GRANT_USE_MEMO_MS) return;
   grantUseRecordedAt.set(key, now);
   try {
-    await appendAccountFacts(
+    await appendPlatformFacts(
       env.ITERATE_CONTEXT,
-      grant.userId,
+      { account: grant.userId },
       {
         type: "events.iterate.com/account/grant-used",
         payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,

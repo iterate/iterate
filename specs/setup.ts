@@ -5,28 +5,23 @@ import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
 /** Runs once before test workers; their environments inherit the prepared values. */
 export default function setup() {
   const startedAt = Date.now();
-  let env = OsPlaywrightAuthEnv.safeParse(process.env);
-  if (!env.success) {
-    let targetEnv: Record<string, string>;
-    try {
-      targetEnv = osTargetEnv();
-    } catch (error) {
-      throw new Error(
-        [
-          "Playwright auth setup failed. Run with `doppler run --project project-worker --config preview -- pnpm spec` against a preview, or set ADMIN_API_SECRET and LOGIN_PASSWORD.",
-          z.prettifyError(env.error),
-          error instanceof Error ? error.message : String(error),
-        ].join("\n\n"),
-      );
-    }
-    env = OsPlaywrightAuthEnv.safeParse({ ...targetEnv, ...process.env });
-    if (!env.success) {
-      throw new Error(
-        "Playwright auth setup failed: environment and the OS deployment's APP_CONFIG do not supply valid auth settings.\n" +
-          z.prettifyError(env.error),
-      );
-    }
+  let targetEnv: Record<string, string>;
+  try {
+    targetEnv = osTargetEnv();
+  } catch (error) {
+    throw new Error(
+      [
+        "Playwright auth setup failed. Run with `doppler run --project project-worker --config preview -- pnpm spec` against a preview.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n\n"),
+    );
   }
+  const env = OsPlaywrightAuthEnv.safeParse(targetEnv);
+  if (!env.success)
+    throw new Error(
+      "Playwright auth setup failed: the OS deployment's APP_CONFIG does not supply valid auth settings.\n" +
+        z.prettifyError(env.error),
+    );
   Object.assign(process.env, env.data);
   console.log(`[playwright] auth setup complete (${Date.now() - startedAt}ms)`);
 }

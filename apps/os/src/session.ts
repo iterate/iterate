@@ -14,7 +14,8 @@ import {
 } from "@iterate-com/shared/config-repo-template/reference";
 import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import type { IterateApi } from "iterate/next/api";
-import { codedError } from "iterate/next/lib";
+import { codedError, reportIssue } from "iterate/next/lib";
+import { OAuthScope } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { templates } from "./generated/config-templates.js";
@@ -35,9 +36,9 @@ import {
   type UserRecord,
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
-import { IdentityProvider } from "./control-plane/contract.ts";
 import { OrganizationRole } from "./organization/contract.ts";
 import type { AppConfig } from "./app-config.ts";
+import { isRetryableTransportError } from "./retryable-error.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
@@ -148,7 +149,7 @@ export class IterateRpcTarget extends RpcTarget {
     return new SessionRpcTarget(this.#input, this.#sessionTeardown, {
       principal,
       reach: user ? { userId: user.id } : "every",
-      ...(user && { scopes: ["iterate", "account", "organizations:write"] }),
+      ...(user && { scopes: [...OAuthScope.options] }),
     });
   }
 
@@ -165,9 +166,9 @@ export class IterateRpcTarget extends RpcTarget {
   ): void {
     if (!principal.email) return;
     const operationId = crypto.randomUUID();
-    publishAccountFact(
+    publishPlatformFacts(
       this.#input,
-      principal.actor,
+      { account: principal.actor },
       {
         type: "events.iterate.com/account/authenticated",
         payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
@@ -178,92 +179,91 @@ export class IterateRpcTarget extends RpcTarget {
   }
 }
 
-/** AN ACCOUNT FACT, appended to the person's own context (`/users/<id>`: authenticated here;
- *  grants.ts and consent.ts add a token minted, a grant used, a consent approved) — stamped with
- *  the caller, principal and grant: the audit lives where it happened, attributed to who did it and
- *  through which connection — and `source.platform`, the one thing the processor folding it trusts
- *  (a person can append any type to their own context; the platform's fixed point, which no rewrite
- *  rule redirects, is the only writer of the stamp). Best-effort and ASYNC (waitUntil), off the verb's own path: a fact
- *  lost to an eviction is a gap in the record, never a failed action. (A grant's END is not
- *  published this way: grants.ts AWAITS it — it is the revocation truth.) The organization's own
- *  facts land the same way, on its context (`publishOrganizationFact`).
- *
- *  THE CONTROL-PLANE DATABASE IS THE TRUTH; these facts are the fold the dash renders and the entity's
- *  activity, not the source of authority. A single command's facts are appended in one call and so
- *  keep their order, but two CONCURRENT conflicting commands to the same context (a membership added
- *  and removed at once) deliver on independent chains with no ordering between them — the fold can
- *  settle opposite to the database's own order until the next authoritative read. Acceptable here: the
- *  edge authorizes every action against the database, never the fold. */
-export function publishAccountFact(
-  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
-  userId: string,
-  facts: StreamEventInput | StreamEventInput[],
-  caller: Caller,
-): void {
-  input.waitUntil(
-    appendAccountFacts(input.contextNamespace, userId, facts, caller).catch(() => undefined),
+/** Whose own context a platform fact lands on: a person's account (`global:/users/<id>`, folded by
+ *  the `account` processor, src/account/) or an organization (`global:/organizations/<id>`, folded
+ *  by `organization`, src/organization/). */
+type FactOwner = { account: string } | { organization: string };
+
+const ownerAddress = (owner: FactOwner) =>
+  "account" in owner
+    ? { processor: "account", path: `/users/${owner.account}` }
+    : { processor: "organization", path: `/organizations/${owner.organization}` };
+
+/** The owner's own context on the global project — where its facts land and its fold is read
+ *  (oauth.ts `accountStateOf`). */
+export function ownerContext(contextNamespace: IterateContextNamespace, owner: FactOwner) {
+  return contextNamespace.getByName(
+    DurableObjectNameCodec.stringify({
+      projectId: GLOBAL_PROJECT_ID,
+      path: ownerAddress(owner).path,
+    }),
   );
 }
 
-/** THE ACCOUNT APPEND itself, awaited and throwing: the account processor's row on `/users/<userId>`
- *  (a second enable appends nothing), then the facts through the platform's fixed point, stamped
- *  `source.platform`. `publishAccountFact` runs it best-effort; a grant's end (grants.ts) and a
- *  grant's use (oauth.ts) await it. */
-export async function appendAccountFacts(
-  contextNamespace: SessionInput["contextNamespace"],
-  userId: string,
+/** PLATFORM FACTS, appended to their owner's own context, awaited and throwing: the owner's
+ *  processor row first (a second enable appends nothing), then the facts in ONE call, so they land
+ *  in the order given. Stamped with the caller, principal and grant — the audit lives where it
+ *  happened, attributed to who did it and through which connection — and with `source.platform`,
+ *  the one thing the processor folding them trusts (a person can append any type to their own
+ *  context; the platform's fixed point, which no rewrite rule redirects, is the only writer of the
+ *  stamp). A grant's end (grants.ts, the revocation truth) and a grant's use (oauth.ts) await it;
+ *  everything else goes through `publishPlatformFacts`.
+ *
+ *  THE CONTROL-PLANE DATABASE IS THE TRUTH; these facts are the fold the dash renders and the entity's
+ *  activity, not the source of authority. Two CONCURRENT conflicting commands to the same context (a
+ *  membership added and removed at once) deliver on independent chains with no ordering between
+ *  them — the fold can settle opposite to the database's own order until the next authoritative
+ *  read. Acceptable here: the edge authorizes every action against the database, never the fold. */
+export async function appendPlatformFacts(
+  contextNamespace: IterateContextNamespace,
+  owner: FactOwner,
   facts: StreamEventInput | StreamEventInput[],
   caller: Caller,
 ): Promise<void> {
-  const context = contextNamespace.getByName(
-    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: `/users/${userId}` }),
-  );
+  const context = ownerContext(contextNamespace, owner);
   const events = Array.isArray(facts) ? facts : [facts];
-  await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
-  // Several facts are appended in ONE call, so they land in the order given.
+  await context.invoke(
+    ["itx", "processors", ["enable", ownerAddress(owner).processor]],
+    [],
+    caller,
+  );
   await context.invoke(["itx", "builtins", ["append", ...events]], [], {
     ...caller,
     platform: true,
   });
 }
 
-/** AN ORGANIZATION FACT, appended to the organization's own context (`/organizations/<id>`): its
- *  creation, rename, deletion, and each membership change — the fold the dash renders (src/organization/)
- *  and the organization's activity. Best-effort and ASYNC (waitUntil), off the verb's own path: the
- *  control-plane database (src/control-plane/) already decided the write; this is the record of it on
- *  the stream, stamped `source.platform` as `publishAccountFact`'s are. A membership also lands on the
- *  person's account (`publishAccountFact`). */
-function publishOrganizationFact(
+/** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
+ *  sign-ins, mints and consents; the organization's creation, rename, deletion and membership
+ *  changes. A lost fact is a gap in the record, never a failed action. A deploy resetting the
+ *  owner's Durable Object cuts in-flight appends at the transport (retryable-error.ts) — expected on
+ *  every deploy under traffic, so a warning; any other failure is reported, as oauth.ts reports a
+ *  grant use it could not record. */
+export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
-  organizationId: string,
+  owner: FactOwner,
   facts: StreamEventInput | StreamEventInput[],
   caller: Caller,
 ): void {
-  const name = DurableObjectNameCodec.stringify({
-    projectId: GLOBAL_PROJECT_ID,
-    path: `/organizations/${organizationId}`,
-  });
-  const context = input.contextNamespace.getByName(name);
-  const events = Array.isArray(facts) ? facts : [facts];
   input.waitUntil(
-    (
-      context.invoke(
-        ["itx", "processors", ["enable", "organization"]],
-        [],
-        caller,
-      ) as Promise<unknown>
-    )
-      .then(
-        () =>
-          context.invoke(["itx", "builtins", ["append", ...events]], [], {
-            ...caller,
-            platform: true,
-          }) as Promise<unknown>,
-      )
-      .then(
-        () => undefined,
-        () => undefined,
-      ),
+    appendPlatformFacts(input.contextNamespace, owner, facts, caller).catch((error) => {
+      const attributes = {
+        path: ownerAddress(owner).path,
+        types: [facts]
+          .flat()
+          .map((fact) => fact.type)
+          .join(","),
+      };
+      if (isRetryableTransportError(error)) {
+        console.warn({
+          event: "session.platform-fact-cut",
+          ...attributes,
+          message: String(error),
+        });
+        return;
+      }
+      reportIssue("session.platform-fact-not-recorded", error, attributes);
+    }),
   );
 }
 
@@ -375,7 +375,7 @@ export class SessionRpcTarget extends RpcTarget {
   /** Creating, renaming or deleting an organization, or changing its members, is the
    *  `organizations:write` scope's: a user grant whose consent kept it ticked (the dash asks for
    *  it; the consent page lets the person untick it), the issuer's own session, or the operator —
-   *  acting as a user, or as the operator (the replay of an older directory). The grant's project
+   *  acting as a user, or as the operator. The grant's project
    *  reach is beside the point — an organization is the person's, and the grant reaches what it
    *  reached before. */
   #organizationsWriter(verb: string): void {
@@ -554,18 +554,12 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     return this.#session.input.controlPlane.listMembers(z.string().min(1).parse(orgId));
   }
 
-  /** A new organization named `name`, the person its owner. The operator may name the owner and
-   *  pin the id (the replay of an older directory). */
-  async create(input: {
-    name: string;
-    id?: string;
-    ownerId?: string;
-  }): Promise<OrganizationRecord> {
+  /** A new organization named `name`, the person its owner. The operator may name the owner. */
+  async create(input: { name: string; ownerId?: string }): Promise<OrganizationRecord> {
     this.#session.organizationsWriter("create");
     const data = z
       .object({
         name: z.string().trim().min(1, "Enter an organization name."),
-        id: z.string().optional(),
         ownerId: z.string().optional(),
       })
       .parse(input);
@@ -576,14 +570,20 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     // scripts add members themselves (an owner named by the operator gets no session here).
     if (record.role === "owner") {
       const membership = memberAddedFact(record.id, caller.principal!.actor, "owner");
-      publishOrganizationFact(
+      publishPlatformFacts(
         sessionInput,
-        record.id,
+        { organization: record.id },
         [orgCreatedFact(record.name), membership],
         caller,
       );
-      publishAccountFact(sessionInput, caller.principal!.actor, membership, caller);
-    } else publishOrganizationFact(sessionInput, record.id, orgCreatedFact(record.name), caller);
+      publishPlatformFacts(sessionInput, { account: caller.principal!.actor }, membership, caller);
+    } else
+      publishPlatformFacts(
+        sessionInput,
+        { organization: record.id },
+        orgCreatedFact(record.name),
+        caller,
+      );
     return record;
   }
 
@@ -600,7 +600,12 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       organizationId,
       data.name,
     );
-    publishOrganizationFact(sessionInput, organizationId, orgRenamedFact(record.name), caller);
+    publishPlatformFacts(
+      sessionInput,
+      { organization: organizationId },
+      orgRenamedFact(record.name),
+      caller,
+    );
     return { ...record, role: "owner" };
   }
 
@@ -614,8 +619,13 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const members = await sessionInput.controlPlane.listMembers(organizationId);
     await sessionInput.controlPlane.deleteOrganization(caller, organizationId);
     for (const { userId } of members)
-      publishAccountFact(sessionInput, userId, memberRemovedFact(organizationId, userId), caller);
-    publishOrganizationFact(sessionInput, organizationId, orgDeletedFact(), caller);
+      publishPlatformFacts(
+        sessionInput,
+        { account: userId },
+        memberRemovedFact(organizationId, userId),
+        caller,
+      );
+    publishPlatformFacts(sessionInput, { organization: organizationId }, orgDeletedFact(), caller);
   }
 
   /** Add a person to an organization the caller owns, as an owner or a member. */
@@ -631,8 +641,8 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.addMember(caller, organizationId, data);
     const fact = memberAddedFact(organizationId, userId, data.role);
-    publishOrganizationFact(sessionInput, organizationId, fact, caller);
-    publishAccountFact(sessionInput, userId, fact, caller);
+    publishPlatformFacts(sessionInput, { organization: organizationId }, fact, caller);
+    publishPlatformFacts(sessionInput, { account: userId }, fact, caller);
   }
 
   /** Remove a person from an organization the caller owns. */
@@ -643,8 +653,8 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.removeMember(caller, organizationId, data);
     const fact = memberRemovedFact(organizationId, userId);
-    publishOrganizationFact(sessionInput, organizationId, fact, caller);
-    publishAccountFact(sessionInput, userId, fact, caller);
+    publishPlatformFacts(sessionInput, { organization: organizationId }, fact, caller);
+    publishPlatformFacts(sessionInput, { account: userId }, fact, caller);
   }
 }
 
@@ -751,17 +761,22 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     if (priorOrgIds) {
       const projectFact = projectCreatedFact(project.id, project.slug);
       if (priorOrgIds.has(project.orgId))
-        publishOrganizationFact(sessionInput, project.orgId, projectFact, caller);
+        publishPlatformFacts(sessionInput, { organization: project.orgId }, projectFact, caller);
       else {
         const organization = await sessionInput.controlPlane.getOrganization(project.orgId);
         const membership = memberAddedFact(project.orgId, caller.principal!.actor, "owner");
-        publishOrganizationFact(
+        publishPlatformFacts(
           sessionInput,
-          project.orgId,
+          { organization: project.orgId },
           [orgCreatedFact(organization?.name ?? project.orgId), membership, projectFact],
           caller,
         );
-        publishAccountFact(sessionInput, caller.principal!.actor, membership, caller);
+        publishPlatformFacts(
+          sessionInput,
+          { account: caller.principal!.actor },
+          membership,
+          caller,
+        );
       }
     }
     return context;
@@ -808,8 +823,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
 }
 
 /** The people — the operator's catalog (`session.users` refuses everyone else): `list()`,
- *  `get(ref)` by id or email, `create({ email, id? })` — the id pinned for the replay of an older
- *  directory. */
+ *  `get(ref)` by id or email, `create({ email })` (find-or-create). */
 class UserCollectionRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   constructor(session: SessionOf) {
@@ -822,27 +836,9 @@ class UserCollectionRpcTarget extends RpcTarget {
   get(ref: string): Promise<UserRecord | null> {
     return this.#session.input.controlPlane.getUser(z.string().min(1).parse(ref));
   }
-  async create(input: { email: string; id?: string }): Promise<UserRecord> {
-    const data = z
-      .object({ email: z.string().trim().min(3), id: z.string().optional() })
-      .parse(input);
-    return this.#session.input.controlPlane.createUser(this.#session.caller, data);
-  }
-  /** A provider's subject linked to the user with this email (identity.ts does the same at
-   *  sign-in; the replay of an older directory carries the links over). */
-  async linkIdentity(input: {
-    provider: IdentityProvider;
-    subject: string;
-    email: string;
-  }): Promise<UserRecord> {
-    const data = z
-      .object({
-        provider: IdentityProvider,
-        subject: z.string().min(1),
-        email: z.string().trim().min(3),
-      })
-      .parse(input);
-    return this.#session.input.controlPlane.linkIdentity(data.provider, data.subject, data.email);
+  async create(input: { email: string }): Promise<UserRecord> {
+    const data = z.object({ email: z.string().trim().min(3) }).parse(input);
+    return this.#session.input.controlPlane.createUser(data);
   }
 }
 

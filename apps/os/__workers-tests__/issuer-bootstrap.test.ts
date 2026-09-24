@@ -2,12 +2,12 @@ import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { appSession, startAppSession } from "iterate/next/app-server";
+import { appSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { platformAddressesOf } from "../src/app-config.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
-import { oauthHelpers, parseAuthorization } from "../src/oauth.ts";
+import { oauthHelpers } from "../src/oauth.ts";
 import { adminSession, controlPlaneStub, ORIGIN } from "./support.ts";
 const sessions: Disposable[] = [];
 beforeEach(() => {
@@ -37,9 +37,7 @@ async function connect(headers: Record<string, string>) {
 const person = async (email: string) => (await operator()).users.create({ email });
 
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
-  const user = await (
-    await operator()
-  ).users.linkIdentity({
+  const user = await controlPlaneStub().linkIdentity({
     provider: "google",
     subject: "1357924680",
     email: "bootstrap@example.com",
@@ -214,50 +212,6 @@ test("copied issuer client metadata and every scope confer app permissions but n
   await expect(app.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /Sign in to iterate/,
   );
-});
-
-test("an issuer session minted before a scope existed still holds every scope — its list is not a consent", async () => {
-  // the shape of startIssuerSession, with the two scopes an older cookie was minted with
-  const user = await person("old-issuer-cookie@example.com");
-  const { platformOrigin: issuerOrigin, api: apiResource } = platformAddressesOf(
-    env,
-    new Request(`${ORIGIN}/`),
-  );
-  const flow = await startAppSession(
-    env.BROWSER_SESSION,
-    {
-      origin: issuerOrigin,
-      issuer: issuerOrigin,
-      resource: apiResource,
-      scopes: ["iterate", "account"],
-    },
-    "/",
-  );
-  const request = await parseAuthorization(env, new Request(flow.location));
-  const approved = await oauthHelpers(
-    env,
-    platformAddressesOf(env, new Request(`${ORIGIN}/`)),
-  ).completeAuthorization({
-    request,
-    userId: user.id,
-    scope: request.scope,
-    metadata: { clientName: "iterate" },
-    revokeExistingGrants: false,
-    props: {
-      kind: "issuer",
-      version: 2,
-      userId: user.id,
-      email: user.email,
-      projects: null,
-      deadline: Date.now() + 30 * 24 * 3600_000,
-    },
-  });
-  const result = await flow.session.complete(new URL(approved.redirectTo).search);
-  expect(result.error).toBeUndefined();
-  const old = await connect({ Cookie: flow.setCookie.split(";")[0]!, Origin: ORIGIN });
-  expect((await old.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
-  const org = await old.organizations.create({ name: "Made with an old cookie" });
-  expect((await old.organizations.list()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
 test("a browser landing on the platform ORIGIN is told it is headless and where the dash is", async () => {
@@ -519,12 +473,7 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
 });
 
 test("the consent page renders on the server, and Authorize posts the choice to the exact authorization URL", async () => {
-  const user = await controlPlaneStub().createUser(
-    { principal: null },
-    {
-      email: "consent-page@example.com",
-    },
-  );
+  const user = await controlPlaneStub().createUser({ email: "consent-page@example.com" });
   const project = await controlPlaneStub().createProject(
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },

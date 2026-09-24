@@ -8,7 +8,7 @@ import { OrganizationProcessor } from "./processor.ts";
 import { type OrganizationState } from "./contract.ts";
 
 /** Every fact the organization folds is the platform's: stamped `source.platform` as its writer
- *  stamps it (session.ts `publishOrganizationFact`). */
+ *  stamps it (session.ts `publishPlatformFacts`). */
 const platform = { platform: true } as const;
 const created = (name: string) => ({
   type: "events.iterate.com/organization/created",

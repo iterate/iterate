@@ -154,17 +154,10 @@ export class ControlPlaneDatabase {
 
   // ── the writes: each one synchronous block — check, then write ──
 
-  /** Find-or-create the person for an email. The operator may pin the id (the replay of an older
-   *  directory); an email already known answers its own person, pinned id or not — the replay
-   *  follows the answered id (scripts/replay-directory.ts `userIdOf`). */
-  createUser(caller: Caller, input: { email: string; id?: string }): UserRecord {
-    if (input.id) this.#requireOperator(caller, "pin a user's id");
+  /** Find-or-create the person for an email. */
+  createUser(input: { email: string }): UserRecord {
     const email = emailAddress(input.email);
-    const known = this.user(email);
-    if (known) return known;
-    if (input.id && this.user(input.id))
-      throw codedError("INVALID_INPUT", `The user id ${input.id} belongs to another email.`);
-    return this.#insertUser(input.id || newId("user"), email);
+    return this.user(email) ?? this.#insertUser(newId("user"), email);
   }
   #insertUser(userId: string, email: string): UserRecord {
     this.sql.exec("INSERT INTO users (id, email) VALUES (?, ?)", userId, email);
@@ -204,14 +197,13 @@ export class ControlPlaneDatabase {
     return user;
   }
 
-  /** A new organization, the caller its owner. The operator may pin the id and name another owner,
-   *  or none (the deployment's own); a pinned organization that exists is answered as it is. */
+  /** A new organization, the caller its owner. The operator may name another owner, or none (the
+   *  deployment's own). */
   createOrganization(
     caller: Caller,
-    input: { name: string; id?: string; ownerId?: string },
+    input: { name: string; ownerId?: string },
   ): OrganizationRecord {
-    if (input.id || input.ownerId)
-      this.#requireOperator(caller, "pin an organization's id or name its owner");
+    if (input.ownerId) this.#requireOperator(caller, "name an organization's owner");
     // named by id or email; the membership holds the id
     const owner = input.ownerId ? this.user(input.ownerId) : null;
     if (input.ownerId && !owner)
@@ -219,9 +211,7 @@ export class ControlPlaneDatabase {
     const ownerId =
       owner?.id ??
       (isOperator(caller) ? null : this.#requireUser(caller, "create an organization"));
-    const pinned = input.id && this.organization(input.id);
-    if (pinned) return pinned;
-    const organizationId = input.id || newId("org");
+    const organizationId = newId("org");
     this.#insertOrganization(organizationId, input.name.trim(), ownerId);
     const record: OrganizationRecord = { id: organizationId, name: input.name.trim(), projects: 0 };
     if (ownerId && ownerId === caller.principal?.actor) record.role = "owner";

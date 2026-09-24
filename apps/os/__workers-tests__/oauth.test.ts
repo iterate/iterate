@@ -826,10 +826,7 @@ test("malformed and foreign resources are expected authorization refusals", asyn
 });
 
 test("a first-level wildcard CIMD client is bound to its project at consent", async () => {
-  const user = await controlPlane().createUser(
-    { principal: null },
-    { email: "wildcard-consent@example.com" },
-  );
+  const user = await controlPlane().createUser({ email: "wildcard-consent@example.com" });
   const caller = { principal: { actor: user.id, email: user.email } };
   const target = await controlPlane().createProject(caller, { project: "wildcard-consent" });
   await controlPlane().createProject(caller, { project: "other-consent" });
