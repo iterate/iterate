@@ -1,8 +1,8 @@
 # Testing: Unit, E2E, And Playwright Specs
 
-How the test lanes are organized, how to run each against any environment,
+How the test suites are organized, how to run each against any environment,
 the canonical environment variables, and [the retry/timeout
-policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
+policy](#retries-and-timeouts) every suite follows. For unit-test style (fake
 timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
@@ -40,7 +40,7 @@ away from.
 1. **Prove the behavior users actually get.** The default test is e2e from
    very far away: through the itx surface (capnweb at `/api`, exactly like a
    production client) or a real browser, against a live deployment, with no
-   test-only seams. The local e2e run already boots the real worker in
+   test-only hooks. The local e2e run already boots the real worker in
    workerd, so a live target is always one command away.
 
 2. **Fail fast; fix the product, not the timeout.** (Misha Kaletsky's
@@ -78,7 +78,7 @@ away from.
 5. **Harnesses must be honest about fidelity.** Where we do unit-test,
    fakes implement the real interfaces (`memoryStream` in
    `apps/os/src/stream/test-support.ts` mirrors the Stream's commit
-   semantics, idempotency at the door and the scanned-range proof; the fake
+   semantics, idempotency at append and the scanned-range proof; the fake
    git remote speaks real protocol v2 through the repo facet's own codecs),
    every processor with side effects has a re-reduce test (replaying the log
    runs no side effect twice), and a harness that structurally cannot catch
@@ -86,7 +86,7 @@ away from.
    `cfartifacts.e2e.test.ts` header lists what the fake remote cannot prove).
 
 6. **A test runtime earns its place.** Unit tests run in plain node; real
-   runtime coverage comes from the e2e lane against the real worker (local
+   runtime coverage comes from the e2e suite against the real worker (local
    workerd, or a live deployment — production-shaped by construction). The
    one extra runtime, the `workers` project (`@cloudflare/vitest-plugin`,
    `apps/os/__workers-tests__/`), exists for the proven gap: hibernation,
@@ -94,16 +94,16 @@ away from.
    can reach. Adding another runtime needs a proven coverage gap, not a
    preference.
 
-## Lanes
+## Suites
 
 The geography rule: `specs/` tests the product through a browser;
 `<app>/e2e/` tests that deployable's own contract. Every e2e suite must be
-wired to a CI lane or explicitly documented as manual — a tag filter or
+wired to a CI job or explicitly documented as manual — a tag filter or
 unset env var that silently skips tests is the failure mode this table
 exists to prevent (a `@preview` title filter once quietly reduced the
 streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 
-| Lane             | Command (repo root unless noted)                                   | Lives in                                                                                                      | In CI                                                                                                                                        | Proves                                                                                                                                                                                                                                          |
+| Suite            | Command (repo root unless noted)                                   | Lives in                                                                                                      | In CI                                                                                                                                        | Proves                                                                                                                                                                                                                                          |
 | ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unit             | `pnpm test`                                                        | `apps/os/src/**/*.test.ts` (colocated), `apps/os/scripts/*.test.ts`, every workspace's own suite              | Depot **Test** workflow, every PR — full suite                                                                                               | In-process logic; no deployment needed.                                                                                                                                                                                                         |
 | Workers          | `pnpm test` (`--project workers` in `apps/os`)                     | `apps/os/__workers-tests__/`, `apps/agents/__workers-tests__/`                                                | Depot **Test** workflow, every PR — full suite                                                                                               | Inside workerd next to the worker (Vite's built `dist/server/index.js` through `exports.default.fetch`, never a source import): hibernation, eviction, alarms and pins that need `cloudflare:test` controls.                                    |
@@ -116,8 +116,8 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | Dummy petshop    | `pnpm test` (its unit suite)                                       | `apps/dummy-petshop/src/`                                                                                     | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                                                       | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                                                     |
 | Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)         | `apps/os/scripts/e2e-soak.ts`                                                                                 | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                           | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time; never a real model.                                                                                  |
 | Perf budgets     | `pnpm --dir apps/os perf` (`WORKER_BASE_URL`)                      | `apps/os/perf/*.perf.test.ts`, every metric and budget in `apps/os/perf/latency.ts`                           | The latency guard below; every soak run, after the e2e suite                                                                                 | Latency and throughput budgets over the same client and worker, measured alone: files one at a time, rows in order, each budget on the median of its rounds (p95 where a run has dozens).                                                       |
-| Latency guard    | Dispatch `os-latency.yml` (`--input budget-scale=0.01` test-pages) | `.depot/workflows/os-latency.yml`, `scripts/ci/os-latency-guard.ts`                                           | **OS latency**, every 3 hours and every main push to the Worker's paths, beside everything (nothing waits on it); pages #error-pulse         | The perf lane against a throwaway preview of main of its own: every metric to PostHog (`os latency measured`), paged red once when it crossed its budget or a sharp regression on its rolling baseline two runs in a row, green once when back. |
-| Real model       | Dispatch `os-real-model.yml`                                       | `REAL:` rows (`realModelOnly`), `.depot/workflows/os-real-model.yml`, `scripts/ci/os-real-model-alert.ts`     | **OS real model**, daily and every main push to the agents runtime, on a throwaway preview; pages #error-pulse                               | The turns every other lane gives a fake provider, against real models: OpenAI's astra (the default) and Workers AI accept the request and answer. [Real-model rows](#real-model-rows).                                                          |
+| Latency guard    | Dispatch `os-latency.yml` (`--input budget-scale=0.01` test-pages) | `.depot/workflows/os-latency.yml`, `scripts/ci/os-latency-guard.ts`                                           | **OS latency**, every 3 hours and every main push to the Worker's paths, beside everything (nothing waits on it); pages #error-pulse         | The perf suite against a throwaway preview of main of its own: every metric to PostHog (`os latency measured`), paged red once when it crossed its budget or a sharp regression on its rolling baseline two runs in a row, green once when back. |
+| Real model       | Dispatch `os-real-model.yml`                                       | `REAL:` rows (`realModelOnly`), `.depot/workflows/os-real-model.yml`, `scripts/ci/os-real-model-alert.ts`     | **OS real model**, daily and every main push to the agents runtime, on a throwaway preview; pages #error-pulse                               | The turns every other run gives a fake provider, against real models: OpenAI's astra (the default) and Workers AI accept the request and answer. [Real-model rows](#real-model-rows).                                                          |
 | Crash hunt       | `RUN_ISOLATE_CRASH_HUNT=1 pnpm e2e isolate-ceilings`               | `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts`                                                           | Nightly against prd (`os-crash-hunt.yml`); opt-in rows, so the preview run stays deterministic                                               | Drives one context's Durable Object up to and past its isolate ceiling on purpose.                                                                                                                                                              |
 | Bench            | `pnpm --dir apps/os bench` (`BENCH_OUT=<file.json>`)               | `apps/os/bench/`                                                                                              | **Manual**                                                                                                                                   | Latency scenarios over the same client and worker, files one at a time.                                                                                                                                                                         |
 
@@ -126,7 +126,7 @@ recursively runs every workspace's `test` script, including the `iterate` CLI,
 Kit's and dummy-petshop's unit suites. Kit's firmware host tests are a separate
 step of the same job (`pnpm --dir apps/kit firmware:test:host`), so `pnpm test`
 runs on machines without cmake; that step runs even when `pnpm test` fails.
-OS's `test`, `e2e` and `bench` scripts run the Vite build first, so every lane
+OS's `test`, `e2e` and `bench` scripts run the Vite build first, so every suite
 tests the built worker. Live tests belong to preview CI instead: the Preview OS workflow's
 `e2e` job runs the OS e2e project and `pnpm spec` side by side against the
 PR's preview (`apps/os/scripts/preview.ts` `runE2e`; it runs `pnpm e2e:run`,
@@ -135,7 +135,7 @@ Playwright runs), and only once that preview's deploy succeeded.
 The OS e2e rows that talk to the petshop dial the deployed fixture; they
 cannot silently skip back out of preview CI.
 
-Any suite a CI lane does not run in full is a wiring bug unless the table names
+Any suite a CI job does not run in full is a wiring bug unless the table names
 its manual status. A test that genuinely cannot run against a given target
 carries an explicit in-code skip with a named guard and a comment saying why,
 so exclusion is always visible where the test lives: `deployedOnly`,
@@ -174,8 +174,8 @@ blocker, not a style note:
 
 | You built                                           | It ships with                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A stream processor, or a new side-effect arm in one | A `memoryStream` harness suite including a **re-reduce test** (replay the log through a new version ⇒ zero repeated side effects, as `processor-rules.test.ts` "version bump re-reduce" does); if it holds obligations, an **eviction/abort** test in the Workers lane (`context-runs.test.ts` kills a context mid-run) |
-| An itx capability or API surface                    | An e2e in `apps/os/e2e/` that exercises it through `/api` exactly like a production client, failure arms included; plus a Workers-lane row when it needs `cloudflare:test` controls                                                                                                                                     |
+| A stream processor, or a new side-effect arm in one | A `memoryStream` harness suite including a **re-reduce test** (replay the log through a new version ⇒ zero repeated side effects, as `processor-rules.test.ts` "version bump re-reduce" does); if it holds obligations, an **eviction/abort** test in the Workers suite (`context-runs.test.ts` kills a context mid-run) |
+| An itx capability or API surface                    | An e2e in `apps/os/e2e/` that exercises it through `/api` exactly like a production client, failure arms included; plus a Workers-suite row when it needs `cloudflare:test` controls                                                                                                                                     |
 | A product flow in a first-party app                 | A Playwright spec under `specs/`, readable as a product spec                                                                                                                                                                                                                                                            |
 | An incident fix with a log-shaped cause             | A repro of the captured event sequence as a harness case, named for the PR, red before the fix                                                                                                                                                                                                                          |
 
@@ -185,7 +185,7 @@ What we do NOT want:
   anti-pattern: a worker-build e2e edits the seeded template with
   exact-string anchors, and template edits kept breaking those anchors — the
   tempting "fix" was a unit test pinning the anchor strings so the breakage
-  showed up in the fast lane. That test asserts nothing about behavior, only
+  showed up in the fast suite. That test asserts nothing about behavior, only
   that two files agree, and every template edit now has to update it too.
   The e2e is the real check; the remedy at edit time is grepping for
   verbatim couplings, not a guard test.
@@ -224,10 +224,10 @@ bespoke runner.
 
 | Dimension    | Values                                            | Controlled by                                                                                                                          | Status         |
 | ------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| Surface      | in-process / workerd / itx API / browser          | which lane you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)                | works today    |
+| Surface      | in-process / workerd / itx API / browser          | which suite you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)                | works today    |
 | Speed        | fast / slow-by-contract                           | per-test `{ timeout }`; the long poles start first (`LONG_POLES` in `apps/os/vitest.config.ts`, hand-maintained from observed seconds) | works today    |
 | Determinism  | deterministic / retry-absorbed                    | `retry: CI ? 1 : 0` + retry telemetry — a nondeterministic test that retries is visible, never silent                                  | works today    |
-| Cost         | free / pays for model inference                   | `realModelOnly` (opt-in `E2E_REAL_MODELS=1`, `REAL:` titles); other lanes fake the provider ([real-model rows](#real-model-rows))      | works today    |
+| Cost         | free / pays for model inference                   | `realModelOnly` (opt-in `E2E_REAL_MODELS=1`, `REAL:` titles); other runs fake the provider ([real-model rows](#real-model-rows))      | works today    |
 | Remote reach | hermetic / hits a deployment / hits a third party | **partial** — `deployedOnly` / `localOnly` gate deployment reach; third-party reach is a deployed fixture (`PETSHOP_BASE_URL`)         | proposal below |
 
 Draft proposal for the remaining gap, keeping vanilla CLIs:
@@ -256,8 +256,8 @@ seconds?
 
 ## Real-model rows
 
-An agent's turn goes to a real model only in the daily real-model lane. Every
-other lane (PR previews, Main OS e2e, local runs, the soak) plays the provider
+An agent's turn goes to a real model only in the daily real-model suite. Every
+other run (PR previews, Main OS e2e, local runs, the soak) plays the provider
 with a fake: the test shadows the agent's `itx.ai`
 (`support.provide("itx.ai", fake)`), so the whole deployed runtime still runs
 above it (the turn loop, the attachment turned into a vision input, the byte
@@ -272,7 +272,7 @@ image part, the AI Gateway options), and nothing is spent.
   100-run soaks spent the cap (1,164 astra turns, about $30), and from then on
   every PR's preview e2e timed out on the two default-model rows.
 - **What runs where.** `apps/agents/e2e/agents-default-model.e2e.test.ts` runs
-  the default model's turn and its vision turn against the fake in every lane.
+  the default model's turn and its vision turn against the fake in every run.
   Its `REAL:` rows (the same two turns on OpenAI's astra, and a pinned Workers
   AI model seeing the image) and the `REAL:` row of
   `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts` are `realModelOnly`: they
@@ -289,12 +289,12 @@ image part, the AI Gateway options), and nothing is spent.
   outlasts the window. The gateway's logs
   (`GET /accounts/<id>/ai-gateway/gateways/default/logs`) show what spent it.
 
-## Running a lane against an environment
+## Running a suite against an environment
 
-Every non-unit lane targets a live deployment and is invoked the same way:
+Every non-unit suite targets a live deployment and is invoked the same way:
 
 ```bash
-doppler run --project os --config <cfg> -- env WORKER_BASE_URL=<url> pnpm <lane>
+doppler run --project os --config <cfg> -- env WORKER_BASE_URL=<url> pnpm <suite>
 ```
 
 The Doppler config supplies the deployment's own credentials — `APP_CONFIG`
@@ -351,18 +351,18 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `VOICE_BASE_URL`                              | The preview script, or you                                  | The Voice deployment the `voice` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
 | `DASH_BASE_URL`                               | The preview script, or you                                  | The Dash deployment the Notes session specs sign in to, to end a Notes session                                                                    | Unset → skipped locally, a failure in CI    |
 | `RUN_ISOLATE_CRASH_HUNT`                      | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
-| `E2E_REAL_MODELS`                             | The real-model lane (`os-real-model.yml`)                   | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
+| `E2E_REAL_MODELS`                             | The real-model suite (`os-real-model.yml`)                    | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
 | `BENCH_OUT`                                   | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                            | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
 | `TEST_TELEMETRY_ARTIFACT_FILE`                | You                                                         | Optional named immediate canonical JSON copy                                                                                                      | Unset → no immediate copy                   |
 | `TEST_TELEMETRY_ARTIFACT_DIR`                 | CI (Test workflow: `test-results/ci-telemetry/raw`), or you | Durable canonical JSON directory consumed by the always-running finalizer                                                                         | Unset → reporter does not write             |
 | `TEST_TELEMETRY_KIND`                         | CI                                                          | Shared `unit`, `integration`, or `e2e` dimension                                                                                                  | Runner-appropriate default                  |
-| `TEST_TELEMETRY_LANE`                         | CI                                                          | Shared lane dimension (`unit`, `vitest`, `playwright`, …)                                                                                         | Runner-appropriate default                  |
+| `TEST_TELEMETRY_SUITE`                        | CI                                                          | Shared suite dimension (`unit`, `vitest`, `playwright`, …)                                                                                         | Runner-appropriate default                  |
 | `TEST_TELEMETRY_APP`                          | No setter today                                             | The deployed application dimension                                                                                                                | Unset                                       |
 | `TEST_TELEMETRY_HEAD_SHA`                     | CI                                                          | Exact tested commit identity, including manually dispatched runs                                                                                  | Ambient `GITHUB_SHA`, then local HEAD       |
 | `TEST_TELEMETRY_BRANCH`                       | CI                                                          | Exact tested source branch, including manually dispatched runs                                                                                    | Ambient GitHub head/ref name                |
 | `TEST_TELEMETRY_PULL_REQUEST_NUMBER`          | CI                                                          | Exact selected PR identity for manually dispatched runs                                                                                           | Ambient pull-request ref, then unset        |
-| `TEST_TELEMETRY_EXPECTED_WORKSPACES`          | CI finalizer                                                | Comma-separated workspaces that must each leave a runner artifact (preview lanes; Test uses `--expect-unit-workspaces`)                           | Unset → require at least one artifact       |
+| `TEST_TELEMETRY_EXPECTED_WORKSPACES`          | CI finalizer                                                | Comma-separated workspaces that must each leave a runner artifact (preview jobs; Test uses `--expect-unit-workspaces`)                           | Unset → require at least one artifact       |
 | `CI`                                          | Depot CI                                                    | One retry (Vitest e2e and Playwright), trace on first retry, 16 Vitest e2e workers and 6 Playwright workers, never reuse an existing server       | Unset locally                               |
 | `VIDEO_MODE`                                  | You                                                         | `"1"` records spec demo videos — see [Video mode](#video-mode-recorded-spec-demos-for-prs)                                                        | No video                                    |
 | `PLAYWRIGHT_SCREENSHOT`                       | You                                                         | Semicolon-separated regexes over `locator.toString()`; each matching successful action saves a full-page PNG (`specs/test-support/screenshot.ts`) | Unset → no screenshots                      |
@@ -397,22 +397,22 @@ for it. The Playwright config additionally honors the Playwright-conventional
 ## Where test helpers live
 
 Four layers. A helper lives at the **lowest layer all its consumers share**,
-and imports point **down** only. When both lanes need a helper, it moves down
+and imports point **down** only. When both suites need a helper, it moves down
 a layer — never sideways into a copy.
 
 | Layer                     | Home                                                                                                    | Charter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | L0 policy & infra         | `packages/shared/src/test-support/`                                                                     | Runner-agnostic: the retry policy and timeout ladder (`e2e-policy/budgets.ts`, exported as `@iterate-com/shared/test-support/e2e-policy`) and the retry telemetry reporter (`e2e-policy/retry-telemetry-reporter.ts`), the CI telemetry contract (`ci-telemetry.ts`), flake records and suite summaries (`flake-record.ts`, `flake-suite-summary.ts`), the `createFlake` / `createFailing` wrappers, and `listenOnFetchSafePort` (`fetch-safe-port.ts`), a loopback listener fetch and browsers will connect to. |
-| L1 environment & identity | `apps/os/scripts/` and `apps/os/e2e/support/deployed-target.ts`                                         | The deployment under test and who you are against it: dev server, build, deploy and preview lifecycle; the deployed target's credentials, routing and MCP origin out of `APP_CONFIG` and `envs.ts`. Consumed by both lanes' configs.                                                                                                                                                                                                                                                                             |
-| L2 surface clients        | `apps/os/e2e/support/` (itx surface) · `specs/test-support/` (browser surface)                          | Lane-specific clients and fixtures: admin itx sessions, fresh projects, principals and fakes on the itx side; signed-in browser sessions and page plugins on the Playwright side.                                                                                                                                                                                                                                                                                                                                |
-| L3 domain harnesses       | `apps/os/src/stream/test-support.ts`, `apps/os/__workers-tests__/support.ts`, colocated with the domain | Unit- and Workers-lane fakes implementing real interfaces (`memoryStream`, node-SQLite Durable Object storage); never imported by L2 or above.                                                                                                                                                                                                                                                                                                                                                                   |
+| L1 environment & identity | `apps/os/scripts/` and `apps/os/e2e/support/deployed-target.ts`                                         | The deployment under test and who you are against it: dev server, build, deploy and preview lifecycle; the deployed target's credentials, routing and MCP origin out of `APP_CONFIG` and `envs.ts`. Consumed by both suites' configs.                                                                                                                                                                                                                                                                             |
+| L2 surface clients        | `apps/os/e2e/support/` (itx surface) · `specs/test-support/` (browser surface)                          | Suite-specific clients and fixtures: admin itx sessions, fresh projects, principals and fakes on the itx side; signed-in browser sessions and page plugins on the Playwright side.                                                                                                                                                                                                                                                                                                                                |
+| L3 domain harnesses       | `apps/os/src/stream/test-support.ts`, `apps/os/__workers-tests__/support.ts`, colocated with the domain | Unit- and Workers-suite fakes implementing real interfaces (`memoryStream`, node-SQLite Durable Object storage); never imported by L2 or above.                                                                                                                                                                                                                                                                                                                                                                   |
 
 Anti-goal: one mega test-support package. That would drag itx clients and
 credential machinery into a package that production workers import; the
-layers keep the credentialed, lane-specific pieces at the edges that need
+layers keep the credentialed, suite-specific pieces at the edges that need
 them. The "lowest shared layer" rule is also deliberately lazy — e.g.
 `until` in `apps/os/e2e/support/client.ts` stays L2 until a Playwright
-spec actually needs it: "needed by both lanes" is proven by a consumer, not
+spec actually needs it: "needed by both suites" is proven by a consumer, not
 predicted.
 
 ## Data fixtures with regenerable outputs
@@ -545,7 +545,7 @@ only on genuine infra wedges).
 | One Vitest e2e test/hook   | `testTimeout` / `hookTimeout`    | 60s / 120s (`apps/os/vitest.config.ts`, `e2e`)                                                     | retry once (CI)           |
 | A heavy test               | per-test `{ timeout }`           | per test, with a `// comment`                                                                      | retry once (CI)           |
 | A retry's pause            | vitest `retry.delay`             | `E2E_CI_RETRY_DELAY_MS` 5s, for `createFailing`'s retries; the e2e project retries without a pause | n/a                       |
-| One Workers-lane test/hook | `testTimeout` / `hookTimeout`    | 120s / 120s (the first test pays workerd boot)                                                     | fail                      |
+| One Workers-suite test/hook | `testTimeout` / `hookTimeout`    | 120s / 120s (the first test pays workerd boot)                                                     | fail                      |
 | One perf test              | `testTimeout` / `hookTimeout`    | 240s / 120s (`apps/os/vitest.config.ts`, `perf`); concurrent project creation 420s                 | fail (no retry)           |
 | One bench file             | `testTimeout` / `hookTimeout`    | 300s                                                                                               | fail                      |
 | The Depot CI job           | `timeout-minutes`                | Test 20, preview deploy 40, preview e2e 30, latency guard 45 minutes                               | outer edge: re-run button |
@@ -589,7 +589,7 @@ be diagnosed, even though the same test outcome remains green in normal CI.
   suite's contention as much as the platform's. A latency or throughput
   budget belongs in `apps/os/perf/` (the `perf` project), which runs alone and
   asserts the median of several rounds; an e2e row may print its numbers. The
-  latency guard (`os-latency.yml`) runs that lane every 3 hours and on every
+  latency guard (`os-latency.yml`) runs that suite every 3 hours and on every
   main push, alone on a preview of its own, and pages when a metric crosses its
   budget or regresses sharply two runs in a row; a new perf row records its
   metrics with `recordLatency` (`apps/os/perf/record.ts`) and names them, with
@@ -621,11 +621,11 @@ only when the test cannot safely or affordably keep executing:
 - the flake manifests as a genuine hang, which has no error to pattern-match
   (`createFlake` deliberately treats a hang as red);
 - the cost is the runtime itself (pathological tail latency), or the whole
-  lane is broken.
+  suite is broken.
 
 The skip path carries extra obligations precisely because it produces no
 data: the narrowest explicit `test.skip`/`fixme` (or a clearly logged no-op
-for an entire broken lane) — never a title filter, deleted discovery entry,
+for an entire broken suite) — never a title filter, deleted discovery entry,
 extra retry, or swallowed error — plus a `parked:` comment with the evidence
 and a `revisit by` date ([below](#parked-tests-expire)), a tracking issue
 with the evidence, impact, investigation work, and concrete exit criteria,
@@ -740,7 +740,7 @@ mini-app spec skips on a deployment that routes projects by paths, because it
 dials a subdomain — that is a property of the target, not a parked bug).
 
 [`lint/dated-skips.test.ts`](../lint/dated-skips.test.ts) enforces this in the
-unit lane (`pnpm test`): it scans the test corpus for skip/fixme/todo markers
+unit suite (`pnpm test`): it scans the test corpus for skip/fixme/todo markers
 and **fails on any `revisit by` date in the past**, printing the file and the
 parked reason. An expired date is a decision point, not a nag to bump: fix and
 un-park the test, or renew the date with the reason re-argued. Undated markers

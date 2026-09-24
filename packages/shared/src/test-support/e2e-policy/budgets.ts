@@ -13,7 +13,7 @@
  *    to accommodate worst-case retry stacks. A run burning retries against a
  *    wedged platform SHOULD get killed.
  * 4. Waits are progress-based (spinner-waiter); static budgets are backstops.
- * 5. Retries are measured, never silent (RetryTelemetryReporter next door).
+ * 5. Retries are measured, never silent (RetryTelemetryReporter, beside this file).
  */
 
 /**

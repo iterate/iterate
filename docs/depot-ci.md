@@ -87,7 +87,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                       |
 | `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                     |
 | `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                      |
-| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf lane against a throwaway preview of main; PostHog; pages on a change of state |
+| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against a throwaway preview of main; PostHog; pages on a change of state |
 | `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state         |
 | `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                   |
 | `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                               |
@@ -335,7 +335,7 @@ freshness:
   meanwhile collapse to the newest pending run. The latency guard
   (`os-latency.yml`, group `os-latency`) is built the same way for the same
   reason, and cutting a measurement short at every merge would starve it. So is
-  the real-model lane (`os-real-model.yml`, group `os-real-model`).
+  the real-model suite (`os-real-model.yml`, group `os-real-model`).
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
   Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout,
@@ -355,7 +355,7 @@ reported completion` on main. Deploy OS uses `4x16`; the client
 These defaults keep a normal all-app main push to 34 requested vCPUs (lint 8,
 test 4, Deploy OS 4, 2 for each of the seven client deploys, and 4
 for Main OS e2e, whose parent, deploy and e2e jobs run one after another; its
-trace, delete and alert jobs follow them), without reducing the parallel lint lane that
+trace, delete and alert jobs follow them), without reducing the parallel lint job that
 uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
 
