@@ -16,7 +16,6 @@ on:
       - apps/notes/**
       - envs.ts
       - scripts/lib/**
-      - apps/os/**
       - packages/iterate/**
       - packages/ui/**
       - packages/shared/**
@@ -36,8 +35,6 @@ jobs:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 20
-    outputs:
-      public_url: ${{ steps.metadata.outputs.public_url }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -50,33 +47,18 @@ jobs:
         run: doppler setup --config prd --project notes
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - id: metadata
-        name: Resolve Notes deploy URL
-        run: echo "public_url=https://notes.iterate.workers.dev" >> "$GITHUB_OUTPUT"
       - name: Deploy apps/notes
+        id: deploy
         working-directory: apps/notes
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy
-  notify:
-    needs:
-      - deploy
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 10
-    env:
-      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+      # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
+      # (deploy-os-next.yml says why `always()`).
       - name: Notify Slack
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: Notes
-          PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
+          PUBLIC_URL: https://notes.iterate.workers.dev
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

@@ -21,15 +21,22 @@ export type MainE2eState = "green" | "red";
 const RED = "🔴 main e2e red";
 const GREEN = "🟢 main e2e green again";
 
-/** The run's verdict from its jobs' results: red on any failure, green when every job succeeded, and
- *  none at all when a job was cancelled (a newer push superseded the run) or nothing failed but not
- *  everything ran. Pure. */
+/** The run's verdict from its jobs' results: red when a job failed or was cancelled, green when every
+ *  job succeeded, and none when nothing failed but not everything ran. A cancelled job hit its
+ *  timeout (Depot ends a timed-out job by cancelling it): a run cancelled by hand never reaches the
+ *  alert (main-os-e2e.yml). Pure. */
 export function mainE2eVerdict(results: Record<string, string>): MainE2eState | undefined {
   const values = Object.values(results);
-  if (values.includes("cancelled")) return undefined;
-  if (values.includes("failure")) return "red";
+  if (values.some((result) => result === "failure" || result === "cancelled")) return "red";
   if (values.length > 0 && values.every((result) => result === "success")) return "green";
   return undefined;
+}
+
+/** The jobs a red page names: each failed one, and each cancelled one as timed out. Pure. */
+export function mainE2eFailedJobs(results: Record<string, string>): string[] {
+  return Object.entries(results).flatMap(([job, result]) =>
+    result === "failure" ? [job] : result === "cancelled" ? [`${job} (timed out)`] : [],
+  );
 }
 
 /** The failed rows of a run's telemetry artifacts: a test whose outcome was unexpected (Playwright),
@@ -116,9 +123,7 @@ async function alert(dryRun: boolean): Promise<void> {
     verdict,
     commitSha,
     commitSubject,
-    failedJobs: Object.entries(results)
-      .filter(([, result]) => result === "failure")
-      .map(([job]) => job),
+    failedJobs: mainE2eFailedJobs(results),
     failingRows,
     runUrl: process.env.DEPOT_JOB_URL,
   });

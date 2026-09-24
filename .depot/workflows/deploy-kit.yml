@@ -14,7 +14,6 @@ on:
       - scripts/lib/**
       - apps/kit/**
       - packages/ui/**
-      - apps/os/**
       - apps/agents/**
       - packages/iterate/**
       - package.json
@@ -67,6 +66,7 @@ jobs:
           source "$IDF_PATH/export.sh"
           pnpm run firmware:release
       - name: Deploy apps/kit
+        id: deploy
         working-directory: apps/kit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -76,25 +76,12 @@ jobs:
           set -euo pipefail
           source "$IDF_PATH/export.sh"
           doppler run -- pnpm run-script deploy
-  notify:
-    needs:
-      - deploy
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 10
-    env:
-      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+      # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
+      # (deploy-os-next.yml says why `always()`).
       - name: Notify Slack
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: Kit
           PUBLIC_URL: https://k.iterate.com
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
