@@ -439,7 +439,7 @@ describe("security requirements — the global namespace is not navigable", () =
   });
 
   // parked: these need machinery from later increments (the privileged account facet and the
-  // transport-admission gate — the deferred path-mask enforcement pass, item B2), so they are
+  // transport-admission gate — the deferred path-mask enforcement pass), so they are
   // documented as skips rather than expected-fails — revisit by 2026-11-15
   test.skip("the account facet's processEventBatch is not client-callable (needs the privileged account facet)", () => {});
   test.skip("a user cannot SUBSCRIBE to another user's log via the pager (needs the transport-admission gate)", () => {});

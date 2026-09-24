@@ -1,7 +1,7 @@
 // e2e/support/client.ts — THE E2E client: open a capnweb session to the one shared worker (URL and
 // admin secret from global-setup, via WORKER_BASE_URL and ADMIN_API_SECRET) for a FRESH ctx per test,
 // exactly like a production client. This is the whole "how a test reaches the worker" surface, plus
-// the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
+// the idioms the files share (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -283,8 +283,8 @@ export async function rpcStubRewriteRuleMatches(itx: any): Promise<string[]> {
     .map((rule) => rule.match);
 }
 
-/** Enabled processors = subscriptions that HOST a facet (M1 marks the row `hostedFacet`; the source
- *  is no longer in the target) and push its processEventBatch. */
+/** Enabled processors = subscriptions that HOST a facet (the row is marked `hostedFacet`; the source
+ *  is not in the target) and push its processEventBatch. */
 export async function processorNames(itx: any): Promise<string[]> {
   return (await subscriptions(itx))
     .filter((s) => s.hostedFacet && /\.processEventBatch$/.test(s.target))

@@ -259,7 +259,7 @@ deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app"
   expect(echo).toBe("site-echo:hi");
 });
 
-// ADMISSION (wave 0, issue 1): a hostname for a project the control plane's catalog does not know is
+// ADMISSION: a hostname for a project the control plane's catalog does not know is
 // 421 at the edge, before any project Durable Object is dialled — a stranger's label under the
 // wildcard mints nothing.
 test("an address for a project the catalog does not know is 421, and its label is never an app", async () => {

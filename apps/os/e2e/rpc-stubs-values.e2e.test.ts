@@ -39,8 +39,6 @@ test("client A: provide('itx.runOnMyComputer', async fn) · client B: await itx.
   expect(ran).toEqual([["ls", ["-la"]]]);
 });
 
-// ── a callback fires back: get demo → rpc target → callLater(timeoutMs, cb) ──
-
 // ── the provider: get demo → Timer with callLater(timeoutMs, cb) ──
 class Timer extends RpcTarget {
   callLater(timeoutMs: number, cb: (() => void) & { dup(): () => void }) {
@@ -143,7 +141,6 @@ class ToolsRich extends RpcTarget {
   }
 }
 
-// A throw in any invoke below fails the test.
 test("rich values through the longest path: Date, bytes, callbacks, RpcTarget args, Request/Response", async () => {
   const ctx = freshCtx("rich");
   const itxA = openItx(ctx);
@@ -166,7 +163,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   ]);
   expect(cbResult).toBe("A:43"); // A called B's callback (42→43) and returned
 
-  // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
+  // 4. the STATELESS RUN LANE (a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
   await itxB.invoke(`itx.append({ type: 'noop' })`); // ensure the stream exists
   await itxB.provide("itx.probe", ["itx", "workers", ["get", { source: SOURCES.probe }]]);
@@ -278,7 +275,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 5. the PROVIDER disposes its handle → the stub is recalled AND the rule is un-set. The un-set
   //    lands one append after the pager's close, so a call in that window is refused CODED
-  //    (RPC_STUB_OFFLINE: the rule still names a stub that is gone — review round 2, edge#13); once it
+  //    (RPC_STUB_OFFLINE: the rule still names a stub that is gone); once it
   //    lands, default-deny answers NO_ITX_EXPRESSION_MATCH — the un-set REMOVES the rule.
   slackProvided[Symbol.dispose]();
   const denied = await until("the dispose propagated", async () => {

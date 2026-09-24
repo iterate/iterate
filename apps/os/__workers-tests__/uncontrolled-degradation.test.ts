@@ -242,7 +242,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
 // WHAT IT DIES OF: the hosting row LANDS (a 4.5 MiB event is under the 8 MiB append ceiling), then
 // `FacetHost#callFacet`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
 // SQLITE_TOOBIG` — at the enable-time catch-up AND on every push after it. Worse than a refusal:
-// with no memo, every push takes the M1 recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
+// with no memo, every push takes the recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
 // and re-parses the 4.5 MiB event out of SQLite, and dies at the same put. `snapshot()` rejects with
 // the same raw text. Production's cell is 2 MB, so a 2–8 MiB processor bundle is exactly this row.
 test.fails("A3 — a hosting spec whose source is over the cell cap but under the append ceiling LANDS, then can never materialize: every push re-reads the event and dies of the raw SQLITE_TOOBIG at the facet memo", async () => {
@@ -468,7 +468,7 @@ const corruptRow = (ctx: string, offset: number) =>
 // WHAT IT DIES OF: `SyntaxError: Unexpected token 'o', "not json" is not valid JSON` — V8's parser,
 // from `Stream.read`'s `JSON.parse` of the cell, naming NO offset. Every reader pages through
 // `read`: the client's own `read`, `waitForEvent`'s history scan, every facet's catch-up and gap
-// repair, the cursor lane's pages, the M1 memo recovery. One bad cell, every reader dead, no way to
+// repair, the cursor lane's pages, the memo recovery. One bad cell, every reader dead, no way to
 // tell WHICH row from the message.
 // An unparseable stored body is coded EVENT_UNREADABLE naming its offset, so a reader can read on
 // past it — BORN RED as V8's raw `is not valid JSON` from `read()` / waitForEvent's scan, naming

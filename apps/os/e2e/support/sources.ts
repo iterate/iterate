@@ -110,7 +110,7 @@ export class UserTallyDurableObject extends StreamProcessorDurableObject {
   processor = new UserTallyProcessor();
 }`,
   },
-  // The facet-spine demo processor (was the platform's built-in `tally`): counts every durable event
+  // The facet-spine demo processor: counts every durable event
   // by type. A userspace class like any other — there are no built-in processors.
   tally: {
     "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";

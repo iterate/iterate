@@ -94,7 +94,6 @@ async function refused(
 }
 
 // Public OAuth lifecycle and browser clients are covered by oauth.test.ts.
-// These tests retain the directory and ingress invariants of the former cookie API.
 test("the directory keeps creation, listing, membership and event attribution coherent", async () => {
   const ada = await operator("Ada@directory.test");
   const principal = await ada.whoami();

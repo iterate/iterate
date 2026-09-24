@@ -251,7 +251,7 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
 });
 
 test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the same name and class with changed source runs the NEW code on its next call, its storage preserved", async () => {
-  // The reduced row carries no source (M1); the facet's startup memo is the one place a
+  // The reduced row carries no source; the facet's startup memo is the one place a
   // materialization reads it from. PINS: the hosting configure refreshes that memo (the DO's commit
   // effect), so the next call loads the new source under a new loader identity and restarts the
   // facet IN PLACE — its checkpoint continues, never a rebuild from 0.

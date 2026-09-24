@@ -171,7 +171,7 @@ test("rewriteRules.list() under a bare row WITH a target still shows every impli
 // An EXPRESSION handle's undo is compare-and-set on the row's target: `#removeRuleInBackground`
 // (src/iterate-context.ts) removes the row only while its target is still the one this handle wrote —
 // spelled the way `rewriteRules.get` spells it (PRINTED, with holes), since the door's event carries
-// the PARSED form. (Was red: the two spellings were compared verbatim and never matched.)
+// the PARSED form.
 test("disposing an EXPRESSION provide handle removes the rule it wrote — the platform row beneath shows through again", async () => {
   const itx = openItx(freshCtx("expression-dispose"));
   const handle = await itx.provide("itx.kv", "itx.builtins.whoami");

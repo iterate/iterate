@@ -77,7 +77,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(s2.offset).toBeGreaterThanOrEqual(8);
 
   // the subscriptions table lists the processor: ONE row whose target is the facet's
-  // processEventBatch, and NO cursor — the facet keeps its own checkpoint. M1: the SOURCE is elided
+  // processEventBatch, and NO cursor — the facet keeps its own checkpoint. The SOURCE is elided
   // from the reduced target (it lives in the log + the facet's kv memo); the row carries a
   // `hostedFacet` marker with the class instead.
   expect(await processorNames(itx)).toEqual(["tally"]);

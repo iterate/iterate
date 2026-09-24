@@ -108,8 +108,8 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   ]);
   expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
   // THE BROWSER'S ACTUAL SHAPE: the page that just did the OAuth dance also carries the platform's
-  // own login cookie, from another origin. The cookie lends it nothing (CSRF — iterate/next/app-server
-  // used to answer 403 here); the socket opens bare and the token still works in-band.
+  // own login cookie, from another origin. The cookie lends it nothing (CSRF); the socket opens bare
+  // and the token still works in-band.
   const withCookie = new UndiciWebSocket(url, {
     headers: { ...issuerHeaders, Origin: "http://spa.example" },
   });
