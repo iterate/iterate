@@ -82,13 +82,16 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 15
     steps:
-      # The PR's own head, not the default branch: the teardown reads the config that created the
-      # preview (cloudflare-os does the same).
-      - name: Checkout the PR head
+      # The teardown reads the config that created the preview (cloudflare-os does the same), and
+      # Preview OS deployed the PR's head merged into main. On a close, the run's own commit is the
+      # nearest tree to that: a merged PR's squash commit on main, or an unmerged PR's head (Depot
+      # runs the close from the head then). A dispatch from main takes the PR's head
+      # (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
+      - name: Checkout the PR's tree
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+          ref: ${{ github.event_name == 'pull_request' && github.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)

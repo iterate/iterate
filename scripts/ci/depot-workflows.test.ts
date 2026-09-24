@@ -819,15 +819,34 @@ test.for([
 
 // docs/depot-ci.md#which-tree-a-pull-requests-ci-tests: Depot reads a PR run's workflow files from
 // its merge commit, so the required checks test that commit, not the head it merges.
-test.each([".depot/workflows/test.yml", ".depot/workflows/lint-typecheck.yml"])(
-  "%s checks out the run's own commit, the tree its workflow file was read from",
-  (file) => {
-    const checkouts = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
-      (job.steps || []).filter((step) => step.uses?.startsWith("actions/checkout")),
+test.for([
+  { file: ".depot/workflows/test.yml", jobIds: ["test"] },
+  { file: ".depot/workflows/lint-typecheck.yml", jobIds: ["lint-typecheck"] },
+  { file: ".depot/workflows/loc-report.yml", jobIds: ["loc-report"] },
+  { file: ".depot/workflows/pr-dashboard.yml", jobIds: ["update_dashboard"] },
+  { file: ".depot/workflows/kit-firmware.yml", jobIds: ["plan-firmware", "build-firmware"] },
+])(
+  "$file checks out the run's own commit, the tree its workflow file was read from",
+  ({ file, jobIds }) => {
+    const { jobs } = loadWorkflow(file);
+    const checkouts = jobIds.flatMap((jobId) =>
+      (jobs[jobId]?.steps || []).filter((step) => step.uses?.startsWith("actions/checkout")),
     );
-    expect(checkouts.map((step) => step.with?.ref)).toEqual(["${{ github.sha }}"]);
+    expect(checkouts.map((step) => step.with?.ref)).toEqual(jobIds.map(() => "${{ github.sha }}"));
   },
 );
+
+// A close runs from the merged PR's squash commit on main, or from an unmerged PR's head; a
+// dispatch from main has neither, so it takes the PR's head.
+test("Preview delete checks out the close's own commit", () => {
+  const checkout = loadWorkflow(".depot/workflows/preview-delete.yml").jobs.delete?.steps?.find(
+    (step) => step.uses?.startsWith("actions/checkout"),
+  );
+
+  expect(checkout?.with?.ref).toBe(
+    "${{ github.event_name == 'pull_request' && github.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}",
+  );
+});
 
 test("labels unit artifacts with the pull-request head, whose merge commit the job tests", () => {
   const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(

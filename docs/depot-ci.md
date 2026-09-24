@@ -491,14 +491,26 @@ four Test jobs failed after every test had passed (#2999). Replayed on #2985's r
 `q0zxdw71pm`, the workspace check fails in the head `397df9615` and passes in the run's merge
 commit `fe85c66d0`.
 
-Every job that gates a pull request therefore tests the run's own commit, the tree its workflow
-file came from:
+Every pull-request job therefore runs the run's own commit, the tree its workflow file came from
+(`depot-workflows.test.ts` enforces each checkout):
 
-- Lint and Typecheck and Test check out `github.sha` (`depot-workflows.test.ts` enforces it).
+- Lint and Typecheck and Test check out `github.sha`.
 - Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which
   deploys it when it is a merge of the head, and otherwise resolves `refs/pull/<n>/merge` as
   before; e2e and trace check out the commit deploy tested. The trace's statuses, the test
   telemetry's `headSha` and the preview's name still use the PR head.
+- LOC report checks out `github.sha`. The report is still the PR's head against its base: the
+  script diffs the two shas from the event, and the checkout supplies only the script, its
+  dependencies and `.gitattributes`.
+- The PR dashboard checks out `github.sha`. Its scripts read GitHub and Slack, never the PR's code.
+- Kit Firmware's Plan and build legs check out `github.sha`, so a firmware PR builds what main
+  would build after the merge, and a board main changed since the branch point is not rebuilt as
+  the PR's change.
+- Preview delete checks out `github.sha` on a close. Depot runs a merged PR's close from its
+  squash commit on main, the nearest tree to the merge commit Preview OS last deployed: #3016's
+  close, run `3ztflxsxzb`, has `Sha` `a1656e2be` (the squash commit) and `Head sha` `495427e19`.
+  It runs an unmerged PR's close from its head: `Sha` equals `Head sha` for the closes of #2981,
+  #2982, #2996 and #3017.
 
 What that means for a pull request:
 
@@ -509,11 +521,15 @@ What that means for a pull request:
 - A PR that conflicts with main has no merge commit and gets no run at all
   ([below](#pull-requests-that-conflict-with-main)).
 
-The hazard remains where a job still checks out the head on purpose: LOC report (it diffs the
-head against its base), the PR dashboard, Kit Firmware's pull-request builds and Preview
-delete. A main change to one of those workflows that needs new code fails un-rebased PRs until
-they rebase. A `workflow_dispatch` reads its file from the dispatched ref instead: a Preview OS
-dispatch from main for a PR runs main's file against that PR merged into main now.
+A `workflow_dispatch` reads its file from the dispatched ref instead: a Preview OS dispatch from
+main for a PR runs main's file against that PR merged into main now. A Preview delete dispatch
+has no merge to check out and takes `refs/pull/<n>/head`, main's file against the PR's own tree.
+
+The hazard remains where the head is the only tree: an unmerged PR's close runs the head's own
+workflow file against the head, so a head older than a main change runs the old teardown. #2982's
+close on 2026-09-24 failed `Could not find requested project 'project-worker'`: its head's
+`doppler.yaml` still named the Doppler project #2987 had renamed to `os`. The nightly sweep
+(`preview-sweep.yml`) deletes what such a close leaves.
 
 ## Pull requests that conflict with main
 
