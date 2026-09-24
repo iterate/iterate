@@ -53,6 +53,13 @@ It prints three grouped counts for the window, and each one is the next thing to
 Its `readWindow` holds the exact filters. Copy them rather than rewriting them, so that your
 drill-down excludes the same expected noise.
 
+When the post-deploy check pages (`scripts/ci/prd-post-deploy-check.ts`, project hosts down right
+after a deploy), its last line is the down hosts' most frequent failure in Workers Logs and whether
+it began before the new version's upload; before the upload means the deploy only landed in it.
+`readFailureCause` holds that query. A project host whose control-plane read failed logs
+`control-plane.platform-failure-stale-project` (served from the data center's last-known copy) or
+`control-plane.platform-failure-unavailable` (answered 503).
+
 ## Drill down
 
 Query `POST /accounts/<account>/workers/observability/telemetry/query` on the `cloudflare-workers`

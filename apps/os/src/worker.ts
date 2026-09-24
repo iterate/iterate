@@ -14,7 +14,8 @@ import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
 import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
-import { ControlPlane } from "./control-plane/edge.ts";
+import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
+import { projectForHost } from "./control-plane/last-known-project.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import { testLinkResponse } from "./issuer-session.ts";
@@ -55,6 +56,26 @@ function withoutBasePath(request: Request, basePath: string): Request {
   const url = new URL(request.url);
   url.pathname = url.pathname.slice(basePath.length) || "/";
   return new Request(url, request);
+}
+
+/** A project host's answer when its admission needed a control-plane read that failed on the
+ *  platform's side (ControlPlaneUnavailableError, edge.ts) and no last-known copy stood in: 503 at
+ *  once, logged as `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages
+ *  on a burst, and on the 5xx), where on 2026-09-24 each visitor waited 12–15 s for an exception.
+ *  Any other error is rethrown. */
+function controlPlaneUnavailable(error: unknown, project: string): Response {
+  if (!(error instanceof ControlPlaneUnavailableError)) throw error;
+  console.warn({
+    event: "control-plane.platform-failure-unavailable",
+    name: project,
+    method: error.method,
+    waitedMs: error.waitedMs,
+    message: error.message,
+  });
+  return new Response(
+    `503: the platform could not look up ${JSON.stringify(project)} just now; try again in a minute\n`,
+    { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
+  );
 }
 
 /** An app's answer through paths ingress, sandboxed (PATHS_INGRESS_SANDBOX). */
@@ -178,7 +199,13 @@ export default {
       // else any label under the wildcard would mint durable storage from the public internet. One
       // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
       // host's label (a slug, an id would do too) to the project's id; an unknown label is 421.
-      const project = await controlPlane.getProject(projectHost.project);
+      // The read is bounded (edge.ts); when it fails, this data center's last-known copy of the
+      // answer stands in (last-known-project.ts), and a host with none answers 503 at once.
+      const project = await projectForHost(controlPlane, projectHost.project, {
+        origin: url.origin,
+        ctx,
+      }).catch((error: unknown) => controlPlaneUnavailable(error, projectHost.project));
+      if (project instanceof Response) return project;
       if (!project)
         return new Response(
           `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
@@ -215,8 +242,15 @@ export default {
           status: 401,
           headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
         });
-      if (authorization && !(await controlPlane.reachesProject(authorization.reach, projectId)))
-        return new Response("This session cannot access this project", { status: 403 });
+      if (authorization) {
+        // A person's access has no stand-in: a membership read the control plane fails is a 503.
+        const reaches = await controlPlane
+          .reachesProject(authorization.reach, projectId)
+          .catch((error: unknown) => controlPlaneUnavailable(error, projectHost.project));
+        if (reaches instanceof Response) return reaches;
+        if (!reaches)
+          return new Response("This session cannot access this project", { status: 403 });
+      }
       if (authorization?.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
       const answer = await env.ITERATE_CONTEXT.getByName(

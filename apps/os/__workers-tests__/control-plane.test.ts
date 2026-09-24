@@ -548,7 +548,12 @@ test("a control plane holder replaces the stub a deploy's reset broke; a refusal
   const controlPlane = new ControlPlane({
     getByName,
   } as unknown as DurableObjectNamespace<ControlPlaneDurableObject>);
-  await expect(controlPlane.reachableProjects("every")).rejects.toBe(reset);
+  // a read cut at the transport is the platform's failure (edge.ts), the cut and its flag kept
+  await expect(controlPlane.reachableProjects("every")).rejects.toMatchObject({
+    name: "ControlPlaneUnavailableError",
+    retryable: true,
+    cause: reset,
+  });
   await expect(controlPlane.reachableProjects("every")).resolves.toEqual([]);
   await expect(controlPlane.reachableProjects("every")).rejects.toBe(refusal);
   await expect(controlPlane.reachableProjects("every")).resolves.toEqual([]);

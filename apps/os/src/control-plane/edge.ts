@@ -5,7 +5,9 @@
 // organization never change, so a hit is kept for the isolate's life (a miss never is); a person's
 // access is kept five seconds — dropped at once here for the person a command was made by or for —
 // and a refusal is never memoized: a project not in a memoized access set is re-read once before it
-// is refused, so a creation is reachable at once.
+// is refused, so a creation is reachable at once. Every READ is bounded (READ_TIMEOUT_MS): one that
+// times out or fails on the platform's side throws ControlPlaneUnavailableError, which a project
+// host's admission models (last-known-project.ts, worker.ts); a command is never cut short.
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
@@ -35,6 +37,42 @@ export const describeReach = (reach: Reach): string =>
     : "userId" in reach
       ? `the projects of the orgs ${reach.userId} belongs to`
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
+
+/** How long the edge waits for one control-plane READ before the platform counts as down: 3 s. In
+ *  prd the singleton answers in 23–30 ms at the median, 266 ms at p99 and ~300 ms at p999 (a wake
+ *  after a deploy's reset); the slowest of 14,622 calls on 2026-09-23/24 took 1.25 s (Workers Logs,
+ *  `ControlPlaneDurableObject` jsrpc wall time). On 2026-09-24 it was unreachable for 188 s and each
+ *  call failed only after 12–15 s ("internal error; reference = …"), so every visitor of every
+ *  project host waited that long for a 5xx. Three seconds is over twice the slowest healthy call and
+ *  a quarter of the platform's own give-up. A command (a write) is not bounded: one abandoned
+ *  here may still land, and its caller would report a change that happened as failed. */
+const READ_TIMEOUT_MS = 3_000;
+
+/** A control-plane READ that did not answer within READ_TIMEOUT_MS, or that failed on the platform's
+ *  side: cut at the transport (retryable-error.ts: "Network connection lost.", a Durable Object
+ *  reset) or workerd's opaque "internal error; reference = …", what the 2026-09-24 outage threw. A
+ *  refusal the catalog coded, or any other throw, is not one and surfaces as what it is. The
+ *  project host's admission models it (worker.ts); everywhere else it surfaces, after 3 s instead of
+ *  the platform's 12–15. */
+export class ControlPlaneUnavailableError extends Error {
+  override readonly name = "ControlPlaneUnavailableError";
+  /** the Durable Object method read (`project`, `accessibleTo`, …) */
+  readonly method: string;
+  readonly waitedMs: number;
+  /** The cause's transport flag, kept: oauth-store.ts asks a cut grant read again once. */
+  readonly retryable: boolean;
+  constructor(method: string, waitedMs: number, cause?: Error) {
+    super(
+      cause
+        ? `The control plane failed ${method} after ${waitedMs} ms: ${cause.message}`
+        : `The control plane did not answer ${method} within ${READ_TIMEOUT_MS} ms`,
+      { cause },
+    );
+    this.method = method;
+    this.waitedMs = waitedMs;
+    this.retryable = isRetryableTransportError(cause);
+  }
+}
 
 const projectMemo = new Map<string, ProjectRecord>();
 /** A host's address under projects' own hostnames, hit or miss, kept thirty seconds: a removed
@@ -76,12 +114,39 @@ export class ControlPlane {
     }
   }
 
+  /** ONE read (`#call`), BOUNDED: past READ_TIMEOUT_MS, or failed on the platform's side, it throws
+   *  ControlPlaneUnavailableError. Workers RPC takes no abort signal, so a call that times out is
+   *  abandoned, not cancelled; the stub it hung on is replaced, as a cut one is. */
+  async #read<T>(method: string, ...args: unknown[]): Promise<T> {
+    const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        this.#stub = this.#namespace.getByName("global");
+        reject(new ControlPlaneUnavailableError(method, Date.now() - started));
+      }, READ_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([this.#call<T>(method, ...args), timedOut]);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (isRetryableTransportError(error) ||
+          error.message.startsWith("internal error; reference ="))
+      )
+        throw new ControlPlaneUnavailableError(method, Date.now() - started, error);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** A project by id or by slug — THE lookup: a URL's `/projects/<slug>`, a hostname's label, an
    *  API call's `project`, a grant's id all resolve here. */
   async getProject(ref: string): Promise<ProjectRecord | null> {
     const memoized = projectMemo.get(ref);
     if (memoized) return memoized;
-    const project = await this.#call<ProjectRecord | null>("project", ref);
+    const project = await this.#read<ProjectRecord | null>("project", ref);
     if (project) {
       projectMemo.set(project.id, project);
       projectMemo.set(project.slug, project);
@@ -142,7 +207,7 @@ export class ControlPlane {
   accessibleTo(userId: string, fresh = false): Promise<AccessibleRecord> {
     const memoized = accessMemo.get(userId);
     if (!fresh && memoized && Date.now() - memoized.at < 5_000) return memoized.value;
-    const value = this.#call<AccessibleRecord>("accessibleTo", userId);
+    const value = this.#read<AccessibleRecord>("accessibleTo", userId);
     value.catch(() => accessMemo.delete(userId)); // a failed read is nobody's answer — its caller sees it
     accessMemo.set(userId, { at: Date.now(), value });
     return value;
@@ -174,7 +239,7 @@ export class ControlPlane {
     reach: Reach,
     expected: readonly string[] = [],
   ): Promise<ProjectRecord[]> {
-    if (reach === "every") return this.#call<ProjectRecord[]>("projects");
+    if (reach === "every") return this.#read<ProjectRecord[]>("projects");
     if ("userId" in reach) {
       const { userId, projectIds } = reach;
       const named = [...expected, ...(projectIds || [])];
@@ -203,28 +268,28 @@ export class ControlPlane {
   }
 
   listOrganizations(): Promise<OrganizationRecord[]> {
-    return this.#call("organizations");
+    return this.#read("organizations");
   }
   getOrganization(organizationId: string): Promise<OrganizationRecord | null> {
-    return this.#call("organization", organizationId);
+    return this.#read("organization", organizationId);
   }
   listMembers(organizationId: string): Promise<MemberRecord[]> {
-    return this.#call("members", organizationId);
+    return this.#read("members", organizationId);
   }
   /** What an invitation link opens, for `userId` (null: nobody signed in) — by the token's hash. */
   getInvitation(tokenHash: string, userId: string | null): Promise<InvitationPreview | null> {
-    return this.#call("invitation", tokenHash, userId);
+    return this.#read("invitation", tokenHash, userId);
   }
   /** A user by id or by email. */
   getUser(ref: string): Promise<UserRecord | null> {
-    return this.#call("user", ref);
+    return this.#read("user", ref);
   }
   /** The user a provider's subject names. */
   identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
-    return this.#call("identity", provider, subject);
+    return this.#read("identity", provider, subject);
   }
   listUsers(): Promise<UserRecord[]> {
-    return this.#call("users");
+    return this.#read("users");
   }
 
   // ── the commands: each one call, under the caller ──
@@ -342,13 +407,13 @@ export class ControlPlane {
 
   /** A grant's JSON as last written, or null. */
   oauthGrant(key: string): Promise<string | null> {
-    return this.#call("oauthGrant", key);
+    return this.#read("oauthGrant", key);
   }
   listOAuthGrants(
     prefix: string,
     options: { cursor?: string; limit?: number },
   ): Promise<OAuthGrantListing> {
-    return this.#call("listOAuthGrants", prefix, options);
+    return this.#read("listOAuthGrants", prefix, options);
   }
   /** `expiresAt`: epoch seconds, or null for a grant that never expires. */
   putOAuthGrant(key: string, value: string, expiresAt: number | null): Promise<void> {

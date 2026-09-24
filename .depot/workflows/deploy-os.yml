@@ -86,12 +86,13 @@ jobs:
       # the new version (≤ 60 s), one GET of each production project host
       # (scripts/ci/prd-post-deploy-check.ts PRD_PROJECT_HOST_URLS), four tries 10 s apart while it looks down. A host still
       # answering 421 or 5xx, or not at all, or a `/version` that never moves, pages #error-pulse and
-      # fails this workflow. Faults on the new version are the prd fault alarm's (prd-fault-alarm.yml,
-      # every 15 minutes).
+      # fails this workflow; the page names the down hosts' most frequent failure in Workers Logs and
+      # whether it began before the upload (under Doppler for the Cloudflare token). Faults on the new
+      # version are the prd fault alarm's (prd-fault-alarm.yml, every 15 minutes).
       - name: Check the project hosts
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
+        run: doppler run -- pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
       # The deploy's own result to #ci; a deploy that failed, was cancelled or hit the job's timeout
       # posts failure. `always()`, because `!cancelled()` is false once the job is cancelled, and a
       # timeout ends the job by cancelling it.
