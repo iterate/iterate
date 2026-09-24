@@ -54,7 +54,7 @@ function tagHash(parts: unknown): string {
 /**
  * `wrangler deploy` with captured output (echoed either way), returning
  * instead of throwing — the reset needs to inspect the failure to pick its
- * fallback (the run() helper inherits stdio, so its output can't be read).
+ * fallback (runAsync inherits stdio, so its output can't be read).
  */
 function runWranglerDeploy(input: {
   configPath: string;

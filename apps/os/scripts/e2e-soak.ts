@@ -61,6 +61,8 @@ for (let n = 1; n <= runs; n++) {
     // --retry=0: the e2e project retries once in CI, which is right for a gate and wrong for a soak —
     // a row that failed its first attempt and passed its second is exactly what the soak exists to
     // count (soak qx2jhwrrlk, 2026-09-22: the tally said 1/100 for a row that had failed 3 first attempts).
+    // Otherwise the `e2e:run` script's argv, minus its reporters: vitest adds repeated `--reporter`
+    // flags together, and the retry-telemetry one would record flakes on every run.
     [
       "exec",
       "vitest",

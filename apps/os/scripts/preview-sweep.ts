@@ -71,7 +71,7 @@ export type PreviewSweepPlan = {
 export function previewNameOfSweptResource(
   resource: SweptResource,
   input: Pick<PreviewSweepInput, "workerNames" | "resourceSuffixes">,
-): string | undefined {
+) {
   const parent = PREVIEW_PARENT.workerName;
   const ownedByAnotherWorker = input.workerNames.some(
     (workerName) =>
@@ -151,6 +151,6 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
  *  are not `current`: an earlier run's. Cancelling a run cancels its queued jobs, its `always()`
  *  delete included (observed 2026-09-23 on main-44db0e6), so each run deletes these before it
  *  deploys; the nightly sweep's rule 3 is the backstop. Pure. */
-export function supersededMainPreviews(previewNames: string[], current: string): string[] {
+export function supersededMainPreviews(previewNames: string[], current: string) {
   return previewNames.filter((name) => /^main-[0-9a-f]{7}$/.test(name) && name !== current);
 }

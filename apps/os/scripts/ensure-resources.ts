@@ -2,9 +2,8 @@ import { createCli } from "trpc-cli";
 import { osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
-import { registrableDomainOf } from "../../../scripts/lib/start-app.ts";
-import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
-import { ownZonesOf } from "./generate-wrangler-config.ts";
+import { registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
+import { ownZonesOf, routedHostnames } from "./generate-wrangler-config.ts";
 
 export default async function ensureResources(options: { env?: string } = {}) {
   const ctx = await resolveEnvContext({
@@ -42,19 +41,10 @@ export default async function ensureResources(options: { env?: string } = {}) {
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );
-  for (const host of [
-    new URL(ctx.env.baseUrl).hostname,
-    new URL(ctx.env.mcpBaseUrl).hostname,
-    ...(ctx.env.ingressRouting?.type === "subdomains"
-      ? [`*.${ctx.env.ingressRouting.hostname}`]
-      : []),
-    ...(ctx.env.projectWildcard ? [`*.${ctx.env.projectWildcard.hostname}`] : []),
-    // this account's own custom apexes; the SaaS ones are custom hostnames, below
-    ...Object.keys(ctx.env.temporaryCustomHostnames || {}).filter((hostname) =>
-      ownZonesOf(ctx.env).has(registrableDomainOf(hostname)),
-    ),
-  ].filter((host) => !host.endsWith(".workers.dev")))
-    await ensureProxiedDnsRecord(ctx, zones, host, "Clean-room OAuth deployment");
+  // every routed hostname, this account's own custom apexes among them; the SaaS ones are custom
+  // hostnames, below
+  for (const { hostname } of routedHostnames(ctx.env))
+    await ensureProxiedDnsRecord(ctx, zones, hostname, "Clean-room OAuth deployment");
   // CLOUDFLARE FOR SAAS: a custom apex whose zone lives in another account is a custom hostname on
   // the first SaaS zone (the zone's fallback origin, `cname.<zone>`, is ours) — created here with an
   // HTTP DV certificate; it turns active once the owner CNAMEs their apex to that fallback origin.
@@ -124,7 +114,18 @@ export default async function ensureResources(options: { env?: string } = {}) {
       `created custom hostname ${hostname} on ${saasZoneName} — its owner CNAMEs the apex to cname.${saasZoneName}`,
     );
   }
-  reconcileResources(ctx.name, ctx.env.resources, resources);
+  // IDs live in git, so bring-up always ends in a reviewed commit: on a mismatch with envs.ts, print
+  // the entry to paste and fail.
+  if (
+    resources.oauthKvId !== ctx.env.resources.oauthKvId ||
+    resources.itxKvId !== ctx.env.resources.itxKvId
+  ) {
+    console.log(`\nenvs.ts is out of date for ${ctx.name} — update its resources entry to:\n`);
+    console.log(`  resources: ${JSON.stringify(resources, null, 2).replaceAll("\n", "\n  ")},\n`);
+    console.log("then commit (the Worker config reads it from envs.ts)");
+    process.exit(1);
+  }
+  console.log(`✅ ${ctx.name} resources all present and match envs.ts`);
 }
 if (process.argv[1]?.endsWith("ensure-resources.ts"))
   void createCli({ ...import.meta, name: "ensure-resources" }).run();

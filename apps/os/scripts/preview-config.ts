@@ -5,9 +5,7 @@
 // transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs`.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import process from "node:process";
 import { fileURLToPath } from "node:url";
-import JSON5 from "json5";
 import { osEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
@@ -16,6 +14,7 @@ import { notes } from "../../notes/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
+import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 /** Beside Vite's built Worker config, so `main` and `assets.directory` resolve identically. */
 export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
@@ -32,7 +31,7 @@ export const MAX_PREVIEW_NAME_LENGTH = 28;
 export const APPS: StartApp[] = [dash, agents, notes, voice, kit];
 /** A path that changes every app: the SDK they are built on, the shared UI, the shared deploy
  *  scripts, the env map. An app's own paths are `apps/<name>/`. */
-export const SHARED_APP_PATHS = [
+const SHARED_APP_PATHS = [
   "packages/iterate/",
   "packages/shared/",
   "packages/ui/",
@@ -46,10 +45,7 @@ export const SHARED_APP_PATHS = [
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
 /** Slugify a ref into a legal preview name, truncating with a stable hash (cloudflare-os). */
-export function slugifyPreviewName(
-  raw: string,
-  { reserve = 0 }: { reserve?: number } = {},
-): string {
+export function slugifyPreviewName(raw: string, { reserve = 0 }: { reserve?: number } = {}) {
   const budget = MAX_PREVIEW_NAME_LENGTH - reserve;
   const slug = raw
     .toLowerCase()
@@ -64,18 +60,14 @@ export function slugifyPreviewName(
 /** `pr<n>-<branch slug>`: recognizable, unique per pull request. Two live branches can slugify to
  *  one name (`feature/foo`, `feature-foo`) and would otherwise share an instance. Without a number
  *  — a local run — the bare slug, which the sweep judges on age alone. */
-export function resolvePreviewName({
-  name = process.env.PREVIEW_NAME,
-  prNumber = process.env.PREVIEW_PR_NUMBER,
-}: { name?: string; prNumber?: string } = {}): string {
-  if (!name) throw new Error("a preview needs a ref: --name <ref> or PREVIEW_NAME");
+export function resolvePreviewName({ name, prNumber }: { name: string; prNumber?: string }) {
   const pr = (prNumber || "").trim();
   if (!/^\d+$/.test(pr)) return slugifyPreviewName(name);
   const prefix = `pr${pr}-`;
   return `${prefix}${slugifyPreviewName(name, { reserve: prefix.length })}`;
 }
 
-export function previewPullRequestNumber(previewName: string): number | undefined {
+export function previewPullRequestNumber(previewName: string) {
   const match = /^pr(\d+)-/.exec(previewName);
   return match ? Number(match[1]) : undefined;
 }
@@ -85,7 +77,7 @@ export function previewPullRequestNumber(previewName: string): number | undefine
  *  a Durable Object class the preview does not have. An existing Worker Preview cannot gain a class
  *  it lacked when it was created (2026-09-23, #2888's ControlPlaneDurableObject: every existing PR
  *  preview failed, a new one passed), so scripts/preview.ts deletes the preview and creates it again. */
-export function isDurableObjectClassNotExportedError(wranglerOutput: string): boolean {
+export function isDurableObjectClassNotExportedError(wranglerOutput: string) {
   return /Cannot create binding for class .* not exported by the script|\[code: 10061\]/.test(
     wranglerOutput,
   );
@@ -93,7 +85,7 @@ export function isDurableObjectClassNotExportedError(wranglerOutput: string): bo
 
 /** `https://<name>-<worker>.<subdomain>.workers.dev` — Cloudflare derives it from the preview's slug
  *  and the worker name, so every URL the config needs is known before anything deploys. */
-export function previewUrl(previewName: string): string {
+export function previewUrl(previewName: string) {
   const host = new URL(PREVIEW_PARENT.baseUrl).hostname;
   const prefix = `${PREVIEW_PARENT.workerName}.`;
   if (!host.startsWith(prefix))
@@ -102,9 +94,9 @@ export function previewUrl(previewName: string): string {
 }
 
 /** Every preview-owned resource is `<worker>-<preview>-<binding>`, the name wrangler's preview
- *  auto-provisioning gives the KV namespaces and the R2 bucket; the D1 database and the Artifacts
- *  namespace follow it by hand. */
-export const previewResourceName = (previewName: string, binding: string): string =>
+ *  auto-provisioning gives the KV namespaces and the R2 bucket; the Artifacts namespace follows it
+ *  by hand. */
+export const previewResourceName = (previewName: string, binding: string) =>
   `${PREVIEW_PARENT.workerName}-${previewName}-${binding}`;
 
 /** The account resources a preview owns: the four kinds `previewResourceSuffixes` names. */
@@ -117,7 +109,7 @@ export type PreviewResourceKind = "kv" | "r2" | "d1" | "artifacts";
  *  is a Durable Object now, not D1); its suffix stays so the sweep still recognizes and deletes the
  *  D1s earlier previews left behind. What deletePreview deletes and the sweep recognizes. */
 export function previewResourceSuffixes(
-  template = readWranglerTemplate(),
+  template = readWranglerBase(),
 ): Record<PreviewResourceKind, string[]> {
   const suffix = ({ binding }: { binding: string }) => binding.toLowerCase().replaceAll("_", "-");
   return {
@@ -131,7 +123,7 @@ export function previewResourceSuffixes(
 /** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
  *  for a name of another shape: the parent's own (`os-next-preview-repos`), another worker's,
  *  another binding's. How the sweep reads a leftover resource (scripts/preview-sweep.ts). */
-export function previewNameOfResource(resourceName: string, binding: string): string | undefined {
+export function previewNameOfResource(resourceName: string, binding: string) {
   const prefix = `${PREVIEW_PARENT.workerName}-`;
   const suffix = `-${binding}`;
   if (!resourceName.startsWith(prefix) || !resourceName.endsWith(suffix)) return undefined;
@@ -140,7 +132,7 @@ export function previewNameOfResource(resourceName: string, binding: string): st
 
 /** Which apps on top a set of changed paths touches: an app's own directory, or a shared path
  *  (then every app). */
-export function changedApps(changedPaths: string[], apps: StartApp[] = APPS): StartApp[] {
+export function changedApps(changedPaths: string[], apps = APPS) {
   if (changedPaths.some((file) => SHARED_APP_PATHS.some((shared) => file.startsWith(shared))))
     return apps;
   return apps.filter((app) => changedPaths.some((file) => file.startsWith(`apps/${app.name}/`)));
@@ -153,7 +145,7 @@ const SECTION_END = "<!-- os-next-preview:end -->";
 
 /** Replace the managed section between the markers, or append one. Everything a person wrote
  *  around it is kept verbatim. */
-export function splicePullRequestBody(body: string, section: string): string {
+export function splicePullRequestBody(body: string, section: string) {
   const block = `${SECTION_BEGIN}\n${section.trim()}\n${SECTION_END}`;
   const begin = body.indexOf(SECTION_BEGIN);
   const end = body.indexOf(SECTION_END, begin);
@@ -174,7 +166,7 @@ export function renderPullRequestSection(input: {
   apps: { name: string; url: string }[];
   /** Which commit the run deployed and tested (scripts/ci/preview-tested-commit.ts). */
   testedCommit?: string;
-}): string {
+}) {
   return [
     `### os-next preview: \`${input.previewName}\``,
     "",
@@ -272,9 +264,4 @@ export function writePreviewWranglerConfig(input: { previewName: string; dashOri
     `${JSON.stringify(previewWranglerConfig({ template: built, ...input }), null, 2)}\n`,
   );
   return fileURLToPath(configUrl);
-}
-
-/** wrangler.base.jsonc, the template every preview's config and resource names derive from. */
-function readWranglerTemplate(): Record<string, any> {
-  return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
 }

@@ -8,8 +8,8 @@ import { codedError, resolveContextPath } from "iterate/next/lib";
 /** The charset a projectId (and, in the global namespace, an owner id) is held to. */
 const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
 
-/** The reserved projectId of the deployment-global namespace: the control plane's own contexts —
- *  `/users/<id>`, `/organizations/<id>`, and `/projects/<id>` records — live here. A global context
+/** The reserved projectId of the deployment-global namespace: the account (`/users/<id>`) and
+ *  organization (`/organizations/<id>`) contexts live here. A global context
  *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
  *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
  *  NAVIGABLE: `cd` is refused for every caller, on a global edge handle (IterateContextRpcTarget.cd)

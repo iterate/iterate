@@ -3,19 +3,16 @@
  * scripts under apps/ and apps/os.
  *
  * Each script stays an imperative top-to-bottom program; these are the
- * handful of moves they all make (spawn-and-fail-fast, smoke probes, the
- * wrangler secrets-file deploy dance, create-only Cloudflare resource
- * ensures, D1 wipes). Plain functions with explicit params — no config
- * machinery.
+ * handful of moves they all make (spawn-and-fail-fast, the vite build, smoke
+ * probes, the wrangler secrets-file deploy, the create-only DNS ensure). Plain
+ * functions with explicit params — no config machinery.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DeployableEnv, type EnvContext } from "./env-context.ts";
 
-/** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
-type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
 // Wrangler does not expose Retry-After, but a direct API call in the same live
 // incident returned 120s. The final attempt therefore lands just beyond that
 // observed window instead of exhausting the budget at 110s.
@@ -23,38 +20,16 @@ const CLOUDFLARE_COMMAND_429_BACKOFF_MS = [5_000, 15_000, 30_000, 75_000] as con
 const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
 /**
- * Spawn a command with inherited stdio and throw on a nonzero exit — the
+ * Spawn a command with inherited stdio and reject on a nonzero exit — the
  * fail-fast building block of every deploy script.
- */
-export function run(
-  command: string,
-  args: string[],
-  opts: { cwd: string; env?: Record<string, string> },
-) {
-  console.log(`$ ${command} ${args.join(" ")}`);
-  const result = spawnSync(command, args, {
-    cwd: opts.cwd,
-    stdio: "inherit",
-    env: { ...process.env, ...opts.env },
-  });
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} exited with ${result.status}`);
-  }
-}
-
-/**
- * Async sibling of {@link run} for the rare deploy steps that deliberately
- * overlap independent host work. Output stays attached to the parent and a
- * nonzero exit still rejects loudly; callers must await the returned promise
- * before mutating the deployed Worker.
  */
 export function runAsync(
   command: string,
   args: string[],
   opts: { cwd: string; env?: Record<string, string> },
-): Promise<void> {
+) {
   console.log(`$ ${command} ${args.join(" ")}`);
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
       stdio: "inherit",
@@ -71,6 +46,23 @@ export function runAsync(
         );
       }
     });
+  });
+}
+
+/**
+ * `vite build` of one app for one envs.ts environment, into a fresh dist/: the Cloudflare Vite
+ * plugin snapshots that environment's Worker config (CLOUDFLARE_ENV) into dist/, and that snapshot
+ * is what deploys and what a per-PR preview starts from.
+ */
+export function viteBuild(
+  appRoot: string,
+  cloudflareEnv: string,
+  extraEnv?: Record<string, string>,
+) {
+  rmSync(join(appRoot, "dist"), { recursive: true, force: true });
+  return runAsync("pnpm", ["exec", "vite", "build"], {
+    cwd: appRoot,
+    env: { CLOUDFLARE_ENV: cloudflareEnv, ...extraEnv },
   });
 }
 
@@ -212,25 +204,16 @@ export async function deployWithSecrets(input: {
   secretValues: Record<string, string>;
   /** CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID for the wrangler process. */
   credentials: Record<string, string>;
-  /** Extra `wrangler deploy` args. */
-  extraDeployArgs?: string[];
 }) {
-  const deployArgs = [
-    "exec",
-    "wrangler",
-    "deploy",
-    "--config",
-    input.builtConfig,
-    ...(input.extraDeployArgs ?? []),
-  ];
   const secretsDir = mkdtempSync(join(tmpdir(), "deploy-secrets-"));
   try {
     const secretsFile = join(secretsDir, "secrets.json");
     writeFileSync(secretsFile, JSON.stringify(input.secretValues), { mode: 0o600 });
-    await runCloudflareCommandWith429Retry("pnpm", [...deployArgs, "--secrets-file", secretsFile], {
-      cwd: input.cwd,
-      env: input.credentials,
-    });
+    await runCloudflareCommandWith429Retry(
+      "pnpm",
+      ["exec", "wrangler", "deploy", "--config", input.builtConfig, "--secrets-file", secretsFile],
+      { cwd: input.cwd, env: input.credentials },
+    );
   } finally {
     rmSync(secretsDir, { recursive: true, force: true });
   }
@@ -252,14 +235,12 @@ export function findBuiltWranglerConfig(appRoot: string): string {
 
 /**
  * Collect the deploy's secret values from the env's Doppler config: every
- * `required` name must be present (throws listing all missing ones at once),
- * `optional` names ship only when the config carries a non-empty value.
+ * `required` name must be present (throws listing all missing ones at once).
  */
 export function collectSecrets(
   ctx: { env: DeployableEnv; secrets: Record<string, string> },
   required: readonly string[],
-  optional: readonly string[] = [],
-): Record<string, string> {
+) {
   const secretValues: Record<string, string> = {};
   const missing: string[] = [];
   for (const key of required) {
@@ -273,33 +254,7 @@ export function collectSecrets(
         `Set them (doppler secrets set --config ${ctx.env.dopplerConfig} ...) and retry.`,
     );
   }
-  for (const key of optional) {
-    const value = ctx.secrets[key];
-    if (value) secretValues[key] = value;
-  }
   return secretValues;
-}
-
-/**
- * Create-only D1 ensure: return the database named `name`, creating it when
- * missing. Never deletes or modifies an existing database.
- */
-export async function ensureD1(
-  ctx: CfContext,
-  name: string,
-): Promise<{ uuid: string; name: string }> {
-  const databases = await ctx.cf<{ uuid: string; name: string }[]>(`/d1/database?per_page=1000`);
-  const existing = databases.find((database) => database.name === name);
-  if (existing) {
-    console.log(`D1 database ${name} exists (${existing.uuid})`);
-    return existing;
-  }
-  const created = await ctx.cf<{ uuid: string; name: string }>(`/d1/database`, {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
-  console.log(`created D1 database ${name} (${created.uuid})`);
-  return created;
 }
 
 /**
@@ -310,7 +265,7 @@ export async function ensureD1(
  * record. Warns (does not throw) when no zone in `zones` covers the host.
  */
 export async function ensureProxiedDnsRecord(
-  ctx: CfContext,
+  ctx: Pick<EnvContext<DeployableEnv>, "cfV4">,
   zones: { id: string; name: string }[],
   host: string,
   comment: string,

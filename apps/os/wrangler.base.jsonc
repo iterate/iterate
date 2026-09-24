@@ -54,10 +54,10 @@
   // A namespace is created by name through the API (`POST /accounts/<id>/artifacts/namespaces`; a
   // repo create on a missing one fails with "Namespace is not active"). wrangler's local runtime has
   // NO Artifacts simulator — the binding is a proxy to the real product on the block's account — so
-  // the local lane (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account,
-  // created once by hand (2026-09-22); until then it named prd's, and every local run wrote real
-  // repos there. A deployment's is envs.ts `artifactsNamespace`; a preview's is
-  // `os-next-preview-<name>-repos`, created and deleted with the preview (scripts/preview.ts).
+  // the local lane (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
+  // (created by hand), so local runs never write repos into prd's. A deployment's is envs.ts
+  // `artifactsNamespace`; a preview's is `os-next-preview-<name>-repos`, created and deleted with
+  // the preview (scripts/preview.ts).
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-next-dev-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
@@ -73,9 +73,9 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
-      // THE CONTROL PLANE: one singleton `ControlPlaneDurableObject` (getByName("global")) — the
-      // registry, reached by binding, not hosted as a facet of any context (so no other context can
-      // host it). control-plane/edge.ts is the worker's typed client over it.
+      // THE CONTROL PLANE: one singleton `ControlPlaneDurableObject` (getByName("global")), reached
+      // by binding, not hosted as a facet of any context (so no other context can host it).
+      // control-plane/edge.ts is the worker's typed client over it.
       { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDurableObject" },
     ],
   },
@@ -86,8 +86,6 @@
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` (iterate-context-durable-object.ts FIRST_PARTY_FACET_CLASSES) — declared like any
     // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
-    // `SecretDurableObject` was a bound namespace (`SECRET`) until 2026-09-21; the facet of the same
-    // name took over, and the old objects are unreachable by name — set the secrets again.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
     // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
     // unused standalone namespace; agent streams and facet storage belong to the context.
@@ -107,15 +105,9 @@
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
-  // CONFIGURATION (src/app-config.ts): ONE JSON object, the `APP_CONFIG` Worker secret —
-  // `{ urls, login, secrets }` — plus `APP_CONFIG_SECRETS__KEY` standing alone so it can rotate with
-  // `previousKey` beside it. Any key can be set alone as `APP_CONFIG_<PATH>__<KEY>`; the generator
-  // computes a deployment's `urls` that way from envs.ts (scripts/generate-wrangler-config.ts), so the
-  // vars below are only the local-dev defaults. (No wrangler `secrets.required` here: it is a types
-  // and local-dev aid, not a deploy guard, and it collides with a harness that passes the same names
-  // as vars — the e2e lane's.)
-  "vars": {
-    "APP_CONFIG_URLS__OS": "http://localhost:8788",
-    "APP_CONFIG_URLS__INGRESS_ROUTING": "{\"type\":\"subdomains\",\"hostname\":\"localhost\"}",
-  },
+  // CONFIGURATION lives in src/app-config.ts, not here: the `APP_CONFIG` Worker secret plus
+  // `APP_CONFIG_SECRETS__KEY`, and scripts/generate-wrangler-config.ts sets each deployment's (and
+  // local dev's) `APP_CONFIG_URLS__*` vars from envs.ts. (No wrangler `secrets.required` here: it is
+  // a types and local-dev aid, not a deploy guard, and it collides with a harness that passes the
+  // same names as vars — the e2e lane's.)
 }

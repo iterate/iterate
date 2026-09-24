@@ -3,11 +3,5 @@
 /src/generated/*
 !/src/generated/*.d.ts
 
-# Generated wrangler configs: only the hand-kept template (base) and the test config belong in git.
-# Every other variant (preview, self-host, worker-bundler, typechecker, the plain jsonc from an older
-# checkout) is written by scripts/build.ts / generate-wrangler-config.ts and must never be committed.
-/wrangler.jsonc
-/wrangler.*.jsonc
-!/wrangler.base.jsonc
-!/wrangler.test.jsonc
+# Run output: scripts/preview.ts's preview.json, scripts/e2e-soak.ts's soak reports.
 /output/

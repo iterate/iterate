@@ -10,7 +10,7 @@
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
 //               client, ALL files in parallel AND all tests within a file concurrent (`--sequence.concurrent`
-//               on the `e2e` script: a ROOT-ONLY option, see below) — every test mints its own project,
+//               on the `e2e:run` script: a ROOT-ONLY option, see below) — every test mints its own project,
 //               and what a test measures it measures on its own contexts; the run's floor is its slowest
 //               TEST. A file whose rows genuinely need an order says so itself (`test.sequential` rows)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
@@ -130,7 +130,7 @@ export default defineConfig({
           // its own worker's logs, one seeded context it also resets — marks those rows `test.sequential`.
           // `sequence.concurrent` is ROOT-ONLY (vitest copies the root value into every project and
           // ignores the project's — a project-level `sequence: { concurrent: true }` here did nothing,
-          // 2026-09-21), so the `e2e` script passes `--sequence.concurrent`. `maxConcurrency` IS per
+          // 2026-09-21), so the `e2e:run` script passes `--sequence.concurrent`. `maxConcurrency` IS per
           // project: the default 5 would run a 21-row file in five waves.
           maxConcurrency: 32,
         },

@@ -13,8 +13,7 @@
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
  */
-import { spawn } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
@@ -22,9 +21,9 @@ import { createCli, t } from "trpc-cli";
 import { z } from "zod";
 import { agentsEnvs, dashEnvs, kitEnvs, notesEnvs, osEnvs, voiceEnvs } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
-import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
+import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
-import { OBSERVABILITY } from "./wrangler-config.ts";
+import { OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
 export interface StartAppEnv extends DeployableEnv {
@@ -45,15 +44,6 @@ export interface StartApp {
   envs: Record<string, StartAppEnv>;
   /** erase-data's whole output: the app owns no server data, and this says where the data lives instead. */
   nothingToErase: string;
-}
-
-/** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
- *  a workers.dev origin ⇒ `<subdomain>.workers.dev`, the account's own). The zone a hostname routes
- *  on, for os-next's wrangler generator and ensure-resources too. */
-export function registrableDomainOf(urlOrHostname: string): string {
-  const hostname = urlOrHostname.includes("://") ? new URL(urlOrHostname).hostname : urlOrHostname;
-  const labels = hostname.split(".");
-  return labels.slice(hostname.endsWith(".workers.dev") ? -3 : -2).join(".");
 }
 
 /** The zone one of our own ORIGINS denies: its registrable domain — except on workers.dev, where that
@@ -252,20 +242,8 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
 /** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
  *  (startAppWorkerConfig) into dist/server/wrangler.json, which is what a preview deploy of the app
  *  starts from. */
-export function buildStartApp(app: StartApp, env: string): Promise<void> {
-  const root = fileURLToPath(app.root);
-  rmSync(path.join(root, "dist"), { recursive: true, force: true });
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn("pnpm", ["exec", "vite", "build"], {
-      cwd: root,
-      env: { ...process.env, CLOUDFLARE_ENV: env },
-      stdio: "inherit",
-    });
-    child.once("error", reject);
-    child.once("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`apps/${app.name}: vite build exited ${code}`)),
-    );
-  });
+export function buildStartApp(app: StartApp, env: string) {
+  return viteBuild(fileURLToPath(app.root), env);
 }
 
 /** The config `wrangler preview` reads for one per-PR preview of a start app, as a pure function

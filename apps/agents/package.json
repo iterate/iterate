@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "typecheck": "pnpm routes:check && tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "typecheck": "pnpm routes:check && tsc --noEmit",
     "test": "pnpm runtime:check && vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "deploy": "tsx scripts/app.ts deploy",
     "ensure-resources": "tsx scripts/app.ts ensure-resources",

@@ -1,21 +1,19 @@
-import { execFileSync, spawn } from "node:child_process";
 // Prepare source consumed by the Worker build: the loaded processor SDK, bundled presence facet and
 // config templates. Vite builds the Worker and Start client after this step; Vitest runs that
 // built Worker.
-import { mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import { build as esbuild, type Plugin } from "esbuild";
+import { viteBuild } from "../../../scripts/lib/deploy-helpers.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
-const SDK_ENTRY = require.resolve("iterate/next/sdk");
-const PRESENCE_ENTRY = path.join(root, "src/client/presence/durable-object.ts");
 
-async function processorSdkModule(): Promise<string> {
+async function processorSdkModule() {
   const bundled = await esbuild({
-    entryPoints: [SDK_ENTRY],
+    entryPoints: [createRequire(import.meta.url).resolve("iterate/next/sdk")],
     bundle: true,
     format: "esm",
     platform: "neutral",
@@ -41,9 +39,9 @@ const externalizeToProcessorJs: Plugin = {
   },
 };
 
-async function presenceProcessorSource(): Promise<{ "cap.js": string }> {
+async function presenceProcessorSource() {
   const bundled = await esbuild({
-    entryPoints: [PRESENCE_ENTRY],
+    entryPoints: [path.join(root, "src/client/presence/durable-object.ts")],
     bundle: true,
     format: "esm",
     platform: "neutral",
@@ -56,14 +54,13 @@ async function presenceProcessorSource(): Promise<{ "cap.js": string }> {
 }
 
 /** Everything above, written. */
-export async function build(): Promise<void> {
-  // Older builds wrote this ignored file. The Vite plugin auto-discovers it if left behind.
-  rmSync(path.join(root, "wrangler.jsonc"), { force: true });
+export async function build() {
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
   const templatesRoot = path.resolve(root, "../../configs-next");
-  const sourceRef =
-    process.env.ITERATE_TEMPLATE_SOURCE_REF ||
-    execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const sourceRef = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
   const templates = readdirSync(templatesRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({
@@ -93,20 +90,11 @@ export async function build(): Promise<void> {
 }
 
 /** Build an environment-specific Worker and its TanStack client into dist/. */
-export async function buildOsNext(env: string): Promise<void> {
+export async function buildOsNext(env: string) {
   await build();
-  rmSync(path.join(root, "dist"), { recursive: true, force: true });
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("pnpm", ["exec", "vite", "build"], {
-      cwd: root,
-      env: { ...process.env, CLOUDFLARE_ENV: "", OS_NEXT_ENV: env },
-      stdio: "inherit",
-    });
-    child.once("error", reject);
-    child.once("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`os-next: vite build exited ${code}`)),
-    );
-  });
+  // vite.config.ts hands the plugin one flattened environment, picked by OS_NEXT_ENV, so the plugin's
+  // own CLOUDFLARE_ENV stays blank.
+  await viteBuild(root, "", { OS_NEXT_ENV: env });
 }
 
 if (process.argv[1]?.endsWith("build.ts")) await build();

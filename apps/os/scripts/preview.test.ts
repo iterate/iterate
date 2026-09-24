@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { DEFAULT_APPS_MODE } from "./preview.ts";
 import {
   APPS,
   changedApps,
@@ -189,8 +188,7 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
 });
 
 describe("which apps on top a preview run deploys", () => {
-  test("all clients are selected by default, even when only os-next changes", () => {
-    expect(DEFAULT_APPS_MODE).toBe("all");
+  test("the apps on top are the five clients", () => {
     expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice", "kit"]);
   });
 

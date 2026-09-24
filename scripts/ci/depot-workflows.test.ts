@@ -583,11 +583,12 @@ describe("Depot validation capacity", () => {
   });
 
   test("the preview's e2e suite and browser specs write the canonical telemetry artifact", () => {
-    expect(readPackageJson("apps/os").scripts?.e2e).toMatch(/retry-telemetry-reporter\.ts/);
-    // The preview runs vitest directly (it must not rebuild the deployed dist/), so it names the
-    // reporter itself.
+    // `e2e` is a build plus `e2e:run`; the preview runs `e2e:run` alone (it must not rebuild the
+    // deployed dist/), so the reporter lives on `e2e:run`.
+    expect(readPackageJson("apps/os").scripts?.e2e).toBe("pnpm build && pnpm e2e:run");
+    expect(readPackageJson("apps/os").scripts?.["e2e:run"]).toMatch(/retry-telemetry-reporter\.ts/);
     expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
-      "--reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+      'runAsync("pnpm", ["e2e:run"]',
     );
     expect(readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8")).toContain(
       "scripts/ci/playwright-telemetry-reporter.ts",
