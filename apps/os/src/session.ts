@@ -36,7 +36,6 @@ import {
   type UserRecord,
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
-import { IdentityProvider } from "./control-plane/contract.ts";
 import { OrganizationRole } from "./organization/contract.ts";
 import type { AppConfig } from "./app-config.ts";
 import { isRetryableTransportError } from "./retryable-error.ts";
@@ -376,7 +375,7 @@ export class SessionRpcTarget extends RpcTarget {
   /** Creating, renaming or deleting an organization, or changing its members, is the
    *  `organizations:write` scope's: a user grant whose consent kept it ticked (the dash asks for
    *  it; the consent page lets the person untick it), the issuer's own session, or the operator —
-   *  acting as a user, or as the operator (the replay of an older directory). The grant's project
+   *  acting as a user, or as the operator. The grant's project
    *  reach is beside the point — an organization is the person's, and the grant reaches what it
    *  reached before. */
   #organizationsWriter(verb: string): void {
@@ -555,18 +554,12 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     return this.#session.input.controlPlane.listMembers(z.string().min(1).parse(orgId));
   }
 
-  /** A new organization named `name`, the person its owner. The operator may name the owner and
-   *  pin the id (the replay of an older directory). */
-  async create(input: {
-    name: string;
-    id?: string;
-    ownerId?: string;
-  }): Promise<OrganizationRecord> {
+  /** A new organization named `name`, the person its owner. The operator may name the owner. */
+  async create(input: { name: string; ownerId?: string }): Promise<OrganizationRecord> {
     this.#session.organizationsWriter("create");
     const data = z
       .object({
         name: z.string().trim().min(1, "Enter an organization name."),
-        id: z.string().optional(),
         ownerId: z.string().optional(),
       })
       .parse(input);
@@ -830,8 +823,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
 }
 
 /** The people — the operator's catalog (`session.users` refuses everyone else): `list()`,
- *  `get(ref)` by id or email, `create({ email, id? })` — the id pinned for the replay of an older
- *  directory. */
+ *  `get(ref)` by id or email, `create({ email })` (find-or-create). */
 class UserCollectionRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   constructor(session: SessionOf) {
@@ -844,27 +836,9 @@ class UserCollectionRpcTarget extends RpcTarget {
   get(ref: string): Promise<UserRecord | null> {
     return this.#session.input.controlPlane.getUser(z.string().min(1).parse(ref));
   }
-  async create(input: { email: string; id?: string }): Promise<UserRecord> {
-    const data = z
-      .object({ email: z.string().trim().min(3), id: z.string().optional() })
-      .parse(input);
+  async create(input: { email: string }): Promise<UserRecord> {
+    const data = z.object({ email: z.string().trim().min(3) }).parse(input);
     return this.#session.input.controlPlane.createUser(this.#session.caller, data);
-  }
-  /** A provider's subject linked to the user with this email (identity.ts does the same at
-   *  sign-in; the replay of an older directory carries the links over). */
-  async linkIdentity(input: {
-    provider: IdentityProvider;
-    subject: string;
-    email: string;
-  }): Promise<UserRecord> {
-    const data = z
-      .object({
-        provider: IdentityProvider,
-        subject: z.string().min(1),
-        email: z.string().trim().min(3),
-      })
-      .parse(input);
-    return this.#session.input.controlPlane.linkIdentity(data.provider, data.subject, data.email);
   }
 }
 

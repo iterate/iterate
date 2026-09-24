@@ -165,56 +165,47 @@ test("organizations.create writes the catalog row and lands the facts on the org
   });
 });
 
-test("the operator pins ids — the replay of an older directory: the user, the organization with its owner, the project answer the pinned ids, and again without error; a person pinning is refused", async () => {
+test("the operator names an organization's owner and restores a project's id; a person doing either is refused", async () => {
   const admin = await operator();
-  const pinned = {
-    user: { email: "pinned@directory.test", id: "user_pinned1" },
-    org: { name: "Pinned organization", id: "org_pinned1", ownerId: "user_pinned1" },
-    project: { project: "pinned-slug", orgId: "org_pinned1", restoreProjectId: "prj_pinned1" },
-  };
-  for (const round of [1, 2]) {
-    expect(await admin.users.create(pinned.user)).toEqual({
-      id: "user_pinned1",
-      email: "pinned@directory.test",
-    });
-    // the second round answers the organization as it is: its project made in the first
-    expect(await admin.organizations.create(pinned.org)).toEqual({
-      id: "org_pinned1",
-      name: "Pinned organization",
-      projects: round - 1,
-    });
-    using project = await admin.projects.create(pinned.project);
-    expect(await project.whoami()).toMatchObject({
-      projectId: "prj_pinned1",
-      projectSlug: "pinned-slug",
-    });
-  }
-  expect(await admin.users.get("user_pinned1")).toEqual(pinned.user);
-  expect(await admin.users.get("pinned@directory.test")).toEqual(pinned.user);
-  expect(await admin.users.list()).toEqual(expect.arrayContaining([pinned.user]));
-  // the pinned person signs in as themselves and owns what was pinned for them
-  const person = await operator("pinned@directory.test");
-  expect(await person.whoami()).toEqual({ actor: "user_pinned1", email: "pinned@directory.test" });
+  const user = await admin.users.create({ email: "owned@directory.test" });
+  // find-or-create: the same email answers the same person
+  expect(await admin.users.create({ email: "owned@directory.test" })).toEqual(user);
+  const org = await admin.organizations.create({ name: "Named organization", ownerId: user.id });
+  expect(org).toEqual({
+    id: expect.stringMatching(/^org_/),
+    name: "Named organization",
+    projects: 0,
+  });
+  using project = await admin.projects.create({
+    project: "restored-slug",
+    orgId: org.id,
+    restoreProjectId: "prj_restored1",
+  });
+  expect(await project.whoami()).toMatchObject({
+    projectId: "prj_restored1",
+    projectSlug: "restored-slug",
+  });
+  expect(await admin.users.get(user.id)).toEqual(user);
+  expect(await admin.users.get("owned@directory.test")).toEqual(user);
+  expect(await admin.users.list()).toEqual(expect.arrayContaining([user]));
+  // the named owner signs in as themselves and owns what was made for them
+  const person = await operator("owned@directory.test");
+  expect(await person.whoami()).toEqual({ actor: user.id, email: "owned@directory.test" });
   expect(await person.organizations.list()).toEqual([
-    { id: "org_pinned1", name: "Pinned organization", role: "owner", projects: 1 },
+    { id: org.id, name: "Named organization", role: "owner", projects: 1 },
   ]);
   expect(await person.projects.list()).toEqual([
-    { id: "prj_pinned1", slug: "pinned-slug", orgId: "org_pinned1", role: "owner" },
+    { id: "prj_restored1", slug: "restored-slug", orgId: org.id, role: "owner" },
   ]);
-  // the pin is the operator's alone; so is naming an owner, and the user catalog
+  // naming an owner is the operator's alone; so is the user catalog
   await refused(() => person.users.create({ email: "someone@directory.test" }), "FORBIDDEN");
   await refused(
-    () => person.organizations.create({ name: "Mine", id: "org_pinned2" }),
+    () => person.organizations.create({ name: "Theirs", ownerId: user.id }),
     "FORBIDDEN",
     /operator/,
   );
   await refused(
-    () => person.organizations.create({ name: "Theirs", ownerId: "user_pinned1" }),
-    "FORBIDDEN",
-    /operator/,
-  );
-  await refused(
-    () => person.projects.create({ project: "mine-pinned", restoreProjectId: "prj_pinned2" }),
+    () => person.projects.create({ project: "mine-restored", restoreProjectId: "prj_restored2" }),
     "FORBIDDEN",
     /admin secret/,
   );
@@ -225,7 +216,7 @@ test("the operator pins ids — the replay of an older directory: the user, the 
     /No user/,
   );
   expect(
-    ((await catalog("organizations")) as { name: string }[]).map((org) => org.name),
+    ((await catalog("organizations")) as { name: string }[]).map((candidate) => candidate.name),
   ).not.toContain("No orphan organization");
 });
 

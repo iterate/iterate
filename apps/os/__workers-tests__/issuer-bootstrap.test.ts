@@ -37,9 +37,7 @@ async function connect(headers: Record<string, string>) {
 const person = async (email: string) => (await operator()).users.create({ email });
 
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
-  const user = await (
-    await operator()
-  ).users.linkIdentity({
+  const user = await controlPlaneStub().linkIdentity({
     provider: "google",
     subject: "1357924680",
     email: "bootstrap@example.com",

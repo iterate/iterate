@@ -169,8 +169,8 @@ export class ControlPlane {
 
   // ── the commands: each one call, under the caller ──
 
-  /** Find-or-create the person for an email; the operator may pin the id. */
-  createUser(caller: Caller, input: { email: string; id?: string }): Promise<UserRecord> {
+  /** Find-or-create the person for an email. */
+  createUser(caller: Caller, input: { email: string }): Promise<UserRecord> {
     return this.#call("createUser", callerOf(caller), input);
   }
   /** What sign-in calls (password-and-code-sign-in.ts, issuer-session.ts): the catalog first. */
@@ -185,7 +185,7 @@ export class ControlPlane {
 
   async createOrganization(
     caller: Caller,
-    input: { name: string; id?: string; ownerId?: string },
+    input: { name: string; ownerId?: string },
   ): Promise<OrganizationRecord> {
     const organization = await this.#call<OrganizationRecord>(
       "createOrganization",

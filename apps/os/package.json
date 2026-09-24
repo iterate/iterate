@@ -16,7 +16,6 @@
     "preview": "tsx scripts/preview.ts",
     "ensure-resources": "tsx scripts/ensure-resources.ts",
     "erase-data": "tsx scripts/erase-data.ts",
-    "replay-directory": "tsx scripts/replay-directory.ts",
     "control-plane-load": "tsx scripts/control-plane-load.ts",
     "project-seed": "tsx scripts/project-seed.ts"
   },

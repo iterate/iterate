@@ -8,17 +8,17 @@ import { adminCredentials, openSession, stub } from "./support.ts";
 test("operator exports the current encrypted secret outside rewrites; fresh project restores it through set", async () => {
   const oldId = "prj_seed_old";
   const newId = "prj_seed_new";
-  // the organization and the two projects, pinned by the operator (the replay's way in)
+  // the organization, and the two projects under ids the operator restores
   const session = await openSession();
   const admin = session.authenticate(adminCredentials());
-  await admin.organizations.create({ name: "Seed", id: "org_seed" });
+  const organization = await admin.organizations.create({ name: "Seed" });
   for (const [id, slug] of [
     [oldId, "seed-old"],
     [newId, "seed-new"],
   ] as const) {
     using project = await admin.projects.create({
       project: slug,
-      orgId: "org_seed",
+      orgId: organization.id,
       restoreProjectId: id,
     });
     expect((await project.whoami()).projectId).toBe(id);

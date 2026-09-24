@@ -28,7 +28,7 @@ const refusal = (thunk: () => unknown) => {
 };
 
 describe("people", () => {
-  test("find-or-create by email, one spelling of an address; the operator alone pins an id", () => {
+  test("find-or-create by email, one spelling of an address", () => {
     const { c } = catalog();
     const ada = c.createUser(nobody, { email: " Ada@Example.com " });
     expect(ada).toEqual({
@@ -37,13 +37,6 @@ describe("people", () => {
     });
     expect(c.createUser(nobody, { email: "ADA@example.com" })).toEqual(ada);
     expect(c.user("ada@example.com")).toEqual(ada);
-    expect(refusal(() => c.createUser(as(ada), { email: "x@example.com", id: "user_x" }))).toEqual({
-      code: "FORBIDDEN",
-      message: "Only the operator may pin a user's id.",
-    });
-    expect(c.createUser(admin, { email: "pinned@example.com", id: "user_pinned" }).id).toBe(
-      "user_pinned",
-    );
   });
 
   test("an identity links once by verified email, then by subject: a changed email follows it unless another person holds it; one subject per provider", () => {
@@ -106,23 +99,19 @@ describe("organizations", () => {
     expect(c.accessibleTo(ada.id)).toEqual({ organizations: [org], projects: [] });
   });
 
-  test("the operator alone pins an id or names an owner — one who exists; a pinned organization that exists is answered as it is", () => {
+  test("the operator alone names an owner — one who exists", () => {
     const { c, person } = catalog();
     const ada = person("ada@example.com");
-    expect(refusal(() => c.createOrganization(as(ada), { name: "X", id: "org_x" })).code).toBe(
-      "FORBIDDEN",
-    );
+    const bob = person("bob@example.com");
+    expect(
+      refusal(() => c.createOrganization(as(ada), { name: "X", ownerId: bob.id })),
+    ).toMatchObject({ code: "FORBIDDEN" });
     expect(
       refusal(() => c.createOrganization(admin, { name: "X", ownerId: "user_nobody" })).message,
     ).toMatch(/No user/);
-    const pinned = { name: "Pinned", id: "org_pinned", ownerId: ada.id };
-    expect(c.createOrganization(admin, pinned)).toEqual({
-      id: "org_pinned",
-      name: "Pinned",
-      projects: 0,
-    });
-    expect(c.createOrganization(admin, { ...pinned, name: "Renamed?" }).name).toBe("Pinned");
-    expect(c.members("org_pinned")).toEqual([{ userId: ada.id, email: ada.email, role: "owner" }]);
+    const named = c.createOrganization(admin, { name: "Named", ownerId: ada.id });
+    expect(named).toEqual({ id: expect.stringMatching(/^org_/), name: "Named", projects: 0 });
+    expect(c.members(named.id)).toEqual([{ userId: ada.id, email: ada.email, role: "owner" }]);
     // an owner named by email is held by id
     const byEmail = c.createOrganization(admin, { name: "By email", ownerId: ada.email });
     expect(c.members(byEmail.id)).toEqual([{ userId: ada.id, email: ada.email, role: "owner" }]);
