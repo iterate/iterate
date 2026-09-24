@@ -113,6 +113,20 @@ test.each([
   },
 );
 
+test("a cancelled Preview OS is red even when the PR's next run came first: it never cancels for a newer push", () => {
+  expect(
+    measurePush({
+      metrics: withWorkflow("nsbcf2f8mt", {
+        status: "cancelled",
+        finishedAt: "2026-09-24T12:30:00.000Z",
+      }),
+      firstExecutions: {},
+      nextRunAt: "2026-09-24T11:55:00Z",
+      summary: undefined,
+    }),
+  ).toMatchObject({ outcome: "red", e2e: "no-summary" });
+});
+
 test("a PR run without Test is not a push; one with a check still unfinished is not measured yet", () => {
   expect(
     measurePush({

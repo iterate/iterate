@@ -106,10 +106,15 @@ export function measurePush(input: {
     }));
   if (!checks.some((check) => check.name === "Test")) return { ...base, outcome: "not-a-push" };
   if (checks.some((check) => !check.finishedAt)) return undefined;
+  // Lint and Test cancel a run in progress when the PR's next push starts (their `concurrency:`);
+  // Preview OS never does, so its cancel is always a timeout or a person.
   const nextRunAt = input.nextRunAt ? Date.parse(input.nextRunAt) : Infinity;
   if (
     checks.some(
-      (check) => check.status === "cancelled" && nextRunAt <= Date.parse(check.finishedAt),
+      (check) =>
+        check.name !== "Preview OS" &&
+        check.status === "cancelled" &&
+        nextRunAt <= Date.parse(check.finishedAt),
     )
   )
     return { ...base, outcome: "superseded" };
