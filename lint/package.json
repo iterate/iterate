@@ -1,5 +1,5 @@
 {
-  "name": "@iterate/lint",
+  "name": "@iterate-com/lint",
   "private": true,
   "type": "module",
   "scripts": {

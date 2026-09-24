@@ -67,7 +67,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/dummy-petshop,@iterate-com/kit,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
         # A superseded run still normalizes and uploads its raw evidence, but
         # GitHub's job telemetry owns the cancelled outcome; do not turn killed
         # runner sentinels into test failures.

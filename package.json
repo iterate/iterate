@@ -9,7 +9,6 @@
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "os": "pnpm --dir apps/os",
     "preview": "pnpm --dir apps/os preview",
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:fix": "oxlint . --fix --threads 1",
