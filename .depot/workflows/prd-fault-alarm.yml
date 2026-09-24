@@ -1,8 +1,11 @@
 # Prd fault alarm: every 15 minutes, reads the last half hour of os-next-prd's
 # Workers Logs and pages Slack #error-pulse (a top-level message mentioning
-# Jonas, at most hourly) on any 5xx, a burst of platform-failure heals, or a
-# burst of errors. Why and thresholds: scripts/ci/prd-fault-alarm.ts. Depot
-# registers the schedule once this file is on the default branch.
+# Jonas, at most hourly) on any 5xx, a burst of platform-failure heals, or any
+# error. The page is the alarm: the run goes red only when it could not read
+# the logs or post to Slack, because a scheduled run reports on main's head
+# commit, where red reads as "this commit broke". Why and thresholds:
+# scripts/ci/prd-fault-alarm.ts. Depot registers the schedule once this file is
+# on the default branch.
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
 
 name: Prd fault alarm (Depot CI)

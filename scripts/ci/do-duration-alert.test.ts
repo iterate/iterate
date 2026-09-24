@@ -2,6 +2,7 @@ import type { WebClient } from "@slack/web-api";
 import { expect, test } from "vitest";
 import {
   type AccountReading,
+  postDailyThread,
   postPageUnlessRecent,
   renderDailyThread,
   upsertDetailsReply,
@@ -379,6 +380,63 @@ test.for([
   expect(slack.writes).toEqual(
     posted ? [["chat.postMessage", { channel: "C1", text: page.text }]] : [],
   );
+});
+
+// A breach ends the run green once it is paged; only a probe that could not measure fails it.
+test.for([
+  {
+    name: "a quiet hour",
+    hours: [{ hour: "2026-09-21T20:00:00Z", doHours: 20 }],
+    expected: { breached: false, pagesPosted: 0 },
+  },
+  {
+    name: "an hour over the page tier, paged",
+    hours: [{ hour: "2026-09-21T20:00:00Z", doHours: 2789 }],
+    expected: { breached: true, pagesPosted: 1 },
+  },
+])("the run resolves: $name", async ({ hours, expected }) => {
+  const slack = fakeSlack([]);
+  await expect(
+    postDailyThread({
+      slack: slack.client,
+      channel: "C1",
+      now: new Date("2026-09-21T21:41:00Z"),
+      readings: [devPreview(hours)],
+      runUrl,
+      testRun: false,
+    }),
+  ).resolves.toEqual(expected);
+});
+
+test("a probe that could not run fails the run once its reply is posted", async () => {
+  const slack = fakeSlack([]);
+  await expect(
+    postDailyThread({
+      slack: slack.client,
+      channel: "C1",
+      now,
+      readings: [
+        {
+          label: "prd",
+          ceilingDoHours: 600,
+          pageUsdPerHour: 12,
+          failure: "Cloudflare GraphQL errors: authentication error",
+          summary: null,
+        },
+      ],
+      runUrl,
+      testRun: false,
+    }),
+  ).rejects.toThrow(
+    "DO duration probe could not run: prd: Cloudflare GraphQL errors: authentication error",
+  );
+  expect(slack.writes).toContainEqual([
+    "chat.postMessage",
+    expect.objectContaining({
+      thread_ts: "999.0",
+      text: expect.stringContaining("⚠️ DO duration probe FAILED to run. account: prd."),
+    }),
+  ]);
 });
 
 function devPreview(

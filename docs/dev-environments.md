@@ -315,7 +315,7 @@ invariants:
 
 - **A PR keeps its preview from first deploy until the PR closes.** Every push
   redeploys it in place (`deploy`); closing the PR deletes it and everything it
-  owned (`delete (PR closed)`). The nightly `sweep` is the safety valve: it
+  owned (`preview-delete.yml`). The nightly sweep (`preview-sweep.yml`) is the safety valve: it
   deletes a preview whose PR closed without a delete, a preview whose last
   deploy is more than 7 days old, a hand-named preview idle for 24 hours with no
   open PR branch of that name, and any per-preview resource that outlived its
@@ -450,8 +450,11 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --input pull-request-number=1234 --input action=reset
 ```
 
-`action` is `deploy | reset | e2e | delete | sweep`; `apps` (`all | auto |
-none`) chooses the clients deployed on top.
+`action` is `deploy | reset | e2e`; `apps` (`all | auto |
+none`) chooses the clients deployed on top. Delete and the nightly sweep are
+workflows of their own: dispatch `preview-delete.yml` with
+`--input pull-request-number=1234` to delete the preview, `preview-sweep.yml`
+to sweep now.
 
 ### Story 4: a preview for experiments
 

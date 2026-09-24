@@ -36,7 +36,7 @@ holds an unchanged text can only leave its lines checked.
 
 Files without history and reports without a known start line are checked.
 Shallow boundary lines are also checked because their true age is unknown;
-CI lint/autofix jobs fetch full history. Unexpected Git failures stop linting
+the CI lint job fetches full history. Unexpected Git failures stop linting
 instead of silently granting exemptions. No Git fetch or write is performed.
 
 The shouting rule uses the example cutoff above. Until that date, committing

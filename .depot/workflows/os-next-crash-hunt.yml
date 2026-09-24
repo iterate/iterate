@@ -15,7 +15,7 @@ name: OS crash hunt
 permissions:
   contents: read
 on:
-  # Nightly, off the hour (deploys land at :00, the DO probe at :41, preview GC at :23).
+  # Nightly, off the hour (deploys land at :00, the DO probe at :41, the preview sweep at 04:37).
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch: {}

@@ -10,21 +10,23 @@
 #                       then their test telemetry and flake records as artifacts
 #   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
 #                       artifact plus a "CI trace" commit status with the time to green or red
-#   delete (PR closed)  deletes the preview and everything it owned
-#   sweep (nightly)     deletes previews whose PR closed without a delete, or that went stale
-# On a push, "delete" and "sweep" skip by design; "e2e" skips only when deploy did not succeed.
+# "e2e" skips only when deploy did not succeed. Closing the PR deletes the preview and everything it
+# owned (preview-delete.yml); the nightly sweep of previews whose PR closed without a delete, or
+# that went stale, is preview-sweep.yml.
 #
 # Depot registers automatic triggers when this file is on the default branch. Test a branch with:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-os-next.yml --ref <branch> \
 #     --input pull-request-number=<pr> --input action=deploy
-# Every operation the PR body lists is a dispatch: action = deploy | reset | e2e | delete | sweep,
-# apps = all | auto | none (the apps on top: dash, agents, notes, voice, kit). Pull-request runs use
-# all so every client is usable against the platform preview; auto remains available for a faster
-# targeted manual redeploy once the clients are already present. action=deploy or reset runs the
-# deploy job and then e2e, as a push does; action=e2e runs e2e alone.
+# Every operation the PR body lists is a dispatch: action = deploy | reset | e2e (a delete is a
+# dispatch of preview-delete.yml), apps = all | auto | none (the apps on top: dash, agents, notes,
+# voice, kit). Pull-request runs use all so every client is usable against the platform preview;
+# auto remains available for a faster targeted manual redeploy once the clients are already
+# present. action=deploy or reset runs the deploy job and then e2e, as a push does; action=e2e runs
+# e2e alone.
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
+# preview-delete.yml takes the same group, so a PR's delete waits for its deploy and e2e to settle.
 # The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
@@ -42,7 +44,7 @@ on:
       - opened
       - synchronize
       - reopened
-      - closed
+    # preview-delete.yml runs on `closed` with this same list.
     paths:
       # A production-workflow change must exercise this isolated deployment:
       # production runs deploy's non-mutating readiness probes only.
@@ -73,19 +75,15 @@ on:
       - envs.ts
       - scripts/lib/**
       - scripts/depot-ci/**
-  schedule:
-    # Nightly, off the hour: what stops a force-closed PR, or a failed cleanup, from leaking a
-    # preview (cloudflare-os runs theirs at 04:37 too).
-    - cron: "37 4 * * *"
   workflow_dispatch:
     inputs:
       pull-request-number:
-        description: PR number (every action but sweep)
+        description: PR number
         required: false
         type: string
         default: ""
       action:
-        description: deploy | reset | e2e | delete | sweep
+        description: deploy | reset | e2e
         required: false
         type: string
         default: deploy
@@ -96,7 +94,7 @@ on:
         default: all
 
 concurrency:
-  group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'sweep' }}
+  group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
   cancel-in-progress: false
 
 env:
@@ -120,7 +118,7 @@ jobs:
   deploy:
     name: deploy
     if: >-
-      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
     runs-on:
       size: 4x16
@@ -289,7 +287,7 @@ jobs:
   # THE CI TRACE (docs/ci-traces.md): the deploy and e2e jobs' Depot timings and `@@ci-trace` markers
   # as trace.html and trace.json, this job's artifact, and a "CI trace" commit status whose
   # description is the time to green (the e2e job's success) or to red (the first failed job), linking
-  # to this job. After both jobs settle, whatever their outcome; never on a delete or sweep.
+  # to this job. After both jobs settle, whatever their outcome; never when neither ran.
   trace:
     name: trace
     needs: [deploy, e2e]
@@ -330,64 +328,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
-
-  cleanup:
-    name: delete (PR closed)
-    if: >-
-      (github.event_name == 'pull_request' && github.event.action == 'closed') ||
-      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'delete')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 15
-    steps:
-      # The PR's own head, not the default branch: the teardown reads the config that created the
-      # preview (cloudflare-os does the same).
-      - name: Checkout the PR head
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Delete the preview
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-        run: doppler run -- pnpm preview delete
-
-  sweep:
-    name: sweep (nightly)
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.action == 'sweep')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Sweep previews whose PR is closed, or older than 7 days
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: doppler run -- pnpm preview sweep

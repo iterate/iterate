@@ -3,8 +3,8 @@
 > **What runs now.** The Preview OS workflow's `trace` job collects the
 > trace once its `deploy` and `e2e` jobs have settled, whatever their outcome.
 > Green is the e2e job's success. Red is the first failed job. There is no
-> `finish` job. The trace job itself, PR-close deletion and the nightly sweep
-> are left out of the trace, as the legacy cleanup was. Step spans come from
+> `finish` job. The trace job itself and PR-close deletion are left out of the
+> trace, as the legacy cleanup was. Step spans come from
 > `BASH_ENV` markers. The e2e step opens the **Test** phase,
 > and its Playwright attempts and Vitest tests are its children.
 >

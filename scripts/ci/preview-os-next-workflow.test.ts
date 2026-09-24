@@ -76,9 +76,6 @@ describe("the OS-Next preview workflow", () => {
     ["workflow_dispatch", "reset", "success", true],
     ["workflow_dispatch", "reset", "failure", false],
     ["workflow_dispatch", "e2e", "skipped", true],
-    ["workflow_dispatch", "delete", "skipped", false],
-    ["workflow_dispatch", "sweep", "skipped", false],
-    ["schedule", "", "skipped", false],
   ])("e2e on %s action=%s after a %s deploy runs: %s", (event, action, result, runs) => {
     const condition = preview.jobs.e2e.if || "";
     const context: Record<string, string> = {

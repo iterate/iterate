@@ -21,7 +21,7 @@ concurrency:
 jobs:
   update_dashboard:
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

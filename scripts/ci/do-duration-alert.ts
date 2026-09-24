@@ -98,23 +98,41 @@ export async function run(options: {
     });
   }
 
-  const thread = renderDailyThread({ now, readings, runUrl, testRun: override !== undefined });
+  return postDailyThread({
+    slack: getSlackClient(),
+    channel: slackChannelIds["#error-pulse"],
+    now,
+    readings,
+    runUrl,
+    testRun: override !== undefined,
+  });
+}
+
+/**
+ * Posts this run's pages, upkeeps the day's thread, then ends the run. A breach ends it green: the
+ * page and the reply are the alarm, and a scheduled run reports on main's head commit, where red
+ * reads as "this commit broke" (on 09-21 a day of red runs reached nobody). A probe that could not
+ * run throws once its reply is posted, so a broken token never passes for a quiet account; so does
+ * any Slack error.
+ */
+export async function postDailyThread(input: {
+  slack: WebClient;
+  channel: string;
+  now: Date;
+  readings: AccountReading[];
+  runUrl: string | null;
+  testRun: boolean;
+}) {
+  const { slack, channel, now, testRun } = input;
+  const thread = renderDailyThread(input);
   console.log(`\n${thread.headline}\n\n${thread.details}\n`);
   for (const reply of thread.replies) console.log(`\n${reply}\n`);
   for (const page of thread.pages) console.log(`\n${page.text}\n`);
 
-  const slack = getSlackClient();
-  const channel = slackChannelIds["#error-pulse"];
   // Pages first: a Slack error in the thread upkeep below must not swallow one.
   let pagesPosted = 0;
   for (const page of thread.pages) {
-    const posted = await postPageUnlessRecent({
-      slack,
-      channel,
-      now,
-      page,
-      testRun: override !== undefined,
-    });
+    const posted = await postPageUnlessRecent({ slack, channel, now, page, testRun });
     if (posted) pagesPosted++;
   }
   const headlineTs = await findOrCreateHeadline({
@@ -122,7 +140,7 @@ export async function run(options: {
     channel,
     now,
     headline: thread.headline,
-    testRun: override !== undefined,
+    testRun,
   });
   await upsertDetailsReply({ slack, channel, headlineTs, details: thread.details });
   for (const text of thread.replies) {
@@ -130,17 +148,22 @@ export async function run(options: {
   }
   await slack.chat.update({ channel, ts: headlineTs, text: thread.headline });
 
+  const unmeasured = input.readings.flatMap((reading) =>
+    reading.summary ? [] : [`${reading.label}: ${reading.failure}`],
+  );
+  // A throw, because trpc-cli exits 0 on a normal return even with process.exitCode set (the
+  // 2026-09-02 dispatch test, where a breach concluded "success").
+  if (unmeasured.length > 0)
+    throw new Error(`DO duration probe could not run: ${unmeasured.join("; ")}`);
   if (thread.replies.length === 0 && thread.pages.length === 0) {
     console.log("✅ both accounts under their ceilings; headline updated");
-    return { breached: false };
+    return { breached: false, pagesPosted };
   }
-  // Throw (after the Slack posts) so the workflow run goes red: trpc-cli
-  // exits 0 on a normal return even with process.exitCode set — verified on
-  // the 2026-09-02 dispatch test, where a breach concluded "success".
-  throw new Error(
-    `DO duration alarm: ${thread.replies.length} alert(s) posted to the daily thread, ` +
+  console.log(
+    `🚨 ${thread.replies.length} alert(s) posted to the daily thread, ` +
       `${thread.pages.length} account(s) at the page tier (${pagesPosted} paged now)`,
   );
+  return { breached: true, pagesPosted };
 }
 
 function probe(dopplerConfig: string, ceilingDoHours: number) {

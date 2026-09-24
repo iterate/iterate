@@ -1,9 +1,19 @@
 name: pkg.pr.new
 on:
+  # Every main commit publishes, so any main sha is installable
+  # (pkg.pr.new/iterate/iterate/iterate@<sha>).
   push:
     branches:
       - main
+  # A PR publishes only when the SDK's inputs change: packages/iterate imports nothing outside
+  # itself, and the root manifests and lockfile decide its install.
   pull_request:
+    paths:
+      - packages/iterate/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/pkg-pr-new.yml
 jobs:
   publish:
     runs-on: ubuntu-latest

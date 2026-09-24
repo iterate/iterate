@@ -297,9 +297,9 @@ test("the configured header bearer is the same administrator at both protocols",
     script: "async (itx) => itx.whoami()",
   });
   expect(global.body.result).toMatchObject({ isError: true });
-  expect(global.body.result.content[0].text).toBe(
-    'FORBIDDEN: project "global": the deployment-global namespace is no project',
-  );
+  expect(global.body.result.content[0]).toMatchObject({
+    text: 'FORBIDDEN: project "global": the deployment-global namespace is no project',
+  });
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });

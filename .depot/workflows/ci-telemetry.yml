@@ -4,9 +4,9 @@ permissions:
   checks: read
   contents: read
   pull-requests: read
+# Dispatch only: PostHog delivery is off (scripts/ci/posthog-events.ts), so a run collects and then
+# drops everything. The schedule comes back with delivery (docs/ci-test-telemetry.md).
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 concurrency:
   group: ci-telemetry-sync
@@ -20,8 +20,8 @@ jobs:
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
-      # The 15-minute cadence rereads 24 hours for outage tolerance. Manual
-      # backfills default to seven days and are idempotent.
+      # One day per dispatch. Run the script locally for a longer backfill (it defaults to seven
+      # days; stable insert IDs make overlapping windows idempotent).
       CI_TELEMETRY_LOOKBACK_DAYS: "1"
     steps:
       - name: Checkout code

@@ -20,6 +20,7 @@ type WorkflowJob = {
     run?: string;
     uses?: string;
     with?: Record<string, unknown>;
+    "working-directory"?: string;
   }>;
 };
 
@@ -28,16 +29,19 @@ type Workflow = {
     group: string;
     "cancel-in-progress": boolean;
   };
+  env?: Record<string, string>;
   jobs: Record<string, WorkflowJob>;
   permissions?: Record<string, string>;
   on?: {
     pull_request?: {
       paths?: string[];
+      types?: string[];
     };
     push?: {
       branches?: string[];
       paths?: string[];
     };
+    schedule?: Array<{ cron: string }>;
   };
 };
 
@@ -213,6 +217,14 @@ describe("Depot credential boundaries", () => {
       permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
     },
     {
+      file: ".depot/workflows/preview-sweep.yml",
+      permissions: { contents: "read", "pull-requests": "read" },
+    },
+    {
+      file: ".depot/workflows/preview-delete.yml",
+      permissions: { contents: "read", "pull-requests": "read" },
+    },
+    {
       file: ".depot/workflows/deploy-os-next.yml",
       permissions: { contents: "read", deployments: "write" },
     },
@@ -317,23 +329,87 @@ describe("Depot validation capacity", () => {
     );
   });
 
-  test.each(["deploy", "e2e"])(
-    "starts the OS-Next preview %s job from the baked workspace",
-    (jobId) => {
-      const job = loadWorkflow(".depot/workflows/preview-os-next.yml").jobs[jobId];
+  test.for([
+    { file: ".depot/workflows/preview-os-next.yml", jobId: "deploy" },
+    { file: ".depot/workflows/preview-os-next.yml", jobId: "e2e" },
+    { file: ".depot/workflows/preview-sweep.yml", jobId: "sweep" },
+    { file: ".depot/workflows/preview-delete.yml", jobId: "delete" },
+  ])("$file $jobId starts from the baked workspace", ({ file, jobId }) => {
+    const workflow = loadWorkflow(file);
+    const job = workflow.jobs[jobId];
 
-      expect(job["runs-on"].image).toBe(bakedImage);
+    expect(job["runs-on"]).toMatchObject({ image: bakedImage });
+    // the store the image was baked with, or the reconcile never reuses the baked node_modules
+    expect(workflow.env).toMatchObject({ PNPM_CONFIG_STORE_DIR: "/home/runner/.pnpm-store" });
 
-      const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
-      expect(checkout?.with).toMatchObject({ clean: false });
+    const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
+    expect(checkout?.with).toMatchObject({ clean: false });
 
-      const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
-      expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
-      // Any one of these means the job installs its own toolchain instead of using the baked one.
-      const installSteps = ["Setup pnpm", "Setup Node", "Install Doppler CLI"];
-      expect(job.steps?.filter((step) => installSteps.includes(step.name || ""))).toEqual([]);
-    },
-  );
+    const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
+    expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
+    // Any one of these means the job installs its own toolchain instead of using the baked one.
+    const installSteps = ["Setup pnpm", "Setup Node", "Install Doppler CLI"];
+    expect(job.steps?.filter((step) => installSteps.includes(step.name || ""))).toEqual([]);
+  });
+
+  // Each runs the baked image's pnpm install, which the 2x8 client deploys run too (Deploy Dash's
+  // whole job takes under a minute), then calls APIs or runs one git command at a time: a larger
+  // runner only costs more.
+  test.for([
+    { file: ".depot/workflows/loc-report.yml", jobId: "loc-report" },
+    { file: ".depot/workflows/pr-dashboard.yml", jobId: "update_dashboard" },
+    { file: ".depot/workflows/release.yml", jobId: "release" },
+  ])("$file runs on the smallest runner", ({ file, jobId }) => {
+    expect(loadWorkflow(file).jobs[jobId]?.["runs-on"]).toMatchObject({ size: "2x8" });
+  });
+
+  test("the nightly preview sweep runs alone, one at a time, never cancelled", () => {
+    const workflow = loadWorkflow(".depot/workflows/preview-sweep.yml");
+
+    expect(workflow).toMatchObject({
+      on: { schedule: [{ cron: "37 4 * * *" }] },
+      concurrency: { group: "preview-sweep", "cancel-in-progress": false },
+    });
+    expect(workflow.jobs.sweep?.steps?.at(-1)).toMatchObject({
+      "working-directory": "apps/os",
+      run: "doppler run -- pnpm preview sweep",
+    });
+  });
+
+  // A job of Preview OS that ran only on `closed` was a skipped check on every push to an open PR.
+  test("a closed PR's preview is deleted by its own workflow, in that PR's preview group", () => {
+    const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
+    const workflow = loadWorkflow(".depot/workflows/preview-delete.yml");
+
+    expect(preview.on?.pull_request?.types).not.toContain("closed");
+    expect(Object.keys(workflow.on || {}).sort()).toEqual(["pull_request", "workflow_dispatch"]);
+    expect(workflow).toMatchObject({
+      // every PR that got a preview, and no other
+      on: { pull_request: { types: ["closed"], paths: preview.on?.pull_request?.paths } },
+      // a delete waits for the PR's in-flight deploy and e2e instead of racing them
+      concurrency: preview.concurrency,
+    });
+    expect(workflow.jobs.delete?.steps?.at(-1)).toMatchObject({
+      "working-directory": "apps/os",
+      run: "doppler run -- pnpm preview delete",
+    });
+  });
+
+  // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
+  // only runs on its schedule carries that job as a skipped check. The image bake is the
+  // exception: its push to main runs the same bake.
+  test.for(
+    depotWorkflowFiles.filter(
+      (file) =>
+        loadWorkflow(file).on?.schedule && file !== ".depot/workflows/build-preview-ci-image.yml",
+    ),
+  )("%s runs only on its schedule or on request", (file) => {
+    expect(
+      Object.keys(loadWorkflow(file).on || {}).filter(
+        (event) => !["schedule", "workflow_dispatch", "workflow_call"].includes(event),
+      ),
+    ).toEqual([]);
+  });
 
   test("runs every workspace test script", () => {
     const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/test.yml"), "utf8");
@@ -390,13 +466,6 @@ describe("Depot validation capacity", () => {
       jobId: "lint-typecheck",
       size: "8x32",
       timeoutMinutes: 20,
-    },
-    {
-      file: ".depot/workflows/autofix.yml",
-      group: "autofix-${{ github.head_ref || github.ref_name || github.run_id }}",
-      jobId: "autofix",
-      size: "2x8",
-      timeoutMinutes: 15,
     },
   ])("$file coalesces superseded branch runs", ({ file, group, jobId, size, timeoutMinutes }) => {
     const workflow = loadWorkflow(file);

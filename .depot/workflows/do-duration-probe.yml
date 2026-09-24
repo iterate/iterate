@@ -12,24 +12,21 @@
 # Every run rewrites the headline of the day's thread in Slack #error-pulse
 # (one message per UTC day: latest hour, today's total, hours over the
 # ceiling, per account). A breach in the last two hours or a probe that could
-# not run is a reply in that thread, and the run goes red. An account at its
-# page tier (dev/preview $10/hour, prd $12/hour) also gets a new top-level
-# message that @-mentions Jonas and names the top namespaces, at most every
-# 3 hours while it lasts.
+# not run is a reply in that thread. An account at its page tier (dev/preview
+# $10/hour, prd $12/hour) also gets a new top-level message that @-mentions
+# Jonas and names the top namespaces, at most every 3 hours while it lasts.
+# The run goes red only when a probe could not run or Slack refused a post: a
+# breach is paged, and a scheduled run reports on main's head commit, where
+# red reads as "this commit broke".
 #
-# Test the Slack hookup end to end (a tiny threshold forces an alert and a
-# page without the mention, marked 🧪 TEST RUN in the message):
+# Test a branch, and the Slack hookup end to end, by dispatching it (a tiny
+# threshold forces an alert and a page without the mention, marked 🧪 TEST RUN
+# in the message):
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow do-duration-probe.yml \
 #     --ref <branch> \
 #     --input threshold-do-hours=1
-#
-# If dispatch is unavailable for an unmerged branch, push a commit whose
-# message contains the magic word `run_do_duration_probe` — that push trigger
-# runs the same forced-alert test (threshold 1). Beware: MENTIONING the magic
-# word in an ordinary commit message triggers it too (found out the fun way —
-# the commit that added this feature described it verbatim and self-tested).
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.
@@ -39,7 +36,7 @@
 name: DO duration probe (Depot CI)
 
 on:
-  # Hourly. Offset from deploys (top of hour) and the preview GC sweep (:23).
+  # Hourly, off the top of the hour, where deploys land.
   schedule:
     - cron: "41 * * * *"
   workflow_dispatch:
@@ -51,11 +48,6 @@ on:
           Set 1 to force an alert and test the Slack hookup.
         type: string
         default: ""
-  # Testing hatch for unmerged branches: any push whose commit message
-  # contains `run_do_duration_probe` runs the forced-alert test.
-  push:
-    branches:
-      - "**"
 
 concurrency:
   group: do-duration-probe
@@ -64,14 +56,13 @@ concurrency:
 jobs:
   probe:
     name: DO duration / probe
-    if: github.event_name != 'push' || contains(github.event.head_commit.message, 'run_do_duration_probe')
     runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           # Scheduled runs always probe with the default branch's thresholds
-          # and tooling; dispatch/push runs test the triggering ref.
+          # and tooling; a dispatch tests the ref it names.
           ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -91,9 +82,8 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # workflow_dispatch: the input (may be empty = defaults).
-          # push (magic-word test): always the forced-alert threshold.
-          THRESHOLD_DO_HOURS: ${{ github.event_name == 'push' && '1' || inputs.threshold-do-hours }}
+          # Empty on a schedule, and on a dispatch without the input: the per-account defaults.
+          THRESHOLD_DO_HOURS: ${{ inputs.threshold-do-hours }}
         run: |-
           set -euo pipefail
           if [ -n "${THRESHOLD_DO_HOURS}" ]; then

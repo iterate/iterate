@@ -5,7 +5,7 @@
 # against it, then DELETES the preview and everything it created. A failed run still deletes (the
 # `delete` job runs always). A cancelled run's queued jobs are cancelled with it, `delete`
 # included, so the run that superseded it deletes every other `main-<sha>` preview before it
-# deploys; the nightly sweep of preview-os-next.yml deletes a PR-less preview a day after its last
+# deploys; the nightly sweep (preview-sweep.yml) deletes a PR-less preview a day after its last
 # deploy as the backstop.
 #
 # A newer push cancels the run in progress: only the latest main is tested. The `alert` job pages

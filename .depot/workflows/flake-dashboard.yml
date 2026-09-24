@@ -12,7 +12,8 @@ permissions:
   contents: read
 on:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    # Hourly, off the top of the hour and the alarms' minutes (:07/:22/:37/:52, :41).
+    - cron: "13 * * * *"
   workflow_dispatch:
     inputs:
       dry-run:
