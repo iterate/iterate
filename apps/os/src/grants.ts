@@ -89,7 +89,7 @@ export class GrantsRpcTarget extends RpcTarget {
    *  reported, not thrown. The key's hash is `key`'s, or its record's on the account. */
   async #unindex(userId: string, id: string, key?: { hash: string }) {
     try {
-      const hash = (key ?? (await accountStateOf(this.#env, userId)).personalAccessTokens[id])
+      const hash = (key || (await accountStateOf(this.#env, userId)).personalAccessTokens[id])
         ?.hash;
       if (hash) await unindexPersonalAccessToken(this.#env.OAUTH_KV, hash);
     } catch (error) {
