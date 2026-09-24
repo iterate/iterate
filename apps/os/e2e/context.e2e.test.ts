@@ -227,8 +227,9 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
 });
 
-// PINS context/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
-// expression.test.ts "hides reserved path segments from function-backed path proxies").
+// PINS iterate/next/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// packages/iterate/src/next/expression.test.ts "hides reserved path segments from the path proxies
+// the hop hands out").
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
 // a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through
