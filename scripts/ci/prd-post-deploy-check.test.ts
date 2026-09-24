@@ -90,7 +90,7 @@ test("the page names a /version that did not move and each host that is down, an
 
 test("every prd deploy checks the project hosts at once, in the deploy job, before notifying", () => {
   const workflow = parseYaml(
-    readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/deploy-os-next.yml"), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/deploy-os.yml"), "utf8"),
   ) as { jobs: Record<string, { steps?: { id?: string; run?: string; if?: string }[] }> };
   expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
   const steps = workflow.jobs.deploy?.steps || [];

@@ -4,7 +4,7 @@
 # rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a failed cleanup,
 # from leaking a preview.
 #
-# Its own workflow, not a job of preview-os-next.yml, so no PR's checks carry it as a skipped job.
+# Its own workflow, not a job of preview-os.yml, so no PR's checks carry it as a skipped job.
 # Sweep now with a dispatch:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-sweep.yml --ref main
 # Depot registers the schedule once this file is on the default branch. The only Depot secret is

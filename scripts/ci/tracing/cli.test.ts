@@ -119,7 +119,7 @@ async function previewOsDepot() {
     new Date(Date.UTC(2026, 8, 23, 12) + seconds * 1000).toISOString();
   const job = (key: string, status: string, startedAt: number, finishedAt: number) => ({
     jobId: `${key}-job`,
-    jobKey: `preview-os-next.yml:${key}`,
+    jobKey: `preview-os.yml:${key}`,
     status,
     finishedAt: finishedAt ? at(finishedAt) : "",
     attempts: [
@@ -142,7 +142,7 @@ async function previewOsDepot() {
     GetWorkflow: {
       workflowId: "workflow",
       workflowName: "Preview OS",
-      workflowPath: "preview-os-next.yml",
+      workflowPath: "preview-os.yml",
       repo: "iterate/iterate",
       headSha: "head",
       sha: "merge",

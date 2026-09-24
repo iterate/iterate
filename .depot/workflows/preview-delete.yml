@@ -1,5 +1,5 @@
 # A CLOSED PULL REQUEST'S PREVIEW, DELETED (`pnpm preview delete`, apps/os/scripts/preview.ts): the
-# os-next preview Preview OS (preview-os-next.yml) deployed for the PR, everything it owned (D1,
+# apps/os preview that Preview OS (preview-os.yml) deployed for the PR, everything it owned (D1,
 # Artifacts namespace, KV namespaces, R2 bucket) and the client previews.
 #
 # Its own workflow, triggered only when a PR closes, so no push to an open PR carries it as a skipped
@@ -25,15 +25,15 @@ on:
   pull_request:
     types:
       - closed
-    # Preview OS's pull_request paths, verbatim (preview-os-next.yml says why each is there).
+    # Preview OS's pull_request paths, verbatim (preview-os.yml says why each is there).
     paths:
-      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
-      - .depot/workflows/preview-os-next.yml
+      - .depot/workflows/preview-os.yml
       - apps/os/**
       - configs-next/**
       - apps/dash/**
@@ -61,7 +61,7 @@ on:
         type: string
 
 concurrency:
-  group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
+  group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
   cancel-in-progress: false
 
 env:

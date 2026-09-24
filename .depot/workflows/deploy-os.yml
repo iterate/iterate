@@ -6,14 +6,14 @@ concurrency:
   # Every ref deploys to the same production Worker (os-next-prd:
   # os.iterate.com, mcp.iterate.com, *.iterate.app). Never interrupt a
   # credentialed deployment midway through its rollout.
-  group: deploy-os-next-production
+  group: deploy-os-production
   cancel-in-progress: false
 on:
   push:
     branches:
       - main
     paths:
-      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-os.yml
       - apps/os/**
       # Never in the Worker or its deploy: the app's docs (not public/setup-prompt.md, which prd
       # serves), its tests and benches, and the preview and soak scripts. Preview OS and Main OS
@@ -65,7 +65,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       # The Doppler project slug is still `project-worker` (the secrets bucket
-      # predates the os-next rename; renaming a Doppler project slug is a
+      # predates the platform's current name; renaming a Doppler project slug is a
       # separate migration). The deployed Cloudflare Worker is os-next-prd.
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config prd --project project-worker

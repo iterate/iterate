@@ -16,7 +16,7 @@
 #
 # Depot registers automatic triggers when this file is on the default branch. Test a branch with:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-#     --workflow preview-os-next.yml --ref <branch> \
+#     --workflow preview-os.yml --ref <branch> \
 #     --input pull-request-number=<pr> --input action=deploy
 # Every operation the PR body lists is a dispatch: action = deploy | reset | e2e (a delete is a
 # dispatch of preview-delete.yml), apps = all | auto | none (the apps on top: dash, agents, notes,
@@ -48,13 +48,13 @@ on:
     paths:
       # A production-workflow change must exercise this isolated deployment:
       # production runs deploy's non-mutating readiness probes only.
-      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
-      - .depot/workflows/preview-os-next.yml
+      - .depot/workflows/preview-os.yml
       - apps/os/**
       - configs-next/**
       - apps/dash/**
@@ -94,7 +94,7 @@ on:
         default: all
 
 concurrency:
-  group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
+  group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
   cancel-in-progress: false
 
 env:

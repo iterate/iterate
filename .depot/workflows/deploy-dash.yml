@@ -55,7 +55,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy
       # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
-      # (deploy-os-next.yml says why `always()`).
+      # (deploy-os.yml says why `always()`).
       - name: Notify Slack
         if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
