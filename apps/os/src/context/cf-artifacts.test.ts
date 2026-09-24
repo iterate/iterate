@@ -175,6 +175,55 @@ test("after a platform failure, a create that landed all the same is not created
   expect(recording.calls.map((call) => call.method)).toEqual(["get", "create", "get"]);
 });
 
+test("after a platform failure, a create that landed all the same answers created when its retry's probe cannot see it yet: the create says it exists", async () => {
+  // 2026-09-24, prj_dc2c708e…: the create's 10400 came 13 s in, the probe a second later found
+  // nothing, and the retry's create answered "repo already exists" — the project's birth failed on it.
+  const recording = recordingNamespace();
+  let answered = 0;
+  const lagging: ArtifactsNamespace = {
+    ...recording.namespace,
+    create: async (name) => {
+      const created = await recording.namespace.create(name);
+      if (++answered === 1) throw new Error("An internal error occurred.");
+      return created;
+    },
+    get: async (name) => {
+      recording.calls.push({ method: "get", name });
+      throw new Error("Repository not found (10200)"); // not readable yet
+    },
+  };
+  expect(await settle(() => scoped(lagging, "prj_a").create("/repos/config"))).toMatchObject({
+    value: { created: true },
+    retries: [{ verb: "create" }],
+  });
+  expect(recording.calls.map((call) => call.method)).toEqual(["get", "create", "get", "create"]);
+});
+
+test("a create answered 'already exists' after a 'not found' probe: the repo is there, and no one retries", async () => {
+  const recording = recordingNamespace(["prj_a.repos--config"]);
+  const lagging: ArtifactsNamespace = {
+    ...recording.namespace,
+    get: async () => {
+      throw new Error("Repository not found (10200)"); // another create landed, not readable yet
+    },
+  };
+  expect(await settle(() => scoped(lagging, "prj_a").create("/repos/config"))).toMatchObject({
+    value: { created: false },
+    retries: [],
+  });
+  // anything else a create answers still surfaces
+  const refusing: ArtifactsNamespace = {
+    ...lagging,
+    create: async () => {
+      throw new Error("Artifacts unavailable (503)");
+    },
+  };
+  expect(await settle(() => scoped(refusing, "prj_a").create("/repos/config"))).toMatchObject({
+    error: { message: "Artifacts unavailable (503)" },
+    retries: [],
+  });
+});
+
 test("after a platform failure, get, createToken, list and delete each answer on their retry", async () => {
   const get = flaky("get", [1], ["prj_a.repos--config"]);
   expect(
@@ -287,6 +336,8 @@ function recordingNamespace(existing: string[] = []) {
   const namespace: ArtifactsNamespace = {
     create: async (name) => {
       calls.push({ method: "create", name });
+      // the binding's answer to a name that is taken
+      if (repos.has(name)) throw new Error(`repo already exists: ${name}`);
       repos.add(name);
       return { token: `tok-${name}` };
     },

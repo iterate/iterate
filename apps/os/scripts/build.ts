@@ -1,6 +1,6 @@
-// Prepare source consumed by the Worker build: the loaded processor SDK, bundled presence facet and
-// config templates. Vite builds the Worker and Start client after this step; Vitest runs that
-// built Worker.
+// Prepare source consumed by the Worker build: the loaded processor SDK, `withItx` alone for a
+// script's isolate, bundled presence facet and config templates. Vite builds the Worker and Start
+// client after this step; Vitest runs that built Worker.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -23,6 +23,24 @@ async function processorSdkModule() {
     minify: true,
     write: false,
     external: ["cloudflare:workers"],
+  });
+  return bundled.outputFiles[0]!.text;
+}
+
+/** `withItx` alone (the SDK's sdk/record-pipelined-steps.ts, ~1.5 KB minified): the one module an
+ *  `itx.run` script's isolate imports (src/library.ts `runScriptModule`). Every distinct script is a
+ *  cold isolate of its own, so it never pays for the whole SDK. apps/agents ships the same bundle
+ *  with its AI transport (scripts/build-runtime.ts). */
+async function withItxModule() {
+  const sdk = path.dirname(createRequire(import.meta.url).resolve("iterate/sdk"));
+  const bundled = await esbuild({
+    entryPoints: [path.join(sdk, "record-pipelined-steps.ts")],
+    bundle: true,
+    format: "esm",
+    platform: "neutral",
+    target: "es2022",
+    minify: true,
+    write: false,
   });
   return bundled.outputFiles[0]!.text;
 }
@@ -80,6 +98,10 @@ export async function build() {
   writeFileSync(
     path.join(root, "src/generated/processor-sdk.js"),
     `export default ${JSON.stringify(await processorSdkModule())};\n`,
+  );
+  writeFileSync(
+    path.join(root, "src/generated/with-itx-module.js"),
+    `export default ${JSON.stringify(await withItxModule())};\n`,
   );
   writeFileSync(
     path.join(root, "src/generated/presence-processor-source.js"),

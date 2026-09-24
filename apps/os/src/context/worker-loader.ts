@@ -16,7 +16,8 @@
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
 // is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
-// no client-side wrapper. A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
+// no client-side wrapper. Loaded code reaches it through the SDK's `withItx(env.ITX, (itx) => …)`,
+// which releases the scope and every call made through it (lint: iterate/no-raw-itx-get). A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
 // `DurableObject` class): there is NO host-injected wrapper and no bare-lambda entry point — the code the
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 

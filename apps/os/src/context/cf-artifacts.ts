@@ -132,6 +132,11 @@ export function repoPathOf(name: string): string {
 const isRepoNotFound = (error: unknown): boolean =>
   /not found|10200/i.test(String((error as { message?: unknown })?.message ?? error));
 
+/** The Artifacts answer to a `create` whose name is taken ("repo already exists: <name>") — after a
+ *  probe that said "not found", the repo is there all the same: `create` reads it as done. */
+const isRepoAlreadyThere = (error: unknown): boolean =>
+  /already exists/i.test(error instanceof Error ? error.message : String(error));
+
 /** The TTL of the probe token `create` mints to learn whether a repo exists. */
 const PROBE_TOKEN_TTL_SECONDS = 60;
 
@@ -214,14 +219,23 @@ export function projectScopedArtifacts(input: {
           ),
         );
       if (await exists()) return { created: false };
-      await retryingOnePlatformFailure("create", name, async (isRetry) => {
+      return await retryingOnePlatformFailure("create", name, async (isRetry) => {
         // the create that failed may have landed all the same: the retry checks first
-        if (isRetry && (await exists())) return;
-        // The result carries the repo's initial credential, unread — and, a Workers-RPC result, a disposer.
-        const created = await input.namespace.create(name);
-        (created as Partial<Disposable>)[Symbol.dispose]?.();
+        if (isRetry && (await exists())) return { created: true };
+        try {
+          // The result carries the repo's initial credential, unread — and, a Workers-RPC result, a disposer.
+          const created = await input.namespace.create(name);
+          (created as Partial<Disposable>)[Symbol.dispose]?.();
+          return { created: true };
+        } catch (error) {
+          // "Already exists" after a "not found" probe: on the retry, the create that failed landed
+          // after all, and the probe could not see it yet (2026-09-24: its 10400 came 13 s in, the
+          // probe a second later found nothing, and the project's birth failed on "repo already
+          // exists"); on the first attempt, another create got there first. The repo is there.
+          if (!isRepoAlreadyThere(error)) throw error;
+          return { created: isRetry };
+        }
       });
-      return { created: true };
     },
     get: async (path) => {
       const name = boundName(path);

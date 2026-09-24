@@ -126,8 +126,8 @@ type R2ObjectRecord = {
  *  merges it in (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record
-   *  (the resolver strips it); here so a strongly typed holder (a loaded worker's `env.ITX.get()`)
-   *  can spell `itx.builtins.append(…)`. */
+   *  (the resolver strips it); here so a strongly typed holder (the scope a loaded worker's
+   *  `withItx(env.ITX, …)` hands it) can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
   whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
@@ -392,8 +392,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  event, `{ name, target: null }`: the DO deletes the facet the row hosted, storage included, before
    *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
    *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
-   *  so loaded code (`env.ITX.get().processors.enable(…)`) and a sibling (`itx.cd(p).processors…`) do
-   *  it through the same built-in as a client. */
+   *  so loaded code (`withItx(env.ITX, (itx) => itx.processors.enable(…))`) and a sibling
+   *  (`itx.cd(p).processors…`) do it through the same built-in as a client. */
   processors: {
     enable(
       name: string,

@@ -12,17 +12,18 @@ import { freshCtx, openItx } from "./support/client.ts";
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
 const PROBE = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 const outcome = async (fn) => { try { return { ok: await fn() }; } catch (e) { return { error: String(e && e.message || e) }; } };
 export default class extends WorkerEntrypoint {
-  async say(call, ...args) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.invoke(call, ...args)); } finally { itx[Symbol.dispose]?.(); } }
-  async cdWhoami(path) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.cd(path).whoami()); } finally { itx[Symbol.dispose]?.(); } }
-  async lend() { const itx = this.env.ITX.get(); try { return await outcome(() => itx.provide("itx.x", "itx.whoami")); } finally { itx[Symbol.dispose]?.(); } }
-  async lendLive() { const itx = this.env.ITX.get(); try { return await outcome(async () => { using h = await itx.provide("itx.live", () => "from the worker"); return await itx.invoke("itx.live()"); }); } finally { itx[Symbol.dispose]?.(); } }
-  async watch() { const itx = this.env.ITX.get(); try { return await outcome(() => itx.subscribe({ target: "itx.builtins.append" })); } finally { itx[Symbol.dispose]?.(); } }
+  say(call, ...args) { return outcome(() => withItx(this.env.ITX, (itx) => itx.invoke(call, ...args))); }
+  cdWhoami(path) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).whoami())); }
+  lend() { return outcome(() => withItx(this.env.ITX, (itx) => itx.provide("itx.x", "itx.whoami"))); }
+  lendLive() { return outcome(() => withItx(this.env.ITX, async (itx) => { await itx.provide("itx.live", () => "from the worker"); return await itx.invoke("itx.live()"); })); }
+  watch() { return outcome(() => withItx(this.env.ITX, (itx) => itx.subscribe({ target: "itx.builtins.append" }))); }
   async fetchUrl(url) { const r = await fetch(url); return { status: r.status, text: (await r.text()).slice(0, 60) }; }
-  async writeRow(match, target) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } })); } finally { itx[Symbol.dispose]?.(); } }
-  async appendEvent(event) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.append(event)); } finally { itx[Symbol.dispose]?.(); } }
-  async cdInvoke(path, call) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.cd(path).invoke(call)); } finally { itx[Symbol.dispose]?.(); } }
+  writeRow(match, target) { return outcome(() => withItx(this.env.ITX, (itx) => itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } }))); }
+  appendEvent(event) { return outcome(() => withItx(this.env.ITX, (itx) => itx.append(event))); }
+  cdInvoke(path, call) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).invoke(call))); }
 }`,
 };
 

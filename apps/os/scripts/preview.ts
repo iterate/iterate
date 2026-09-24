@@ -18,6 +18,10 @@ import process from "node:process";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
 import { z } from "zod";
+import {
+  TestEvidenceTarget,
+  testEvidencePaths,
+} from "@iterate-com/shared/test-support/test-evidence";
 import { OS_DOPPLER_PROJECT, osEnvs, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
@@ -907,13 +911,13 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
   ? {
       specs: {
         TEST_TELEMETRY_WORKSPACE: "iterate-root",
-        FLAKE_RECORD_DIR: "test-results/flake-records/specs",
+        FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/specs`,
       },
       "preview-e2e": {
         TEST_TELEMETRY_WORKSPACE: "os",
         TEST_TELEMETRY_KIND: "e2e",
         TEST_TELEMETRY_SUITE: "vitest",
-        FLAKE_RECORD_DIR: "test-results/flake-records/preview-e2e",
+        FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/preview-e2e`,
       },
     }
   : { specs: {}, "preview-e2e": {} };
@@ -963,6 +967,35 @@ async function runE2e(
     throw new Error(`${failedSuites.join(" and ")} failed against ${previewUrl(previewName)}`);
 }
 
+/** THE DEPLOYED TARGET, in the test evidence folder before the suites start, when the workflow
+ *  records evidence (TEST_TELEMETRY_ARTIFACT_DIR): the preview and the deployment its `/version`
+ *  answers with. A run against a preview deployed earlier (the `action=e2e` dispatch) tests what
+ *  that deploy left, not the commit this job checked out
+ *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). It never fails the run: a
+ *  preview that does not answer fails the suites, and the file then has no deploymentId. */
+async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget["apps"]) {
+  if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR) return;
+  const url = previewUrl(previewName);
+  // `<deployId> <platformOrigin>` (src/worker.ts)
+  const deploymentId = await fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000) })
+    .then(async (response) => (response.ok ? (await response.text()).split(" ")[0] : undefined))
+    .catch(() => undefined);
+  try {
+    const target = TestEvidenceTarget.parse({
+      previewName,
+      url,
+      deploymentId: deploymentId?.trim() || undefined,
+      apps,
+      checkedAt: new Date().toISOString(),
+    });
+    const file = path.join(REPO_ROOT, testEvidencePaths.target);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(target, null, 2)}\n`);
+  } catch (error) {
+    console.warn(`the deployed target was not recorded: ${describe(error)}`);
+  }
+}
+
 /** The two suites side by side, or the vitest rows alone with `only`; the names of those that
  *  failed. The vitest run gets the rows' choice as E2E_SLOW_ROWS, which holds each row to its
  *  timeout ceiling (e2e/support/setup.ts). */
@@ -971,6 +1004,13 @@ async function runE2eSuites(previewName: string, slowRows: SlowRows) {
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(APPS.find((app) => app.name === name)!, previewName);
+  await writeDeployedTarget(
+    previewName,
+    // the client apps the specs run against; the vitest rows alone use none
+    slowRows === "only"
+      ? []
+      : ["notes", "voice", "dash"].map((name) => ({ name, url: appUrl(name) })),
+  );
   const spec =
     slowRows === "only"
       ? undefined

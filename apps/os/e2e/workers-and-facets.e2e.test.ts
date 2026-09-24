@@ -18,7 +18,7 @@
 //   • DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining: `facets.get(name, spec).demo.timer
 //     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (iterate/expression.ts),
 //     never a bare Proxy (NonPipelinable over Workers RPC, workerd#6873) — and the callback fires back
-//     inside the caller, from a capnweb client AND from worker B via env.ITX.get()
+//     inside the caller, from a capnweb client AND from worker B via withItx(env.ITX, …)
 //   • Kenton's persistent-stub machinery IN USE: a hosted DO stores its live itx handle (the
 //     ctx.exports-minted ItxEntrypoint stub) in its OWN storage and the handle read back replays the
 //     restore chain on use — storage.put throws for any non-restorable stub, so put succeeding + the
@@ -90,22 +90,24 @@ test("itx.workers.get takes the modules INLINE", async () => {
   expect(inline).toBe(42);
 
   // 2. inline code can call back into itx (env.ITX is bound in the confined isolate).
-  const withItx = await itx.invoke([
+  const calledBack = await itx.invoke([
     "itx",
     "workers",
     [
       "get",
       {
         source: {
-          "cap.js": entrypoint(
-            "async run() { const itx = await this.env.ITX.get(); return (await itx.whoami()).projectId; }",
-          ),
+          "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
+export default class extends WorkerEntrypoint {
+  async run() { return (await withItx(this.env.ITX, (itx) => itx.whoami())).projectId; }
+}`,
         },
       },
     ],
     ["run"],
   ]);
-  expect(withItx).toBe(ctx);
+  expect(calledBack).toBe(ctx);
 });
 
 // ── a PRODUCER source behind a cacheKey: Cloudflare's `get(id, getCode)` contract, end to end ──
@@ -267,8 +269,9 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, b
 
 // ── dynamic worker → dynamic worker mid-chain pipelining. Worker A is a STATEFUL hosted DO whose getter
 // chain returns nested RpcTargets (get demo → Demo, get timer → Timer, timer.callLater(ms, cb)); worker
-// B is a SECOND loaded entrypoint that reaches A through its own `env.ITX.get()` and writes the natural
-// dotted chain; the callback B passes rides the membrane the other way and fires back INSIDE B ──
+// B is a SECOND loaded entrypoint that reaches A through its own `env.ITX` (one `withItx` round trip)
+// and writes the natural dotted chain; the callback B passes rides the membrane the other way and fires
+// back INSIDE B ──
 
 // ── worker A: a stateful DO with a getter chain that bottoms out at callLater(ms, cb) ──
 const SRC_WORKER_A = {
@@ -293,21 +296,23 @@ export class CounterDurableObject extends FacetDurableObject {
 export default CounterDurableObject;`,
 };
 
-// ── worker B: reaches A via env.ITX.get() and writes the natural mid-chain dotted call ──
+// ── worker B: reaches A via withItx(env.ITX, …) and writes the natural mid-chain dotted call ──
 const SRC_WORKER_B = {
   "cap.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class ConsumerB extends WorkerEntrypoint {
-  async run(aRef) {
-    // env.ITX.get() is the real scope. facets.get(name, { source, className }) is a mid-chain
+  run(aRef) {
+    // withItx hands the real scope. facets.get(name, { source, className }) is a mid-chain
     // HANDLE; the getter chain .demo.timer and terminal .callLater(ms, cb) pipeline onto it natively
     // — consecutive stub-returning calls over Workers RPC, the deepest pipelining case.
-    const itx = await this.env.ITX.get();
-    let pinged = false;
-    await itx.facets.get('counterA', { source: aRef.source, className: aRef.className })
-      .demo.timer.callLater(200, () => { pinged = true; });
-    if (pinged) await itx.append({ type: 'pinged-from-A-via-B' }); // observable at the client
-    return { ran: true, pinged };
+    return withItx(this.env.ITX, async (itx) => {
+      let pinged = false;
+      await itx.facets.get('counterA', { source: aRef.source, className: aRef.className })
+        .demo.timer.callLater(200, () => { pinged = true; });
+      if (pinged) await itx.append({ type: 'pinged-from-A-via-B' }); // observable at the client
+      return { ran: true, pinged };
+    });
   }
 }`,
 };
@@ -328,9 +333,9 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both kinds of cons
     });
   await until("capnweb client callback fired", () => clientPinged, 30_000);
 
-  // ── consumer 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
+  // ── consumer 2: worker B reaches worker A via withItx — the dynamic-worker → dynamic-worker case ──
   const ran = await itx.workers.get({ source: SRC_WORKER_B }).run(aRef);
-  // dynamic worker B: env.ITX.get().facets.get('counterA', aRef).demo.timer.callLater(cb) ran and the callback fired inside B
+  // dynamic worker B: itx.facets.get('counterA', aRef).demo.timer.callLater(cb) ran and the callback fired inside B
   expect(ran?.ran).toBe(true);
   expect(ran?.pinged).toBe(true);
 

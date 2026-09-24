@@ -96,10 +96,10 @@ test("itx.ingressRoutes.set refuses a malformed route (INVALID_INPUT) before it 
 
 /** The template's router (configs/default/worker.ts) with a 404 of its own. */
 const SRC_INGRESS_ROUTER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Router extends WorkerEntrypoint {
+  "cap.js": `import { ConfigWorker } from "./processor.js";
+export default class Router extends ConfigWorker {
   async fetch(request) {
-    const route = await this.env.ITX.get().ingressRoutes.match({ method: request.method, url: request.url, headers: request.headers });
+    const route = await this.withItx((itx) => itx.ingressRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
     if (route) {
       if (route.authRequirement && !request.headers.get("x-itx-principal"))
         return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });

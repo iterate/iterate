@@ -5,6 +5,7 @@ import {
   SPEC_EXPECT_TIMEOUT_MS,
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
+import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 
 const videoMode = process.env.VIDEO_MODE === "1";
 // CI retry artifacts already include screenshots/traces; retaining videos can
@@ -44,11 +45,12 @@ export default defineConfig({
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
   workers: process.env.CI ? 6 : 1,
-  outputDir: "test-results/playwright-output",
+  // Everything the run leaves goes into the test evidence folder (docs/test-evidence.md).
+  outputDir: testEvidencePaths.playwrightOutput,
   reporter: [
     ["list"],
-    ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
-    ["json", { outputFile: "test-results/playwright-results.json" }],
+    ["html", { outputFolder: testEvidencePaths.playwrightReport, open: "never" }],
+    ["json", { outputFile: testEvidencePaths.playwrightResults }],
     // The telemetry reporter writes the canonical test artifact and the plain tests' flake records
     // (retried passes and hard failures) the preview's CI finalizer uploads (docs/testing.md#flakes-and-pinned-failures).
     ["./scripts/ci/playwright-telemetry-reporter.ts"],

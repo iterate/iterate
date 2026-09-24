@@ -11,6 +11,7 @@ import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
 import type { Caller } from "./caller.ts";
+import WITH_ITX_MODULE from "./generated/with-itx-module.js";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
@@ -45,12 +46,12 @@ export interface LibraryRoots {
   /** A script — the text of `async (itx) => { … }` — run ONCE against this context, ON THE LOG:
    *  `run` appends `context/run-requested { code }` (attributed to the caller), the context's
    *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
-   *  whose `run` hands the script `env.ITX.get()`), and `run` resolves with the `run-settled`
-   *  event's result — or rejects with its error. So every script that ever ran is a pair of events
-   *  on the context it ran against, and a run the context's restart interrupted — or that was still
-   *  running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such, never re-run. JSON
-   *  in, JSON out. A script bakes in its own values — an agent writes it whole (an alternative to a
-   *  tool call), so `run` takes no arguments. */
+   *  whose `run` hands the script the scope of one `withItx` round trip), and `run` resolves with
+   *  the `run-settled` event's result — or rejects with its error. So every script that ever ran is
+   *  a pair of events on the context it ran against, and a run the context's restart interrupted —
+   *  or that was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such,
+   *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
+   *  (an alternative to a tool call), so `run` takes no arguments. */
   run(script: string): Promise<unknown>;
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
@@ -227,7 +228,9 @@ export function buildLibrary(
 // trusted-client doctrine), so a text that is not one function expression fails at load, in the
 // loader's words. It takes no arguments: a script is an agent's whole output (an alternative to a
 // tool call), its values baked in. The template is the smallest WorkerEntrypoint that hosts it:
-// `run()` mints the itx scope for the call and disposes it after, as the SDK's ConfigWorker does.
+// `run()` hands it the scope of ONE `withItx` round trip, as the SDK's ConfigWorker does, so the
+// scope and every call the script made through it are released when it settles — its unawaited ones
+// and its deadline's included.
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
@@ -240,32 +243,39 @@ export function buildLibrary(
  *  (apps/agents `adaptContextRuns`). */
 export const RUN_DEADLINE_MS = 10 * 60_000;
 
-/** The module `run` loads: `script` spliced in as `const script = (…)`, raced against the deadline.
- *  Exported for the unit pin. */
-export function runScriptModule(script: string): { "cap.js": string } {
+/** The module `run` loads: `script` spliced in as `const script = (…)`, run inside ONE `withItx`
+ *  round trip (the SDK's, bundled alone as `with-itx.js`: a script's isolate never loads the whole
+ *  SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
+ *  JSON, and a live value (a handle, a function) is released with the round trip. Exported for the
+ *  unit pin. */
+export function runScriptModule(script: string): { "cap.js": string; "with-itx.js": string } {
   return {
     "cap.js": [
       'import { WorkerEntrypoint } from "cloudflare:workers";',
+      'import { withItx } from "./with-itx.js";',
       `const script = (${script});`,
       "export default class extends WorkerEntrypoint {",
       "  async run() {",
-      "    const itx = this.env.ITX.get();",
       "    let deadline;",
       "    try {",
-      "      return await Promise.race([",
-      "        script(itx),",
-      "        new Promise((_, reject) => {",
-      `          deadline = setTimeout(() => reject(new Error("itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes")), ${RUN_DEADLINE_MS});`,
-      "        }),",
-      "      ]);",
+      "      return await withItx(this.env.ITX, async (itx) => {",
+      "        const value = await Promise.race([",
+      "          script(itx),",
+      "          new Promise((_, reject) => {",
+      `            deadline = setTimeout(() => reject(new Error("itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes")), ${RUN_DEADLINE_MS});`,
+      "          }),",
+      "        ]);",
+      "        const json = JSON.stringify(value);",
+      "        return json === undefined ? undefined : JSON.parse(json);",
+      "      });",
       "    } finally {",
       "      clearTimeout(deadline);",
-      "      itx[Symbol.dispose]?.();",
       "    }",
       "  }",
       "}",
       "",
     ].join("\n"),
+    "with-itx.js": WITH_ITX_MODULE,
   };
 }
 

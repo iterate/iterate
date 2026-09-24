@@ -20,11 +20,17 @@ import {
   type StreamEventInput,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
-import { callReleasing } from "./record-pipelined-steps.ts";
+import { withItx } from "./record-pipelined-steps.ts";
+// THE ONE WAY code reaches its context: `withItx(this.env.ITX, (itx) => …)` — one round trip, then
+// everything it reached released (record-pipelined-steps.ts). A host's `this.withItx(fn)` is the same
+// function. Never `env.ITX.get()` alone: whatever it hands out keeps this isolate, and the object
+// hosting it, running and billed after the context is evicted (lint: iterate/no-raw-itx-get).
+export { withItx };
 export {
   // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
-  // `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
-  // cannot await — then `set` to mutate and `snapshot()` as the client's seed read (stream/processor.ts).
+  // `new LiveState({ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }, "chat", {…})` — a
+  // field initializer cannot await — then `set` to mutate and `snapshot()` as the client's seed read
+  // (stream/processor.ts).
   LiveState,
   StreamProcessor,
   defineProcessorContract,
@@ -62,14 +68,15 @@ export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 //
 // hosted through the ordinary `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`
 // — a processor is a named facet that additionally gets pushed every commit. `processor` is a FIELD
-// so it can take what its effects need from this object (`new Notifier(this.env.ITX)`), and so the
-// same class is constructed bare in a test. A method of the host's own that callers reach by itx
-// expression goes on its list: `static override publicMethods = [...super.publicMethods, "message"]`.
+// so it can take what its effects need from this object — reach as a `WithItx` accessor, never a
+// scope: `new Notifier((call) => this.withItx(call))` — and so the same class is constructed bare in
+// a test. A method of the host's own that callers reach by itx expression goes on its list:
+// `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
 // that knows it (pinned in __workers-tests__/facet-props.test.ts). THE STREAM is the itx scope
-// behind `env.ITX.get()` (iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other
-// dotted call.
+// `this.withItx(fn)` hands `fn` (apps/os iterate-context.ts `ItxEntrypoint`); the engine's
+// `append`/`read` ride it like any other dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
 // cannot set alarms."); a timer, when one is needed, is a scheduled append on the context. The
@@ -109,7 +116,7 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
   }
 }
 
-/** The itx scope as `env.ITX.get()` hands it over: a context's declared API (api.ts) — a capnweb stub
+/** The itx scope `withItx` hands its callback: a context's declared API (api.ts) — a capnweb stub
  *  of apps/os's `IterateContextRpcTarget`, which satisfies it. */
 export type ItxScope = IterateContextApi;
 /** What hands the scope over: the loopback entrypoint a loaded worker has as `env.ITX`, or the one a
@@ -155,7 +162,7 @@ export abstract class StreamProcessorDurableObject<
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
 
-  // ── what an author reaches (the itx scope is `this.env.ITX.get()`, typed; identity is `this.ctx.props`) ──
+  // ── what an author reaches (the itx scope: `this.withItx(fn)`; identity: `this.ctx.props`) ──
 
   /** After a runtime field on the processor moved OUTSIDE a batch (an RPC method on this object);
    *  inside `processEvent` the engine re-projects on its own. */
@@ -248,7 +255,7 @@ export abstract class StreamProcessorDurableObject<
    *  "… does not outlive …"). Protected: a host with methods of its own (the workspace,
    *  src/workspace/durable-object.ts) reaches its context the same way. */
   protected withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
-    return callReleasing(this.#itxEntrypoint(), call);
+    return withItx(this.#itxEntrypoint(), call);
   }
 }
 
@@ -281,7 +288,7 @@ export abstract class ConfigWorker<
   /** ONE round trip on the itx scope, then release the scope and every call made through it
    *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). */
   protected withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
-    return callReleasing(this.env.ITX, call);
+    return withItx(this.env.ITX, call);
   }
 
   /** THE AUTHOR HOOK — one event at a time, in offset order. Append reactions through the itx scope;
@@ -291,7 +298,8 @@ export abstract class ConfigWorker<
   /** THE WEB ROOT — every Request on a host of the project (the project's configured ingress
    *  target). The host's routing slug is in `x-iterate-routing-slug` (`notes` for
    *  `notes--<project>.<hostname>`; absent on the apex), written only by the platform: route on it
-   *  in plain code, answering here or forwarding the Request. Default: not found. */
+   *  in plain code, answering here (reaching the context through `this.withItx`) or forwarding the
+   *  Request. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });
   }

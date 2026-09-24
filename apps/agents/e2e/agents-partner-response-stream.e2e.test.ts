@@ -122,7 +122,7 @@ class DelayedWorkersAi extends RpcTarget {
 }
 
 localOnly(
-  "the installed agent settles delayed model streams through env.ITX.get",
+  "the installed agent settles delayed model streams through env.ITX",
   async () => {
     const worker = await startOwnWorker();
     try {

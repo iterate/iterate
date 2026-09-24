@@ -1,9 +1,9 @@
-// record-pipelined-steps.test.ts — `callReleasing` disposes what this records, so it must record EVERY call a
+// record-pipelined-steps.test.ts — `withItx` disposes what this records, so it must record EVERY call a
 // round trip reached (the undisposed `itx.cd(path)` of `itx.cd(path).append(…)` kept facet → ItxEntrypoint
 // → context resident until the next deploy, 2026-09-21/22; without this, the facet itself kept running,
 // billed, 2026-09-23) and change nothing else about the stub.
 import { expect, test, vi } from "vitest";
-import { callReleasing, recordPipelinedSteps } from "./record-pipelined-steps.ts";
+import { recordPipelinedSteps, withItx } from "./record-pipelined-steps.ts";
 
 test.each([
   {
@@ -28,9 +28,28 @@ test.each([
     answer: { appended: ["e"] },
     disposed: ["dispose cd(/b).append", "dispose cd(/b).whoami", "dispose cd(/b)"],
   },
+  {
+    name: "an awaited handle, and a call made on it, are released",
+    run: async (itx: any) => {
+      const repo = await itx.open("/r");
+      return await repo.whoami();
+    },
+    answer: { path: "handle(/r)" },
+    disposed: ["dispose handle(/r).whoami", "dispose handle(/r)", "dispose open(/r)"],
+  },
+  {
+    name: "awaited plain data is handed back as it is, so it still copies across RPC",
+    run: async (itx: any) => {
+      const answer = await itx.cd("/p").whoami();
+      expect(answer).toStrictEqual({ path: "cd(/p)" });
+      return answer;
+    },
+    answer: { path: "cd(/p)" },
+    disposed: ["dispose cd(/p).whoami", "dispose cd(/p)"],
+  },
 ])("$name", async ({ run, answer, disposed }) => {
   const log: string[] = [];
-  const answered = await callReleasing({ get: () => fakeStub(log) }, async (itx) => {
+  const answered = await withItx({ get: () => fakeStub(log) }, async (itx) => {
     const value = await run(itx);
     expect(log).toEqual([]); // recording disposes nothing itself
     return value;
@@ -54,7 +73,7 @@ test("a release that throws is reported, the rest are still released and the ans
   };
   const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
   try {
-    const answered = await callReleasing({ get: () => itx }, (scope: any) =>
+    const answered = await withItx({ get: () => itx }, (scope: any) =>
       scope.cd("/d").append({ type: "y" }),
     );
     expect(answered).toEqual({ appended: [{ type: "y" }] });
@@ -92,8 +111,15 @@ function fakeStub(log: string[]) {
       },
     );
   };
+  // A stub a call answers once awaited: callable, as workerd's and capnweb's stubs are.
+  const handle = (name: string) =>
+    Object.assign(() => undefined, {
+      whoami: () => step(`${name}.whoami`, { path: name }),
+      [Symbol.dispose]: () => log.push(`dispose ${name}`),
+    });
   return {
     cd: (path: string) => step(`cd(${path})`, undefined),
+    open: (path: string) => step(`open(${path})`, handle(`handle(${path})`)),
     repos: { get: (path: string) => step(`repos.get(${path})`, undefined) },
     echo: (arg: unknown) => arg,
     nothing: () => undefined,

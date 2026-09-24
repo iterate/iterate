@@ -21,8 +21,10 @@ export default {
     "duplicates",
   ],
   ignoreIssues: {
-    // apps/agents' runtime:build output: the platform injects ./processor.js when it loads it.
+    // apps/agents' runtime:build output and the config templates' workers: the platform injects
+    // ./processor.js when it loads them.
     "configs/with-agents/agents.js": ["unresolved"],
+    "configs/*/worker.ts": ["unresolved"],
     // The types it names resolve from each extending app's own dependencies.
     "tsconfig.base.json": ["unlisted", "unresolved"],
   },

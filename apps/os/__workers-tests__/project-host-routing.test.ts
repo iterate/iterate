@@ -1,3 +1,4 @@
+import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
@@ -6,7 +7,9 @@ import {
   fakeCloudflareCustomHostnames,
   ORIGIN,
   publishConfigWorker,
+  releasePins,
   SRC_ECHO_APP,
+  stub,
 } from "./support.ts";
 const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
 
@@ -85,6 +88,63 @@ test("x-iterate-routing-slug is the edge's alone: loaded code forging it on env.
     { status: 200, body: { routingSlug: null } },
     { status: 200, body: { routingSlug: null } },
   ]);
+});
+
+/** An app whose body is three chunks, 100 ms apart: still streaming after its Response is handed on. */
+const SRC_SLOW_APP = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Slow extends WorkerEntrypoint {
+  fetch() {
+    const encoder = new TextEncoder();
+    let n = 0;
+    return new Response(new ReadableStream({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        controller.enqueue(encoder.encode("chunk-" + n + ";"));
+        if (++n === 3) controller.close();
+      },
+    }));
+  }
+}`,
+};
+
+/** The config worker's router, as the SDK teaches it: one `withItx` round trip per request, released
+ *  once the app's Response is in, while its body still streams. */
+const SRC_WITH_ITX_ROUTER = {
+  "cap.js": `import { ConfigWorker } from "./processor.js";
+export default class extends ConfigWorker {
+  fetch(request) {
+    return this.withItx((itx) => itx.slow.fetch(request));
+  }
+}`,
+};
+
+test("a router that answers through this.withItx hands on the app's whole streamed body — the release after the Response does not cut it — and leaves nothing holding the context", async () => {
+  const ctx = "prj_routing_withitx_stream";
+  const s = stub(ctx);
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.slow",
+      target: ["itx", "workers", ["get", { source: SRC_SLOW_APP }]],
+    },
+  });
+  // What the edge sends a context for a project host's request (worker.ts): a plain fetch naming
+  // the router by itx expression.
+  const page = await s.fetch(
+    new Request("https://router.test/", {
+      headers: {
+        "x-itx-expression": JSON.stringify([
+          "itx",
+          "workers",
+          ["get", { source: SRC_WITH_ITX_ROUTER }],
+        ]),
+      },
+    }),
+  );
+  expect(await page.text()).toBe("chunk-0;chunk-1;chunk-2;");
+  await releasePins(ctx);
+  await evictDurableObject(s); // times out after 30 s while anything still holds it
 });
 
 test("under the base, only a project host: a hostname that fails the grammar is 421 — never the control plane; the platform host itself is unaffected", async () => {

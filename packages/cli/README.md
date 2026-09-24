@@ -17,6 +17,7 @@ npx @iterate-com/cli tokens list
 npx @iterate-com/cli tokens revoke pat_…
 npx @iterate-com/cli mcp claude                    # Claude Code on /mcp with ITERATE_BEARER_TOKEN
 npx @iterate-com/cli use-my-computer --project my-project --name myComputer
+npx @iterate-com/cli tunnel 5173 --project my-project --name blog  # a local port on a project host
 npx @iterate-com/cli menubar --project my-project  # macOS app
 npx @iterate-com/cli logout
 ```
@@ -68,6 +69,26 @@ The command requires macOS, AppleScript and Swift. Share only with a project
 you trust: its callers can run local code. The capability belongs to the live
 connection and is released on exit. A disconnect or token expiry ends sharing
 with an error; rerun the command to refresh authentication and reconnect.
+
+## Tunnel
+
+`tunnel <port>` serves `http://localhost:<port>` on a host of the project until Ctrl-C,
+WebSocket upgrades included (a Vite dev server's hot module reloading works through it):
+
+```sh
+iterate tunnel 5173 --project my-project --name blog
+# https://blog--my-project.iterate.app → http://localhost:5173 (project members only). Press Ctrl-C to stop.
+iterate tunnel 3000 --project my-project --public   # anyone may use it; the name is random
+```
+
+The tunnel lends the local port to the project as `itx.tunnels.<name>` and sets the ingress
+route `tunnel-<name>` (`itx.ingressRoutes`), which the project's config worker consults first
+(the default templates do; an older project adds the lines from `configs/default/worker.ts` to
+its own `worker.ts`). By default only signed-in project members get through; others are sent to
+sign in. Ctrl-C deletes the route; a tunnel that dies without it leaves the host answering 502
+until it runs again. The local server sees `x-forwarded-host` and `x-forwarded-proto`. On a
+deployment that serves projects under paths, the local server must serve under the printed base
+path (Vite: `--base`). `--json` prints the URL and each request as NDJSON.
 
 ## Configs
 

@@ -7,8 +7,9 @@ jobs it `needs` have settled, whatever their outcome: Preview OS's `deploy` and
 beside it and wait for none of it). `scripts/ci/tracing/cli.ts current` reads
 the run from Depot and writes `trace.html` and `trace.json` for exactly those
 jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`
-artifact (kept 30 days). Then `cli.ts publish` finds that artifact and the e2e
-job's `public-playwright-report` in Depot and posts two commit statuses
+artifact (it asks for 30 days; Depot keeps artifacts about a week, see
+[test evidence](test-evidence.md)). Then `cli.ts publish` finds that artifact
+and the e2e job's `public-playwright-report` in Depot and posts two commit statuses
 (`statuses: write`), each linking the report in the viewer below:
 
 - **CI trace**: success with the time to green, failure with the time to red,
@@ -37,7 +38,7 @@ not download its traces. Each response's CSP confines the page to its own
 artifact's path. Misha built it for the `iterate/config` project, where each
 artifact had its own `*.iterate.app` origin; it went with that project in #2837,
 and came back here on one workers.dev origin, one path per artifact. Links expire
-with the artifact's 30-day retention.
+with the artifact, about a week after the run.
 
 ## What the trace shows
 

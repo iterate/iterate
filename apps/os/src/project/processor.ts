@@ -319,9 +319,9 @@ export class ProjectProcessor extends StreamProcessor<
         await this.withItx((itx) => itx.repos.create("/repos/config"));
         const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
         // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-        let commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as
-          | string
-          | null;
+        const tip = async () =>
+          (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
+        let commitOid = await tip();
         if (!commitOid) {
           const reference = state.creation?.configRepoTemplate;
           const changes = reference
@@ -329,13 +329,33 @@ export class ProjectProcessor extends StreamProcessor<
             : defaultFiles;
           if (!changes.some((file) => file.path === "worker.ts"))
             throw new Error("The config template needs a worker.ts entrypoint");
-          const seeded = (await this.withItx((itx) =>
-            config(itx).commitFiles({
-              message: reference ? `seed: ${reference}` : "seed: minimal project config",
-              changes,
-            }),
-          )) as unknown as { commitOid: string | null };
-          commitOid = seeded.commitOid;
+          // THE SEED LANDS ONLY ON THE UNBORN `main` IT WAS DECIDED ON (`parent: null`). `create`
+          // answers before this certificate, so the config repo may be written between the read
+          // above and this commit — a voice delegation's website edit was (2026-09-24), and the seed,
+          // applied on top of it, put the seed homepage back over the edit. Refused, the seed leaves
+          // the commit that got there first as the project's config, and `main`'s tip is what the
+          // ingress names. A failure that left `main` unborn is the saga's own failure.
+          try {
+            const seeded = (await this.withItx((itx) =>
+              config(itx).commitFiles({
+                message: reference ? `seed: ${reference}` : "seed: minimal project config",
+                changes,
+                parent: null,
+              }),
+            )) as unknown as { commitOid: string | null };
+            commitOid = seeded.commitOid;
+          } catch (error) {
+            commitOid = await tip();
+            if (!commitOid) throw error;
+            console.info({
+              event: "project.seed-on-born-main",
+              namespace: "project",
+              message:
+                "the seed commit threw with main born — a commit got there first (the seed refused itself) or the seed landed without its answer: main's tip is the project's config",
+              commitOid,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
         if (!commitOid) throw new Error("the config repo's seed left main unborn");
         const manifestText = await this.withItx((itx) =>

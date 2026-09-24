@@ -54,6 +54,7 @@ import {
   projectUrl,
 } from "./support/project-host.ts";
 import {
+  CARELESS_CHATROOM_SOURCE,
   CHATTY_SOURCE,
   facetStartedAt,
   HEARTBEAT_SOURCE,
@@ -177,6 +178,7 @@ export default class LiveMaker extends WorkerEntrypoint { make() { made += 1; re
 /** The careless holder, the Keeper fixture's manners (support/sources.ts): it keeps its `env.ITX`
  *  scope and every answer, and releases none of them. */
 const CARELESS_HOLDER_SOURCE = {
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless holder IS the subject: it keeps its env.ITX scope and every answer
   "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class CarelessHolderDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing", "started"];
@@ -239,16 +241,17 @@ test("a facet keeping a sibling's data answer, handed through the root's cd, kee
   expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
-// LiveState's documented sink (sdk/index.ts): `{ append: (e) => env.ITX.get().append(e) }` — a fresh
-// scope per `set`, and neither it nor the append's answer is ever released. The chatroom's live
-// state is built with it, so its revision (`rev`, the start time × 4096) names the instance.
+// LiveState's old documented sink, `{ append: (e) => env.ITX.get().append(e) }` — a fresh scope per
+// `set`, and neither it nor the append's answer is ever released (support/residency-facets.ts
+// CARELESS_CHATROOM_SOURCE). The chatroom's live state is built with it, so its revision (`rev`, the
+// start time × 4096) names the instance.
 test("the LiveState sink that never releases env.ITX keeps neither the context nor its facet running", async () => {
   const itx = openItx(freshCtx("residency_live_state_sink"));
   const chatroom = (method: string, ...args: unknown[]) =>
     itx.invoke([
       "itx",
       "facets",
-      ["get", "chatroom", { source: SOURCES.chatroom, className: "ChatroomDurableObject" }],
+      ["get", "chatroom", { source: CARELESS_CHATROOM_SOURCE, className: "ChatroomDurableObject" }],
       [method, ...args],
     ]);
   expect(await chatroom("post", "careless", "hi")).toEqual({ ok: true });

@@ -716,24 +716,26 @@ is the push's, across every check.
 A browser-readable report is uploaded as a Depot artifact even after test
 failures, and the check keeps the actual test outcome: a report link means the
 report is available, nothing more. Links use Depot artifact UUIDs and expire
-with their 30-day retention. An artifact whose name starts with `public-` can
-be opened by anyone at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
+with them. The workflows ask for 30 days, but Depot keeps artifacts about a
+week: runs older than that list none ([test evidence](test-evidence.md)). An
+artifact whose name starts with `public-` can be opened by anyone at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
 ([CI traces](./ci-traces.md#the-viewer)), so upload only files intended to be public.
 
 The Preview OS and Main OS e2e jobs print Playwright's report into the job log
 after Vitest's, and upload two artifacts even when the suite fails:
 
 - `public-playwright-report`: Playwright's HTML report
-  (`test-results/playwright-html`), kept 30 days. The **Playwright report**
+  (`test-results/playwright-html`), kept about a week. The **Playwright report**
   status opens it; a failed spec's trace opens in the report's trace viewer.
 - `preview-os-test-artifacts-attempt-<id>` (main:
   `main-os-test-artifacts-attempt-<id>`): all of `test-results/`, one per job
   attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
   `trace.zip`, screenshot and `error-context.md` are under
-  `playwright-output/<test>/`, next to `playwright-results.json` and the
-  telemetry.
+  `playwright-output/<test>/`, next to `playwright-results.json`, the
+  telemetry and the [test evidence](test-evidence.md) manifest.
 
 Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
-`unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`.
+`unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`; its
+[test evidence](test-evidence.md) manifest goes only to R2.

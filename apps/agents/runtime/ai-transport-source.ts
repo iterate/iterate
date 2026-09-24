@@ -1,14 +1,22 @@
+import { WITH_ITX_MODULE } from "./with-itx-module.ts";
+
 /** The stateless byte-pushing transport loaded by each agent durable object. A Durable Object that
  *  receives a provider Response or stream from a second Durable Object makes the Workers runtime
  *  report a hung request (./ai-transport.md), so this Worker consumes provider I/O itself and pushes
  *  each byte chunk into the caller's AgentAiSink under an idle bound; no Response, stream or reader
- *  crosses back to the Durable Object. */
+ *  crosses back to the Durable Object. It carries its own `withItx` (`with-itx.js`, built from the
+ *  SDK's by runtime:build) and never imports `./processor.js`, so no model call loads the whole SDK. */
 export const AI_TRANSPORT_SOURCE = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./with-itx.js";
 export default class AgentAiTransport extends WorkerEntrypoint {
-  async run(path, model, input, options, sink, idleBudgetMs) {
-    const itx = this.env.ITX.get();
-    const scoped = itx.cd(path);
+  // One withItx round trip for the whole model call: the scope, its cd(path) and the ai.run call are
+  // released after the drain, the whole body inside. The agent facet's runInBackground claim is what
+  // keeps this call alive that long (apps/agents/runtime/processor.ts #runLlmRequest).
+  run(path, model, input, options, sink, idleBudgetMs) {
+    return withItx(this.env.ITX, (itx) => this.#run(itx.cd(path), model, input, options, sink, idleBudgetMs));
+  }
+  async #run(scoped, model, input, options, sink, idleBudgetMs) {
     let call, reader, initialTimedOut = false;
     const withinIdle = async (operation, message) => {
       let timer;
@@ -56,9 +64,8 @@ export default class AgentAiTransport extends WorkerEntrypoint {
       void reader?.cancel(error).catch(() => {});
       void sink.error(error instanceof Error ? error.message : String(error)).catch(() => {});
       throw error;
-    } finally {
-      call?.[Symbol.dispose]?.(); scoped[Symbol.dispose]?.(); itx[Symbol.dispose]?.();
     }
   }
 }`,
+  "with-itx.js": WITH_ITX_MODULE,
 };

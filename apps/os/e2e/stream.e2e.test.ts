@@ -19,8 +19,8 @@
 //     the real DO SQLite (event_chunks), an idempotent chunked retry dedupes, a mid-batch conflict rolls
 //     the chunk rows back, chunk rows stay invisible to paging, a surrogate pair straddling a chunk
 //     boundary survives (the JSON is sliced by UTF-16 code units)
-//   • `waitForEvent` through a LOADED worker's `env.ITX.get()` — the scope's method waits on the DO and
-//     returns the committed event (the Workers-RPC path no other suite drives)
+//   • `waitForEvent` through a LOADED worker's `withItx(env.ITX, …)` — the scope's method waits on
+//     the DO and returns the committed event (the Workers-RPC path no other suite drives)
 //   • OPT-IN, deployed only (RUN_WAKE_LOOP_PROBE=1): the self-wake trace — a stuck cursor delivery on
 //     a dormant context self-wakes on the DO's alarm, and the probe prints each wake's story
 
@@ -464,20 +464,20 @@ test("a surrogate pair straddling a chunk boundary round-trips byte-identically"
 
 // ── waitForEvent through a loaded worker ──
 
-test("waitForEvent through a LOADED worker's env.ITX.get() — the scope's dotted method waits on the DO and returns the event", async () => {
+test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted method waits on the DO and returns the event", async () => {
   const ctx = freshCtx("waitload");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  // The method under test is `waitForEvent` on the itx scope a loaded worker holds (`env.ITX.get()` —
-  // the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
+  // The method under test is `waitForEvent` on the itx scope a loaded worker reaches (`withItx(env.ITX, …)`
+  // — the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
   // worker returns the committed event — the Workers-RPC path no other suite drives.
   const SRC_WAITER = {
     "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "./processor.js";
 export default class Waiter extends WorkerEntrypoint {
-  async run(afterOffset) {
-    const itx = await this.env.ITX.get();
-    return await itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
+  run(afterOffset) {
+    return withItx(this.env.ITX, (itx) => itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 }));
   }
 }`,
   };
