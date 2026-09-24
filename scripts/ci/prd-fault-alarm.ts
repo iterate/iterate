@@ -137,7 +137,7 @@ export function logWindow(now: Date, state: AlarmState | null): LogWindow {
 
 /** The window's incidents: one per 5xx host, healed name or error message. Heals count only in a
  *  burst (10 or more in the window) or as an incident already open. Pure. */
-export function incidentsOf(reading: FaultReading, open: (key: string) => boolean) {
+function incidentsOf(reading: FaultReading, open: (key: string) => boolean) {
   const signals = [
     // prd answers no 5xx on purpose since #2844
     [
@@ -235,7 +235,7 @@ export function triageIncidents(
 }
 
 /** The page opening `sightings`, biggest first per signal. Pure. */
-export function renderFaultPage(
+function renderFaultPage(
   sightings: { what: string; label: string; count: number }[],
   window: LogWindow,
   remembered = true,
