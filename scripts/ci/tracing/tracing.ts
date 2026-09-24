@@ -89,8 +89,8 @@ export function assembleTrace(
   >,
 ) {
   const workflow = Workflow.parse(input);
-  const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
-  workflow.jobs = workflow.jobs.filter((job) => !/:(finish|trace|cleanup|sweep)$/.test(job.jobKey));
+  // The trace job collects this report, so it is not in it.
+  workflow.jobs = workflow.jobs.filter((job) => !job.jobKey.endsWith(":trace"));
   if (
     workflow.jobs.some(
       (job) => !["finished", "failed", "cancelled", "skipped"].includes(job.status),
@@ -101,14 +101,12 @@ export function assembleTrace(
     .flatMap((job) => [job.finishedAt, ...job.attempts.map((attempt) => attempt.finishedAt)])
     .filter(Boolean)
     .map((time) => Date.parse(time));
-  const producerEnd = ends.length ? Math.max(...ends) : Date.parse(workflow.workflowFinishedAt);
+  const rootEnd = ends.length ? Math.max(...ends) : Date.parse(workflow.workflowFinishedAt);
   // Retrying only cleanup/reporting must not create a new test execution.
   const executions = [...workflow.executions].sort((a, b) => b.execution - a.execution);
-  const execution = executions.find((execution) => Date.parse(execution.createdAt) <= producerEnd);
+  const execution = executions.find((execution) => Date.parse(execution.createdAt) <= rootEnd);
   if (!execution) throw new Error("Depot workflow has no execution for its preview jobs");
-  const nextExecution = executions[executions.indexOf(execution) - 1];
   const rootStart = Date.parse(execution.createdAt);
-  const executionEnd = nextExecution ? Date.parse(nextExecution.createdAt) : Infinity;
   const eventsByAttempt = new Map(
     [...logs].map(([id, lines]) => [
       id,
@@ -128,59 +126,15 @@ export function assembleTrace(
       }),
     ]),
   );
-  // Read only the test verdict from finish. Its setup, reporting and cleanup are
-  // deliberately outside this trace, even when they later fail the Depot job.
-  const verdictEvents = (finish?.attempts || [])
-    .flatMap((attempt) => eventsByAttempt.get(attempt.attemptId) || [])
-    .filter((event) => "time" in event && event.time >= rootStart && event.time < executionEnd);
-  const greenMarker = verdictEvents.find((event) => event.kind === "check-green");
-  const greenStep = verdictEvents.find(
-    (event) => event.kind === "shell-start" && event.step === "tests_passed",
-  );
-  const greenEnd =
-    greenStep?.kind === "shell-start"
-      ? verdictEvents.find(
-          (event) =>
-            event.kind === "shell-end" && event.id === greenStep.id && event.exitCode === 0,
-        )
-      : undefined;
-  const observedGreen =
-    greenMarker?.kind === "check-green"
-      ? { time: greenMarker.time, evidence: "GitHub check update acknowledged" }
-      : greenEnd?.kind === "shell-end"
-        ? { time: greenEnd.time, evidence: "Successful early-green step end" }
-        : null;
-  const verdictFailure = observedGreen
-    ? undefined
-    : verdictEvents
-        .flatMap((event) => {
-          if (event.kind !== "shell-end" || event.exitCode === 0) return [];
-          const start = verdictEvents.find(
-            (item) => item.kind === "shell-start" && item.id === event.id,
-          );
-          const step = event.stepId || (start?.kind === "shell-start" ? start.step : "");
-          return ["consumers", "merge_reports", "tests_passed"].includes(step)
-            ? [{ time: event.time, evidence: `Failed test-result validation (${step})` }]
-            : [];
-        })
-        .sort((a, b) => a.time - b.time)[0];
-  const rootEnd = Math.max(
-    producerEnd,
-    observedGreen?.time || producerEnd,
-    verdictFailure?.time || producerEnd,
-  );
   workflow.workflowFinishedAt = new Date(rootEnd).toISOString();
-  if (verdictFailure || workflow.jobs.some((job) => job.status === "failed"))
-    workflow.workflowStatus = "failed";
+  if (workflow.jobs.some((job) => job.status === "failed")) workflow.workflowStatus = "failed";
   else if (workflow.jobs.some((job) => job.status === "cancelled"))
     workflow.workflowStatus = "cancelled";
   else if (workflow.jobs.length && workflow.jobs.every((job) => job.status === "skipped"))
     workflow.workflowStatus = "skipped";
-  else if (finish) workflow.workflowStatus = observedGreen ? "finished" : "incomplete";
   else if (workflow.jobs.length) workflow.workflowStatus = "finished";
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
-  const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];
   const add = (
     id: string,
     parentSpanId: string,
@@ -262,16 +216,7 @@ export function assembleTrace(
   }
   for (const job of workflow.jobs) {
     const key = jobKeyInWorkflow(job.jobKey);
-    const labels: Record<string, string> = {
-      plan: "Plan",
-      prepare: "Prepare",
-      apps: "App tests",
-      deploy: "Deploy",
-      e2e: "E2E",
-    };
-    const name =
-      labels[key] ||
-      key.replace(/playwright:matrix-(\d+)/, (_, index) => `Playwright ${Number(index) + 1}/6`);
+    const name = ({ deploy: "Deploy", e2e: "E2E" } as Record<string, string>)[key] || key;
     const attempts = job.attempts.filter(
       (attempt) =>
         attempt.startedAt &&
@@ -317,50 +262,40 @@ export function assembleTrace(
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
-      const wait = shells.find(
-        (event) => event.step === "wait_for_preview" || event.step === "consumers",
-      );
-      const tests = shells.find(
-        (event) =>
-          event.step === "playwright" || event.step === "app_tests" || event.step === "e2e",
-      );
+      // The e2e job's `e2e` step (preview-os.yml) opens its Test phase.
+      const tests = shells.find((event) => event.step === "e2e");
       const boundaries = [{ name: "Setup", time: start }];
-      if (wait) boundaries.push({ name: "Wait", time: wait.time });
       if (tests) {
         boundaries.push({ name: "Test", time: tests.time });
         const done = shellEnds.get(tests.id);
         if (done) boundaries.push({ name: "Finish", time: done.time });
-      } else if (wait) {
-        const done = shellEnds.get(wait.id);
-        if (done) boundaries.push({ name: "Finish", time: done.time });
       }
-      const phases =
-        wait || tests
-          ? boundaries.map((boundary, index) => {
-              // Depot job finishes have whole-second precision. A final marker can
-              // fall later within that second: retain both source timestamps,
-              // but give the derived trailing phase zero duration, not negative.
-              const phaseEnd = boundaries[index + 1]?.time || Math.max(boundary.time, end);
-              return {
-                start: boundary.time,
-                end: phaseEnd,
-                id: add(
-                  `${attempt.attemptId}/phase/${index}`,
-                  jobSpan,
-                  boundary.name,
-                  boundary.time,
-                  phaseEnd,
-                  {
-                    "ci.kind": "phase",
-                    "ci.phase": boundary.name.toLowerCase(),
-                    "ci.evidence":
-                      "Grouping from measured step boundaries; includes action/runner gaps",
-                  },
-                  false,
-                ),
-              };
-            })
-          : [];
+      const phases = tests
+        ? boundaries.map((boundary, index) => {
+            // Depot job finishes have whole-second precision. A final marker can
+            // fall later within that second: retain both source timestamps,
+            // but give the derived trailing phase zero duration, not negative.
+            const phaseEnd = boundaries[index + 1]?.time || Math.max(boundary.time, end);
+            return {
+              start: boundary.time,
+              end: phaseEnd,
+              id: add(
+                `${attempt.attemptId}/phase/${index}`,
+                jobSpan,
+                boundary.name,
+                boundary.time,
+                phaseEnd,
+                {
+                  "ci.kind": "phase",
+                  "ci.phase": boundary.name.toLowerCase(),
+                  "ci.evidence":
+                    "Grouping from measured step boundaries; includes action/runner gaps",
+                },
+                false,
+              ),
+            };
+          })
+        : [];
       const stepParents = new Map<string, string>();
       const stepEnds = new Map<string, number>();
       for (const shell of shells) {
@@ -395,26 +330,6 @@ export function assembleTrace(
         );
         stepParents.set(shell.stepKey, id);
         stepEnds.set(shell.stepKey, shellEnd);
-      }
-      for (const event of events) {
-        if (event.kind === "milestone") {
-          add(
-            `${attempt.attemptId}/milestone/${event.name}`,
-            stepParents.get(event.stepKey) || jobSpan,
-            event.name,
-            event.time,
-            event.time,
-            { "ci.kind": "milestone", "ci.evidence": "Status publication succeeded" },
-            false,
-          );
-        }
-        if (event.kind === "dependency") {
-          dependencies.push({
-            sourceId: stepParents.get(event.stepKey) || jobSpan,
-            targetId: event.targetId,
-            milestone: event.milestone,
-          });
-        }
       }
       const operations = events.filter((event) => event.kind === "span-start");
       const operationIds = new Map(
@@ -491,43 +406,8 @@ export function assembleTrace(
       }
     }
   }
-  // Resolve after collecting every job; Depot need not return producers first.
-  const byId = new Map(spans.map((span) => [span.spanId, span]));
-  for (const dependency of dependencies) {
-    const source = byId.get(dependency.sourceId)!;
-    const milestone =
-      dependency.milestone &&
-      byId.get(hash(`${traceId}/${dependency.targetId}/milestone/${dependency.milestone}`, 16));
-    // Cancelled runners can have an attempt ID without ever starting. Their
-    // evidence is the zero-duration job placeholder, not an invented attempt.
-    const unstartedJob = workflow.jobs.find((job) =>
-      job.attempts.some(
-        (attempt) => attempt.attemptId === dependency.targetId && !attempt.startedAt,
-      ),
-    );
-    const target =
-      milestone || byId.get(hash(`${traceId}/${unstartedJob?.jobId || dependency.targetId}`, 16));
-    if (!target) throw new Error(`Missing CI dependency target: ${dependency.targetId}`);
-    source.links.push({
-      traceId,
-      spanId: target.spanId,
-      attributes: [
-        {
-          key: "ci.link.label",
-          value: {
-            stringValue: dependency.milestone
-              ? `Requires ${dependency.milestone}${milestone ? "" : " (not observed)"}`
-              : "Waits for job to settle",
-          },
-        },
-      ],
-    });
-  }
-  const green =
-    workflow.workflowStatus === "finished"
-      ? observedGreen || { time: rootEnd, evidence: "Successful preview completion" }
-      : null;
-  if (green) {
+  if (workflow.workflowStatus === "finished") {
+    const green = { time: rootEnd, evidence: "Successful preview completion" };
     const workflowSpan = spans[0];
     workflowSpan.attributes.push(
       { key: "ci.time_to_green_ms", value: { stringValue: String(green.time - rootStart) } },
@@ -551,16 +431,11 @@ export function assembleTrace(
       .map((attempt) => Date.parse(attempt.finishedAt))
       .filter((time) => time >= rootStart && time <= rootEnd)
       .sort((a, b) => a - b)[0];
-    const failure = [
-      ...(failedAt === undefined
-        ? []
-        : [{ time: failedAt, evidence: "First failed job completion (Depot)" }]),
-      ...(verdictFailure ? [verdictFailure] : []),
-    ].sort((a, b) => a.time - b.time)[0];
-    const red = failure ? failure.time : rootEnd;
-    const evidence = failure
-      ? failure.evidence
-      : "Preview completion (upper bound; no failed job completion recorded)";
+    const red = failedAt ?? rootEnd;
+    const evidence =
+      failedAt === undefined
+        ? "Preview completion (upper bound; no failed job completion recorded)"
+        : "First failed job completion (Depot)";
     spans[0].attributes.push(
       { key: "ci.time_to_red_ms", value: { stringValue: String(red - rootStart) } },
       { key: "ci.red.evidence", value: { stringValue: evidence } },
@@ -589,12 +464,9 @@ export function assembleTrace(
   };
 }
 
-/**
- * A job's key inside its workflow file: `preview-os.yml:e2e` → `e2e`. The legacy preview called
- * a reusable workflow, whose jobs were `preview.yml:preview:<job>`.
- */
+/** A job's key inside its workflow file: `preview-os.yml:e2e` → `e2e`. */
 export function jobKeyInWorkflow(jobKey: string) {
-  return jobKey.replace(/^.*?\.yml:(preview:)?/, "");
+  return jobKey.replace(/^.*?\.yml:/, "");
 }
 
 /** Use source YAML, never expanded runner commands that could contain credentials. */
@@ -643,7 +515,7 @@ type Span = {
     attributes: { key: string; value: { stringValue: string } }[];
   }[];
   status: { code: number };
-  links: { traceId: string; spanId: string; attributes: Span["attributes"] }[];
+  links: never[];
 };
 
 export const Workflow = z.object({
@@ -687,21 +559,6 @@ export const Workflow = z.object({
 });
 
 const TraceEvent = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("dependency"),
-    targetId: z.string().min(1),
-    milestone: z.string(),
-  }),
-  z.object({
-    kind: z.literal("milestone"),
-    name: z.string().min(1),
-    time: z.number().finite(),
-  }),
-  z.object({
-    kind: z.literal("check-green"),
-    time: z.number().finite(),
-    checkId: z.number().int().positive(),
-  }),
   z.object({
     kind: z.literal("span-start"),
     id: z.string(),

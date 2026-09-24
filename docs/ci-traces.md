@@ -15,10 +15,10 @@ measured shell steps, and individual Playwright attempts and Vitest tests.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
 
-The summary shows **Time to green** when the e2e job succeeded and **Time to
-red** from the first failed job attempt in the run; recovered test or job
-attempts do not count. Missing failure timing uses a labelled upper bound.
-Missing verdict evidence never invents green.
+The summary shows **Time to green** at the last traced job's finish when none
+failed or was cancelled, and **Time to red** from the first failed job attempt
+in the run; recovered test or job attempts do not count. Missing failure timing uses a
+labelled upper bound.
 
 Elapsed metrics start at the run's creation, so they include time waiting to
 start. A striped **Workflow queue** row appears first, measured from Depot
@@ -51,10 +51,6 @@ time.
 points, preserving async parents across parallel work. Thrown errors and
 explicit failed command results mark the operation failed; missing end records
 remain visibly incomplete. Names and status are recorded, not exception text.
-
-The assembler also still accepts an older pipeline's shape: a `finish` job's
-test verdict, `wait_for_preview`/`consumers` Wait phases and their
-prerequisite links (`tracing.ts`). The current workflow produces none of it.
 
 ## Privacy
 

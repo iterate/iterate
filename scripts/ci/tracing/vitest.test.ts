@@ -129,8 +129,8 @@ function vitestRun(enabled: string) {
     .map((line) => JSON.parse(line.slice("@@ci-trace ".length)));
   const workflow = {
     workflowId: "workflow",
-    workflowName: "Preview",
-    workflowPath: "preview.yml",
+    workflowName: "Preview OS",
+    workflowPath: "preview-os.yml",
     repo: "iterate/iterate",
     headSha: "head",
     sha: "merge",
@@ -141,8 +141,8 @@ function vitestRun(enabled: string) {
     executions: [{ executionId: "execution", execution: 1, createdAt: startedAt }],
     jobs: [
       {
-        jobId: "apps",
-        jobKey: "preview.yml:preview:apps",
+        jobId: "e2e",
+        jobKey: "preview-os.yml:e2e",
         status: "failed",
         attempts: [
           {
@@ -157,13 +157,13 @@ function vitestRun(enabled: string) {
     ],
   };
   const lines = [
-    { kind: "shell-start", id: "shell", step: "app_tests", time: Date.parse(startedAt) },
+    { kind: "shell-start", id: "shell", step: "e2e", time: Date.parse(startedAt) },
     ...events,
     { kind: "shell-end", id: "shell", time: Date.now(), exitCode: 1 },
   ].map((event) => ({
     body: `@@ci-trace ${JSON.stringify(event)}`,
-    stepKey: "app_tests",
-    stepId: "app_tests",
+    stepKey: "e2e",
+    stepId: "e2e",
   }));
   return {
     result,

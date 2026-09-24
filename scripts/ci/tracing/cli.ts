@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { z } from "zod";
-import { DEPOT_ORG } from "../depot.ts";
+import { depotCiApi } from "../depot.ts";
 import { getOctokit } from "../github.ts";
 import { assembleTrace, jobKeyInWorkflow, Workflow, renderTrace, stepCommands } from "./tracing.ts";
 
@@ -126,19 +126,7 @@ export default class CiTrace {
   }
 
   private async depot(method: string, body: object) {
-    const token = z.string().min(1).parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
-    const response = await fetch(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "x-depot-org": DEPOT_ORG,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new Error(`Depot ${method} returned HTTP ${response.status}`);
-    return response.json();
+    return depotCiApi(method, body, z.string().min(1).parse(process.env.DEPOT_CI_TELEMETRY_TOKEN));
   }
 }
 
