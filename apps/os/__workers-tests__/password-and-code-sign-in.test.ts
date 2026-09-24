@@ -24,7 +24,7 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
     EMAIL: { send } as unknown as Env["EMAIL"],
     APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@control.test>",
   } as Env;
-  const started = await startLoginCode(mailbox, "Person@Real-Mailbox.dev");
+  const started = await startLoginCode(mailbox, "Person@Real-Mailbox.dev", null);
   expect(send).toHaveBeenCalledTimes(1);
   const message = send.mock.calls[0]![0];
   expect(message.to).toBe("person@real-mailbox.dev");
@@ -44,7 +44,7 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
     restart: true,
   });
   // five wrong tries end a challenge, and the right code is then too late
-  const second = await startLoginCode(mailbox, "person@real-mailbox.dev");
+  const second = await startLoginCode(mailbox, "person@real-mailbox.dev", null);
   for (let attempt = 1; attempt < 5; attempt++)
     expect(await finishLoginCode(mailbox, withCookie(second.setCookie), "111111")).toMatchObject({
       error: expect.stringMatching(/not right/),
@@ -60,11 +60,13 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
   // three codes to one address in the window, then the address rests; a reserved test domain is
   // never mailed — no mailbox exists there (mail there bounces, and a bounce costs the sender's
   // reputation) — so no code is even started: the person is told to enter a real address
-  await startLoginCode(mailbox, "person@real-mailbox.dev");
+  await startLoginCode(mailbox, "person@real-mailbox.dev", null);
   expect(send).toHaveBeenCalledTimes(3);
-  await expect(startLoginCode(mailbox, "Person@Real-Mailbox.dev")).rejects.toThrow(/Too many/);
+  await expect(startLoginCode(mailbox, "Person@Real-Mailbox.dev", null)).rejects.toThrow(
+    /Too many/,
+  );
   send.mockClear();
-  await expect(startLoginCode(mailbox, "nobody@example.com")).rejects.toThrow(/receive mail/);
+  await expect(startLoginCode(mailbox, "nobody@example.com", null)).rejects.toThrow(/receive mail/);
   expect(send).not.toHaveBeenCalled();
   // no cookie at all: nothing to finish
   expect(

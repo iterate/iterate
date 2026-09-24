@@ -87,7 +87,7 @@ export async function signInWithPassword(
   env: Env,
   email: string,
   password: string,
-  client: string | null = null,
+  client: string | null,
 ): Promise<{ user: UserRecord } | { error: string }> {
   const secret = appConfigOf(env).login.password.exposeSecret();
   if (!secret) throw codedError("UNAUTHENTICATED", "Password sign-in is not offered here.");
@@ -144,7 +144,7 @@ async function mailAllowed(env: Env, address: string, client: string | null): Pr
 export async function startLoginCode(
   env: Env,
   email: string,
-  client: string | null = null,
+  client: string | null,
 ): Promise<{ setCookie: string }> {
   const config = appConfigOf(env);
   if (!(env.EMAIL && config.login.emailCode))

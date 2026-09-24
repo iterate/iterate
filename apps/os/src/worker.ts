@@ -35,7 +35,6 @@ import { authorizationForToken, recordGrantUse } from "./oauth.ts";
  *  the edge refuses past a few. A fresh Request starts at zero — an app looping its own project
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
-const PROJECT_HOST_MAX_HOPS = 4;
 
 /** THE BASE PATH an app is served under (paths ingress: `/projects/<project>/<app>`), alongside
  *  `x-iterate-app`: the edge strips it from the URL the app sees and says it here, so
@@ -136,12 +135,12 @@ export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     // THE HOP COUNT — what the app forwards: a request carrying the count it was handed re-enters
-    // here with it, each pass adds one, a few is a loop; a fresh Request carries none and starts at
-    // zero. The edge writes digits; anything else (an app spelling "NaN" to defeat the budget —
-    // `NaN > max` is never true) is over budget by definition.
+    // here with it, each pass adds one, more than four is a loop; a fresh Request carries none and
+    // starts at zero. The edge writes digits; anything else (an app spelling "NaN" to defeat the
+    // budget — `NaN > 4` is never true) is over budget by definition.
     const hopsHeader = request.headers.get(PROJECT_HOST_HOPS_HEADER) ?? "0";
     const hops = /^\d{1,3}$/.test(hopsHeader) ? Number(hopsHeader) + 1 : Infinity;
-    if (hops > PROJECT_HOST_MAX_HOPS)
+    if (hops > 4)
       return new Response(
         `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app fetching its own host)\n`,
         { status: 508 },

@@ -37,12 +37,8 @@ const httpOrigin = z
   .string()
   .trim()
   .refine((value) => {
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      return false;
-    }
+    if (!URL.canParse(value)) return false;
+    const url = new URL(value);
     return url.origin === value && (url.protocol === "https:" || url.protocol === "http:");
   }, "expected an HTTP(S) origin without a path");
 
@@ -189,6 +185,7 @@ function fieldNameOf(path: readonly (string | number | symbol)[]): string {
 function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): void {
   const object = z.record(z.string(), z.unknown()).safeParse(raw);
   if (!object.success) return;
+  // unwrap() and shape hand back loosely typed schemas; the walk checks each with instanceof
   let current: z.ZodTypeAny = schema;
   while (
     current instanceof z.ZodDefault ||

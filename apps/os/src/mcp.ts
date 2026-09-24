@@ -131,6 +131,8 @@ async function buildServer(
       ),
     },
     async (raw: unknown) => {
+      // fromJsonSchema's validator has checked `raw` against the schema above: `script` required,
+      // nothing else but `project`
       const toolArguments = raw as { project?: string; script: string };
       try {
         const projectId = await projectOfToolCall(

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 // App-supplied identifiers, never a publisher-verification assertion.
 export const ClientDisplayUrl = z.url({ protocol: /^https$/ }).refine((value) => {
+  // zod runs a refine even after z.url() has failed, where `new URL` would throw
   if (!URL.canParse(value)) return false;
   const url = new URL(value);
   return !url.username && !url.password;
