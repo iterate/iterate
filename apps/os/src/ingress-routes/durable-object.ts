@@ -2,7 +2,8 @@
 // project's root `/`, hosting the ingress routes processor (processor.ts). `snapshot()` is the route
 // table `itx.ingressRoutes` reads (context/built-ins.ts). Hosted from `ctx.exports`
 // (first-party-facets.ts): ordinary bundled worker code, enabled as a row on `/` by the first
-// `itx.ingressRoutes.set`.
+// `itx.ingressRoutes.set`. It is rarely pushed (it consumes one event type), so each `snapshot` —
+// every request's `match` — first catches up through the log.
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { IngressRoutesState } from "./contract.ts";
