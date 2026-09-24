@@ -11,14 +11,24 @@
 //   pnpm dev kill                     SIGTERM its process group, SIGKILL after 10s
 //   pnpm dev restart [--port N]       kill, then start --detach on the same port
 //
-// Either way the running server is recorded in .wrangler/dev-server.json ({pid, port, baseUrl,
-// startedAt, detached}) once `/version` answers — what `status`, `kill` and getin read. The record
-// stays after the server stops: it is how a worktree keeps its port. Without `--port`, the port is this
+// Either way the server holds .wrangler/dev-server.lock from before its build until it exits (one
+// per worktree: a second is refused, a second `start --detach` waits for the first), and is recorded
+// in .wrangler/dev-server.json ({pid, port, baseUrl, startedAt, detached}) once `/version` answers —
+// what `status`, `kill` and getin read. The record stays after the server stops: it is how a
+// worktree keeps its port. Without `--port`, the port is this
 // worktree's last recorded one, else 8788, else any free one — so two worktrees each keep their
 // own, and the one that gets 8788 matches the Dash's documented `.dev.vars`
 // (`ITERATE_ORIGIN=http://localhost:8788`).
-import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer, type AddressInfo } from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -29,6 +39,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const stateDir = path.join(root, ".wrangler");
 const recordPath = path.join(stateDir, "dev-server.json");
 const logPath = path.join(stateDir, "dev.log");
+const lockPath = path.join(stateDir, "dev-server.lock");
 
 const [command, ...rest] = process.argv.slice(2).filter((argument) => argument !== "--");
 const commands: Record<string, (args: string[]) => Promise<void>> = {
@@ -36,11 +47,19 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     if (!args.includes("--detach")) return serve(args);
     const running = await runningServer();
     if (running) return console.log(`already running: ${describe(running)}`);
+    const starting = holder();
+    if (starting) return console.log(`running: ${describe(await readied(starting))}`);
     await startDetached(args.filter((argument) => argument !== "--detach"));
   },
   status: async () => {
     const running = await runningServer();
     if (running) return console.log(`running: ${describe(running)}`);
+    const starting = holder();
+    if (starting) {
+      console.log(`starting (pid ${starting})`);
+      process.exitCode = 1;
+      return;
+    }
     const last = readRecord();
     console.log(`not running${last ? ` (last on port ${last.port})` : ""}`);
     process.exitCode = 1;
@@ -50,27 +69,29 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     if (running && !running.detached)
       throw new Error(`${describe(running)} runs attached: its output is in its own terminal`);
     if (!existsSync(logPath)) throw new Error(`no log at ${logPath}: \`pnpm dev start --detach\``);
+    const pid = holder();
     console.error(
-      running
-        ? `following ${describe(running)} — Ctrl-C detaches, the server keeps running`
+      pid
+        ? `following pid ${pid} — Ctrl-C detaches, the server keeps running`
         : `not running; the last log:`,
     );
     // `tail -F` follows by inotify/kqueue, and on through a restart's truncation
-    const tail = spawn("tail", ["-n", "100", ...(running ? ["-F"] : []), logPath], {
+    const tail = spawn("tail", ["-n", "100", ...(pid ? ["-F"] : []), logPath], {
       stdio: "inherit",
     });
     process.on("SIGINT", () => tail.kill("SIGINT"));
     await new Promise((resolve) => tail.on("exit", resolve));
   },
   kill: async () => {
-    const running = await runningServer();
-    if (!running) return console.log("not running");
-    await stop(running.pid);
-    console.log(`stopped pid ${running.pid}; port ${running.port} is free`);
+    // a starting server too: the lock's holder, whether or not it answers yet
+    const pid = holder();
+    if (!pid) return console.log("not running");
+    await stop(pid);
+    console.log(`stopped pid ${pid}`);
   },
   restart: async (args) => {
-    const running = await runningServer();
-    if (running) await stop(running.pid);
+    const pid = holder();
+    if (pid) await stop(pid);
     // without --port, `defaultPort` takes the recorded one, free again
     await startDetached(args);
   },
@@ -83,11 +104,7 @@ await (command && command in commands ? commands[command]!(rest) : serve(process
  *  answers. A detached one's `startDetached` hears "ready" over IPC. */
 async function serve(argv: string[]) {
   const args = argv.filter((argument) => argument !== "--");
-  const running = await runningServer();
-  if (running)
-    throw new Error(
-      `this worktree's dev server is already running (${describe(running)}): \`pnpm dev attach\` or \`pnpm dev kill\``,
-    );
+  acquire();
   const portIndex = args.indexOf("--port");
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : await defaultPort();
   const viteArgs = portIndex >= 0 ? args : [...args, "--port", `${port}`];
@@ -153,6 +170,46 @@ async function startDetached(args: string[]) {
   console.log(`running: ${describe(outcome.ready)}`);
 }
 
+/** Take .wrangler/dev-server.lock for this process's life: created exclusively (`wx`), before the
+ *  build, so two `pnpm dev`s in one worktree — two `getin`s at once, say — cannot both start a
+ *  workerd on its state, the second finding the first before it answers. */
+function acquire() {
+  const held = holder();
+  if (held)
+    throw new Error(
+      `this worktree's dev server is already running or starting (pid ${held}): \`pnpm dev attach\` or \`pnpm dev kill\``,
+    );
+  mkdirSync(stateDir, { recursive: true });
+  // throws EEXIST when another took it since `holder()` looked
+  writeFileSync(lockPath, `${process.pid}`, { flag: "wx" });
+  process.on("exit", () => {
+    if (holder() === process.pid) rmSync(lockPath);
+  });
+}
+
+/** The pid of this worktree's `serve` — starting or running — from the lock, when that process is
+ *  still a dev.ts: a lock a killed server left behind (SIGKILL runs no exit handler) goes, rather
+ *  than naming a pid the system has since reused. */
+function holder() {
+  if (!existsSync(lockPath)) return null;
+  const pid = Number(readFileSync(lockPath, "utf8"));
+  const command = spawnSync("ps", ["-o", "command=", "-p", `${pid}`], { encoding: "utf8" }).stdout;
+  if (command.includes(path.join("scripts", "dev.ts"))) return pid;
+  rmSync(lockPath, { force: true });
+  return null;
+}
+
+/** Wait for a server another `start --detach` is starting to answer, or to give up. */
+async function readied(pid: number) {
+  console.log(`waiting for the dev server (pid ${pid}) to answer …`);
+  for (;;) {
+    const running = await runningServer();
+    if (running) return running;
+    if (holder() !== pid) throw new Error(`the dev server pid ${pid} exited before answering`);
+    await sleep(500);
+  }
+}
+
 /** SIGTERM the server's process group (a detached one leads its own; an attached one's `serve`
  *  forwards the signal to vite), SIGKILL whatever is left after 10s. */
 async function stop(pid: number) {
@@ -191,11 +248,11 @@ type DevServer = {
   detached: boolean;
 };
 
-/** The recorded server, when its process is alive and it answers `/version` (not some other
+/** The recorded server, when it still holds the lock and answers `/version` (not some other
  *  process that inherited the pid or the port). */
 async function runningServer() {
   const record = readRecord();
-  if (!record || !alive(record.pid)) return null;
+  if (!record || record.pid !== holder()) return null;
   const response = await fetch(`${record.baseUrl}/version`).catch(() => null);
   return response?.ok ? record : null;
 }
