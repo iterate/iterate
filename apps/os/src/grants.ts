@@ -15,6 +15,7 @@ import {
   oauthHelpers,
   parseAuthorization,
   revokeGrant,
+  TOKEN_ENDPOINT,
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
@@ -103,6 +104,11 @@ export class GrantsRpcTarget extends RpcTarget {
       oauthHelpers(env, this.#addresses).listUserGrants(session.sub, { limit: 50, cursor }),
       accountStateOf(env, session.sub),
     ]);
+    const { api, mcp } = this.#addresses;
+    const resourceNames = new Map<string, GrantRecord["resource"]>([
+      [api, "api"],
+      [mcp, "mcp"],
+    ]);
     const items = page.items.flatMap((grant): GrantRecord[] => {
       if (account.endedGrants[grant.id]) return [];
       const metadata = DisplayMetadata.parse(grant.metadata ?? {});
@@ -122,6 +128,7 @@ export class GrantsRpcTarget extends RpcTarget {
               : metadata.tokenKind === "personal"
                 ? "personal"
                 : "session",
+          resource: resourceNames.get(String(grant.resource)),
           createdAt: grant.createdAt * 1000,
           expiresAt,
           lastUsedAt: account.grantUses[grant.id]?.at ?? null,
@@ -261,7 +268,7 @@ export class GrantsRpcTarget extends RpcTarget {
     const response = await authorizationServerFetch(
       env,
       this.#addresses,
-      new Request(`${issuer}/oauth2/token`, {
+      new Request(`${issuer}${TOKEN_ENDPOINT}`, {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "authorization_code",
@@ -284,10 +291,14 @@ export class GrantsRpcTarget extends RpcTarget {
       })
       .parse(await response.json());
     // The provider's access token is `<userId>:<grantId>:<secret>` (oauth-provider.ts): the grant's
-    // id is its middle — the only place the mint learns it. The fact of the mint, on the account.
+    // id is its middle — the only place the mint learns it. (`unwrapToken` would read the token
+    // back from KV, where a write is only usually visible at once.) A token of any other shape fails
+    // the mint rather than record the grant under a wrong id. The fact of the mint, on the account.
     // Best-effort and async (session.ts `publishPlatformFacts`): the provider is the truth for the
     // grant, this is the person's record of it.
-    const [, grantId = ""] = tokens.access_token.split(":");
+    const [tokenUserId, grantId] = tokens.access_token.split(":");
+    if (tokenUserId !== session.sub || !grantId)
+      throw new Error("The provider's access token is not `<userId>:<grantId>:<secret>`.");
     publishPlatformFacts(
       {
         contextNamespace: this.#env.ITERATE_CONTEXT,

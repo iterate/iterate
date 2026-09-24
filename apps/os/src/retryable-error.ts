@@ -8,3 +8,12 @@
  *  throw is not a transport failure. */
 export const isRetryableTransportError = (error: unknown): boolean =>
   (error as { retryable?: unknown } | null)?.retryable === true;
+
+/** A transport failure a DEPLOY caused: every deploy resets the platform's Durable Objects for their
+ *  new code, and workerd fails each call in flight with this message. Expected on every deploy
+ *  under traffic, so a retry it causes is no platform failure (scripts/ci/prd-fault-alarm.ts, which
+ *  excludes the same message from its errors). */
+export const isDeployReset = (error: unknown): boolean =>
+  isRetryableTransportError(error) &&
+  error instanceof Error &&
+  error.message.includes("Durable Object reset because its code was updated");

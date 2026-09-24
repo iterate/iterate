@@ -1,25 +1,31 @@
 // src/oauth-store.test.ts — the provider's store over a fake control plane: a grant call cut at the
-// transport (what a deploy's reset of the control plane's Durable Object does to a call in flight)
-// is asked once more, on a fresh stub, and logged as a platform failure the prd fault alarm counts.
+// transport is asked once more, on a fresh stub. A deploy's reset of the control plane's Durable
+// Object is expected; any other cut is logged as a platform failure the prd fault alarm counts.
 import { expect, onTestFinished, test, vi } from "vitest";
 import { providerStore } from "./oauth-store.ts";
 
-test("a grant read cut at the transport is asked once more on a fresh stub, and logged as a platform failure", async () => {
-  const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => {
-    warns.mockRestore();
-  });
-  const store = storeOver([
-    () => Promise.reject(transportCut()),
-    () => Promise.resolve('{"id":"g1"}'),
-  ]);
-  expect(await store.get("grant:user_a:g1", { type: "json" })).toEqual({ id: "g1" });
-  expect(warns).toHaveBeenCalledExactlyOnceWith({
-    event: "oauth.platform-failure-grant-store-retry",
-    name: "grant-store-get",
-    message: expect.stringContaining("Durable Object reset"),
-  });
-});
+test.each([
+  ["Durable Object reset because its code was updated.", "oauth.deploy-reset-grant-store-retry"],
+  ["Network connection lost.", "oauth.platform-failure-grant-store-retry"],
+])(
+  "a grant read cut at the transport (%s) is asked once more on a fresh stub, and logged as %s",
+  async (message, event) => {
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => {
+      warns.mockRestore();
+    });
+    const store = storeOver([
+      () => Promise.reject(transportCut(message)),
+      () => Promise.resolve('{"id":"g1"}'),
+    ]);
+    expect(await store.get("grant:user_a:g1", { type: "json" })).toEqual({ id: "g1" });
+    expect(warns).toHaveBeenCalledExactlyOnceWith({
+      event,
+      name: "grant-store-get",
+      message: `Error: ${message}`,
+    });
+  },
+);
 
 test("a second cut throws: the grant store never retries twice", async () => {
   const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -57,9 +63,8 @@ function storeOver(answers: (() => Promise<string>)[]) {
   });
 }
 
-/** What workerd throws for a call a Durable Object reset cut (retryable-error.ts). */
-function transportCut() {
-  return Object.assign(new Error("Durable Object reset because its code was updated."), {
-    retryable: true,
-  });
+/** What workerd throws for a call cut at the transport (retryable-error.ts): by default, a deploy's
+ *  reset of the Durable Object. */
+function transportCut(message = "Durable Object reset because its code was updated.") {
+  return Object.assign(new Error(message), { retryable: true });
 }

@@ -150,6 +150,15 @@ export default {
 
     const appConfig = appConfigOf(env);
     const { deployId } = appConfig;
+    // A blank `urls.os` (a self-host, SELF-HOSTING.md) makes each request's own origin the
+    // platform's, and OAuth takes no plain-http issuer or resource but a loopback one (the library
+    // throws building them): a plain-http request goes to its HTTPS origin first.
+    if (
+      !appConfig.urls.os &&
+      url.protocol === "http:" &&
+      !/^(localhost|127(\.\d{1,3}){3}|\[::1\])$/.test(url.hostname)
+    )
+      return Response.redirect(`https://${url.host}${url.pathname}${url.search}`, 308);
     if (appConfig.urls.mcp && url.origin === appConfig.urls.mcp) {
       // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
       if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))

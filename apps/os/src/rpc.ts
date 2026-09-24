@@ -4,7 +4,7 @@ import type { Env } from "./env.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { GrantsRpcTarget } from "./grants.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
+import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 import { authorizationForToken, grantIsLive, recordGrantUse, type Authorization } from "./oauth.ts";
 import {
   IterateRpcTarget,
@@ -145,13 +145,17 @@ export async function rpcResponse(
         until = Math.min(started + 60_000, grant.expiresAt);
         schedule(authorization, grant);
       } catch (error) {
-        // A RETRYABLE READ is asked again, not a lost session: every deploy resets the control
-        // plane's Durable Object, and the call it cut is a retryable transport error. The
-        // retry is bounded by the deadline above — the grant stays good only until `until`, so a
-        // read that keeps failing ends the session there, "Session authorization expired".
+        // A RETRYABLE READ is asked again, not a lost session: every deploy resets the Durable
+        // Objects the tick reads (the person's account, the control plane), and the call it cut is
+        // a retryable transport error — expected, where any other cut is a platform failure the
+        // prd fault alarm counts. The retry is
+        // bounded by the deadline above — the grant stays good only until `until`, so a read that
+        // keeps failing ends the session there, "Session authorization expired".
         if (isRetryableTransportError(error) && !stopped) {
           console.warn({
-            event: "oauth.platform-failure-live-authorization-retry",
+            event: isDeployReset(error)
+              ? "oauth.deploy-reset-live-authorization-retry"
+              : "oauth.platform-failure-live-authorization-retry",
             name: "live-authorization",
             grantId: grant.grantId,
             message: String(error),

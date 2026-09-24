@@ -4,7 +4,10 @@ import { platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import type { Env, Handler } from "./env.ts";
 import {
   authorizationServerFetch,
+  CLIENT_REGISTRATION_ENDPOINT,
+  logRefusal,
   recordGrantUse,
+  TOKEN_ENDPOINT,
   validateToken,
   type Authorization,
 } from "./oauth.ts";
@@ -14,8 +17,8 @@ import { mcpResponse } from "./mcp.ts";
 /** The authorization server's own endpoints (oauth.ts), on the platform origin. */
 const AUTHORIZATION_SERVER_PATHS = new Set([
   "/.well-known/oauth-authorization-server",
-  "/oauth2/token",
-  "/oauth2/register",
+  TOKEN_ENDPOINT,
+  CLIENT_REGISTRATION_ENDPOINT,
 ]);
 
 /** THE PLATFORM'S OAUTH ROUTES: `/api` and `/mcp`, each a protected resource of the authorization
@@ -87,7 +90,10 @@ function resourceServer(
     },
     handler: {
       fetch(request, env, ctx) {
-        if (!ctx.auth.scope.includes("iterate")) return insufficientScope(ctx.auth, ["iterate"]);
+        if (!ctx.auth.scope.includes("iterate")) {
+          logRefusal(resource, "insufficient_scope");
+          return insufficientScope(ctx.auth, ["iterate"]);
+        }
         if (ctx.props.grant) ctx.waitUntil(recordGrantUse(env, ctx.props.grant));
         return serve(request, env, ctx, ctx.props);
       },

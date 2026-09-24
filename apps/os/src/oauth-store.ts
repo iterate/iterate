@@ -27,7 +27,7 @@
 //   • It calls these four members only, in the shapes below.
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
+import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 
 const GRANT_KEY_PREFIX = "grant:";
 
@@ -37,16 +37,19 @@ const GRANT_KEY_PREFIX = "grant:";
 export function providerStore(env: Pick<Env, "CONTROL_PLANE" | "OAUTH_KV">): KVNamespace {
   const kv = env.OAUTH_KV;
   const controlPlane = new ControlPlane(env.CONTROL_PLANE);
-  /** Asked again ONCE when the call was cut at the transport: every deploy resets the control
-   *  plane's Durable Object, and edge.ts replaces the stub the cut call threw from. Each operation
-   *  is idempotent (a read, or a whole-row write or delete); a second failure throws. */
+  /** Asked again ONCE when the call was cut at the transport, and edge.ts replaces the stub the cut
+   *  call threw from. Each operation is idempotent (a read, or a whole-row write or delete); a second
+   *  failure throws. A deploy's reset of the control plane's Durable Object is expected; any other
+   *  cut is a platform failure, which the prd fault alarm counts. */
   const ask = async <T>(operation: string, call: () => Promise<T>): Promise<T> => {
     try {
       return await call();
     } catch (error) {
       if (!isRetryableTransportError(error)) throw error;
       console.warn({
-        event: "oauth.platform-failure-grant-store-retry",
+        event: isDeployReset(error)
+          ? "oauth.deploy-reset-grant-store-retry"
+          : "oauth.platform-failure-grant-store-retry",
         name: `grant-store-${operation}`,
         message: String(error),
       });

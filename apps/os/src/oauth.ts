@@ -116,32 +116,48 @@ export async function grantIsLive(env: Env, grant: AccessGrant): Promise<boolean
  *  authorization server issued for `resource` (audience-checked, its props decrypted) whose grant
  *  is still live, else the operator's bearer. The props are the platform's `Authorization` — what
  *  the resource's handler reads as `ctx.props`. Null refuses the bearer (the resource server's 401
- *  challenge). The operator's bearer is no token of this server's: like any other credential a
- *  resource accepts on its own terms (the library's docs/resource-servers.md, "Another issuer, at
- *  your own risk"), it is accepted at both resources, with every scope. */
+ *  challenge), logged as an `oauth.refusal` like the authorization server's own (`onError`). The
+ *  operator's bearer is no token of this server's: a static credential accepted at both resources
+ *  with every scope — at `/mcp` outside the MCP authorization profile (the library's
+ *  docs/advanced-configuration.md, "MCP compatibility warning"). */
 export async function validateToken(
   env: Env,
   addresses: PlatformAddresses,
   resource: string,
   token: string,
 ) {
-  const validated = await authorizationServer(env, addresses).validateToken(
-    resource,
-    token,
-    providerEnv(env),
-  );
+  const libraryToken = new TextEncoder().encode(token).byteLength <= LIBRARY_TOKEN_MAX_BYTES;
+  const validated = libraryToken
+    ? await authorizationServer(env, addresses).validateToken(resource, token, providerEnv(env))
+    : null;
   if (validated) {
     const authorization = await authorizationOf(env, validated);
-    return authorization && { ...validated, props: authorization };
-  }
-  if (!(await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret())))
+    if (authorization) return { ...validated, props: authorization };
+    logRefusal(resource, "grant_not_live");
     return null;
-  return {
-    props: { principal: { actor: "admin" }, reach: "every", grant: null } satisfies Authorization,
-    audience: resource,
-    scope: [...OAuthScope.options],
-  };
+  }
+  if (await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret()))
+    return {
+      props: { principal: { actor: "admin" }, reach: "every", grant: null } satisfies Authorization,
+      audience: resource,
+      scope: [...OAuthScope.options],
+    };
+  // Why the library said no, read again only now: a token it holds for the other resource, or none.
+  const held = libraryToken && (await oauthHelpers(env, addresses).unwrapToken(token));
+  logRefusal(resource, held ? "audience_mismatch" : "token_unknown_or_expired");
+  return null;
 }
+
+/** A bearer the resource refused, as the authorization server's refusals are logged (`onError`):
+ *  its category and the check that failed. */
+export function logRefusal(resource: string, reason: string) {
+  console.warn({ event: "oauth.refusal", category: "protected-resource", reason, resource });
+}
+
+/** The longest bearer the library is asked about. Its tokens are about 90 characters, and it looks
+ *  one up by a KV key made of the bearer's own parts: past KV's 512-byte key limit the lookup
+ *  throws, which would answer a stranger's bearer with a 503 and a reported issue. */
+const LIBRARY_TOKEN_MAX_BYTES = 256;
 
 /** A bearer as `/api` admits it, where no resource server's handler runs: a project host's bearer,
  * a bare socket's in-band `authenticate` (rpc.ts), a browser session's held token (browser-client.ts).
@@ -152,7 +168,10 @@ export async function authorizationForToken(
   addresses: PlatformAddresses,
 ): Promise<Authorization | null> {
   const validation = await validateToken(env, addresses, addresses.api, token);
-  return validation?.scope.includes("iterate") ? validation.props : null;
+  if (!validation) return null;
+  if (validation.scope.includes("iterate")) return validation.props;
+  logRefusal(addresses.api, "insufficient_scope");
+  return null;
 }
 
 /** How often a grant's use is recorded: once an hour per grant per isolate, so the account's log
@@ -218,6 +237,12 @@ export async function revokeGrant(
   }
 }
 
+/** The authorization server's endpoints on the platform origin (api.ts routes the token and
+ *  registration endpoints to it; the authorize endpoint is the issuer's consent page). */
+const AUTHORIZE_ENDPOINT = "/oauth2/auth";
+export const TOKEN_ENDPOINT = "/oauth2/token";
+export const CLIENT_REGISTRATION_ENDPOINT = "/oauth2/register";
+
 /** THE AUTHORIZATION SERVER at `addresses` (the library's role-based API, its
  *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's two resources, `/api`
  *  (Cap'n Web) and `/mcp` — each hosted in this worker by api.ts. Every grant and access token is
@@ -227,19 +252,20 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAdd
   return new OAuthAuthorizationServer<Env>({
     issuer: platformOrigin,
     resources: [api, mcp],
-    authorizeEndpoint: "/oauth2/auth",
-    tokenEndpoint: "/oauth2/token",
+    authorizeEndpoint: AUTHORIZE_ENDPOINT,
+    tokenEndpoint: TOKEN_ENDPOINT,
     // DCR is served on every deployment (not just local http): CIMD stays the apps' own path
     // (iterate/app-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
-    clientRegistrationEndpoint: "/oauth2/register",
+    clientRegistrationEndpoint: CLIENT_REGISTRATION_ENDPOINT,
     clientIdMetadataDocumentEnabled: true,
     scopesSupported: OAuthScope.options,
     refreshTokenTTL: SESSION_IDLE_SECONDS,
     refreshTokenIdleTTL: SESSION_IDLE_SECONDS,
     tokenExchangeCallback: (input) => grantLifetime(env, input),
     // Each refusal by the check that failed (`internal`, the library's
-    // docs/advanced-configuration.md "The internal reason"); the wire stays generic.
+    // docs/advanced-configuration.md "The internal reason"); the wire stays generic. `detail` is
+    // context such as a caught error or a client metadata document's fetch failure, never a secret.
     onError: ({ code, status, internal }) => {
       console.warn({
         event: "oauth.refusal",
@@ -247,6 +273,7 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAdd
         status,
         category: internal.category,
         reason: internal.reason,
+        detail: internal.detail instanceof Error ? String(internal.detail) : internal.detail,
       });
     },
   });
@@ -274,8 +301,9 @@ async function authorizationOf(
  *  "Sliding expiry"). A grant whose end is on the person's account, or past its `deadline`, is
  *  refused. A personal token never refreshes: its one access token, and the grant with it, live
  *  until its deadline (30 days by default, up to ten years for a device — grants.ts `mint`). Every
- *  other grant lives `SESSION_IDLE_SECONDS` unused, never past its deadline: 30 days after the
- *  sign-in or consent that made it. */
+ *  other grant lives a week unused (the server's `refreshTokenTTL` and `refreshTokenIdleTTL`), and
+ *  within a week of its deadline, 30 days after the sign-in or consent that made it, only until
+ *  that deadline. */
 async function grantLifetime(
   env: Env,
   input: TokenExchangeCallbackOptions,
@@ -300,12 +328,12 @@ async function grantLifetime(
       throw refused("personal_token_refresh", "Personal tokens cannot refresh.");
     return { accessTokenProps, accessTokenTTL: remaining, refreshTokenTTL: remaining };
   }
-  const lifetime = Math.min(SESSION_IDLE_SECONDS, remaining);
+  if (remaining >= SESSION_IDLE_SECONDS) return { accessTokenProps };
   // The library honors `refreshTokenTTL` only at the code exchange and `refreshTokenIdleTTL` only at
   // a refresh, and refuses either key anywhere else.
   return input.grantType === GrantType.AUTHORIZATION_CODE
-    ? { accessTokenProps, refreshTokenTTL: lifetime }
-    : { accessTokenProps, refreshTokenIdleTTL: lifetime };
+    ? { accessTokenProps, refreshTokenTTL: remaining }
+    : { accessTokenProps, refreshTokenIdleTTL: remaining };
 }
 
 /** The env the provider runs over: the worker's, with `OAUTH_KV` the provider's store

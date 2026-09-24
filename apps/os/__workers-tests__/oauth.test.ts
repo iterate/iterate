@@ -106,6 +106,15 @@ test("the configured header bearer is the same administrator at both protocols",
   expect(await tool("wrong", "run", { project: "x", script: "async () => 1" })).toMatchObject({
     status: 401,
   });
+  // a bearer too long to be a token is refused unread: the library's lookup key would pass KV's
+  // 512-byte limit, and KV throws (a stranger's 503)
+  const long = `user_${"x".repeat(600)}:grant:secret`;
+  expect(await call("/api", { headers: { Authorization: `Bearer ${long}` } })).toMatchObject({
+    status: 401,
+  });
+  expect(await tool(long, "run", { project: "x", script: "async () => 1" })).toMatchObject({
+    status: 401,
+  });
 });
 
 test("a grant is bound to the one resource it asked for: its token opens that alone, within membership and its project ceiling", async () => {
@@ -114,8 +123,19 @@ test("a grant is bound to the one resource it asked for: its token opens that al
   expect(flow.token).toBeDefined();
   const token = flow.token!.access_token;
   const mcpToken = (await grant([`${ORIGIN}/mcp`])).token!.access_token;
-  // an /api token is no /mcp token, nor the reverse (RFC 8707: one audience per token)
+  // an /api token is no /mcp token, nor the reverse (RFC 8707: one audience per token), and the
+  // refusal is logged with the check that failed
+  const warns = vi.spyOn(console, "warn");
+  onTestFinished(() => {
+    warns.mockRestore();
+  });
   expect(await tool(token, "run", { script: "async () => 1" })).toMatchObject({ status: 401 });
+  expect(warns).toHaveBeenCalledWith({
+    event: "oauth.refusal",
+    category: "protected-resource",
+    reason: "audience_mismatch",
+    resource: `${ORIGIN}/mcp`,
+  });
   expect(
     await call("/api", {
       method: "POST",
@@ -235,7 +255,9 @@ test("a refresh a second after the code exchange reads the grant the exchange wr
 // (pluggable storage providers, a Durable Object adapter among them) proposes the fix. The exit: when
 // the library ships storage with strongly consistent grants, give this server that option. It then
 // passes, `createFailing` turns the row red, and src/oauth-store.ts and
-// src/control-plane/oauth-grants.ts are deleted.
+// src/control-plane/oauth-grants.ts are deleted. #312 keeps KV the default, so the row cannot turn
+// red by itself: the `storage` line below is the signal — the day the library has the option, the
+// directive is unused and the typecheck fails, pointing here.
 createFailing(
   test,
   /a refresh right after the code exchange should succeed: \{"error":"invalid_grant","error_description":"Invalid refresh token"\}/,
@@ -248,6 +270,8 @@ createFailing(
       resources: [`${ORIGIN}/api`],
       authorizeEndpoint: "/oauth2/auth",
       tokenEndpoint: "/oauth2/token",
+      // @ts-expect-error — no storage option yet (upstream #312): set it to the strongly consistent one
+      storage: undefined,
     });
     const oauth = server.getOAuthApi(env);
     const client = await oauth.createClient({
@@ -550,14 +574,23 @@ test("a live session rides out a deploy's Durable Object reset during its re-che
         }),
       ),
     );
+  const warns = vi.spyOn(console, "warn");
   onTestFinished(() => {
     membershipReads.mockRestore();
+    warns.mockRestore();
   });
   // Real elapsed time: the 30 s tick meets the reset, and its retry 2 s later reads through.
   await new Promise((resolve) => setTimeout(resolve, 34_000));
   const reads = membershipReads.mock.calls.length; // mockRestore clears the record
   membershipReads.mockRestore();
   expect(reads).toBeGreaterThanOrEqual(2);
+  // a deploy's reset is expected, never a platform failure the prd fault alarm counts
+  expect(warns).toHaveBeenCalledWith({
+    event: "oauth.deploy-reset-live-authorization-retry",
+    name: "live-authorization",
+    grantId: flow.token!.access_token.split(":")[1],
+    message: "Error: Durable Object reset because its code was updated.",
+  });
   expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
   await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers
 });
@@ -798,6 +831,10 @@ test("console and project browsers use the same CIMD flow and independent grants
     await expect(
       consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
     ).rejects.toThrow(/at least a minute/);
+    const refusals = vi.spyOn(console, "warn");
+    onTestFinished(() => {
+      refusals.mockRestore();
+    });
     expect(
       await call("/oauth2/token", {
         method: "POST",
@@ -808,6 +845,17 @@ test("console and project browsers use the same CIMD flow and independent grants
         }),
       }),
     ).toMatchObject({ status: 400 });
+    // the token is an access token, which the library refuses as a refresh token before any
+    // lifetime policy runs (the mint discards the grant's refresh token): logged as that refusal
+    expect(refusals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "oauth.refusal",
+        status: 400,
+        category: "refresh-token-grant",
+        reason: "refresh_token_mismatch",
+      }),
+    );
+    refusals.mockRestore();
     const inventory = await consoleLogin.root.grants.list();
     const [, personalId] = personal.token.split(":");
     expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({

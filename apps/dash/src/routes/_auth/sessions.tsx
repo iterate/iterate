@@ -1,9 +1,9 @@
 // /sessions: every OAuth grant the signed-in user holds (browsers, connected apps, personal access
 // tokens), each endable on its own, and the one place a personal access token is minted: a name,
 // the projects it may reach and the one resource it is for → `api.grants.mint` → the token, shown
-// ONCE (it is a finite provider
-// access token, never stored readable). The list is one page of `grants.list(cursor)` — the route's
-// loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it.
+// ONCE (it is a finite provider access token, never stored readable). The list is one page of
+// `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end invalidates
+// the router, which reloads it.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
@@ -181,7 +181,15 @@ function SessionsPage() {
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>{GRANT_KIND_LABELS[item.kind]}</TableCell>
+                <TableCell>
+                  {GRANT_KIND_LABELS[item.kind]}
+                  {item.resource && (
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {item.resource === "mcp" ? "MCP" : "API"}
+                    </span>
+                  )}
+                </TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
                 </TableCell>
