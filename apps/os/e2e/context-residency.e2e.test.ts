@@ -100,7 +100,7 @@ test("a run whose script returned a live value does not keep its context residen
 // A FACET reaches its own context the other way round: through the SDK's `withItx` on the loopback
 // entrypoint — the repo facet's `itx.cfArtifacts.get(path).remote()`, the collection's
 // `itx.cd(path)…waitForEvent`. A step such a round trip left holding the context's session kept
-// facet → ItxEntrypoint → context resident UNTIL THE NEXT DEPLOY (every project an os-next preview's
+// facet → ItxEntrypoint → context resident UNTIL THE NEXT DEPLOY (every project an apps/os preview's
 // e2e run created stayed billed for hours, 2026-09-21/22); the context now ends that session with
 // the call. What `withItx` leaves undisposed keeps the FACET running instead, so it releases every
 // call (the rows at the bottom).

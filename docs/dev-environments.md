@@ -362,7 +362,7 @@ job that hangs until its timeout counts as red. The full mutating proof is each
 PR's preview.
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**
-drives isolate-ceiling rows against prd (`os-next-crash-hunt.yml`), the hourly
+drives isolate-ceiling rows against prd (`os-crash-hunt.yml`), the hourly
 **DO duration probe** watches Durable Object cost, the 15-minute **prd fault
 alarm** reads production's Workers Logs for 5xx and error bursts, and the
 dispatch-only **OS e2e soak** runs the suite N times against one deployed
@@ -421,7 +421,7 @@ DEMO_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- 
 The soak runs sequentially and writes `output/soak/summary.json` plus a table:
 a row that fails once in a hundred is a flake, a row that fails every time is a
 bug. All requested runs complete, so the summary preserves the failure rate.
-Run it from CI (`os-next-e2e-soak.yml`) when the result matters: from a laptop
+Run it from CI (`os-e2e-soak.yml`) when the result matters: from a laptop
 the OAuth-cookie rows answer 401, an unexplained laptop-side difference.
 
 ### Story 3: pin a PR to a preview
@@ -432,7 +432,7 @@ To run a PR's operations by hand, dispatch the workflow with its number:
 
 ```bash
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow preview-os-next.yml --ref <branch> \
+  --workflow preview-os.yml --ref <branch> \
   --input pull-request-number=1234 --input action=reset
 ```
 

@@ -31,7 +31,7 @@ export function e2eWorkerConfig(
   const {
     rawConfig: { env: _deployments, ...rawConfig },
   } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "dist/server/wrangler.json") });
-  if (rawConfig.name !== "os-next-local-build")
+  if (rawConfig.name !== "os-local-build")
     throw new Error(
       `local e2e needs a local Vite build (found ${rawConfig.name}); run pnpm e2e to rebuild first`,
     );

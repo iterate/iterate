@@ -10,7 +10,7 @@
 //   3. No merge commit at all (the pull request conflicts with main) means the run tests the head
 //      alone, and says so.
 //
-// .depot/workflows/preview-os-next.yml runs this right after checking out the head, before anything
+// .depot/workflows/preview-os.yml runs this right after checking out the head, before anything
 // is installed, so it needs no dependencies: node runs it with its own type stripping. It checks the
 // tested commit out in place and hands its SHA to the jobs after deploy, which check out that same
 // SHA (GitHub serves a test merge commit by SHA after main has moved on and the ref with it).

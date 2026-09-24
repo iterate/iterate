@@ -24,7 +24,7 @@ organization token and its scope caveat, and CLI/MCP queries.
   `prd-fault-alarm.yml`), not in a gate on the merge path.
 - A scheduled run reports on main's head commit, so an alarm stays green unless it is broken: it
   pages and passes, and fails only when it could not measure or could not post. The nightly crash
-  hunt (`os-next-crash-hunt.yml`) is the exception: a crash it finds is a red run, and the red run
+  hunt (`os-crash-hunt.yml`) is the exception: a crash it finds is a red run, and the red run
   is what posts to #error-pulse.
 - A job that only runs on a schedule lives in a schedule-only workflow, so no push or PR carries it
   as a skipped check (`scripts/ci/depot-workflows.test.ts` enforces it).
@@ -69,18 +69,18 @@ does not support, belongs there too.
 | `test.yml`                   | PR, main push                                       | **Test** (required): `pnpm test`, then the Kit firmware host tests                   |
 | `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                         |
 | `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                       |
-| `preview-os-next.yml`        | PR touching the preview paths, dispatch             | **Preview OS**: the PR's preview, its e2e job and the CI trace                       |
+| `preview-os.yml`             | PR touching the preview paths, dispatch             | **Preview OS**: the PR's preview, its e2e job and the CI trace                       |
 | `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                             |
 | `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews and orphaned preview resources                                |
 | `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: a throwaway preview of main, e2e and specs, delete, alert           |
-| `deploy-os-next.yml`         | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                               |
+| `deploy-os.yml`              | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                               |
 | `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Production deploy of Dash, Agents, Notes, Voice, Kit, SPA or dummy-petshop           |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                             |
 | `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch | Bakes the CI image ([Custom Image](#custom-image))                                   |
 | `do-duration-probe.yml`      | Hourly, dispatch                                    | Durable Object cost alarm for both Cloudflare accounts                               |
 | `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                          | Reads production's Workers Logs and pages #error-pulse on faults                     |
-| `os-next-crash-hunt.yml`     | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                   |
-| `os-next-e2e-soak.yml`       | Dispatch                                            | The e2e suite N times against one deployed worker                                    |
+| `os-crash-hunt.yml`          | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                   |
+| `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker                                    |
 | `flake-dashboard.yml`        | Hourly, dispatch                                    | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580) |
 | `ci-telemetry.yml`           | Dispatch                                            | GitHub, Depot and review-bot telemetry (delivers nothing while PostHog is off)       |
 | `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                |
@@ -237,7 +237,7 @@ the file basename, not the full path.
 
 ```bash
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow preview-os-next.yml \
+  --workflow preview-os.yml \
   --ref <branch> \
   --input pull-request-number=<pr-number> \
   --input action=deploy
@@ -245,7 +245,7 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 
 `action` is `deploy | reset | e2e` and `apps` is
 `all | auto | none` (the clients on top of the platform preview); the header of
-`.depot/workflows/preview-os-next.yml` documents each. Deleting a PR's preview
+`.depot/workflows/preview-os.yml` documents each. Deleting a PR's preview
 and the nightly preview sweep are workflows of their own: dispatch
 `preview-delete.yml` (`--input pull-request-number=<pr-number>`) to delete one
 now, `preview-sweep.yml` (no inputs) to sweep now.
@@ -254,7 +254,7 @@ Deploy a branch manually:
 
 ```bash
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow deploy-os-next.yml \
+  --workflow deploy-os.yml \
   --ref <branch> \
   --input ref=<branch>
 ```
@@ -292,7 +292,7 @@ Mainline workflows deliberately separate deployment safety from validation
 freshness:
 
 - A credentialed deploy uses one fixed concurrency group named for its actual
-  destination, such as `deploy-os-next-production`. It always sets
+  destination, such as `deploy-os-production`. It always sets
   `cancel-in-progress: false`. The checked-out branch is not the destination,
   so it must not appear in that group name. An active rollout finishes; if
   several newer commits queue behind it, Depot keeps the newest pending run.
@@ -426,7 +426,7 @@ can two workflows that name the same group: Depot wakes "a peer workflow in the
 same concurrency group" when the slot frees
 ([Depot's orchestrator](https://depot.dev/blog/building-ci-with-durable-lambda)),
 as GitHub does. For the Preview OS workflow, a manual dispatch, an automatic PR
-run and the Preview delete run for the same PR share `preview-os-next-<pr>` with
+run and the Preview delete run for the same PR share `preview-os-<pr>` with
 `cancel-in-progress: false`: neither cancels the running one, but a newer
 pending run replaces an older pending one, so a dispatch queued behind a push
 can silently disappear. When validating previews, use one path at a time.
@@ -437,7 +437,7 @@ find the exact job/attempt id.
 
 ## Which PRs get a preview
 
-The Preview OS workflow (`.depot/workflows/preview-os-next.yml`, cribbed from
+The Preview OS workflow (`.depot/workflows/preview-os.yml`, cribbed from
 cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
 `configs-next`, the five hosted clients (`apps/dash`, `apps/agents`,
 `apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `specs` and

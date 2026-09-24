@@ -93,7 +93,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     exports: { BrowserSession: { type: "durable-object" as const, storage: "sqlite" as const } },
     vars: {
       // the default issuer: prd's platform origin (envs.ts always has a prd entry); a per-PR preview's
-      // config swaps in the same PR's os-next preview (startAppPreviewConfig), and local dev takes a
+      // config swaps in the same PR's apps/os preview (startAppPreviewConfig), and local dev takes a
       // local one from a gitignored .dev.vars
       ITERATE_ORIGIN: osEnvs.prd!.baseUrl,
       // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
@@ -235,7 +235,7 @@ export function buildStartApp(app: StartApp, env: string) {
  *  of the built config (dist/server/wrangler.json, the `preview` env's) — the shape of
  *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
  *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
- *  and its vars with the issuer swapped for the same PR's os-next preview. The top level is
+ *  and its vars with the issuer swapped for the same PR's apps/os preview. The top level is
  *  the parent worker (what `wrangler preview` branches from; deployed from this same config the
  *  first time it is missing) with the class as a legacy `migrations` entry, because the pkg.pr.new
  *  wrangler build that provisions previews predates `exports`; the `previews` block is the one
@@ -253,7 +253,7 @@ export function startAppPreviewConfig(
       observability: config.observability,
       durable_objects: config.durable_objects,
       // Every var the built worker carries (ITERATE_DENY_ZONES among them), the issuer swapped for this
-      // PR's os-next preview.
+      // PR's apps/os preview.
       vars: { ...config.vars, ITERATE_ORIGIN: input.issuer },
     },
   };

@@ -1,4 +1,4 @@
-// Prd post-deploy check (deploy-os-next.yml, the deploy job's step right after every prd deploy): wait
+// Prd post-deploy check (deploy-os.yml, the deploy job's step right after every prd deploy): wait
 // (≤ 60 s) for `/version` to name a version other than the one live before the deploy, so the hosts
 // are read on the new one, then one GET of each production project host, four tries 10 s apart while
 // it looks down. A `/version` that never moves, or a host still answering 421 or 5xx or not at all,

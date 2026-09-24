@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "os-next",
+  "name": "os",
   // Vite builds the Worker from this entry. scripts/build.ts first prepares generated source the
   // Worker imports; vite.config.ts combines these bindings with one environment from envs.ts.
   "main": "src/worker.ts",
@@ -48,7 +48,7 @@
   "send_email": [{ "name": "EMAIL" }],
   // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
   // a deployment's bucket is `<resourceNamePrefix>-files` (envs.ts, ensure-resources).
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-next-files" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-files" }],
   // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
   // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
   // A namespace is created by name through the API (`POST /accounts/<id>/artifacts/namespaces`; a

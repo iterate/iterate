@@ -93,7 +93,7 @@ const workspaceDirectories = (
 describe("Depot deployment safety", () => {
   test("finds the production deploy workflows", () => {
     expect(deploymentWorkflows.map(({ app }) => app)).toEqual(
-      expect.arrayContaining(["os-next", "dash", "agents", "notes", "voice", "kit", "spa"]),
+      expect.arrayContaining(["os", "dash", "agents", "notes", "voice", "kit", "spa"]),
     );
   });
 
@@ -123,8 +123,7 @@ describe("Depot deployment safety", () => {
       const workspaceByName = new Map(
         workspaceDirectories.map((directory) => [readPackageJson(directory).name, directory]),
       );
-      const workspaceApp = app === "os-next" ? "os" : app;
-      const packageJson = readPackageJson(`apps/${workspaceApp}`);
+      const packageJson = readPackageJson(`apps/${app}`);
       const workspaceDependencies = Object.entries({
         ...packageJson.dependencies,
         ...packageJson.devDependencies,
@@ -135,14 +134,14 @@ describe("Depot deployment safety", () => {
       expect(loadWorkflow(file).on?.push?.paths).toEqual(
         expect.arrayContaining([
           file,
-          `apps/${workspaceApp}/**`,
+          `apps/${app}/**`,
           ...workspaceDependencies.map((directory) => `${directory}/**`),
         ]),
       );
     },
   );
 
-  test.each(deploymentWorkflows.filter(({ app }) => app !== "os-next"))(
+  test.each(deploymentWorkflows.filter(({ app }) => app !== "os"))(
     "$file does not redeploy for the platform's source, which no client imports",
     ({ file }) => {
       expect(triggers(loadWorkflow(file).on?.push?.paths ?? [], "apps/os/src/worker.ts")).toBe(
@@ -168,8 +167,8 @@ describe("Depot deployment safety", () => {
     expect(triggers(paths, "apps/spa/public/index.html")).toBe(true);
   });
 
-  test("deploy-os-next.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {
-    const paths = loadWorkflow(".depot/workflows/deploy-os-next.yml").on?.push?.paths ?? [];
+  test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {
+    const paths = loadWorkflow(".depot/workflows/deploy-os.yml").on?.push?.paths ?? [];
     const shipped = ["apps/os/src", "apps/os/public"].flatMap((directory) =>
       readdirSync(resolve(repoRoot, directory), { recursive: true, withFileTypes: true })
         .filter((entry) => entry.isFile() && !entry.name.endsWith(".test.ts"))
@@ -210,7 +209,7 @@ describe("Depot deployment safety", () => {
 
   test.each(
     deploymentWorkflows.filter(({ app }) =>
-      ["os-next", "dash", "agents", "notes", "voice", "kit"].includes(app),
+      ["os", "dash", "agents", "notes", "voice", "kit"].includes(app),
     ),
   )("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
     const workflow = loadWorkflow(file);
@@ -231,7 +230,7 @@ describe("Depot deployment safety", () => {
   });
 
   test("runs OS and Notes stateful proofs only against an isolated preview", () => {
-    const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
+    const preview = loadWorkflow(".depot/workflows/preview-os.yml");
     const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
     for (const { file } of deploymentWorkflows) {
@@ -247,7 +246,7 @@ describe("Depot deployment safety", () => {
     }
     expect(preview.on?.pull_request?.paths).toEqual(
       expect.arrayContaining([
-        ".depot/workflows/deploy-os-next.yml",
+        ".depot/workflows/deploy-os.yml",
         ".depot/workflows/deploy-notes.yml",
         // the root Playwright suite (specs/AGENTS.md) runs only here
         "specs/**",
@@ -314,7 +313,7 @@ describe("Depot credential boundaries", () => {
       },
     },
     {
-      file: ".depot/workflows/preview-os-next.yml",
+      file: ".depot/workflows/preview-os.yml",
       permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
     },
     {
@@ -326,7 +325,7 @@ describe("Depot credential boundaries", () => {
       permissions: { contents: "read", "pull-requests": "read" },
     },
     {
-      file: ".depot/workflows/deploy-os-next.yml",
+      file: ".depot/workflows/deploy-os.yml",
       permissions: { contents: "read", deployments: "write" },
     },
     {
@@ -466,8 +465,8 @@ describe("Depot validation capacity", () => {
   });
 
   test.for([
-    { file: ".depot/workflows/preview-os-next.yml", jobId: "deploy" },
-    { file: ".depot/workflows/preview-os-next.yml", jobId: "e2e" },
+    { file: ".depot/workflows/preview-os.yml", jobId: "deploy" },
+    { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
     { file: ".depot/workflows/preview-sweep.yml", jobId: "sweep" },
     { file: ".depot/workflows/preview-delete.yml", jobId: "delete" },
   ])("$file $jobId starts from the baked workspace", ({ file, jobId }) => {
@@ -558,7 +557,7 @@ describe("Depot validation capacity", () => {
 
   // A job of Preview OS that ran only on `closed` was a skipped check on every push to an open PR.
   test("a closed PR's preview is deleted by its own workflow, in that PR's preview group", () => {
-    const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
+    const preview = loadWorkflow(".depot/workflows/preview-os.yml");
     const workflow = loadWorkflow(".depot/workflows/preview-delete.yml");
 
     expect(preview.on?.pull_request?.types).not.toContain("closed");
@@ -691,7 +690,7 @@ describe("Depot validation capacity", () => {
   test.each([
     { file: ".depot/workflows/test.yml", jobId: "test", group: "unit", suites: ["unit"] },
     {
-      file: ".depot/workflows/preview-os-next.yml",
+      file: ".depot/workflows/preview-os.yml",
       jobId: "e2e",
       group: "preview",
       suites: ["specs", "preview-e2e"],
@@ -740,7 +739,7 @@ describe("Depot validation capacity", () => {
   );
 
   test("the preview e2e job keeps the browser evidence, whatever the suite's outcome", () => {
-    const steps = loadWorkflow(".depot/workflows/preview-os-next.yml").jobs.e2e?.steps ?? [];
+    const steps = loadWorkflow(".depot/workflows/preview-os.yml").jobs.e2e?.steps ?? [];
     const playwrightConfig = readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8");
     const suite = steps.find((step) => step.run?.includes("pnpm preview e2e"));
     const results = steps.find((step) => step.with?.name === "preview-os-test-artifacts");
@@ -778,7 +777,7 @@ describe("Depot validation capacity", () => {
 
   test.each([
     [".depot/workflows/test.yml", "test"],
-    [".depot/workflows/preview-os-next.yml", "e2e"],
+    [".depot/workflows/preview-os.yml", "e2e"],
   ])("%s finalizes test telemetry under the canonical PostHog project", (file, jobId) => {
     const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),

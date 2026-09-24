@@ -29,13 +29,13 @@ on:
   push:
     branches: [main]
     paths:
-      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
-      - .depot/workflows/preview-os-next.yml
+      - .depot/workflows/preview-os.yml
       - .depot/workflows/main-os-e2e.yml
       - apps/os/**
       - configs-next/**

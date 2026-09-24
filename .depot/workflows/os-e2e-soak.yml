@@ -1,7 +1,7 @@
 # THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (a preview of
 # main by default, `pnpm preview deploy --name soak`) and tally every row that did not pass every time
 # (apps/os/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
-#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-next-e2e-soak.yml \
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input worker-base-url=https://soak-os-next-preview.iterate-dev-preview.workers.dev
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
 # difference), and CI is the environment whose flakes matter.
@@ -74,6 +74,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: os-next-e2e-soak
+          name: os-e2e-soak
           path: apps/os/output/soak
           if-no-files-found: warn

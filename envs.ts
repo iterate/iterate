@@ -41,7 +41,7 @@ export interface KitEnv {
 
 export const kitEnvs = {
   // THE PARENT of kit's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its
   // data. A preview lists and flashes the same GitHub releases as production
   // (apps/kit/src/firmware/releases.ts).
   preview: {
@@ -180,7 +180,7 @@ export const osEnvs: Record<string, OsEnv> = {
  *  platform at os.iterate.com, on a custom domain (dash.iterate.com). */
 export const dashEnvs = {
   // THE PARENT of dash's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -199,7 +199,7 @@ export const dashEnvs = {
 /** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
 export const agentsEnvs = {
   // THE PARENT of agents's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -217,7 +217,7 @@ export const agentsEnvs = {
 
 export const notesEnvs = {
   // THE PARENT of notes's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -237,7 +237,7 @@ export const notesEnvs = {
 
 export const voiceEnvs = {
   // THE PARENT of voice's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -270,7 +270,7 @@ export const spaEnvs = {
   },
 };
 
-/** apps/dummy-petshop — the fake third party os-next's tests connect to over the real network (a
+/** apps/dummy-petshop — the fake third party apps/os's tests connect to over the real network (a
  *  plain Worker, no Start). Production only: its workers.dev origin, no routes, no DNS. */
 export interface DummyPetshopEnv {
   cloudflareAccountId: string;

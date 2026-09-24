@@ -1330,8 +1330,8 @@ test("a failed deploy is red at its completion and e2e never ran", () => {
 });
 
 test.each([
-  ["preview-os-next.yml:e2e", "e2e"],
-  ["preview-os-next.yml:deploy", "deploy"],
+  ["preview-os.yml:e2e", "e2e"],
+  ["preview-os.yml:deploy", "deploy"],
   ["preview.yml:preview:playwright:matrix-2", "playwright:matrix-2"],
   ["preview.yml:preview:finish", "finish"],
 ])("%s is job %s of its workflow", (jobKey, key) => {
@@ -1403,7 +1403,7 @@ function previewWorkflow(cleanupStatus: string) {
 function osPreviewWorkflow() {
   const job = (key: string, status: string, startedAt: number, finishedAt: number) => ({
     jobId: key,
-    jobKey: `preview-os-next.yml:${key}`,
+    jobKey: `preview-os.yml:${key}`,
     status,
     attempts:
       status === "skipped"
@@ -1421,7 +1421,7 @@ function osPreviewWorkflow() {
   return {
     workflowId: "os-preview",
     workflowName: "Preview OS",
-    workflowPath: "preview-os-next.yml",
+    workflowPath: "preview-os.yml",
     repo: "iterate/iterate",
     headSha: "head",
     sha: "merge",

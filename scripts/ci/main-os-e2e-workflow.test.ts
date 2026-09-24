@@ -19,7 +19,7 @@ type MainWorkflow = {
 };
 
 const main = readWorkflow("main-os-e2e.yml") as MainWorkflow;
-const preview = readWorkflow("preview-os-next.yml") as {
+const preview = readWorkflow("preview-os.yml") as {
   on: { pull_request: { paths: string[] } };
 };
 
@@ -27,7 +27,7 @@ test("runs on every main push a PR preview would run for, one run at a time, nev
   expect(main.on.push?.branches).toEqual(["main"]);
   expect(main.on.push?.paths).toEqual(
     expect.arrayContaining(
-      preview.on.pull_request.paths.filter((path) => !path.includes("preview-os-next.yml")),
+      preview.on.pull_request.paths.filter((path) => !path.includes("preview-os.yml")),
     ),
   );
   // every started run reaches delete and alert; Depot keeps only the newest pending push

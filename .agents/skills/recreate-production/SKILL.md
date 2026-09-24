@@ -1,11 +1,11 @@
 ---
 name: recreate-production
-description: Capture or restore a selected OS Next project after a deliberate production data erase.
+description: Capture or restore a selected project after a deliberate production data erase.
 ---
 
 # Recreate a production project
 
-Use this skill only for a deliberate OS Next recovery. Read
+Use this skill only for a deliberate production recovery. Read
 [Project recovery seeds](../../../apps/os/docs/project-seeds.md) before acting. A seed is a
 semantic snapshot of one project, not a database dump.
 

@@ -32,7 +32,7 @@ import {
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
-import { buildOsNext } from "./build.ts";
+import { buildOs } from "./build.ts";
 import {
   APPS,
   changedApps,
@@ -133,7 +133,7 @@ function run(
 /** The wrangler a run uses: the pinned draft build (WRANGLER_PACKAGE) installed into a tmpdir the
  *  way cloudflare-os does it (pnpm, exotic subdeps allowed for the pkg.pr.new workspace packages). */
 function preparePreviewWrangler() {
-  const installDir = mkdtempSync(path.join(tmpdir(), "os-next-preview-wrangler-"));
+  const installDir = mkdtempSync(path.join(tmpdir(), "os-preview-wrangler-"));
   writeFileSync(
     path.join(installDir, "package.json"),
     JSON.stringify({ private: true, dependencies: { wrangler: WRANGLER_PACKAGE } }),
@@ -192,7 +192,7 @@ async function github<T = unknown>(route: string, init: { method?: string; body?
       headers: {
         accept: "application/vnd.github+json",
         authorization: `Bearer ${requireEnv("GITHUB_TOKEN")}`,
-        "user-agent": "os-next-preview",
+        "user-agent": "os-preview",
         ...(init.body !== undefined && { "content-type": "application/json" }),
       },
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -400,14 +400,14 @@ async function deleteR2Bucket(cf: Cf, bucketName: string) {
 const isMissingWorkerError = (output: string) =>
   /This Worker does not exist on your account|code"?:\s*10007/i.test(output);
 
-/** The preview's URL, known before anything deploys (the same rule as os-next's). */
+/** The preview's URL, known before anything deploys (the same rule as apps/os's). */
 const appPreviewUrl = (app: StartApp, previewName: string) =>
   `https://${previewName}-${new URL(app.envs.preview!.baseUrl).hostname}`;
 
 /** A config that names a parent worker and nothing else: enough for `wrangler preview delete`
  *  and the sweep, on a checkout that never built anything. */
 function writeParentConfig(parent: { workerName: string; cloudflareAccountId: string }) {
-  const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-parent-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "os-preview-parent-"));
   const file = path.join(dir, "wrangler.json");
   writeFileSync(
     file,
@@ -416,7 +416,7 @@ function writeParentConfig(parent: { workerName: string; cloudflareAccountId: st
   return file;
 }
 
-/** Build the app for the `preview` env, write its preview config with this PR's os-next preview
+/** Build the app for the `preview` env, write its preview config with this PR's apps/os preview
  *  as the issuer, and branch a preview off the app's parent — deploying the parent from the same
  *  config the first time it is missing, as cloudflare-os's `deployBaselineWorker` does. */
 async function deployAppPreview(
@@ -486,7 +486,7 @@ async function changedPaths(prNumber: string | undefined) {
     .filter(Boolean);
 }
 
-/** `wrangler preview delete` of one preview of `parent` — os-next's or an app's. One that never
+/** `wrangler preview delete` of one preview of `parent` — apps/os's or an app's. One that never
  *  existed — a PR closed before its first deploy, a re-run of the cleanup job, the sweep racing the
  *  close job, a parent never deployed — is the expected case, not a failure. */
 async function deleteWorkerPreview(
@@ -528,7 +528,7 @@ async function deleteWorkerPreview(
  *  through a 0600 tmp file, never argv or the config. */
 async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
   const secrets = collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
-  const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-secrets-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "os-preview-secrets-"));
   const file = path.join(dir, "secrets.json");
   try {
     writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
@@ -618,7 +618,7 @@ async function deployOsPreview(
         `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
       );
     }
-    // os-next's smoke is `/version` naming the new deployment (src/worker.ts); propagation was
+    // apps/os's smoke is `/version` naming the new deployment (src/worker.ts); propagation was
     // observed at a few seconds.
     await smokeResponse(
       `${url}/version`,
@@ -640,14 +640,14 @@ async function deployPreview(
   apps: StartApp[],
 ) {
   assertFreshInstall();
-  // The apps' vite builds run beside os-next's build, their rejection handlers attached at once: OS
-  // Next's build and deployment can take minutes, and an app build may fail before its result is
+  // The apps' vite builds run beside apps/os's build, their rejection handlers attached at once:
+  // apps/os's build and deployment can take minutes, and an app build may fail before its result is
   // consumed. Each step is a span in the CI trace (docs/ci-traces.md), so the deploy step shows
   // where its time went.
   const appBuilds = Promise.allSettled(
     apps.map((app) => traceOperation(`Build ${app.name}`, () => buildStartApp(app, "preview"))),
   );
-  await traceOperation("Build OS", () => buildOsNext("preview"));
+  await traceOperation("Build OS", () => buildOs("preview"));
   const appBuildResults = await appBuilds;
   const failedBuilds = appBuildResults.flatMap((result, index) =>
     result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
@@ -703,7 +703,7 @@ async function deletePreview(cf: Cf, previewName: string, wrangler: string) {
     await deleteR2Bucket(cf, previewResourceName(previewName, suffix));
 }
 
-/** os-next's preview and everything it owned, then every app on top's preview (whether or not it
+/** apps/os's preview and everything it owned, then every app on top's preview (whether or not it
  *  exists). */
 async function deleteAll(cf: Cf, previewName: string) {
   const wrangler = preparePreviewWrangler();
@@ -801,7 +801,7 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
     const response = await fetch(`https://api.github.com/repos/${repository()}/pulls/${number}`, {
       headers: {
         accept: "application/vnd.github+json",
-        "user-agent": "os-next-preview-sweep",
+        "user-agent": "os-preview-sweep",
         ...(process.env.GITHUB_TOKEN && { authorization: `Bearer ${process.env.GITHUB_TOKEN}` }),
       },
     });
@@ -915,7 +915,7 @@ async function sweep(cf: Cf, dryRun: boolean) {
   console.log(
     `${previews.length} preview(s) on ${PREVIEW_PARENT.workerName}; ${resources.length} KV namespaces, R2 buckets, D1s and Artifacts namespaces to judge`,
   );
-  // An app's preview without an os-next preview of the same name is a leftover of a failed delete.
+  // An app's preview without an apps/os preview of the same name is a leftover of a failed delete.
   const appPreviews: { app: StartApp; name: string }[] = [];
   for (const app of APPS) {
     const parent = app.envs.preview!.workerName;
@@ -1087,7 +1087,7 @@ async function main(argv: string[]) {
   if (parsed.command === "delete-superseded")
     return deleteSupersededMainPreviews((await parentContext()).cf, previewName, parsed.dryRun);
   if (parsed.command === "config" || parsed.dryRun) {
-    await buildOsNext("preview");
+    await buildOs("preview");
     console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
     return;
   }

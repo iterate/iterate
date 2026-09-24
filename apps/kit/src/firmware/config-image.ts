@@ -109,7 +109,7 @@ export function encodeDeviceConfiguration(
         name: "project id",
         value: configuration.iterate.projectId,
         maxBytes: projectIdMaxBytes,
-        /* A SLUG, WITH NO PREFIX TO INSIST ON: on os-next a project's id IS
+        /* A SLUG, WITH NO PREFIX TO INSIST ON: on the platform a project's id IS
          * its DNS-safe slug, and `projects.get` validates exactly this set. */
         validate: (value) => /^[A-Za-z0-9_-]+$/.test(value),
       },

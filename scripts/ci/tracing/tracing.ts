@@ -590,7 +590,7 @@ export function assembleTrace(
 }
 
 /**
- * A job's key inside its workflow file: `preview-os-next.yml:e2e` → `e2e`. The legacy preview called
+ * A job's key inside its workflow file: `preview-os.yml:e2e` → `e2e`. The legacy preview called
  * a reusable workflow, whose jobs were `preview.yml:preview:<job>`.
  */
 export function jobKeyInWorkflow(jobKey: string) {

@@ -1,6 +1,6 @@
 # Interactive CI traces
 
-The Preview OS workflow's `trace` job (`.depot/workflows/preview-os-next.yml`)
+The Preview OS workflow's `trace` job (`.depot/workflows/preview-os.yml`)
 collects a trace once its `deploy` and `e2e` jobs have settled, whatever their
 outcome. `scripts/ci/tracing/cli.ts current` reads the run from Depot and writes
 `trace.html` and `trace.json`; the job uploads them as the

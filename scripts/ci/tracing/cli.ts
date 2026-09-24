@@ -5,7 +5,7 @@ import { getOctokit } from "../github.ts";
 import { assembleTrace, jobKeyInWorkflow, Workflow, renderTrace, stepCommands } from "./tracing.ts";
 
 /** The workflows whose runs are traced: the per-PR preview's deploy and e2e jobs. */
-const TRACED_WORKFLOWS = ["preview-os-next.yml"];
+const TRACED_WORKFLOWS = ["preview-os.yml"];
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {

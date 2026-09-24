@@ -168,7 +168,7 @@ export function renderPullRequestSection(input: {
   testedCommit?: string;
 }) {
   return [
-    `### os-next preview: \`${input.previewName}\``,
+    `### OS preview: \`${input.previewName}\``,
     "",
     `**${input.url}** · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
     "",
