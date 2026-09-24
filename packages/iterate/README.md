@@ -5,12 +5,32 @@ bindings, and OAuth app sessions, under `iterate/*`. The package exports source 
 workspace and compiled JavaScript with declarations when packed. The `iterate` command is
 [`@iterate-com/cli`](../cli/README.md).
 
+## The SDK/platform line
+
 The SDK holds what user code runs or speaks, and the platform is its first user: apps/os builds
-its own entities on `iterate/sdk`, and the first-party apps' code uses only `iterate/*` (lint
-refuses any import of apps/os from another app or package, apps/os's test harnesses aside). Code
-that only the platform's Worker runs stays in apps/os.
-Each subpath in `package.json`'s `exports` is one public module; nothing else is importable. The
-rule and its reasons: [the SDK/platform line](../../docs/2026-09-24-sdk-platform-line.md).
+its own entities on `iterate/sdk`, and the first-party apps' code uses only `iterate/*`. Each
+subpath in `package.json`'s `exports` is one public module; nothing else is importable.
+
+- A module belongs here when user code runs it or speaks it: a loaded worker, a facet, a
+  processor, a browser or Node client, or the wire contract between them and the platform. It
+  belongs in apps/os when only the platform's Worker runs it, and in packages/shared when more
+  than one app needs it and user code never does.
+- Outside apps/os, no package and no app imports apps/os. `import-js/no-restricted-paths` in
+  `.oxlintrc.json` resolves each import under `packages/**` and `apps/**` to a file, so type
+  imports, re-exports, dynamic `import()` and an app added later are covered, and
+  `lint/oxlintrc-platform-line.test.ts` pins it. Tests may import apps/os's two harnesses,
+  `apps/os/e2e/support/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform.
+- The one known exception: the git codec (`@iterate-com/shared/git-wire`) and the GitHub template
+  reader live in packages/shared, though only the platform's Worker runs them. packages/shared is
+  private, so they do not cross the line.
+- No private core package behind a thin `iterate`: apps/os would then import modules user code
+  cannot, and the SDK's types would have to be bundled or published anyway.
+
+Follow-ups: move the git codec and the template reader into `apps/os/src/repo/`, and type the test
+harnesses against `iterate/api`. The decision's reasons, and how workerd, the Agents SDK, Convex,
+Supabase, tRPC, Hono and Wrangler draw the same line:
+[the decision record](https://github.com/iterate/iterate/blob/d52a4e8e0f791c96b683fe178b56570532123c05/docs/2026-09-24-sdk-platform-line.md)
+(#3018).
 
 ## Reaching the context from loaded code
 
