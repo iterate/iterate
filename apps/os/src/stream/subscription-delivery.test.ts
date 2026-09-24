@@ -1386,6 +1386,69 @@ test("alarm claim: a HALTED row owes nothing, even if its persisted cursor carri
   expect(second).toMatchObject({ alarms: [] });
 });
 
+// ── a push the row's removal cut off is that outcome, never an issue ──
+
+test.for([
+  {
+    name: "a push in flight when its row is removed and its facet deleted (NO_FACET) is logged as the removal, never an issue",
+    rejection: codedError("NO_FACET", 'facet "gone" was deleted while this call was in flight'),
+    removed: true,
+    expected: { issues: [], removals: ["subscription-delivery.deliver"] },
+  },
+  {
+    name: "control: any other failure of that push is still an issue",
+    rejection: new Error("the facet threw"),
+    removed: true,
+    expected: { issues: ["subscription-delivery.deliver"], removals: [] },
+  },
+  {
+    name: "control: NO_FACET on a row still in place addresses a facet no longer hosted — neither",
+    rejection: codedError("NO_FACET", 'no facet "gone" — load a class into it first'),
+    removed: false,
+    expected: { issues: [], removals: [] },
+  },
+])("$name", async ({ rejection, removed, expected }) => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const parked: ((reason: unknown) => void)[] = [];
+  const rig = incarnation(
+    () =>
+      new FacetHandle(([call]) =>
+        Array.isArray(call) && call[0] === "processEventBatch"
+          ? new Promise<void>((_, reject) => parked.push(reject))
+          : Promise.resolve(),
+      ),
+  );
+  const configure = (target: ItxExpression | null) =>
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "gone", target, consumes: ["blob"] },
+        },
+        "/",
+      ),
+    );
+  configure(facetTarget("gone"));
+  await drainDeliveries();
+  rig.stream.append({ type: "blob", payload: {} });
+  await drainDeliveries();
+  if (removed) configure(null);
+  parked.shift()!(rejection);
+  await drainDeliveries();
+  const events = (spy: typeof log, event: string) =>
+    spy.mock.calls
+      .map(([line]) => line as { event?: string; failureSite?: string })
+      .filter((line) => line.event === event)
+      .map((line) => line.failureSite);
+  expect({
+    issues: events(error, "issue"),
+    removals: events(log, "delivery.facet-removed-in-flight"),
+  }).toEqual(expected);
+  error.mockRestore();
+  log.mockRestore();
+});
+
 function nextMacrotask() {
   return new Promise((r) => setImmediate(r));
 }

@@ -11,7 +11,9 @@
 // deployed fact (workerd's harness cannot evict a context whose facet is live, workerd#6800): the
 // careless rows of e2e/context-residency.e2e.test.ts read the facet's own start across incarnations,
 // and the opt-in perf/context-residency.perf.test.ts times how long the platform keeps such a facet
-// running.
+// running. A reset is an abort and a start (facet-host.ts FACET_START_WATCHDOG_MS), of the facets
+// called since their last start only; why the start, and the birth's before its first write, is a
+// deployed fact too: e2e/facet-abort-storage-reset.e2e.test.ts.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -65,6 +67,26 @@ test("a context's birth resets its loaded facets that hold no claim, names them 
   for (const name of ["idle", "busy"])
     expect(await s.invoke(["itx", "facets", ["get", name], ["hello"]])).toEqual(expect.any(String));
   await s.invoke(["itx", "processors", ["claim", "busy", null]]);
+});
+
+test("a birth resets only the facets the last incarnation called: one no call reached since is left alone", async () => {
+  const ctx = "prj_facet_birth_reset_only_what_ran";
+  const s = stub(ctx);
+  expect(await s.invoke(["itx", "facets", ["get", "idle", spec], ["hello"]])).toEqual(
+    expect.any(String),
+  );
+  for (let i = 0; i < 2; i++) {
+    await releasePins(ctx);
+    await evictDurableObject(s);
+    await s.invoke(["itx", ["whoami"]]);
+  }
+  const { events } = (await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  const woken = events.filter((event) => event.type === "events.iterate.com/stream/woken");
+  expect(woken.map((event) => (event.payload as { facetsReset?: string[] }).facetsReset)).toEqual([
+    undefined,
+    ["idle"],
+    undefined,
+  ]);
 });
 
 test("a context still resident a quiet period after it materialized a loaded facet resets its unclaimed ones in place, on the alarm, and spares a claimed one", async () => {

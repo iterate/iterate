@@ -12,6 +12,10 @@
 //     instance.
 // The facet here hangs on a batch, on its first revive and on an armed catch-up, and would never
 // answer any of them: the abort from the host needs nothing from it. The context is not reset.
+// A push its row's REMOVAL cuts off (the facet deleted with the row, `ctx.facets.delete` failing the
+// call in flight with the runtime's "Facet was deleted.") is modeled the same way: NO_FACET, the
+// removal it raced, logged as `delivery.facet-removed-in-flight` — it was a
+// `subscription-delivery.deliver` issue per removal (measured 2026-09-24).
 //
 // Pinned in the `workers` vitest project because it needs the real facet runtime (`ctx.facets`,
 // its abort), a hosted processor SDK facet and the alarm on demand.
@@ -176,6 +180,33 @@ test("a catch-up hung on a facet that itx.facets.abort resets runs again on the 
 
 /** The processor enabled on `ctx` (`processors.enable` spelled raw, as in
  *  facet-push-timeout-heals.test.ts), its configure batch pushed; its probe and the log. */
+test("a push hung on a facet whose row is removed is that removal — logged, never an issue", async () => {
+  const ctx = "prj_facet_delete_cuts_its_push";
+  const { probe } = await hostedOn(ctx);
+  await stub(ctx).append({ type: "pin/hang" });
+  await until("the hanging push is on the facet", async () => (await probe()).seen.length === 2);
+  const errors = consoleErrors();
+  const logs = vi.spyOn(console, "log");
+  onTestFinished(() => {
+    logs.mockRestore();
+  });
+  await stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name, target: null },
+  });
+  const removal = await until("the cut-off push is logged as the removal", async () =>
+    logs.mock.calls
+      .flat()
+      .find((line) => JSON.stringify(line).includes('"delivery.facet-removed-in-flight"')),
+  );
+  expect(removal).toMatchObject({
+    name,
+    failureSite: "subscription-delivery.deliver",
+    message: `facet "${name}" was deleted while this call was in flight`,
+  });
+  expect(issueLines(errors)).toEqual([]);
+});
+
 async function hostedOn(ctx: string) {
   await stub(ctx).append({
     type: "events.iterate.com/stream/subscription-configured",

@@ -276,7 +276,9 @@ export class SubscriptionDelivery {
             targetOwnsProgress(state, row)
               ? this.#catchUpFacetRow(name, row)
               : this.#deliverFromCursor(name)
-          ).catch((error) => reportIssue("subscription-delivery.resume", error, { name }));
+          ).catch((error) =>
+            this.#reportFacetRowFailure("subscription-delivery.resume", name, row, error),
+          );
           break;
         }
         case "events.iterate.com/stream/subscription-configured": {
@@ -296,9 +298,10 @@ export class SubscriptionDelivery {
           if (targetOwnsProgress(state, row))
             this.#deliveryRecordFor(name).deliveryChain = this.#catchUpFacetRow(name, row).catch(
               (error) => {
-                // NO_FACET here is a disable that landed during the load — nothing to report.
-                if (errorCode(error) !== "NO_FACET")
-                  reportIssue("subscription-delivery.configured", error, { name });
+                // NO_FACET on the row still in place addresses a facet no longer hosted, as a push
+                // into it does (below).
+                if (errorCode(error) === "NO_FACET" && this.#isStillTheRow(name, row)) return;
+                this.#reportFacetRowFailure("subscription-delivery.configured", name, row, error);
               },
             );
           else if (row.afterOffset !== undefined)
@@ -578,14 +581,45 @@ export class SubscriptionDelivery {
         throw error;
       }
     } catch (error) {
-      // NO_FACET is a disable that landed under an in-flight push — the row is gone too.
       // NO_ITX_EXPRESSION_MATCH is a row that DANGLES (its rule removed, or not configured yet): it
-      // errors until the rule lands and revives with it, so a push into it is no issue per commit.
+      // errors until the rule lands and revives with it, so a push into it is no issue per commit;
+      // so is NO_FACET on a row still in place, which addresses a facet no longer hosted.
       // FACET_ABORTED is a reset someone asked for, its batch caught up above.
       const code = errorCode(error);
-      if (code !== "NO_FACET" && code !== "NO_ITX_EXPRESSION_MATCH" && code !== "FACET_ABORTED")
-        reportIssue("subscription-delivery.deliver", error, { name });
+      if (code === "NO_ITX_EXPRESSION_MATCH" || code === "FACET_ABORTED") return;
+      if (code === "NO_FACET" && this.#isStillTheRow(name, row)) return;
+      this.#reportFacetRowFailure("subscription-delivery.deliver", name, row, error);
     }
+  }
+
+  /** A facet row's delivery that failed: NO_FACET once the row is gone or replaced is the removal it
+   *  raced — a disable, a delete, the facet taken with its row (`ctx.facets.delete` fails a call in
+   *  flight, FacetHost `#call`) — an outcome, logged; anything else is an issue. */
+  #reportFacetRowFailure(
+    failureSite: string,
+    name: string,
+    row: Subscription,
+    error: unknown,
+  ): void {
+    if (errorCode(error) === "NO_FACET" && !this.#isStillTheRow(name, row)) {
+      console.log({
+        event: "delivery.facet-removed-in-flight",
+        namespace: "subscription-delivery",
+        failureSite,
+        name,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    reportIssue(failureSite, error, { name });
+  }
+
+  /** The row under `name` is still the one configured at `row`'s offset — neither removed nor replaced. */
+  #isStillTheRow(name: string, row: Subscription): boolean {
+    return (
+      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset ===
+      row.configuredAtOffset
+    );
   }
 
   /** The catch-up a timed-out push owes (above), or one an `itx.facets.abort` cut off: chained, so
@@ -595,7 +629,12 @@ export class SubscriptionDelivery {
     const record = this.#deliveryRecordFor(name);
     record.deliveryChain = record.deliveryChain.then(() =>
       this.#catchUpFacetRow(name, row).catch((error) =>
-        reportIssue("subscription-delivery.catch-up-after-timeout", error, { name }),
+        this.#reportFacetRowFailure(
+          "subscription-delivery.catch-up-after-timeout",
+          name,
+          row,
+          error,
+        ),
       ),
     );
   }

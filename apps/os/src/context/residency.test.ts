@@ -84,13 +84,13 @@ test.for<{
       deadlines: { residencyWatchdog: null, unclaimedFacetSweep: T + 2 * SWEEP },
     },
   },
-])("$name", ({ midway, expected }) => {
+])("$name", async ({ midway, expected }) => {
   const fixture = residencyFixture();
   fixture.residency.armUnclaimedFacetSweep();
   vi.setSystemTime(T + SWEEP / 2);
   midway(fixture);
   vi.setSystemTime(T + SWEEP);
-  fixture.residency.alarmPassStarted(Date.now());
+  await fixture.residency.alarmPassStarted(Date.now());
   expect({
     resets: fixture.facetResets.length,
     deadlines: fixture.residency.deadlines(),
@@ -125,12 +125,12 @@ test("the alarm's overdue watch hears when the first inbound call starts and the
   });
 });
 
-test("watchdog: a quiet window records the incarnation once, and never arms again", () => {
+test("watchdog: a quiet window records the incarnation once, and never arms again", async () => {
   const fixture = residencyFixture();
   fixture.state.liveFacetNames = ["agent"];
   fixture.residency.inboundCallInOneTurn();
   vi.setSystemTime(T + W);
-  fixture.residency.alarmPassStarted(Date.now());
+  await fixture.residency.alarmPassStarted(Date.now());
   fixture.residency.inboundCallInOneTurn();
   expect({
     appended: fixture.appended,
@@ -225,10 +225,10 @@ test("pins: the test-only release runs now and cancels the pending timer", () =>
   expect(fixture).toMatchObject({ released: { count: 1 } });
 });
 
-test("birth reset: the facets it reset are named on the wake record, and logged", () => {
+test("birth reset: the facets it reset are named on the wake record, and logged", async () => {
   const fixture = residencyFixture();
   fixture.state.unclaimedLoadedFacets = ["site"];
-  fixture.residency.resetUnclaimedFacetsAtBirth();
+  await fixture.residency.resetUnclaimedFacetsAtBirth();
   expect({
     wakeRecordDetail: fixture.residency.wakeRecordDetail(),
     logged: fixture.log.mock.calls,
@@ -247,10 +247,10 @@ test("birth reset: the facets it reset are named on the wake record, and logged"
   });
 });
 
-test("birth reset: nothing reset adds nothing to the wake record", () => {
+test("birth reset: nothing reset adds nothing to the wake record", async () => {
   const fixture = residencyFixture();
   fixture.state.unclaimedLoadedFacets = [];
-  fixture.residency.resetUnclaimedFacetsAtBirth();
+  await fixture.residency.resetUnclaimedFacetsAtBirth();
   expect({
     wakeRecordDetail: fixture.residency.wakeRecordDetail(),
     logged: fixture.log.mock.calls,
@@ -286,10 +286,11 @@ function residencyFixture() {
     } as unknown as DurableObjectState,
     facetHost: {
       snapshot: () => ({ facetWorkInFlight: 0, liveFacetNames: state.liveFacetNames }),
-      resetUnclaimedLoadedFacets: () => {
+      resetUnclaimedLoadedFacets: async () => {
         facetResets.push(state.unclaimedLoadedFacets);
         return state.unclaimedLoadedFacets;
       },
+      startFacetsTheLastIncarnationRan: async () => state.unclaimedLoadedFacets,
     },
     rpcStubs: {
       hasBorrowedRpcStubs: () => state.borrowed,

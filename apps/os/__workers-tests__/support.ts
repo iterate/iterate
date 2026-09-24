@@ -175,7 +175,7 @@ export async function signedInSession(email: string): Promise<any> {
  *  references". You must release BEFORE you can evict. Run directly: in production the pins'
  *  30 s timer releases them, and a facet does not keep the actor resident on the edge (it runs on
  *  after it; the next incarnation's birth resets it when loaded and unclaimed — FacetHost
- *  `resetUnclaimedLoadedFacets`); a test that wants the alarm PASS itself fakes Date
+ *  `startFacetsTheLastIncarnationRan`); a test that wants the alarm PASS itself fakes Date
  *  and calls `runDurableObjectAlarm`. */
 export async function releasePins(ctx: string): Promise<void> {
   await runInDurableObject(stub(ctx), (instance) => {

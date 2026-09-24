@@ -102,8 +102,12 @@ interface StreamDeps {
    *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
   /** What the host adds to each incarnation's wake record (`appendWakeRecord`) — the DO: the loaded
-   *  facets its birth reset (FacetHost `resetUnclaimedLoadedFacets`), when there were any. */
+   *  facets its birth reset (FacetHost `startFacetsTheLastIncarnationRan`), when there were any. */
   wakeRecordDetail?: () => Record<string, unknown>;
+  /** The DO counts the incarnation itself (`storage.countIncarnation()`), once its birth started
+   *  the facets the last incarnation ran: until then the birth writes nothing (FacetHost
+   *  `startFacetsTheLastIncarnationRan`). Absent: counted as the stream is constructed. */
+  incarnationCountedByHost?: boolean;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
@@ -139,6 +143,7 @@ export class Stream {
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
+    if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
@@ -638,8 +643,8 @@ class StreamStorage {
   readonly #sql: SqlStorageHandle;
   /** The core reduce's checkpoint (processor.ts `ReduceCheckpointTable`), in this store. */
   readonly reduceCheckpoints: ReduceCheckpointTable;
-  /** This incarnation's number — the counter in `stream_meta`, bumped here: constructing the
-   *  storage IS an incarnation starting. Growth across idle ⇒ the actor hibernated. */
+  /** This incarnation's number — the counter in `stream_meta`, read here and bumped by
+   *  `countIncarnation`: an incarnation starting. Growth across idle ⇒ the actor hibernated. */
   readonly incarnation: number;
 
   constructor(storage: DurableObjectStorageSlice) {
@@ -677,6 +682,10 @@ class StreamStorage {
     }
     this.reduceCheckpoints = new ReduceCheckpointTable(this.#sql, { createTable: false });
     this.incarnation = (prior ? Number(prior.value) : 0) + 1;
+  }
+
+  /** This incarnation's number, written: the store's first write of an incarnation. */
+  countIncarnation(): void {
     this.#sql.exec(
       "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('incarnation', ?)",
       String(this.incarnation),

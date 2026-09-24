@@ -2,9 +2,10 @@
 // A facet is materialized from its startup memo (`facet:<name>` in kv) under a loaded identity whose
 // change restarts it in place, called under a watchdog, its answer copied out and the result object
 // disposed. The claims hosted processors make on the context's alarm (`processors.claim`) live here
-// with the backoff ladder of failed revives; the DO's alarm pass calls `reviveDueClaims`. The DO
-// wires the deps and forwards; nothing here reaches past `ctx.facets`, `ctx.storage.kv`,
-// `ctx.exports` and what it is handed.
+// with the backoff ladder of failed revives; the DO's alarm pass calls `reviveDueClaims`. A facet
+// the platform stops is started again at once, and a birth starts the ones the last incarnation
+// called (FACET_START_WATCHDOG_MS). The DO wires the deps and forwards; nothing here reaches past
+// `ctx.facets`, `ctx.storage.kv`, `ctx.exports`, `ctx.blockConcurrencyWhile` and what it is handed.
 //
 // TWO WAYS INTO A FACET, one call beneath both. A caller's itx expression reaches one only through
 // `handle` — what `itx.facets.get` hands out — whose every walk is checked against the methods the
@@ -61,6 +62,24 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
+/** WORKAROUND for a platform defect — e2e/facet-abort-storage-reset.e2e.test.ts (the measurements).
+ *  On the edge (never in local workerd), a facet whose SQLite database took a few dozen pages of
+ *  writes and then STOPS — aborted (`ctx.facets.abort`), or evicted with its context — makes one of
+ *  the context's next storage commits fail with "Internal error in Durable Object storage caused
+ *  object to be reset": the whole object resets, and every call in flight on it fails. Measured on
+ *  an os-preview preview: 40 rows of 2 KB, then an abort, 100 % of runs; the same facet evicted
+ *  with its context, then the next incarnation's calls, 100 %. The facet STARTED AGAIN before the
+ *  context commits anything more avoids it: after an abort, a start right after it and before any
+ *  other event (`#restart`); after an eviction, a start in the next incarnation's birth before its
+ *  first write (`startFacetsTheLastIncarnationRan`) — a start after that write does not. So the
+ *  platform never stops a facet without starting it again: every abort of its own is a `#restart`,
+ *  and a birth starts every facet the last incarnation ran (`facet-ran:<name>` rows). A start is
+ *  one call, `listPublicMethods`, under its own watchdog (a birth waits on it, and a birth that
+ *  outlasts 30 s resets the object); a start that fails is logged, never thrown. Remove when
+ *  the repro stops reproducing. */
+const FACET_START_WATCHDOG_MS = 10_000;
+/** Every call but a platform start: the call watchdog, and a facet that timed out started again. */
+const FACET_CALL_WATCHDOG = { watchdogMs: FACET_CALL_WATCHDOG_MS, restartOnTimeout: true };
 /** How long a context that materialized a loaded facet must go without activity from OUTSIDE the
  *  project's loaded code — an edge session, HTTP, MCP, a sibling's hop, a claim, an alarm pass that
  *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
@@ -88,8 +107,9 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
 
 type FacetHostDeps = {
   /** `ctx.facets` (the containers), `ctx.storage.kv` (memos, restart markers, restart counts,
-   *  claims), `ctx.exports` (the first-party classes). */
-  ctx: Pick<DurableObjectState, "facets" | "storage" | "exports">;
+   *  claims, what ran), `ctx.exports` (the first-party classes), `ctx.blockConcurrencyWhile` (a
+   *  restart, `#restart`). */
+  ctx: Pick<DurableObjectState, "facets" | "storage" | "exports" | "blockConcurrencyWhile">;
   /** What `prepareConfinedWorker` reads of the env: the Worker Loader. Read at call time, off the
    *  DO's own `env` field — a workerd test swaps that field for a counting loader
    *  (__workers-tests__/facet-class-loads-at-startup.test.ts). */
@@ -127,6 +147,8 @@ type MaterializedFacet = {
   retireLoadedIdentity?: () => void;
   startupFailed: () => boolean;
   generation: number;
+  /** A platform start's (`#start`): the `facet:<name>:loader-id` row it owes once the facet started. */
+  recordLoadedIdentity?: () => void;
 };
 
 export class FacetHost {
@@ -171,6 +193,15 @@ export class FacetHost {
   /** A loaded facet's `publicMethods`, by the startup memo it was asked under: the list belongs to
    *  the code the memo names, and a reconfigure or a removal replaces the memo. */
   readonly #publicMethodsByLoadedFacetStartupMemo = new WeakMap<FacetSpec, readonly string[]>();
+  /** Each loaded facet's identity as this incarnation last materialized it — ahead of its
+   *  `facet:<name>:loader-id` row while a restart under a new identity is starting it. */
+  readonly #loaderIdByName = new Map<string, string>();
+  /** The facets this incarnation called: each has its `facet-ran:<name>` row, written on its first
+   *  call — what the next birth starts before its first write, and what the sweep resets. */
+  readonly #ranThisIncarnation = new Set<string>();
+  /** The generation `#deleteFacet` ended, per facet: a call in flight on it rejects with the
+   *  runtime's "Facet was deleted.", answered NO_FACET (`#call`) — the outcome a removal is. */
+  readonly #deletedGeneration = new Map<string, number>();
 
   constructor(deps: FacetHostDeps) {
     this.#deps = deps;
@@ -210,6 +241,7 @@ export class FacetHost {
   claim(name: string, at: number | null): void {
     this.#facetRevived(name);
     this.#claimFacetAlarm(name, at);
+    this.#markRan(name); // a facet that claims, or releases, is running
   }
 
   /** The alarm pass's third job — THE DUE CLAIMS: each is spent first (a claim is one revive, never
@@ -248,54 +280,86 @@ export class FacetHost {
 
   /** `itx.facets.abort(name, reason)` (built-ins.ts, which records the fact right after): the facet
    *  RESET from here, the host — `ctx.facets.abort` needs nothing from the facet, so a class that is
-   *  no SDK host and one that would never answer a call reset alike. Its instance goes, and every
-   *  call in flight on it rejects FACET_ABORTED (`#call`); its storage and startup memo stay, so the
-   *  next call starts it fresh. A facet not running this incarnation has nothing to reset — the
-   *  call still answers, and the fact still lands. The core reduce is no facet; a name never hosted
-   *  here is NO_FACET. */
-  abort(name: string, reason: string | undefined): void {
+   *  no SDK host and one that would never answer a call reset alike — and started again at once
+   *  (`#restart`). Its instance goes, and every call in flight on it rejects FACET_ABORTED
+   *  (`#call`); its storage and startup memo stay. A facet not running this incarnation has nothing
+   *  to reset — it is started all the same, and the fact still lands. The core reduce is no facet; a
+   *  name never hosted here is NO_FACET. */
+  abort(name: string, reason: string | undefined): Promise<void> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee
     if (typeof name !== "string")
       throw new Error("itx.facets.abort(name, reason?): name the facet");
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — never a facet, nothing to abort`);
-    // A first-party name is always hostable; any other must have been hosted here (its memo, or the
-    // row that hosts it) — else NO_FACET, before anything is recorded.
-    if (!firstPartyFacetClassOf(name)) this.#facetStartupMemoFor(name, undefined);
-    const generation = this.#facetGeneration(name);
-    this.#abortFacetIfRunning(name, `facet "${name}" aborted${reason ? `: ${reason}` : ""}`);
-    this.#liveFacetNames.delete(name);
-    if (this.#facetGeneration(name) !== generation)
-      this.#abortedOnRequest.set(name, { generation, reason });
+    // A first-party name is hostable where it is placed; any other must have been hosted here (its
+    // memo, or the row that hosts it) — else NO_FACET, before anything is recorded.
+    if (firstPartyFacetClassOf(name))
+      assertFacetPlacement(name, { projectId: this.#deps.projectId, path: this.#deps.path });
+    else this.#facetStartupMemoFor(name, undefined);
+    return this.#restart(name, () => {
+      const generation = this.#facetGeneration(name);
+      this.#abortFacetIfRunning(name, `facet "${name}" aborted${reason ? `: ${reason}` : ""}`);
+      this.#liveFacetNames.delete(name);
+      if (this.#facetGeneration(name) !== generation)
+        this.#abortedOnRequest.set(name, { generation, reason });
+    });
   }
 
-  /** THE RESET OF UNCLAIMED LOADED FACETS — run by the DO at an incarnation's birth (its constructor,
-   *  before it serves anything) and when a context that materialized one has been quiet for
-   *  `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS` (the sweep on its alarm). A facet does NOT die with the
-   *  incarnation that started it: one that keeps any Workers-RPC value from its `env.ITX` (a stub,
-   *  an answer, plain data included) keeps running after its context is evicted, billed per
-   *  instance under the context's object, and the next incarnation's `facets.get` lands on that same
-   *  instance — its startup callback runs again all the same, so nothing tells the host the instance
-   *  is old (measured on a deployed preview, 2026-09-23). So every LOADED facet is reset here unless
-   *  it holds a CLAIM: work that must outlive the call that started it runs through the processor's
-   *  `runInBackground`, whose claim on this context's alarm (`processors.claim`) keeps the facet
-   *  running — an LLM attempt, its backoff, a live voice dial. The abort cannot tell a running facet
-   *  from a stopped one and costs neither anything (no wake, 0 ms); a running one ends, with its
-   *  billing, and its next call starts it from its startup memo. FIRST-PARTY facets keep no memo and
-   *  are never reset: the `secret` facet pumps a proxied socket with no claim, and the platform's own
-   *  classes release every round trip (`withItx`). Returns the names reset, whether or not each was
-   *  still running. */
-  resetUnclaimedLoadedFacets(): string[] {
-    const reset: string[] = [];
-    // The prefix holds a loaded facet's startup memo (`facet:<name>`, what names it here), its loaded
-    // identity (`:loader-id`) and any facet's restart count (`:restarts`).
-    for (const [key] of this.#deps.ctx.storage.kv.list({ prefix: "facet:" })) {
-      const name = key.slice("facet:".length);
-      if (name.endsWith(":loader-id") || name.endsWith(":restarts")) continue;
-      if (firstPartyFacetClassOf(name) || this.#facetClaims.has(name)) continue;
-      this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context quiet or reborn");
-      this.#liveFacetNames.delete(name); // cold from here: its next call starts it from its memo
-      reset.push(name);
+  /** THE BIRTH'S FIRST ACT, before this incarnation writes anything (the DO counts the incarnation
+   *  after it): every facet the last incarnation called (its `facet-ran:<name>` row) is STARTED, so
+   *  one it left evicted mid-write never meets this incarnation's first commit stopped (the platform
+   *  defect, FACET_START_WATCHDOG_MS). A loaded one holding no claim is RESET first — a facet does
+   *  NOT die with the incarnation that started it: one that keeps any Workers-RPC value from its
+   *  `env.ITX` (a stub, an answer, plain data included) keeps running after its context is
+   *  evicted, billed per instance under the context's object, and the next incarnation's
+   *  `facets.get` lands on that same instance (measured on a deployed preview, 2026-09-23). Work that
+   *  must outlive the call that started it runs through the processor's `runInBackground`, whose
+   *  claim on this context's alarm (`processors.claim`) keeps the facet running — so a claimed one,
+   *  and a FIRST-PARTY one (the platform's own classes release every round trip, `withItx`; the
+   *  `secret` facet pumps a proxied socket with no claim), is started without a reset: the start
+   *  lands on the instance if it still runs. A facet no incarnation called since its last start is
+   *  not running and holds no write, and is left alone. Returns the names reset. */
+  async startFacetsTheLastIncarnationRan(): Promise<string[]> {
+    const ran = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
+      key.slice("facet-ran:".length),
+    );
+    const reset = ran.filter(
+      (name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name),
+    );
+    await Promise.all(
+      ran.map((name) =>
+        reset.includes(name)
+          ? this.#restart(name, () =>
+              this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context reborn"),
+            )
+          : this.#start(name),
+      ),
+    );
+    // A claimed one still runs: its row stays for the birth or the sweep after its claim.
+    for (const name of ran)
+      if (!this.#facetClaims.has(name)) this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
+    return reset;
+  }
+
+  /** THE SWEEP'S RESET, in place, when a context that materialized a loaded facet has been quiet for
+   *  `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS` (context/residency.ts): what the birth reset does for a
+   *  context that evicted on time (`startFacetsTheLastIncarnationRan`), for one still resident —
+   *  every LOADED facet called since its last start and holding no claim is restarted, its instance
+   *  and its billing ended; a fresh one holds nothing. Returns the names reset. */
+  async resetUnclaimedLoadedFacets(): Promise<string[]> {
+    const reset = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
+      key.slice("facet-ran:".length),
+    ).filter((name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name));
+    await Promise.all(
+      reset.map((name) =>
+        this.#restart(name, () =>
+          this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context quiet"),
+        ),
+      ),
+    );
+    for (const name of reset) {
+      this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
+      this.#ranThisIncarnation.delete(name);
     }
     return reset;
   }
@@ -308,6 +372,65 @@ export class FacetHost {
     if (this.#facetWorkInFlight !== 0) return;
     for (const facetName of this.#liveFacetNames) this.#abortFacetIfRunning(facetName, reason);
     this.#liveFacetNames.clear();
+  }
+
+  /** THE PLATFORM'S ABORT, always this: `abort` (a `#abortFacetIfRunning`, and what the caller
+   *  books beside it) and a `#start` right after it, both under `blockConcurrencyWhile`, so no other
+   *  event commits in between (FACET_START_WATCHDOG_MS). Never throws: a callback that throws there
+   *  resets the object. */
+  #restart(name: string, abort: () => void): Promise<void> {
+    return this.#deps.ctx.blockConcurrencyWhile(async () => {
+      abort();
+      this.#liveFacetNames.delete(name);
+      await this.#start(name);
+    });
+  }
+
+  /** THE PLATFORM'S START of a facet: materialized — a loaded one's new identity recorded only once
+   *  it started, so nothing is written before — and called once, `listPublicMethods`, which a class
+   *  that is no SDK shell refuses only after it started. Arms no sweep: the platform's start is no
+   *  use. A start that fails leaves the facet stopped, and is logged; the platform defect at facet
+   *  start (`isFacetStartPlatformFailure`) as such. Never throws. */
+  async #start(name: string): Promise<void> {
+    const start = async () => {
+      const firstPartyClassName = firstPartyFacetClassOf(name);
+      const started = await this.#materialize(
+        name,
+        firstPartyClassName,
+        firstPartyClassName ? undefined : this.#facetStartupMemoFor(name, undefined),
+        { platformStart: true },
+      );
+      await this.#call(started, name, [["listPublicMethods"]], {
+        watchdogMs: FACET_START_WATCHDOG_MS,
+        restartOnTimeout: false,
+      }).catch((error: unknown) => {
+        if (
+          !(error instanceof TypeError && error.message.includes("does not implement the method"))
+        )
+          throw error;
+      });
+      started.recordLoadedIdentity?.();
+    };
+    try {
+      // The whole start, its source resolved included, under the watchdog: a birth waits on it.
+      await withTimeout(start(), FACET_START_WATCHDOG_MS, `facet "${name}" start`);
+    } catch (error) {
+      console.warn({
+        event: isFacetStartPlatformFailure(error)
+          ? "facet.platform-failure-start"
+          : "facet.start-failed",
+        namespace: "iterate-context",
+        name,
+        message: String(error instanceof Error ? error.message : error).slice(0, 512),
+      });
+    }
+  }
+
+  /** The facet was called this incarnation: its `facet-ran:<name>` row, once per incarnation. */
+  #markRan(name: string): void {
+    if (this.#ranThisIncarnation.has(name)) return;
+    this.#ranThisIncarnation.add(name);
+    this.#deps.ctx.storage.kv.put(`facet-ran:${name}`, true);
   }
 
   #facetReviveFailed(name: string) {
@@ -495,11 +618,14 @@ export class FacetHost {
             FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
         itxExpressionSteps,
       );
+    this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
-      const materialized = await this.#materialize(name, firstPartyClassName, facetStartupMemo);
+      const materialized = await this.#materialize(name, firstPartyClassName, facetStartupMemo, {
+        platformStart: false,
+      });
       try {
-        return await this.#call(materialized, name, itxExpressionSteps);
+        return await this.#call(materialized, name, itxExpressionSteps, FACET_CALL_WATCHDOG);
       } catch (error) {
         if (!this.#isRecoverableFacetFailure(name, error, materialized)) throw error;
         // The platform failure (the predicate's doc), or a restart for one: recovered below, one
@@ -591,13 +717,19 @@ export class FacetHost {
           message: error.message,
         });
       }
-      const attempt = await this.#materialize(name, firstPartyClassName, facetStartupMemo);
+      // The attempt IS the start after this recovery's abort: no restart of its own, and the loaded
+      // identity recorded once it ran.
+      const attempt = await this.#materialize(name, firstPartyClassName, facetStartupMemo, {
+        platformStart: true,
+      });
       try {
-        return await this.#call(attempt, name, itxExpressionSteps);
+        return await this.#call(attempt, name, itxExpressionSteps, FACET_CALL_WATCHDOG);
       } catch (attemptError) {
         if (!this.#isRecoverableFacetFailure(name, attemptError, attempt)) throw attemptError;
         failedOn = attempt;
         error = attemptError;
+      } finally {
+        attempt.recordLoadedIdentity?.();
       }
     }
   }
@@ -626,10 +758,12 @@ export class FacetHost {
     name: string,
     firstPartyClassName: string | undefined,
     facetStartupMemo: FacetSpec | undefined,
+    { platformStart }: { platformStart: boolean },
   ): Promise<MaterializedFacet> {
     const props = { iterateContextName: this.#deps.iterateContextName, name };
     let mintClass: () => DurableObjectClass;
     let retireLoadedIdentity: (() => void) | undefined;
+    let recordLoadedIdentity: (() => void) | undefined;
     if (firstPartyClassName) {
       // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facet-from-exports.test.ts).
       const exportsOf = this.#deps.ctx.exports as unknown as Record<
@@ -668,16 +802,35 @@ export class FacetHost {
       // deploy, a workaround generation after a dead load (worker-loader.ts) — the facet restarts in
       // place, its storage surviving. The abort matters for the dead-load case too: workerd hands
       // back the SAME facet container on every `facets.get`, even one whose startup callback
-      // rejected, and only an abort clears it.
-      const previousLoaderId = this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) as
+      // rejected, and only an abort clears it. The row is read once per incarnation and written
+      // once the facet started under the new identity (a write between the abort and the start is
+      // what the platform defect needs); this incarnation's own view is `#loaderIdByName`.
+      const recordedLoaderId = this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) as
         | string
         | undefined;
+      const previousLoaderId = this.#loaderIdByName.get(name) ?? recordedLoaderId;
+      this.#loaderIdByName.set(name, loaderId);
       if (previousLoaderId && previousLoaderId !== loaderId) {
-        this.#abortFacetIfRunning(name, "loaded identity changed");
-        this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
+        // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
+        // it first — abort and start with nothing between (`#restart`), the identity recorded there.
+        if (platformStart) {
+          this.#abortFacetIfRunning(name, "loaded identity changed");
+          this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
+        } else {
+          await this.#restart(name, () =>
+            this.#abortFacetIfRunning(name, "loaded identity changed"),
+          );
+          if (this.#facetStartupMemoByName.get(name) !== memo)
+            throw codedError(
+              "NO_FACET",
+              `facet "${name}" was deleted or reconfigured while it restarted`,
+            );
+        }
       }
-      if (previousLoaderId !== loaderId)
-        this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
+      if (this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) !== loaderId)
+        recordLoadedIdentity = () =>
+          this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
+      if (!platformStart) recordLoadedIdentity?.();
       mintClass = () => load().getDurableObjectClass(memo.className, { props });
       retireLoadedIdentity = retire;
     }
@@ -705,12 +858,13 @@ export class FacetHost {
       }
     });
     this.#liveFacetNames.add(name); // live from here
-    if (!firstPartyClassName) this.#deps.loadedFacetMaterialized();
+    if (!firstPartyClassName && !platformStart) this.#deps.loadedFacetMaterialized();
     return {
       facet,
       retireLoadedIdentity,
       startupFailed: () => startupFailed,
       generation: this.#facetGenerationByName.get(name) ?? 0,
+      recordLoadedIdentity: platformStart ? recordLoadedIdentity : undefined,
     };
   }
 
@@ -718,12 +872,15 @@ export class FacetHost {
    *  `.fetch(request)` included (plain HTTP by expression, the upgrade refused in `handle`; a
    *  WebSocket upgrade from the DO's egress to the `secret` facet, whose 101 rides the fetch
    *  channel back) — then the answer copied out. A facet that never answers (FACET_CALL_WATCHDOG_MS)
-   *  or whose startup threw is aborted: its pending call rejects, the counter drains, the next call
-   *  re-materializes it. A call on an instance `abort` reset rejects FACET_ABORTED. */
+   *  or whose startup threw is aborted: its pending call rejects, the counter drains. One that timed
+   *  out is started again (`#restart`) unless the call was a platform start itself; one whose
+   *  startup threw starts on its next call. A call on an instance `abort` reset rejects
+   *  FACET_ABORTED; one on an instance `#deleteFacet` deleted, NO_FACET. */
   async #call(
     { facet, startupFailed, generation }: MaterializedFacet,
     name: string,
     itxExpressionSteps: ItxExpression,
+    { watchdogMs, restartOnTimeout }: { watchdogMs: number; restartOnTimeout: boolean },
   ): Promise<unknown> {
     // Every step the walk went PAST (`repos()` in `repos().create(path)`, when one call walks several
     // steps on the facet — a subscription target's, a handle's own `invoke`) holds a session onto the
@@ -741,7 +898,7 @@ export class FacetHost {
       // push pays it only if the watchdog actually fires, never on the green path.
       result = await withTimeout(
         call,
-        FACET_CALL_WATCHDOG_MS,
+        watchdogMs,
         // Secret calls can carry material or operator credentials. Never include their arguments
         // in a timeout message, which is observable through both logs and rejected RPCs.
         () =>
@@ -750,8 +907,12 @@ export class FacetHost {
     } catch (error) {
       if (errorCode(error) === "TIMEOUT") {
         if (this.#facetGeneration(name) === generation) {
-          this.#abortFacetIfRunning(name, "call timed out", generation);
-          this.#liveFacetNames.delete(name);
+          const abort = () => this.#abortFacetIfRunning(name, "call timed out", generation);
+          if (restartOnTimeout) await this.#restart(name, abort);
+          else {
+            abort();
+            this.#liveFacetNames.delete(name);
+          }
         }
       } else if (startupFailed()) {
         if (this.#facetGeneration(name) === generation) {
@@ -765,6 +926,14 @@ export class FacetHost {
           "FACET_ABORTED",
           `facet "${name}" was aborted${aborted.reason ? `: ${aborted.reason}` : ""} — its next call starts it fresh`,
         );
+      // The runtime's own words for a call in flight on a facet `ctx.facets.delete` took
+      // (workerd server.c++ `deleteFacet`): the removal this call raced, not a failure of it.
+      if (
+        this.#deletedGeneration.get(name) === generation &&
+        error instanceof Error &&
+        error.message === "Facet was deleted."
+      )
+        throw codedError("NO_FACET", `facet "${name}" was deleted while this call was in flight`);
       throw error;
     } finally {
       releaseRpcSessions(rpcSessionsSteppedPast);
@@ -874,13 +1043,17 @@ export class FacetHost {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     this.#deps.ctx.facets.delete(name);
+    this.#deletedGeneration.set(name, this.#facetGeneration(name));
     this.#facetGenerationByName.set(name, this.#facetGeneration(name) + 1);
     this.#claimFacetAlarm(name, null);
     this.#facetRevived(name);
     this.#deps.ctx.storage.kv.delete(`facet:${name}`);
     this.#deps.ctx.storage.kv.delete(`facet:${name}:loader-id`);
     this.#deps.ctx.storage.kv.delete(`facet:${name}:restarts`);
+    this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
     this.#facetStartupMemoByName.delete(name);
+    this.#loaderIdByName.delete(name);
+    this.#ranThisIncarnation.delete(name);
     this.#liveFacetNames.delete(name);
   }
 }
