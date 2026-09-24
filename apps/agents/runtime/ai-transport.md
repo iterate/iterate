@@ -41,7 +41,7 @@ A tail that exited or received no requests is not evidence. Compare these contro
 | Stateless Worker / second DO calling AI | Complete SSE   | None                        |
 | DO / second DO calling AI               | Complete SSE   | **Hung-request exception**  |
 
-The OS-Next reproduction also failed with both foreground and background DO calls, and with
+The in-platform reproduction also failed with both foreground and background DO calls, and with
 scope disposal before or after draining the body. Stateless callers passed eight real-AI
 streaming/nonstreaming and disposal controls. DO callers passed delayed synthetic-response
 controls. The runtime's precise internal liveness-bookkeeping defect remains unproven; the
@@ -71,12 +71,13 @@ to the Durable Object.
 
 ## Application transport
 
-`apps/agents/runtime/ai-transport.ts` implements that push protocol. The stateless Worker calls
-`itx.ai` at the original agent path, preserving its inherited overrides and explicit capability
-masks. It forwards response metadata and awaits each byte write into a caller-owned native
-`RpcTarget`; the agent Durable Object presents a fresh local stream to the existing processor.
-The remote call remains active until provider I/O finishes. No provider Response, stream, or
-reader is returned to the Durable Object.
+[`ai-transport-source.ts`](ai-transport-source.ts) (the stateless relay) and
+[`ai-transport.ts`](ai-transport.ts) (the sink) implement that push protocol. The stateless Worker
+calls `itx.ai` at the original agent path, preserving its inherited overrides and explicit
+capability masks. It forwards response metadata and awaits each byte write into a caller-owned
+native `RpcTarget`; the agent Durable Object presents a fresh local stream to the existing
+processor. The remote call remains active until provider I/O finishes. No provider Response,
+stream, or reader is returned to the Durable Object.
 
 Initial response, individual provider reads, and each sink write have a 45-second timeout.
 Interrupting a turn rejects the local body immediately. Cleanup cancellation is best-effort and

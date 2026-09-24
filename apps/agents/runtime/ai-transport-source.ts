@@ -1,4 +1,8 @@
-/** The stateless byte-pushing transport loaded by each agent durable object. */
+/** The stateless byte-pushing transport loaded by each agent durable object. A Durable Object that
+ *  receives a provider Response or stream from a second Durable Object makes the Workers runtime
+ *  report a hung request (./ai-transport.md), so this Worker consumes provider I/O itself and pushes
+ *  each byte chunk into the caller's AgentAiSink under an idle bound; no Response, stream or reader
+ *  crosses back to the Durable Object. */
 export const AI_TRANSPORT_SOURCE = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class AgentAiTransport extends WorkerEntrypoint {

@@ -11,7 +11,7 @@ type ModelTransportStart =
   | { kind: "stream" }
   | { kind: "value"; value: unknown };
 
-/** The receiving end of the byte-only RPC bridge. */
+/** The receiving end of the byte-only RPC bridge; why it exists: ./ai-transport.md. */
 export class AgentAiSink extends RpcTarget {
   readonly stream = new TransformStream<Uint8Array>();
   readonly writer = this.stream.writable.getWriter();
