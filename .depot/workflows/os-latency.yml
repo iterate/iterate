@@ -138,7 +138,8 @@ jobs:
           --ref "${{ github.ref }}"
           --trigger "${{ github.event_name }}"
           --budget-scale "${BUDGET_SCALE:-1}"
-      # The judge writes the state only for a real run on main, before it fails a broken one.
+      # The judge writes the state only for a real run on main: after its page, before PostHog and
+      # before it fails a broken probe, so neither costs the next run its memory.
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4

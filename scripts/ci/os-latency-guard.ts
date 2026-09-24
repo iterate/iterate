@@ -394,6 +394,18 @@ async function judge(options: {
   if (page) console.log(`\n${page}\n`);
   else console.log("latency: no change of state, nothing to page");
 
+  // The order is the state's: the page first, since a red it records must have been posted (a page
+  // that could not post leaves the state as it was, so the next run owes it again); then the state,
+  // so neither a PostHog outage nor a broken probe costs the guard its memory; then PostHog.
+  if (page && !options.dryRun)
+    await getSlackClient().chat.postMessage({
+      channel: slackChannelIds["#error-pulse"],
+      text: page,
+    });
+  if (options.stateOut && outcome.next) {
+    mkdirSync(dirname(options.stateOut), { recursive: true });
+    writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
+  }
   const events = latencyEvents(readings, {
     sha,
     run: options.run,
@@ -403,23 +415,12 @@ async function judge(options: {
     at,
   });
   if (options.dryRun) console.log(`dry run: ${events.length} PostHog events and the page not sent`);
-  else {
-    // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
+  // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
+  else
     await sendPostHogEvents(events, {
       apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
       host: "https://eu.i.posthog.com",
     });
-    if (page)
-      await getSlackClient().chat.postMessage({
-        channel: slackChannelIds["#error-pulse"],
-        text: page,
-      });
-  }
-  // Kept before the verdict: a broken run's measured metrics still count, and its red still stands.
-  if (options.stateOut && outcome.next) {
-    mkdirSync(dirname(options.stateOut), { recursive: true });
-    writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
-  }
   if (broken.length > 0)
     throw new Error(
       `the latency probe is broken:\n${broken.map((line) => `  ${line}`).join("\n")}`,
