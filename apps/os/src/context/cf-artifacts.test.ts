@@ -2,7 +2,7 @@
 // pure over an injected namespace) and the path → Artifacts-name mapping. Git itself is the repo
 // facet's (src/repo/git-wire.test.ts pins its codecs).
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   projectScopedArtifacts,
   repoArtifactName,
@@ -170,3 +170,156 @@ test("every binding handle is released: create, get and createToken leave none l
   expect((await repo.createToken("write", 60)).plaintext).toBe("write-prj_a.repos--config-60");
   expect({ opened, released }).toEqual({ opened: 3, released: 3 }); // probe (found), get, createToken
 });
+
+// ── the binding's platform failure ── Artifacts API error 10400, "An internal error occurred.", which
+// the binding answered to create, get, list and delete on and off for nine minutes on 2026-09-23
+// (20:33–20:42 UTC), each call fine a moment later. Every verb retries it ONCE, a second later,
+// logged; a second one surfaces.
+
+test("after a platform failure, create retries a failed probe, and a failed create after checking it did not land", async () => {
+  const probe = flaky("get", [1]);
+  expect(
+    await settle(() => scoped(probe.namespace, "prj_a").create("/repos/config")),
+  ).toMatchObject({
+    value: { created: true },
+    retries: [
+      {
+        event: "cfartifacts.platform-failure-retry",
+        name: "prj_a.repos--config",
+        verb: "probe",
+        message: "An internal error occurred.",
+      },
+    ],
+  });
+
+  const create = flaky("create", [1]);
+  expect(
+    await settle(() => scoped(create.namespace, "prj_a").create("/repos/config")),
+  ).toMatchObject({ value: { created: true }, retries: [{ verb: "create" }] });
+  expect(create.calls.map((call) => call.method)).toEqual([
+    "get", // probe: not found
+    "create (failed)",
+    "get", // the retry checks first: not found
+    "create",
+  ]);
+});
+
+test("after a platform failure, a create that landed all the same is not created twice", async () => {
+  const recording = recordingNamespace();
+  const landedThenFailed: ArtifactsNamespace = {
+    ...recording.namespace,
+    create: async (name) => {
+      await recording.namespace.create(name);
+      throw new Error("An internal error occurred.");
+    },
+  };
+  expect(
+    await settle(() => scoped(landedThenFailed, "prj_a").create("/repos/config")),
+  ).toMatchObject({ value: { created: true }, retries: [{ verb: "create" }] });
+  expect(recording.calls.map((call) => call.method)).toEqual(["get", "create", "get"]);
+});
+
+test("after a platform failure, get, createToken, list and delete each answer on their retry", async () => {
+  const get = flaky("get", [1], ["prj_a.repos--config"]);
+  expect(
+    await settle(async () => (await scoped(get.namespace, "prj_a").get("/repos/config")).remote()),
+  ).toMatchObject({
+    value: "https://acct.artifacts.cloudflare.net/git/ns/prj_a.repos--config.git",
+    retries: [{ verb: "get" }],
+  });
+
+  // the second `get` is the handle createToken takes
+  const token = flaky("get", [2], ["prj_a.repos--config"]);
+  expect(
+    await settle(async () =>
+      (await scoped(token.namespace, "prj_a").get("/repos/config")).createToken("write", 60),
+    ),
+  ).toMatchObject({
+    value: { plaintext: "write-prj_a.repos--config-60" },
+    retries: [{ verb: "createToken" }],
+  });
+
+  const list = flaky("list", [1], ["prj_a.site"]);
+  expect(await settle(() => scoped(list.namespace, "prj_a").list())).toMatchObject({
+    value: { repos: [{ path: "/site" }] },
+    retries: [{ verb: "list" }],
+  });
+
+  const del = flaky("delete", [1], ["prj_a.site"]);
+  expect(await settle(() => scoped(del.namespace, "prj_a").delete("/site"))).toMatchObject({
+    value: true,
+    retries: [{ verb: "delete" }],
+  });
+});
+
+test("after a platform failure, a delete that landed all the same answers false on its retry: already gone", async () => {
+  const recording = recordingNamespace(["prj_a.site"]);
+  const landedThenFailed: ArtifactsNamespace = {
+    ...recording.namespace,
+    delete: async (name) => {
+      await recording.namespace.delete(name);
+      throw new Error("An internal error occurred.");
+    },
+  };
+  expect(await settle(() => scoped(landedThenFailed, "prj_a").delete("/site"))).toMatchObject({
+    value: false,
+    retries: [{ verb: "delete" }],
+  });
+});
+
+test("the platform-failure retry is bounded: a second one surfaces, and any other failure is never retried", async () => {
+  const twice = flaky("list", [1, 2]);
+  expect(await settle(() => scoped(twice.namespace, "prj_a").list())).toMatchObject({
+    error: { message: "An internal error occurred." },
+    retries: [{ verb: "list" }],
+  });
+
+  const unavailable: ArtifactsNamespace = {
+    ...recordingNamespace().namespace,
+    list: async () => {
+      throw new Error("Artifacts unavailable (503)");
+    },
+  };
+  expect(await settle(() => scoped(unavailable, "prj_a").list())).toMatchObject({
+    error: { message: "Artifacts unavailable (503)" },
+    retries: [],
+  });
+});
+
+/** The recording namespace, with `method` failing as the binding did on the calls numbered
+ *  `failingCalls` (from 1). */
+function flaky(method: keyof ArtifactsNamespace, failingCalls: number[], existing: string[] = []) {
+  const recording = recordingNamespace(existing);
+  let call = 0;
+  // one method of the recording namespace, called through with its own arguments
+  const real = recording.namespace[method] as (...args: unknown[]) => Promise<unknown>;
+  // the recording namespace with that one method wrapped: the same shape
+  const namespace = {
+    ...recording.namespace,
+    [method]: async (...args: unknown[]) => {
+      if (failingCalls.includes(++call)) {
+        recording.calls.push({ method: `${method} (failed)`, name: String(args[0] ?? "*") });
+        throw new Error("An internal error occurred.");
+      }
+      return real(...args);
+    },
+  } as ArtifactsNamespace;
+  return { ...recording, namespace };
+}
+
+/** Run a verb with the retry's wait elapsed at once: its answer or error, and the warns it logged. */
+async function settle<T>(run: () => Promise<T>) {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const outcome = run().then(
+      (value) => ({ value }),
+      (error: Error) => ({ error }),
+    );
+    await vi.runAllTimersAsync();
+    return { ...(await outcome), retries: warn.mock.calls.map(([entry]) => entry) };
+  } finally {
+    warn.mockRestore();
+    vi.useRealTimers();
+  }
+}

@@ -65,8 +65,10 @@ export class ScopedArtifactRepoRpcTarget extends RpcTarget {
     this.#remote = remote;
   }
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
-    return withArtifactRepoHandle(this.#namespace, this.#name, (handle) =>
-      handle.createToken(scope, ttlSeconds),
+    return retryingOnePlatformFailure("createToken", this.#name, () =>
+      withArtifactRepoHandle(this.#namespace, this.#name, (handle) =>
+        handle.createToken(scope, ttlSeconds),
+      ),
     );
   }
   /** `https://<account>.artifacts.cloudflare.net/git/<namespace>/<project>.<name>.git` (the binding's
@@ -133,6 +135,43 @@ const isRepoNotFound = (error: unknown): boolean =>
 /** The TTL of the probe token `create` mints to learn whether a repo exists. */
 const PROBE_TOKEN_TTL_SECONDS = 60;
 
+/** The binding's platform failure — Artifacts API error 10400, "An internal error occurred." On
+ *  2026-09-23 (20:35–20:42 UTC) it answered create, get, list and delete on and off, each fine a
+ *  moment later; a project's birth failed on it ("repo /repos/config: creation failed"). */
+const isArtifactsPlatformFailure = (error: unknown): boolean =>
+  /An internal error occurred|\b10400\b/.test(
+    String((error as { message?: unknown })?.message ?? error),
+  );
+
+/** How long a verb waits before its one retry after a platform failure. */
+const PLATFORM_FAILURE_RETRY_DELAY_MS = 1000;
+
+/** A verb, and ONE retry of it after the binding's platform failure, a second later — logged as
+ *  `cfartifacts.platform-failure-retry` (scripts/ci/prd-fault-alarm.ts pages on a burst). A second
+ *  failure, and every other failure, surfaces as what it is. Only for a verb that is safe to run
+ *  twice: a read, a token, a delete (a second one answers "not found"), a create that checks first
+ *  (`attempt`'s `isRetry`). */
+async function retryingOnePlatformFailure<T>(
+  verb: string,
+  name: string,
+  attempt: (isRetry: boolean) => Promise<T>,
+): Promise<T> {
+  try {
+    return await attempt(false);
+  } catch (error) {
+    if (!isArtifactsPlatformFailure(error)) throw error;
+    console.warn({
+      event: "cfartifacts.platform-failure-retry",
+      namespace: "iterate-context",
+      name,
+      verb,
+      message: String((error as { message?: unknown })?.message ?? error),
+    });
+    await new Promise((resolve) => setTimeout(resolve, PLATFORM_FAILURE_RETRY_DELAY_MS));
+    return await attempt(true);
+  }
+}
+
 /** `itx.cfArtifacts` — Cloudflare Artifacts, project-scoped, BY PATH: the binding proxy beneath
  *  `itx.repos.get(path)`. THE ISOLATION WALL, enforced here and not by the binding: every repo name
  *  is forced under this project's `${projectId}.` prefix (like `itx.kv`'s `${projectId}:`). The
@@ -170,28 +209,39 @@ export function projectScopedArtifacts(input: {
       const name = boundName(path);
       // The probe is what a read does — a handle AND a token, since either may be where the binding
       // says "not found"; anything else (an outage, an auth failure) surfaces as what it is.
-      try {
-        await withArtifactRepoHandle(input.namespace, name, (handle) =>
-          handle.createToken("read", PROBE_TOKEN_TTL_SECONDS),
+      const exists = () =>
+        retryingOnePlatformFailure("probe", name, () =>
+          withArtifactRepoHandle(input.namespace, name, (handle) =>
+            handle.createToken("read", PROBE_TOKEN_TTL_SECONDS),
+          ).then(
+            () => true,
+            (error) => {
+              if (!isRepoNotFound(error)) throw error;
+              return false;
+            },
+          ),
         );
-        return { created: false };
-      } catch (error) {
-        if (!isRepoNotFound(error)) throw error;
-      }
-      // The result carries the repo's initial credential, unread — and, a Workers-RPC result, a disposer.
-      const created = await input.namespace.create(name);
-      (created as Partial<Disposable>)[Symbol.dispose]?.();
+      if (await exists()) return { created: false };
+      await retryingOnePlatformFailure("create", name, async (isRetry) => {
+        // the create that failed may have landed all the same: the retry checks first
+        if (isRetry && (await exists())) return;
+        // The result carries the repo's initial credential, unread — and, a Workers-RPC result, a disposer.
+        const created = await input.namespace.create(name);
+        (created as Partial<Disposable>)[Symbol.dispose]?.();
+      });
       return { created: true };
     },
     get: async (path) => {
       const name = boundName(path);
-      const { remote } = await withArtifactRepoHandle(input.namespace, name, (handle) =>
-        handle.info(),
+      const { remote } = await retryingOnePlatformFailure("get", name, () =>
+        withArtifactRepoHandle(input.namespace, name, (handle) => handle.info()),
       );
       return new ScopedArtifactRepoRpcTarget(input.namespace, name, remote);
     },
     list: async (options) => {
-      const page = await input.namespace.list(options);
+      const page = await retryingOnePlatformFailure("list", prefix, () =>
+        input.namespace.list(options),
+      );
       return {
         repos: page.repos.flatMap((r) =>
           r.name.startsWith(prefix) ? [{ path: repoPathOf(r.name.slice(prefix.length)) }] : [],
@@ -201,8 +251,10 @@ export function projectScopedArtifacts(input: {
       };
     },
     delete: async (path) => {
+      const name = boundName(path);
       try {
-        return await input.namespace.delete(boundName(path));
+        // a retry after a delete that landed answers "not found": false, already gone
+        return await retryingOnePlatformFailure("delete", name, () => input.namespace.delete(name));
       } catch (error) {
         if (!isRepoNotFound(error)) throw error;
         return false;
