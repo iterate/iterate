@@ -98,7 +98,7 @@ on:
 
 concurrency:
   group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)

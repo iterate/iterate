@@ -16,6 +16,7 @@ type PreviewStep = {
 
 /** The parts of .depot/workflows/preview-os.yml these tests read. */
 type PreviewWorkflow = {
+  concurrency: { group: string; "cancel-in-progress": string };
   env?: Record<string, string>;
   on: { pull_request?: { paths?: string[] }; workflow_dispatch?: { inputs?: object } };
   jobs: Record<
@@ -117,6 +118,17 @@ test("Preview OS: only the trace runs after the suites, so the next push's deplo
     );
     expect(after.map(([jobId]) => jobId)).toEqual(["trace"]);
   }
+});
+
+// A newer push makes the run in progress out of date; a dispatch (an operator's, a soak's) waits its
+// turn, and preview-delete.yml, in the same group, never cancels (depot-workflows.test.ts).
+test("Preview OS: a PR's next push cancels its run in progress; a dispatch cancels nothing", () => {
+  const cancels = (event: string) =>
+    evaluate(preview.concurrency["cancel-in-progress"].replace(/^\$\{\{ (.*) \}\}$/, "$1"), {
+      "github.event_name": event,
+    });
+  expect(cancels("pull_request")).toBe(true);
+  expect(cancels("workflow_dispatch")).toBe(false);
 });
 
 // docs/testing.md#slow-rows: a push leaves the e2e rows tagged `slow` to the PR's paths and
