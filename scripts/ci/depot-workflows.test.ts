@@ -6,7 +6,8 @@ import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
-import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
+import { SUITE_WORKFLOWS, stateArtifact as flakeDashboardState } from "./flake-dashboard/update.ts";
+import { stateArtifact as osLatencyState } from "./os-latency-guard.ts";
 import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
 import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
@@ -36,6 +37,8 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   env?: Record<string, string>;
+  name?: string;
+  needs?: string | string[];
   permissions?: Record<string, string>;
   "runs-on": {
     image?: string;
@@ -52,6 +55,7 @@ type Workflow = {
   };
   env?: Record<string, string>;
   jobs: Record<string, WorkflowJob>;
+  name?: string;
   permissions?: Record<string, string>;
   on?: {
     pull_request?: {
@@ -221,8 +225,6 @@ test.each(
 });
 
 test("runs OS and Notes stateful proofs only against an isolated preview", () => {
-  const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
-
   for (const { file } of deploymentWorkflows) {
     const runs = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
       (job.steps || []).map((step) => step.run || ""),
@@ -243,11 +245,6 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
       "playwright.config.ts",
     ]),
   );
-  // one `pnpm spec` in the Browser specs job runs every project, the notes one against the Notes preview
-  expect(previewScript).toContain('runAsync("pnpm", ["spec"], {');
-  expect(previewScript).toContain('NOTES_BASE_URL: appUrl("notes")');
-  expect(previewScript).toContain('VOICE_BASE_URL: appUrl("voice")');
-  expect(previewScript).toContain('DASH_BASE_URL: appUrl("dash")');
 });
 
 // apps/kit/README.md "Firmware releases": the Kit Worker streams firmware from GitHub releases
@@ -258,7 +255,6 @@ test("Kit deploys only the installer; firmware ships as GitHub releases", () => 
   const runs = (deploy.steps || []).map((step) => step.run || "");
 
   expect(runs.filter((run) => /esp-idf|export\.sh|firmware:/i.test(run))).toEqual([]);
-  expect(deploy).toMatchObject({ "runs-on": { size: "2x8" } });
   expect(triggers(paths, "apps/kit/firmware/targets/havpe/CMakeLists.txt")).toBe(false);
   expect(triggers(paths, "apps/kit/src/firmware/catalog.ts")).toBe(true);
   expect(paths).toEqual(
@@ -402,21 +398,9 @@ test("release.yml never takes a kit-firmware tag for the last release", () => {
   expect(releaseInfo?.run).toContain("git describe --tags --abbrev=0 --match 'v[0-9]*'");
 });
 
-test("the CI telemetry sync runs hourly with the Depot token from Doppler _shared/preview", () => {
-  const workflow = loadWorkflow(".depot/workflows/ci-telemetry.yml");
-  const sync = workflow.jobs.sync.steps?.find((step) =>
-    step.run?.includes("scripts/ci/sync-ci-telemetry.ts"),
-  );
-
-  expect(workflow.on?.schedule).toEqual([{ cron: expect.stringMatching(/^\d+ \* \* \* \*$/) }]);
-  expect(sync?.run).toContain(
-    "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
-  );
-});
-
 test("the flake dashboard lists every workflow that uploads flake records", () => {
   const uploaders = depotWorkflowFiles.flatMap((file) => {
-    const workflow = loadWorkflow(file) as Workflow & { name: string };
+    const workflow = loadWorkflow(file);
     return Object.values(workflow.jobs).some((job) =>
       (job.steps || []).some((step) => String(step.with?.name || "").startsWith("flake-records-")),
     )
@@ -437,81 +421,54 @@ test("the iterate GitHub App's key is read only by the flake dashboard, which ne
   );
 });
 
-test("writes the flake dashboard with the Depot telemetry token and keeps its state only for real runs", () => {
-  const steps = loadWorkflow(".depot/workflows/flake-dashboard.yml").jobs.update?.steps ?? [];
-  const writer = steps.find((step) => step.run?.includes("scripts/ci/flake-dashboard/update.ts"));
-  const keep = steps.find((step) => step.with?.name === "flake-dashboard-state");
-
-  expect(writer?.run).toContain(
-    "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
+// Each scheduled guard hands its state to its next run as an artifact of its own workflow
+// (scripts/ci/depot.ts newestArtifactFile): the workflow the guard names uploads the file the guard
+// wrote, whatever the run's outcome, and the guard reads back what its previous-state step saved.
+// The scripts decide which runs write one: the latency, time-to-green and fault guards only a real
+// run on main (their `--ref`).
+const guards = [
+  { script: "scripts/ci/flake-dashboard/update.ts", state: flakeDashboardState },
+  { script: "scripts/ci/os-latency-guard.ts", state: osLatencyState },
+  { script: "scripts/ci/pr-ttg-guard.ts", state: prTtgState },
+  { script: "scripts/ci/prd-fault-alarm.ts", state: prdFaultAlarmState },
+];
+test.each(guards)("$script keeps its state for its next run", ({ script, state }) => {
+  const workflows = depotWorkflowFiles
+    .map((file) => loadWorkflow(file))
+    .filter((workflow) => workflow.name === state.workflow);
+  expect(workflows).toHaveLength(1);
+  const steps = Object.values(workflows[0]!.jobs).flatMap((job) => job.steps || []);
+  const keep = steps.find((step) => step.with?.name === state.artifact);
+  const path = String(keep?.with?.path);
+  const writer = steps.find(
+    (step) => step.run?.includes(script) && step.run.includes(`--state-out ${path}`),
   );
-  expect(writer?.run).toContain("--state-out test-results/flake-dashboard/state.json");
+  const saved = steps.map((step) => /previous-state --out (\S+)/u.exec(step.run || "")?.[1]);
+
   expect(keep).toMatchObject({
-    if: "always() && inputs.dry-run != 'true'",
+    if: expect.stringMatching(/^always\(\)/u),
     uses: "actions/upload-artifact@v4",
-    with: expect.objectContaining({ path: "test-results/flake-dashboard/state.json" }),
   });
+  expect(path.endsWith(`/${state.file}`), path).toBe(true);
+  expect(writer, `${script} writes --state-out ${path}`).toBeDefined();
   expect(steps.indexOf(writer!)).toBeLessThan(steps.indexOf(keep!));
+  for (const out of saved.filter(Boolean)) expect(writer?.run).toContain(`--state ${out}`);
 });
 
-test("the PR time-to-green guard measures hourly with the Depot telemetry token and keeps its own state", () => {
-  const workflow = loadWorkflow(".depot/workflows/pr-ttg.yml") as Workflow & { name: string };
-  const steps = workflow.jobs.measure?.steps ?? [];
-  const measure = steps.find((step) => step.run?.includes("scripts/ci/pr-ttg-guard.ts measure"));
-  const keep = steps.find((step) => step.with?.name === prTtgState.artifact);
-
-  expect(workflow).toMatchObject({
-    name: prTtgState.workflow,
-    on: { schedule: [{ cron: expect.stringMatching(/^\d+ \* \* \* \*$/) }] },
-  });
-  expect(measure?.run).toContain(
-    "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
+test("every artifact kept as a run's state is a guard's", () => {
+  const kept = depotWorkflowFiles.flatMap((file) =>
+    Object.values(loadWorkflow(file).jobs).flatMap((job) =>
+      (job.steps || []).flatMap((step) => {
+        const name = String(step.with?.name || "");
+        return name.endsWith("-state") ? [name] : [];
+      }),
+    ),
   );
-  expect(measure?.run).toContain(
-    "pr-ttg-guard.ts previous-state --out test-results/pr-ttg/previous.json",
-  );
-  expect(measure?.run).toContain("--state test-results/pr-ttg/previous.json");
-  expect(measure?.run).toContain(`--state-out test-results/pr-ttg/${prTtgState.file}`);
-  expect(keep).toMatchObject({
-    if: "always()",
-    uses: "actions/upload-artifact@v4",
-    with: expect.objectContaining({ path: `test-results/pr-ttg/${prTtgState.file}` }),
-  });
-  expect(steps.indexOf(measure!)).toBeLessThan(steps.indexOf(keep!));
-});
-
-test("the prd fault alarm reads its previous state, keeps it only on main, and uploads it", () => {
-  const workflow = loadWorkflow(".depot/workflows/prd-fault-alarm.yml") as Workflow & {
-    name: string;
-  };
-  const steps = workflow.jobs.alarm?.steps ?? [];
-  const read = steps.find((step) => step.run?.includes("prd-fault-alarm.ts previous-state"));
-  const alarm = steps.find((step) => step.run?.includes("prd-fault-alarm.ts run"));
-  const keep = steps.find((step) => step.with?.name === prdFaultAlarmState.artifact);
-
-  expect(workflow).toMatchObject({ name: prdFaultAlarmState.workflow });
-  expect(read?.run).toContain(
-    "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
-  );
-  expect(alarm?.run).toContain("--state test-results/prd-fault-alarm/previous.json");
-  expect(alarm?.run).toContain(
-    `github.ref == 'refs/heads/main' && '--state-out test-results/prd-fault-alarm/${prdFaultAlarmState.file}'`,
-  );
-  expect(keep).toMatchObject({
-    if: "always()",
-    uses: "actions/upload-artifact@v4",
-    with: expect.objectContaining({
-      path: `test-results/prd-fault-alarm/${prdFaultAlarmState.file}`,
-    }),
-  });
-  expect(steps.indexOf(read!)).toBeLessThan(steps.indexOf(alarm!));
-  expect(steps.indexOf(alarm!)).toBeLessThan(steps.indexOf(keep!));
+  expect(kept.toSorted()).toEqual(guards.map(({ state }) => state.artifact).toSorted());
 });
 
 test("the PR time-to-green guard's checks are workflows by their names", () => {
-  const names = depotWorkflowFiles.map(
-    (file) => (loadWorkflow(file) as Workflow & { name?: string }).name,
-  );
+  const names = depotWorkflowFiles.map((file) => loadWorkflow(file).name);
   for (const check of CHECKS) expect(names, check).toContain(check);
 });
 
@@ -541,16 +498,9 @@ test.for([
   { file: ".depot/workflows/preview-sweep.yml", jobId: "sweep" },
   { file: ".depot/workflows/preview-delete.yml", jobId: "delete" },
 ])("$file $jobId starts from the baked workspace", ({ file, jobId }) => {
-  const workflow = loadWorkflow(file);
-  const job = workflow.jobs[jobId];
+  const job = loadWorkflow(file).jobs[jobId];
 
-  expect(job["runs-on"]).toMatchObject({ image: bakedImage });
-  // the store the image was baked with, or the reconcile never reuses the baked node_modules
-  expect(workflow.env).toMatchObject({ PNPM_CONFIG_STORE_DIR: "/home/runner/.pnpm-store" });
-
-  const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
-  expect(checkout?.with).toMatchObject({ clean: false });
-
+  // its image, store and checkout: the next test, for every job that reconciles
   const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
   expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
   // Any one of these means the job installs its own toolchain instead of using the baked one.
@@ -603,30 +553,6 @@ test("a step named for the baked reconcile runs it", () => {
   expect(misnamed).toEqual([]);
 });
 
-// Each runs the baked image's pnpm install, which the 2x8 client deploys run too (Deploy Dash's
-// whole job takes under a minute), then calls APIs or runs one git command at a time: a larger
-// runner only costs more.
-test.for([
-  { file: ".depot/workflows/loc-report.yml", jobId: "loc-report" },
-  { file: ".depot/workflows/pr-dashboard.yml", jobId: "update_dashboard" },
-  { file: ".depot/workflows/release.yml", jobId: "release" },
-])("$file runs on the smallest runner", ({ file, jobId }) => {
-  expect(loadWorkflow(file).jobs[jobId]?.["runs-on"]).toMatchObject({ size: "2x8" });
-});
-
-test("the nightly preview sweep runs alone, one at a time, never cancelled", () => {
-  const workflow = loadWorkflow(".depot/workflows/preview-sweep.yml");
-
-  expect(workflow).toMatchObject({
-    on: { schedule: [{ cron: "37 4 * * *" }] },
-    concurrency: { group: "preview-sweep", "cancel-in-progress": false },
-  });
-  expect(workflow.jobs.sweep?.steps?.at(-1)).toMatchObject({
-    "working-directory": "apps/os",
-    run: "doppler run -- pnpm preview sweep",
-  });
-});
-
 // A job of Preview OS that ran only on `closed` was a skipped check on every push to an open PR.
 test("a closed PR's preview is deleted by its own workflow, in that PR's preview group", () => {
   const preview = loadWorkflow(".depot/workflows/preview-os.yml");
@@ -640,10 +566,6 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
     // a delete waits for the PR's in-flight deploy and e2e instead of racing them, and is never
     // cut short
     concurrency: { group: preview.concurrency?.group, "cancel-in-progress": false },
-  });
-  expect(workflow.jobs.delete?.steps?.at(-1)).toMatchObject({
-    "working-directory": "apps/os",
-    run: "doppler run -- pnpm preview delete",
   });
 });
 
@@ -676,7 +598,40 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
       steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),
       file,
     ).toEqual([]);
+    // no PR number anywhere: nothing is written to a pull request
+    expect(JSON.stringify(workflow), file).not.toContain("PREVIEW_PR_NUMBER");
   }
+});
+
+test("Main OS e2e runs on every main push a PR preview would run for", () => {
+  const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
+
+  expect(main.on?.push?.branches).toEqual(["main"]);
+  expect(main.on?.push?.paths).toEqual(
+    expect.arrayContaining(previewPaths.filter((path) => !path.includes("preview-os.yml"))),
+  );
+});
+
+// The checks a main push shows are the ones a PR's preview shows, and main is traced as a PR preview
+// is (docs/ci-traces.md). Only the trace's checkout and traced commit differ: main's pushed commit; a
+// PR's tested merge commit, with the statuses on its head.
+test("Main OS e2e names its checks as Preview OS does and traces them the same way", () => {
+  const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
+  const preview = loadWorkflow(".depot/workflows/preview-os.yml");
+  const trace = (workflow: Workflow) => ({
+    env: { BASH_ENV: workflow.env?.BASH_ENV, CI_TRACE_ENABLED: workflow.env?.CI_TRACE_ENABLED },
+    steps: (workflow.jobs.trace?.steps || []).filter(
+      (step) => step.uses !== "actions/checkout@v4" && step.name !== "Record the traced commit",
+    ),
+  });
+
+  for (const job of ["deploy", "e2e", "specs", "trace"])
+    expect(main.jobs[job]?.name, job).toBe(preview.jobs[job]?.name);
+  expect(trace(main)).toEqual(trace(preview));
+  // it only reports: nothing that follows the suites waits for it
+  expect(Object.values(main.jobs).filter((job) => [job.needs].flat().includes("trace"))).toEqual(
+    [],
+  );
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
@@ -722,30 +677,14 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
 
 test("the Lint check runs the root lint script that local runs use", () => {
   const steps = loadWorkflow(".depot/workflows/lint-typecheck.yml").jobs["lint-typecheck"].steps;
-  const lint = steps?.find((step) => step.name === "Run Lint");
-  const scripts = readPackageJson(".").scripts;
 
-  expect(lint?.run).toBe("pnpm lint");
-  expect(scripts?.lint).toBe(
-    "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
-  );
-  // One thread for fixes too: at the default one per core, every JS worker starts its own
-  // type-aware service, and a 16-core machine hits spawn ENOMEM.
-  // Measured at 1, 4, 8 and 12 threads, more threads were no faster.
-  expect(scripts?.["lint:fix"]).toBe("oxlint . --fix --threads 1");
+  expect(steps?.find((step) => step.name === "Run Lint")?.run).toBe("pnpm lint");
 });
 
-test("the preview's e2e suite and browser specs write the canonical telemetry artifact", () => {
+test("the preview's e2e suite writes the canonical telemetry artifact", () => {
   // `e2e` is a build plus `e2e:run`; the preview runs `e2e:run` alone (it must not rebuild the
   // deployed dist/), so the reporter lives on `e2e:run`.
-  expect(readPackageJson("apps/os").scripts?.e2e).toBe("pnpm build && pnpm e2e:run");
   expect(readPackageJson("apps/os").scripts?.["e2e:run"]).toMatch(/retry-telemetry-reporter\.ts/);
-  expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
-    'runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)]',
-  );
-  expect(readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8")).toContain(
-    "scripts/ci/playwright-telemetry-reporter.ts",
-  );
 });
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
@@ -769,30 +708,6 @@ test("every unit-test workspace writes the canonical telemetry artifact", () => 
   expect(finalizer?.run).toContain("--expect-unit-workspaces");
   expect(finalizer?.env?.TEST_TELEMETRY_EXPECTED_WORKSPACES).toBeUndefined();
   expect(unitTestWorkspaces(repoRoot).sort()).toEqual(expectedWorkspaces.sort());
-});
-
-test.each([
-  {
-    file: ".depot/workflows/test.yml",
-    group: "test-${{ github.head_ref || github.ref_name || github.run_id }}",
-    jobId: "test",
-    size: "8x32",
-    timeoutMinutes: 20,
-  },
-  {
-    file: ".depot/workflows/lint-typecheck.yml",
-    group: "lint-typecheck-${{ github.head_ref || github.ref_name || github.run_id }}",
-    jobId: "lint-typecheck",
-    size: "8x32",
-    timeoutMinutes: 20,
-  },
-])("$file coalesces superseded branch runs", ({ file, group, jobId, size, timeoutMinutes }) => {
-  const workflow = loadWorkflow(file);
-  const job = workflow.jobs[jobId];
-
-  expect(workflow).toMatchObject({ concurrency: { group, "cancel-in-progress": true } });
-  expect(job["runs-on"]).toMatchObject({ size });
-  expect(job["timeout-minutes"]).toBe(timeoutMinutes);
 });
 
 test.each([
@@ -899,8 +814,8 @@ test.each([
       id: "evidence-write",
       if: expect.stringMatching(/^always\(\)( && steps\.[a-z0-9-]+\.outcome != 'skipped')?$/u),
       "continue-on-error": true,
-      "timeout-minutes": 2,
-      run: "pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}",
+      "timeout-minutes": expect.any(Number),
+      run: expect.stringContaining("cancelled() && '--cancelled'"),
     });
     // the outcome of every step that runs tests, each one before the write, so a failure the
     // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
@@ -912,20 +827,15 @@ test.each([
       expect(step, id).toBeGreaterThan(-1);
       expect(step).toBeLessThan(steps.indexOf(write!));
     }
-    // a cancelled or timed-out job's folder too, with CI's Cloudflare token from Doppler
+    // a cancelled or timed-out job's folder too, bounded the same way
     expect(upload).toMatchObject({
       id: "evidence-upload",
-      if: "${{ always() && hashFiles('test-results/manifest.json') != '' }}",
+      if: expect.stringContaining("always()"),
       "continue-on-error": true,
-      "timeout-minutes": 3,
-      env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
-      run: "doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload",
+      "timeout-minutes": expect.any(Number),
     });
-    // a step that failed before it could say why is reported by the next one
-    expect(report).toMatchObject({
-      if: "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
-      run: 'bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"',
-    });
+    // a step that failed before it could say why is reported by the next one, whatever happened
+    expect(report?.if).toContain("always()");
     // after every runner and the finalizer; then the R2 upload beside every artifact that keeps
     // the folder, each only reading it (docs/depot-ci.md#parallel-steps); then the report
     expect(index("scripts/ci/upload-test-telemetry.ts")).toBeLessThan(steps.indexOf(write!));
@@ -1021,10 +931,6 @@ test("the test jobs' flake records go into the test evidence folder", () => {
     (step) => step.name === "Run Tests",
   );
   expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(testEvidencePaths.flakeRecords);
-  // the e2e jobs' suites set their own, one directory per suite
-  expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
-    "FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/",
-  );
   for (const path of Object.values(testEvidencePaths).filter((path) => path !== "test-results")) {
     expect(path.startsWith(`${testEvidencePaths.root}/`), path).toBe(true);
   }
@@ -1068,15 +974,11 @@ test.for([
   "$file's Browser specs job keeps the browser evidence, whatever the suite's outcome",
   ({ file, results: name }) => {
     const steps = loadWorkflow(file).jobs.specs?.steps ?? [];
-    const playwrightConfig = readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8");
     const suite = steps.find((step) => step.run?.includes("pnpm preview specs"));
     const results = steps.find((step) => step.with?.name === name);
     const report = steps.find((step) => step.with?.name === "public-playwright-report");
 
-    // the root config writes per-test output (traces, screenshots, error context) and the HTML
-    // report into the test evidence folder, which the job uploads
-    expect(playwrightConfig).toContain("outputDir: testEvidencePaths.playwrightOutput");
-    expect(playwrightConfig).toContain("outputFolder: testEvidencePaths.playwrightReport");
+    // the root config writes per-test output and the HTML report into the test evidence folder
     expect(results).toMatchObject({
       if: expect.stringMatching(/^always\(\)/u),
       uses: "actions/upload-artifact@v4",

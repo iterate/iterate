@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { expect, test, vi } from "vitest";
 import {
@@ -87,6 +90,26 @@ test("a run that cannot read prd fails: no Cloudflare credentials", async () => 
     "run under doppler --project os --config prd",
   );
   expect(cloudflare.fetch).not.toHaveBeenCalled();
+});
+
+// A dispatch on a branch reads and pages like any run, but must not move main's read window or its
+// open incidents.
+test.for([
+  ["refs/heads/main", true],
+  ["refs/heads/a-branch", false],
+  [undefined, false],
+] as const)("a run on %s keeps its state: %s", async ([ref, kept]) => {
+  await using _cloudflare = workersLogs(serverErrorsOnly(0));
+  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", credentials.accountId);
+  vi.stubEnv("CLOUDFLARE_API_TOKEN", credentials.apiToken);
+  const directory = mkdtempSync(join(tmpdir(), "prd-fault-alarm-"));
+  try {
+    const stateOut = join(directory, "state.json");
+    await expect(run({ ref, stateOut })).resolves.toBe("prd is quiet");
+    expect(existsSync(stateOut)).toBe(kept);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
 });
 
 // Each fault is an incident: a new one pages, its repeats go into that page's thread.

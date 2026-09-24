@@ -21,9 +21,9 @@ import process from "node:process";
 /**
  * The paths whose change gets a pull request a preview: GitHub `paths` syntax, where the last
  * pattern a file matches decides and a `!` pattern excludes. preview-delete.yml's `paths` are this
- * list and main-os-e2e.yml's push `paths` contain it (depot-workflows.test.ts and
- * main-os-e2e-workflow.test.ts keep them so), because a closing pull request deletes the preview it
- * got, and main tests what a pull request's preview would have.
+ * list and main-os-e2e.yml's push `paths` contain it (depot-workflows.test.ts keeps them so),
+ * because a closing pull request deletes the preview it got, and main tests what a pull request's
+ * preview would have.
  */
 export const previewPaths = [
   // A production-workflow change must exercise the isolated deployment: production runs only
