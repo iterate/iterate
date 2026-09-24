@@ -12,6 +12,9 @@ concurrency:
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # TEST EVIDENCE IN R2 (docs/test-evidence.md): `r2` puts each test job attempt's test-results/
+  # folder in the iterate-ci bucket; `off` skips that step.
+  TEST_EVIDENCE_UPLOAD: r2
 
 jobs:
   test:
@@ -57,6 +60,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run Tests
+        id: tests
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           FLAKE_RECORD_DIR: test-results/flake-records
@@ -69,10 +73,14 @@ jobs:
         run: doppler run -- pnpm test
       # Kit's firmware compiled for the host (ASan/UBSan) and run under CTest. Its own step, not
       # part of Kit's `test`, so `pnpm test` runs where cmake is missing; the image has cmake.
-      # `!cancelled()`, so a unit-test failure does not hide the firmware result.
+      # `!cancelled()`, so a unit-test failure does not hide the firmware result. CTest's JUnit XML
+      # goes into the test evidence folder (docs/test-evidence.md).
       - name: Run Kit firmware host tests
+        id: kit-host-tests
         if: ${{ !cancelled() }}
-        run: pnpm --dir apps/kit firmware:test:host
+        run: |
+          mkdir -p test-results/ctest
+          pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/test-results/ctest/junit.xml"
       # Fails when a test workspace left no complete artifact, and writes the unit suite summary next
       # to its flake lines. A superseded run still keeps its raw evidence, but the job's own
       # cancelled outcome is the record; killed runner sentinels are not test failures.
@@ -83,6 +91,38 @@ jobs:
         # --expect-unit-workspaces reads the workspaces from the checkout, so the list has one source:
         # the tree whose tests ran.
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
+      # attempt's tests left. This adds one row per test (tables/tests.parquet), then manifest.json:
+      # the run's result (from the steps below and the finalizer's check), the tested commit and
+      # tree, the job attempt and every file's sha256. Neither this nor the upload decides the job;
+      # the tests did.
+      - name: Write the test evidence manifest
+        id: evidence-write
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          TEST_EVIDENCE_STEPS: tests=${{ steps.tests.outcome }} kit-host-tests=${{ steps.kit-host-tests.outcome }}
+          TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
+      # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys. A
+      # cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/ copy.
+      # A failure is a warning and a line of the job's summary, never the job's result.
+      - name: Upload the test evidence to R2
+        id: evidence-upload
+        if: ${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+      # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
+      # warning and summary line here; one that reported itself is left alone.
+      - name: Report a test evidence step that could not
+        if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
+        run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow
       # artifact for the flake dashboard to pull, one per job attempt

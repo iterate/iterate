@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, matchesGlob, relative, resolve } from "node:path";
+import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
+import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
 import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
@@ -16,12 +18,14 @@ const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm
 const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
   env?: Record<string, string>;
   id?: string;
   name?: string;
   if?: string;
   parallel?: WorkflowStep[];
   run?: string;
+  "timeout-minutes"?: number;
   uses?: string;
   with?: Record<string, unknown>;
   "working-directory"?: string;
@@ -715,7 +719,7 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
   const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps ?? [];
   const runTests = steps.findIndex((step) => step.name === "Run Tests");
   const firmwareHostTests = steps.findIndex(
-    (step) => step.run === "pnpm --dir apps/kit firmware:test:host",
+    (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
   );
 
   expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
@@ -880,6 +884,156 @@ test.each([
   },
 );
 
+// docs/test-evidence.md: each test job attempt's test-results/ folder, its manifest and its upload
+// to R2.
+test.each([
+  { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
+  { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["e2e"] },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["e2e"] },
+])(
+  "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2, deciding nothing and never failing unseen",
+  ({ file, jobId, testSteps }) => {
+    const workflow = loadWorkflow(file);
+    const job = workflow.jobs[jobId]!;
+    const steps = job.steps || [];
+    const index = (command: string) => steps.findIndex((step) => !!step.run?.includes(command));
+    const write = steps[index("scripts/ci/test-evidence.ts write")];
+    const upload = steps[index("scripts/ci/test-evidence.ts upload")];
+    const report = steps[index("scripts/ci/test-evidence-unreported.sh")];
+
+    expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("r2");
+    // always, a cancelled job's folder saying so; bounded, so a hang cannot reach the job's timeout
+    expect(write).toMatchObject({
+      id: "evidence-write",
+      if: "always()",
+      "continue-on-error": true,
+      "timeout-minutes": 2,
+      run: "pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}",
+    });
+    // the outcome of every step that runs tests, each one before the write, so a failure the
+    // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
+    expect(write?.env?.TEST_EVIDENCE_STEPS).toBe(
+      testSteps.map((id) => `${id}=\${{ steps.${id}.outcome }}`).join(" "),
+    );
+    for (const id of testSteps) {
+      const step = steps.findIndex((candidate) => candidate.id === id);
+      expect(step, id).toBeGreaterThan(-1);
+      expect(step).toBeLessThan(steps.indexOf(write!));
+    }
+    // a cancelled or timed-out job's folder too, with CI's Cloudflare token from Doppler
+    expect(upload).toMatchObject({
+      id: "evidence-upload",
+      if: "${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}",
+      "continue-on-error": true,
+      "timeout-minutes": 3,
+      env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
+      run: "doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload",
+    });
+    // a step that failed before it could say why is reported by the next one
+    expect(report).toMatchObject({
+      if: "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
+      run: 'bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"',
+    });
+    // after every runner and the finalizer, and before the artifacts that keep the folder
+    expect(index("scripts/ci/upload-test-telemetry.ts")).toBeLessThan(steps.indexOf(write!));
+    expect(steps.indexOf(write!)).toBeLessThan(steps.indexOf(upload!));
+    expect(steps.indexOf(upload!)).toBeLessThan(steps.indexOf(report!));
+    expect(steps.indexOf(report!)).toBeLessThan(
+      steps.findIndex((step) => step.uses === "actions/upload-artifact@v4"),
+    );
+    // the runners write into the folder
+    const telemetryDirectories = [
+      job.env?.TEST_TELEMETRY_ARTIFACT_DIR,
+      ...steps.map((step) => step.env?.TEST_TELEMETRY_ARTIFACT_DIR),
+    ].filter(Boolean);
+    expect(telemetryDirectories).toEqual([testEvidencePaths.telemetry]);
+  },
+);
+
+test("the Test job's manifest names the pull request, branch and head its runners do", () => {
+  const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps ?? [];
+  const runTests = steps.find((step) => step.name === "Run Tests");
+  const write = steps.find((step) => step.id === "evidence-write");
+  const source = [
+    "TEST_TELEMETRY_BRANCH",
+    "TEST_TELEMETRY_HEAD_SHA",
+    "TEST_TELEMETRY_PULL_REQUEST_NUMBER",
+  ];
+  for (const name of source) {
+    expect(write?.env?.[name], name).toBeTruthy();
+    expect(write?.env?.[name], name).toBe(runTests?.env?.[name]);
+  }
+});
+
+test("the CI telemetry sync's test evidence jobs are the jobs that upload a folder", () => {
+  const uploading = depotWorkflowFiles.flatMap((file) =>
+    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
+      (job.steps || []).some((step) => step.run?.includes("scripts/ci/test-evidence.ts upload"))
+        ? [`${file.slice(".depot/workflows/".length)}:${jobId}`]
+        : [],
+    ),
+  );
+  expect(uploading.toSorted()).toEqual(testEvidenceJobs.toSorted());
+});
+
+test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {
+  const runner = mkdtempSync(join(tmpdir(), "test-evidence-unreported-"));
+  const summary = join(runner, "summary.md");
+  const report = (write: string, upload: string) => {
+    writeFileSync(summary, "");
+    const result = spawnSync(
+      "bash",
+      [resolve(repoRoot, "scripts/ci/test-evidence-unreported.sh"), write, upload],
+      {
+        env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: runner },
+        encoding: "utf8",
+      },
+    );
+    return { status: result.status, stdout: result.stdout, summary: readFileSync(summary, "utf8") };
+  };
+  try {
+    // Doppler refused: the upload never reached the script
+    const unreported = report("success", "failure");
+    expect(unreported).toEqual({
+      status: 0,
+      stdout: `::warning title=${stepFailureTitles.upload}::the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest\n`,
+      summary: `**${stepFailureTitles.upload}**: the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest. The tests' result is unaffected.\n`,
+    });
+    const write = report("failure", "skipped");
+    expect(write.stdout).toContain(`::warning title=${stepFailureTitles.write}::the write step`);
+
+    // the script reported the upload itself (reportStepFailure's marker): nothing more to say
+    writeFileSync(join(runner, "test-evidence-upload.reported"), "R2 PUT …: 500\n");
+    expect(report("success", "failure")).toEqual({ status: 0, stdout: "", summary: "" });
+  } finally {
+    rmSync(runner, { recursive: true });
+  }
+});
+
+test("Kit's host tests write CTest's JUnit XML into the test evidence folder", () => {
+  const kit = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
+    (step) => step.id === "kit-host-tests",
+  );
+  expect(kit?.run).toContain(
+    `pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/${testEvidencePaths.ctestJunit}"`,
+  );
+  expect(kit?.run).toContain(`mkdir -p ${dirname(testEvidencePaths.ctestJunit)}`);
+});
+
+test("the test jobs' flake records go into the test evidence folder", () => {
+  const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find(
+    (step) => step.name === "Run Tests",
+  );
+  expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(testEvidencePaths.flakeRecords);
+  // the e2e jobs' suites set their own, one directory per suite
+  expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
+    "FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/",
+  );
+  for (const path of Object.values(testEvidencePaths).filter((path) => path !== "test-results")) {
+    expect(path.startsWith(`${testEvidencePaths.root}/`), path).toBe(true);
+  }
+});
+
 test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
   const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
   const directory = mkdtempSync(join(tmpdir(), "job-attempt-"));
@@ -924,18 +1078,18 @@ test.for([
     const report = steps.find((step) => step.with?.name === "public-playwright-report");
 
     // the root config writes per-test output (traces, screenshots, error context) and the HTML
-    // report under the directory the job uploads
-    expect(playwrightConfig).toContain('outputDir: "test-results/playwright-output"');
-    expect(playwrightConfig).toContain('outputFolder: "test-results/playwright-html"');
+    // report into the test evidence folder, which the job uploads
+    expect(playwrightConfig).toContain("outputDir: testEvidencePaths.playwrightOutput");
+    expect(playwrightConfig).toContain("outputFolder: testEvidencePaths.playwrightReport");
     expect(results).toMatchObject({
       if: "always()",
       uses: "actions/upload-artifact@v4",
-      with: expect.objectContaining({ path: "test-results" }),
+      with: expect.objectContaining({ path: testEvidencePaths.root }),
     });
     expect(report).toMatchObject({
       if: expect.stringContaining("always()"),
       uses: "actions/upload-artifact@v4",
-      with: expect.objectContaining({ path: "test-results/playwright-html" }),
+      with: expect.objectContaining({ path: testEvidencePaths.playwrightReport }),
     });
     expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(results!));
     expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(report!));

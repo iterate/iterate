@@ -1,5 +1,10 @@
 import { expect, test, vi } from "vitest";
-import { ciTelemetryEvents, runSource, workflowRunners } from "./sync-ci-telemetry.ts";
+import {
+  ciTelemetryEvents,
+  runSource,
+  testEvidenceAttemptIds,
+  workflowRunners,
+} from "./sync-ci-telemetry.ts";
 
 const window = {
   start: Date.parse("2026-09-24T05:00:00Z"),
@@ -62,6 +67,70 @@ test("a job attempt carries its job, runner size, queue time and duration", () =
   });
   // a workflow file run with `depot ci run` has no path to read a runner size from
   expect(fixtureEvents()[2]?.properties).toMatchObject({ job_name: "e2e", runner_size: undefined });
+});
+
+test("a test evidence job's attempt says whether its folder reached R2, by the prefix its summary names", () => {
+  const runs = [
+    {
+      run,
+      workflows: [
+        {
+          workflow: {
+            workflowId: "wf3",
+            workflowPath: "test.yml",
+            name: "Test",
+            status: "finished",
+            finishedAt: "2026-09-24T05:40:00Z",
+          },
+          jobs: [
+            {
+              job: { jobId: "job4", jobKey: "test.yml:test" },
+              attempts: [
+                attempt("uploaded", "2026-09-24T05:35:00.000Z"),
+                attempt("not-uploaded", "2026-09-24T05:36:00.000Z", "failure", 2),
+                attempt("before-window", "2026-09-24T04:59:00.000Z"),
+              ],
+            },
+            {
+              job: { jobId: "job5", jobKey: "test.yml:lint" },
+              attempts: [attempt("no-evidence", "2026-09-24T05:37:00.000Z")],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  // the attempts whose summaries the sync reads: the evidence job's, in the window
+  expect(testEvidenceAttemptIds(runs, window)).toEqual(["uploaded", "not-uploaded"]);
+
+  const prefix = "evidence/ci/trust=pr/date=2026-09-24/job=job4/testrun_uploaded/";
+  const events = ciTelemetryEvents({
+    window,
+    runs,
+    workflows: [],
+    sources: new Map(),
+    runners: new Map(),
+    evidence: new Map([
+      ["uploaded", { prefix }],
+      ["not-uploaded", { prefix: undefined }],
+    ]),
+  });
+  expect(events.map(({ properties }) => properties)).toEqual([
+    expect.objectContaining({
+      attempt_id: "uploaded",
+      test_run_id: "testrun_uploaded",
+      test_evidence_uploaded: true,
+      test_evidence_prefix: prefix,
+    }),
+    expect.objectContaining({
+      attempt_id: "not-uploaded",
+      test_run_id: "testrun_not-uploaded",
+      test_evidence_uploaded: false,
+      test_evidence_prefix: undefined,
+    }),
+    // a job that uploads nothing says nothing about evidence
+    expect.not.objectContaining({ test_evidence_uploaded: expect.anything() }),
+  ]);
 });
 
 test("a pull request run is that pull request's branch", async () => {

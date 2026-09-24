@@ -379,6 +379,13 @@ for it. The Playwright config additionally honors the Playwright-conventional
   one per job attempt) even when a test fails, next to
   `flake-records-unit-attempt-<id>`. See
   [CI and test telemetry](ci-test-telemetry.md) for downloading and checking one.
+- **The test evidence folder**: `test-results/` is one test run's evidence.
+  After the finalizer, `scripts/ci/test-evidence.ts write` adds one row per
+  test (`tables/tests.parquet`) and `manifest.json` (the run's result, the
+  tested commit and tree, the job attempt, the deployed target in the e2e
+  jobs, and every file's sha256). Kit's CTest writes its JUnit XML there too.
+  Then `upload` puts the folder in the `iterate-ci` R2 bucket; the step's
+  log and the job's summary give its prefix. [Test evidence](test-evidence.md).
 - **The Vitest e2e suite** streams to the job log; the soak writes one JSON
   report per run under `apps/os/output/soak/` plus `summary.json`.
 - **Playwright** writes the repo-level `test-results/`:

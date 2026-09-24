@@ -14,6 +14,7 @@
     "./test-support/flake-suite-summary": "./src/test-support/flake-suite-summary.ts",
     "./test-support/flake-record": "./src/test-support/flake-record.ts",
     "./test-support/ci-telemetry": "./src/test-support/ci-telemetry.ts",
+    "./test-support/test-evidence": "./src/test-support/test-evidence.ts",
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./slugify": "./src/slugify.ts",

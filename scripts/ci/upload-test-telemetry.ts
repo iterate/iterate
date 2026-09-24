@@ -12,7 +12,7 @@ import {
 } from "./test-telemetry-completeness.ts";
 import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
 
-async function loadTestTelemetryArtifacts(rawDirectory: string) {
+export async function loadTestTelemetryArtifacts(rawDirectory: string) {
   const files = (await filesBelow(rawDirectory)).filter((file) => file.endsWith(".json"));
   const artifacts = await Promise.all(
     files.map(async (file) => ({
