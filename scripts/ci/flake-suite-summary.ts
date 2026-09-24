@@ -9,7 +9,6 @@ import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.
 export async function writeFlakeSuiteSummaries(input: {
   directory: string;
   group: "unit" | "preview";
-  scope: "job" | "workflow";
   artifacts: TestTelemetryArtifact[];
   expectedWorkspaces: string[];
   cancelled: boolean;
@@ -41,16 +40,13 @@ export async function writeFlakeSuiteSummaries(input: {
     const completeness = analyzeTestTelemetryCompleteness(
       evidence,
       suite === "unit" ? input.expectedWorkspaces : [],
-      input.scope,
     );
-    const expectedCount =
-      input.scope === "workflow" ? completeness.expectedArtifactSources.length : 1;
     const diagnostics = [
       ...(!branch ? ["Missing source branch"] : []),
       ...(input.cancelled ? ["CI run cancelled"] : []),
       ...(artifacts.length === 0 ? ["No test runner result received"] : []),
-      ...(suite !== "unit" && (!expectedCount || artifacts.length !== expectedCount)
-        ? [`Expected ${expectedCount} full-suite runner results, received ${artifacts.length}`]
+      ...(suite !== "unit" && artifacts.length !== 1
+        ? [`Expected 1 full-suite runner results, received ${artifacts.length}`]
         : []),
       ...completeness.missingArtifactSources.map(
         ({ source }) => `Missing runner: ${source.producer}@${source.workspace}`,

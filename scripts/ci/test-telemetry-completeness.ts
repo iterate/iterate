@@ -36,7 +36,6 @@ export type TestTelemetryCompleteness = {
 export function analyzeTestTelemetryCompleteness(
   artifacts: readonly TestTelemetryArtifact[],
   expectedWorkspaces: readonly string[],
-  scope: "job" | "workflow",
 ): TestTelemetryCompleteness {
   const primaryArtifact = selectPrimaryArtifact(artifacts);
   const currentArtifacts =
@@ -44,8 +43,7 @@ export function analyzeTestTelemetryCompleteness(
       ? artifacts
       : artifacts.filter(
           (artifact) =>
-            ciScopeKey(artifactCiScope(artifact, scope)) ===
-            ciScopeKey(artifactCiScope(primaryArtifact, scope)),
+            ciScopeKey(artifactCiScope(artifact)) === ciScopeKey(artifactCiScope(primaryArtifact)),
         );
   const foreignArtifactIds = artifacts
     .filter((artifact) => !currentArtifacts.includes(artifact))
@@ -62,12 +60,12 @@ export function analyzeTestTelemetryCompleteness(
   ];
   const expectedScopedArtifactSources = currentArtifacts.flatMap((artifact) =>
     (artifact.expectedArtifactSources ?? []).map((source) =>
-      scopedArtifactSource(artifact, source, scope),
+      scopedArtifactSource(artifact, source),
     ),
   );
   const observedScopedArtifactSources = currentArtifacts.flatMap((artifact) => {
     const source = testTelemetryArtifactSource(artifact);
-    return source ? [scopedArtifactSource(artifact, source, scope)] : [];
+    return source ? [scopedArtifactSource(artifact, source)] : [];
   });
 
   return {
@@ -166,20 +164,16 @@ function findMissingArtifactSources(
 function scopedArtifactSource(
   artifact: TestTelemetryArtifact,
   source: TestTelemetryArtifactSource,
-  scope: "job" | "workflow",
 ): ScopedArtifactSource {
-  return { source, ciScope: artifactCiScope(artifact, scope) };
+  return { source, ciScope: artifactCiScope(artifact) };
 }
 
-function artifactCiScope(
-  artifact: TestTelemetryArtifact,
-  scope: "job" | "workflow",
-): ArtifactCiScope {
+function artifactCiScope(artifact: TestTelemetryArtifact): ArtifactCiScope {
   return {
     repository: artifact.ci.repository,
     workflowRunId: artifact.ci.workflowRunId,
     workflowRunAttempt: artifact.ci.workflowRunAttempt,
-    ...(scope === "job" && { jobName: artifact.ci.jobName }),
+    jobName: artifact.ci.jobName,
   };
 }
 

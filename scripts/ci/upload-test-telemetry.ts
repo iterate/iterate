@@ -14,9 +14,7 @@ import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
 
 const DEFAULT_ARTIFACT_ROOT = "test-results/ci-telemetry";
 
-export { testTelemetryEvents } from "./test-telemetry-events.ts";
-
-export async function loadTestTelemetryArtifacts(rawDirectory: string) {
+async function loadTestTelemetryArtifacts(rawDirectory: string) {
   const files = (await filesBelow(rawDirectory)).filter((file) => file.endsWith(".json"));
   const artifacts = await Promise.all(
     files.map(async (file) => ({
@@ -33,11 +31,11 @@ export async function loadTestTelemetryArtifacts(rawDirectory: string) {
 
 export async function finalizeTestTelemetry(options: {
   artifactRoot: string;
-  scope: "job" | "workflow";
   cancelled?: boolean;
   dryRun?: boolean;
   expectedWorkspaces?: readonly string[];
   flakeSuites?: "unit" | "preview";
+  headSha?: string;
 }) {
   const artifactRoot = resolve(options.artifactRoot);
   const rawDirectory = join(artifactRoot, "raw");
@@ -52,7 +50,6 @@ export async function finalizeTestTelemetry(options: {
   const completeness = analyzeTestTelemetryCompleteness(
     loaded.map(({ artifact }) => artifact),
     options.expectedWorkspaces ?? [],
-    options.scope,
   );
   const {
     expectedArtifactSources,
@@ -105,13 +102,12 @@ export async function finalizeTestTelemetry(options: {
   // Cancellation before any reporter starts has no source identity for a summary.
   // Keep the cancelled manifest; absence of a summary cannot clear the dashboard.
   if (options.flakeSuites && loaded.length > 0) {
-    const headSha = process.env.TEST_TELEMETRY_HEAD_SHA;
+    const { headSha } = options;
     if (!headSha)
       throw new Error("TEST_TELEMETRY_HEAD_SHA is required for full flake suite summaries");
     await writeFlakeSuiteSummaries({
       directory: resolve(artifactRoot, "../flake-records"),
       group: options.flakeSuites,
-      scope: options.scope,
       artifacts: loaded.map(({ artifact }) => artifact),
       expectedWorkspaces: [...(options.expectedWorkspaces || [])],
       cancelled: options.cancelled || false,
@@ -235,9 +231,7 @@ if (isMainModule(import.meta.url)) {
   }
   const rootFlagIndex = process.argv.indexOf("--artifact-root");
   const artifactRoot =
-    rootFlagIndex === -1
-      ? (process.env.TEST_TELEMETRY_ARTIFACT_ROOT ?? DEFAULT_ARTIFACT_ROOT)
-      : process.argv[rootFlagIndex + 1];
+    rootFlagIndex === -1 ? DEFAULT_ARTIFACT_ROOT : process.argv[rootFlagIndex + 1];
   if (!artifactRoot || artifactRoot.startsWith("--")) {
     throw new Error("--artifact-root requires a path");
   }
@@ -245,13 +239,12 @@ if (isMainModule(import.meta.url)) {
     .split(",")
     .map((workspace) => workspace.trim())
     .filter(Boolean);
-  const cancelled = process.argv.includes("--cancelled");
   await finalizeTestTelemetry({
     artifactRoot,
-    scope: process.argv.includes("--workflow-scope") ? "workflow" : "job",
-    cancelled,
-    dryRun: cancelled || process.argv.includes("--dry-run"),
+    cancelled: process.argv.includes("--cancelled"),
+    dryRun: process.argv.includes("--dry-run"),
     expectedWorkspaces,
     flakeSuites,
+    headSha: process.env.TEST_TELEMETRY_HEAD_SHA,
   });
 }

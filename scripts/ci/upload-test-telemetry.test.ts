@@ -6,7 +6,8 @@ import {
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { afterEach, expect, it, vi } from "vitest";
-import { finalizeTestTelemetry, testTelemetryEvents } from "./upload-test-telemetry.ts";
+import { testTelemetryEvents } from "./test-telemetry-events.ts";
+import { finalizeTestTelemetry } from "./upload-test-telemetry.ts";
 
 const { sendPostHogEventsMock } = vi.hoisted(() => ({ sendPostHogEventsMock: vi.fn() }));
 vi.mock("./posthog-events.ts", async (importOriginal) => ({
@@ -222,7 +223,7 @@ it("keeps raw and normalized JSON for replay while dry-run skips delivery", asyn
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
   );
 
-  const result = await finalizeTestTelemetry({ scope: "job", artifactRoot: root, dryRun: true });
+  const result = await finalizeTestTelemetry({ artifactRoot: root, dryRun: true });
 
   expect(result.artifacts).toHaveLength(1);
   const normalized = JSON.parse(
@@ -246,7 +247,6 @@ it("delivers complete evidence before rejecting a missing expected workspace", a
 
   await expect(
     finalizeTestTelemetry({
-      scope: "job",
       artifactRoot: root,
       expectedWorkspaces: ["@iterate-com/os"],
     }),
@@ -331,7 +331,7 @@ it("requires exact expected runner sources with cardinality before passing", asy
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
   );
 
-  await expect(finalizeTestTelemetry({ scope: "job", artifactRoot: root })).rejects.toThrow(
+  await expect(finalizeTestTelemetry({ artifactRoot: root })).rejects.toThrow(
     "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root (expected 2, observed 1)",
   );
   expect(sendPostHogEventsMock).toHaveBeenCalledOnce();
@@ -382,7 +382,7 @@ it("requires exact expected runner sources with cardinality before passing", asy
   rmSync(root, { recursive: true });
 });
 
-it("combines shard reports from one workflow attempt while preserving job identity", async () => {
+it("rejects a runner artifact from another job of the same workflow attempt", async () => {
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-shards-"));
   using _cleanup = { [Symbol.dispose]: () => rmSync(root, { recursive: true }) };
   const source = {
@@ -393,49 +393,26 @@ it("combines shard reports from one workflow attempt while preserving job identi
     workspace: "iterate-root",
   };
   writeTestTelemetryArtifact(
+    { ...artifact, ci: { ...artifact.ci, jobName: "e2e" }, expectedArtifactSources: [source] },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
+  writeTestTelemetryArtifact(
     {
       ...artifact,
-      ci: { ...artifact.ci, jobName: "finish" },
-      expectedArtifactSources: [source, source],
+      artifactId: "playwright-1",
+      producer: source.producer,
+      ci: { ...artifact.ci, jobName: "playwright-1" },
+      context: source,
     },
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
   );
-  for (const jobName of ["playwright-1", "playwright-2"]) {
-    writeTestTelemetryArtifact(
-      {
-        ...artifact,
-        artifactId: jobName,
-        producer: source.producer,
-        ci: { ...artifact.ci, jobName },
-        context: source,
-      },
-      { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
-    );
-  }
-  await expect(
-    finalizeTestTelemetry({ artifactRoot: root, dryRun: true, scope: "job" }),
-  ).rejects.toThrow("Foreign test telemetry artifacts");
-  const result = await finalizeTestTelemetry({
-    artifactRoot: root,
-    dryRun: true,
-    scope: "workflow",
-  });
-  expect(result.artifacts.map((item) => item.ci.jobName).sort()).toEqual([
-    "finish",
-    "playwright-1",
-    "playwright-2",
-  ]);
-  expect(JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8"))).toMatchObject(
-    {
-      artifactCount: 3,
-      foreignArtifactIds: [],
-      missingArtifactSources: [],
-    },
+  await expect(finalizeTestTelemetry({ artifactRoot: root, dryRun: true })).rejects.toThrow(
+    "Foreign test telemetry artifacts: playwright-1",
   );
 });
 
 it.each([{ repository: "iterate/another" }, { workflowRunId: "122" }, { workflowRunAttempt: "2" }])(
-  "workflow reports still reject foreign identity %j",
+  "rejects a runner artifact with a foreign identity %j",
   async (foreignIdentity) => {
     const root = mkdtempSync(join(tmpdir(), "test-telemetry-foreign-shard-"));
     using _cleanup = { [Symbol.dispose]: () => rmSync(root, { recursive: true }) };
@@ -455,14 +432,14 @@ it.each([{ repository: "iterate/another" }, { workflowRunId: "122" }, { workflow
         ...artifact,
         artifactId: "foreign-shard",
         producer: source.producer,
-        ci: { ...artifact.ci, ...foreignIdentity, jobName: "playwright-1" },
+        ci: { ...artifact.ci, ...foreignIdentity },
         context: source,
       },
       { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
     );
-    await expect(
-      finalizeTestTelemetry({ artifactRoot: root, dryRun: true, scope: "workflow" }),
-    ).rejects.toThrow("Foreign test telemetry artifacts: foreign-shard");
+    await expect(finalizeTestTelemetry({ artifactRoot: root, dryRun: true })).rejects.toThrow(
+      "Foreign test telemetry artifacts: foreign-shard",
+    );
     expect(
       JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8")),
     ).toMatchObject({
@@ -492,9 +469,9 @@ it("fails on an incomplete runner artifact after retaining its normalized eviden
     TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw"),
   });
 
-  await expect(
-    finalizeTestTelemetry({ scope: "job", artifactRoot: root, dryRun: true }),
-  ).rejects.toThrow(`Incomplete test telemetry artifacts: ${artifact.artifactId}`);
+  await expect(finalizeTestTelemetry({ artifactRoot: root, dryRun: true })).rejects.toThrow(
+    `Incomplete test telemetry artifacts: ${artifact.artifactId}`,
+  );
   const manifest = JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8")) as {
     incompleteArtifactIds: string[];
   };
@@ -530,7 +507,7 @@ it("delivers completed runner errors without misclassifying their evidence as in
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
   );
 
-  const result = await finalizeTestTelemetry({ scope: "job", artifactRoot: root });
+  const result = await finalizeTestTelemetry({ artifactRoot: root });
 
   expect(sendPostHogEventsMock).toHaveBeenCalledOnce();
   expect(
@@ -561,7 +538,6 @@ it.each([undefined, "unit", "preview"] as const)(
     const artifactRoot = join(root, "ci-telemetry");
 
     const result = await finalizeTestTelemetry({
-      scope: "job",
       artifactRoot,
       cancelled: true,
       flakeSuites,
@@ -584,9 +560,9 @@ it("rejects duplicate artifact IDs instead of double-counting a retried upload",
   writeFileSync(join(rawDirectory, "first.json"), JSON.stringify(artifact));
   writeFileSync(join(rawDirectory, "second", "duplicate.json"), JSON.stringify(artifact));
 
-  await expect(
-    finalizeTestTelemetry({ scope: "job", artifactRoot: root, dryRun: true }),
-  ).rejects.toThrow(`Duplicate test telemetry artifact IDs: ${artifact.artifactId}`);
+  await expect(finalizeTestTelemetry({ artifactRoot: root, dryRun: true })).rejects.toThrow(
+    `Duplicate test telemetry artifact IDs: ${artifact.artifactId}`,
+  );
   rmSync(root, { recursive: true });
 });
 
