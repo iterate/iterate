@@ -347,6 +347,48 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
   expect(calls).toEqual(["claim www.acme.test", "remove www.acme.test", "release www.acme.test"]);
 });
 
+test("ProjectProcessor — a drained re-check knows the add it just answered provisioned: its failure keeps the claim", async () => {
+  const calls: string[] = [];
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => (finish = resolve));
+  let provisions = 0;
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async (name) => void calls.push(`claim ${name}`),
+      release: async (name) => void calls.push(`release ${name}`),
+      provider: {
+        provision: async () => {
+          provisions += 1;
+          if (provisions > 1) throw new Error("Cloudflare is down");
+          await held;
+          return observation("pending");
+        },
+        remove: async () => {},
+      },
+    }),
+  );
+  const owe = (offset: number) =>
+    deliver(
+      processor,
+      {
+        ...empty,
+        hostnames: {
+          "www.acme.test": { requested: { verb: "add", offset }, cloudflare: null, error: null },
+        },
+      },
+      async () => [],
+    );
+  owe(1);
+  await settle();
+  owe(2); // a re-check asked while the first add runs; the state has no observation yet
+  finish();
+  await settle();
+  expect(calls).toEqual(["claim www.acme.test", "claim www.acme.test"]);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(

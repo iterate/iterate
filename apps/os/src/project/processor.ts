@@ -253,19 +253,24 @@ export class ProjectProcessor extends StreamProcessor<
       this.#hostnameWork.add(hostname);
       runInBackground(async () => {
         try {
-          // Drain: the newest request as of each pass, never the one just answered again.
+          // Drain: the newest request as of each pass, never the one just answered again. Whether
+          // the hostname is serving is the worker's own to carry: the state it drains from may not
+          // have reduced its last answer yet.
           let answered = 0;
+          let serving = Boolean(entry.cloudflare);
           for (
             let owed = entry;
             owed?.requested && owed.requested.offset !== answered;
             owed = this.#newestHostnames[hostname]
           ) {
             const { verb, offset } = owed.requested;
-            await append(
+            const answer =
               verb === "add"
-                ? await this.#addHostname(hostname, offset, Boolean(owed.cloudflare))
-                : await this.#removeHostname(hostname, offset),
-            );
+                ? await this.#addHostname(hostname, offset, serving)
+                : await this.#removeHostname(hostname, offset);
+            await append(answer);
+            serving =
+              "cloudflare" in answer.payload ? serving || !!answer.payload.cloudflare : false;
             answered = offset;
           }
         } finally {
