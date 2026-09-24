@@ -51,20 +51,19 @@ test("any door materializes a fresh context: readEvents(0) starts with created t
     ["events.iterate.com/stream/created", 1],
     ["events.iterate.com/stream/woken", 2],
   ]);
-  expect(page.events[0].payload).toEqual({ projectId: ctx, path: "/" });
+  expect(page.events[0]).toMatchObject({ payload: { projectId: ctx, path: "/" } });
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
   // The first user append follows created and woken.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
-  expect(receipts[0].type).toBe("hello");
-  expect(receipts[0].offset).toBe(3);
+  expect(receipts[0]).toMatchObject({ type: "hello", offset: 3 });
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
-  expect(snap.state.createdAt).toBe(page.events[0].createdAt);
+  expect(snap.state).toMatchObject({ createdAt: page.events[0].createdAt });
 
   // exactly once per incarnation (and born exactly once, ever)
   await itx.invoke(`itx.append({ type: 'again' })`);
@@ -74,23 +73,6 @@ test("any door materializes a fresh context: readEvents(0) starts with created t
 });
 
 // ── the commit point: guards, idempotency, depth, the pause slice, paging ──
-
-const read = (
-  itx: any,
-  afterOffset?: number,
-  limit?: number,
-): Promise<{ events: any[]; scannedThroughOffset: number }> =>
-  itx.invoke([
-    "itx",
-    [
-      "readEvents",
-      ...(afterOffset === undefined
-        ? []
-        : limit === undefined
-          ? [afterOffset]
-          : [afterOffset, limit]),
-    ],
-  ]);
 
 // ── the append door's runtime guards ──
 
@@ -117,7 +99,7 @@ test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async ()
   const pair = await itx.append(duplicated, duplicated);
   // The dedupe itself is right: both entries answer with the ONE committed offset…
   expect(pair).toHaveLength(2);
-  expect(pair[1].offset).toBe(pair[0].offset);
+  expect(pair[1]).toMatchObject({ offset: pair[0].offset });
   const page = await read(itx);
   expect(page.events.filter((e) => e.idempotencyKey === "dup-in-batch")).toHaveLength(1);
   // …and the distinct view reached the facet exactly ONCE: one `dup` counted, at the head.
@@ -126,7 +108,7 @@ test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async ()
     const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
     return s.offset >= head && s;
   });
-  expect(snap.state.counts.dup).toBe(1);
+  expect(snap.state.counts).toMatchObject({ dup: 1 });
 });
 
 test("a mid-batch idempotency conflict rolls the whole batch back atomically", async () => {
@@ -157,7 +139,7 @@ test("a mid-batch idempotency conflict rolls the whole batch back atomically", a
     itx.append({ type: "fresh-again" }, { type: "seed", payload: { v: 3 }, idempotencyKey: "kc" }),
   );
   const [probe] = await itx.append({ type: "probe", payload: {} });
-  expect(probe.offset).toBe(marker.offset + 1);
+  expect(probe).toMatchObject({ offset: marker.offset + 1 });
 });
 
 test("a dedupe hit interleaved with fresh events assigns no double offsets", async () => {
@@ -168,11 +150,11 @@ test("a dedupe hit interleaved with fresh events assigns no double offsets", asy
     { type: "note", payload: { v: 1 }, idempotencyKey: "kd" }, // dedupe hit — consumes NO offset
     { type: "fresh", payload: { n: 2 } },
   );
-  expect(batch[1].offset).toBe(orig.offset); // the hit answers with the ORIGINAL identity
-  expect(batch[2].offset).toBe(batch[0].offset + 1); // the hit did not burn an offset in between
+  expect(batch[1]).toMatchObject({ offset: orig.offset }); // the hit answers with the ORIGINAL identity
+  expect(batch[2]).toMatchObject({ offset: batch[0].offset + 1 }); // the hit did not burn an offset in between
   const page = await read(itx);
   const offsets = page.events.map((e) => e.offset);
-  expect(new Set(offsets).size).toBe(offsets.length); // no offset assigned twice
+  expect(offsets).toEqual([...new Set(offsets)]); // no offset assigned twice
   // the original and both fresh events are each in the log exactly once
   expect(offsets).toEqual(expect.arrayContaining([orig.offset, batch[0].offset, batch[2].offset]));
   expect(page.events.filter((e) => e.idempotencyKey === "kd")).toHaveLength(1);
@@ -187,7 +169,7 @@ test("concurrent appends from two sessions to one ctx keep offsets unique", asyn
     ...Array.from({ length: 10 }, (_, i) => b.append({ type: "race", payload: { from: "b", i } })),
   ]);
   const offsets = results.map(([e]) => e.offset);
-  expect(new Set(offsets).size).toBe(20);
+  expect(offsets).toEqual([...new Set(offsets)]); // 20 receipts, no offset twice
   // and the log agrees: exactly 20 race rows, offsets unique and matching the receipts
   // (platform events — woken, live-state deltas — share the sequence, so the race offsets
   // need not be 1..20; uniqueness and receipt/log agreement are the property)
@@ -197,15 +179,6 @@ test("concurrent appends from two sessions to one ctx keep offsets unique", asyn
 });
 
 // ── expression/value depth near the codec's parse budget ──
-
-/** n-deep nested array with a 0 at the bottom: [[[…0…]]]. */
-const nested = (n: number): unknown => {
-  let v: unknown = 0;
-  for (let i = 0; i < n; i++) v = [v];
-  return v;
-};
-/** The same shape in the STRING half of the codec. */
-const nestedLiteral = (n: number): string => "[".repeat(n) + "0" + "]".repeat(n);
 
 test("a 64-deep nested-array payload (structured lane) appends and reads back byte-identically", async () => {
   const itx = openItx(freshCtx("depth"));
@@ -240,7 +213,7 @@ test("an idempotent RETRY of a 64-deep payload dedupes instead of tripping the d
   });
   const [first] = await itx.append(build());
   const [retry] = await itx.append(build());
-  expect(retry.offset).toBe(first.offset); // same key + same body = same event
+  expect(retry).toMatchObject({ offset: first.offset }); // same key + same body = same event
 });
 
 // ── the core reduce's pause slice (control is ordinary events; enforcement reads the reduce) ──
@@ -318,23 +291,23 @@ test("read paging: a full page stops at its last row; a short page proves the du
   // scannedThroughOffset must not overshoot past the ephemeral holes to the head
   const full = await read(itx, base, 3);
   expect(full.events).toHaveLength(3);
-  expect(full.scannedThroughOffset).toBe(durables[2].offset);
+  expect(full).toMatchObject({ scannedThroughOffset: durables[2].offset });
   // SHORT page from there: proves the scan reached the DURABLE mark — never the in-memory head,
   // whose ephemeral offsets a later incarnation may hand to durables (a reader that persisted one
   // would skip them). The ephemerals took offsets (eph[1] > durables[2]) but are not proven.
   const short = await read(itx, durables[2].offset, 3);
   expect(short.events).toHaveLength(0);
   expect(eph[1].offset).toBeGreaterThan(durables[2].offset);
-  expect(short.scannedThroughOffset).toBe(durables[2].offset);
+  expect(short).toMatchObject({ scannedThroughOffset: durables[2].offset });
   // one more durable AFTER the holes: a full page whose last row IS the head lands exactly on it
   const [d4] = await itx.append({ type: "d", payload: { n: 4 } });
   const exact = await read(itx, base, 4);
   expect(exact.events).toHaveLength(4);
-  expect(exact.scannedThroughOffset).toBe(d4.offset);
+  expect(exact).toMatchObject({ scannedThroughOffset: d4.offset });
   // and a default-limit read across the holes returns just the row beyond them
   const across = await read(itx, durables[2].offset);
   expect(across.events.map((e) => e.offset)).toEqual([d4.offset]);
-  expect(across.scannedThroughOffset).toBe(d4.offset);
+  expect(across).toMatchObject({ scannedThroughOffset: d4.offset });
 });
 
 test("readEvents(afterOffset beyond head) never claims a scan of unassigned offsets", async () => {
@@ -347,14 +320,11 @@ test("readEvents(afterOffset beyond head) never claims a scan of unassigned offs
   // consume offsets beyond the last receipt, so a receipt offset under-approximates it).
   const head = (await read(itx)).scannedThroughOffset;
   const page = await read(itx, head + 100);
-  expect(page.events).toEqual([]);
+  expect(page).toMatchObject({ events: [] });
   expect(page.scannedThroughOffset).toBeLessThanOrEqual(head);
 });
 
 // ── row chunking ──
-
-const readOne = async (itx: any, offset: number) =>
-  (await itx.invoke(["itx", ["readEvents", offset - 1, 1]])).events[0];
 
 test("a ~256KB payload round-trips byte-identically (the in-bounds control)", async () => {
   const itx = openItx(freshCtx("chunkctl"));
@@ -377,8 +347,8 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
   const big = await itx.append({ type: "big", payload: { blob } });
   const [after] = await itx.append({ type: "small-after" });
   expect(big.length).toBe(1); // 5MB body committed as ONE event (not split)
-  expect(big[0].offset).toBe(before.offset + 1); // dense with its predecessor
-  expect(after.offset).toBe(big[0].offset + 1); // and with its successor
+  expect(big[0]).toMatchObject({ offset: before.offset + 1 }); // dense with its predecessor
+  expect(after).toMatchObject({ offset: big[0].offset + 1 }); // and with its successor
 
   // Read it back through a FRESH session (same ctx) — a real storage reassembly, not an echo.
   const itx2 = openItx(ctx);
@@ -393,7 +363,7 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
   const keyed = { type: "big-keyed", payload: { blob }, idempotencyKey: "chunk-once" };
   const [k1] = await itx.append(keyed);
   const [k2] = await itx.append(keyed);
-  expect(k2.offset).toBe(k1.offset);
+  expect(k2).toMatchObject({ offset: k1.offset });
 });
 
 test("a chunked append followed by an idempotency CONFLICT in the same batch rolls back ALL chunk rows", async () => {
@@ -424,7 +394,7 @@ test("a chunked append followed by an idempotency CONFLICT in the same batch rol
     ),
   ).rejects.toThrow(/idempotency key "pin" already names a different event/);
   const [next] = await itx.append({ type: "after-rollback" });
-  expect(next.offset).toBe(marker.offset + 1);
+  expect(next).toMatchObject({ offset: marker.offset + 1 });
 }, 60_000);
 
 test("read paging across a chunked event keeps the scanned-offset-range proof honest", async () => {
@@ -440,12 +410,12 @@ test("read paging across a chunked event keeps the scanned-offset-range proof ho
   // Page 1: a FULL page (limit 2 from just before e2) lands exactly ON the chunked event.
   const page1 = await itx.invoke(["itx", ["readEvents", e2.offset - 1, 2]]);
   expect(page1.events.map((e: { offset: number }) => e.offset)).toEqual([e2.offset, big.offset]);
-  expect(page1.scannedThroughOffset).toBe(big.offset); // the EVENT offset — never a chunk row's
+  expect(page1).toMatchObject({ scannedThroughOffset: big.offset }); // the EVENT offset — never a chunk row's
   expect(page1.events[1].payload.blob === blob).toBe(true); // the body rode the page whole
   // Page 2 chains contiguously from the proof.
   const page2 = await itx.invoke(["itx", ["readEvents", page1.scannedThroughOffset, 500]]);
   expect(page2.events.map((e: { offset: number }) => e.offset)).toEqual([e4.offset, e5.offset]);
-  expect(page2.scannedThroughOffset).toBe(e5.offset);
+  expect(page2).toMatchObject({ scannedThroughOffset: e5.offset });
 }, 60_000);
 
 const EVENT_CHUNK_SIZE = 512 * 1024; // must match src/stream/stream.ts
@@ -473,7 +443,7 @@ test("a surrogate pair straddling a chunk boundary round-trips byte-identically"
   expect(hi).toBeLessThanOrEqual(0xdbff);
 
   const [committed] = await itx.append({ type: "big", payload: { blob } });
-  expect(committed.payload.blob).toBe(blob); // the echo is the in-memory object — always intact
+  expect(committed.payload).toMatchObject({ blob }); // the echo is the in-memory object — always intact
 
   // Read back through a FRESH session → a real reassembly from event_chunks, not an echo.
   const back = await readOne(openItx(ctx), committed.offset);
@@ -516,8 +486,8 @@ export default class Waiter extends WorkerEntrypoint {
   await sleep(500); // let the loaded worker start waiting before the append (the anchored afterOffset makes either order correct)
   await itxB.invoke(`itx.append({ type: 'ping', payload: { via: 'entrypoint' } })`);
   const got = await pending;
-  expect(got.type).toBe("ping");
-  expect(got.payload).toEqual({ via: "entrypoint" });
+  expect(got).toMatchObject({ type: "ping" });
+  expect(got).toMatchObject({ payload: { via: "entrypoint" } });
   expect(got.offset).toBeGreaterThan(head);
 });
 
@@ -613,3 +583,33 @@ probe(
     }
   },
 );
+
+const read = (
+  itx: any,
+  afterOffset?: number,
+  limit?: number,
+): Promise<{ events: any[]; scannedThroughOffset: number }> =>
+  itx.invoke([
+    "itx",
+    [
+      "readEvents",
+      ...(afterOffset === undefined
+        ? []
+        : limit === undefined
+          ? [afterOffset]
+          : [afterOffset, limit]),
+    ],
+  ]);
+
+/** n-deep nested array with a 0 at the bottom: [[[…0…]]]. */
+const nested = (n: number): unknown => {
+  let v: unknown = 0;
+  for (let i = 0; i < n; i++) v = [v];
+  return v;
+};
+
+/** The same shape in the STRING half of the codec. */
+const nestedLiteral = (n: number): string => "[".repeat(n) + "0" + "]".repeat(n);
+
+const readOne = async (itx: any, offset: number) =>
+  (await itx.invoke(["itx", ["readEvents", offset - 1, 1]])).events[0];

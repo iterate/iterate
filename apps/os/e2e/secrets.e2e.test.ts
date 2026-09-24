@@ -42,12 +42,6 @@ import {
 const SET = "events.iterate.com/secret/set";
 const DELETED = "events.iterate.com/secret/deleted";
 
-/** The `secret/set` and `secret/deleted` facts on a context's log as `[type, payload]`, oldest first. */
-const changesOf = async (itx: any): Promise<unknown[]> =>
-  (await readAll(itx))
-    .filter((e) => e.type === SET || e.type === DELETED)
-    .map((e) => [e.type, e.payload]);
-
 test("set / list / delete: paths, pins and strategy kinds are listed, values never are; each change is one fact on the secret's path, cross-posted to the root, without the value; a bad path, a missing pin and a bad URL are refused", async () => {
   const itx = openItx(freshCtx("secrets"));
   expect(await itx.secrets.list()).toEqual([]);
@@ -142,7 +136,7 @@ test("a secret is its path: after a set the `secret` processor row is on /secret
   const set1 = (await readAll(x)).find((e) => e.type === SET);
   expect(set1?.payload).toEqual({ path: "/secrets/x", urls });
   const snapshot1 = await x.facets.get("secret").snapshot();
-  expect(snapshot1.state).toEqual({ material: { offset: set1.offset }, deletion: null });
+  expect(snapshot1).toMatchObject({ state: { material: { offset: set1.offset }, deletion: null } });
   expect(snapshot1.offset).toBeGreaterThanOrEqual(set1.offset);
   // delete: the fact lands, the row goes, the catalog drops it
   expect(await itx.secrets.delete("/secrets/x")).toEqual({ path: "/secrets/x" });
@@ -165,9 +159,8 @@ test("a secret is its path: after a set the `secret` processor row is on /secret
   expect(await processorNames(x)).toEqual(["secret"]);
   const set2 = (await readAll(x)).filter((e) => e.type === SET).at(-1);
   expect(set2.offset).toBeGreaterThan(deleted.offset);
-  expect((await x.facets.get("secret").snapshot()).state).toEqual({
-    material: { offset: set2.offset },
-    deletion: null,
+  expect(await x.facets.get("secret").snapshot()).toMatchObject({
+    state: { material: { offset: set2.offset }, deletion: null },
   });
   expect(await itx.secrets.list()).toEqual([
     { path: "/secrets/x", urls, createdAt: expect.any(String) },
@@ -190,7 +183,7 @@ test("the pin at egress: a secret is refused, 502, for any origin but its pinned
       headers: { authorization: 'getSecret("/secrets/bound")' },
     }),
   );
-  expect(res.status).toBe(502);
+  expect(res).toMatchObject({ status: 502 });
   const body = await res.text();
   expect(body).toContain("the secret /secrets/bound is pinned to https://api.example.com");
   expect(body).toContain("not sent to https://egress.invalid");
@@ -222,7 +215,7 @@ test("`{ field }` in the egress placeholder: a field the object value has no str
     const res = await itx.fetch(
       new Request("https://egress.invalid/", { headers: { authorization } }),
     );
-    expect(res.status).toBe(502);
+    expect(res).toMatchObject({ status: 502 });
     return res.text();
   };
   expect(await refusal('getSecret("/secrets/tg", { field: "bot.nope" })')).toContain(
@@ -280,14 +273,14 @@ export default class Echo extends WorkerEntrypoint {
     const plain = await itx.fetch(
       new Request(app, { headers: { "x-secret": 'getSecret("/secrets/arrives")' } }),
     );
-    expect(plain.status).toBe(200);
+    expect(plain).toMatchObject({ status: 200 });
     expect(await plain.text()).toBe("the-value (none)");
     const field = await itx.fetch(
       new Request(app, {
         headers: { "x-field": 'getSecret("/secrets/arrives-json", { field: "a.b" })' },
       }),
     );
-    expect(field.status).toBe(200);
+    expect(field).toMatchObject({ status: 200 });
     expect(await field.text()).toBe("(none) the-field");
     // each dispatch is a `secret/used` fact on the SECRET's own log: the request AS RECEIVED (the
     // placeholder, never the value) and the upstream's status
@@ -317,7 +310,7 @@ test("a use is a fact: an egress through a secret appends `secret/used` on the s
   const res = await itx.fetch(
     new Request(workerUrl("/version"), { headers: { "x-secret": 'getSecret("/secrets/ver")' } }),
   );
-  expect(res.status).toBe(200);
+  expect(res).toMatchObject({ status: 200 });
   expect(await usedFacts(ver)).toEqual([
     { method: "GET", url: workerUrl("/version"), status: 200 },
   ]);
@@ -327,7 +320,7 @@ test("a use is a fact: an egress through a secret appends `secret/used` on the s
       headers: { "x-secret": 'getSecret("/secrets/ver")' },
     }),
   );
-  expect(refused.status).toBe(502);
+  expect(refused).toMatchObject({ status: 502 });
   expect((await usedFacts(ver)).length).toBe(1);
   expect(JSON.stringify([await readAll(itx), await readAll(ver)])).not.toContain("the-value");
 });
@@ -427,7 +420,7 @@ test("a set refused by a paused stream on the secret's path leaves no value behi
       headers: { authorization: 'getSecret("/secrets/ghost")' },
     }),
   );
-  expect(res.status).toBe(502); // the refused set stored no value, so the secret's facet finds none for `ghost` and refuses before the terminal fetch — the request never leaves
+  expect(res).toMatchObject({ status: 502 }); // the refused set stored no value, so the secret's facet finds none for `ghost` and refuses before the terminal fetch — the request never leaves
   expect(await res.text()).toContain('no stored project secret for getSecret("/secrets/ghost")');
 });
 
@@ -527,7 +520,7 @@ test("one request, one secret: a request naming two secrets is refused at egress
       headers: { "x-a": 'getSecret("/secrets/a")', "x-b": 'getSecret("/secrets/b")' },
     }),
   );
-  expect(res.status).toBe(502);
+  expect(res).toMatchObject({ status: 502 });
   expect(await res.text()).toContain(
     'one request, one secret — this one names "/secrets/a", "/secrets/b"',
   );
@@ -550,3 +543,9 @@ function usedFacts(secret: any, expected = 1): Promise<unknown[]> {
     10_000,
   );
 }
+
+/** The `secret/set` and `secret/deleted` facts on a context's log as `[type, payload]`, oldest first. */
+const changesOf = async (itx: any): Promise<unknown[]> =>
+  (await readAll(itx))
+    .filter((e) => e.type === SET || e.type === DELETED)
+    .map((e) => [e.type, e.payload]);

@@ -50,25 +50,6 @@ import {
   registerProject,
 } from "./support/project-host.ts";
 
-/** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder —
- *  `secret` is the secret's path, what the placeholder spells (`itx` is the untyped capnweb stub
- *  `openItx` hands out). */
-const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path: string) => {
-  const res = await itx.fetch(
-    new Request(`${petshopBaseUrl()}${path}`, {
-      headers: { authorization: `Bearer getSecret("${secret}", { field: "accessToken" })` },
-    }),
-  );
-  return { status: res.status, body: (await res.json().catch(() => null)) as any };
-};
-
-/** The `secret/refreshed` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
- *  facet appends one per strategy run, before it answers the request that ran it. */
-const refreshedFacts = async (secret: ReturnType<typeof openItx>): Promise<unknown[]> =>
-  (await readAll(secret))
-    .filter((e: any) => e.type === "events.iterate.com/secret/refreshed")
-    .map((e: any) => e.payload);
-
 test("waitrose-session: a username/password secret mints its session on first use, re-mints on 401, and the session works on the API — the password never leaves its Durable Object", async () => {
   const itx = openItx(freshCtx("secrets-waitrose"));
   const petshop = petshopBaseUrl();
@@ -102,7 +83,7 @@ test("waitrose-session: a username/password secret mints its session on first us
   // safe because the account above is this run's alone and no other row in the suite logs in there.
   await petshopExpireTokens("graphql-session-login");
   const pets = await bearerCall(itx, "/secrets/waitrose", "/api/pets");
-  expect(pets.status).toBe(200);
+  expect(pets).toMatchObject({ status: 200 });
   expect(Array.isArray(pets.body.pets ?? pets.body)).toBe(true);
 
   // The two logins are two `secret/refreshed` facts on the secret's path — the first-use mint and
@@ -193,7 +174,7 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   //    revoking the original changes nothing for the next expiry
   await petshopRevokeRefreshToken(first.refreshToken);
   await petshopExpireTokens(client.clientId);
-  expect((await bearerCall(itx, "/secrets/petshop", "/api/pets")).status).toBe(200);
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/pets")).toMatchObject({ status: 200 });
 
   // 7. revocation of the CURRENT refresh token: the next refresh grant is invalid_grant, and the
   //    caller gets the provider's 401 — the reason stays inside the DO. The current token is not
@@ -205,7 +186,7 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
     { ...client, accessToken: "expired-anyway", refreshToken: "revoked-or-never-issued" },
     { urls: [petshop], refresh: { kind: "oauth-refresh-token", tokenEndpoint } },
   );
-  expect((await bearerCall(itx, "/secrets/petshop", "/api/me")).status).toBe(401);
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({ status: 401 });
   // the failed run is a fact too — the outcome and the provider's reason, never a token
   expect(await refreshedFacts(secret)).toEqual([
     { kind: "oauth-refresh-token", ok: true },
@@ -224,7 +205,7 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
       headers: { authorization: 'Bearer getSecret("/secrets/petshop", { field: "accessToken" })' },
     }),
   );
-  expect(elsewhere.status).toBe(502);
+  expect(elsewhere).toMatchObject({ status: 502 });
   const refusal = await elsewhere.text();
   expect(refusal).toContain(`pinned to ${petshop}`);
   expect(refusal).not.toContain(first.accessToken);
@@ -298,7 +279,7 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   // nothing is on the catalog until the exchange succeeds — an abandoned attempt leaves no row
   expect(await itx.secrets.list()).toEqual([]);
   // a use before the callback is a clean 502: nothing to substitute, nothing to refresh with yet
-  expect((await bearerCall(itx, "/secrets/petshop", "/api/me")).status).toBe(502);
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({ status: 502 });
 
   // the human's consent: the URL names the platform's callback and carries PKCE
   const authorize = new URL(authorizationUrl);
@@ -308,18 +289,18 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   expect(authorizationUrl).not.toContain(client.clientSecret);
   authorize.searchParams.set("approve", "1");
   const consent = await fetch(authorize, { redirect: "manual" });
-  expect(consent.status).toBe(302);
+  expect(consent).toMatchObject({ status: 302 });
   const back = new URL(consent.headers.get("location")!);
   expect(back.origin + back.pathname).toBe(callback);
   expect(back.searchParams.get("code")).toBeTruthy();
 
   // the callback admits only a signed-in member of the project: no session is a 401, and the
   // attempt is still live afterwards (a stranger who saw the link cannot complete it, nor kill it)
-  expect((await fetch(back)).status).toBe(401);
+  expect(await fetch(back)).toMatchObject({ status: 401 });
   // a forged state is refused before any session or Durable Object is consulted
   const forged = new URL(back);
   forged.searchParams.set("state", "not-signed-by-us");
-  expect((await fetch(forged)).status).toBe(400);
+  expect(await fetch(forged)).toMatchObject({ status: 400 });
   // the member's callback: the exchange happens inside the secret's facet — and when the fact that
   // follows it is REFUSED (the secret's stream paused), the tokens stay: the code is spent and the
   // consent cannot be re-obtained by a retry, so the callback answers the error and its replay
@@ -328,12 +309,12 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   const secret = itx.cd("/secrets/petshop");
   await secret.append({ type: "events.iterate.com/stream/paused" });
   const refused = await fetch(back, member);
-  expect(refused.status, await refused.text()).toBe(400);
+  expect(refused, await refused.text()).toMatchObject({ status: 400 });
   expect(await itx.secrets.list()).toEqual([]); // no fact yet — the tokens are in the facet
   await secret.append({ type: "events.iterate.com/stream/resumed" });
   const done = await fetch(back, member);
   const said = await done.text();
-  expect(done.status, said).toBe(200);
+  expect(done, said).toMatchObject({ status: 200 });
   expect(said).toContain("the secret /secrets/petshop of project");
   const row = {
     path: "/secrets/petshop",
@@ -352,7 +333,7 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   ]);
   // a replayed callback (a refreshed tab) completes idempotently: no second exchange, the same
   // one catalog row — never a 400 for a secret that is live
-  expect((await fetch(back, member)).status).toBe(200);
+  expect(await fetch(back, member)).toMatchObject({ status: 200 });
   expect(await itx.secrets.list()).toEqual([row]);
 
   // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
@@ -395,13 +376,13 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
   authorize.searchParams.set("approve", "1");
   const consent = await fetch(authorize, { redirect: "manual" });
-  expect(consent.status).toBe(302);
+  expect(consent).toMatchObject({ status: 302 });
   const back = new URL(consent.headers.get("location")!);
   expect(back.origin + back.pathname).toBe(callback);
   const done = await fetch(back, {
     headers: { authorization: `Bearer ${adminCredentials().secret}` },
   });
-  expect(done.status, await done.text()).toBe(200);
+  expect(done, await done.text()).toMatchObject({ status: 200 });
 
   expect(await itx.secrets.list()).toEqual([
     {
@@ -483,3 +464,22 @@ deployedOnly(
     ).toEqual([event]);
   },
 );
+
+/** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder —
+ *  `secret` is the secret's path, what the placeholder spells (`itx` is the untyped capnweb stub
+ *  `openItx` hands out). */
+const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path: string) => {
+  const res = await itx.fetch(
+    new Request(`${petshopBaseUrl()}${path}`, {
+      headers: { authorization: `Bearer getSecret("${secret}", { field: "accessToken" })` },
+    }),
+  );
+  return { status: res.status, body: (await res.json().catch(() => null)) as any };
+};
+
+/** The `secret/refreshed` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
+ *  facet appends one per strategy run, before it answers the request that ran it. */
+const refreshedFacts = async (secret: ReturnType<typeof openItx>): Promise<unknown[]> =>
+  (await readAll(secret))
+    .filter((e: any) => e.type === "events.iterate.com/secret/refreshed")
+    .map((e: any) => e.payload);

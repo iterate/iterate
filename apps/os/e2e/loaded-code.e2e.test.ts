@@ -96,9 +96,9 @@ test("a raw fetch() from loaded code is itx.fetch at its context, through the ta
   expect(atRoot.status).toBeLessThan(500); // the root's implicit `itx.fetch`: egress answered
   // the owner grants egress to the child with one row, and the same fetch goes through
   await root.cd("/x").provide("itx.fetch", "itx.builtins.cd('/').fetch");
-  expect((await root.cd("/x").workers.get({ source: PROBE }).fetchUrl(target)).status).toBe(
-    atRoot.status,
-  );
+  expect(await root.cd("/x").workers.get({ source: PROBE }).fetchUrl(target)).toMatchObject({
+    status: atRoot.status,
+  });
 });
 
 test("owner-written physical redirects survive a loaded-code hop, while fresh calls and forwarded row writes still meet admission", async () => {

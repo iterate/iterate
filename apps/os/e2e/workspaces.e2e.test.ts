@@ -30,33 +30,7 @@ import {
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
 import { localOnly } from "./support/project-host.ts";
 
-/** The same for the workspace's own facts. */
-const workspaceTypes = (log: { type: string }[]) =>
-  log
-    .filter((e) => e.type.startsWith("events.iterate.com/workspace"))
-    .map((e) => e.type.replace("events.iterate.com/", ""));
-
 const SEED = { "/repos/config": { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };
-
-/** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.cfArtifacts` lent to
- *  each repo's context, and the workspace at `/workspaces/<name>`, created too; the fake closes when
- *  the test finishes. */
-async function workspaceOverFakeArtifacts(
-  { onTestFinished }: TestContext,
-  name: string,
-  seed: Record<string, Record<string, string>> = SEED,
-) {
-  const itx = openItx(freshCtx("ws"));
-  const artifacts = await FakeArtifacts.start(seed);
-  onTestFinished(() => artifacts.close());
-  for (const path of Object.keys(seed)) {
-    await itx.cd(path).provide("itx.cfArtifacts", artifacts);
-    await itx.repos.create(path);
-  }
-  await itx.workspaces.create(`/workspaces/${name}`);
-  const workspace = itx.workspaces.get(`/workspaces/${name}`);
-  return { itx, artifacts, workspace };
-}
 
 localOnly(
   "reads fall through to the mounted repo at its tip; a write shadows; the merged listing and the status say which is which",
@@ -224,7 +198,7 @@ localOnly(
       /span 2 mounts/,
     );
     const commit = await workspace.gitCommit({ message: "z", scope: "/repos/config/vendor" });
-    expect(commit.changedPaths).toEqual(["/repos/config/vendor/z.txt"]);
+    expect(commit).toMatchObject({ changedPaths: ["/repos/config/vendor/z.txt"] });
     expect(artifacts.remoteFiles("/repos/config/vendor")).toEqual({
       "y.txt": "from lib",
       "z.txt": "z",
@@ -273,7 +247,7 @@ localOnly(
       };
     };
     expect(await load()).toEqual({ note: null, tip: null }); // an unborn repo: no note yet
-    expect(artifacts.created).toEqual(["/repos/config"]);
+    expect(artifacts).toMatchObject({ created: ["/repos/config"] });
     // Save and commit.
     await itx.invoke([
       "itx",
@@ -331,7 +305,9 @@ test("against real Artifacts: nested paths through the workspace — a repo file
     await workspace.writeFile("/repos/config/notes/log.md", "# log\n");
     await workspace.writeFile("/repos/config/worker.ts", "export default 2;\n");
     const commit = await workspace.gitCommit({ message: "notes" });
-    expect(commit.changedPaths).toEqual(["/repos/config/notes/log.md", "/repos/config/worker.ts"]);
+    expect(commit).toMatchObject({
+      changedPaths: ["/repos/config/notes/log.md", "/repos/config/worker.ts"],
+    });
     expect(await repo.readFile("notes/log.md")).toBe("# log\n");
     expect(await repo.readFile("worker.ts")).toBe("export default 2;\n"); // the repo, at the new tip, agrees
     expect(await repo.listFiles()).toEqual({
@@ -437,3 +413,29 @@ test("the project facet's collection refuses a creation whose creator is not an 
   ])
     expect(written).not.toContain(type);
 });
+
+/** The same for the workspace's own facts. */
+const workspaceTypes = (log: { type: string }[]) =>
+  log
+    .filter((e) => e.type.startsWith("events.iterate.com/workspace"))
+    .map((e) => e.type.replace("events.iterate.com/", ""));
+
+/** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.cfArtifacts` lent to
+ *  each repo's context, and the workspace at `/workspaces/<name>`, created too; the fake closes when
+ *  the test finishes. */
+async function workspaceOverFakeArtifacts(
+  { onTestFinished }: TestContext,
+  name: string,
+  seed: Record<string, Record<string, string>> = SEED,
+) {
+  const itx = openItx(freshCtx("ws"));
+  const artifacts = await FakeArtifacts.start(seed);
+  onTestFinished(() => artifacts.close());
+  for (const path of Object.keys(seed)) {
+    await itx.cd(path).provide("itx.cfArtifacts", artifacts);
+    await itx.repos.create(path);
+  }
+  await itx.workspaces.create(`/workspaces/${name}`);
+  const workspace = itx.workspaces.get(`/workspaces/${name}`);
+  return { itx, artifacts, workspace };
+}

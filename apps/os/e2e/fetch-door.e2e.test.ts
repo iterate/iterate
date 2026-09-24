@@ -52,36 +52,18 @@ test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSock
   const site = projectUrl({ project: slug, app: "site", path: "/" });
 
   const page = await fetchProjectUrl(site);
-  expect(page.status, page.text).toBe(200);
+  expect(page, page.text).toMatchObject({ status: 200 });
   expect(page.text).toContain("dynamic web capability");
 
   const ws = await wsRoundTripOnProjectUrl(site, "hello-from-eyeball", 15_000);
   expect(ws.error).toBeUndefined();
-  expect(ws.opened).toBe(true);
-  expect(ws.echo).toBe("site-echo:hello-from-eyeball");
-  expect(ws.closeCode).toBe(1000);
+  expect(ws).toMatchObject({ opened: true, echo: "site-echo:hello-from-eyeball", closeCode: 1000 });
 
   // observability is the core reduce's snapshot (the rewrite above already committed, so the wake
   // record has reduced)
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(typeof snap.state.incarnation).toBe("number");
 });
-
-/** A fetch-shaped live rpc stub that records what it saw (method, path AND query, body — the
- *  request must cross intact, not just some response come back) and answers a distinctive Response. */
-class HttpDevice extends RpcTarget {
-  saw: string[] = [];
-  async fetch(request: Request) {
-    const url = new URL(request.url);
-    this.saw.push(
-      `${request.method} ${url.host}${url.pathname}${url.search} body=${await request.text()}`,
-    );
-    return new Response("pong-from-node-provider", {
-      status: 201,
-      headers: { "x-device": "node-live-cap" },
-    });
-  }
-}
 
 test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node provider's fetch() and its Response rides back out", async () => {
   const slug = freshDnsSafeProjectSlug("caplivehttp");
@@ -94,28 +76,15 @@ test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node
   const target = { project: slug, app: "device", path: "/hunt?probe=1" };
 
   const res = await fetchProjectUrl(projectUrl(target), {}, { method: "POST", body: "ping" });
-  expect(res.status, res.text).toBe(201);
-  expect(res.text).toBe("pong-from-node-provider");
+  expect(res, res.text).toMatchObject({ status: 201 });
+  expect(res).toMatchObject({ text: "pong-from-node-provider" });
   expect(res.headers["x-device"]).toBe("node-live-cap");
   // the URL as the eyeball spelled it (under paths: with the project prefix stripped, as the app sees it)
   const seen = appSeesUrl(target);
-  expect(device.saw).toEqual([`POST ${seen.host}${seen.pathname}${seen.search} body=ping`]);
+  expect(device).toMatchObject({
+    saw: [`POST ${seen.host}${seen.pathname}${seen.search} body=ping`],
+  });
 });
-
-/** The device: a fetch-shaped live rpc stub that upgrades WebSockets — the workerd fetch-handler
- *  idiom verbatim, running in Node. */
-class WsDevice extends RpcTarget {
-  async fetch(request: Request) {
-    const upgrade = String(request?.headers?.get?.("upgrade") ?? "");
-    if (upgrade.toLowerCase() !== "websocket") return new Response("http-fallback");
-    const pair = new WebSocketPair();
-    pair[1].accept();
-    pair[1].addEventListener("message", (e: { data: unknown }) =>
-      pair[1].send(`device-echo:${e.data}`),
-    );
-    return upgradeWebSocketResponse(pair[0]);
-  }
-}
 
 test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the Node provider", async () => {
   const slug = freshDnsSafeProjectSlug("caplivews");
@@ -127,13 +96,11 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
   const device = projectUrl({ project: slug, app: "device", path: "/" });
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetchProjectUrl(device);
-  expect(plain.text).toBe("http-fallback");
+  expect(plain).toMatchObject({ text: "http-fallback" });
 
   const ws = await wsRoundTripOnProjectUrl(device, "hello-device");
   expect(ws.error).toBeUndefined();
-  expect(ws.opened).toBe(true);
-  expect(ws.echo).toBe("device-echo:hello-device");
-  expect(ws.closeCode).toBe(1000);
+  expect(ws).toMatchObject({ opened: true, echo: "device-echo:hello-device", closeCode: 1000 });
 });
 
 // The workerd-provider half of the same lane is pinned in __workers-tests__/ws-fetch-live-101
@@ -146,30 +113,22 @@ test("a hop count the platform never wrote (an app spelling `NaN` to defeat the 
     projectUrl({ project: freshDnsSafeProjectSlug("nan-hops"), app: "site", path: "/" }),
     { "x-itx-expression-hops": "NaN" },
   );
-  expect(response.status).toBe(508);
+  expect(response).toMatchObject({ status: 508 });
   expect(response.text).toContain('"NaN"');
 });
 
 test("unknown issuer server functions answer 404 instead of Start's internal 500", async () => {
   for (const id of ["bogus", "0".repeat(64)]) {
     const response = await fetch(workerUrl(`/_serverFn/${id}`), { redirect: "manual" });
-    expect(response.status, id).toBe(404);
+    expect(response, id).toMatchObject({ status: 404 });
   }
 });
 
 // ── egress: a missing project secret is a 502 at the door ──
 
-/** Send a Request through a fresh context's egress terminal, with test query/headers. (The URL
- *  parser percent-encodes the placeholder's quotes in the query; the door matches that form too.)
- *  The Response rides back over capnweb. */
-const egress = (query: string, headers?: Record<string, string>): Promise<Response> =>
-  openItx(freshCtx("egress")).fetch(
-    new Request(`https://egress.invalid/hunt?probe=1${query}`, { headers }),
-  );
-
 test("a missing project secret in a HEADER is a loud 502 naming the header and the placeholder", async () => {
   const res = await egress("", { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' });
-  expect(res.status).toBe(502);
+  expect(res).toMatchObject({ status: 502 });
   const body = await res.text();
   expect(body).toMatch(/no stored project secret/);
   expect(body).toContain('getSecret("/secrets/GHOST")'); // the placeholder is named to US, not the destination
@@ -180,7 +139,7 @@ test("a missing project secret in the URL query is a loud 502 naming the URL —
   const res = await egress('&access_token=getSecret("/secrets/GHOST")', {
     "x-hunt-auth": 'getSecret("/secrets/GHOST")',
   });
-  expect(res.status).toBe(502);
+  expect(res).toMatchObject({ status: 502 });
   const body = await res.text();
   expect(body).toMatch(/no stored project secret/);
   expect(body).toContain('getSecret("/secrets/GHOST")');
@@ -279,9 +238,6 @@ export default class Consumer extends WorkerEntrypoint {
 }`,
 };
 
-const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
-  itx.invoke(["itx", "workers", ["get", { source: SRC_PROVIDER }], ["run", mode]]);
-
 test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fetch", async () => {
   const itx = openItx(freshCtx("dynliveself"));
   const out = (await runProvider(itx, "self-plain")) as { status: number; body: string };
@@ -359,3 +315,45 @@ createFailing(
     ).toEqual({ status: 200, body: "dyn live site" });
   },
 );
+
+/** A fetch-shaped live rpc stub that records what it saw (method, path AND query, body — the
+ *  request must cross intact, not just some response come back) and answers a distinctive Response. */
+class HttpDevice extends RpcTarget {
+  saw: string[] = [];
+  async fetch(request: Request) {
+    const url = new URL(request.url);
+    this.saw.push(
+      `${request.method} ${url.host}${url.pathname}${url.search} body=${await request.text()}`,
+    );
+    return new Response("pong-from-node-provider", {
+      status: 201,
+      headers: { "x-device": "node-live-cap" },
+    });
+  }
+}
+
+/** The device: a fetch-shaped live rpc stub that upgrades WebSockets — the workerd fetch-handler
+ *  idiom verbatim, running in Node. */
+class WsDevice extends RpcTarget {
+  async fetch(request: Request) {
+    const upgrade = String(request?.headers?.get?.("upgrade") ?? "");
+    if (upgrade.toLowerCase() !== "websocket") return new Response("http-fallback");
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].addEventListener("message", (e: { data: unknown }) =>
+      pair[1].send(`device-echo:${e.data}`),
+    );
+    return upgradeWebSocketResponse(pair[0]);
+  }
+}
+
+/** Send a Request through a fresh context's egress terminal, with test query/headers. (The URL
+ *  parser percent-encodes the placeholder's quotes in the query; the door matches that form too.)
+ *  The Response rides back over capnweb. */
+const egress = (query: string, headers?: Record<string, string>): Promise<Response> =>
+  openItx(freshCtx("egress")).fetch(
+    new Request(`https://egress.invalid/hunt?probe=1${query}`, { headers }),
+  );
+
+const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
+  itx.invoke(["itx", "workers", ["get", { source: SRC_PROVIDER }], ["run", mode]]);

@@ -11,18 +11,6 @@ import { errorCode } from "iterate/next/lib";
 import { adminCredentials, rejection, session, until } from "./support/client.ts";
 import { freshDnsSafeProjectSlug } from "./support/project-host.ts";
 
-/** A signed-in person: the admin fixture acting `as` them (src/session.ts finds-or-creates the user
- *  in the control plane, and the session carries `organizations:write`). */
-const person = (email: string) => session().authenticate(adminCredentials({ email }));
-
-/** A person's `memberships` fold, off their account facet — `{ [orgId]: { role, since } }`. */
-const memberships = async (api: any) =>
-  (await api.user.facets.get("account").liveSnapshot()).state.memberships ?? {};
-
-/** An organization's record, off its `organization` facet. */
-const record = async (organization: any) =>
-  (await organization.facets.get("organization").liveSnapshot()).state;
-
 /** A person's reach as the edge memoizes it (src/control-plane/edge.ts, five seconds): a request
  *  drops the memo on the isolate it was made on, so ANOTHER person's socket — possibly on another
  *  isolate of a deployed worker — may answer from a memo up to five seconds old. A cross-session
@@ -89,7 +77,7 @@ test("projects.create({ project, orgId }) lands the project in that organization
   expect(listed).toEqual({ slug, createdAt: expect.any(String) });
   // the same organization's same slug is the same project (a new request, the same answer)
   using again = await api.projects.create({ project: slug, orgId: org.id });
-  expect((await again.whoami()).projectId).toBe(projectId);
+  expect(await again.whoami()).toMatchObject({ projectId });
   expect(
     (await api.projects.list()).filter((row: { slug: string }) => row.slug === slug),
   ).toHaveLength(1);
@@ -123,7 +111,7 @@ test("organizations.rename answers the new name and the record follows; delete i
   const api = person(`${slug}@example.com`);
   const org = await api.organizations.create({ name: `Organization ${slug}` });
   using project = await api.projects.create({ project: slug, orgId: org.id });
-  expect((await project.whoami()).projectSlug).toBe(slug);
+  expect(await project.whoami()).toMatchObject({ projectSlug: slug });
   // rename: the answer, the record, the list
   const renamed = `Renamed ${slug}`;
   expect(await api.organizations.rename(org.id, { name: `  ${renamed}  ` })).toEqual({
@@ -205,7 +193,7 @@ test("organizations.addMember gives a second person the organization — their l
       REACH_MEMO_BOUND_MS,
     ),
   ).toEqual({ id: projectId, slug, orgId: org.id, role: "member" });
-  expect((await guest.projects.get(projectId).whoami()).projectId).toBe(projectId);
+  expect(await guest.projects.get(projectId).whoami()).toMatchObject({ projectId });
   // … and the organization's record has both
   using organization = await owner.organizations.get(org.id);
   expect(
@@ -303,3 +291,15 @@ test("a person's first projects.create without orgId makes their organization �
     ].sort(),
   );
 });
+
+/** A signed-in person: the admin fixture acting `as` them (src/session.ts finds-or-creates the user
+ *  in the control plane, and the session carries `organizations:write`). */
+const person = (email: string) => session().authenticate(adminCredentials({ email }));
+
+/** A person's `memberships` fold, off their account facet — `{ [orgId]: { role, since } }`. */
+const memberships = async (api: any) =>
+  (await api.user.facets.get("account").liveSnapshot()).state.memberships ?? {};
+
+/** An organization's record, off its `organization` facet. */
+const record = async (organization: any) =>
+  (await organization.facets.get("organization").liveSnapshot()).state;

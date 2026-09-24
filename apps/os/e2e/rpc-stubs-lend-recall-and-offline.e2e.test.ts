@@ -36,16 +36,6 @@ import {
 } from "./support/client.ts";
 import { HangTools, Tools } from "./support/targets.ts";
 
-/** The `itx/rewrite-rule-configured` events the durable log holds at `match` — the "a re-provide
- *  appends ONE rule event" instrument. */
-const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string | null }[]> =>
-  (await readAll(itx))
-    .filter(
-      (e) =>
-        e.type === "events.iterate.com/itx/rewrite-rule-configured" && ruleMatchAtRest(e) === match,
-    )
-    .map((e) => ({ target: e.payload.target as string | null }));
-
 // (A never-configured match is default-deny like any other unmatched call — NO_ITX_EXPRESSION_MATCH
 // across the /api hop is context.e2e; RPC_STUB_OFFLINE narrows to "rule exists, no stub under its
 // key": the hand-configured-rule and mid-invoke tests below. That a visitor's `x-itx-*` headers never
@@ -291,6 +281,7 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
       ? f
       : undefined;
   });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: only the un-lent key is dropped; a live provider in the map must fail
   expect(both.dropped).toEqual({ "itx.ghost": "RPC_STUB_OFFLINE" }); // the un-lent key, dropped BY the offline rejection
 
   wsDead.close(); // one member dies — its transport goes, and its rule goes with its session
@@ -392,7 +383,7 @@ test("disposing a SubscriptionHandleRpcTarget removes its row and recalls its st
   await until("the stub gone from presence", async () => (await presence(observer)).length === 0);
   await observer.append({ type: "mark" });
   await sleep(600);
-  expect(c.delivered).toBe(1); // nothing reaches a disposed subscription
+  expect(c).toMatchObject({ delivered: 1 }); // nothing reaches a disposed subscription
 });
 
 test("disposing a SubscriptionHandleRpcTarget removes an EXPRESSION row in either codec half — a target that merely NAMES the registry lends nothing, so only the row goes", async () => {
@@ -538,3 +529,13 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
   expect((await rpcStubRewriteRuleMatches(observer)).length).toBe(baselineRules); // the dispose touched no rule
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 });
+
+/** The `itx/rewrite-rule-configured` events the durable log holds at `match` — the "a re-provide
+ *  appends ONE rule event" instrument. */
+const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string | null }[]> =>
+  (await readAll(itx))
+    .filter(
+      (e) =>
+        e.type === "events.iterate.com/itx/rewrite-rule-configured" && ruleMatchAtRest(e) === match,
+    )
+    .map((e) => ({ target: e.payload.target as string | null }));

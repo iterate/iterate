@@ -40,7 +40,7 @@ test("a disconnected userspace facet's deadline fires after the pins' release wi
   expect(wakesBeforeDue).toEqual(["request", "alarm"]);
   expect(await reconnected.schedules.list()).toEqual([]);
   await reconnected.facets.get("deadlines").waitUntilProcessed({ offset: due[0].offset });
-  expect((await reconnected.facets.get("deadlines").snapshot()).state.timedOut).toEqual([
-    "dormant",
-  ]);
+  expect(await reconnected.facets.get("deadlines").snapshot()).toMatchObject({
+    state: { timedOut: ["dormant"] },
+  });
 }, 45_000);

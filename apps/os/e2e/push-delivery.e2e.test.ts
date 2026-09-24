@@ -42,8 +42,7 @@ test("delivered ranges CHAIN across a consumes-filtered quiet gap", async () => 
   expect(d2.events.map((e) => e.offset)).toEqual([hit2.offset]);
   // THE contract: the skipped span rides the next delivered range — d2 starts EXACTLY where d1
   // ended (one comparison client-side; a gap here would force a pull that must not be needed).
-  expect(d2.range.after).toBe(d1.range.through);
-  expect(d2.range.through).toBe(hit2.offset);
+  expect(d2.range).toMatchObject({ after: d1.range.through, through: hit2.offset });
 });
 
 test("consumes naming an ephemeral type opts in; the consumes-less default excludes ephemerals", async () => {
@@ -167,5 +166,5 @@ test("an append of 900 events in one batch arrives as ONE callback invocation (b
   await until("all 900 delivered", () => c.offsets().length >= 900, 30_000);
   expect(c.invocations).toHaveLength(1); // ONE commit = ONE delivery — the batch is never split
   expect(c.invocations[0].events).toHaveLength(900);
-  expect(c.invocations[0].range.through).toBe(committed[899].offset);
+  expect(c.invocations[0].range).toMatchObject({ through: committed[899].offset });
 });

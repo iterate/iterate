@@ -14,9 +14,6 @@ import {
   registerProject,
 } from "./support/project-host.ts";
 
-const bytesOf = (text: string) => new TextEncoder().encode(text);
-const textOf = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
-
 test("files: put as bytes, base64 or a data: URL; bytes/head/list/delete; the same objects one layer down in itx.r2, the binding verbatim", async () => {
   const itx = openItx(freshCtx("files"));
   expect(await itx.files.list()).toEqual([]);
@@ -67,17 +64,17 @@ test("files: put as bytes, base64 or a data: URL; bytes/head/list/delete; the sa
   });
   const page = await itx.r2.list({ prefix: "notes/", limit: 1 });
   expect(page.objects.map((o: { key: string }) => o.key)).toEqual(["notes/b64.txt"]);
-  expect(page.truncated).toBe(true);
+  expect(page).toMatchObject({ truncated: true });
   const rest = await itx.r2.list({ prefix: "notes/", cursor: page.cursor });
   expect(rest.objects.map((o: { key: string }) => o.key)).toEqual(["notes/hello.txt"]);
-  expect(rest.truncated).toBe(false);
+  expect(rest).toMatchObject({ truncated: false });
   expect((await itx.r2.list({ delimiter: "/" })).delimitedPrefixes.sort()).toEqual([
     "img/",
     "notes/",
   ]);
   const got = await itx.r2.get("notes/hello.txt", { range: { offset: 1, length: 3 } });
   expect(textOf(got.data)).toBe("ell");
-  expect(got.range).toEqual({ offset: 1, length: 3 });
+  expect(got).toMatchObject({ range: { offset: 1, length: 3 } });
   const stored = await itx.r2.put("raw/a.bin", bytesOf("raw"), {
     httpMetadata: { contentType: "application/octet-stream" },
     customMetadata: { origin: "test" },
@@ -99,7 +96,7 @@ test("files are the project's own: another project's slice of the bucket is empt
   await a.files.get("/secret.txt").put({ contentType: "text/plain", data: bytesOf("mine") });
   expect(await b.files.list()).toEqual([]);
   expect(await b.files.get("/secret.txt").head()).toBeNull();
-  expect((await b.r2.list()).objects).toEqual([]);
+  expect(await b.r2.list()).toMatchObject({ objects: [] });
   expect(textOf(await a.files.get("/secret.txt").bytes())).toBe("mine");
 });
 
@@ -128,16 +125,16 @@ test("a signed URL downloads the file from the project host — content type, et
   expect(signed.searchParams.get("token")).toBeTruthy();
   expect(Date.parse(download.expiresAt)).toBeGreaterThan(Date.now() + 6 * 24 * 3600 * 1000);
   const got = await fetchProjectUrl(download.url);
-  expect(got.status).toBe(200);
-  expect(got.text).toBe("# hello world");
+  expect(got).toMatchObject({ status: 200, text: "# hello world" });
   expect(got.headers["content-type"]).toBe("text/markdown");
   expect(got.headers["etag"]).toMatch(/^".+"$/);
   expect(got.headers["accept-ranges"]).toBe("bytes");
   const ranged = await fetchProjectUrl(download.url, { range: "bytes=2-6" });
-  expect(ranged.status).toBe(206);
-  expect(ranged.text).toBe("hello");
+  expect(ranged).toMatchObject({ status: 206, text: "hello" });
   expect(ranged.headers["content-range"]).toBe("bytes 2-6/13");
-  expect((await fetchProjectUrl(download.url, {}, { method: "HEAD" })).status).toBe(200);
+  expect(await fetchProjectUrl(download.url, {}, { method: "HEAD" })).toMatchObject({
+    status: 200,
+  });
 
   // An upload: the signed PUT stores the body under the path with the request's content type.
   const upload = await itx.files
@@ -148,7 +145,7 @@ test("a signed URL downloads the file from the project host — content type, et
     { "content-type": "text/plain" },
     { method: "PUT", body: "uploaded" },
   );
-  expect(put.status).toBe(200);
+  expect(put).toMatchObject({ status: 200 });
   expect(JSON.parse(put.text)).toEqual({
     path: "/uploads/note.txt",
     contentType: "text/plain",
@@ -158,18 +155,24 @@ test("a signed URL downloads the file from the project host — content type, et
 
   // A TTL that is not a whole number still mints a URL that works (the claim's exp is floored).
   const fractional = await itx.files.get("/docs/readme.md").url({ expiresInSeconds: 90.5 });
-  expect((await fetchProjectUrl(fractional.url)).status).toBe(200);
+  expect(await fetchProjectUrl(fractional.url)).toMatchObject({ status: 200 });
 
   // Refusals: a GET token used to PUT, a PUT token used to GET, a tampered token, a missing one.
-  expect((await fetchProjectUrl(download.url, {}, { method: "PUT", body: "x" })).status).toBe(403);
-  expect((await fetchProjectUrl(upload.url)).status).toBe(403);
-  expect((await fetchProjectUrl(`${download.url}x`)).status).toBe(403);
-  expect((await fetchProjectUrl(address)).status).toBe(400);
+  expect(await fetchProjectUrl(download.url, {}, { method: "PUT", body: "x" })).toMatchObject({
+    status: 403,
+  });
+  expect(await fetchProjectUrl(upload.url)).toMatchObject({ status: 403 });
+  expect(await fetchProjectUrl(`${download.url}x`)).toMatchObject({ status: 403 });
+  expect(await fetchProjectUrl(address)).toMatchObject({ status: 400 });
   // A token for a path that holds nothing: 404, not a refusal.
   const empty = await itx.files.get("/docs/missing.md").url();
-  expect((await fetchProjectUrl(empty.url)).status).toBe(404);
+  expect(await fetchProjectUrl(empty.url)).toMatchObject({ status: 404 });
   // Another project's address with this project's token: the claim names the wrong project.
   const other = freshDnsSafeProjectSlug("files-url-other");
   await registerProject(other);
-  expect((await fetchProjectUrl(download.url.replace(slug, other))).status).toBe(403);
+  expect(await fetchProjectUrl(download.url.replace(slug, other))).toMatchObject({ status: 403 });
 });
+
+const bytesOf = (text: string) => new TextEncoder().encode(text);
+
+const textOf = (bytes: Uint8Array) => new TextDecoder().decode(bytes);

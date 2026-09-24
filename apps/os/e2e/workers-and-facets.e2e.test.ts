@@ -31,10 +31,6 @@ import { SOURCES } from "./support/sources.ts";
 
 // ── the two doors and their sources ──
 
-// A loaded SOURCE exports its host — here a WorkerEntrypoint whose `run` is `body`.
-const entrypoint = (body: string) =>
-  `import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint { ${body} }`;
-
 test("itx.workers.get({ source: src }) (stateless) + itx.facets.get(name, spec) (durable facet) + itx.facets.get(name)", async () => {
   const itx = openItx(freshCtx("load"));
 
@@ -133,13 +129,13 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
   await expect(
     itx.invoke(["itx", "workers", ["get", { source: "itx.codeStore.get('greet')" }], ["run", 1]]),
   ).rejects.toThrow(/needs a cacheKey/);
-  expect(codeStore.produced).toEqual([]);
+  expect(codeStore).toMatchObject({ produced: [] });
 
   // 2. with a key: the first call produces, the second rides the warm isolate
   const spec = { source: "itx.codeStore.get('greet')", cacheKey: "greet@v1" };
   expect(await itx.invoke(["itx", "workers", ["get", spec], ["run", 1]])).toBe("greet:1");
   expect(await itx.invoke(["itx", "workers", ["get", spec], ["run", 2]])).toBe("greet:2");
-  expect(codeStore.produced).toEqual(["greet"]);
+  expect(codeStore).toMatchObject({ produced: ["greet"] });
 
   // 3. a new key is a new isolate: produced again (the caller changed the code, so the key)
   expect(
@@ -150,7 +146,7 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
       ["run", 3],
     ]),
   ).toBe("greet:3");
-  expect(codeStore.produced).toEqual(["greet", "greet"]);
+  expect(codeStore).toMatchObject({ produced: ["greet", "greet"] });
 
   // 4. the same for a FACET: hosted from a producer, the state persists across calls and the
   //    producer ran once; the memo keeps the key so a bare `facets.get(name)` re-materializes it
@@ -177,7 +173,7 @@ export class CounterDurableObject extends FacetDurableObject {
   expect(await itx.invoke(["itx", "facets", ["get", "ck", facetSpec], ["bump"]])).toBe(1);
   expect(await itx.invoke(["itx", "facets", ["get", "ck", facetSpec], ["bump"]])).toBe(2);
   expect(await itx.invoke(["itx", "facets", ["get", "ck"], ["bump"]])).toBe(3);
-  expect(facetCodeStore.produced).toBe(1);
+  expect(facetCodeStore).toMatchObject({ produced: 1 });
 });
 
 // ── a producer that THREW: the key is never poisoned ──
@@ -400,3 +396,7 @@ test("itx.run(script): the script runs in a confined isolate with THIS context's
   await expect(itx.run("this is not a function")).rejects.toThrow();
   expect(await itx.run("async () => 'still fine'")).toBe("still fine");
 });
+
+// A loaded SOURCE exports its host — here a WorkerEntrypoint whose `run` is `body`.
+const entrypoint = (body: string) =>
+  `import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint { ${body} }`;

@@ -17,33 +17,6 @@ import { deployedOnly } from "./support/project-host.ts";
 
 const MODEL = "@cf/meta/llama-3.2-1b-instruct";
 
-/** The binding's gateway half, as an RpcTarget so the DO's mid-chain `.run(req)` rides back here. */
-class FakeAiGateway extends RpcTarget {
-  readonly #id: string;
-  constructor(id: string) {
-    super();
-    this.#id = id;
-  }
-  run(request: unknown) {
-    return { gateway: this.#id, request };
-  }
-}
-
-/** A deterministic `env.AI`: the same three doors, canned answers, every call recorded. */
-class FakeAi extends RpcTarget {
-  readonly calls: { model: string; inputs: unknown; options?: unknown }[] = [];
-  run(model: string, inputs: unknown, options?: unknown) {
-    this.calls.push({ model, inputs, options });
-    return { response: `deterministic:${model}`, inputs };
-  }
-  gateway(id: string) {
-    return new FakeAiGateway(id);
-  }
-  models() {
-    return [{ name: "@cf/fake/model" }];
-  }
-}
-
 test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding; resolve ends at the stub; dispose restores the platform row", async () => {
   const ctx = freshCtx("ai-shadow");
   const itx = openItx(ctx);
@@ -58,7 +31,9 @@ test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding
     response: "deterministic:@cf/x",
     inputs: { prompt: "hi" },
   });
-  expect(fake.calls).toEqual([{ model: "@cf/x", inputs: { prompt: "hi" }, options: undefined }]);
+  expect(fake).toMatchObject({
+    calls: [{ model: "@cf/x", inputs: { prompt: "hi" }, options: undefined }],
+  });
   expect(await itx.ai.models()).toEqual([{ name: "@cf/fake/model" }]);
   expect(await itx.rewriteRules.resolve("itx.ai.run")).toEqual([
     "itx.ai.run", // resolve() PRINTS
@@ -94,10 +69,12 @@ test("THE DREAM: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model; the ca
     inputs: { prompt: "hi" },
   });
   await itx.fable({ prompt: "again" }, { gateway: { id: "g" } });
-  expect(fake.calls).toEqual([
-    { model: MODEL, inputs: { prompt: "hi" }, options: undefined },
-    { model: MODEL, inputs: { prompt: "again" }, options: { gateway: { id: "g" } } },
-  ]);
+  expect(fake).toMatchObject({
+    calls: [
+      { model: MODEL, inputs: { prompt: "hi" }, options: undefined },
+      { model: MODEL, inputs: { prompt: "again" }, options: { gateway: { id: "g" } } },
+    ],
+  });
   // the pure chain shows `@` filled, and the law holds through a template rule
   const chain = (await itx.rewriteRules.resolve("itx.fable({ prompt: 'hi' })")) as string[];
   expect(chain).toEqual([
@@ -173,3 +150,30 @@ deployedOnly(
   },
   90_000,
 );
+
+/** The binding's gateway half, as an RpcTarget so the DO's mid-chain `.run(req)` rides back here. */
+class FakeAiGateway extends RpcTarget {
+  readonly #id: string;
+  constructor(id: string) {
+    super();
+    this.#id = id;
+  }
+  run(request: unknown) {
+    return { gateway: this.#id, request };
+  }
+}
+
+/** A deterministic `env.AI`: the same three doors, canned answers, every call recorded. */
+class FakeAi extends RpcTarget {
+  readonly calls: { model: string; inputs: unknown; options?: unknown }[] = [];
+  run(model: string, inputs: unknown, options?: unknown) {
+    this.calls.push({ model, inputs, options });
+    return { response: `deterministic:${model}`, inputs };
+  }
+  gateway(id: string) {
+    return new FakeAiGateway(id);
+  }
+  models() {
+    return [{ name: "@cf/fake/model" }];
+  }
+}

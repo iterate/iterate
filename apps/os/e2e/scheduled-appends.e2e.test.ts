@@ -25,16 +25,20 @@ test("a userspace facet schedules a durable timeout batch, then consumes it with
   });
   expect(Date.parse(due.createdAt)).toBeGreaterThanOrEqual(Date.parse(at));
   await facet.waitUntilProcessed({ offset: due.offset });
-  expect((await facet.snapshot()).state).toEqual({ timedOut: ["invoice"], audited: ["invoice"] });
+  expect(await facet.snapshot()).toMatchObject({
+    state: { timedOut: ["invoice"], audited: ["invoice"] },
+  });
   expect(await itx.schedules.list()).toEqual([]);
   const events = await readAll(itx);
   const occurrence = events.filter((event) => event.type.startsWith("job/"));
   expect(occurrence.map((event) => event.type)).toEqual(["job/timed-out", "job/timeout-audit"]);
-  expect(occurrence[1].offset).toBe(occurrence[0].offset + 1);
-  expect(occurrence[0].source.schedule).toEqual({
-    key: JSON.stringify(["deadlines", "invoice"]),
-    scheduledAtOffset: definition.scheduledAtOffset,
-    at,
+  expect(occurrence[1]).toMatchObject({ offset: occurrence[0].offset + 1 });
+  expect(occurrence[0].source).toMatchObject({
+    schedule: {
+      key: JSON.stringify(["deadlines", "invoice"]),
+      scheduledAtOffset: definition.scheduledAtOffset,
+      at,
+    },
   });
   expect(
     events.filter((event) => event.type === "events.iterate.com/stream/append-schedule-completed"),
@@ -55,16 +59,18 @@ test("a facet owns multiple independent deadlines, cancels finished work and saf
   const at = new Date(Date.now() + 1500).toISOString();
   const replacement = await facet.start("slow", { at });
   await facet.finish(old); // a stale owner cannot cancel its replacement
-  expect((await itx.schedules.get(["deadlines", "slow"])).scheduledAtOffset).toBe(
-    replacement.scheduledAtOffset,
-  );
+  expect(await itx.schedules.get(["deadlines", "slow"])).toMatchObject({
+    scheduledAtOffset: replacement.scheduledAtOffset,
+  });
   expect(await itx.schedules.get(["deadlines", "finished"])).toBeNull();
   const due = await itx.waitForEvent({
     type: "job/timeout-audit",
     afterOffset: replacement.scheduledAtOffset,
   });
   await facet.waitUntilProcessed({ offset: due.offset });
-  expect((await facet.snapshot()).state).toEqual({ timedOut: ["slow"], audited: ["slow"] });
+  expect(await facet.snapshot()).toMatchObject({
+    state: { timedOut: ["slow"], audited: ["slow"] },
+  });
   expect(await itx.schedules.list()).toEqual([]);
 });
 
@@ -108,14 +114,16 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
   const [opened] = await itx.append({ type: "invoice/opened", payload: { invoiceId: "123" } });
   const due = await itx.waitForEvent({ type: "invoice/reminder-due", afterOffset: opened.offset });
   await itx.facets.get("reminders").waitUntilProcessed({ offset: due.offset });
-  expect((await itx.facets.get("reminders").snapshot()).state).toEqual({ reminded: ["123"] });
+  expect(await itx.facets.get("reminders").snapshot()).toMatchObject({
+    state: { reminded: ["123"] },
+  });
   const events = await readAll(itx);
   const definition = events.find(
     (event) => event.type === "events.iterate.com/stream/append-scheduled",
   )!;
-  expect(definition.source.processor.whileProcessing.offset).toBe(opened.offset);
-  expect(due.source.schedule.scheduledAtOffset).toBe(definition.offset);
-  expect(due.source.schedule.definedBy.processor.slug).toBe("reminders");
+  expect(definition.source.processor.whileProcessing).toMatchObject({ offset: opened.offset });
+  expect(due.source.schedule).toMatchObject({ scheduledAtOffset: definition.offset });
+  expect(due.source.schedule.definedBy.processor).toMatchObject({ slug: "reminders" });
   expect(Object.keys(due.source.schedule.definedBy)).toEqual(["processor"]);
   expect(due).toStrictEqual(events.find((event) => event.offset === due.offset));
   expect(due.source.processor).toBeUndefined();
@@ -125,7 +133,7 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
     payload: definition.payload,
     idempotencyKey: definition.idempotencyKey,
   });
-  expect(receipt.offset).toBe(definition.offset);
+  expect(receipt).toMatchObject({ offset: definition.offset });
   expect(await itx.schedules.list()).toEqual([]);
 });
 
@@ -136,7 +144,9 @@ test("pause holds a deadline until resume; session attribution names the definit
     when: { at: new Date(Date.now() + 1500).toISOString() },
     events: [{ type: "held/due" }],
   });
-  expect((await itx.schedules.get("held")).source.principal.actor).toBe("admin");
+  expect(await itx.schedules.get("held")).toMatchObject({
+    source: { principal: { actor: "admin" } },
+  });
   await itx.append({
     type: "events.iterate.com/stream/paused",
     payload: { reason: "maintenance" },
@@ -156,7 +166,7 @@ test("pause holds a deadline until resume; session attribution names the definit
     type: "held/due",
     afterOffset: definition.scheduledAtOffset,
   });
-  expect(due.source.schedule.definedBy.principal.actor).toBe("admin");
+  expect(due.source.schedule.definedBy.principal).toMatchObject({ actor: "admin" });
   expect(Object.keys(due.source.schedule.definedBy)).toEqual(["principal"]);
   expect(due).toStrictEqual((await readAll(itx)).find((event) => event.offset === due.offset));
   expect(due.source.principal).toBeUndefined();
@@ -224,7 +234,7 @@ test("client-visible validation and capacity refusals commit nothing; a past dea
     type: "past/due",
     afterOffset: definition.scheduledAtOffset,
   });
-  expect(due.type).toBe("past/due");
+  expect(due).toMatchObject({ type: "past/due" });
   expect(await itx.schedules.list()).toEqual([]);
 });
 
@@ -243,7 +253,7 @@ test("a userspace facet consumes recurring events until it cancels its receipt",
       afterOffset: receipt.scheduledAtOffset,
     });
     second = await itx.waitForEvent({ type: "job/timeout-audit", afterOffset: first.offset });
-    expect(second.source.schedule.scheduledAtOffset).toBe(receipt.scheduledAtOffset);
+    expect(second.source.schedule).toMatchObject({ scheduledAtOffset: receipt.scheduledAtOffset });
     const gap = Date.parse(second.source.schedule.at) - Date.parse(first.source.schedule.at);
     expect(gap).toBeGreaterThanOrEqual(1000);
     expect(gap % 1000).toBe(0);
@@ -281,7 +291,7 @@ test("inspection rows are cancellation receipts and a stale row cannot cancel a 
   const replacement = await itx.schedules.set(input);
   await itx.schedules.cancel(old);
   const current = await itx.schedules.get(input.key);
-  expect(current.scheduledAtOffset).toBe(replacement.scheduledAtOffset);
+  expect(current).toMatchObject({ scheduledAtOffset: replacement.scheduledAtOffset });
   await itx.schedules.cancel(current);
   expect(await itx.schedules.get(input.key)).toBeNull();
   expect(await itx.schedules.list()).toEqual([]);
