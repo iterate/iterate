@@ -1,6 +1,6 @@
 // /projects/<project>/ — the overview: the project, its role, its site — and, while the project's own
-// creation runs, where it stands: the `project` facet's LIVE STATE on `/` (os-next src/project/),
-// rendered as apps/os's creation checklist until `project/created` lands, or as the failure the
+// creation runs, where it stands: the `project` facet's LIVE STATE on `/` (apps/os/src/project/),
+// rendered as a creation checklist until `project/created` lands, or as the failure the
 // processor reported. The frame the project's own pages fill in over time.
 import { useEffect, useState } from "react";
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
@@ -21,7 +21,7 @@ const shell = getRouteApi("/_auth");
 type ProjectContext = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 
 /** The project facet's live state, the one field this page reads: where the project's own creation
- *  stands, as the offset of the event that says so (null for a project born before the saga existed). */
+ *  stands, as the offset of the event that says so (null until `project/create-requested` lands). */
 const ProjectLive = z.looseObject({
   creation: z
     .object({ status: z.enum(["requested", "created", "failed"]), offset: z.number() })
@@ -120,9 +120,9 @@ function ProjectOverview() {
   );
 }
 
-/** apps/os's "Creating project" checklist at the size os-next carries: the request is in (the
- *  directory row and `project/create-requested` — this page exists because it is) and the
- *  certificate is what the project processor owes; the live state swaps this out the moment it lands. */
+/** The creation checklist: the request is in (the directory row and `project/create-requested` —
+ *  this page exists because it is) and the certificate is what the project processor owes; the live
+ *  state swaps this out the moment it lands. */
 function ProjectCreationProgress({ configRepoSeeded }: { configRepoSeeded: boolean }) {
   const steps = [
     { key: "registered", label: "Registering project", done: true },
@@ -175,15 +175,11 @@ function ProjectCreationFailed({ context, offset }: { context: ProjectContext; o
     let disposed = false;
     // `readEvents(after, limit)` answers the rows past `after`: the failure's own, first
     context
-      .invoke(["itx", ["readEvents", offset - 1, 1]])
+      .readEvents(offset - 1, 1)
       .then((page) => {
         if (disposed) return;
-        const read = z
-          .object({
-            events: z.array(z.looseObject({ payload: z.looseObject({ error: z.string() }) })),
-          })
-          .safeParse(page);
-        setError(read.data?.events[0]?.payload.error ?? "The failure's event could not be read.");
+        const read = z.object({ error: z.string() }).safeParse(page.events[0]?.payload);
+        setError(read.data?.error ?? "The failure's event could not be read.");
       })
       .catch(
         (caught: unknown) =>

@@ -28,6 +28,19 @@ import {
 import { APPS } from "../apps.ts";
 import { useOrganizationTree } from "./organization-tree.tsx";
 
+const PROJECT_PAGES = [
+  { to: "/projects/$slug", label: "Overview", icon: LayoutDashboard },
+  { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
+  { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
+] as const;
+
+const ACCOUNT_PAGES = [
+  { to: "/projects", label: "Projects", icon: FolderKanban },
+  { to: "/organizations", label: "Organizations", icon: Building2 },
+  { to: "/sessions", label: "Sessions", icon: KeyRound },
+  { to: "/activity", label: "Activity", icon: Activity },
+] as const;
+
 export function DashNav({
   project,
   host,
@@ -55,54 +68,18 @@ function ProjectNav({
     <SidebarGroup>
       <SidebarGroupContent>
         <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Overview"
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$slug",
-                  params: { slug: project.slug },
-                  fuzzy: false,
-                }),
-              )}
-              render={<Link to="/projects/$slug" params={{ slug: project.slug }} />}
-            >
-              <LayoutDashboard />
-              <span>Overview</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="MCP"
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$slug/mcp",
-                  params: { slug: project.slug },
-                  fuzzy: false,
-                }),
-              )}
-              render={<Link to="/projects/$slug/mcp" params={{ slug: project.slug }} />}
-            >
-              <Plug />
-              <span>MCP</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Secrets"
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$slug/secrets",
-                  params: { slug: project.slug },
-                  fuzzy: false,
-                }),
-              )}
-              render={<Link to="/projects/$slug/secrets" params={{ slug: project.slug }} />}
-            >
-              <LockKeyhole />
-              <span>Secrets</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          {PROJECT_PAGES.map(({ to, label, icon: Icon }) => (
+            <SidebarMenuItem key={to}>
+              <SidebarMenuButton
+                tooltip={label}
+                isActive={Boolean(matchRoute({ to, params: { slug: project.slug }, fuzzy: false }))}
+                render={<Link to={to} params={{ slug: project.slug }} />}
+              >
+                <Icon />
+                <span>{label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
           {host ? (
             <SidebarMenuItem>
               <SidebarMenuButton
@@ -154,46 +131,18 @@ function TopLevelNav() {
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Projects"
-                isActive={Boolean(matchRoute({ to: "/projects", fuzzy: false }))}
-                render={<Link to="/projects" />}
-              >
-                <FolderKanban />
-                <span>Projects</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Organizations"
-                isActive={Boolean(matchRoute({ to: "/organizations", fuzzy: false }))}
-                render={<Link to="/organizations" />}
-              >
-                <Building2 />
-                <span>Organizations</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Sessions"
-                isActive={Boolean(matchRoute({ to: "/sessions", fuzzy: false }))}
-                render={<Link to="/sessions" />}
-              >
-                <KeyRound />
-                <span>Sessions</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Activity"
-                isActive={Boolean(matchRoute({ to: "/activity", fuzzy: false }))}
-                render={<Link to="/activity" />}
-              >
-                <Activity />
-                <span>Activity</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+            {ACCOUNT_PAGES.map(({ to, label, icon: Icon }) => (
+              <SidebarMenuItem key={to}>
+                <SidebarMenuButton
+                  tooltip={label}
+                  isActive={Boolean(matchRoute({ to, fuzzy: false }))}
+                  render={<Link to={to} />}
+                >
+                  <Icon />
+                  <span>{label}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>

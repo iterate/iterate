@@ -1,8 +1,8 @@
 // THE TREE the dash navigates — the signed-in person → their organizations → each organization's
 // projects — read from LIVE STATE, not listed: which organizations the person belongs to is the
-// account fold on `session.user` (`memberships`, os-next src/account/contract.ts); what an
+// account fold on `session.user` (`memberships`, apps/os/src/account/contract.ts); what an
 // organization is called, who belongs to it and which projects it holds is the organization fold on
-// `session.organizations.get(orgId)` (src/organization/contract.ts). ONE subscription per
+// `session.organizations.get(orgId)` (apps/os/src/organization/contract.ts). ONE subscription per
 // organization and one for the account, never one per project (every open live state is a
 // subscription row and a pinned Durable Object): a project's own live state opens on its page alone.
 // `<OrganizationTree>` is mounted once by the shell and renders nothing; it publishes the tree it
@@ -21,7 +21,7 @@ import type { AuthenticatedApp } from "iterate/next/app";
 import { useLiveState } from "iterate/next/react";
 
 export type OrganizationRole = "owner" | "member";
-export type TreeProject = {
+type TreeProject = {
   id: string;
   slug: string;
   orgId: string;
@@ -42,7 +42,7 @@ export type TreeOrganization = {
   status: "connecting" | "live" | "error";
   error?: string;
 };
-export type OrganizationTree = {
+type OrganizationTreeState = {
   /** live: the account's memberships and every organization's record, pushed as they change;
    *  listed: the session's lists, read once */
   source: "live" | "listed";
@@ -56,13 +56,18 @@ export type OrganizationTree = {
   error?: string;
 };
 
-const EMPTY: OrganizationTree = { source: "live", loaded: false, organizations: [], projects: [] };
+const EMPTY: OrganizationTreeState = {
+  source: "live",
+  loaded: false,
+  organizations: [],
+  projects: [],
+};
 
 // ── the store: what the mounted `<OrganizationTree>` last published ──
-let published: OrganizationTree = EMPTY;
+let published: OrganizationTreeState = EMPTY;
 const listeners = new Set<() => void>();
 let reload: () => void = () => {};
-function publish(tree: OrganizationTree) {
+function publish(tree: OrganizationTreeState) {
   published = tree;
   for (const listener of listeners) listener();
 }
@@ -72,7 +77,7 @@ function subscribe(listener: () => void) {
 }
 
 /** The tree as every component reads it; re-renders as it changes. */
-export function useOrganizationTree(): OrganizationTree {
+export function useOrganizationTree(): OrganizationTreeState {
   return useSyncExternalStore(
     subscribe,
     () => published,
@@ -81,10 +86,9 @@ export function useOrganizationTree(): OrganizationTree {
 }
 /** The tree as a route's `beforeLoad` reads it — a snapshot: empty and not loaded before the shell
  *  has mounted it (a fresh page load), so a loader that needs a row falls back to the catalog. */
-export function readOrganizationTree(): OrganizationTree {
+export function readOrganizationTree(): OrganizationTreeState {
   return published;
 }
-/** The listed tree reads its lists again (after a create); the live tree already has it. */
 /** How long a page waits for an organization the loaded tree does not list yet: a creation answers
  *  before the account's live-state push lands in this client, so the tree is `loaded` and the
  *  organization absent for a moment. After the grace it is missing. */
@@ -108,6 +112,7 @@ export function useOrganizationTreeEntry(orgId: string): {
   return { org, missing: !org && tree.loaded && graceOverFor === orgId };
 }
 
+/** The listed tree reads its lists again (after a create); the live tree already has it. */
 export function reloadOrganizationTree(): void {
   reload();
 }
@@ -193,7 +198,7 @@ function LiveTree({ api, user }: { api: Api; user: GlobalContext }) {
         .map(([id]) => id),
     [memberships],
   );
-  const tree = useMemo((): OrganizationTree => {
+  const tree = useMemo((): OrganizationTreeState => {
     const organizations = orgIds.map((id): TreeOrganization => {
       const branch = branches[id];
       const record =
