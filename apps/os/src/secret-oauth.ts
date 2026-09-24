@@ -20,6 +20,9 @@ import {
   type SecretRecord,
 } from "./secrets.ts";
 
+/** How long an OAuth attempt stays open: the signed `state`'s expiry and the pending attempt's. */
+export const SECRET_OAUTH_TTL_MS = 10 * 60_000;
+
 /** What `itx.secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the project's
  *  own OAuth client (bring-your-own-app), the scope, the pin, and any extra authorize parameters the
  *  provider needs (Google: `access_type=offline`, `prompt=consent` for a refresh token). */
@@ -138,7 +141,7 @@ export async function beginSecretOAuth(
       redirectUri: attempt.redirectUri,
       codeVerifier,
       nonce: attempt.nonce,
-      until: (attempt.now ?? Date.now()) + 10 * 60_000,
+      until: (attempt.now ?? Date.now()) + SECRET_OAUTH_TTL_MS,
     },
     authorizationUrl: url.href,
   };

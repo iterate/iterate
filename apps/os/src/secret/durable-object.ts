@@ -46,6 +46,7 @@ import {
   beginSecretOAuth,
   completeSecretOAuth,
   SECRET_OAUTH_CALLBACK_PATH,
+  SECRET_OAUTH_TTL_MS,
   type NormalizedSecretOAuthOptions,
   type PendingSecretOAuth,
   type SecretOAuthState,
@@ -53,7 +54,7 @@ import {
 import {
   originPinned,
   pinRefusal,
-  ProjectSecretRefused,
+  SecretRefused,
   refreshSecretMaterial,
   substituteProjectSecrets,
   verifySecretHmac,
@@ -139,7 +140,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     try {
       opened = await decryptSecretMaterial(stored.record.material, binding, this.#keys());
     } catch {
-      throw new ProjectSecretRefused(
+      throw new SecretRefused(
         `itx.fetch: the stored material of ${path} cannot be opened (a rotated key, or another context's record) — set the secret again`,
       );
     }
@@ -217,7 +218,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       kind: "secret-oauth",
       context: this.#address().context,
       nonce,
-      exp: Date.now() + 10 * 60_000,
+      exp: Date.now() + SECRET_OAUTH_TTL_MS,
     };
     const { pending, authorizationUrl } = await beginSecretOAuth(options, {
       redirectUri: `${platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
@@ -310,7 +311,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       // at the egress that routed the request (the facet is the boundary that holds the bytes).
       const resolve = (named: string) => {
         if (named !== path)
-          throw new ProjectSecretRefused(
+          throw new SecretRefused(
             `itx.fetch: getSecret(${JSON.stringify(named)}) does not belong to the secret ${path}`,
           );
         return stored?.record.material ?? null;
@@ -325,12 +326,11 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         substituted = await substituteProjectSecrets(request, resolve);
       } catch (error) {
         // No accessToken yet with a strategy configured: mint first (the first-use case), then go.
-        if (!(error instanceof ProjectSecretRefused) || !retry || !error.mintable || !stored)
-          throw error;
+        if (!(error instanceof SecretRefused) || !retry || !error.mintable || !stored) throw error;
         try {
           await this.#refresh(stored.revision);
         } catch (cause) {
-          throw new ProjectSecretRefused(
+          throw new SecretRefused(
             `${error.message}; the refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`,
           );
         }
@@ -351,7 +351,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       return used(await dispatch(await substituteProjectSecrets(retry, resolve)));
     } catch (error) {
       // A refusal is a 502 to the caller with the reason — never the destination, never the value.
-      if (error instanceof ProjectSecretRefused)
+      if (error instanceof SecretRefused)
         return new Response(`${error.message}\n`, { status: 502 });
       throw error;
     }
@@ -435,7 +435,7 @@ const dispatch = async (request: Request): Promise<Response> => {
   try {
     return await fetch(request, { redirect: "manual" });
   } catch {
-    throw new ProjectSecretRefused(
+    throw new SecretRefused(
       `itx.fetch: the pinned host ${new URL(request.url).origin} could not be reached`,
     );
   }
