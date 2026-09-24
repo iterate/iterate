@@ -9,7 +9,8 @@ test("client navigation loads sign-in through its server function and rejects ma
 }) => {
   await page.goto("/");
   // Until React hydrates the link it is a plain anchor, and a click loads the page in full.
-  const signInLink = page.getByRole("link", { name: "sign-in" });
+  // Exact: the landing page also links the Dash, whose preview host carries the branch name.
+  const signInLink = page.getByRole("link", { name: "sign-in", exact: true });
   await expect
     .poll(() => signInLink.evaluate((link) => Object.keys(link)))
     .toContainEqual(expect.stringMatching(/^__reactProps/));

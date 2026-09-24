@@ -192,8 +192,16 @@ through the live projection where there is one, or by reloading the loaders:
 
 ```tsx
 await api.projects.get(project.id).secrets.set(path, value, { urls: origins });
-await router.invalidate(); // the secrets list is the route's loader
+await router.invalidate({ sync: true }); // the secrets list is the route's loader
 ```
+
+`sync: true` makes the call wait for the reload. Without it, TanStack Router reloads a route that
+already has data in the background (`loaderShouldRunAsync && !inner.sync` in router-core's
+`load-matches.ts`): `invalidate()` resolves at once, the action's pending state ends ("Installing…",
+the form's spinner), and the page shows its old data until the reload lands, so the action looks as
+if it failed. That happened to Voice's install on a busy platform (#3016). While the reload runs,
+the page keeps its data, and no pending component shows. An action that navigates next can skip
+`sync`, because the navigation waits for its own load.
 
 ### Mount
 
