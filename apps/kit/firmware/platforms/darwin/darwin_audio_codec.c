@@ -174,43 +174,6 @@ void iterate_kit_darwin_audio_codec_pump(
   }
 }
 
-uint32_t iterate_kit_darwin_audio_codec_playback_lead_bytes(
-    const struct iterate_kit_darwin_audio_codec *darwin) {
-  if (darwin == NULL || !darwin->playback_enabled) {
-    return 0U;
-  }
-  return iterate_kit_darwin_audio_output_lead_bytes(&darwin->output);
-}
-
-uint32_t iterate_kit_darwin_audio_codec_discard_playback(
-    struct iterate_kit_darwin_audio_codec *darwin) {
-  if (darwin == NULL || !darwin->playback_enabled) {
-    return 0U;
-  }
-  return iterate_kit_darwin_audio_output_discard(&darwin->output);
-}
-
-void iterate_kit_darwin_audio_codec_set_playback_expected(
-    struct iterate_kit_darwin_audio_codec *darwin,
-    bool expected) {
-  if (darwin != NULL && darwin->playback_enabled) {
-    iterate_kit_darwin_audio_output_set_expected(&darwin->output, expected);
-  }
-}
-
-enum iterate_kit_darwin_audio_output_status
-iterate_kit_darwin_audio_codec_drain(
-    struct iterate_kit_darwin_audio_codec *darwin,
-    uint32_t timeout_ms) {
-  if (darwin == NULL || timeout_ms == 0U) {
-    return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG;
-  }
-  if (!darwin->playback_enabled) {
-    return ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK;
-  }
-  return iterate_kit_darwin_audio_output_drain(&darwin->output, timeout_ms);
-}
-
 void iterate_kit_darwin_audio_codec_metrics(
     const struct iterate_kit_darwin_audio_codec *darwin,
     struct iterate_kit_darwin_audio_codec_metrics *metrics) {

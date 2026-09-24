@@ -187,7 +187,7 @@ struct stackchan_avatar_atomic_metrics {
 
 struct stackchan_avatar_owner {
   face_animator_t animator;
-  face_animator_state_t latest_pose;
+  face_pose_t latest_pose;
   face_avatar_registry_t registry;
 
   esp_lcd_panel_handle_t panel;
@@ -400,7 +400,7 @@ static bool prepare_avatar_frame_under_lock(
    * cannot race. Retain the bounded API anyway: it proves that any future
    * second writer fails one frame closed instead of spinning on core 0.
    */
-  face_animator_state_t candidate = owner.latest_pose;
+  face_pose_t candidate = owner.latest_pose;
   if (face_animator_snapshot(&owner.animator, &candidate)) {
     owner.latest_pose = candidate;
   } else {

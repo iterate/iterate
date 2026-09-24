@@ -1,13 +1,12 @@
 /*
  * WHAT A PRESS MEANS, TESTED ON A BOARD THAT HAS NO BUTTONS.
  *
- * `components/voice/src/voice_loop.c` is the one program all four boards run,
- * and until this file it was in no host build: its intent mapping was verified
- * by diffing it against the four device files it replaced, and that is exactly
- * where the bug lived. This fixture drives conversation control through the
- * mounted capability, exercising the same route a real caller uses.
+ * `components/voice/src/voice_loop.c` is the one program every board runs, and
+ * its intent mapping is where a remote press once latched and was never read.
+ * This fixture drives conversation control through the mounted capability,
+ * exercising the same route a real caller uses.
  *
- * This is that test. The board here has no `poll` op at all, so there is no
+ * The board here has no `poll` op at all, so there is no
  * physical button in the program: every intent has to come from the capability
  * the loop mounts, over the same Cap'n Web session a real caller uses, through
  * the same transport seam a real socket delivers on.
@@ -17,8 +16,6 @@
 #include "fake_esp_idf_platform.h"
 
 #include "iterate/kit/voice/loop.h"
-
-#include "esp_timer.h"
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/voice_device_profile.h"
@@ -185,7 +182,7 @@ static void boot(void) {
 
 static void step(void) {
   iterate_kit_host_esp_idf_advance_ms(50U);
-  iterate_kit_voice_loop_step((uint64_t)(esp_timer_get_time() / 1000));
+  iterate_kit_voice_loop_step();
 }
 
 /*
@@ -1307,7 +1304,7 @@ static void an_unaccepted_activation_times_out_once(void) {
  * AN IDLE BOARD KEEPS ITS OWN SOCKET, AND THIS IS THE ONE THING THAT DOES IT.
  *
  * Between calls this device sends no application message at all, which is the
- * only kind os-next's idle close counts (voice_device_profile.h), so the period
+ * only kind the OS's idle close counts (voice_device_profile.h), so the period
  * has to be reached from the loop's own clock while NOTHING else is happening.
  *
  * PINNED BECAUSE THE FIRST ATTEMPT GOT IT WRONG. The probe was first put beside

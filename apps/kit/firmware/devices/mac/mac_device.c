@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
       next_levels_at_us = now_us + 1000000;
     }
     iterate_kit_darwin_audio_codec_pump(&codec, (uint64_t)now_us);
-    iterate_kit_voice_loop_step((uint64_t)(now_us / 1000));
+    iterate_kit_voice_loop_step();
     iterate_kit_voice_loop_capture_step();
     iterate_kit_voice_loop_capture_step();
     iterate_kit_voice_loop_playback_step();

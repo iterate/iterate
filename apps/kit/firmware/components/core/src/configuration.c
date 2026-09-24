@@ -12,9 +12,8 @@
  *
  * CRC32 detects transfer/storage corruption; it is not a MAC and does not make
  * the key safe against someone who can read or rewrite flash. The key field
- * carries the os-next deployment admin secret today, which is why a board
- * holding one is a bench board: device-scoped OAuth credentials can replace it
- * later without changing the bounded container/parser.
+ * carries a project-scoped personal access token minted by `grants.mint` for
+ * the person who set the board up (itx_mount.h).
  */
 enum {
   CONFIGURATION_FIELD_HEADER_SIZE = 3,
@@ -137,10 +136,11 @@ static bool valid_base_url(const char *value) {
 }
 
 /*
- * A PROJECT ID IS A SLUG, AND THE `prj_` PREFIX IS GONE. On os-next a project's
- * id IS its DNS-safe slug, and `projects.get` validates exactly
- * `/^[A-Za-z0-9_-]+$/`. Mirror the server's rule rather than a narrower guess:
- * a board that refuses its own blob at boot never dials and looks dead.
+ * The field holds the project's id (`prj_<hex>`, as the Kit firmware page
+ * writes it), and `projects.get` also accepts the project's slug, so this
+ * mirrors the server's one-path-segment rule `/^[A-Za-z0-9_-]+$/` rather than
+ * insisting on a `prj_` prefix: a board that refuses its own blob at boot
+ * never dials and looks dead.
  */
 static bool valid_project_id(const char *value) {
   const char *cursor;

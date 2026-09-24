@@ -477,12 +477,6 @@ bool waveshare_avatar_render(
   return true;
 }
 
-/* --- faces ----------------------------------------------------------------- */
-
-const char *waveshare_avatar_slug(void) {
-  return face.ready ? face_avatar_registry_current_slug(&face.registry) : "";
-}
-
 /* --- what went wrong ------------------------------------------------------- */
 
 uint32_t waveshare_avatar_render_failures(void) {

@@ -7,13 +7,11 @@ static uint8_t scale_channel(uint8_t channel, uint8_t scale) {
 }
 
 /*
- * The seven-way classification the equality gate compares. It used to
- * return display STRINGS ("connecting", "in call") that no screen has
- * rendered since every board grew its own panel renderer; the classes
- * survive because overlay_equal is StackChan's repaint gate — the
- * function whose misuse once caused the 1 Hz face blackout. Order
- * matters and mirrors the light renderer's: a broken speaker while the
- * network is fine is still a device that cannot hold a conversation.
+ * The seven-way classification the equality gate compares. No screen renders
+ * it as text; it exists because overlay_equal is StackChan's repaint gate —
+ * the function whose misuse once caused the 1 Hz face blackout. Order matters
+ * and mirrors the light renderer's: a broken speaker while the network is
+ * fine is still a device that cannot hold a conversation.
  */
 static uint8_t overlay_class(
     const struct iterate_kit_conversation_visual_state *state) {

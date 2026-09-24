@@ -9,9 +9,6 @@ typedef struct {
     const char *slug;
     const char *name;
     const face_sprite_atlas_t *atlas;
-    uint16_t work_width;
-    uint16_t work_height;
-    uint8_t flags;
 } face_avatar_entry_t;
 
 #include "face_avatar_catalog_generated.inc"

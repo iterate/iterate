@@ -28,8 +28,6 @@ static void renders_one_shared_three_sector_grammar(void) {
   const struct iterate_kit_conversation_visual_state state = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,
     .reach = ITERATE_KIT_REACH_STREAM,
-    .has_wifi_rssi = true,
-    .wifi_rssi_dbm = -66,
     .conversation_active = true,
     .media_ready = true,
     .microphone_listening = true,
@@ -193,30 +191,13 @@ static void restart_arm_supersedes_all_status(void) {
   }
 }
 
-/*
- * Wi-Fi RSSI naturally moves by a few dB while the device is stationary. The
- * Stick originally compared that raw telemetry and repainted its whole status
- * panel every second, producing visible flicker even though the three network
- * lights had not changed. Output equality is the correct invalidation seam:
- * diagnostics retain precise RSSI while renderers wake only for a visible
- * semantic change.
- */
-static void treats_rssi_changes_as_the_same_visual_output(void) {
+/* Equality is view equality: a climb up the ladder is a visible change. */
+static void lights_equal_follows_the_rendered_ladder(void) {
   const struct iterate_kit_conversation_visual_state first = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,
     .reach = ITERATE_KIT_REACH_API,
-    .has_wifi_rssi = true,
-    .wifi_rssi_dbm = -73,
   };
   struct iterate_kit_conversation_visual_state second = first;
-  second.wifi_rssi_dbm = -77;
-  assert(iterate_kit_conversation_lights_equal(&first, &second));
-
-  /*
-   * And now every RSSI is the same picture, because these pixels stopped
-   * being a signal meter. What changes them is the ladder.
-   */
-  second.wifi_rssi_dbm = -30;
   assert(iterate_kit_conversation_lights_equal(&first, &second));
   second.reach = ITERATE_KIT_REACH_SESSION;
   assert(!iterate_kit_conversation_lights_equal(&first, &second));
@@ -357,7 +338,7 @@ int main(void) {
   makes_media_failure_unambiguously_red();
   keeps_media_failure_visible_while_idle();
   restart_arm_supersedes_all_status();
-  treats_rssi_changes_as_the_same_visual_output();
+  lights_equal_follows_the_rendered_ladder();
   the_network_pixels_count_how_far_up_the_ladder_we_are();
   a_rung_is_only_reached_when_everything_below_it_is();
   a_press_lights_the_microphone_before_the_call_exists();

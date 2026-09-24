@@ -258,12 +258,6 @@ void iterate_kit_i2s_codec_play_sound(const uint8_t *pcm, uint32_t bytes) {
 #endif
 }
 
-void iterate_kit_i2s_codec_drop_pending_sound(void) {
-  portENTER_CRITICAL(&codec_lock);
-  sound_pcm = NULL;
-  portEXIT_CRITICAL(&codec_lock);
-}
-
 bool iterate_kit_i2s_codec_sound_active(void) {
   portENTER_CRITICAL(&codec_lock);
   const bool active = sound_pcm != NULL;

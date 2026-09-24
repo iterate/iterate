@@ -25,8 +25,8 @@ extern "C" {
  *
  * Atlas data and playback state are caller-owned. The implementation performs
  * no allocation, retains no PCM, and uses integer arithmetic only. The same
- * player renders into any caller-owned RGB565 surface; the legacy 160x120
- * entry points below are only convenience wrappers for CoreS3/WASM callers.
+ * player renders into any caller-owned RGB565 surface; the 160x120 entry
+ * points below are convenience wrappers.
  */
 enum {
     FACE_SPRITE_MAGIC = 0x46535052U, /* "FSPR" */
@@ -345,12 +345,6 @@ bool face_sprite_render_snapshot(
     uint32_t sample_clock,
     uint16_t *rgb565,
     size_t pixel_capacity);
-
-bool face_sprite_render_snapshot_to(
-    const face_sprite_player_t *validated_player,
-    const face_render_key_t *render_key,
-    uint32_t sample_clock,
-    const face_sprite_surface_t *surface);
 
 /*
  * Resolve the immediate target mouth slot without debounce. Useful to

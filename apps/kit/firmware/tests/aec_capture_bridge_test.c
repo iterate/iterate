@@ -488,7 +488,7 @@ static void reading_metrics_does_not_mutate_the_bridge(void) {
       snapshot.egress_samples_copied + wire_samples);
 }
 
-/* --- the degenerate cadence, which is now three of the four boards -------- */
+/* --- the degenerate cadence, which most boards run ----------------------- */
 
 /*
  * THE SHARED CAPTURE STEP RUNS EVERY BOARD THROUGH THIS BRIDGE, so the claim

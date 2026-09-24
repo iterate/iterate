@@ -258,7 +258,7 @@ static void start_mount(struct fixture *fixture) {
 
 /*
  * ONE DISPATCHER, TWO ARGUMENT SHAPES. A stream push arrives as the bare
- * `(events, range)` os-next calls a lent stub with — argument 0 IS the events
+ * `(events, range)` the OS calls a lent stub with — argument 0 IS the events
  * array — while live state still hands over one state object and no range.
  * Telling them apart on the array, rather than on a field that happened to be
  * in the old batch envelope, is what makes this seam honest.
@@ -562,7 +562,7 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
   }
 
   /*
-   * A STREAM SUBSCRIPTION IS CLOSED BY BEING RELEASED. os-next's handle has no
+   * A STREAM SUBSCRIPTION IS CLOSED BY BEING RELEASED. The OS's handle has no
    * `close()`, so calling one would reject — and on this client a rejection is
    * indistinguishable from a network fault. Live state still has `unsubscribe`.
    */

@@ -96,7 +96,7 @@ struct FaceState {
    * attempt keeps the previous pose rather than waiting.
    */
   face_animator_t animator;
-  face_animator_state_t latest_pose;
+  face_pose_t latest_pose;
   /* Latest-only face request, catalogue index + 1; zero means none. */
   std::atomic<uint32_t> pending_face_index_plus_one;
   uint16_t *frame;      /* FACE_RENDER_WIDTH x FACE_RENDER_HEIGHT, PSRAM */
@@ -233,7 +233,7 @@ bool face_draw(void) {
    * so idle life never freezes with it.
    */
   {
-    face_animator_state_t candidate = face.latest_pose;
+    face_pose_t candidate = face.latest_pose;
     if (face_animator_snapshot(&face.animator, &candidate)) {
       face.latest_pose = candidate;
     }

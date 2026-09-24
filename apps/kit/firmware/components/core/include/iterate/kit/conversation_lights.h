@@ -20,11 +20,9 @@ struct iterate_kit_rgb8 {
 };
 
 /*
- * There was a third state, DISCONNECTED, and no board could ever reach it:
- * all four map `link_ready` to CONNECTED or CONNECTING, because a device that
- * cannot see the network is still trying to and saying "offline" about it was
- * a promise the fleet never kept. Its status word, its dark-red network
- * sector and its banner colour are gone with it.
+ * No DISCONNECTED state: every board maps `link_ready` to CONNECTED or
+ * CONNECTING, because a device that cannot see the network is still trying
+ * to, and saying "offline" about it would be a promise the fleet never keeps.
  */
 enum iterate_kit_network_state {
   ITERATE_KIT_NETWORK_CONNECTING = 0,
@@ -34,11 +32,11 @@ enum iterate_kit_network_state {
 /**
  * How far up the ladder to a conversation this device has actually got.
  *
- * THE THREE NETWORK PIXELS USED TO BE WI-FI SIGNAL STRENGTH, and signal
+ * THE THREE NETWORK PIXELS ARE NOT WI-FI SIGNAL STRENGTH, because signal
  * strength is the wrong question. A board with three bars of Wi-Fi and no
- * capability mounted looks identical to one that can talk, and the difference
- * is the entire user-visible failure: you press the button and nothing
- * happens. What a person needs to see is how much of the chain is up.
+ * capability mounted would look identical to one that can talk, and the
+ * difference is the entire user-visible failure: you press the button and
+ * nothing happens. What a person needs to see is how much of the chain is up.
  *
  * Each rung strictly contains the ones below it, so the count is meaningful on
  * its own and a renderer never has to encode a combination. RSSI keeps its
@@ -61,7 +59,7 @@ enum iterate_kit_reach {
  * This is intentionally facts rather than pixels or device-driver state. A
  * physical LED ring, StackChan's two strips, and a tiny on-screen grid must all
  * answer the same questions even though their output APIs differ. The caller
- * owns timing and samples RSSI/audio elsewhere; this model owns no clock,
+ * owns timing and samples audio elsewhere; this model owns no clock,
  * GPIO, Wi-Fi, audio, task, queue, or heap allocation.
  *
  * The diagnostic renderer reserves three pixels each for network, assistant
@@ -72,8 +70,6 @@ struct iterate_kit_conversation_visual_state {
   enum iterate_kit_network_state network;
   /** How much of the chain to a live conversation is up; three pixels of it. */
   enum iterate_kit_reach reach;
-  bool has_wifi_rssi;
-  int32_t wifi_rssi_dbm;
   bool conversation_active;
   bool media_ready;
   bool media_failed;
@@ -103,7 +99,7 @@ struct iterate_kit_conversation_visual_state {
  *
  * Here rather than in each device because the containment rule — a rung is
  * only reached if every rung below it is — is the property the count depends
- * on, and four copies of it is four chances to publish "session but no
+ * on, and a copy per board is a chance per board to publish "session but no
  * stream", which is three pixels that mean nothing.
  *
  * `session_active` without `stream_ready` is impossible on real hardware; if
@@ -125,13 +121,8 @@ void iterate_kit_conversation_lights_render(
         pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
 
 /**
- * Reports whether two snapshots produce exactly the same logical lights.
- *
- * This is view equality, not telemetry equality: two RSSI readings inside the
- * same displayed band are deliberately equal. Display adapters should use
- * this at their invalidation boundary so high-resolution diagnostic noise
- * cannot trigger pointless SPI traffic or visible flicker. Precise readings
- * remain available through metrics and are not discarded by this function.
+ * Reports whether two snapshots produce exactly the same logical lights;
+ * display adapters should use this at their invalidation boundary.
  */
 bool iterate_kit_conversation_lights_equal(
     const struct iterate_kit_conversation_visual_state *left,

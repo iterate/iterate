@@ -107,19 +107,11 @@ enum {
    * The inbox rides PSRAM (512 KiB), and overflowing it is SESSION-FATAL, so
    * it is sized for the worst legitimate burst rather than the average: a
    * paced answer clumps at TCP granularity, and pulling a recording off the
-   * card adds a call per chunk on top. Measured high-water was 46 of 64
-   * during ordinary use — close enough to the edge that the session died
-   * under a recording pull concurrent with a call. 128 leaves real headroom.
+   * card adds a call per chunk on top. It holds 64 slots; measured
+   * high-water was 46 of them during ordinary use, and a recording pull
+   * concurrent with a call has overflowed it.
    */
   CONTROL_INBOX_SLOTS = ITERATE_KIT_VOICE_CONTROL_INBOX_SLOTS,
-  /*
-   * The uplink sends 6 frames per 120 ms, which is exactly the capture rate —
-   * so it has no margin, and any iteration blocked on outbox headroom puts
-   * it permanently behind (measured: holds over 2 s ended with the queue
-   * still full at the flush deadline). The outbox lives in PSRAM now, so
-   * depth is cheap; 16 slots lets the sender catch up instead of losing the
-   * tail of long utterances.
-   */
   /*
    * 64, not 16. Pushing into a FULL outbox returns CAPNWEB_E_TRANSPORT, and
    * this peer terminalizes on that — the session ends, the turn is lost, and
@@ -141,14 +133,8 @@ enum {
   TERMINAL_PENDING_CAPACITY = 2U,
   FRAME_MS = ITERATE_KIT_VOICE_FRAME_MS,
   FRAME_SAMPLES = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  /*
-   * `SPEAKER_FRAME_MS` and `DMA_RING_CREDIT_MS` were here, and on all four
-   * boards, and read by nobody on any of them — 20 everywhere, and 40/60/90/120
-   * respectively. A constant no code reads is a claim no measurement checks, so
-   * they are deleted rather than promoted to per-board facts. The ring depth
-   * that DOES matter survives as `facts->speaker_dry_wait_ms`, which is derived
-   * from it and is read on every dry wait.
-   */
+  /* A board's DMA ring depth reaches the loop only as
+   * `facts->speaker_dry_wait_ms`, which is read on every dry wait. */
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
   /* One local activation gets one finite opening attempt. */
   OPENING_DEADLINE_MS = 20000U,
@@ -250,12 +236,12 @@ static struct iterate_kit_itx_transport transport;
 /*
  * EVERYTHING ELSE THE LOOP HOLDS, IN PSRAM — sixty-six kilobytes of it.
  *
- * Three of the four boards kept this internal and the fourth did not, and the
- * fourth is the one that dropped its socket mid-sentence with "esp-aes: Failed
- * to allocate memory" while `heapFree` read 5,800,196. Internal RAM is the
- * only kind TLS, Wi-Fi and DMA can use, and this struct needs none of those
- * properties: it is counters, Cap'n Web's three fixed tables, a JSON token
- * arena, a stats buffer and two queue HANDLES.
+ * Internal RAM is scarce enough that the board with a camera, LVGL and esp-sr
+ * dropped its socket mid-sentence with "esp-aes: Failed to allocate memory"
+ * while `heapFree` read 5,800,196. It is the only kind TLS, Wi-Fi and DMA can
+ * use, and this struct needs none of those properties: it is counters, Cap'n
+ * Web's three fixed tables, a JSON token arena, a stats buffer and two queue
+ * HANDLES.
  *
  * Safe because nothing here is touched from an ISR — the audio ISRs belong to
  * the board drivers and never see it — and because atomics on this target
@@ -343,7 +329,7 @@ EXT_RAM_BSS_ATTR static struct {
   /*
    * The playback step's persistent state — the shared playout clock, its
    * counters and the last write — written only by the playback task. The
-   * step itself is shared with the host CLI: iterate/kit/voice_playout.h.
+   * step itself is owned by iterate/kit/voice_playout.h.
    */
   struct iterate_kit_voice_playout playout;
   uint32_t mic_frames_captured;
@@ -446,7 +432,7 @@ EXT_RAM_BSS_ATTR static struct {
   /* Release pressed, but the capture queue is not yet on the wire. */
   atomic_bool speaker_reprime;
   /* The answer's playout timeline — when it began, how much has played, the
-   * worst lag — is `playout.clock`'s, shared with the host CLI; see
+   * worst lag — is owned by `playout.clock`; see
    * iterate/kit/voice_playback_clock.h. */
   /* One atomic epoch notification: reprime cannot erase a newer short answer
    * terminal. UINT32_MAX means no pending terminal. */
@@ -466,8 +452,7 @@ EXT_RAM_BSS_ATTR static struct {
  *
  * Every op below `start` and `present` is optional — a NULL pointer is a board
  * saying it has no such hardware. Funnelling the checks through four one-line
- * thunks keeps that fact in one place instead of at each of the ~110 call sites
- * the four device files used to spread it over.
+ * thunks keeps that fact in one place instead of at every call site.
  */
 static void board_phase(enum iterate_kit_voice_phase phase) {
   if (runtime.board->phase != NULL) {
@@ -556,7 +541,8 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
    * raising it two milliseconds before the first write meant the opening of
    * every answer played into an amp that was not up yet — heard as the first
    * half-word being clipped or missing. Enabling it here spends the playout
-   * prefill (160 ms) as settle time, which costs nothing.
+   * prefill (SPEAKER_PREFILL_BYTES, 200 ms) as settle time, which costs
+   * nothing.
    */
   board_phase(ITERATE_KIT_VOICE_PHASE_ARRIVED);
   atomic_store_explicit(
@@ -566,7 +552,7 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
   /*
    * Audio arriving within a second of a starve means the answer was still
    * going: the pipe genuinely ran dry mid-speech, and that is audible. The
-   * rule is the clock's, shared with the host CLI.
+   * rule is owned by the playback clock.
    */
   if (iterate_kit_voice_playback_clock_audio_arrived(
           &runtime.playout.clock, now_ms(NULL))) {
@@ -659,11 +645,10 @@ static uint32_t abandon_speaker_audio(void) {
    * AND THE ANSWER'S CLOCK GOES WITH ITS AUDIO — carried by the reprime the
    * playback task applies before its next frame: the playout clock owns the
    * answer's timeline, and `iterate_kit_voice_playback_clock_reprime` starts
-   * it from zero. It used to be reset here by hand, in the funnel rather than
-   * at the flush sites, because it had first been written at ONE of the four
-   * and a new CALL then kept the last call's clock — 34 frames skipped with
-   * `spkLagMaxMs` at 117,083 on the StackChan. Now neither a site nor a
-   * funnel can forget it: whatever primes the clock resets the timeline.
+   * it from zero, so neither a flush site nor this funnel can forget it: a
+   * reset written at only one of the flush sites once let a new CALL keep the
+   * last call's clock — 34 frames skipped with `spkLagMaxMs` at 117,083 on
+   * the StackChan.
    */
   /* And the part-frame waiting for audio that is never coming: spliced onto
    * the front of the next answer, it is a click once per barge-in. */
@@ -791,11 +776,11 @@ static bool playback_apply_reprime(
 /*
  * THE BOARD'S RING AND SINK, AS THE SHARED PLAYOUT STEP SEES THEM.
  *
- * The step — iterate/kit/voice_playout.h — is the sequence this board and the
- * host CLI both run: prime, take one frame, treat a dry ring as a hole or the
- * end, skip a late frame with backlog behind it, hand the rest to the
- * speaker, report what was played. It used to be written here and again in
- * the CLI, and the two drifted apart twice. What is below is only what is
+ * The step — iterate/kit/voice_playout.h — is the sequence every board runs:
+ * prime, take one frame, treat a dry ring as a hole or the end, skip a late
+ * frame with backlog behind it, hand the rest to the speaker, report what was
+ * played. When it was written here and again in a since-deleted host CLI
+ * (#2710), the two copies drifted apart twice. What is below is only what is
  * the board's alone: the FreeRTOS queue with its generations and reprime
  * handshake, and the codec write with its bounded wait for DMA headroom.
  */
@@ -1110,27 +1095,25 @@ void iterate_kit_voice_loop_playback_step(void) {
 /*
  * ONE CAPTURE PATH, THROUGH THE BRIDGE, ON EVERY BOARD.
  *
- * Three of the four boards read a whole 20 ms wire frame, hand it to a
- * passthrough and queue it. The fourth reads 8 ms DMA chunks, runs esp-sr's
- * VOIP engine over 16 ms frames and owes the wire 20 ms — three cadences that
+ * Most boards read a whole 20 ms wire frame, hand it to a passthrough and
+ * queue it. A board with esp-sr reads 8 ms DMA chunks, runs its VOIP engine
+ * over 16 ms frames and owes the wire 20 ms — three cadences that
  * no amount of whole-frame FIFO can reconcile without a beat pattern. The
  * bridge is that reconciliation, and it is already board-generic: separate
  * `processing_frame_samples` and `egress_frame_samples`, one owner, no task,
  * lock, allocation or hidden capacity.
  *
  * At 320 in / 320 processed / 320 out it degenerates to an exact pass-through
- * — four memcpys and the same `iterate_kit_audio_processor_process` call the
- * direct path made — with ONE real semantic change, which is the reason this
- * is a commit of its own:
+ * — four memcpys and one `iterate_kit_audio_processor_process` call — with
+ * ONE real semantic change against a direct path:
  *
  *   A FAILED PROCESS NOW EMITS 320 SAMPLES OF SILENCE INSTEAD OF DROPPING THE
- *   FRAME. The direct path returned early and sent nothing, so the wire
- *   timeline skipped 20 ms; the bridge fails closed by writing a complete
+ *   FRAME. A direct path would return early and send nothing, so the wire
+ *   timeline would skip 20 ms; the bridge fails closed by writing a complete
  *   silent frame, which keeps the timeline deterministic and can never
  *   substitute raw microphone. Unreachable under a passthrough processor,
- *   which cannot fail once its near and output planes are non-NULL — so on
- *   three boards this is a contract change with no reachable behaviour behind
- *   it, and on the fourth it is what its own AEC already did.
+ *   which cannot fail once its near and output planes are non-NULL; on a board
+ *   with its own AEC it is what that AEC already did.
  *
  * A fixed-size frame is the less surprising contract: every consumer
  * downstream of here assumes 20 ms, and a silently missing frame is the kind
@@ -1298,47 +1281,11 @@ static void fence_activation(void) {
   runtime.voice_stream_generation = 0U;
 }
 
-static void end_local_activation(const char *reason, const char *status) {
-  if (runtime.activation_live) ESP_LOGI(tag, "call ended here: %s", reason);
-  bool queued;
-  /* Every local end is immediately audible: discard the old answer before
-   * fencing capture or waiting for its terminal to reach the stream. */
-  (void)abandon_speaker_audio();
-  /* A terminal is required only after this activation reached the stream. */
-  queued = !runtime.activation_live ||
-      runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
-  fence_activation();
-  /* `pending_terminals` owns the ID now. Do not let a delayed acceptance or
-   * speaker frame match an activation the person has already ended. */
-  runtime.activation[0] = '\0';
-  stream_path[0] = '\0';
-  runtime.activation_live = false;
-  atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
-  atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
-  runtime.view.wants_call = false;
-  runtime.view.listening = false;
-  /* A queued terminal fences later microphone appends, so the old call must
-   * stop governing new local intent immediately. */
-  runtime.view.call_active = false;
-  runtime.voice_stream->call_active = false;
-  runtime.voice_stream->answer_open = false;
-  runtime.voice_stream->last_presence_at_ms = 0U;
-  runtime.opening_started_at_ms = 0U;
-  runtime.opening_outcome = OPENING_IDLE;
-  atomic_fetch_add_explicit(
-      &runtime.capture_generation, 1U, memory_order_acq_rel);
-  atomic_store_explicit(&runtime.capture_open, false, memory_order_release);
-  atomic_store_explicit(
-      &runtime.capture_discard_requested, true, memory_order_release);
-  runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-  runtime.view.status = queued ? status : "cancel backlog full";
-  if (!queued) ESP_LOGE(tag, "terminal backlog full for activation");
-}
-
-/* The server has already accepted the terminal; fence only local audio. */
-static void end_authoritative_activation(const char *status) {
-  if (!runtime.activation_live) return;
-  ESP_LOGI(tag, "call ended by the server");
+/*
+ * Close the current activation on this device: no delayed acceptance or
+ * speaker frame may match it, and it stops governing new local intent at once.
+ */
+static void close_activation_locally(const char *status) {
   fence_activation();
   runtime.activation[0] = '\0';
   stream_path[0] = '\0';
@@ -1360,6 +1307,28 @@ static void end_authoritative_activation(const char *status) {
       &runtime.capture_discard_requested, true, memory_order_release);
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
   runtime.view.status = status;
+}
+
+static void end_local_activation(const char *reason, const char *status) {
+  if (runtime.activation_live) ESP_LOGI(tag, "call ended here: %s", reason);
+  bool queued;
+  /* Every local end is immediately audible: discard the old answer before
+   * fencing capture or waiting for its terminal to reach the stream. */
+  (void)abandon_speaker_audio();
+  /* A terminal is required only after this activation reached the stream. */
+  queued = !runtime.activation_live ||
+      runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
+  /* `pending_terminals` owns the ID now, and a queued terminal fences later
+   * microphone appends, so the ended call must stop governing local intent. */
+  close_activation_locally(queued ? status : "cancel backlog full");
+  if (!queued) ESP_LOGE(tag, "terminal backlog full for activation");
+}
+
+/* The server has already accepted the terminal; fence only local audio. */
+static void end_authoritative_activation(const char *status) {
+  if (!runtime.activation_live) return;
+  ESP_LOGI(tag, "call ended by the server");
+  close_activation_locally(status);
 }
 
 static const char *const setup_voice_path[] = {"voice", "setupVoiceAgent"};
@@ -1827,7 +1796,7 @@ static bool initialise_connection(void) {
   }
   /*
    * TURN IT UP. Every board here shipped at a volume somebody measured once
-   * and nobody could change without a reflash, and all four were reported as
+   * and nobody could change without a reflash, and every one was reported as
    * too quiet. The driver keeps its ceiling; the knob is now a call away.
    */
   {
@@ -1873,16 +1842,10 @@ static bool initialise_connection(void) {
     }
   }
   /*
-   * AND WHAT ONLY THIS BOARD HAS — which until now was nothing, on every
-   * board.
-   *
-   * `board_ops.modules` is declared, documented, and implemented (HAVPE's
-   * `aec.setStage`); it was never called. The array above was sized at twelve
-   * for "four shared plus whatever the board has of its own" and then filled
-   * with the four. So a board-local method failed at the call site as
-   * "unknown device capability" — which reads like a misspelled path, not
-   * like a capability that was never mounted, and cost an evening of looking
-   * for the typo in a registration table that was correct.
+   * AND WHAT ONLY THIS BOARD HAS (HAVPE's `aec.setStage`, say). A board-local
+   * method that is never mounted fails at the call site as "unknown device
+   * capability", which reads like a misspelled path — it once cost an evening
+   * of looking for the typo in a registration table that was correct.
    */
   if (runtime.board->modules != NULL) {
     module_count += runtime.board->modules(
@@ -1918,14 +1881,10 @@ static bool initialise_connection(void) {
   options.capability_match = capability_match;
   options.capability = iterate_kit_peer_capability(&runtime.peer);
   /*
-   * THERE IS NO DESCRIPTION TO SEND ANY MORE.
-   *
-   * `projects.connect` took one and journalled it as the provision's
-   * instructions; `provide` takes a match and a stub and nothing else. What a
-   * model discovers about this board is now whatever the project's own rows
-   * say about `clients.<device>` — the device asserts only that the name works.
-   * `facts->peer_description` still documents the surface for people reading
-   * this file.
+   * `provide` takes a match and a stub and nothing else, which is why the
+   * peer's description above is `{}`. What a model discovers about this board
+   * is whatever the project's own rows say about `clients.<device>`; the
+   * device asserts only that the name works.
    */
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
@@ -1945,26 +1904,19 @@ static bool initialise_connection(void) {
 
 /*
  * HOW THIS DEVICE IS, AS ONE DOCUMENT, ANSWERED ONLY WHEN SOMEBODY ASKS.
- *
- * It used to be two things — this, and a copy pushed on a timer — and they
- * were never allowed to disagree. There is only the pull now, which is the
- * same document and none of the traffic.
+ * There is no copy pushed on a timer, so there is nothing for it to disagree
+ * with and none of the traffic.
  */
 static size_t health_json(char *out, size_t capacity) {
   /*
    * PURE. This serializes local statistics and records nothing.
    *
-   * It used to stamp "somebody asked us something" here, on the reasoning that
-   * answering an RPC is the only proof the mount is still reachable — which is
-   * true, and was defeated by the placement: the deleted `append_stats` called
-   * this every five seconds to build the telemetry body, so the device renewed
-   * its own liveness lease twelve times a minute by talking to itself. On
-   * 2026-08-04 that left the pinned board unreachable for over seven minutes
-   * with a 90s watchdog armed and a server holding zero connections.
-   *
    * Reachability comes from `iterate_kit_peer_served_dispatches` — INBOUND
-   * dispatches, which no amount of outbound telemetry can inflate. Keeping
-   * this pure is what makes that true, and it outlived the push that broke it.
+   * dispatches, which no amount of outbound telemetry can inflate. Stamping
+   * "somebody asked us something" here instead let a periodic caller renew
+   * the device's own liveness lease by talking to itself: on 2026-08-04 that
+   * left the pinned board unreachable for over seven minutes with a 90s
+   * watchdog armed and a server holding zero connections.
    */
   /*
    * NAME AND VALUE TRAVEL TOGETHER.
@@ -2066,7 +2018,6 @@ static size_t health_json(char *out, size_t capacity) {
          &runtime.speaker_overflow_drops, memory_order_relaxed)},
     /* Audio arriving just after a software-dry tick. Same signal, one step on. */
     {"spkSoftDryRefills", runtime.speaker_underruns},
-    /* The task-side starvation measure: ms the ring was empty, and how often. */
     /*
      * SOFTWARE-BUFFER LATENESS, absorbed by the hardware ring — not an audible
      * gap, and named so nobody gates on it. The 90ms DMA ring sits between this
@@ -2082,13 +2033,10 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkWrites", runtime.playout.stats.writes},
     {"spkBadFrames", runtime.speaker_bad_frames},
     /*
-     * A CHUNK THE DEVICE COULD NOT DECODE, which is now the only way audio
-     * can fail to reach the speaker before it is queued.
-     *
-     * The old classifier's `spkIgnoredCall`/`spkIgnoredStale`/`spkIgnoredDup`
-     * are gone with the classifier: the sender paces the answer and no frame
-     * carries a call or an answer any more, so there is nothing for the
-     * device to refuse.
+     * A CHUNK THE DEVICE COULD NOT DECODE, which is the only way audio can
+     * fail to reach the speaker before it is queued: the sender paces the
+     * answer and no frame carries a call or an answer, so there is nothing
+     * for the device to refuse.
      */
     {"spkDecodeFailures", runtime.voice_stream->spk_decode_failures},
     {"spkDiscarded",
@@ -2120,15 +2068,6 @@ static size_t health_json(char *out, size_t capacity) {
      */
     {"facePolls", runtime.voice_stream->face_polls},
     {"faceUpdates", runtime.voice_stream->face_updates},
-    /*
-     * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
-     *
-     * `faceFrames` counts completed analysis windows — 100 a second while audio
-     * plays. A mouth that has stopped moving is either this number standing
-     * still or the audio never arriving, and nothing on the screen tells those
-     * apart. The frozen-pose bug was diagnosed from source because there was no
-     * counter to look at; there is one now.
-     */
     {"batches", runtime.voice_stream->batches_on_connection},
     {"connGeneration", runtime.voice_stream->connection_generation},
     /* Deliveries that never arrived: the times a range did not continue the
@@ -2167,8 +2106,6 @@ static size_t health_json(char *out, size_t capacity) {
     {"rpcImportsMax", tables.imports_capacity},
     {"rpcCalls", tables.calls_used},
     {"rpcCallsMax", tables.calls_capacity},
-    /* Which step of preparing a conversation failed last — the reason that
-     * used to exist only on a console whose opening reboots the board. */
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     /*
      * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
@@ -2286,10 +2223,10 @@ static size_t health_json(char *out, size_t capacity) {
    *
    * A dozen of the fields above were a particular board's hardware — DMA
    * ledgers, codec overruns, an I2C button's read failures, a face's frame
-   * count — and the four device files each carried their own dozen. They are
-   * the board's to name, so the board appends them, and a board that overflows
-   * fails the same way the shared table does: nothing is sent, because a
-   * truncated stats line is not a shorter document, it is no document.
+   * count. They are the board's to name, so the board appends them, and a board
+   * that overflows fails the same way the shared table does: nothing is sent,
+   * because a truncated stats line is not a shorter document, it is no
+   * document.
    */
   if (runtime.board->health != NULL) {
     const size_t appended =
@@ -2313,17 +2250,11 @@ static size_t render_health(void *context, char *out, size_t capacity) {
 }
 
 /*
- * `append_stats` WAS HERE, AND IT IS WHY NOTHING COULD EVER SLEEP.
- *
- * It pushed this same document onto the conversation stream every five
- * seconds, unconditionally, from inside the "everything ready" gate — so four
- * idle boards were four Durable Objects woken twelve times a minute each,
- * forever, whether or not anybody was in the room. A heartbeat is the one
- * thing a hibernating object cannot tolerate, and this one was declared in no
- * contract and duplicated `health()` exactly.
- *
- * The numbers did not go anywhere: `render_health` above is the same document,
- * and a capability call costs nothing when nobody asks. State, not a pulse.
+ * THERE IS DELIBERATELY NO PERIODIC HEALTH PUSH. A heartbeat onto the
+ * conversation stream wakes every idle board's Durable Object twelve times a
+ * minute, forever, and a hibernating object cannot tolerate that.
+ * `render_health` above is the same document, and a capability call costs
+ * nothing when nobody asks. State, not a pulse.
  */
 
 /*
@@ -2403,10 +2334,10 @@ static void park_with_fault(const char *what) {
  * Power the board and check that what it handed back can carry a conversation.
  *
  * PARKS RATHER THAN RETURNS on failure — that is the caller's job, but it is
- * why this is a function: two of the four boards `return`ed from here with the
- * task watchdog already subscribed, which is a reboot loop, and from across a
- * room a board rebooting every twenty seconds is indistinguishable from a dead
- * one and cannot be asked what went wrong.
+ * why this is a function: a board that `return`ed from here with the task
+ * watchdog already subscribed was in a reboot loop, and from across a room a
+ * board rebooting every twenty seconds is indistinguishable from a dead one and
+ * cannot be asked what went wrong.
  *
  * The order INSIDE `start` is the board's own: one must raise its panel before
  * its codec because both resets hang off a single TCA9554, and doing it the
@@ -2552,13 +2483,11 @@ bool iterate_kit_voice_loop_init(
   /*
    * PSRAM, like the speaker queue beside it and for the same reasons.
    *
-   * 32 frames of 640 bytes is 20 KiB, and three of the four boards were
-   * spending that in INTERNAL RAM — the only kind TLS, Wi-Fi and DMA can use.
-   * The fourth already knew better: the board with a camera, LVGL and esp-sr
-   * put its microphone queue in PSRAM, and it is also the board that dropped
-   * its socket mid-sentence with "esp-aes: Failed to allocate memory" while
-   * `heapFree` read 5,800,196. Unifying to internal would have taken 20 KiB
-   * back from exactly the board that has already proved it cannot spare it.
+   * MIC_QUEUE_DEPTH frames (about 21 s of 20 ms audio) is hundreds of
+   * kilobytes, and INTERNAL RAM is the only kind TLS, Wi-Fi and DMA can use —
+   * scarce enough that the board with a camera, LVGL and esp-sr dropped its
+   * socket mid-sentence with "esp-aes: Failed to allocate memory" while
+   * `heapFree` read 5,800,196.
    *
    * Safe for the same reason the speaker queue is: an item is one indivisible
    * 20 ms frame, FreeRTOS copies on send and receive, and this is never a DMA
@@ -2658,13 +2587,11 @@ static const char *capnweb_status_name(int32_t status) {
 /*
  * ONE PASS OF THE DEVICE.
  *
- * `now_ms` is a parameter rather than a call, because a step that is handed
- * its clock can be driven by a virtual one — and a device whose every deadline
- * is measured against a clock it fetches itself cannot be tested at all.
+ * Every deadline reads the ESP clock (`esp_timer_get_time` via `now_ms`); host
+ * tests drive it virtually with `iterate_kit_host_esp_idf_set_now_us()`.
  */
-void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
+void iterate_kit_voice_loop_step(void) {
   static uint64_t next_control_poll_at;
-  (void)now_ms_value;
   {
     (void)esp_task_wdt_reset();
     (void)iterate_kit_itx_transport_poll(&transport, 16U);
@@ -2731,12 +2658,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * this far, so there is no toggle left to disambiguate against the
      * intent the loop holds.
      */
-    /*
-     * THE AUDIT RIDES THE ONE RESOLUTION SITE, so a finger and an injected
-     * press write the same record. Latest-wins latch rather than a queue:
-     * two controls in one pass is already a person mashing, and the append
-     * below needs a READY session the press may predate.
-     */
     if (runtime.intent.microphone_muted &&
         !atomic_exchange_explicit(
             &runtime.capture_muted, true, memory_order_acq_rel)) {
@@ -2799,14 +2720,12 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         ESP_LOGE(
             tag,
             "left ready: recvStatus=%" PRId32 " wsClose=%" PRId32
-            " wsErrType=%" PRId32 " tlsErr=%" PRId32 " errno=%" PRId32
+            " errno=%" PRId32
             " protoFail=%" PRIu32 " recvFail=%" PRIu32 " sendFail=%" PRIu32
             " inboxDiscard=%" PRIu32 " outboxDiscard=%" PRIu32
             " appCapnweb=%" PRId32 " (%s)",
             metrics.last_control_receive_status,
             metrics.last_websocket_close_status_code,
-            metrics.last_websocket_error_type,
-            metrics.last_websocket_tls_error,
             metrics.last_websocket_transport_errno,
             metrics.protocol_failures,
             metrics.control_receive_failures,
@@ -3122,22 +3041,18 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * EVERY producer gates on outbox headroom: exhaustion is
        * SESSION-FATAL in this peer (finish_message terminalizes on
        * backpressure), and the measured drain is only ~25-50 messages/s.
-       * Mic frames aggregate to 4-frame/80ms appends (12.5 pushes/s);
-       * frames are skipped without headroom — the freshest-wins mic queue
-       * makes that loss honest.
+       * Mic frames flush every MIC_FLUSH_MS (about 20 pushes/s) in steady
+       * state, up to MIC_FRAMES_PER_APPEND frames per append; a backlog
+       * flushes every step. Frames are skipped without headroom — the
+       * freshest-wins mic queue makes that loss honest.
        */
       struct iterate_kit_spsc_ring_metrics outbox_metrics;
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-      size_t outbox_free =
+      const size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static int16_t pcm_storage[MIC_FRAMES_PER_APPEND][FRAME_SAMPLES];
       static bool call_active_shown;
-
-      /* A terminal append consumes the same ring as mic frames. Refresh the
-       * headroom before deciding whether another producer may append. */
-      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-      outbox_free = CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
 
       /*
        * One intent path for both sources: a physical button edge and an RPC
@@ -3160,31 +3075,21 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         wanted_previously = wants_call;
       }
       /*
-       * THE BRIDGE-SILENCE WATCHDOG WAS HERE, AND ITS EVIDENCE IS GONE.
-       *
-       * The bridge holds the call in a Durable Object this device cannot see,
-       * and it can stop — evicted, redeployed, or simply gone — without
-       * appending the conversation-ended that would say so. Overnight that left
-       * a device holding a call that had not existed for hours, so the call was
-       * believed only while its bridge kept proving it was there.
-       *
-       * The proof was the pong answering this device's own ping: the ONE
-       * bridge-sourced event that arrives while nobody is speaking. With the
-       * ping deleted, twenty seconds of a person thinking is indistinguishable
-       * from a dead bridge, and the watchdog would have dropped a live call on
-       * every thoughtful pause. A watchdog that fires on the normal case is
-       * worse than none.
-       *
-       * `bridgeAgeMs` still reports the age, so the fact is visible to whoever
-       * is looking. What replaced the ACTION is the downlink deadline below,
-       * which fires on silence only when traffic is expected — and whose remedy
-       * (recycle the connection, keep the call) was always the gentler one.
+       * THERE IS DELIBERATELY NO BRIDGE-SILENCE WATCHDOG. The bridge can stop
+       * without appending the conversation-ended that would say so, but no
+       * bridge-sourced event arrives while nobody is speaking, so twenty
+       * seconds of a person thinking is indistinguishable from a dead bridge —
+       * such a watchdog would drop a live call on every thoughtful pause.
+       * `bridgeAgeMs` reports the age; the downlink deadline below acts on
+       * silence only while traffic is owed, and its remedy (recycle the
+       * connection, keep the call) is the gentler one.
        */
 
       /*
        * THE DOWNLINK WATCHDOG. Silence is evidence only while traffic is owed —
-       * a wanted call not yet accepted, or an answer begun whose `last` has not
-       * come (iterate_kit_voice_stream_downlink_expected) — since the facet drops
+       * a wanted call not yet accepted, or an answer begun whose
+       * `lastFrameOfAnswer` has not come
+       * (iterate_kit_voice_stream_downlink_expected) — since the facet drops
        * idle silence and an accepted call with nothing owed delivers nothing.
        * Ten seconds of nothing in either state is a dead lane: recycle the
        * connection (make-before-break, one round trip); three recycles that
@@ -3264,10 +3169,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         }
       }
 
-
-      /* The pressed-button audit, owed since its press, sent when the
-       * session can carry it. */
-
       {
         const size_t queued = uxQueueMessagesWaiting(runtime.mic_queue);
         const bool discarding = atomic_load_explicit(
@@ -3279,7 +3180,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * vanish. Measured 2026-08-19 16:07 after a DO storage reset: the
          * call dialled fine, capture ran, the queue filled and rolled
          * (micDropped 217), and the person's opening sentence aged out of
-         * the 5 s buffer during the ~60 s the watchdog took to notice.
+         * the mic buffer during the ~60 s the watchdog took to notice.
          * Half a queue with no headroom for three seconds is not
          * backpressure, it is the jam — restart the transport now.
          */
@@ -3419,8 +3320,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
    *
    * Everything above assembles one view; this is the single place it reaches
    * the hardware. Unconditional, because the board's own comparison is cheaper
-   * than the nine lock round trips the setters used to cost, and because three
-   * of the four panels are pumped by their caller and this is that pump.
+   * than a lock round trip per setter, and because most panels are pumped by
+   * their caller and this is that pump.
    */
   present();
 }
@@ -3439,7 +3340,7 @@ void iterate_kit_voice_loop_run(
     return;
   }
   for (;;) {
-    iterate_kit_voice_loop_step(now_ms(NULL));
+    iterate_kit_voice_loop_step();
     DELAY_MS(5);
   }
 }

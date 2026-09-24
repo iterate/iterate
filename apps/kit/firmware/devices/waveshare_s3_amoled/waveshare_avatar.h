@@ -162,9 +162,6 @@ void waveshare_avatar_set_call_active(bool active);
 bool waveshare_avatar_render(
     uint16_t *rgb565, size_t pixel_capacity, bool awake);
 
-/** Which face is showing, for the menu and for `health()`. */
-const char *waveshare_avatar_slug(void);
-
 /*
  * What went wrong, for health(). All three were dark while the face was frozen
  * and there was nothing to look at but the screen.

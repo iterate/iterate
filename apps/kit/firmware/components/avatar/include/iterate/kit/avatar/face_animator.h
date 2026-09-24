@@ -10,14 +10,7 @@
 extern "C" {
 #endif
 
-/*
- * The conversation turn, as the face needs to know it.
- *
- * These used to live in `face_driver.h` beside a vtable that let a caller swap
- * animation algorithms at runtime. Nothing ever swapped one — the envelope
- * animator is called directly from all four boards — so the indirection went
- * and the events moved here, to their only consumer.
- */
+/* The conversation turn, as the face needs to know it. */
 typedef enum {
     FACE_STREAM_USER_SPEECH_STARTED = 0,
     FACE_STREAM_USER_SPEECH_STOPPED,
@@ -51,7 +44,7 @@ typedef struct {
     bool listening_lock;
     bool external_mouth;
     uint8_t viseme_windows_left;
-    face_animator_state_t state;
+    face_pose_t state;
 } face_animator_t;
 
 extern const face_envelope_config_t FACE_ENVELOPE_DEFAULT_CONFIG;
@@ -91,7 +84,7 @@ void face_animator_clear_viseme(face_animator_t *animator);
  * try again on its next tick.
  */
 bool face_animator_snapshot(const face_animator_t *animator,
-                            face_animator_state_t *state);
+                            face_pose_t *state);
 
 #ifdef __cplusplus
 }

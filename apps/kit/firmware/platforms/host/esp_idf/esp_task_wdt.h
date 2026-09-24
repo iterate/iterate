@@ -1,7 +1,7 @@
-#ifndef ITERATE_KIT_FAKE_ESP_TASK_WDT_H
-#define ITERATE_KIT_FAKE_ESP_TASK_WDT_H
+#ifndef ITERATE_KIT_HOST_ESP_TASK_WDT_H
+#define ITERATE_KIT_HOST_ESP_TASK_WDT_H
 
-/* Host stand-in. See README.md in this directory. */
+/* Host stand-in. See esp_idf.h. */
 
 #include "esp_err.h"
 

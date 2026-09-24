@@ -53,7 +53,7 @@ struct iterate_kit_stream {
 
 /* Receives a remote callback's arguments, borrowed only for this call.
  *
- * TWO POSITIONAL ARGUMENTS, NOT ONE OBJECT. os-next calls a lent subscription
+ * TWO POSITIONAL ARGUMENTS, NOT ONE OBJECT. The OS calls a lent subscription
  * stub as a BARE FUNCTION with `(events, range)`: `update` is argument 0 — for
  * a stream subscription, the events array itself — and `range` is argument 1,
  * `{after, through}`, or NULL when the callee passed none (live state does).
@@ -124,7 +124,7 @@ bool iterate_kit_stream_reclaimable(const struct iterate_kit_stream *stream);
  *
  * THERE IS NO DELIVERY BOUND TO ASK FOR. `openConnection` took
  * maxDeliveryEvents/maxDeliveryBytes and the device sized its inbox slot to
- * match; os-next has no such knob — commits landing behind an in-flight
+ * match; the OS has no such knob — commits landing behind an in-flight
  * delivery fold into one call. The device's protection is the sender appending
  * one speaker frame per append, plus its own bounded inbox, which drops and
  * counts what will not fit.

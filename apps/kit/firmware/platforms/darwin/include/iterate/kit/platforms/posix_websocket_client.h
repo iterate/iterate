@@ -54,7 +54,7 @@ struct iterate_kit_posix_websocket_client_options {
   uint8_t *transmit_storage;
   size_t transmit_storage_capacity;
   bool DANGEROUS_disable_certificate_verification;
-  /** Sent as `Authorization: Bearer <token>` on the upgrade when set: os-next
+  /** Sent as `Authorization: Bearer <token>` on the upgrade when set: the OS
    * gates `/api` with its OAuth provider before the first frame exists. */
   const char *bearer_token;
 };

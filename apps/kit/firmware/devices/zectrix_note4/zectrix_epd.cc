@@ -342,7 +342,7 @@ struct zectrix_epd_t {
         if (err == ESP_OK) err = WaitBusy("display refresh");
         if (err != ESP_OK) {
             // Do not issue 0x02 while BUSY is still asserted. Mark the
-            // controller unusable so power_off() cuts the external rail.
+            // controller unusable so PowerOffLocked() cuts the external rail.
             controller_ready = false;
             internal_power_on = false;
             return err;
@@ -603,43 +603,10 @@ extern "C" esp_err_t zectrix_epd_new(const zectrix_epd_config_t* config,
     return ESP_OK;
 }
 
-extern "C" esp_err_t zectrix_epd_del(zectrix_epd_handle_t handle) {
-    if (handle == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    esp_err_t result = handle->PowerOffLocked();
-    if (handle->spi != nullptr) {
-        const esp_err_t err = spi_bus_remove_device(handle->spi);
-        if (result == ESP_OK) result = err;
-        handle->spi = nullptr;
-    }
-    if (handle->owns_bus && handle->bus_initialized) {
-        const esp_err_t err = spi_bus_free(handle->config.spi_host);
-        if (result == ESP_OK) result = err;
-    }
-    vSemaphoreDelete(handle->mutex);
-    heap_caps_free(handle->shadow);
-    heap_caps_free(handle->dma_buffer);
-    delete handle;
-    return result;
-}
-
 extern "C" esp_err_t zectrix_epd_power_on(zectrix_epd_handle_t handle) {
     if (handle == nullptr) return ESP_ERR_INVALID_ARG;
     MutexGuard guard(handle->mutex);
     return guard.locked() ? handle->PowerOnLocked() : ESP_FAIL;
-}
-
-extern "C" esp_err_t zectrix_epd_power_off(zectrix_epd_handle_t handle) {
-    if (handle == nullptr) return ESP_ERR_INVALID_ARG;
-    MutexGuard guard(handle->mutex);
-    return guard.locked() ? handle->PowerOffLocked() : ESP_FAIL;
-}
-
-extern "C" bool zectrix_epd_is_powered(zectrix_epd_handle_t handle) {
-    if (handle == nullptr) return false;
-    MutexGuard guard(handle->mutex);
-    return guard.locked() && handle->powered;
 }
 
 extern "C" esp_err_t zectrix_epd_refresh_full_1bpp(zectrix_epd_handle_t handle,

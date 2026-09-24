@@ -20,7 +20,7 @@
 /*
  * THE VOICE_STREAM REMOUNT BACKOFF, WITH THE DEVICE'S OWN BUDGET.
  *
- * All four boards ran this gate and none of them ever reset it, so the delay
+ * Every board once ran this gate without ever resetting it, so the delay
  * only ever grew: five transient failures walked it to the 30s ceiling and
  * left it there for the rest of the boot, and a board that had been healthy
  * for an hour still took thirty seconds to notice the next failed mount. The

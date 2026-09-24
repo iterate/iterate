@@ -1,4 +1,4 @@
-#include "rpc_internal.h"
+#include "iterate/kit/capabilities/arguments.h"
 
 /*
  * Keep the public error vocabulary small while preserving whether the caller

@@ -50,8 +50,6 @@ int main(void) {
     const struct iterate_kit_conversation_visual_state *expected = &cases[i].becomes;
     assert(actual.network == expected->network);
     assert(actual.reach == expected->reach);
-    assert(actual.has_wifi_rssi == expected->has_wifi_rssi);
-    assert(actual.wifi_rssi_dbm == expected->wifi_rssi_dbm);
     assert(actual.conversation_active == expected->conversation_active);
     assert(actual.media_ready == expected->media_ready);
     assert(actual.media_failed == expected->media_failed);

@@ -35,14 +35,13 @@ void iterate_kit_voice_playback_clock_reprime(
    * first one played — so a flush, which by definition leaves no answer in
    * flight, must leave no timeline either.
    *
-   * This lived in the owners, beside their flush sites. On the board it was
-   * written at ONE of the four — the new-answer branch — and the other three
-   * were left resetting nothing: a new CALL emptied the ring and kept the last
-   * call's clock, so the first audio of the new one was measured against an
-   * answer minutes old and the catch-up rule deleted it. Measured on the
-   * StackChan: 34 frames skipped with `spkLagMaxMs` at 117,083. The board then
-   * moved it into its one abandon funnel; the host CLI's new-turn flush still
-   * reprimed without it. Here, every flush on every target resets it, because
+   * When this lived in the owners, beside their flush sites, the board wrote
+   * it at ONE of them — the new-answer branch — and the others reset nothing:
+   * a new CALL emptied the ring and kept the last call's clock, so the first
+   * audio of the new one was measured against an answer minutes old and the
+   * catch-up rule deleted it. Measured on the StackChan: 34 frames skipped
+   * with `spkLagMaxMs` at 117,083. A since-deleted host CLI's (#2710) new-turn
+   * flush also reprimed without it. Here, every flush resets it, because
    * every flush reprimes.
    */
   forget_answer_timeline(clock);
@@ -135,16 +134,17 @@ iterate_kit_voice_playback_clock_empty(
      *
      * This is the reset that needs no cooperation from the sender. The
      * reprime covers the answer that replaces a LIVE one; this covers every
-     * ordinary turn, including the ones where `drop` arrives a few chunks
+     * ordinary turn, including the ones where the clear arrives a few chunks
      * late — measured on the StackChan, where 800 ms of a new answer was
      * delivered ahead of the clear that was supposed to precede it.
      *
-     * IT IS DONE HERE, NOT BY THE CALLER. Both owners used to do it beside
-     * this call, and the host CLI had one dry path — live audio — that never
-     * made the call at all: after a back-office wait its next answer was
-     * measured against the previous one, read as nine seconds late, and lost
-     * four frames in five for the rest of the turn (prd, 2026-09-09). A reset
-     * that lives in the decision cannot be skipped by a path that skips it.
+     * IT IS DONE HERE, NOT BY THE CALLER. When the owners did it beside this
+     * call, a since-deleted host CLI (#2710) had one dry path — live audio —
+     * that never made the call at all: after a back-office wait its next answer
+     * was measured against the previous one, read as nine seconds late, and
+     * lost four frames in five for the rest of the turn (prd, 2026-09-09). A
+     * reset that lives in the decision cannot be skipped by a path that skips
+     * it.
      */
     forget_answer_timeline(clock);
     return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
@@ -215,20 +215,11 @@ iterate_kit_voice_playback_clock_frame(
    * nobody can afford to lose.
    */
   /*
-   * ONE CATCH-UP RULE, NOT TWO. A second trigger used to sit here, firing on
-   * queue DEPTH past a 9,000 ms high-water mark and dropping one frame every
-   * N — and the paragraphs above are the argument against it, written beside
-   * it: depth cannot tell "the sender is ahead of realtime" from "playback has
-   * stalled", and dropping gradually is hopeless against a stall (3.1 s of lag,
-   * three frames dropped, 60 ms recovered).
-   *
-   * It was also unreachable. voice-agent2 caps the device at
-   * MAX_DEVICE_SPEAKER_BACKLOG_BYTES — 128,000 bytes, 4,000 ms — so 9,000 ms of
-   * backlog required the server's model of this device's memory to be wrong by
-   * more than five seconds. Kept as a backstop against exactly that, it was a
-   * backstop nobody had ever seen fire, which is a comment rather than a
-   * mechanism. If the model does go that wrong, the honest signal is the same
-   * one this function already trusts: lateness against the audio timeline.
+   * ONE CATCH-UP RULE, NOT TWO. There is deliberately no second trigger on
+   * queue DEPTH: depth cannot tell "the sender is ahead of realtime" from
+   * "playback has stalled", and dropping gradually is hopeless against a stall
+   * (3.1 s of lag, three frames dropped, 60 ms recovered). The honest signal
+   * is the one this function trusts: lateness against the audio timeline.
    */
   /*
    * AND ONLY WHILE AT LEAST THE THRESHOLD IS WAITING. Skipping recovers lag
@@ -239,7 +230,8 @@ iterate_kit_voice_playback_clock_frame(
    * answer ended, the silence after it went on counting, and a later answer
    * is now measured against a clock it never started. Skipping into that
    * chunk recovers 20 ms a frame against arrival at the same rate, so the
-   * lag never moves and every frame pays: measured on the host CLI, four in
+   * lag never moves and every frame pays: measured on a since-deleted host
+   * CLI (#2710), four in
    * five frames of a 71-second answer discarded, the listener hearing one
    * block of speech in every hundred milliseconds, for the whole answer.
    * Requiring the backlog to carry the threshold makes "skip until level"

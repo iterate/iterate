@@ -222,15 +222,8 @@ static void note_order(char mark) {
   if (order_length + 1U < sizeof(order_log)) order_log[order_length++] = mark;
 }
 
-/*
- * THE SENDER SHIPS CHUNKS NOW, so a test has to build one.
- *
- * A `pcm` payload is a whole number of 320-byte mu-law wire frames — that is
- * the sender's guarantee and the only thing the module accepts, because both
- * speaker consumers reject any PCM length but 640. Four-byte fixtures were
- * fine when one event was one frame; they are now a protocol violation, which
- * is itself worth a test.
- */
+/* `byte_count` bytes of PCM16, all `fill`, as the base64 a `pcm` payload
+ * carries. */
 static const char *pcm_b64(size_t byte_count, uint8_t fill) {
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -259,9 +252,9 @@ static const char *pcm_b64(size_t byte_count, uint8_t fill) {
   return encoded;
 }
 
-/** `frames` whole wire frames of mu-law, base64. */
+/** `frames` whole 20 ms frames of PCM16, base64. */
 static const char *frames_b64(size_t frames, uint8_t fill) {
-  return pcm_b64(frames * (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES, fill);
+  return pcm_b64(frames * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES, fill);
 }
 
 /** Deliver one `spk-frame` event, with whatever extra payload keys it needs. */
@@ -383,11 +376,10 @@ static void downlink_flow(void) {
             "\"events.iterate.com/voice-agent/call-started\"]]") !=
         NULL);
     /*
-     * AND NOTHING ASKS FOR A DELIVERY BOUND, because os-next has no knob to
+     * AND NOTHING ASKS FOR A DELIVERY BOUND, because the OS has no knob to
      * ask with: commits landing behind an in-flight delivery fold into one
-     * call. What used to be `maxDeliveryEvents`/`maxDeliveryBytes` is now the
-     * sender's discipline of one speaker frame per append, plus this device's
-     * own bounded inbox.
+     * call. The bound is the sender's discipline of one speaker frame per
+     * append, plus this device's own bounded inbox.
      */
     assert(strstr(open_message, "maxDelivery") == NULL);
     /* The capability IS the target — not a `processEventBatch` member — which
@@ -422,8 +414,7 @@ static void downlink_flow(void) {
   receive(&fixture, "[\"release\",1,1]");
   assert(fixture.voice_stream.spk_frames_received == 2U);
   assert(spoken_frames == 2U);
-  /* Expanded: 320 mu-law bytes became one whole 640-byte PCM frame. */
-  assert(spoken_length == ITERATE_KIT_VOICE_STREAM_FRAME_BYTES);
+  assert(spoken_length == ITERATE_KIT_VOICE_FRAME_BYTES);
   assert(speech_started_count == 1);
   /*
    * THE ORDER, WHICH IS THE POINT. The flush is announced BEFORE the frame
@@ -452,7 +443,7 @@ static void downlink_flow(void) {
   order_length = 0U;
   push_spk(&fixture, 2, 43, "\"lastFrameOfAnswer\":true,", frames_b64(1U, 0x49));
   assert(response_done_count == 1);
-  assert(spoken_length == ITERATE_KIT_VOICE_STREAM_FRAME_BYTES);
+  assert(spoken_length == ITERATE_KIT_VOICE_FRAME_BYTES);
   assert(order_length == 2U);
   assert(memcmp(order_log, "fl", 2U) == 0);
 
@@ -499,8 +490,8 @@ static void downlink_flow(void) {
   order_length = 0U;
   push_spk(&fixture, 4, 45, "", frames_b64(4U, 0x51));
   assert(spoken_frames == 1U);
-  assert(spoken_bytes == 4U * (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES);
-  assert(spoken_length == 4U * (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES);
+  assert(spoken_bytes == 4U * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES);
+  assert(spoken_length == 4U * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES);
   assert(order_length == 1U);
   assert(memcmp(order_log, "f", 1U) == 0);
   assert(fixture.voice_stream.spk_decode_failures == 0U);
@@ -632,20 +623,13 @@ static void face_runtime_state_is_polled_and_deduped(void) {
 
 
 /*
- * THE SECOND VOICE AGENT'S DIALECT.
+ * THE CLEAR AND LAST-FRAME FLAGS, with and without a frame number.
  *
- * Two agents speak this contract. They differ in exactly one payload:
- * `drop: true` became `clearSpeakerBufferBeforeFrame: true` riding on a
- * numbered frame, and `last` became `lastFrameOfAnswer`. The rename is not
- * cosmetic — `drop` named no audio, so a late one discarded the answer that
- * had already replaced the one it was about.
- *
- * One binary understands both dialects on purpose. The two agents are meant to
- * be run side by side and compared, and an instrument that changes between the
- * two measurements measures itself. The numbering itself is carried and
- * ignored: nothing on the device ever acted on it.
+ * `clearSpeakerBufferBeforeFrame` rides a numbered frame and
+ * `lastFrameOfAnswer` marks the end of an answer. The numbering is carried
+ * and ignored: nothing on the device acts on it.
  */
-static void the_second_agents_dialect(void) {
+static void speaker_flags_ride_numbered_or_bare_frames(void) {
   static struct fixture fixture;
   fixture_init(&fixture);
   start_and_mount(&fixture);
@@ -675,16 +659,16 @@ static void the_second_agents_dialect(void) {
       &fixture, 3, 102, "\"deviceSpeakerFrameSeq\":2,", frames_b64(1U, 0x42));
   assert(spoken_frames == 3U);
 
-  /* The first agent sends no number at all, and its frames play the same. */
+  /* A frame with no number plays the same. */
   push_spk(&fixture, 4, 103, "", frames_b64(1U, 0x46));
 
   /*
-   * AND THE NEW NAME FOR THE END OF AN ANSWER, on its own empty frame.
+   * AND THE END OF AN ANSWER, on its own empty frame.
    *
-   * The second agent raises this at the DRAIN point rather than attaching it to
+   * The sender raises this at the DRAIN point rather than attaching it to
    * whichever frame turned out to be final, so when the answer is short the
    * marker arrives as a frame of its own carrying no audio. That is the exact
-   * shape the decode's early return used to swallow.
+   * shape a decode-first early return would swallow.
    */
   response_done_count = 0;
   spoken_frames = 0U;
@@ -712,7 +696,7 @@ static void the_second_agents_dialect(void) {
   assert(order_length == 2U);
   assert(memcmp(order_log, "fl", 2U) == 0);
 
-  /* The first agent's `last` still means what it always did. */
+  /* An unnumbered empty last frame completes the answer too. */
   push_spk(&fixture, 7, 106, "\"lastFrameOfAnswer\":true,", "");
   assert(response_done_count == 3);
 
@@ -723,11 +707,11 @@ static void the_second_agents_dialect(void) {
       8,
       107,
       "\"deviceSpeakerFrameSeq\":10,",
-      pcm_b64(ITERATE_KIT_VOICE_STREAM_FRAME_BYTES + 64U, 0x34));
+      pcm_b64(ITERATE_KIT_VOICE_FRAME_BYTES + 64U, 0x34));
   assert(fixture.voice_stream.spk_decode_failures == 0U);
-  assert(spoken_bytes == (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES + 64U);
+  assert(spoken_bytes == (size_t)ITERATE_KIT_VOICE_FRAME_BYTES + 64U);
 
-  /* The new name for the clear raises the same edge the old one did. */
+  /* The clear raises the speech-started edge. */
   assert(speech_started_count == 0);
   push_spk(
       &fixture,
@@ -742,10 +726,9 @@ static void the_second_agents_dialect(void) {
    *
    * An interruption is exactly when the sender has no audio left to attach the
    * flag to — it has just thrown the answer away — so the clear rides a frame
-   * whose `pcm` is empty. The decode has an early return on failure and this
-   * used to sit below it: the server said stop, the device agreed to obey, and
-   * the message was discarded on the doorstep for being an empty envelope.
-   * Three fixes upstream were measured against that and moved nothing.
+   * whose `pcm` is empty. The decode has an early return on failure, so the
+   * clear must be obeyed before it or the message is discarded on the doorstep
+   * for being an empty envelope.
    */
   spoken_frames = 0U;
   push_spk(
@@ -1117,7 +1100,7 @@ int main(void) {
   downlink_flow();
   a_discontinuous_delivery_range_is_counted();
   face_runtime_state_is_polled_and_deduped();
-  the_second_agents_dialect();
+  speaker_flags_ride_numbered_or_bare_frames();
   recycle_keeps_call_epoch_and_fences_closed_predecessor();
   failed_renewal_requires_a_fresh_incumbent_batch();
   repeated_silent_renewals_start_with_no_batches();

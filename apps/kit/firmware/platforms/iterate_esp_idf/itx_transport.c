@@ -1,4 +1,5 @@
 #include "iterate/kit/platforms/itx_transport.h"
+#include "iterate/kit/atomic.h"
 #include "iterate/kit/retry_gate.h"
 
 #include <limits.h>
@@ -27,10 +28,11 @@
  * The two SPSC rings are the only message handoff. This avoids locks and keeps
  * arbitrary RPC and stream-event work out of ESP-IDF's callback task, while
  * bounded poll/send bursts cap application and network-task work. A1 carries
- * mu-law media as ephemeral Cap'n Web stream events on this same /api socket;
+ * PCM16 media as ephemeral Cap'n Web stream events on this same /api socket;
  * there is no second binary PCM lane. We rejected a callback-driven session
  * because device methods could block ESP-IDF networking. The global queue and
- * four-frame append bounds provide the explicit pressure limit for media.
+ * the MIC_FRAMES_PER_APPEND (8) append bound provide the explicit pressure
+ * limit for media.
  *
  * Recovery always establishes a new socket generation. Fragments and outbound
  * messages from the old Cap'n Web session are discarded with saturating
@@ -145,38 +147,6 @@ static uint32_t task_stack_headroom_bytes(TaskHandle_t task) {
       uxTaskGetStackHighWaterMark(task) * sizeof(StackType_t));
 }
 
-static void atomic_saturating_increment(uint32_t *value) {
-  /*
-   * Incident counters survive unattended endurance runs. Saturation preserves
-   * the monotonic statement "at least UINT32_MAX" whereas wraparound would make
-   * a worsening fault appear to recover.
-   */
-  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (current != UINT32_MAX &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             current + 1U,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
-static void atomic_max_u32(uint32_t *value, uint32_t candidate) {
-  /* Relaxed is sufficient: this maximum is evidence, not a publication flag. */
-  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
-  while (candidate > current &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             candidate,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
 static void remember_platform_error(
     struct iterate_kit_itx_transport *transport,
     esp_err_t error) {
@@ -249,9 +219,9 @@ static void discard_control_inbox(
     (void)length;
     (void)iterate_kit_spsc_ring_read_release(
         transport->options.control_inbox);
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &transport->control_messages_discarded);
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &transport->control_inbox_discarded);
   }
 }
@@ -319,7 +289,8 @@ static void record_protocol_failure(
      * session. Replaying or skipping the bad message inside the same session
      * was rejected because request/reference state may already be incoherent.
      */
-    atomic_saturating_increment(&transport->protocol_failures);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
+        &transport->protocol_failures);
   }
   request_restart(transport);
 }
@@ -367,7 +338,7 @@ static void mark_socket_disconnected(
     /*
      * Multiple ESP-IDF terminal events describe one generation; count it once.
      */
-    atomic_saturating_increment(
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
         &transport->websocket_disconnects);
   }
 }
@@ -391,7 +362,8 @@ static void wifi_event(
   if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
     const wifi_event_sta_disconnected_t *disconnected = event_data;
     atomic_store_u32(&transport->wifi_connected, 0U);
-    atomic_saturating_increment(&transport->wifi_disconnects);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
+        &transport->wifi_disconnects);
     if (disconnected != NULL) {
       __atomic_store_n(
           &transport->last_wifi_disconnect_reason,
@@ -420,7 +392,7 @@ static void ip_event(
 static void fail_receive(
     struct iterate_kit_itx_transport *transport,
     int32_t status) {
-  atomic_saturating_increment(
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
       &transport->control_receive_failures);
   __atomic_store_n(
       &transport->last_control_receive_status,
@@ -446,7 +418,7 @@ static void fail_receive_fatal(
    * while the fatal latch distinguishes "replace this socket" from "continuing
    * could confuse an ancient generation with a new one."
    */
-  atomic_saturating_increment(
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
       &transport->control_receive_failures);
   __atomic_store_n(
       &transport->last_control_receive_status,
@@ -480,7 +452,7 @@ static bool mark_socket_connected(
    * therefore never accept a connected flag paired with the prior session.
    */
   atomic_store_u32(&transport->socket_connected, 1U);
-  atomic_saturating_increment(
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
       &transport->websocket_connections);
   return true;
 }
@@ -490,10 +462,10 @@ static void remember_websocket_error(
     int32_t error) {
   /*
    * The lower taskless adapter exposes the errno/result at the point it loses
-   * framing trust. It cannot expose the managed client's callback-only TLS and
-   * HTTP tuple, so preserve the real domain and leave unavailable fields zero.
+   * framing trust: record the generation and the causal errno.
    */
-  atomic_saturating_increment(&transport->websocket_errors);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
+      &transport->websocket_errors);
   atomic_store_u32(
       &transport->last_websocket_error_generation,
       atomic_load_u32(&transport->socket_generation));
@@ -562,7 +534,8 @@ static void receive_control_messages(
        * resolves in milliseconds; if it somehow does not, the peer's own
        * timeouts apply rather than us corrupting the session.
        */
-      atomic_saturating_increment(&transport->control_inbox_deferrals);
+      iterate_kit_atomic_saturating_increment_relaxed_u32(
+          &transport->control_inbox_deferrals);
       return;
     }
     const enum iterate_kit_esp_idf_websocket_receive_result result =
@@ -698,7 +671,7 @@ static void send_control_messages(
 }
 
 /*
- * THE CREDENTIAL RIDES THE UPGRADE. os-next gates `/api` with its OAuth
+ * THE CREDENTIAL RIDES THE UPGRADE. The OS gates `/api` with its OAuth
  * provider: the blob's key is a personal access token the Kit page minted,
  * sent as `Authorization: Bearer`, and the provider resolves it before the
  * first Cap'n Web frame exists — the session then only asks for what the
@@ -845,7 +818,7 @@ static void network_task(void *context) {
         wifi_retry_at_us != 0 &&
         now_us >= wifi_retry_at_us) {
       const esp_err_t error = esp_wifi_connect();
-      atomic_saturating_increment(
+      iterate_kit_atomic_saturating_increment_relaxed_u32(
           &transport->wifi_connect_attempts);
       if (error != ESP_OK) {
         remember_platform_error(transport, error);
@@ -885,7 +858,7 @@ static void network_task(void *context) {
          * the measured floor risks silent stack corruption, so fail closed and
          * retain a dedicated diagnostic instead of repeatedly reconnecting.
          */
-        atomic_saturating_increment(
+        iterate_kit_atomic_saturating_increment_relaxed_u32(
             &transport->network_task_stack_exhaustions);
         remember_platform_error(transport, ESP_ERR_NO_MEM);
         latch_fatal_failure(
@@ -893,7 +866,7 @@ static void network_task(void *context) {
             ITERATE_KIT_ITX_FATAL_NETWORK_STACK_HEADROOM);
         continue;
       }
-      atomic_saturating_increment(
+      iterate_kit_atomic_saturating_increment_relaxed_u32(
           &transport->websocket_start_attempts);
       refresh_handshake_headers(transport);
       status =
@@ -954,7 +927,7 @@ static void network_task(void *context) {
         &transport->network_task_work_cycles,
         work_cycles,
         __ATOMIC_RELAXED);
-    atomic_max_u32(
+    iterate_kit_atomic_update_max_relaxed_u32(
         &transport->network_task_max_work_cycles,
         work_cycles);
   }
@@ -1491,7 +1464,7 @@ enum iterate_kit_status iterate_kit_itx_transport_poll(
         if (atomic_publish_newer_generation(
                 &transport->mount_timeout_generation,
                 timed_out_generation)) {
-          atomic_saturating_increment(
+          iterate_kit_atomic_saturating_increment_relaxed_u32(
               &transport->mount_timeouts);
         }
         remember_platform_error(transport, ESP_ERR_TIMEOUT);
@@ -1765,22 +1738,9 @@ void iterate_kit_itx_transport_metrics(
   metrics->last_websocket_error_generation =
       atomic_load_u32(
           &transport->last_websocket_error_generation);
-  metrics->last_websocket_error_type = __atomic_load_n(
-      &transport->last_websocket_error_type,
-      __ATOMIC_ACQUIRE);
-  metrics->last_websocket_tls_error = __atomic_load_n(
-      &transport->last_websocket_tls_error,
-      __ATOMIC_ACQUIRE);
-  metrics->last_websocket_tls_stack_error = __atomic_load_n(
-      &transport->last_websocket_tls_stack_error,
-      __ATOMIC_ACQUIRE);
   metrics->last_websocket_transport_errno = __atomic_load_n(
       &transport->last_websocket_transport_errno,
       __ATOMIC_ACQUIRE);
-  metrics->last_websocket_handshake_status_code =
-      __atomic_load_n(
-          &transport->last_websocket_handshake_status_code,
-          __ATOMIC_ACQUIRE);
   metrics->last_websocket_close_status_code =
       __atomic_load_n(
           &transport->last_websocket_close_status_code,

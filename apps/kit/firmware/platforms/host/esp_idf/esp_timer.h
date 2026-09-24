@@ -1,13 +1,12 @@
-#ifndef ITERATE_KIT_FAKE_ESP_TIMER_H
-#define ITERATE_KIT_FAKE_ESP_TIMER_H
+#ifndef ITERATE_KIT_HOST_ESP_TIMER_H
+#define ITERATE_KIT_HOST_ESP_TIMER_H
 
 /*
- * Host stand-in. See README.md in this directory.
+ * Host stand-in. See esp_idf.h.
  *
- * The clock does not run on its own. A test advances it with
- * iterate_kit_fake_esp_idf_set_now_us(), because a deadline measured against a
- * clock nobody controls cannot be tested — which is the same reason
- * iterate_kit_voice_loop_step() takes `now_ms` as a parameter.
+ * A test pins the clock with iterate_kit_host_esp_idf_set_now_us() and from
+ * then on moves it itself, because a deadline measured against a clock nobody
+ * controls cannot be tested. Every voice loop deadline reads this clock.
  */
 
 #include <stdint.h>

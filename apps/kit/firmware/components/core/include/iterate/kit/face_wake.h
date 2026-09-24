@@ -11,11 +11,11 @@ extern "C" {
 /**
  * How long a face stays awake after its conversation ends, in milliseconds.
  *
- * THE END OF A CALL IS THE MOMENT THE FACE GOES BACK TO SLEEP. Two boards
- * previously waited three minutes, on the reasoning that a resting robot
- * reads better than a crashed one — but a face that stays wide awake for
- * three minutes after you hang up does not read as resting, it reads as a
- * device that did not notice you left. Closed eyes are this product's word
+ * THE END OF A CALL IS THE MOMENT THE FACE GOES BACK TO SLEEP. Waiting three
+ * minutes, on the reasoning that a resting robot reads better than a crashed
+ * one, does not work: a face that stays wide awake for three minutes after
+ * you hang up does not read as resting, it reads as a device that did not
+ * notice you left. Closed eyes are this product's word
  * for idle, so idle should show them, promptly.
  *
  * The tail exists only so the last syllable of an answer is not cut off by

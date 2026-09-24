@@ -1,7 +1,7 @@
-#ifndef ITERATE_KIT_FAKE_ESP_HEAP_CAPS_H
-#define ITERATE_KIT_FAKE_ESP_HEAP_CAPS_H
+#ifndef ITERATE_KIT_HOST_ESP_HEAP_CAPS_H
+#define ITERATE_KIT_HOST_ESP_HEAP_CAPS_H
 
-/* Host stand-in. See README.md in this directory. */
+/* Host stand-in. See esp_idf.h. */
 
 #include <stddef.h>
 

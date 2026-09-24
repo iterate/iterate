@@ -26,10 +26,10 @@
  * callback, `iterate_kit_darwin_audio_output` pulled from its render callback
  * — so the codec adapter, the metrics and every consumer are unchanged.
  *
- * FORMAT. The client format on both buses is the wire's own 16 kHz mono
- * PCM16; the unit converts from the devices' native rates. If the unit is
- * unavailable or refuses the format, open fails cleanly and the caller falls
- * back to the queues — an escape hatch that is also `--no-aec` on the CLI.
+ * FORMAT. The client format on both buses is the wire's own 16 kHz mono PCM16;
+ * the unit converts from the devices' native rates. If the unit is unavailable
+ * or refuses the format, open fails cleanly and the caller falls back to the
+ * queues — an escape hatch that is also `--no-aec` on iterate-kit-mac.
  */
 
 #include <AudioToolbox/AudioToolbox.h>

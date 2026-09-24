@@ -1,8 +1,8 @@
-#ifndef ITERATE_KIT_FAKE_ESP_ATTR_H
-#define ITERATE_KIT_FAKE_ESP_ATTR_H
+#ifndef ITERATE_KIT_HOST_ESP_ATTR_H
+#define ITERATE_KIT_HOST_ESP_ATTR_H
 
 /*
- * Host stand-in. See README.md in this directory.
+ * Host stand-in. See esp_idf.h.
  *
  * PSRAM placement is a linker fact and there is no PSRAM here, so the loop's
  * large buffers land in ordinary .bss. That is the whole difference, and it is

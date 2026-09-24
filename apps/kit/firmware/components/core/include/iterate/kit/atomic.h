@@ -37,7 +37,11 @@ static inline uint32_t iterate_kit_atomic_load_relaxed_u32(
   return __atomic_load_n(value, __ATOMIC_RELAXED);
 }
 
-/** Add one without wrapping; no payload or ownership is published. */
+/**
+ * Add one without wrapping; no payload or ownership is published. Saturation
+ * keeps the monotonic statement "at least UINT32_MAX" true, whereas
+ * wraparound would make a worsening fault appear to recover.
+ */
 static inline void
 iterate_kit_atomic_saturating_increment_relaxed_u32(
     volatile uint32_t *value) {
@@ -70,9 +74,8 @@ static inline void iterate_kit_atomic_update_max_relaxed_u32(
   }
 }
 
-/** Add an amount, saturating at UINT32_MAX. Same relaxed CAS as increment;
- * moved from the CoreS3 capture reserve and avatar diagnostics. Volatile
- * storage is accepted so existing ISR-facing counter layouts stay unchanged.
+/** Add an amount, saturating at UINT32_MAX. Same relaxed CAS as increment.
+ * Volatile storage is accepted so ISR-facing counter layouts stay unchanged.
  */
 static inline void iterate_kit_atomic_saturating_add_relaxed_u32(
     volatile uint32_t *value, uint32_t amount) {

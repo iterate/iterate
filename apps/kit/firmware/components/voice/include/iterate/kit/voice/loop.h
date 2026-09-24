@@ -48,12 +48,8 @@ struct iterate_kit_voice_view {
   bool link_ready;
   bool call_active;
   /**
-   * INTENT, which the loop now owns and the board only renders.
-   *
-   * It used to live in the display module on three of the four boards, so the
-   * one fact that decides whether this device is trying to be in a call was
-   * stored behind a panel driver and read back through a mutex three times a
-   * pass.
+   * INTENT, which the loop owns and the board only renders — not stored
+   * behind a panel driver and read back through a mutex.
    */
   bool wants_call;
   /** The local microphone gate is open. */
@@ -227,13 +223,8 @@ struct iterate_kit_board_ops {
 };
 
 /**
- * Constants, not code.
- *
- * Everything here was a `#define` or an enum member duplicated four times. A
- * board that needs a different NUMBER does not need a different program, and the
- * four copies proved it: across the whole ~180-line constant block, exactly two
- * literals ever differed, and one of those (`DMA_RING_CREDIT_MS`) was read by
- * nobody on any board. It is deleted rather than promoted.
+ * Constants, not code: a board that needs a different NUMBER does not need a
+ * different program.
  */
 struct iterate_kit_board_facts {
   /** Stable board identity; the loop derives its stream and client paths. */
@@ -302,7 +293,7 @@ bool iterate_kit_voice_loop_init(
     const struct iterate_kit_board_ops *ops,
     const struct iterate_kit_board_facts *facts,
     void *context);
-void iterate_kit_voice_loop_step(uint64_t now_ms);
+void iterate_kit_voice_loop_step(void);
 void iterate_kit_voice_loop_capture_step(void);
 void iterate_kit_voice_loop_playback_step(void);
 

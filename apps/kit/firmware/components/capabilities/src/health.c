@@ -1,6 +1,6 @@
 #include "iterate/kit/capabilities/health.h"
 
-#include "rpc_internal.h"
+#include "iterate/kit/capabilities/arguments.h"
 
 #include <inttypes.h>
 #include <stdio.h>

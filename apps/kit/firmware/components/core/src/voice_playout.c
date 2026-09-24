@@ -63,13 +63,13 @@ enum iterate_kit_voice_playout_outcome iterate_kit_voice_playout_step(
      * can never be taken back, and so permanently puts the rest of the answer
      * 20 ms further behind — 149 times in one measured answer, three seconds
      * of chopping. A board's ring already clocks out zeros when it is truly
-     * empty. A sink that has no such hardware behind it (the CLI's file
-     * model) supplies the silence so its recording keeps the timeline.
+     * empty. A sink with no hardware clock behind it supplies the silence
+     * through `conceal` so its output keeps the timeline.
      *
      * The end resets the answer's timeline inside the clock, in this same
-     * call. THAT is the reset the two owners used to write themselves and
-     * each forgot on one path; asking the clock on EVERY dry read, from every
-     * path, is what this step guarantees.
+     * call. Two hand-written copies of that reset each forgot it on one path;
+     * asking the clock on EVERY dry read, from every path, is what this step
+     * guarantees.
      */
     ++playout->stats.waits_dry;
     if (iterate_kit_voice_playback_clock_empty(

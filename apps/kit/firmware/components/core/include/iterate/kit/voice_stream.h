@@ -14,8 +14,6 @@ extern "C" {
 #endif
 
 enum {
-  /** One 20 ms, 16 kHz mono PCM16 microphone frame. */
-  ITERATE_KIT_VOICE_STREAM_FRAME_BYTES = 640,
   /*
    * A flush encodes one contiguous PCM body. This limit must fit its base64
    * payload and envelope in one control outbox slot.
@@ -42,18 +40,18 @@ enum iterate_kit_voice_stream_control {
   /**
    * Barge-in: flush local playback immediately.
    *
-   * Raised from `drop` on the first frame of a replacing answer, so it arrives
-   * IN ORDER with the audio it invalidates. It used to be a `speech_started`
-   * on a second event type, where nothing decided which lane won.
+   * Raised from `clearSpeakerBufferBeforeFrame` on the first frame of a
+   * replacing answer, so it arrives IN ORDER with the audio it invalidates. A
+   * separate event type would be a second lane, and nothing would decide which
+   * lane won.
    */
   ITERATE_KIT_VOICE_STREAM_CONTROL_SPEECH_STARTED = 0,
   /**
    * The sender has no more audio for this answer.
    *
-   * Raised from `last` on the final frame, AFTER that frame is delivered. It
-   * used to be a `response.done` that routinely overtook the audio it was
-   * about; the note in handle_spk_frame records what treating that as "the
-   * answer is over" cost.
+   * Raised from `lastFrameOfAnswer` on the final frame, AFTER that frame is
+   * delivered. A separate terminal event routinely overtook the audio it was
+   * about; the note in handle_spk_frame records what that cost.
    */
   ITERATE_KIT_VOICE_STREAM_CONTROL_RESPONSE_DONE,
   /** The bridge hung up (locally, after its idle timeout, or remotely). */
@@ -63,18 +61,8 @@ enum iterate_kit_voice_stream_control {
 };
 
 /**
- * One decoded speaker PCM frame (16 kHz mono S16LE) with the identity it
- * carried on the wire.
- *
- * `identity` is the frame's OWN account of which call, which answer and which
- * position within that answer — never the receiver's belief about those. That
- * distinction is the entire point and it has already been got wrong: both
- * targets filled `answer` in from their own state before classifying, which
- * makes "is this a newer answer?" ask whether a number equals itself. The
- * REPLACE path became unreachable, so a barge-in never flushed the queue and
- * the assistant talked over the person for the rest of the answer.
- *
- * It is passed by pointer and borrowed for the duration of the call.
+ * One decoded speaker PCM chunk (16 kHz mono S16LE); `pcm` is borrowed for the
+ * duration of the call.
  */
 typedef void (*iterate_kit_voice_stream_speaker_fn)(
     void *context, const uint8_t *pcm, size_t pcm_length);
@@ -127,9 +115,8 @@ struct iterate_kit_voice_stream_options {
   uint64_t (*now_ms)(void *clock_context);
   void *clock_context;
   /**
-   * Downlink: when set, the mount also opens a live connection on the
-   * stream (spk-frame, capped to what one inbox slot holds) and delivers
-   * decoded speaker PCM here. NULL = uplink-only probe.
+   * Downlink: when set, decoded speaker PCM is delivered here. NULL =
+   * uplink-only probe.
    */
   iterate_kit_voice_stream_speaker_fn on_speaker;
   iterate_kit_voice_stream_control_fn on_control;
@@ -207,9 +194,9 @@ struct iterate_kit_voice_stream {
   char args_buffer[ITERATE_KIT_VOICE_STREAM_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICE_STREAM_B64_CAPACITY];
   /*
-   * One inbound chunk of mu-law, decoded once and then handed out a frame at
-   * a time. Bounded and static: the decode never allocates, and a chunk larger
-   * than this is refused at the door rather than overrunning anything.
+   * One inbound chunk of PCM16, decoded from base64 once. Bounded and static:
+   * the decode never allocates, and a chunk larger than this is refused at the
+   * door rather than overrunning anything.
    */
   uint8_t chunk_buffer[ITERATE_KIT_VOICE_STREAM_CHUNK_BYTES];
 };
@@ -239,16 +226,6 @@ enum capnweb_status iterate_kit_voice_stream_recycle_subscription(
     struct iterate_kit_voice_stream *voice_stream,
     struct iterate_kit_stream_subscription *fresh_subscription);
 
-/** Generic-subscription callback for a bound call. The owner is the voice_stream;
- * its epoch identifies one current or overlapping predecessor subscription.
- * `events` is the delivery's events array itself — os-next calls the lent stub
- * as a bare `(events, range)` function — and `range` is `{after, through}`. */
-void iterate_kit_voice_stream_on_subscription_update(
-    void *owner,
-    uint32_t owner_epoch,
-    const struct capnweb_value *events,
-    const struct capnweb_value *range);
-
 /**
  * One-way append of up to MAX_FRAMES_PER_APPEND consecutive mic frames as
  * one atomic multi-event append — divides the outbound message rate (each
@@ -266,24 +243,6 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
     size_t frame_count,
     size_t frame_length,
     const char *activation);
-
-/**
- * One-way append of a caller-built JSON array of stream event inputs
- * (diagnostics/stats events). The caller owns JSON validity.
- */
-enum capnweb_status iterate_kit_voice_stream_append_raw(
-    struct iterate_kit_voice_stream *voice_stream,
-    const char *events_json_array,
-    size_t length);
-
-/**
- * Hang up: a durable events.iterate.com/voice-agent/conversation-ended event
- * carrying this call's id, which is what the bridge watches for. One-way —
- * the bridge's conversation-ended echo confirms it. `reason` must be a safe
- * JSON string; NULL becomes `hangup`.
- */
-enum capnweb_status iterate_kit_voice_stream_end_call(
-    struct iterate_kit_voice_stream *voice_stream, const char *reason);
 
 /**
  * Append an authoritative terminal event for `activation`.

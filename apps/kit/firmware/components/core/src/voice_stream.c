@@ -9,7 +9,7 @@
 
 /*
  * NAMED ONE BY ONE, BECAUSE "*" NEVER SWEEPS AN EPHEMERAL. `spk-frame` is
- * ephemeral and os-next's `consumesEvent` is explicit that a wildcard does not
+ * ephemeral and the OS's `consumesEvent` is explicit that a wildcard does not
  * reach one, so the type that carries every syllable of every answer is the
  * one a shorthand would silently drop.
  */
@@ -77,23 +77,20 @@ static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /*
- * THE UPLINK MU-LAW ENCODER WAS HERE, AND WHY IT MIGHT HAVE TO COME BACK.
+ * THE UPLINK IS PCM16, AND WHY IT MIGHT HAVE TO BECOME MU-LAW AGAIN.
  *
- * It was removed deliberately: two codecs on one wire is two chances for the
- * ends to disagree, and they did — a server that read the bytes as PCM16 while
- * the device sent mu-law produced a call that heard nothing, answered nothing
- * and logged nothing. PCM16 both ways deletes that whole class of fault.
+ * PCM16 both ways means the two ends cannot disagree on the codec. They did
+ * when there were two: a server that read the bytes as PCM16 while the device
+ * sent mu-law produced a call that heard nothing, answered nothing and logged
+ * nothing.
  *
- * What it cost is on record and is NOT theoretical. Before mu-law, a 3-second
- * turn put roughly 100 KB/s of base64 PCM16 on the wire in one burst and the
- * TCP flow stalled dead — both directions, no errors, twenty seconds at a
- * time. That is the "I hold the button and nothing happens" this lab spent
- * days on. Halving the bytes fixed it, and also quartered the message rate,
- * because twice as many frames fit one append.
- *
- * So the uplink is back to where that happened. A host CLI on a wired network
- * will never show it; only a board on Wi-Fi can. If the stall returns, this is
- * the first thing to put back, and `git log` has the exact encoder.
+ * The cost is on record and is NOT theoretical. A 3-second turn puts roughly
+ * 100 KB/s of base64 PCM16 on the wire in one burst, and on a board's Wi-Fi
+ * that has stalled the TCP flow dead — both directions, no errors, twenty
+ * seconds at a time. Halving the bytes with mu-law fixed it. The Mac on a
+ * wired network will never show it; only a board on Wi-Fi can. If the stall
+ * returns, the mu-law encoder is the first thing to put back, and `git log`
+ * has the exact one.
  */
 
 static size_t base64_encode(
@@ -190,35 +187,28 @@ static bool base64_decode(
 /* --- inbound delivery batches (the exported callback capability) ---------- */
 
 /*
- * THE DOWNLINK MU-LAW EXPANDER WAS HERE. Same story as the encoder above, and
- * the same warning: it was measured delivering 9-31 frames a second against
- * the 50 that realtime needs, and halving the bytes was the only lever that
- * did not require the far end to guess at this network. PCM16 is what the
- * speaker path wants anyway, so nothing decodes anything now — but if a board
- * starts concealing, this is where the fix went.
+ * The downlink is PCM16 for the same reason, with the same warning: a mu-law
+ * downlink was once the fix for a board measured delivering 9-31 frames a
+ * second against the 50 that realtime needs. If a board starts concealing,
+ * that expander (see `git log`) is where the fix went.
  */
 
 /*
  * THE WHOLE OF THE DEVICE'S SPEAKER POLICY: clear it, or write it.
  *
- * WHAT USED TO BE HERE. Every chunk carried an answer number, a frame index
- * and a sequence, and the board ran a 230-line classifier (`audio_playout.c`)
- * over them to work out for itself whether the audio was still wanted:
- * high-water marks, abandoned-answer latches, restart detection, duplicate
- * rejection. Three separate bugs in it silenced the device PERMANENTLY — each
- * one a number the sender could never reach again — and all three were found
- * by listening to a board go quiet and then guessing. It was answering a
- * question the sender already knows the answer to.
- *
- * The sender says `drop` instead, on the first chunk of a replacing answer.
- * It cannot be reordered against the audio it invalidates because it IS that
- * audio, and there is nothing left to get wrong.
+ * The device does not work out for itself whether audio is still wanted; the
+ * sender already knows. A device-side classifier over answer numbers, frame
+ * indices and sequences silenced boards PERMANENTLY through three separate
+ * bugs, each one a number the sender could never reach again. The sender
+ * instead sets `clearSpeakerBufferBeforeFrame` on the first chunk of a
+ * replacing answer. It cannot be reordered against the audio it invalidates
+ * because it IS that audio, and there is nothing left to get wrong.
  *
  * DEDUPLICATION IS NOT DONE HERE EITHER. A make-before-break recycle really
  * does deliver the same events twice, and that is handled one layer up by
  * event OFFSET (`dispatch_batch`), which is where the identity of an event
- * actually lives. Doing it again by audio content was a second answer to the
- * same question, and the two could disagree.
+ * actually lives. Doing it again by audio content would be a second answer to
+ * the same question, and the two could disagree.
  */
 static void handle_spk_frame(
     struct iterate_kit_voice_stream *voice_stream,
@@ -227,8 +217,8 @@ static void handle_spk_frame(
   struct capnweb_value flag;
   size_t b64_length;
   size_t chunk_length = 0U;
-  bool drop = false;
-  bool last = false;
+  bool clear_first = false;
+  bool last_frame = false;
 
   /*
    * NOTHING PLAYS INTO A CALL THIS DEVICE IS NOT ON. The end button's
@@ -239,51 +229,34 @@ static void handle_spk_frame(
    */
   if (!voice_stream->call_active) return;
 
-
   /*
-   * THE SAME INSTRUCTION UNDER THE SECOND AGENT'S NAME FOR IT.
-   *
-   * `drop` named no audio: it said "empty your ring" and nothing about which
-   * answer it meant, so a late one discarded the answer that had already
-   * replaced the one it was about. The rewrite binds the clear to a numbered
-   * frame and calls it what the device DOES — clear the buffer, then play THIS
-   * frame — and the device's whole buffer policy is readable off the payload.
-   *
-   * Both are honoured, because both agents are in service and the point of
-   * running them side by side is that the instrument does not change between
-   * them. Either being true means clear.
+   * The clear is bound to a numbered frame and says what the device DOES —
+   * clear the buffer, then play THIS frame — so a late clear cannot discard
+   * the answer that already replaced the one it was about.
    */
-  if (!drop &&
-      capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &drop);
+  if (capnweb_value_object_get(
+          payload, "clearSpeakerBufferBeforeFrame", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &clear_first);
   }
-  /*
-   * The second agent's name for the same edge. It says what the frame MEANS —
-   * this is the last frame of the answer — rather than `last`, which needed
-   * the reader to already know what it was the last of.
-   */
-  if (!last && capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &last);
+  if (capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &last_frame);
   }
 
   /*
-   * `drop` FIRST, AND BEFORE ANYTHING CAN GO WRONG WITH THE AUDIO.
+   * THE CLEAR FIRST, AND BEFORE ANYTHING CAN GO WRONG WITH THE AUDIO.
    *
    * The device does not decide turns; it does what the server's frames say.
-   * `drop` is the server saying "empty your ring", and it is true whether or
-   * not this chunk carries audio, so nothing about decoding audio may stand
-   * between it and being obeyed.
+   * The clear is true whether or not this chunk carries audio, so nothing
+   * about decoding audio may stand between it and being obeyed.
    *
-   * It used to sit BELOW the decode, which has an early `return` on failure.
    * A barge-in is exactly the case where the sender has no audio left to
    * attach the flag to — it has just thrown the answer away — so it sends the
-   * flag on an empty chunk, whose empty `pcm` string decodes to nothing, takes
-   * that early return, and never reaches the drop. The server said stop, the
-   * device agreed to obey, and the message was discarded on the doorstep for
-   * being an empty envelope. Three fixes upstream of here were measured
-   * against that and moved nothing.
+   * flag on an empty chunk, whose empty `pcm` string decodes to nothing. Below
+   * the decode's early `return`, the clear was discarded on the doorstep for
+   * being an empty envelope, and three fixes upstream were measured against
+   * that and moved nothing.
    */
-  if (drop && voice_stream->options.on_control != NULL) {
+  if (clear_first && voice_stream->options.on_control != NULL) {
     voice_stream->options.on_control(
         voice_stream->options.downlink_context,
         ITERATE_KIT_VOICE_STREAM_CONTROL_SPEECH_STARTED);
@@ -291,8 +264,8 @@ static void handle_spk_frame(
 
   /*
    * A CHUNK WITH NO AUDIO IS NOT A BROKEN CHUNK. The sender closes an answer
-   * whose audio has already all gone with a bare `last`, and that chunk is the
-   * only marker that completes the answer. Treating it as a decode
+   * whose audio has already all gone with a bare `lastFrameOfAnswer`, and that
+   * chunk is the only marker that completes the answer. Treating it as a decode
    * failure and returning early is what made a conversation go deaf after two
    * or three turns.
    */
@@ -318,17 +291,16 @@ static void handle_spk_frame(
    * chunk is appended to the end of it; where one chunk stops and the next
    * starts is not a thing either side has to agree on.
    *
-   * IT USED TO GO OUT 640 BYTES AT A TIME, and that rule cost more than it ever
-   * bought. It made a chunk with anything left over on the end a protocol
-   * violation to be counted and dropped, which every chunk had, because audio
-   * deltas are of no particular length: 118 dropped chunks in three turns.
-   * Buying it back needed the sender to carry a remainder between deltas and pad
-   * an answer's tail with silence. The click that the rule was supposed to
-   * prevent cannot happen — a ring has no phase, and consecutive PCM16 samples
-   * written consecutively are the same waveform however they were cut.
+   * A 640-byte framing rule here would cost more than it buys: audio deltas
+   * are of no particular length, so it made nearly every chunk a protocol
+   * violation (118 dropped chunks in three turns), and the click it was meant
+   * to prevent cannot happen — a ring has no phase, and consecutive PCM16
+   * samples written consecutively are the same waveform however they were cut.
+   *
+   * The lane owes more frames until `lastFrameOfAnswer`; an empty clear frame
+   * owes none.
    */
-  /* The lane owes more frames until `last`; an empty clear frame owes none. */
-  voice_stream->answer_open = !last && chunk_length > 0U;
+  voice_stream->answer_open = !last_frame && chunk_length > 0U;
   if (chunk_length > 0U && voice_stream->options.on_speaker != NULL) {
     ++voice_stream->spk_frames_received;
     voice_stream->options.on_speaker(
@@ -342,7 +314,7 @@ static void handle_spk_frame(
    * terminal event on a separate lane, where it routinely
    * arrived FIRST and cost 258 received frames that were never played.
    */
-  if (last && voice_stream->options.on_control != NULL) {
+  if (last_frame && voice_stream->options.on_control != NULL) {
     voice_stream->options.on_control(
         voice_stream->options.downlink_context,
         ITERATE_KIT_VOICE_STREAM_CONTROL_RESPONSE_DONE);
@@ -492,8 +464,14 @@ static void process_batch(
   }
 }
 
-
-void iterate_kit_voice_stream_on_subscription_update(
+/*
+ * Generic-subscription callback for a bound call. The owner is the
+ * voice_stream; its epoch identifies one current or overlapping predecessor
+ * subscription. `events` is the delivery's events array itself — the OS calls
+ * the lent stub as a bare `(events, range)` function — and `range` is
+ * `{after, through}`.
+ */
+static void on_subscription_update(
     void *owner,
     uint32_t owner_epoch,
     const struct capnweb_value *events,
@@ -545,7 +523,7 @@ enum capnweb_status iterate_kit_voice_stream_bind(
   status = iterate_kit_stream_subscription_open(subscription, stream, key,
       consumed_event_types,
       sizeof(consumed_event_types) / sizeof(consumed_event_types[0]),
-      iterate_kit_voice_stream_on_subscription_update, voice_stream,
+      on_subscription_update, voice_stream,
       voice_stream->connection_generation);
   if (status != CAPNWEB_OK) {
     return fail(voice_stream, ITERATE_KIT_VOICE_STREAM_FAILURE_OPEN_CALL, status);
@@ -606,7 +584,7 @@ enum capnweb_status iterate_kit_voice_stream_recycle_subscription(
   status = iterate_kit_stream_subscription_open(fresh_subscription, voice_stream->stream,
       key, consumed_event_types,
       sizeof(consumed_event_types) / sizeof(consumed_event_types[0]),
-      iterate_kit_voice_stream_on_subscription_update, voice_stream,
+      on_subscription_update, voice_stream,
       voice_stream->connection_generation);
   if (status != CAPNWEB_OK) {
     (void)iterate_kit_stream_subscription_close(fresh_subscription);
@@ -636,7 +614,7 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
       frame_count == 0U ||
       frame_count > ITERATE_KIT_VOICE_STREAM_MAX_FRAMES_PER_APPEND ||
       frame_length == 0U ||
-      frame_length > ITERATE_KIT_VOICE_STREAM_FRAME_BYTES) {
+      frame_length > ITERATE_KIT_VOICE_FRAME_BYTES) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   if (voice_stream->state != ITERATE_KIT_VOICE_STREAM_READY) {
@@ -722,30 +700,15 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
   return status;
 }
 
-enum capnweb_status iterate_kit_voice_stream_append_raw(
-    struct iterate_kit_voice_stream *voice_stream,
-    const char *events_json_array,
-    size_t length) {
-  if (voice_stream == NULL || events_json_array == NULL || length == 0U) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voice_stream->state != ITERATE_KIT_VOICE_STREAM_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  return iterate_kit_stream_append(
-      voice_stream->stream, events_json_array, length);
-}
-
-
 /* --- the face, pulled out of the processor's own runtime bag ------------- */
 
 /*
  * A PLAIN METHOD NAME ON THE CONVERSATION'S CONTEXT, exactly like
- * `setupVoiceAgent` on the project root. os-next has no `getProcessorRuntimeState`
- * built-in; anything that is not a built-in resolves through the context's
- * rewrite rules, so the voice worker owns this name the same way it owns setup.
- * The device keeps the call and the reply shape and expresses no opinion about
- * which worker answers.
+ * `setupVoiceAgent` on the project root. The OS has no
+ * `getProcessorRuntimeState` built-in; anything that is not a built-in resolves
+ * through the context's rewrite rules, so the voice worker owns this name the
+ * same way it owns setup. The device keeps the call and the reply shape and
+ * expresses no opinion about which worker answers.
  *
  * It is armed only on a board with a mouth (`observe_answer`), so a deployment
  * whose worker has not claimed the name yet costs the HAVPE nothing.
@@ -910,20 +873,6 @@ enum capnweb_status iterate_kit_voice_stream_end_activation(
   if (length < 0 || (size_t)length >= sizeof(arguments)) return CAPNWEB_E_LIMIT;
   return iterate_kit_stream_append(stream, arguments, (size_t)length);
 }
-
-enum capnweb_status iterate_kit_voice_stream_end_call(
-    struct iterate_kit_voice_stream *voice_stream, const char *reason) {
-  enum capnweb_status status;
-  if (voice_stream == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
-  status = iterate_kit_voice_stream_end_activation(
-      voice_stream->stream, voice_stream->options.activation, reason);
-  if (status != CAPNWEB_OK) return status;
-  voice_stream->call_active = false;
-  voice_stream->answer_open = false;
-  voice_stream->last_presence_at_ms = 0U;
-  return CAPNWEB_OK;
-}
-
 
 enum capnweb_status iterate_kit_voice_stream_close(
     struct iterate_kit_voice_stream *voice_stream) {

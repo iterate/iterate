@@ -382,23 +382,11 @@ def command_publish(args: argparse.Namespace) -> int:
                     if len(themes) == 1 or theme_id == "dark"
                     else f"{base_name} · {theme.get('display_name', theme_id)}"
                 )
-                canvas_w, canvas_h = map(int, target["canvas"])
                 entries.append(
                     "    {\n"
                     f"        {json.dumps(slug)},\n"
                     f"        {json.dumps(name)},\n"
                     f"        &{symbol},\n"
-                    f"        {canvas_w}U,\n"
-                    f"        {canvas_h}U,\n"
-                    "        FACE_RENDER_FLAG_PIXELATED |\n"
-                    "            FACE_RENDER_FLAG_SPRITE_MOUTH |\n"
-                    "            FACE_RENDER_FLAG_IDLE_MOTION"
-                    + (
-                        " |\n            FACE_RENDER_FLAG_HALF_RES"
-                        if canvas_w <= 40
-                        else ""
-                    )
-                    + ",\n"
                     "    },"
                 )
 

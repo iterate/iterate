@@ -1,5 +1,7 @@
 #include "iterate/kit/spsc_ring.h"
 
+#include "iterate/kit/atomic.h"
+
 #include <limits.h>
 #include <string.h>
 
@@ -27,10 +29,6 @@
  * whether fullness means drop, epoch reset, or connection recovery.
  */
 
-static uint32_t atomic_load_relaxed(const uint32_t *value) {
-  return __atomic_load_n(value, __ATOMIC_RELAXED);
-}
-
 static uint32_t atomic_load_acquire(const uint32_t *value) {
   return __atomic_load_n(value, __ATOMIC_ACQUIRE);
 }
@@ -38,33 +36,6 @@ static uint32_t atomic_load_acquire(const uint32_t *value) {
 static void atomic_store_release(
     uint32_t *destination, uint32_t value) {
   __atomic_store_n(destination, value, __ATOMIC_RELEASE);
-}
-
-static void atomic_saturating_increment(uint32_t *value) {
-  uint32_t current = atomic_load_relaxed(value);
-  while (current != UINT32_MAX &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             current + 1U,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
-}
-
-static void atomic_update_max(
-    uint32_t *value, uint32_t candidate) {
-  uint32_t current = atomic_load_relaxed(value);
-  while (candidate > current &&
-         !__atomic_compare_exchange_n(
-             value,
-             &current,
-             candidate,
-             false,
-             __ATOMIC_RELAXED,
-             __ATOMIC_RELAXED)) {
-  }
 }
 
 static bool power_of_two(size_t value) {
@@ -119,10 +90,11 @@ enum iterate_kit_status iterate_kit_spsc_ring_write_acquire(
     return ITERATE_KIT_STATE_ERROR;
   }
 
-  producer = atomic_load_relaxed(&ring->producer_sequence);
+  producer = iterate_kit_atomic_load_relaxed_u32(&ring->producer_sequence);
   consumer = atomic_load_acquire(&ring->consumer_sequence);
   if ((uint32_t)(producer - consumer) >= ring->slot_count) {
-    atomic_saturating_increment(&ring->producer_backpressure);
+    iterate_kit_atomic_saturating_increment_relaxed_u32(
+        &ring->producer_backpressure);
     return ITERATE_KIT_BACKPRESSURE;
   }
   index = producer & (uint32_t)(ring->slot_count - 1U);
@@ -151,7 +123,7 @@ enum iterate_kit_status iterate_kit_spsc_ring_write_publish(
   }
 
   ring->lengths[ring->write_index] = length;
-  producer = atomic_load_relaxed(&ring->producer_sequence);
+  producer = iterate_kit_atomic_load_relaxed_u32(&ring->producer_sequence);
   next = producer + 1U;
   ring->write_acquired = false;
   /*
@@ -160,10 +132,11 @@ enum iterate_kit_status iterate_kit_spsc_ring_write_publish(
    * observe a new sequence while still seeing an old payload.
    */
   atomic_store_release(&ring->producer_sequence, next);
-  atomic_saturating_increment(&ring->messages_published);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
+      &ring->messages_published);
   consumer = atomic_load_acquire(&ring->consumer_sequence);
   depth = next - consumer;
-  atomic_update_max(&ring->high_water_slots, depth);
+  iterate_kit_atomic_update_max_relaxed_u32(&ring->high_water_slots, depth);
   return ITERATE_KIT_OK;
 }
 
@@ -202,7 +175,7 @@ enum iterate_kit_status iterate_kit_spsc_ring_read_acquire(
     return ITERATE_KIT_STATE_ERROR;
   }
 
-  consumer = atomic_load_relaxed(&ring->consumer_sequence);
+  consumer = iterate_kit_atomic_load_relaxed_u32(&ring->consumer_sequence);
   producer = atomic_load_acquire(&ring->producer_sequence);
   if (consumer == producer) {
     return ITERATE_KIT_UNAVAILABLE;
@@ -224,11 +197,11 @@ enum iterate_kit_status iterate_kit_spsc_ring_read_release(
   if (!ring->read_acquired) {
     return ITERATE_KIT_STATE_ERROR;
   }
-  consumer = atomic_load_relaxed(&ring->consumer_sequence);
+  consumer = iterate_kit_atomic_load_relaxed_u32(&ring->consumer_sequence);
   ring->read_acquired = false;
   atomic_store_release(
       &ring->consumer_sequence, consumer + 1U);
-  atomic_saturating_increment(&ring->messages_consumed);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(&ring->messages_consumed);
   return ITERATE_KIT_OK;
 }
 
@@ -247,12 +220,12 @@ void iterate_kit_spsc_ring_metrics(
   producer = atomic_load_acquire(&ring->producer_sequence);
   consumer = atomic_load_acquire(&ring->consumer_sequence);
   metrics->messages_published =
-      atomic_load_relaxed(&ring->messages_published);
+      iterate_kit_atomic_load_relaxed_u32(&ring->messages_published);
   metrics->messages_consumed =
-      atomic_load_relaxed(&ring->messages_consumed);
+      iterate_kit_atomic_load_relaxed_u32(&ring->messages_consumed);
   metrics->producer_backpressure =
-      atomic_load_relaxed(&ring->producer_backpressure);
+      iterate_kit_atomic_load_relaxed_u32(&ring->producer_backpressure);
   metrics->high_water_slots =
-      atomic_load_relaxed(&ring->high_water_slots);
+      iterate_kit_atomic_load_relaxed_u32(&ring->high_water_slots);
   metrics->current_slots = producer - consumer;
 }

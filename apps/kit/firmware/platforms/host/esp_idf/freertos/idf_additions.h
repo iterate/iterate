@@ -1,8 +1,8 @@
-#ifndef ITERATE_KIT_FAKE_FREERTOS_IDF_ADDITIONS_H
-#define ITERATE_KIT_FAKE_FREERTOS_IDF_ADDITIONS_H
+#ifndef ITERATE_KIT_HOST_FREERTOS_IDF_ADDITIONS_H
+#define ITERATE_KIT_HOST_FREERTOS_IDF_ADDITIONS_H
 
 /*
- * Host stand-in. See ../README.md.
+ * Host stand-in. See ../esp_idf.h.
  *
  * The capability argument is what puts a queue in PSRAM on a device. There is
  * no PSRAM here, so it is accepted and ignored — the placement is invisible to

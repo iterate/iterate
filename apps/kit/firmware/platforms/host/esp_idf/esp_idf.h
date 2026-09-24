@@ -34,13 +34,9 @@ void iterate_kit_host_esp_idf_set_now_us(int64_t now_us);
 void iterate_kit_host_esp_idf_advance_ms(uint32_t milliseconds);
 
 size_t iterate_kit_host_esp_idf_tasks_created(void);
-const char *iterate_kit_host_esp_idf_task_name(size_t index);
 
-/** With a pinned clock esp_restart() only records; these read what it recorded. */
+/** With a pinned clock esp_restart() only records; this reads what it recorded. */
 bool iterate_kit_host_esp_idf_restart_requested(void);
-const char *iterate_kit_host_esp_idf_restart_note(void);
-
-void iterate_kit_host_esp_idf_fail_next_queue(void);
 
 /** The note esp_restart() will print (the platform's restart_with_note sets it). */
 void iterate_kit_host_esp_idf_set_restart_note(const char *note);

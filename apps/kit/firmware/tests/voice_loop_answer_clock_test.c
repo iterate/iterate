@@ -187,7 +187,7 @@ static const struct iterate_kit_board_facts open_mic_facts = {
 /* --- driving the loop ----------------------------------------------------- */
 
 static void step(void) {
-  iterate_kit_voice_loop_step((uint64_t)(esp_timer_get_time() / 1000));
+  iterate_kit_voice_loop_step();
 }
 
 /** One pass of the speaker task, which on a board is a thread of its own. */
@@ -298,11 +298,10 @@ static long callback_export_id(void) {
 /* --- the audio itself ----------------------------------------------------- */
 
 /**
- * `frames` whole wire frames of mu-law, base64, all one sample value.
+ * `frames` whole 20 ms frames of PCM16, base64, all one sample value.
  *
- * Content is irrelevant here — nothing in this file listens — but LENGTH is
- * not: the speaker path refuses any PCM length but 640, so a chunk that is not
- * a whole number of frames would be counted as bad rather than played.
+ * Content is irrelevant here — nothing in this file listens — but the length
+ * sets how much speaker audio the answer clock has to play out.
  */
 static uint8_t speaker_pcm_byte;
 
@@ -310,7 +309,7 @@ static const char *frames_b64(size_t frames) {
   static char encoded[8192];
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES;
+  const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES;
   const uint8_t fill = speaker_pcm_byte;
   size_t at = 0U;
   size_t out = 0U;

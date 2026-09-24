@@ -80,7 +80,7 @@ iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
 
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
-# The one session grammar all four boards drive: a press starts a session
+# The one session grammar every board drives: a press starts a session
 # (with the wake chime), a press or an end-press ends it, and leaving a
 # session is the one end-chime edge. Board tests keep only their gesture wiring.
 iterate_kit_add_core_test(
@@ -89,8 +89,8 @@ iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-touch-tap-test touch_tap_test.c)
 iterate_kit_add_core_test(
   iterate-kit-voice-playback-clock-test voice_playback_clock_test.c)
-# THE STEP BOTH TARGETS RUN, against a ring that is an array and a sink that
-# counts: every branch the board's and the CLI's playback share, asserted once.
+# THE PLAYOUT STEP, against a ring that is an array and a sink that counts:
+# every branch, asserted once.
 iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-voice-stream-test voice_stream_test.c)
 iterate_kit_add_core_test(
@@ -116,9 +116,8 @@ target_link_libraries(iterate-kit-esp-idf-fakes PUBLIC
 target_compile_features(iterate-kit-esp-idf-fakes PUBLIC c_std_11)
 target_compile_options(iterate-kit-esp-idf-fakes PRIVATE -Wall -Wextra -Werror)
 
-# THE SHARED LOOP, ON A LAPTOP. Four boards run components/voice and nothing
-# outside a flash had ever compiled it, so the mapping from a press to an
-# intent was verified only by diffing against the device files it replaced.
+# THE SHARED LOOP, ON A LAPTOP. Every board runs components/voice, so the
+# mapping from a press to an intent is tested here rather than on a flash.
 # The ESP-IDF it links is the host one (platforms/host/esp_idf), clock pinned.
 iterate_kit_add_test(
   iterate-kit-voice-loop-intent-test voice_loop_intent_test.c

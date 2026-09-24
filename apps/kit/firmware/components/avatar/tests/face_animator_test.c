@@ -8,8 +8,8 @@
 _Static_assert(sizeof(face_animator_t) <= 64,
                "the face animator must stay in tiny internal RAM");
 
-static void assert_state_equal(const face_animator_state_t *left,
-                               const face_animator_state_t *right)
+static void assert_state_equal(const face_pose_t *left,
+                               const face_pose_t *right)
 {
     assert(left->frame_index == right->frame_index);
     assert(left->playout_samples == right->playout_samples);
@@ -25,7 +25,7 @@ static void assert_state_equal(const face_animator_state_t *left,
 static void silence_keeps_the_face_at_rest(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     const int16_t silence[320] = {0};
 
     face_animator_init(&animator, 16000);
@@ -40,7 +40,7 @@ static void silence_keeps_the_face_at_rest(void)
 static void voiced_pcm_opens_the_mouth_within_twenty_milliseconds(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     int16_t voiced[320];
     for (size_t index = 0; index < 320; ++index) {
         voiced[index] = (index % 20 < 10) ? 12000 : -12000;
@@ -60,7 +60,7 @@ static void voiced_pcm_opens_the_mouth_within_twenty_milliseconds(void)
 static void moderate_speech_uses_most_of_the_mouth_range(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     int16_t speech[640];
     for (size_t index = 0; index < 640; ++index) {
         speech[index] = (index % 40 < 20) ? 4000 : -4000;
@@ -78,7 +78,7 @@ static void moderate_speech_uses_most_of_the_mouth_range(void)
 static void user_speech_locks_an_obvious_closed_mouth_listening_pose(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     int16_t assistant_pcm[320];
     for (size_t index = 0; index < 320; ++index) {
         assistant_pcm[index] =
@@ -109,7 +109,7 @@ static void user_speech_locks_an_obvious_closed_mouth_listening_pose(void)
 static void mouth_release_is_smooth_but_bounded(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     int16_t voiced[320];
     const int16_t ten_ms_silence[160] = {0};
     const int16_t two_hundred_ms_silence[3200] = {0};
@@ -143,8 +143,8 @@ static void websocket_packet_boundaries_cannot_change_the_face(void)
 {
     face_animator_t contiguous;
     face_animator_t fragmented;
-    face_animator_state_t contiguous_state;
-    face_animator_state_t fragmented_state;
+    face_pose_t contiguous_state;
+    face_pose_t fragmented_state;
     int16_t pcm[1733];
     const size_t chunks[] = {1, 37, 3, 159, 320, 11, 503, 2, 697};
 
@@ -183,8 +183,8 @@ static void spectral_activity_changes_mouth_shape_without_an_fft(void)
 {
     face_animator_t vowel_like;
     face_animator_t fricative_like;
-    face_animator_state_t vowel_state;
-    face_animator_state_t fricative_state;
+    face_pose_t vowel_state;
+    face_pose_t fricative_state;
     int16_t slow_crossings[640];
     int16_t fast_crossings[640];
 
@@ -211,8 +211,8 @@ static void idle_motion_is_deterministic_on_the_playout_clock(void)
 {
     face_animator_t first;
     face_animator_t second;
-    face_animator_state_t first_state;
-    face_animator_state_t second_state;
+    face_pose_t first_state;
+    face_pose_t second_state;
     const int16_t silence[160] = {0};
     bool saw_blink = false;
     bool saw_gaze = false;
@@ -245,8 +245,8 @@ static void idle_motion_is_deterministic_on_the_playout_clock(void)
 static void snapshot_never_waits_for_a_preempted_writer(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
-    face_animator_state_t before;
+    face_pose_t state;
+    face_pose_t before;
 
     face_animator_init(&animator, 16000);
     memset(&state, 0xa5, sizeof(state));

@@ -6,13 +6,12 @@
  * conversation, and each kept network or storage work next to the audio loop.
  * This module therefore owns only the product state a person needs in hand.
  *
- * It draws with esp_lcd directly. It used to hold LVGL for exactly two
- * canvases and a flush pipeline; that cost 278 KB of flash, a 24 KB private
- * heap in internal RAM, and a port task on core 1 — the audio core — waking
- * a thousand times a second. Two rectangles a second do not need a UI
- * runtime: the face and the light strip are pushed as bounded strips from a
- * 100 ms task pinned to core 0, the same pattern StackChan's renderer
- * proved.
+ * It draws with esp_lcd directly. LVGL for two canvases and a flush pipeline
+ * cost 278 KB of flash, a 24 KB private heap in internal RAM, and a port task
+ * on core 1 — the audio core — waking a thousand times a second. Two rectangles
+ * a second do not need a UI runtime: the face and the light strip are pushed as
+ * bounded strips from a 100 ms task pinned to core 0, the same pattern
+ * StackChan's renderer proved.
  */
 #include "waveshare_display.h"
 

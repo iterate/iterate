@@ -72,7 +72,6 @@ struct iterate_kit_board {
   const struct iterate_kit_board_ops *extra;
 };
 
-
 /** Run the singleton board forever; startup failure parks in the loop's fault
  * path, including after watchdog enrollment. All extra ops receive NULL context.
  * extra->phase follows the shared ledger; other optional ops pass through.
@@ -108,15 +107,6 @@ enum iterate_kit_status iterate_kit_board_set_volume(uint8_t percent, uint8_t *a
  * App task only; board-specific mute feedback may immediately replace the bar.
  */
 enum iterate_kit_status iterate_kit_board_nudge_volume(int step);
-/** Last view copied by board.c before presenting the ring and extra. Initially
- * zero; borrowed singleton storage changes on the next presentation. App task
- * only: poll reads the previous presentation, including call_active/wants_call.
- */
-const struct iterate_kit_voice_view *iterate_kit_board_view(void);
-/** Last successfully applied percent; startup adopts the board's driver value
- * when extra supplies one, otherwise the table's full-scale initial setting.
- */
-uint8_t iterate_kit_board_volume(void);
 /** Queue a synthetic down edge in the same classifier as physical controls. */
 void iterate_kit_board_inject_press(void);
 /** Apply the shared grammar to normalized input. Exposed for focused host

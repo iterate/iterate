@@ -1,11 +1,11 @@
 """FSPR v2 C emission.
 
 Emits one translation unit per target atlas, structurally compatible with
-firmware-ws/main/face_sprite_sheet.h: RGB565 palette, PackBits/raw cell
-blob, cell table, shared mouth arrays, viseme maps, and expression banks,
-rooted in a single const face_sprite_atlas_t. The layout mirrors
-tools/generate_sprite_showcase.py so the production player and existing
-review tooling accept the output unchanged.
+firmware/components/avatar/include/iterate/kit/avatar/face_sprite_sheet.h:
+RGB565 palette, PackBits/raw cell blob, cell table, shared mouth arrays,
+viseme maps, and expression banks, rooted in a single const
+face_sprite_atlas_t. firmware/tools/generate-atlases.py regenerates the same
+bytes from the committed assets.
 """
 
 from __future__ import annotations

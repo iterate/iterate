@@ -14,11 +14,10 @@ extern "C" {
  *   UPPER = BOOT (GPIO0, low = pressed)
  *   LOWER = PWR  (EXIO4 on the TCA9554, high = pressed)
  *
- * NAMED FOR WHERE THEY ARE, NOT FOR WHAT THEY DO. They used to be called
- * "call" and "talk"; when those meanings moved between the buttons, every
- * name in the file became a lie and the code read as though it did the
- * opposite of what it did. Position is the one thing about a button that
- * cannot change underneath you.
+ * NAMED FOR WHERE THEY ARE, NOT FOR WHAT THEY DO. Meanings move between
+ * buttons, and when they do every meaning-based name becomes a lie and the
+ * code reads as though it does the opposite of what it does. Position is the
+ * one thing about a button that cannot change underneath you.
  *
  * ONLY THE UPPER BUTTON MAY BE HELD. PWR sits in the board's power path, and
  * holding it powers the device down in hardware — no firmware involved, and

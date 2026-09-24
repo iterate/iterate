@@ -39,10 +39,8 @@ struct iterate_kit_fake_queue {
 static struct {
   bool clock_pinned;
   int64_t now_us;
-  const char *task_names[FAKE_TASK_CAPACITY];
   size_t tasks_created;
   struct iterate_kit_fake_queue queues[FAKE_QUEUE_CAPACITY];
-  bool fail_next_queue;
   bool restart_requested;
   char restart_note[FAKE_RESTART_NOTE_CAPACITY];
   bool log_enabled;
@@ -75,21 +73,8 @@ size_t iterate_kit_host_esp_idf_tasks_created(void) {
   return fake.tasks_created;
 }
 
-const char *iterate_kit_host_esp_idf_task_name(size_t index) {
-  if (index >= fake.tasks_created) return "";
-  return fake.task_names[index] == NULL ? "" : fake.task_names[index];
-}
-
 bool iterate_kit_host_esp_idf_restart_requested(void) {
   return fake.restart_requested;
-}
-
-const char *iterate_kit_host_esp_idf_restart_note(void) {
-  return fake.restart_note;
-}
-
-void iterate_kit_host_esp_idf_fail_next_queue(void) {
-  fake.fail_next_queue = true;
 }
 
 /* --- clock ---------------------------------------------------------------- */
@@ -191,12 +176,12 @@ BaseType_t xTaskCreatePinnedToCore(
     TaskHandle_t *created,
     BaseType_t core) {
   (void)body;
+  (void)name;
   (void)stack_bytes;
   (void)argument;
   (void)priority;
   (void)core;
   if (fake.tasks_created >= FAKE_TASK_CAPACITY) return pdFAIL;
-  fake.task_names[fake.tasks_created] = name;
   ++fake.tasks_created;
   /*
    * A NON-NULL HANDLE THAT IS NOT A TASK. The loop only ever passes this back
@@ -204,7 +189,7 @@ BaseType_t xTaskCreatePinnedToCore(
    * task" on hardware — so the handle must be distinguishable from NULL even
    * though nothing runs behind it.
    */
-  if (created != NULL) *created = (TaskHandle_t)&fake.task_names[0];
+  if (created != NULL) *created = (TaskHandle_t)&fake.tasks_created;
   return pdPASS;
 }
 
@@ -232,10 +217,6 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void) { return NULL; }
 
 QueueHandle_t xQueueCreate(UBaseType_t depth, UBaseType_t item_bytes) {
   size_t index;
-  if (fake.fail_next_queue) {
-    fake.fail_next_queue = false;
-    return NULL;
-  }
   if (depth == 0U || item_bytes == 0U) return NULL;
   for (index = 0U; index < FAKE_QUEUE_CAPACITY; ++index) {
     struct iterate_kit_fake_queue *queue = &fake.queues[index];
