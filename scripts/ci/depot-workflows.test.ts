@@ -37,6 +37,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   env?: Record<string, string>;
+  outputs?: Record<string, string>;
   name?: string;
   needs?: string | string[];
   permissions?: Record<string, string>;
@@ -229,7 +230,13 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
     const runs = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
       (job.steps || []).map((step) => step.run || ""),
     );
-    for (const suite of ["pnpm e2e", "pnpm spec", "pnpm preview e2e", "pnpm preview specs"]) {
+    for (const suite of [
+      "pnpm e2e",
+      "pnpm spec",
+      "pnpm preview e2e",
+      "pnpm preview specs",
+      'pnpm preview "$SUITE"',
+    ]) {
       expect(
         runs.filter((run) => run.includes(suite)),
         `${file} must not run ${suite}`,
@@ -684,6 +691,67 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
   );
 });
 
+// ONE DEFINITION in each workflow, and the same one in both: Browser specs is E2E tests' runner,
+// outputs and steps (YAML aliases), the two differing only in the suite their env names. Main's
+// steps are a PR preview's less its guard and its PR's checkouts, plus the failing rows the alert
+// names; every step they share runs the same command and uploads the same files.
+test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runner", () => {
+  const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
+  const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
+  const preview = loadWorkflow(".depot/workflows/preview-os.yml");
+  const [e2e, specs] = [main.jobs.e2e!, main.jobs.specs!];
+  expect(specs).toMatchObject({
+    steps: e2e.steps,
+    outputs: e2e.outputs,
+    "runs-on": e2e["runs-on"],
+    "timeout-minutes": e2e["timeout-minutes"],
+  });
+  expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
+  expect(e2e).toMatchObject({
+    "runs-on": preview.jobs.e2e?.["runs-on"],
+    "timeout-minutes": preview.jobs.e2e?.["timeout-minutes"],
+  });
+  // each suite as a PR preview names it; E2E tests runs every row and judges the slow ones, which
+  // the alert pages under their own name, and Browser specs judges none
+  for (const job of ["e2e", "specs"])
+    for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
+      expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);
+  expect(e2e.env).toMatchObject({
+    E2E_SLOW_ROWS: "run",
+    JUDGED_SUITE: "slow e2e rows",
+    JUDGED_TAG: "slow",
+  });
+  expect(Object.keys(specs.env || {})).not.toContain("JUDGED_SUITE");
+
+  const mainSteps = e2e.steps || [];
+  const previewSteps = preview.jobs.e2e?.steps || [];
+  const prOnly = [
+    "Require a deployed preview",
+    "Record the PR head for test telemetry",
+    "Check out the PR merged into main",
+  ];
+  const expected = previewSteps
+    .map((step) => step.name!)
+    .filter((name) => !prOnly.includes(name))
+    .map((name) => (name === "Checkout the tested commit" ? "Checkout main" : name));
+  expected.splice(
+    expected.indexOf("Run the suite against the preview") + 1,
+    0,
+    "Collect the failing rows",
+  );
+  expect(mainSteps.map((step) => step.name)).toEqual(expected);
+  for (const step of mainSteps) {
+    const twin = previewSteps.find((candidate) => candidate.name === step.name);
+    if (twin?.run) expect(step, step.name).toMatchObject({ run: twin.run });
+    // the same uploads, their artifacts named for main instead of a preview
+    if (twin?.uses)
+      expect({
+        ...step.with,
+        name: String(step.with?.name).replace(/^main-/u, "preview-"),
+      }).toEqual(twin.with);
+  }
+});
+
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
 // only runs on its schedule carries that job as a skipped check. Four workflows run the same jobs
 // on every trigger: the two image bakes (a push to main bakes as the schedule does, the preview
@@ -767,7 +835,7 @@ test.each([
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", suite: "preview-e2e" },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", suite: "specs" },
 ])("$file $jobId always finalizes and retains $suite test telemetry", ({ file, jobId, suite }) => {
-  const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
+  const steps = stepsAsRun(file, jobId);
   const finalizer = steps.find((step) => step.run?.includes("scripts/ci/upload-test-telemetry.ts"));
   // Flake records have their own upload. Select the complete telemetry directory this
   // retention guard is about.
@@ -817,7 +885,7 @@ test.each([
 ])(
   "the $jobId job of $file names its evidence per job attempt and never overwrites it",
   ({ file, jobId }) => {
-    const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
+    const steps = stepsAsRun(file, jobId);
     // Overwritten on purpose: the latest attempt's HTML report, which a link can name. Each
     // attempt's own copy is inside its test-results artifact.
     const evidence = steps.filter(
@@ -843,16 +911,17 @@ test.each([
 // to R2.
 test.each([
   { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
-  { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["e2e"] },
-  { file: ".depot/workflows/preview-os.yml", jobId: "specs", testSteps: ["specs"] },
-  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["e2e"] },
-  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", testSteps: ["specs"] },
+  // the suite jobs' one step, `suite`, recorded under the suite its job names
+  { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["suite"], as: ["e2e"] },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs", testSteps: ["suite"], as: ["specs"] },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["suite"], as: ["e2e"] },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", testSteps: ["suite"], as: ["specs"] },
 ])(
   "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2, deciding nothing and never failing unseen",
-  ({ file, jobId, testSteps }) => {
+  ({ file, jobId, testSteps, as }) => {
     const workflow = loadWorkflow(file);
     const job = workflow.jobs[jobId]!;
-    const steps = job.steps || [];
+    const steps = stepsAsRun(file, jobId);
     const index = (command: string) => steps.findIndex((step) => !!step.run?.includes(command));
     const write = steps[index("scripts/ci/test-evidence.ts write")];
     const upload = steps[index("scripts/ci/test-evidence.ts upload")];
@@ -870,7 +939,7 @@ test.each([
     // the outcome of every step that runs tests, each one before the write, so a failure the
     // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
     expect(write?.env?.TEST_EVIDENCE_STEPS).toBe(
-      testSteps.map((id) => `${id}=\${{ steps.${id}.outcome }}`).join(" "),
+      testSteps.map((id, i) => `${as?.[i] ?? id}=\${{ steps.${id}.outcome }}`).join(" "),
     );
     for (const id of testSteps) {
       const step = steps.findIndex((candidate) => candidate.id === id);
@@ -1023,7 +1092,7 @@ test.for([
 ])(
   "$file's Browser specs job keeps the browser evidence, whatever the suite's outcome",
   ({ file, results: name }) => {
-    const steps = loadWorkflow(file).jobs.specs?.steps ?? [];
+    const steps = stepsAsRun(file, "specs");
     const suite = steps.find((step) => step.run?.includes("pnpm preview specs"));
     const results = steps.find((step) => step.with?.name === name);
     const report = steps.find((step) => step.with?.name === "public-playwright-report");
@@ -1093,6 +1162,28 @@ function loadWorkflow(file: string): Workflow {
   for (const job of Object.values(workflow.jobs))
     job.steps = job.steps?.flatMap((step) => step.parallel || [step]);
   return workflow;
+}
+
+/**
+ * A job's steps as it runs them: flattened as loadWorkflow does, and each `${{ env.NAME }}` and
+ * `"$NAME"` of the job's own env replaced by its value. The two suite jobs of Preview OS and Main OS
+ * e2e run one step list, and the suite each runs is its env's.
+ */
+function stepsAsRun(file: string, jobId: string): WorkflowStep[] {
+  const job = loadWorkflow(file).jobs[jobId];
+  const env = job?.env || {};
+  const expand = (value: unknown): unknown => {
+    if (typeof value === "string")
+      return value.replace(
+        /\$\{\{ env\.([A-Z0-9_]+) \}\}|"\$([A-Z0-9_]+)"/gu,
+        (match, expression?: string, shell?: string) => env[expression || shell || ""] || match,
+      );
+    if (Array.isArray(value)) return value.map(expand);
+    if (value instanceof Object)
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, expand(entry)]));
+    return value;
+  };
+  return (job?.steps || []).map((step) => expand(step) as WorkflowStep);
 }
 
 function readWorkflow(file: string): Workflow {

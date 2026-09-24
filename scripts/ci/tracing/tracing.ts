@@ -262,9 +262,9 @@ export function assembleTrace(
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
-      // A test job's suite step (preview-os.yml: `e2e` in E2E tests, `specs` in Browser specs)
-      // opens its Test phase.
-      const tests = shells.find((event) => event.step === "e2e" || event.step === "specs");
+      // A test job's suite step opens its Test phase: `suite` in E2E tests and Browser specs,
+      // which share one definition (preview-os.yml), or `e2e` and `specs` in runs before that.
+      const tests = shells.find((event) => SUITE_STEP_IDS.has(event.step));
       const boundaries = [{ name: "Setup", time: start }];
       if (tests) {
         boundaries.push({ name: "Test", time: tests.time });
@@ -623,6 +623,7 @@ function hash(value: string, length: number) {
 const SourceWorkflow = z.object({
   jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
 });
+const SUITE_STEP_IDS = new Set(["suite", "e2e", "specs"]);
 const jobLabels = new Map([
   ["deploy", "Deploy preview"],
   ["e2e", "E2E tests"],

@@ -888,15 +888,15 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
         [
           line("install", { kind: "shell-start", id: "install", step: "install", time: ms(42) }),
           line("install", { kind: "shell-end", id: "install", time: ms(50), exitCode: 0 }),
-          line("e2e", { kind: "shell-start", id: "suite", step: "e2e", time: ms(52) }),
-          line("e2e", { kind: "shell-end", id: "suite", time: ms(170), exitCode: 0 }),
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(52) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(170), exitCode: 0 }),
         ],
       ],
       [
         "specs-attempt",
         [
-          line("specs", { kind: "shell-start", id: "suite", step: "specs", time: ms(50) }),
-          line("specs", { kind: "shell-end", id: "suite", time: ms(110), exitCode: 0 }),
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(110), exitCode: 0 }),
         ],
       ],
     ]),
@@ -911,12 +911,12 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
     "Test",
     "Finish",
     "install",
-    "e2e",
+    "suite",
     "Browser specs",
     "Setup",
     "Test",
     "Finish",
-    "specs",
+    "suite",
   ]);
   expect(spans[0]).toMatchObject({
     endTimeUnixNano: String(BigInt(ms(180)) * 1_000_000n),
