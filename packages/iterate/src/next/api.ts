@@ -459,6 +459,9 @@ export interface IterateSessionApi {
           status: "pending" | "accepted" | "revoked" | "expired";
           /** the reader already belongs */
           member: boolean;
+          /** the reader is the one who accepted it — accepting again answers the same and lands
+           *  the membership's facts again */
+          acceptedByYou: boolean;
         })
       | null
     >;

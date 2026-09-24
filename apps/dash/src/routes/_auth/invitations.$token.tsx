@@ -57,6 +57,23 @@ function InvitationPage() {
         description="Check that the whole link was copied, or ask an owner of the organization for a new one."
       />
     );
+  // the link they joined by: "Open" accepts it again — it answers the same, and lands the
+  // membership on the organization's record and their account again, should the first answer have
+  // been cut before those folded (the tree reads the folds, so without it the page would be missing)
+  if (invitation.acceptedByYou && invitation.member)
+    return (
+      <Notice
+        title={`You joined ${invitation.orgName}`}
+        description="You accepted this invitation already."
+        action={
+          <Button type="button" disabled={joining} onClick={() => void join()}>
+            {joining ? <Spinner data-icon="inline-start" /> : null}
+            Open {invitation.orgName}
+          </Button>
+        }
+        error={error}
+      />
+    );
   const open = (
     <Link
       to="/organizations/$orgId"
@@ -126,10 +143,12 @@ function Notice({
   title,
   description,
   action,
+  error,
 }: {
   title: string;
   description: string;
   action?: ReactNode;
+  error?: string | null;
 }) {
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-6 p-4 md:p-8">
@@ -138,6 +157,13 @@ function Notice({
           <CardTitle className="text-xl">{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </CardHeader>
+        {error ? (
+          <CardContent>
+            <p role="alert" data-type="error" className="text-sm text-destructive">
+              {error}
+            </p>
+          </CardContent>
+        ) : null}
         {action ? <CardFooter>{action}</CardFooter> : null}
       </Card>
     </div>

@@ -154,6 +154,7 @@ test("invitations: an owner creates a link — the record by id, never the hash;
     orgName: "Booper",
     status: "pending",
     member: false,
+    acceptedByYou: false,
   });
   expect(c.invitation("hash-1", ada.id, NOW)).toMatchObject({ member: true });
   expect(c.invitation("hash-nobody", bob.id, NOW)).toBeNull();
@@ -190,7 +191,15 @@ test("invitations: accepted, the person joins in the link's role — once: again
     message: "This invitation was already used by someone else.",
   });
   expect(c.accessibleTo(carol.id)).toMatchObject({ organizations: [] });
-  expect(c.invitation("hash-1", carol.id, NOW + 3)).toMatchObject({ status: "accepted" });
+  expect(c.invitation("hash-1", carol.id, NOW + 3)).toMatchObject({
+    status: "accepted",
+    acceptedByYou: false,
+  });
+  expect(c.invitation("hash-1", bob.id, NOW + 3)).toMatchObject({
+    status: "accepted",
+    member: true,
+    acceptedByYou: true,
+  });
   // once used it is a membership: revoked it is not, removed it is — and the link stays spent
   expect(refusal(() => c.revokeInvitation(as(ada), org.id, invitation.id, NOW))).toMatchObject({
     message: "This invitation was already accepted; remove the member instead.",

@@ -277,6 +277,7 @@ test("organizations.createInvitation hands an owner a single-use link: a second 
     expiresAt: invitation.expiresAt,
     status: "pending",
     member: false,
+    acceptedByYou: false,
   });
   expect(await guest.organizations.invitation(`${invitation.token}x`)).toBeNull();
   // … accepts it, and lists the organization at once — the answer is the row they now read

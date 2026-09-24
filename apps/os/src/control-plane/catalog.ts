@@ -70,11 +70,13 @@ export type InvitationRecord = {
 /** Where an invitation stands at `now`: open, used, withdrawn, or past its time. */
 export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
 /** What the person holding a link sees before accepting: the organization it opens, the role, and
- *  whether it can still be used — `member` when they already belong. */
+ *  whether it can still be used — `member` when they already belong, `acceptedByYou` when the link
+ *  is the one they joined by (accepting it again re-lands the membership's facts). */
 export type InvitationPreview = InvitationRecord & {
   orgName: string;
   status: InvitationStatus;
   member: boolean;
+  acceptedByYou: boolean;
 };
 /** What a person can access: their organizations and every project of those, with their role. */
 export type AccessibleRecord = { organizations: OrganizationRecord[]; projects: ProjectRecord[] };
@@ -368,6 +370,7 @@ export class ControlPlaneDatabase {
       orgName: organization.name,
       status: invitationStatus(found, now),
       member: Boolean(userId && this.#role(found.record.orgId, userId)),
+      acceptedByYou: Boolean(userId && found.acceptedBy === userId),
     };
   }
 
