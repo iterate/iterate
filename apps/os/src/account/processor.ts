@@ -66,13 +66,25 @@ export class AccountProcessor extends StreamProcessor<
           consents: [...state.consents, { ...event.payload, at: event.createdAt }],
         };
       case "events.iterate.com/organization/member-added": {
-        const { orgId, role } = event.payload;
+        const { orgId, role, mint } = event.payload;
+        // A MINT is the organization's first membership, landed here in the background once the
+        // creation that minted it answered (session.ts `landProjectOnOrganization`). Any other
+        // membership fact of the organization is later than it, even one that lands first, so a
+        // mint never overrides a membership the account holds, nor revives one that ended.
+        if (mint && (state.memberships[orgId] || state.endedMemberships[orgId])) return undefined;
         const memberships = reduceMembership(state.memberships, orgId, role, event.createdAt);
-        return memberships && { ...state, memberships };
+        if (!memberships) return undefined;
+        const { [orgId]: _rejoined, ...endedMemberships } = state.endedMemberships;
+        return { ...state, memberships, endedMemberships };
       }
       case "events.iterate.com/organization/member-removed": {
-        const memberships = dropMembership(state.memberships, event.payload.orgId);
-        return memberships && { ...state, memberships };
+        // the end is kept even for a membership the account never held: its mint may land after it
+        const { orgId } = event.payload;
+        return {
+          ...state,
+          memberships: dropMembership(state.memberships, orgId) ?? state.memberships,
+          endedMemberships: { ...state.endedMemberships, [orgId]: { at: event.createdAt } },
+        };
       }
       case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted": {

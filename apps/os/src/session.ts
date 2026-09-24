@@ -265,6 +265,43 @@ async function foldPlatformFacts(
   );
 }
 
+/** A project creation that answers this late logs where it waited (`session.project-create-slow`).
+ *  Across 2026-09-24's 19 latency runs (1, 10 and 25 people creating at once) a creation answered in
+ *  1.9 s at the median and 5.5 s at p99; Cloudflare's stalls on a brand-new object held one for
+ *  6.5–22.7 s. */
+const SLOW_CREATE_MS = 5_000;
+
+/** How long each call a project creation waits on took, by step: logged once when the creation
+ *  took SLOW_CREATE_MS or longer, answered or thrown, so the log names the Durable Object that held
+ *  it. Cloudflare's stalls on a brand-new object's first call or first write leave no line of their
+ *  own, and until this one the only witness was the trace. */
+class CreateWaits {
+  readonly #started = Date.now();
+  readonly #steps: Record<string, number> = {};
+
+  async time<T>(step: string, work: () => Promise<T>): Promise<T> {
+    const started = Date.now();
+    try {
+      return await work();
+    } finally {
+      this.#steps[step] = Date.now() - started;
+    }
+  }
+
+  report(attributes: { projectId?: string; orgId?: string }): void {
+    const ms = Date.now() - this.#started;
+    if (ms < SLOW_CREATE_MS) return;
+    const [slowest] = Object.entries(this.#steps).sort(([, a], [, b]) => b - a)[0] ?? [];
+    console.warn({
+      event: "session.project-create-slow",
+      ms,
+      slowest,
+      steps: this.#steps,
+      ...attributes,
+    });
+  }
+}
+
 /** A PROJECT ON ITS ORGANIZATION'S RECORD — the fold the dash tree lists an organization's projects
  *  from (session-fed: the control-plane database is imperative). ONE path for every creation —
  *  a person's, the operator's acting as one, and the operator's own into a named organization (a
@@ -272,9 +309,16 @@ async function foldPlatformFacts(
  *  at head, so the same creation again (a rerun `apply`, a retry) appends nothing, and one whose
  *  landing an earlier deployment skipped lands now. An organization the record has never heard of
  *  is one this creation minted (a person's first project, catalog.ts): its creation and its members
- *  come first, in one ordered append, so the fold sees the organization before its project; each
- *  membership also lands on the member's account. The deployment's own organization (the
- *  operator's projects with no `orgId`) has no members and no page: nothing lands there.
+ *  come first, in one ordered append, so the fold sees the organization before its project. Each
+ *  of those memberships also lands on the member's account, in the BACKGROUND
+ *  (`publishPlatformFacts`): the answer never waits on a person's account. On 2026-09-24 Cloudflare
+ *  held the first write of a new account's Durable Object for 21.9 s, and a first project that
+ *  waited on its fold answered 22.7 s late. Nothing before the answer needs it: the dash reads the
+ *  account through live state, and every access check reads the control plane. Landing late, the
+ *  membership may arrive after a later membership fact of the same organization, so it is marked
+ *  `mint` and the account never lets it override one (account/processor.ts). The deployment's own
+ *  organization (the operator's projects with no `orgId`) has no members and no page: nothing
+ *  lands there.
  *
  *  TWO AT ONCE both read the record without it, so each fact lands under an idempotency key: the
  *  stream keeps the first event under a key and answers every later one with it. A minted
@@ -283,9 +327,10 @@ async function foldPlatformFacts(
  *  `organization/…` key (context/built-ins.ts `append`), so the event a key answers with is always
  *  one the fold keeps. */
 async function landProjectOnOrganization(
-  input: Pick<SessionInput, "contextNamespace" | "controlPlane">,
+  input: Pick<SessionInput, "contextNamespace" | "controlPlane" | "waitUntil">,
   project: ProjectRecord,
   caller: Caller,
+  waits: CreateWaits,
 ): Promise<void> {
   if (project.orgId === ADMIN_ORG_ID) return;
   // The record at head (the facet catches up from its log before answering), its processor enabled
@@ -293,28 +338,36 @@ async function landProjectOnOrganization(
   // nothing. `invoke` answers `unknown` across the DO hop; the `organization` facet is the
   // platform's own OrganizationDurableObject and `snapshot()` the engine's `{ offset, state }`.
   const organizationContext = ownerContext(input.contextNamespace, { organization: project.orgId });
-  await organizationContext.invoke(["itx", "processors", ["enable", "organization"]], [], caller);
-  const { state: record } = (await organizationContext.invoke(
-    ["itx", "facets", ["get", "organization"], ["snapshot"]],
-    [],
-    caller,
+  await waits.time("organizationEnable", () =>
+    organizationContext.invoke(["itx", "processors", ["enable", "organization"]], [], caller),
+  );
+  const { state: record } = (await waits.time("organizationSnapshot", () =>
+    organizationContext.invoke(
+      ["itx", "facets", ["get", "organization"], ["snapshot"]],
+      [],
+      caller,
+    ),
   )) as { state: OrganizationState };
   const onOrganization: StreamEventInput[] = [];
-  const onAccounts: [FactOwner, StreamEventInput][] = [];
   if (!record.name) {
-    const organization = await input.controlPlane.getOrganization(project.orgId);
+    const organization = await waits.time("controlPlaneOrganization", () =>
+      input.controlPlane.getOrganization(project.orgId),
+    );
+    const members = await waits.time("controlPlaneMembers", () =>
+      input.controlPlane.listMembers(project.orgId),
+    );
     onOrganization.push({
       ...orgCreatedFact(organization?.name ?? project.orgId),
       idempotencyKey: "organization/created",
     });
-    for (const { userId, role } of await input.controlPlane.listMembers(project.orgId)) {
+    for (const { userId, role } of members) {
       if (record.members[userId]?.role === role) continue;
       const membership = {
-        ...memberAddedFact(project.orgId, userId, role),
+        ...memberAddedFact(project.orgId, userId, role, { mint: true }),
         idempotencyKey: `organization/member-added:${project.orgId}:${userId}:mint`,
       };
       onOrganization.push(membership);
-      onAccounts.push([{ account: userId }, membership]);
+      publishPlatformFacts(input, { account: userId }, membership, caller);
     }
   }
   // a project is created once and its slug never changes: every landing of it is the same event
@@ -324,10 +377,8 @@ async function landProjectOnOrganization(
       idempotencyKey: `organization/project-created:${project.id}`,
     });
   if (onOrganization.length)
-    await foldPlatformFacts(
-      input,
-      [[{ organization: project.orgId }, onOrganization], ...onAccounts],
-      caller,
+    await waits.time("organizationFold", () =>
+      foldPlatformFacts(input, [[{ organization: project.orgId }, onOrganization]], caller),
     );
 }
 
@@ -383,9 +434,10 @@ const memberAddedFact = (
   orgId: string,
   userId: string,
   role: OrganizationRole,
+  { mint }: { mint?: true } = {},
 ): StreamEventInput => ({
   type: "events.iterate.com/organization/member-added",
-  payload: { orgId, userId, role },
+  payload: { orgId, userId, role, mint },
 });
 const memberRemovedFact = (orgId: string, userId: string): StreamEventInput => ({
   type: "events.iterate.com/organization/member-removed",
@@ -951,37 +1003,54 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         "FORBIDDEN",
         `this session is ${describeReach(reach)} — creating a project needs a signed-in user or the admin secret`,
       );
-    // pinned once, before the durable request: a resumed creation always reads the same tree
-    const configRepoTemplate = data.configRepoTemplate
-      ? formatConfigRepoTemplateReference(
-          await pinPublicGithubTemplate(parseConfigRepoTemplateReference(data.configRepoTemplate)),
-        )
-      : undefined;
-    const { input: sessionInput, caller } = this.#session;
-    const project = await sessionInput.controlPlane.createProject(caller, {
-      project: data.project,
-      organizationId: data.orgId,
-      restoreProjectId: data.restoreProjectId,
-    });
-    // The project's own creation saga, on its root: enable the `project` processor, then request it —
-    // the saga (src/project/processor.ts) seeds the config repo from the template and lands the
-    // certificate. Idempotent: a request after the certificate is a harmless fact, one after a
-    // failure a new attempt. The dash watches the facet's live state; we return at once.
-    const context = this.#context(project.id);
-    await context.invoke(["itx", "processors", ["enable", "project"]]);
-    await context.invoke([
-      "itx",
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/create-requested",
-          payload: { slug: project.slug, orgId: project.orgId, configRepoTemplate },
-        },
-      ],
-    ]);
-    // The organization's record, before the answer: the dash lists the project as soon as it has it.
-    await landProjectOnOrganization(sessionInput, project, caller);
-    return context;
+    const waits = new CreateWaits();
+    let project: ProjectRecord | undefined;
+    try {
+      // pinned once, before the durable request: a resumed creation always reads the same tree
+      const template = data.configRepoTemplate;
+      const configRepoTemplate = template
+        ? formatConfigRepoTemplateReference(
+            await waits.time("template", () =>
+              pinPublicGithubTemplate(parseConfigRepoTemplateReference(template)),
+            ),
+          )
+        : undefined;
+      const { input: sessionInput, caller } = this.#session;
+      const created = await waits.time("controlPlaneCreate", () =>
+        sessionInput.controlPlane.createProject(caller, {
+          project: data.project,
+          organizationId: data.orgId,
+          restoreProjectId: data.restoreProjectId,
+        }),
+      );
+      project = created;
+      // The project's own creation saga, on its root: enable the `project` processor, then request
+      // it — the saga (src/project/processor.ts) seeds the config repo from the template and lands
+      // the certificate. Idempotent: a request after the certificate is a harmless fact, one after a
+      // failure a new attempt. The dash watches the facet's live state; we return at once.
+      const context = this.#context(created.id);
+      await waits.time("projectEnable", () =>
+        context.invoke(["itx", "processors", ["enable", "project"]]),
+      );
+      await waits.time("projectRequest", () =>
+        context.invoke([
+          "itx",
+          [
+            "append",
+            {
+              type: "events.iterate.com/project/create-requested",
+              payload: { slug: created.slug, orgId: created.orgId, configRepoTemplate },
+            },
+          ],
+        ]),
+      );
+      // The organization's record, before the answer: the dash lists the project as soon as it has
+      // it. The member's account is not waited on.
+      await landProjectOnOrganization(sessionInput, created, caller, waits);
+      return context;
+    } finally {
+      waits.report({ projectId: project?.id, orgId: project?.orgId });
+    }
   }
 
   /** The project's root context ("/"), by its minted id (`prj_<hex>`) or its slug (a URL's

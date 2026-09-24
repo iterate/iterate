@@ -2,7 +2,8 @@
 // namespace, where the FACTS about them land — an authentication (session.ts), a personal access
 // token minted, a grant ended or used (grants.ts, oauth.ts), a consent approved (consent.ts) — each
 // appended by the verb that did it, stamped with the caller; and the memberships the session lands
-// here after the control-plane database writes them (session.ts `foldPlatformFacts`).
+// here after the control-plane database writes them (session.ts `foldPlatformFacts`; a minted
+// organization's first in the background, `landProjectOnOrganization`).
 // This file is the only place its own events and their payloads are spelled; processor.ts folds
 // them into the state a client reads through live state (the dash's tree: which organizations a
 // person belongs to is THIS fold, bounded per person); durable-object.ts hosts it as the
@@ -82,7 +83,7 @@ export const AccountContract = defineProcessorContract({
   slug: "account",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "5",
+  version: "6",
   description:
     "The user's account: authentications, personal access tokens, ended and used grants, consents, the organizations the person belongs to, and the catalog of the user's own secrets.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
@@ -112,6 +113,10 @@ export const AccountContract = defineProcessorContract({
     memberships: z
       .record(z.string(), z.object({ role: OrganizationRole, since: z.string() }))
       .default({}),
+    /** Every organization whose membership ended, by organization id: when. What keeps a minted
+     *  organization's first membership, which lands in the background (`member-added` with `mint`),
+     *  from reviving a membership that ended before it arrived. Re-joining clears it. */
+    endedMemberships: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
     secrets: SecretCatalog.default({}),
   }),

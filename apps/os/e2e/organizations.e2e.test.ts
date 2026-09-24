@@ -3,9 +3,10 @@
 // plane (src/control-plane/), which writes its catalog and lands the FACTS on the organization's
 // own record (`organization` facet at `/organizations/<id>`) and on each member's account
 // (`account` facet at `/users/<id>`, `memberships`) — the two folds the dash reads through live
-// state. A verb answers only once its facts are FOLDED (src/session.ts `appendOrganizationFacts`),
-// so these rows read the folds at once, never by polling; only another person's reach waits, on
-// the edge's memo. These rows read what a client can: the verbs' answers, the list through the
+// state. A verb answers only once its facts are FOLDED (src/session.ts `foldPlatformFacts`), so
+// these rows read the folds at once, never by polling; only another person's reach waits, on the
+// edge's memo, and a first project's membership on the person's account, which lands in the
+// background. These rows read what a client can: the verbs' answers, the list through the
 // person's reach, and the two folds. Every row mints its own person, organization and project; the
 // files run in parallel.
 import { expect, test } from "vitest";
@@ -342,7 +343,15 @@ test("a person's first projects.create without orgId makes their organization �
   expect(await api.projects.list()).toEqual([
     { id: projectId, slug, orgId: org.id, role: "owner" },
   ]);
-  expect((await memberships(api))[org.id]).toEqual({ role: "owner", since: expect.any(String) });
+  // the one fold this row polls: the minted organization's membership reaches the person's account
+  // in the background, so the creation never waits on the account (src/session.ts
+  // `landProjectOnOrganization`)
+  expect(
+    await until(
+      "the membership lands on the account",
+      async () => (await memberships(api))[org.id],
+    ),
+  ).toEqual({ role: "owner", since: expect.any(String) });
   // the next project without orgId goes to the same organization — no second one is minted
   using second = await api.projects.create({ project: `${slug}-2` });
   const { projectId: secondId } = await second.whoami();

@@ -17,6 +17,7 @@ import {
   refused,
   SRC_ECHO_APP,
   stub,
+  until,
 } from "./support.ts";
 
 const secret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
@@ -343,7 +344,7 @@ test("the operator's project in a named organization lands on the organization's
   ).toEqual([]);
 });
 
-test("a person's first project mints their organization: its record gets the creation, the owner and the project in that order, the owner's account the membership", async () => {
+test("a person's first project mints their organization: its record gets the creation, the owner and the project in that order; the owner's account the membership, in the background", async () => {
   const person = await operator("first-project@directory.test");
   const { actor } = await person.whoami();
   using _project = await person.projects.create({ project: "first-of-mine" });
@@ -357,7 +358,7 @@ test("a person's first project mints their organization: its record gets the cre
     { type: "events.iterate.com/organization/created", payload: { name: "first-project" } },
     {
       type: "events.iterate.com/organization/member-added",
-      payload: { orgId: org!.id, userId: actor, role: "owner" },
+      payload: { orgId: org!.id, userId: actor, role: "owner", mint: true },
     },
     {
       type: "events.iterate.com/organization/project-created",
@@ -369,9 +370,14 @@ test("a person's first project mints their organization: its record gets the cre
     members: { [actor]: { role: "owner" } },
     projects: { [projectId]: { slug: "first-of-mine" } },
   });
-  expect(await accountState(person)).toMatchObject({
-    memberships: { [org!.id]: { role: "owner" } },
-  });
+  // the account's membership lands in the background: the creation never waits on it
+  // (project-create-holds-no-account.test.ts)
+  expect(
+    await until(
+      "the membership lands on the owner's account",
+      async () => (await accountState(person)).memberships[org!.id],
+    ),
+  ).toMatchObject({ role: "owner" });
   // the next one lands in the same organization, and only the project lands
   using _second = await person.projects.create({ project: "second-of-mine" });
   expect(
