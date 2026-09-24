@@ -68,6 +68,7 @@ test.each<{ preview: string; deployedHoursAgo?: number; verdict: "stale" | "keep
     { preview: "latency", deployedHoursAgo: 144, verdict: "keep" },
     { preview: "real-model", verdict: "keep" },
     { preview: "real-model", deployedHoursAgo: 192, verdict: "stale" },
+    { preview: "slow-e2e", deployedHoursAgo: 30, verdict: "keep" },
     // rule 3 still takes a branch preview that begins `main-`, and a workflow's old per-run name
     { preview: "main-branch", deployedHoursAgo: 30, verdict: "stale" },
     { preview: "latency-94096387667921-1", deployedHoursAgo: 30, verdict: "stale" },
@@ -237,6 +238,12 @@ test.each<[string, string[], string, string[]]>([
   // a name that is no workflow's own preview supersedes nothing, a per-run one included
   ["a hand-named current", ["main-44db0e6", "latency-94096387667921-1"], "soak", []],
   ["a per-run current", ["main-44db0e6", "main-7ea6741"], "main-7ea6741", []],
+  [
+    "the slow e2e rows', which never had per-run ones",
+    ["main-44db0e6", "slow-e2e"],
+    "slow-e2e",
+    [],
+  ],
 ])("a CI workflow's superseded per-run previews: %s", (_label, names, current, superseded) => {
   expect(supersededMainPreviews(names, current)).toEqual(superseded);
 });

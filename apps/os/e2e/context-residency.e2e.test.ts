@@ -27,6 +27,11 @@
 // those numbers sampled the platform: a facet the platform stopped 0 s and 20 s after its call
 // (#2939, #2899), a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while
 // the control plane stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
+//
+// The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow` and
+// skip the PRs that change none of their code (docs/testing.md#slow-rows): they run on a PR that
+// changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, on every main push, and every
+// 2 hours against main (os-slow-e2e.yml).
 import { expect, test } from "vitest";
 import {
   adminCredentials,
@@ -386,26 +391,33 @@ test("an SDK facet that reached its context through withItx does not outlive the
 // in the opt-in perf file: here the platform stopped it 0 s and 20 s after its call (#2939, #2899),
 // with no invocation of the context in between, which no reset of ours can do.
 
-test("a careless loaded facet the last call left running is no longer running a quiet minute later, with no call from outside", async () => {
-  const ctx = freshCtx("residency_sweep");
-  const heartbeat = (method: string) =>
-    openItx(ctx).invoke([
-      "itx",
-      "facets",
-      ["get", "heartbeat", { source: HEARTBEAT_SOURCE, className: "HeartbeatDurableObject" }],
-      [method],
-    ]);
-  const lastCallAt = await heartbeat("beat");
-  disposeSessions();
-  await sleep(110_000); // no request: the context evicts in ~10 s; the sweep's alarm is its only wake
-  const record = await heartbeat("beats");
-  console.log(`[residency] the careless facet beat on ${record.lastBeat - lastCallAt} ms`, record);
-  // Stopped by the sweep a quiet minute after the call — or earlier, by the platform — and in either
-  // case long before this call: a facet still beating here would beat until the next call's birth.
-  expect(record.lastBeat - lastCallAt, JSON.stringify({ lastCallAt, ...record })).toBeLessThan(
-    90_000,
-  );
-}, 180_000);
+test(
+  "a careless loaded facet the last call left running is no longer running a quiet minute later, with no call from outside",
+  { tags: ["slow"], timeout: 180_000 },
+  async () => {
+    const ctx = freshCtx("residency_sweep");
+    const heartbeat = (method: string) =>
+      openItx(ctx).invoke([
+        "itx",
+        "facets",
+        ["get", "heartbeat", { source: HEARTBEAT_SOURCE, className: "HeartbeatDurableObject" }],
+        [method],
+      ]);
+    const lastCallAt = await heartbeat("beat");
+    disposeSessions();
+    await sleep(110_000); // no request: the context evicts in ~10 s; the sweep's alarm is its only wake
+    const record = await heartbeat("beats");
+    console.log(
+      `[residency] the careless facet beat on ${record.lastBeat - lastCallAt} ms`,
+      record,
+    );
+    // Stopped by the sweep a quiet minute after the call — or earlier, by the platform — and in either
+    // case long before this call: a facet still beating here would beat until the next call's birth.
+    expect(record.lastBeat - lastCallAt, JSON.stringify({ lastCallAt, ...record })).toBeLessThan(
+      90_000,
+    );
+  },
+);
 
 // ── ONLY OUTSIDE ACTIVITY KEEPS A CONTEXT IN USE ──
 // The sweep's quiet clock restarts on activity from outside the project's loaded code — a session,
@@ -417,26 +429,30 @@ test("a careless loaded facet the last call left running is no longer running a 
 // instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
 // plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
 
-test("a careless loaded facet calling its own context every 5 s is no longer running a quiet minute and a half after the last outside call", async () => {
-  const ctx = freshCtx("residency_chatty");
-  expect(
-    await openItx(ctx).invoke([
-      "itx",
-      "facets",
-      ["get", "chatty", { source: CHATTY_SOURCE, className: "ChattyDurableObject" }],
-      ["chatter"],
-    ]),
-  ).toBe("chattering");
-  disposeSessions();
-  await sleep(120_000); // no outside call: the facet's own appends are the context's only callers
-  const chatter = (await readAll(openItx(ctx)))
-    .filter((e: any) => e.type === "chatter")
-    .map((e: any) => Date.parse(e.createdAt));
-  console.log(`[residency] the chatty facet chattered ${chatter.at(-1)! - chatter[0]!} ms`);
-  // Reset in place by the sweep a quiet minute in — or stopped earlier by the platform — and in
-  // either case long before this read: a facet still chattering here would chatter forever.
-  expect(chatter.at(-1)! - chatter[0]!, JSON.stringify(chatter)).toBeLessThan(90_000);
-}, 180_000);
+test(
+  "a careless loaded facet calling its own context every 5 s is no longer running a quiet minute and a half after the last outside call",
+  { tags: ["slow"], timeout: 180_000 },
+  async () => {
+    const ctx = freshCtx("residency_chatty");
+    expect(
+      await openItx(ctx).invoke([
+        "itx",
+        "facets",
+        ["get", "chatty", { source: CHATTY_SOURCE, className: "ChattyDurableObject" }],
+        ["chatter"],
+      ]),
+    ).toBe("chattering");
+    disposeSessions();
+    await sleep(120_000); // no outside call: the facet's own appends are the context's only callers
+    const chatter = (await readAll(openItx(ctx)))
+      .filter((e: any) => e.type === "chatter")
+      .map((e: any) => Date.parse(e.createdAt));
+    console.log(`[residency] the chatty facet chattered ${chatter.at(-1)! - chatter[0]!} ms`);
+    // Reset in place by the sweep a quiet minute in — or stopped earlier by the platform — and in
+    // either case long before this read: a facet still chattering here would chatter forever.
+    expect(chatter.at(-1)! - chatter[0]!, JSON.stringify(chatter)).toBeLessThan(90_000);
+  },
+);
 
 // A CLAIM'S RELEASE is the last thing the facet's work did, so it arms the sweep again: the sweep
 // may already have run — and disarmed — while the claim held the facet (the voice call that hangs up
@@ -447,22 +463,28 @@ test("a careless loaded facet calling its own context every 5 s is no longer run
 // first sweep, and that the release arms the next, the Workers suite decides; how long it ran is
 // printed here and timed in the opt-in perf file.
 
-test("a careless facet whose claim ends is no longer running a quiet minute and a half after the release, though the sweep ran while the claim held it", async () => {
-  const ctx = freshCtx("residency_released");
-  const releaser = (method: string, ...args: unknown[]) =>
-    openItx(ctx).invoke([
-      "itx",
-      "facets",
-      ["get", "releaser", { source: RELEASER_SOURCE, className: "ReleaserDurableObject" }],
-      [method, ...args],
-    ]);
-  const startedAt = await releaser("start", 70_000);
-  disposeSessions();
-  await sleep(180_000); // nothing from here: the sweep runs at ~60 s, the release lands at 70 s
-  const beats = await releaser("beats");
-  console.log(`[residency] the releaser beat on ${beats.lastBeat - startedAt} ms`, beats);
-  expect(beats.lastBeat - startedAt, JSON.stringify({ startedAt, ...beats })).toBeLessThan(160_000);
-}, 270_000);
+test(
+  "a careless facet whose claim ends is no longer running a quiet minute and a half after the release, though the sweep ran while the claim held it",
+  { tags: ["slow"], timeout: 270_000 },
+  async () => {
+    const ctx = freshCtx("residency_released");
+    const releaser = (method: string, ...args: unknown[]) =>
+      openItx(ctx).invoke([
+        "itx",
+        "facets",
+        ["get", "releaser", { source: RELEASER_SOURCE, className: "ReleaserDurableObject" }],
+        [method, ...args],
+      ]);
+    const startedAt = await releaser("start", 70_000);
+    disposeSessions();
+    await sleep(180_000); // nothing from here: the sweep runs at ~60 s, the release lands at 70 s
+    const beats = await releaser("beats");
+    console.log(`[residency] the releaser beat on ${beats.lastBeat - startedAt} ms`, beats);
+    expect(beats.lastBeat - startedAt, JSON.stringify({ startedAt, ...beats })).toBeLessThan(
+      160_000,
+    );
+  },
+);
 
 // ── CLAIMED WORK OUTLIVES ITS CONTEXT ON PURPOSE ──
 // Work that must outlive the call that started it runs through `runInBackground`: the processor's

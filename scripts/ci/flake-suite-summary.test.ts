@@ -167,6 +167,46 @@ test.each(["specs", "preview-e2e"])(
   },
 );
 
+test.each([
+  { states: ["passed", "failed"], slowRows: "ran" },
+  { states: ["skipped", "skipped"], slowRows: "skipped" },
+  { states: [], slowRows: undefined },
+])(
+  "the preview e2e summary says whether its rows tagged slow ran: $states → $slowRows",
+  async ({ states, slowRows }) => {
+    using output = temporaryDirectory();
+    const artifact = browserResult();
+    const base = artifact.tests[0]!;
+    artifact.producer = "vitest-retry-telemetry-reporter";
+    artifact.context = { ...artifact.context, framework: "vitest", workspace: "os" };
+    artifact.tests = [
+      { ...base, leafName: "a plain row" },
+      ...states.map((state, index) => ({
+        ...base,
+        leafName: `slow ${index}`,
+        state,
+        tags: ["slow"],
+      })),
+    ];
+    await writeFlakeSuiteSummaries({
+      directory: output.path,
+      group: "preview",
+      artifacts: [artifact],
+      expectedWorkspaces: [],
+      cancelled: false,
+      headSha: "abc123",
+    });
+    const summary = JSON.parse(
+      readFileSync(join(output.path, "preview-e2e/suite-summary.json"), "utf8"),
+    );
+    expect(summary).toEqual(
+      slowRows
+        ? expect.objectContaining({ slowRows })
+        : expect.not.objectContaining({ slowRows: expect.anything() }),
+    );
+  },
+);
+
 function temporaryDirectory() {
   const path = mkdtempSync(join(tmpdir(), "flake-summary-"));
   return {

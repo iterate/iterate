@@ -73,6 +73,8 @@ export async function writeFlakeSuiteSummaries(input: {
     ];
     const tests = artifacts.flatMap((artifact) => artifact.tests);
     if (tests.length === 0) diagnostics.push("No tests reported");
+    // Whether the rows tagged `slow` ran (apps/os/scripts/slow-rows.ts); a tree with none says nothing.
+    const slowRows = tests.filter((test) => test.tags.includes("slow"));
     const startedAt =
       artifacts.map((artifact) => artifact.run.startedAt).sort()[0] || new Date().toISOString();
     const finishedAt =
@@ -115,6 +117,10 @@ export async function writeFlakeSuiteSummaries(input: {
       unknownFlakeCount: tests.filter((test) => unknownFlakeRecordFromTelemetry(test) !== null)
         .length,
       failedCount: tests.filter(testTelemetryFailed).length,
+      ...(suite === "preview-e2e" &&
+        slowRows.length > 0 && {
+          slowRows: slowRows.some((test) => test.state !== "skipped") ? "ran" : "skipped",
+        }),
       diagnostics: [...new Set(diagnostics)],
       runUrl:
         source.ci.depotJobUrl ||

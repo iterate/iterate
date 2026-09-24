@@ -9,7 +9,9 @@
 #                       into the PR body, under a status line: deploying, deployed or deploy failed
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       the status line rewritten to e2e passed or e2e failed, then their test
-#                       telemetry and flake records as artifacts
+#                       telemetry and flake records as artifacts. The e2e rows tagged `slow` run
+#                       when the PR changes their code (SLOW_ROW_PATHS) or carries the `slow-e2e`
+#                       label, and are skipped otherwise (docs/testing.md#slow-rows)
 #   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
 #                       artifact plus the "CI trace" and "Playwright report" commit statuses, which
 #                       open them in the ci-reports viewer
@@ -26,7 +28,8 @@
 # voice, kit). Pull-request runs use all so every client is usable against the platform preview;
 # auto remains available for a faster targeted manual redeploy once the clients are already
 # present. action=deploy or reset runs the deploy job and then e2e, as a push does; action=e2e runs
-# e2e alone.
+# e2e alone. slow-rows = run | skip overrides what the PR's paths and label say about the rows
+# tagged `slow`: `--input action=e2e --input slow-rows=run` runs them against the live preview.
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
 # preview-delete.yml takes the same group, so a PR's delete waits for its deploy and e2e to settle.
@@ -97,6 +100,11 @@ on:
         required: false
         type: string
         default: all
+      slow-rows:
+        description: "The e2e rows tagged slow: run | skip; empty = as the PR's paths and slow-e2e label say"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: preview-os-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
@@ -239,6 +247,7 @@ jobs:
           PREVIEW_NAME: ${{ github.head_ref }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          E2E_SLOW_ROWS: ${{ inputs.slow-rows }}
         run: doppler run -- pnpm preview e2e
       # Fails when either runner left no complete artifact, and writes the specs and preview-e2e
       # suite summaries next to their flake lines. A cancelled run keeps its partial evidence without

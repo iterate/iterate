@@ -15,6 +15,7 @@ import {
   E2E_ROW_TIMEOUT_CEILING_MS,
   E2E_SLEEP_CEILING_MS,
   E2E_SLOW_ROW_TIMEOUT_MS,
+  e2eRowTimeoutCeilingMs,
   SLOW_ROW_PATHS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import ts from "typescript";
@@ -26,22 +27,14 @@ import { expect, onTestFinished, test } from "vitest";
 // declares (options, trailing argument, or a createFlake / createFailing deadline), its tags, the
 // gate it runs behind, and every fixed wait inside it. A row gated on an opt-in variable
 // (`RUN_*`, `E2E_REAL_MODELS`) or on a local worker (`localOnly`) runs in no PR's e2e job, which
-// targets the PR's preview, so neither budget applies to it.
+// targets the PR's preview, so neither budget applies to it. A row tagged `slow` runs only on the PRs
+// that change its code (docs/testing.md#slow-rows): its waits are its own, and its timeout may reach
+// `E2E_SLOW_ROW_TIMEOUT_MS`.
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const osRoot = join(repoRoot, "apps/os");
 /** Where the e2e project's rows and their support modules live (apps/os/vitest.config.ts). */
 const E2E_DIRECTORIES = ["apps/os/e2e", "apps/agents/e2e"];
-
-/**
- * Rows that wait real platform time and are not tagged `slow` yet, by title. They still run on
- * every PR, with their own sleeps and timeouts, until the `slow` tag exists and they carry it.
- */
-const PENDING_SLOW = [
-  "a careless loaded facet the last call left running is no longer running a quiet minute later, with no call from outside",
-  "a careless loaded facet calling its own context every 5 s is no longer running a quiet minute and a half after the last outside call",
-  "a careless facet whose claim ends is no longer running a quiet minute and a half after the release, though the sweep ran while the claim held it",
-];
 
 const scan = scanE2eRows(E2E_DIRECTORIES.map((directory) => join(repoRoot, directory)));
 const defaultTimeoutMs = Number(e2eProjectOptions().testTimeout?.replaceAll("_", ""));
@@ -56,7 +49,9 @@ test("the e2e run keeps its parallelism: every file at once, every row in a file
     maxWorkers: "process.env.CI ? 16 : undefined",
     maxConcurrency: "32",
     retry: "process.env.CI ? E2E_CI_RETRIES : 0",
+    strictTags: "true",
   });
+  expect(e2eProjectOptions().tags).toMatch(/name: "slow",[^}]*timeout: E2E_SLOW_ROW_TIMEOUT_MS,/u);
   expect(defaultTimeoutMs).toBeLessThanOrEqual(E2E_ROW_TIMEOUT_CEILING_MS);
 });
 
@@ -87,16 +82,21 @@ test(`no e2e row that runs on every PR waits longer than ${E2E_SLEEP_CEILING_MS 
   ).toEqual([]);
 });
 
-test("every exempt and pending slow title names one row that runs on every PR", () => {
-  const titles = [...Object.keys(E2E_BUDGET_EXEMPTIONS), ...PENDING_SLOW];
-  const stale = titles.flatMap((title) => {
+test("every exempt title names one row that runs on every PR and is not tagged slow", () => {
+  const stale = Object.keys(E2E_BUDGET_EXEMPTIONS).flatMap((title) => {
     const matching = scan.rows.filter((row) => row.title === title && row.onPrs);
     if (matching.length !== 1) return [`${matching.length} rows titled: ${title}`];
-    return matching[0]!.slow && PENDING_SLOW.includes(title)
-      ? [`now tagged slow, so drop it from PENDING_SLOW: ${title}`]
-      : [];
+    return matching[0]!.slow ? [`tagged slow, so it needs no exemption: ${title}`] : [];
   });
   expect(stale).toEqual([]);
+});
+
+// A PR runs the rows tagged slow when it changes a file of SLOW_ROW_PATHS (apps/os/scripts/slow-rows.ts),
+// so a slow row's own file is one: a PR that edits the row runs it.
+test("every file with a row tagged slow is in SLOW_ROW_PATHS", () => {
+  const files = scan.rows.filter((row) => row.slow).map((row) => row.at.replace(/:\d+$/u, ""));
+  expect(files.length).toBeGreaterThan(0);
+  expect(files.filter((file) => !SLOW_ROW_PATHS.includes(file))).toEqual([]);
 });
 
 test("every SLOW_ROW_PATHS entry is a file in the repository", () => {
@@ -156,11 +156,9 @@ test("the guard reads each way a row declares its timeout, its gate and its wait
 function timeoutViolations(rows: E2eRow[], defaultTimeoutMs: number) {
   return rows.flatMap((row) => {
     if (!row.onPrs) return [];
-    const timeoutMs = row.timeoutMs ?? defaultTimeoutMs;
-    const ceilingMs =
-      row.slow || PENDING_SLOW.includes(row.title)
-        ? E2E_SLOW_ROW_TIMEOUT_MS
-        : (E2E_BUDGET_EXEMPTIONS[row.title]?.timeoutMs ?? E2E_ROW_TIMEOUT_CEILING_MS);
+    // a row tagged `slow` without its own timeout takes the tag's
+    const timeoutMs = row.timeoutMs ?? (row.slow ? E2E_SLOW_ROW_TIMEOUT_MS : defaultTimeoutMs);
+    const ceilingMs = e2eRowTimeoutCeilingMs(row);
     if (timeoutMs === "unreadable")
       return [`${row.at} declares a timeout this guard cannot read — ${row.title}`];
     return timeoutMs > ceilingMs
@@ -170,14 +168,9 @@ function timeoutViolations(rows: E2eRow[], defaultTimeoutMs: number) {
 }
 
 function waitViolations(scanned: ReturnType<typeof scanE2eRows>) {
-  const allowed = (row: E2eRow) =>
-    !row.onPrs ||
-    row.slow ||
-    PENDING_SLOW.includes(row.title) ||
-    !!E2E_BUDGET_EXEMPTIONS[row.title];
   return [
     ...scanned.rows.flatMap((row) =>
-      allowed(row)
+      !row.onPrs || row.slow || E2E_BUDGET_EXEMPTIONS[row.title]
         ? []
         : row.sleeps.map((sleep) => `${sleep.at} waits ${sleep.ms / 1000} s — ${row.title}`),
     ),

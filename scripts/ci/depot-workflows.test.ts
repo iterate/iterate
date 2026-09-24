@@ -643,23 +643,47 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
     main: ".depot/workflows/main-os-e2e.yml",
     latency: ".depot/workflows/os-latency.yml",
     "real-model": ".depot/workflows/os-real-model.yml",
+    "slow-e2e": ".depot/workflows/os-slow-e2e.yml",
   });
   expect(ownPreviews.map(({ preview }) => preview).toSorted()).toEqual(
     [...CI_WORKFLOW_PREVIEWS.keys()].toSorted(),
   );
-  for (const { file, workflow } of ownPreviews) {
+  for (const { file, preview, workflow } of ownPreviews) {
     expect(workflow.concurrency, file).toMatchObject({ "cancel-in-progress": false });
     const steps = Object.values(workflow.jobs).flatMap((job) => job.steps || []);
     const runs = steps.map((step) => step.run || "");
     // the gate holds past the window an in-place redeploy's old version still answers in
     expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview deploy --settle \d{3}$/));
-    expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview delete-superseded$/));
+    // the per-run previews it made before it kept one
+    if (CI_WORKFLOW_PREVIEWS.get(preview))
+      expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview delete-superseded$/));
     expect(runs, file).not.toContainEqual(expect.stringMatching(/pnpm preview (delete|reset)$/));
     expect(
       steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),
       file,
     ).toEqual([]);
   }
+});
+
+// docs/testing.md#slow-rows: most PRs skip the e2e rows tagged `slow`. Main OS e2e runs them on each
+// main push but pages only when main changes state, so they also run alone against main every 2
+// hours and page on their own change of state; a run off main pages nobody.
+test("the slow e2e rows run alone against main every 2 hours and page on their own change of state", () => {
+  const workflow = loadWorkflow(".depot/workflows/os-slow-e2e.yml");
+  const job = workflow.jobs["slow-rows"];
+  const runs = job?.steps?.map((step) => step.run || "") ?? [];
+  const suite = runs.findIndex((run) =>
+    run.startsWith("doppler run -- pnpm preview e2e --slow-rows only"),
+  );
+  const judge = runs.findIndex((run) =>
+    run.startsWith("pnpm tsx scripts/ci/os-slow-e2e-alert.ts --dir test-results/ci-telemetry/raw"),
+  );
+
+  expect(workflow.on?.schedule).toEqual([{ cron: expect.stringMatching(/^\d+ \*\/2 \* \* \*$/) }]);
+  expect(job?.env).toMatchObject({ TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw" });
+  expect(suite).toBeGreaterThan(-1);
+  expect(judge).toBeGreaterThan(suite);
+  expect(runs[judge]).toContain("${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}");
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
@@ -726,7 +750,7 @@ test("the preview's e2e suite and browser specs write the canonical telemetry ar
   expect(readPackageJson("apps/os").scripts?.e2e).toBe("pnpm build && pnpm e2e:run");
   expect(readPackageJson("apps/os").scripts?.["e2e:run"]).toMatch(/retry-telemetry-reporter\.ts/);
   expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
-    'runAsync("pnpm", ["e2e:run"]',
+    'runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)]',
   );
   expect(readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8")).toContain(
     "scripts/ci/playwright-telemetry-reporter.ts",
