@@ -21,6 +21,7 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   ingressRouting,
+  navigateProjectUrl,
   projectHostsAreLocal,
   projectUrl,
   publishConfigWorker,
@@ -46,6 +47,10 @@ export default class Site extends WorkerEntrypoint {
     }
     if (url.pathname === "/app.js")
       return new Response("document.title = 'site';", { headers: { "content-type": "text/javascript" } });
+    if (url.pathname === "/private")
+      return request.headers.get("x-itx-principal")
+        ? new Response("private\n")
+        : new Response("Sign in\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
     if (url.pathname === "/echo")
       return Response.json({
         url: request.url,
@@ -153,11 +158,45 @@ test("a project host verifies an OAuth bearer, strips credentials and rejects a 
   expect(seen.authorization).toBeNull();
   const forged = await fetchProjectUrl(echoUrl, { "x-itx-principal": '{"actor":"forged"}' });
   expect(JSON.parse(forged.text).principal).toBeNull();
+  // a grant for another project is no member here: it arrives anonymous, never refused
   const other = await registerProject(freshDnsSafeProjectSlug("ingress-foreign"), member);
   const foreign = await oauthSession(other, member);
+  const stranger = await fetchProjectUrl(echoUrl, { Authorization: `Bearer ${foreign.token}` });
+  expect(stranger, stranger.text).toMatchObject({ status: 200 });
+  expect(JSON.parse(stranger.text)).toMatchObject({ principal: null, authorization: null });
+});
+
+test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to sign in and back, a non-member's to sign in again with the project; a fetch keeps the 401, a non-member's is 403", async () => {
+  const slug = freshDnsSafeProjectSlug("ingress-sign-in");
+  const member = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, member);
+  await publishConfigWorker(openItx(projectId), siteTarget());
+  const privateUrl = projectUrl({ project: slug, routingSlug: "site", path: "/private" });
+  privateUrl.search = "?tab=1";
+  const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+  // the browser adapter's login on the host's own origin (the platform's under paths), `next` the
+  // path the browser addressed — under paths, the base path included
+  const login = (query: Record<string, string>) =>
+    `${privateUrl.origin}/.auth/login?${new URLSearchParams({
+      ...query,
+      next: privateUrl.pathname + privateUrl.search,
+    })}`;
+  const signIn = await navigateProjectUrl(privateUrl, navigate);
+  expect(signIn, signIn.text).toMatchObject({ status: 302 });
+  expect(signIn.headers).toMatchObject({ location: login({}), "cache-control": "no-store" });
+  const fetched = await fetchProjectUrl(privateUrl);
+  expect(fetched).toMatchObject({ status: 401, text: "Sign in\n" });
+  expect(fetched.headers).toMatchObject({ "www-authenticate": 'Bearer realm="iterate"' });
+  const { token } = await oauthSession(projectId, member);
   expect(
-    await fetchProjectUrl(echoUrl, { Authorization: `Bearer ${foreign.token}` }),
-  ).toMatchObject({ status: 403 });
+    await navigateProjectUrl(privateUrl, { ...navigate, Authorization: `Bearer ${token}` }),
+  ).toMatchObject({ status: 200, text: "private\n" });
+  const other = await registerProject(freshDnsSafeProjectSlug("ingress-sign-in-other"), member);
+  const foreign = { Authorization: `Bearer ${(await oauthSession(other, member)).token}` };
+  const signInAgain = await navigateProjectUrl(privateUrl, { ...navigate, ...foreign });
+  expect(signInAgain, signInAgain.text).toMatchObject({ status: 302 });
+  expect(signInAgain.headers).toMatchObject({ location: login({ project: slug }) });
+  expect(await fetchProjectUrl(privateUrl, foreign)).toMatchObject({ status: 403 });
 });
 
 /** A config worker that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */

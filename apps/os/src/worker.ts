@@ -28,6 +28,7 @@ import { appCookies, browserAuthorization, browserClient } from "./browser-clien
 import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
+import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-sign-in.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
  *  and forwards the headers it was handed re-enters with the count on them, each pass adds one, and
@@ -267,20 +268,25 @@ export default {
           status: 401,
           headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
         });
-      if (authorization) {
-        // A person's access has no stand-in: a membership read the control plane fails is a 503,
-        // and once this request's admission found the control plane down, it is one at once — a
-        // second bounded wait would only end the same way.
-        if (stale) return controlPlaneUnavailable(stale.error, url.hostname);
-        const reaches = await controlPlane
-          .reachesProject(authorization.reach, projectId)
-          .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
-        if (reaches instanceof Response) return reaches;
-        if (!reaches)
-          return new Response("This session cannot access this project", { status: 403 });
-      }
+      // A person's access has no stand-in: a membership read the control plane fails is a 503, and
+      // once this request's admission found the control plane down, it is one at once — a second
+      // bounded wait would only end the same way.
+      if (authorization && stale) return controlPlaneUnavailable(stale.error, url.hostname);
+      const reachesProject = authorization
+        ? await controlPlane
+            .reachesProject(authorization.reach, projectId)
+            .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname))
+        : false;
+      if (reachesProject instanceof Response) return reachesProject;
       logServedStale();
-      if (authorization?.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
+      // WHO ARRIVES (project-host-sign-in.ts): a member is stamped; a non-member, or a session
+      // cookie on a cross-site write or upgrade, goes on anonymous — the app decides what that sees
+      const caller = projectHostCallerOf({
+        authorization: authorization && { via: bearer ? "bearer" : "cookie", reachesProject },
+        request,
+      });
+      const stamped = caller === "member" ? authorization : null;
+      if (stamped?.grant) ctx.waitUntil(recordGrantUse(env, stamped.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
       const answer = await env.ITERATE_CONTEXT.getByName(
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
@@ -290,16 +296,27 @@ export default {
           hops,
           appCookies: appCookies(request.headers.get("cookie")) || null,
           identity: {
-            principal: authorization?.principal ?? null,
-            grant: authorization?.grant?.grantId,
+            principal: stamped?.principal ?? null,
+            grant: stamped?.grant?.grantId,
             platformBearer: Boolean(bearer && authorization),
           },
           basePath: projectHost.basePath,
           platformOrigin,
         }),
       );
+      // The app's `401 Bearer realm="iterate"` becomes the sign-in (project-host-sign-in.ts), at the
+      // browser adapter serving this host: the host's own under subdomains, the platform's under paths.
+      const signIn = projectHostSignInAnswerOf({
+        answer,
+        request,
+        caller,
+        projectSlug: project.slug,
+        loginUrl: `${routing?.type === "paths" ? platformOrigin : url.origin}/.auth/login`,
+      });
+      if (signIn && answer.body) ctx.waitUntil(answer.body.cancel());
+      const response = signIn || answer;
       // Under paths the app answered on the platform's own origin: its document runs sandboxed.
-      return routing?.type === "paths" ? sandboxed(answer) : answer;
+      return routing?.type === "paths" ? sandboxed(response) : response;
     }
     // Under a subdomains wildcard there are project hosts and nothing else: a hostname there that
     // fails the grammar (`site--prj_1`, `a.b.c`, `--x`) names no project host and must not fall

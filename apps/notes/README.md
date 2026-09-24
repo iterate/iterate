@@ -20,6 +20,19 @@ project reaches its `fetch`, and it serves only the `notes` routing slug (`x-ite
 so `notes--<project>.iterate.app` reaches Notes (see
 [specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)).
 
+The project host stamps `x-itx-principal` only for a project member, so the guard is one check.
+Signed out, `auth.require` answers `401` with the platform's challenge, and the edge turns a page
+load into the sign-in (or, for someone signed in without this project, into "sign in again"), then
+back to the page. A hand-written private route does the same:
+
+```js
+if (!request.headers.get("x-itx-principal"))
+  return new Response("Sign in\n", {
+    status: 401,
+    headers: { "WWW-Authenticate": 'Bearer realm="iterate"' },
+  });
+```
+
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to
 `https://os.iterate.com` by default; to use a local OS (`pnpm --dir ../os dev -- --port 8788`)
 put `ITERATE_ORIGIN=http://localhost:8788` in a gitignored `.dev.vars` here.

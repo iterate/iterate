@@ -265,11 +265,8 @@ test("a personal access token — one OAuth grant the account mints, for one res
   const member = { email: `${slug}@example.com` };
   const projectId = await registerProject(slug, member);
   const other = await registerProject(otherSlug, member); // the same org: the USER reaches it, the token will not
-  await publishConfigWorker(openItx(projectId), [
-    "itx",
-    "workers",
-    ["get", { source: SRC_ECHO_APP }],
-  ]);
+  for (const id of [projectId, other])
+    await publishConfigWorker(openItx(id), ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const { issuerHeaders, principal } = await oauthSession(projectId, member);
   // The account's own session (the login cookie) is what the sessions page speaks; a batch session
   // is one-shot, so each account call below opens its own.
@@ -308,14 +305,16 @@ test("a personal access token — one OAuth grant the account mints, for one res
   expect(mcpAtApi).toMatchObject({ status: 401 });
   await mcpAtApi.body?.cancel();
 
-  // a project host: the covered project's app sees the stamped principal and no bearer; a project
-  // the token does not cover is refused before any Durable Object is dialled
+  // a project host: the covered project's app sees the stamped principal and no bearer; on a project
+  // the token does not cover the request arrives anonymous
   const echoOf = (project: string) => projectUrl({ project, routingSlug: "echo", path: "/" });
   const bearer = { Authorization: `Bearer ${token}` };
   const covered = await fetchProjectUrl(echoOf(slug), bearer);
   expect(covered, covered.text).toMatchObject({ status: 200 });
   expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
-  expect(await fetchProjectUrl(echoOf(otherSlug), bearer)).toMatchObject({ status: 403 });
+  const uncovered = await fetchProjectUrl(echoOf(otherSlug), bearer);
+  expect(uncovered, uncovered.text).toMatchObject({ status: 200 });
+  expect(JSON.parse(uncovered.text)).toEqual({ principal: null, authorization: null });
   expect(
     await fetchProjectUrl(echoOf(slug), { Authorization: `Bearer ${mcpToken}` }),
   ).toMatchObject({ status: 401 });
