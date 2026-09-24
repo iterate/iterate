@@ -1,9 +1,5 @@
-// e2e/facet-abort-storage-reset.e2e.test.ts — A CLOUDFLARE FAULT, MEASURED, AND THE PLATFORM'S
-// WORKAROUND (context/facet-host.ts FACET_START_WATCHDOG_MS). Deployed-only and OPT-IN, because the
-// first row resets the Durable Object it runs on:
-//
-//   RUN_FACET_ABORT_REPRO=1 WORKER_BASE_URL=https://<preview> pnpm e2e facet-abort-storage-reset
-//   FACET_ABORT_REPRO_RUNS=16 …   (each row that many times at once; default 1)
+// e2e/facet-abort-storage-reset.e2e.test.ts — A CLOUDFLARE FAULT, PINNED AND MEASURED, AND THE
+// PLATFORM'S WORKAROUND (context/facet-host.ts FACET_START_WATCHDOG_MS).
 //
 // A facet whose SQLite database took a few dozen pages of writes (40 rows of 2 KB; 16 rows rewritten
 // for half a second) and then STOPS — `ctx.facets.abort(name)`, or an eviction with its context —
@@ -11,10 +7,24 @@
 // storage caused object to be reset; reference = …": the whole object resets, and every call in
 // flight on it fails. The facet started again before the context commits anything more avoids it.
 // So the platform never stops a facet without starting it again, and a birth starts every facet
-// the last incarnation ran before its first write. Each row below drives one way a facet stops,
-// with a storage-heavy loaded facet, and asserts the context is not reset. Measured on os-preview
-// previews, 2026-09-24, with FACET_ABORT_REPRO_RUNS=16 (runs whose context reset once the path
-// began; none reset during setup), a preview of main before and of this workaround after:
+// the last incarnation ran before its first write.
+//
+// THE PIN, the first row: the raw fault, with no platform code between the abort and the fault (a
+// loaded facet aborts its OWN child facet), as a createFailing. It resets the context it runs on,
+// so it is tagged `slow` (docs/testing.md#slow-rows): every main push runs it, and a PR runs it
+// when it changes the workaround's code. When it goes red because it
+// passed, Cloudflare fixed the fault: remove the workaround (FACET_START_WATCHDOG_MS names every
+// piece) and the rows below, and keep the pin's body as a plain row.
+//
+// THE MEASUREMENTS, the other rows: each drives one way a facet stops, with a storage-heavy loaded
+// facet, and asserts the context is not reset. Deployed-only and OPT-IN:
+//
+//   RUN_FACET_ABORT_REPRO=1 WORKER_BASE_URL=https://<preview> pnpm e2e facet-abort-storage-reset
+//   FACET_ABORT_REPRO_RUNS=16 …   (each row that many times at once; default 1)
+//
+// Measured on os-preview previews, 2026-09-24, with FACET_ABORT_REPRO_RUNS=16 (runs whose context
+// reset once the path began; none reset during setup), a preview of main before and of this
+// workaround after:
 //   • `itx.facets.abort` right after 40 rows of 2 KB:            63 of 64 → 0 of 64
 //   • the facet evicted with its context right after them; the
 //     next incarnation's calls (no platform abort at all):         64 of 64 → 0 of 64
@@ -23,12 +33,11 @@
 //   • the sweep's reset in place of a facet still writing:          1 of 63 → 0 of 63
 //   • a new loaded identity right after 40 rows:                    0 of 64 → 0 of 64
 //   • the raw fault, a facet aborting its own child facet:         64 of 64 → 64 of 64
-// The first row asserts the fault is STILL there, with no platform code between the abort and the
-// fault: a loaded facet aborts its OWN child facet. When it stops reproducing, Cloudflare fixed it —
-// remove the workaround (FACET_START_WATCHDOG_MS names every piece).
 import { expect, test } from "vitest";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { adminCredentials, freshCtx, openItx, readAll, session, sleep } from "./support/client.ts";
-import { projectHostsAreLocal } from "./support/project-host.ts";
+import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
 
 /** A loaded facet that writes: `write(n)` n rows of 2 KB, one commit each — a table of many pages;
  *  `writeOn()` keeps its `env.ITX` answer (so it runs on after its context evicts) and writes a
@@ -141,20 +150,18 @@ async function tally(
   return counts;
 }
 
-repro(
-  "Cloudflare resets a context whose loaded facet aborts its own child facet right after 40 rows of 2 KB",
+createFailing(deployedOnly, RESET, {
+  timeoutMs: 60_000,
+  retries: process.env.CI ? E2E_CI_RETRIES : 0,
+})(
+  "a loaded facet aborting its own child facet right after 40 rows of 2 KB should not reset its context",
+  { tags: ["slow"] },
   async () => {
-    const { reset } = await tally("raw child abort", async (ctx, run) => {
-      const itx = openItx(ctx);
-      expect(await call(itx, "childWrite", 40)).toBe(40);
-      run.onPath();
-      await call(itx, "childAbort");
-      await probeCommits(itx);
-      return "ok";
-    });
-    expect(reset).toBe(RUNS);
+    const itx = openItx(freshCtx("facet_abort_reset"));
+    expect(await call(itx, "childWrite", 40)).toBe(40);
+    await call(itx, "childAbort");
+    await probeCommits(itx);
   },
-  240_000,
 );
 
 repro(

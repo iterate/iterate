@@ -9,8 +9,8 @@
 #
 # Its memory (where the next read starts, the open incidents' threads) is its own
 # `prd-fault-alarm-state` artifact, read back by the next run with the Depot organization token from
-# Doppler _shared/preview. Only a run on main keeps it. A run that cannot read it reads the last
-# half hour and pages everything as new: a repeat, never a miss.
+# Doppler _shared/preview. Only a run on main keeps it (the script checks `--ref`). A run that
+# cannot read it reads the last half hour and pages everything as new: a repeat, never a miss.
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
 
 name: Prd fault alarm (Depot CI)
@@ -54,10 +54,11 @@ jobs:
         run: >-
           doppler run --project os --config prd --
           pnpm tsx scripts/ci/prd-fault-alarm.ts run
+          --ref "${{ github.ref }}"
           --state test-results/prd-fault-alarm/previous.json
-          ${{ github.ref == 'refs/heads/main' && '--state-out test-results/prd-fault-alarm/state.json' || '' }}
-      # The alarm writes the state after its posts, so a run that failed to post keeps none and the
-      # next one reads its window again.
+          --state-out test-results/prd-fault-alarm/state.json
+      # The alarm writes the state only on main, after its posts, so a run that failed to post keeps
+      # none and the next one reads its window again.
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4

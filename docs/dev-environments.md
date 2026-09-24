@@ -291,7 +291,7 @@ deployed runs:
 pnpm spec
 
 # deployed preview: the Doppler config supplies the preview's APP_CONFIG
-DEMO_BASE_URL=https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev \
+DEMO_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
@@ -360,9 +360,8 @@ There is no fleet to expand: every PR gets its own preview, and nothing is
 pooled or leased.
 
 Each preview is a complete, isolated stack on the dev/preview Cloudflare
-account: a Cloudflare Worker Preview of the parent `os-preview`, named
-`pr<n>-<branch slug>`, at
-`https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev`,
+account: a Cloudflare Worker Preview of the parent `os`, named `pr<n>`, at
+`https://pr<n>-os.iterate-dev-preview.workers.dev`,
 with Durable Objects, KV, R2 and an Artifacts namespace of its own. The
 five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
 own parents, wired to it and to each other: each signs in against it, and every link
@@ -401,8 +400,9 @@ invariants:
   each preview up again right before deleting it, and a GitHub lookup that
   failed never makes a preview stale.
 - **Nothing to contend for.** There is no pool, so there is no queue, no
-  resting slot and no reclaim. Concurrency is per PR and never cancelled: a
-  half-applied preview is worse than a slow one.
+  resting slot and no reclaim. Concurrency is per PR: a push cancels the PR's
+  run in progress, and the next run redeploys the whole preview, which repairs
+  a deploy cut short.
 - **Everything is attributable and visible.** The PR body names the preview,
   its deployment and a Cloudflare dashboard link; the workflow logs narrate
   each operation; `pnpm preview sweep --dry-run` prints what the sweep would
@@ -443,18 +443,20 @@ worker (next story).
 
 ### Story 1: CI previews my PR
 
-Opening or pushing a PR that touches preview-relevant paths (the Preview OS
-workflow's `paths:` list; see [Depot CI](depot-ci.md)) runs the **Preview OS**
-workflow. **deploy** builds and deploys the platform preview and all five
-clients, then writes the URL and the operations into the PR body's managed
-section. **e2e** then runs as its own job against that deployment, and only
-once the deploy succeeded: the Vitest e2e suite and the Playwright specs side
-by side (`pnpm preview e2e`). Every push reruns both; a run with no successful
-deploy runs no e2e rather than reporting green. The section opens with a status
-line (`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job
-and when: `deploying`, then `deployed` or `deploy failed` (with the error's
-tail, and the links below marked as the last good deploy's), then `e2e passed`
-or `e2e failed` (with the failed suites). Each job rewrites only that line.
+Every push to a PR runs the **Preview OS** workflow. When the PR touches
+preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
+[Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** builds and
+deploys the platform preview and all five clients, then writes the URL and the
+operations into the PR body's managed section. **E2E tests** (the Vitest e2e
+suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
+`pnpm preview specs`) then run side by side against that deployment, each its
+own job and required check. A deploy that did not succeed turns both red rather
+than letting them report green. The section opens with a status line
+(`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job and
+when: `deploying`, then `deployed` or `deploy failed` (with the error's tail,
+and the links below marked as the last good deploy's). Under it each suite's
+job writes its own line, `E2E tests` or `Browser specs`, `passed` or `failed`;
+a new deploy clears them. Each job rewrites only its own line.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes the
 preview, its Artifacts namespace, KV namespaces and R2 bucket (and any D1 an
@@ -482,7 +484,7 @@ For a focused flake hunt, reuse the exact deployment and run one test file or
 one test repeatedly without redeploying (from `apps/os`):
 
 ```bash
-PREVIEW=https://pr1234-<branch slug>-os-preview.iterate-dev-preview.workers.dev
+PREVIEW=https://pr1234-os.iterate-dev-preview.workers.dev
 
 # one Vitest file, one test (paths are relative to apps/os)
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
@@ -519,8 +521,10 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --input pull-request-number=1234 --input action=reset
 ```
 
-`action` is `deploy | reset | e2e`; `apps` (`all | auto |
-none`) chooses the clients deployed on top. Delete and the nightly sweep are
+`action` is `deploy | reset | test | e2e | specs` (`test`, `e2e` and `specs`
+run the suites against the preview as it is deployed:
+[Depot CI](depot-ci.md#run-the-suites-against-a-deployed-preview)); `apps`
+(`all | auto | none`) chooses the clients deployed on top. Delete and the nightly sweep are
 workflows of their own: dispatch `preview-delete.yml` with
 `--input pull-request-number=1234` to delete the preview, `preview-sweep.yml`
 to sweep now.
@@ -533,11 +537,11 @@ previews from deploying over you and PR cleanups from deleting your work:
 ```bash
 cd apps/os
 doppler run --project os --config preview -- pnpm preview deploy --name exp-<you>
-# → https://exp-<you>-os-preview.iterate-dev-preview.workers.dev
+# → https://exp-<you>-os.iterate-dev-preview.workers.dev
 
 # sign in there with any email and the preview password, drive it as operator,
 # or run the specs against it:
-DEMO_BASE_URL=https://exp-<you>-os-preview.iterate-dev-preview.workers.dev \
+DEMO_BASE_URL=https://exp-<you>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # delete it when done; otherwise the sweep takes it 24 h after its last deploy

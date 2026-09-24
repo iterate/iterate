@@ -18,7 +18,7 @@ import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
-import { verifyAdminSecret, type Caller } from "./caller.ts";
+import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
@@ -277,13 +277,11 @@ async function foldPlatformFacts(
  *  operator's projects with no `orgId`) has no members and no page: nothing lands there.
  *
  *  TWO AT ONCE both read the record without it, so each fact lands under an idempotency key: the
- *  stream keeps the first event under a key and answers every later one with it, whoever appends
- *  it. A minted organization's first members are keyed as that first landing (`:mint`), never as
- *  the membership itself, so a later removal and re-add is never swallowed.
- *  A KEY TAKEN FIRST by someone else — a member can append to the organization's context, and the
- *  fold trusts only the platform's facts — would leave the record without the fact (the same body:
- *  the stream answers with theirs) or refuse it (another body). So the record is read again, and
- *  what it still lacks lands unkeyed: the normal path costs that one read. */
+ *  stream keeps the first event under a key and answers every later one with it. A minted
+ *  organization's first members are keyed as that first landing (`:mint`), never as the membership
+ *  itself, so a later removal and re-add is never swallowed. Only the platform takes an
+ *  `organization/…` key (context/built-ins.ts `append`), so the event a key answers with is always
+ *  one the fold keeps. */
 async function landProjectOnOrganization(
   input: Pick<SessionInput, "contextNamespace" | "controlPlane">,
   project: ProjectRecord,
@@ -296,50 +294,41 @@ async function landProjectOnOrganization(
   // platform's own OrganizationDurableObject and `snapshot()` the engine's `{ offset, state }`.
   const organizationContext = ownerContext(input.contextNamespace, { organization: project.orgId });
   await organizationContext.invoke(["itx", "processors", ["enable", "organization"]], [], caller);
-  type Landing = [FactOwner, StreamEventInput | StreamEventInput[]];
-  const lacking = async (keyed: boolean): Promise<Landing[]> => {
-    const { state: record } = (await organizationContext.invoke(
-      ["itx", "facets", ["get", "organization"], ["snapshot"]],
-      [],
-      caller,
-    )) as { state: OrganizationState };
-    const key = (idempotencyKey: string) => (keyed ? { idempotencyKey } : {});
-    const onOrganization: StreamEventInput[] = [];
-    const landings: Landing[] = [];
-    if (!record.name) {
-      const organization = await input.controlPlane.getOrganization(project.orgId);
-      onOrganization.push({
-        ...orgCreatedFact(organization?.name ?? project.orgId),
-        ...key("organization/created"),
-      });
-      for (const { userId, role } of await input.controlPlane.listMembers(project.orgId)) {
-        if (record.members[userId]?.role === role) continue;
-        const membership = {
-          ...memberAddedFact(project.orgId, userId, role),
-          ...key(`organization/member-added:${project.orgId}:${userId}:mint`),
-        };
-        onOrganization.push(membership);
-        landings.push([{ account: userId }, membership]);
-      }
+  const { state: record } = (await organizationContext.invoke(
+    ["itx", "facets", ["get", "organization"], ["snapshot"]],
+    [],
+    caller,
+  )) as { state: OrganizationState };
+  const onOrganization: StreamEventInput[] = [];
+  const onAccounts: [FactOwner, StreamEventInput][] = [];
+  if (!record.name) {
+    const organization = await input.controlPlane.getOrganization(project.orgId);
+    onOrganization.push({
+      ...orgCreatedFact(organization?.name ?? project.orgId),
+      idempotencyKey: "organization/created",
+    });
+    for (const { userId, role } of await input.controlPlane.listMembers(project.orgId)) {
+      if (record.members[userId]?.role === role) continue;
+      const membership = {
+        ...memberAddedFact(project.orgId, userId, role),
+        idempotencyKey: `organization/member-added:${project.orgId}:${userId}:mint`,
+      };
+      onOrganization.push(membership);
+      onAccounts.push([{ account: userId }, membership]);
     }
-    // a project is created once and its slug never changes: every landing of it is the same event
-    if (!record.projects[project.id])
-      onOrganization.push({
-        ...projectCreatedFact(project.id, project.slug),
-        ...key(`organization/project-created:${project.id}`),
-      });
-    return onOrganization.length
-      ? [[{ organization: project.orgId }, onOrganization], ...landings]
-      : [];
-  };
-  const keyed = await lacking(true);
-  if (!keyed.length) return;
-  await foldPlatformFacts(input, keyed, caller).catch((error: unknown) => {
-    // another body under a key (idempotencyConflictMessage, greppable across the hop): taken first
-    if (!String(error).includes("already names a different event")) throw error;
-  });
-  const unkeyed = await lacking(false);
-  if (unkeyed.length) await foldPlatformFacts(input, unkeyed, caller);
+  }
+  // a project is created once and its slug never changes: every landing of it is the same event
+  if (!record.projects[project.id])
+    onOrganization.push({
+      ...projectCreatedFact(project.id, project.slug),
+      idempotencyKey: `organization/project-created:${project.id}`,
+    });
+  if (onOrganization.length)
+    await foldPlatformFacts(
+      input,
+      [[{ organization: project.orgId }, onOrganization], ...onAccounts],
+      caller,
+    );
 }
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
@@ -825,7 +814,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const token = mintInvitationToken();
     const invitation = await sessionInput.controlPlane.createInvitation(caller, organizationId, {
-      tokenHash: await hashInvitationToken(token),
+      tokenHash: await sha256Hex(token),
       role: data.role,
       emailHint: data.emailHint,
       expiresAt: Date.now() + data.expiresInDays * 86_400_000,
@@ -862,7 +851,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     if (reach !== "every" && !("userId" in reach))
       throw codedError("FORBIDDEN", "A user session is required to read an invitation.");
     return this.#session.input.controlPlane.getInvitation(
-      await hashInvitationToken(z.string().min(1).parse(token)),
+      await sha256Hex(z.string().min(1).parse(token)),
       reach === "every" ? null : reach.userId,
     );
   }
@@ -877,7 +866,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const { input: sessionInput, caller } = this.#session;
     const { invitation, userId, role, accepted } = await sessionInput.controlPlane.acceptInvitation(
       caller,
-      await hashInvitationToken(z.string().min(1).parse(token)),
+      await sha256Hex(z.string().min(1).parse(token)),
     );
     // landed again on a retry by the same person: the fold absorbs both, and `role` is the
     // membership as it stands, so a promotion since is never rewound
@@ -1098,18 +1087,6 @@ const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
 void _iterateApi;
 
 /** An invitation link's secret: 32 random bytes, base64url — the one path segment of
- *  `/invitations/<token>`, unguessable. The control plane keeps only `hashInvitationToken`'s
- *  digest, so a read of its database opens no organization. */
-function mintInvitationToken(): string {
-  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-}
-
-/** The SHA-256 of an invitation token, hex: the control plane's lookup key (`token_hash`). A
- *  plain digest suffices — the token is 256 random bits, nothing to stretch. */
-async function hashInvitationToken(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+ *  `/invitations/<token>`, unguessable. The control plane keeps only its `sha256Hex` (`token_hash`),
+ *  so a read of its database opens no organization; a plain digest suffices for 256 random bits. */
+const mintInvitationToken = () => base64url(crypto.getRandomValues(new Uint8Array(32)));

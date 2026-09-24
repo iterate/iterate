@@ -73,6 +73,16 @@ enum {
    * bounded; the replacement generation follows the normal reconnect policy.
    */
   ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS = 10000,
+  /*
+   * A refused key (iterate_kit_esp_idf_websocket_refused_credential) is asked
+   * again after a minute, doubling to ten. Setting the device up again is what
+   * mends it, and that rewrites the key and reboots, so a retry serves only a
+   * refusal that ends on its own: a key minted moments ago that has not
+   * reached every location yet, or an OS that refused in error and was
+   * fixed. Ten minutes bounds how long either outlives its cause.
+   */
+  ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS = 60000,
+  ITERATE_KIT_ITX_CREDENTIAL_RETRY_MAX_MS = 600000,
 };
 
 /**
@@ -155,6 +165,12 @@ struct iterate_kit_itx_transport_metrics {
   uint32_t websocket_start_attempts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
+  /** Upgrades the OS answered 401 or 403, refusing the device's key. */
+  uint32_t websocket_credential_refusals;
+  /** HTTP status of the latest upgrade answer, 0 when none arrived. */
+  int32_t last_websocket_upgrade_status;
+  /** From a refused upgrade until an upgrade succeeds. */
+  bool credential_refused;
   /** True only when this boot has no in-place control recovery path. */
   bool fatal_failure_latched;
   enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
@@ -345,6 +361,8 @@ struct iterate_kit_itx_transport {
   uint32_t websocket_start_attempts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
+  uint32_t websocket_credential_refusals;
+  uint32_t credential_refused;
   uint32_t mount_timeouts;
   uint32_t mount_timeout_generation;
   uint32_t protocol_failures;

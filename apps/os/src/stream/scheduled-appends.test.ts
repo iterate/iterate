@@ -49,15 +49,12 @@ test("scheduled work survives an alarm pass; pause holds it and resume rearms", 
   const { stream, coordinator, alarms, deletes } = setup();
   stream.append(scheduled());
   expect(alarms).toHaveLength(1);
-  await coordinator.pass(
-    async () => {
-      stream.append({
-        type: "events.iterate.com/stream/paused",
-        payload: { reason: "maintenance" },
-      });
-    },
-    { delivered: true },
-  );
+  await coordinator.pass(async () => {
+    stream.append({
+      type: "events.iterate.com/stream/paused",
+      payload: { reason: "maintenance" },
+    });
+  });
   expect(stream.nextScheduledAppendAt()).toBeNull();
   expect(alarms).toHaveLength(1); // the pass spent its alarm; a paused schedule wants none
   expect(deletes).toEqual([]);
@@ -136,18 +133,15 @@ test("a due-work pass writes nothing until it completes, then arms once for what
   stream.append(scheduled("later", "2032-01-01T00:00:00Z"));
   alarms.length = 0;
   const retryAt = Date.parse("2031-01-01T00:00:00Z");
-  await coordinator.pass(
-    async () => {
-      for (const row of [a, b])
-        stream.append({
-          type: "events.iterate.com/stream/append-schedule-completed",
-          payload: { key: row.payload!.key, scheduledAtOffset: row.offset },
-        });
-      otherDeadlines.push(retryAt); // a delivery's retry, reported mid-pass
-      expect(alarms).toEqual([]);
-    },
-    { delivered: true },
-  );
+  await coordinator.pass(async () => {
+    for (const row of [a, b])
+      stream.append({
+        type: "events.iterate.com/stream/append-schedule-completed",
+        payload: { key: row.payload!.key, scheduledAtOffset: row.offset },
+      });
+    otherDeadlines.push(retryAt); // a delivery's retry, reported mid-pass
+    expect(alarms).toEqual([]);
+  });
   expect(alarms).toEqual([retryAt]);
 });
 
@@ -397,7 +391,6 @@ function setup() {
       deleteAlarm: async () => void deletes.push(1),
       deadlines: () => [stream.nextScheduledAppendAt(), ...otherDeadlines],
       held: () => false,
-      runOverduePass: () => {},
       onOverdue: () => {},
     });
     stream = new Stream({

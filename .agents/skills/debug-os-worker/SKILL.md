@@ -21,10 +21,10 @@ Never type a worker or account name from memory, because workers get renamed. Pr
 pnpm exec tsx -e 'import("./envs.ts").then((m) => console.log(m.osEnvs.prd.workerName, m.PRD_ACCOUNT_ID, m.osEnvs.preview.workerName, m.PREVIEW_AND_DEV_ACCOUNT_ID))'
 ```
 
-| Target    | `$metadata.service` in Workers Logs                                               | Credentials (`doppler run --project os --config …`) |
-| --------- | --------------------------------------------------------------------------------- | --------------------------------------------------- |
-| prd       | `osEnvs.prd.workerName`                                                           | `prd`                                               |
-| a preview | `osEnvs.preview.workerName`, plus `$workers.preview.slug` = `pr<n>-<branch slug>` | `preview`                                           |
+| Target    | `$metadata.service` in Workers Logs                                 | Credentials (`doppler run --project os --config …`) |
+| --------- | ------------------------------------------------------------------- | --------------------------------------------------- |
+| prd       | `osEnvs.prd.workerName`                                             | `prd`                                               |
+| a preview | `osEnvs.preview.workerName`, plus `$workers.preview.slug` = `pr<n>` | `preview`                                           |
 
 A preview's name is `resolvePreviewName` in `apps/os/scripts/preview-config.ts`. The PR body
 shows it. Hosted apps log under their own workers (`<app>Envs.*.workerName`).
@@ -53,14 +53,11 @@ It prints three grouped counts for the window, and each one is the next thing to
 Its `readWindow` holds the exact filters. Copy them rather than rewriting them, so that your
 drill-down excludes the same expected noise.
 
-When the post-deploy check pages (`scripts/ci/prd-post-deploy-check.ts`, project hosts down right
-after a deploy), its last line is the down hosts' most frequent failure in Workers Logs and whether
-it began before the new version's upload; before the upload means the deploy only landed in it.
-`readFailureCause` holds that query. A project host whose control-plane read failed logs
-`control-plane.platform-failure-stale-project` (served from the data center's last-known copy) or
-`control-plane.platform-failure-unavailable` (answered 503). Whether the copies are written at all:
-each isolate logs `control-plane.last-known-copy` once, `readBack` true when its first copy read
-back; a cache that failed logs `control-plane.last-known-copy-unwritten` or `-unread`.
+A project host whose control-plane read failed or took over 3 s logs
+`control-plane.platform-failure-stale-project` (served from the control plane's last-known copy in
+`OAUTH_KV`) or, when a failed read had no copy, `control-plane.platform-failure-unavailable`
+(answered 503). A copy the control plane could not write or admission could not read logs
+`control-plane.last-known-copy-unwritten` or `-unread`.
 
 ## Drill down
 

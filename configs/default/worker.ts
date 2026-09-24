@@ -4,10 +4,10 @@ export default class extends ConfigWorker {
   // Every host of the project reaches this fetch. The platform names the host's routing slug in
   // `x-iterate-routing-slug` (`blog` for `blog--<project>.<base>`; absent on the apex): route on it.
   async fetch(request) {
-    // The project's ingress routes first (`itx.ingressRoutes`; `iterate tunnel` sets one per tunnel):
+    // The project's fetch routes first (`itx.fetchRoutes`; `iterate tunnel` sets one per tunnel):
     // a matched request goes to its route's target, a private route's anonymous visitor to sign in.
     const route = await this.withItx((itx) =>
-      itx.ingressRoutes.match({
+      itx.fetchRoutes.match({
         method: request.method,
         url: request.url,
         headers: request.headers,
@@ -22,7 +22,7 @@ export default class extends ConfigWorker {
       const headers = new Headers(request.headers);
       headers.set(
         "x-itx-expression",
-        `itx.ingressRoutes.fetch(${JSON.stringify(route.ingressRouteName)})`,
+        `itx.fetchRoutes.fetch(${JSON.stringify(route.fetchRouteName)})`,
       );
       return this.env.ITX.fetch(new Request(request, { headers }));
     }

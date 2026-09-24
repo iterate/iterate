@@ -82,8 +82,23 @@ const isWorkerModules = (source: unknown): source is WorkerModules =>
  *  failure there mints nothing) and loads the modules LITERALLY under the next GENERATION of the id
  *  (`<id>#<n>`). One extra identity per dead→recovered transition, never per attempt. Memory-only: a
  *  platform-isolate reset costs one replayed failure. Code that fails to START is outside this (same
- *  key ⇒ same code — the author's bug) and is replayed until upstream lands. */
-const loaderIdGenerations = new Map<string, { generation: number; dead: boolean }>();
+ *  key ⇒ same code — the author's bug) and is replayed until upstream lands.
+ *
+ *  ONE RECOVERY AT A TIME: every caller that finds the id dead while a recovery runs waits on that
+ *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`. On prd at
+ *  14:36 UTC on 2026-09-24 the iterate project's config worker's first load after a deploy failed,
+ *  and a scanner sent 4,502 requests in 31 s: each ran its own producer, ~915 concurrent
+ *  `repo.modules` calls on one repo facet instead of one, and its host answered 503 for ~70 s. The
+ *  recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
+ *  per incarnation: a new incarnation never waits on a promise its dead predecessor left behind. */
+const loaderIdGenerations = new Map<
+  string,
+  {
+    generation: number;
+    dead: boolean;
+    recovery?: { itxEntrypoint: Fetcher; modules: Promise<WorkerModules> };
+  }
+>();
 
 /** The content hash of a literal module map, memoized by the map's IDENTITY: the DO hands the SAME
  *  startup-memo object per facet per incarnation, so the per-character hash runs ONCE per source per
@@ -205,16 +220,34 @@ export async function prepareConfinedWorker(
     opts.owner,
     sourceVersion,
   ]);
-  let { generation, dead } = loaderIdGenerations.get(loaderIdBase) ?? {
-    generation: 0,
-    dead: false,
-  };
+  const state = loaderIdGenerations.get(loaderIdBase) ?? { generation: 0, dead: false };
+  let { generation } = state;
   let modulesForWorkerCode = getModules;
-  if (dead) {
-    const modules = await getModules(); // outside the loader: a throw here poisons nothing
+  if (state.dead) {
+    // Outside the loader, so a throw here poisons nothing; one run for every caller while it lasts.
+    let recovery =
+      state.recovery?.itxEntrypoint === opts.itxEntrypoint ? state.recovery.modules : undefined;
+    if (!recovery) {
+      const deadGeneration = generation;
+      const started = Promise.resolve().then(() => getModules());
+      recovery = started;
+      loaderIdGenerations.set(loaderIdBase, {
+        generation,
+        dead: true,
+        recovery: { itxEntrypoint: opts.itxEntrypoint, modules: started },
+      });
+      // Only the recovery the map still holds settles it: a newer one (another incarnation's) wins.
+      const settle = (next: { generation: number; dead: boolean }) => {
+        if (loaderIdGenerations.get(loaderIdBase)?.recovery?.modules === started)
+          loaderIdGenerations.set(loaderIdBase, next);
+      };
+      started.then(
+        () => settle({ generation: deadGeneration + 1, dead: false }),
+        () => settle({ generation: deadGeneration, dead: true }), // the next caller tries again
+      );
+    }
+    const modules = await recovery;
     generation += 1;
-    dead = false;
-    loaderIdGenerations.set(loaderIdBase, { generation, dead });
     modulesForWorkerCode = () => modules;
   }
   const loaderId = generation ? `${loaderIdBase}#${generation}` : loaderIdBase;
@@ -258,6 +291,12 @@ export async function prepareConfinedWorker(
     /** Mark this identity DEAD: the next `prepareConfinedWorker` for the same base loads under the
      *  next generation — a genuinely fresh isolate. The recovery for a cached isolate that can no
      *  longer be called (the clone-version failure the DO's facet call names). */
-    retire: () => loaderIdGenerations.set(loaderIdBase, { generation, dead: true }),
+    retire: () => {
+      // Only the identity still current: a burst of calls that all failed on generation n retires
+      // it once, and a late one never sends a recovered n+1 back to the dead n.
+      const current = loaderIdGenerations.get(loaderIdBase) ?? { generation: 0, dead: false };
+      if (current.generation === generation && !current.dead)
+        loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
+    },
   };
 }

@@ -197,7 +197,7 @@ export function randomRoutingSlug(): string {
 }
 
 /** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>`, set
- *  the ingress route `tunnel-<slug>` taking the `<slug>` host to it, print the URL, and on Ctrl-C
+ *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL, and on Ctrl-C
  *  delete the route, then end the lend. A disconnect ends the tunnel with an error. */
 export async function runTunnel(input: {
   connection: Awaited<ReturnType<typeof connectIterate>>;
@@ -217,60 +217,68 @@ export async function runTunnel(input: {
       `--name ${JSON.stringify(routingSlug)} is not a routing slug: lowercase letters, digits and single hyphens, starting with a letter, at most ${ROUTING_SLUG_MAX_LENGTH} characters`,
     );
   type TunnelEvent =
-    | { type: "live"; url: string; routingSlug: string; ingressRouteName: string; public: boolean }
+    | { type: "live"; url: string; routingSlug: string; fetchRouteName: string; public: boolean }
     | { type: "request"; line: string }
     | { type: "stopped" };
   const emit = (event: TunnelEvent) => {
     if (input.json) process.stdout.write(`${JSON.stringify(event)}\n`);
   };
-  const ingressRouteName = `tunnel-${routingSlug}`;
+  const fetchRouteName = `tunnel-${routingSlug}`;
   const target = `itx.tunnels.${routingSlug}`;
   using project = await input.connection.session.projects.get(input.project);
+  const url = await project.url({ routingSlug });
+  const basePath = new URL(url).pathname;
+  // Under paths routing the tunnel shares the platform's origin, so its pages are served sandboxed
+  // with an opaque origin: their subresource requests carry no cookie and a private route turns
+  // every one of them away. Refused before anything is lent or set.
+  if (basePath !== "/" && !input.public)
+    throw new Error(
+      `Private tunnels need their own origin; this deployment serves projects under paths (${url}). Use --public, or give the deployment a domain (subdomain routing).`,
+    );
   // A host another route already takes is someone else's: refuse, never take it over. A tunnel of
   // the same name (a restart, another terminal) is taken over.
-  const taken = (await project.ingressRoutes.list()).find(
+  const taken = (await project.fetchRoutes.list()).find(
     (route) =>
-      route.ingressRouteName !== ingressRouteName &&
-      route.requestMatcher.routingSlug === routingSlug,
+      route.fetchRouteName !== fetchRouteName && route.requestMatcher.routingSlug === routingSlug,
   );
   if (taken)
     throw new Error(
-      `The ${routingSlug} host already has the ingress route ${JSON.stringify(taken.ingressRouteName)}, which this tunnel would shadow or be shadowed by. Pick another --name.`,
+      `The ${routingSlug} host already has the fetch route ${JSON.stringify(taken.fetchRouteName)}, which this tunnel would shadow or be shadowed by. Pick another --name.`,
     );
-  const standing = (await project.ingressRoutes.list()).find(
-    (route) => route.ingressRouteName === ingressRouteName,
+  const standing = (await project.fetchRoutes.list()).find(
+    (route) => route.fetchRouteName === fetchRouteName,
   );
   if (standing && standing.target.join(".") !== target)
     throw new Error(
-      `The ingress route ${ingressRouteName} exists and was not made by a tunnel (its target is ${standing.target.join(".")}). Pick another --name.`,
+      `The fetch route ${fetchRouteName} exists and was not made by a tunnel (its target is ${standing.target.join(".")}). Pick another --name.`,
     );
   const log = (line: string) => {
     if (input.json) emit({ type: "request", line });
     else console.error(line);
   };
   using _provision = await project.provide(target, new LocalPortRpcTarget(input.port, log));
-  await project.ingressRoutes.set(ingressRouteName, {
+  await project.fetchRoutes.set(fetchRouteName, {
     requestMatcher: { routingSlug },
     target,
     authRequirement: input.public ? null : { visitors: "project-members" },
   });
   try {
-    const url = await project.url({ routingSlug });
-    emit({ type: "live", url, routingSlug, ingressRouteName, public: Boolean(input.public) });
-    console.error(
-      `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
-    );
-    const basePath = new URL(url).pathname;
-    if (basePath !== "/")
-      console.error(
-        `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
-      );
+    // Listening before the URL is out: until a listener is installed the OS's default action ends
+    // the process at once, so a Ctrl-C right after `live` would leave the route standing.
     let stop: () => void = () => {};
     const stopped = new Promise<"stopped">((resolve) => {
       stop = () => resolve("stopped");
     });
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
+    emit({ type: "live", url, routingSlug, fetchRouteName, public: Boolean(input.public) });
+    console.error(
+      `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
+    );
+    if (basePath !== "/")
+      console.error(
+        `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
+      );
     try {
       const outcome = await Promise.race([stopped, input.connection.closed]);
       if (outcome !== "stopped")
@@ -283,9 +291,9 @@ export async function runTunnel(input: {
     }
   } finally {
     // the route first: the host stops answering 502 the moment it is gone
-    await project.ingressRoutes.set(ingressRouteName, null).catch((error: unknown) => {
+    await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
       console.error(
-        `Could not delete the ingress route ${ingressRouteName}: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not delete the fetch route ${fetchRouteName}: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
     emit({ type: "stopped" });

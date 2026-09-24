@@ -3,8 +3,8 @@
 # (packages/ui/AGENTS.md). When the set of files upstream has moved changes, post it to Slack #ci:
 # which files, and the refresh command. A drift nobody refreshed is posted again a week later; back in
 # sync is posted once. #ci's history is the only state. The run stays green when it posts: upstream
-# moving is news, not a broken main. It fails only when it could not ask the registry (three tries) or
-# could not post.
+# moving is news, not a broken main. It fails only when it could not ask the registry (the next day's
+# run asks again) or could not post.
 #
 # A run off main prints what it would post and posts nothing:
 #

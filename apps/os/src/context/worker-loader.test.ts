@@ -9,7 +9,8 @@
 // half pins Cloudflare's `get(id, getCode)` contract as we use it: a PRODUCER expression runs inside
 // `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
 // WORKAROUND (worker-loader.ts `loaderIdGenerations`): a producer that threw marks its id dead, the
-// next attempt produces outside the loader and loads literally under the id's next generation.
+// next attempt produces outside the loader and loads literally under the id's next generation, and
+// the callers that find it dead while that attempt runs wait on it (two rows, under load).
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "./paths.ts";
 import {
@@ -205,6 +206,120 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   await load();
   expect(produced).toBe(4);
   expect(new Set(keys)).toMatchObject({ size: 2 }); // the dead id and its one recovered generation
+});
+
+test("WORKAROUND, under load: every caller that finds the id dead while its recovery runs waits on that one recovery — 50 concurrent callers run the producer once, not 50 times", async () => {
+  // prd, 2026-09-24 14:36 UTC: the config worker's first load after a deploy failed, a scanner sent
+  // 4,502 requests in 31 s, and each ran its own producer — ~915 `repo.modules` calls at once.
+  const { env, keys } = fakeLoaderEnv();
+  const host = {} as Fetcher; // a context's one `itxEntrypoint` stub per incarnation
+  let produced = 0;
+  let failFirst = true;
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => (release = resolve));
+  const invoke = async () => {
+    produced++;
+    if (failFirst) {
+      failFirst = false;
+      throw new Error("Network connection lost.");
+    }
+    await slow; // a cold repo fetch: 1–2 s on prd, 40–60 s under the herd
+    return { "cap.js": "export default class Site {}" };
+  };
+  const load = (itxEntrypoint = host) =>
+    loadConfined({
+      env,
+      deployId: "deploy-1",
+      platformOrigin: null,
+      itxEntrypoint,
+      kind: "worker",
+      owner: "prj_u.iterate/",
+      source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "c0ffee" }]],
+      cacheKey: "c0ffee",
+      invoke,
+      where: "workers.get",
+    });
+  const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "c0ffee"]);
+  await load(); // the first load's producer throws inside getCode: the id is dead
+  await Promise.resolve();
+  expect(produced).toBe(1);
+  const herd = Array.from({ length: 50 }, () => load());
+  await Promise.resolve();
+  expect(produced).toBe(2); // one recovery, however many callers
+  release();
+  const recovered = await Promise.all(herd);
+  expect(new Set(recovered.map((r) => r.loaderId))).toEqual(new Set([`${dead}#1`]));
+  expect(produced).toBe(2);
+  expect(new Set(keys)).toEqual(new Set([dead, `${dead}#1`]));
+});
+
+test("WORKAROUND, under load: a recovery that fails fails every caller waiting on it, and the next caller starts a fresh one; a recovery another incarnation started is never waited on", async () => {
+  const { env } = fakeLoaderEnv();
+  let produced = 0;
+  let outcome: "fail" | "hang" | "ok" = "fail";
+  const invoke = async () => {
+    produced++;
+    if (outcome === "fail") throw new Error("Durable Object is overloaded.");
+    if (outcome === "hang") return new Promise<never>(() => {}); // its incarnation died mid-call
+    return { "cap.js": "export default class Site {}" };
+  };
+  const load = (itxEntrypoint: Fetcher) =>
+    loadConfined({
+      env,
+      deployId: "deploy-1",
+      platformOrigin: null,
+      itxEntrypoint,
+      kind: "worker",
+      owner: "prj_v.iterate/",
+      source: "itx.build('site')",
+      cacheKey: "site@1",
+      invoke,
+      where: "workers.get",
+    });
+  const incarnation1 = {} as Fetcher;
+  await load(incarnation1); // dies inside getCode
+  await Promise.resolve();
+  // a failing recovery: every caller waiting on it fails with it, the producer ran once for them
+  const failing = await Promise.allSettled([load(incarnation1), load(incarnation1)]);
+  expect(failing.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+  expect(produced).toBe(2);
+  // an incarnation that dies with its recovery in flight leaves a promise that never settles …
+  outcome = "hang";
+  void load(incarnation1);
+  await Promise.resolve();
+  expect(produced).toBe(3);
+  // … and the next incarnation (a new stub) starts its own instead of waiting on it forever
+  outcome = "ok";
+  const incarnation2 = {} as Fetcher;
+  await expect(load(incarnation2)).resolves.toMatchObject({
+    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "site@1"])}#1`,
+  });
+  expect(produced).toBe(4);
+});
+
+test("retire(): a burst of calls that failed on one identity retires it once, and a late retire from a replaced identity never sends the next generation back to it", async () => {
+  const { env } = fakeLoaderEnv();
+  const opts = {
+    env,
+    deployId: "deploy-1",
+    platformOrigin: null,
+    itxEntrypoint: {} as Fetcher,
+    kind: "worker" as const,
+    owner: "prj_retire.iterate/",
+    source: { "cap.js": "export default {}" },
+    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
+    where: "workers.get",
+  };
+  // two calls on generation 0 meet the clone-version failure together: one retirement
+  const [a, b] = await Promise.all([prepareConfinedWorker(opts), prepareConfinedWorker(opts)]);
+  a.retire();
+  b.retire();
+  const recovered = await prepareConfinedWorker(opts);
+  expect(recovered).toMatchObject({ loaderId: `${a.loaderId}#1` });
+  // generation 1 fails too; a call still in flight on generation 0 fails late
+  recovered.retire();
+  a.retire();
+  expect(await prepareConfinedWorker(opts)).toMatchObject({ loaderId: `${a.loaderId}#2` });
 });
 
 test("prepare resolves the identity without asking the loader; load() is the one call that does, and a repeat is the loader's cache to answer", async () => {

@@ -8,9 +8,9 @@ import { expect, test } from "vitest";
 import { parseAppConfig } from "./app-config.ts";
 import { mintTestLink, redeemTestLink } from "./test-link.ts";
 
-const pr123 = "https://pr123-feature-os-preview.iterate-dev-preview.workers.dev";
-const pr124 = "https://pr124-other-os-preview.iterate-dev-preview.workers.dev";
-const dash123 = "https://pr123-feature-dash-preview.iterate-dev-preview.workers.dev";
+const pr123 = "https://pr123-os.iterate-dev-preview.workers.dev";
+const pr124 = "https://pr124-os.iterate-dev-preview.workers.dev";
+const dash123 = "https://pr123-dash.iterate-dev-preview.workers.dev";
 const now = Date.UTC(2026, 8, 24);
 const link = {
   key: "preview-secrets-key",
@@ -31,39 +31,33 @@ test("a link minted for this preview signs its person in and sends them to its n
   });
 });
 
-test("a tampered payload — another person under the same signature — is refused", async () => {
-  const [payload, signature] = (await mintTestLink(link)).split(".");
-  const claims = JSON.parse(atob(payload!.replaceAll("-", "+").replaceAll("_", "/")));
-  const forged = btoa(JSON.stringify({ ...claims, email: "jonas@preview.iterate.test" }))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-  expect(await redeemTestLink(`${forged}.${signature}`, at(pr123))).toMatchObject({
-    status: 403,
-    message: "This sign-in link's signature is not valid here.",
-  });
-});
-
 test.each([
-  ["no token", async () => null, /malformed/],
+  ["no token", async () => null],
+  [
+    "a tampered payload (another person under the same signature)",
+    async () => {
+      const [payload, signature] = (await mintTestLink(link)).split(".");
+      const claims = JSON.parse(atob(payload!.replaceAll("-", "+").replaceAll("_", "/")));
+      const forged = btoa(JSON.stringify({ ...claims, email: "jonas@preview.iterate.test" }))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replace(/=+$/, "");
+      return `${forged}.${signature}`;
+    },
+  ],
   [
     "a flipped byte",
     async () => {
       const token = await mintTestLink(link);
       return `${token.slice(0, -2)}${token.at(-2) === "A" ? "B" : "A"}${token.at(-1)}`;
     },
-    /signature/,
   ],
-  [
-    "another deployment's key",
-    () => mintTestLink({ ...link, key: "prd-secrets-key" }),
-    /signature/,
-  ],
-  ["not base64url", async () => "a+b.c/d", /signature/],
-])("%s is refused", async (_, token, message) => {
-  expect(await redeemTestLink(await token(), at(pr123))).toMatchObject({
+  ["another deployment's key", () => mintTestLink({ ...link, key: "prd-secrets-key" })],
+  ["not base64url", async () => "a+b.c/d"],
+])("%s is refused", async (_, token) => {
+  expect(await redeemTestLink(await token(), at(pr123))).toEqual({
     status: 403,
-    message: expect.stringMatching(message),
+    message: "This sign-in link's signature is not valid here.",
   });
 });
 

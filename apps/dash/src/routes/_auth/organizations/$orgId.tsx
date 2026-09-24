@@ -34,6 +34,7 @@ import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import { DefaultPendingComponent } from "@iterate-com/ui/components/route-defaults";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import {
@@ -527,7 +528,8 @@ function Invitations({
           </Button>
         </form>
         {created ? (
-          <div
+          // never in a session replay or autocapture: the link joins the organization, shown once
+          <NotRecorded
             role="status"
             data-testid="invitation-link"
             className="flex flex-col gap-2 rounded-md border bg-muted/40 p-3 text-sm"
@@ -558,7 +560,7 @@ function Invitations({
                 <X />
               </Button>
             </div>
-          </div>
+          </NotRecorded>
         ) : null}
         {pending.length ? (
           <div className="overflow-x-auto rounded-lg border">

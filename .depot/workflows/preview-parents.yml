@@ -1,0 +1,99 @@
+# THE PREVIEW PARENTS FROM MAIN (`pnpm preview deploy-parents`, apps/os/scripts/preview.ts): the
+# workers every per-PR Worker Preview branches from, on the dev/preview account — apps/os's `os` and
+# each app's (`dash`, `agents`, `notes`, `voice`, `kit`; envs.ts `<app>Envs.preview`). Deployed from
+# every push to main that a pull request's preview would run for (scripts/ci/preview-paths.ts
+# `previewPaths`; depot-workflows.test.ts keeps them equal), the parents are main on the dev/preview
+# account: https://os.iterate-dev-preview.workers.dev is os.iterate.com at main, and
+# https://dash.iterate-dev-preview.workers.dev is dash.iterate.com at main, signed in against it.
+#
+# Nothing waits for this. A preview does not depend on its parent's code: a brand-new preview binds a
+# Durable Object class its parent never had, and redeploying the parent changes no existing preview
+# (measured 2026-09-24 on a throwaway worker).
+#
+# Deploy the parents from any ref by hand:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow preview-parents.yml --ref main --input ref=<ref>
+# The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials and
+# the `os` parent's two secrets (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
+
+name: Preview parents
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    # scripts/ci/preview-paths.ts `previewPaths`, verbatim (it says why each is there), then this file.
+    paths:
+      - .depot/workflows/deploy-os.yml
+      - .depot/workflows/deploy-dash.yml
+      - .depot/workflows/deploy-agents.yml
+      - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-voice.yml
+      - .depot/workflows/deploy-kit.yml
+      - .depot/workflows/preview-os.yml
+      - apps/os/**
+      - configs/**
+      - apps/dash/**
+      - apps/agents/**
+      - apps/notes/**
+      - apps/voice/**
+      - apps/kit/**
+      - "!apps/kit/firmware/**"
+      - specs/**
+      - playwright.config.ts
+      - packages/cli/**
+      - packages/iterate/**
+      - packages/shared/**
+      - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - envs.ts
+      - scripts/lib/**
+      - scripts/depot-ci/**
+      - .depot/workflows/preview-parents.yml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  # One deploy of the parents at a time, never interrupted midway. The nightly reset of the `os`
+  # parent's data (preview-sweep.yml) takes the same group.
+  group: preview-parents
+  cancel-in-progress: false
+
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  deploy:
+    name: Deploy the preview parents
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Deploy the parents
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm preview deploy-parents

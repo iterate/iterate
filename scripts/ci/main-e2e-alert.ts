@@ -1,22 +1,40 @@
-// scripts/ci/main-e2e-alert.ts — THE PAGE FOR MAIN'S E2E RUN (.depot/workflows/main-os-e2e.yml): every
+// scripts/ci/main-e2e-alert.ts — THE PAGES FOR MAIN'S E2E RUN (.depot/workflows/main-os-e2e.yml): every
 // push to main redeploys main's preview in place and runs the e2e suite and the browser specs against
 // it. This posts to #error-pulse only when main CHANGES state: once when it goes red (naming
 // the failed jobs and the failing rows), once when it is green again. A red that stays red, and every
 // green, post nothing. The last page in the channel is the state: nothing long-lived is kept anywhere
-// else. The daily real-model suite pages the same way under its own name (scripts/ci/os-real-model-alert.ts).
+// else.
 //
-//   pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
-//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert [--dry-run]
-import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
+// A SUITE, a run's rows tagged `--tag` or titled `--title-prefix`, pages the same way under its own
+// name, so a regression in it pages even while main is already red: the rows tagged `slow` of main's
+// own e2e run ("slow e2e rows", which most PRs skip: docs/testing.md#slow-rows), judged in the e2e job
+// and paged by `alert`, and the `REAL:` rows of the daily real-model suite ("real-model e2e",
+// os-real-model.yml), which `judge` judges and pages in its own run. A suite whose run proves nothing
+// (no telemetry, a runner that did not finish, one of its rows not run) is a BROKEN PROBE: it fails
+// the job that judges it and pages nothing.
+//
+// Only a run on main pages (`--ref`, the run's git ref): the channel's last page is main's state, and
+// a run off main, or a dry run, prints the page it would post.
+//
+//   pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir <telemetry> [--suite <name> --tag <tag>]
+//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert --ref <ref> [--dry-run]
+//   pnpm tsx scripts/ci/main-e2e-alert.ts judge --dir <telemetry> --suite <name> (--tag <tag> | --title-prefix <prefix>) --ref <ref> [--dry-run]
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { parseArgs } from "node:util";
 import { z } from "zod";
-import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import type {
+  TestTelemetryArtifact,
+  TestTelemetryRecord,
+} from "@iterate-com/shared/test-support/ci-telemetry";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
+import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
 
-export type MainE2eState = "green" | "red";
+const MainE2eState = z.enum(["green", "red"]);
+export type MainE2eState = z.infer<typeof MainE2eState>;
 
 /** A suite's page's first words: how the next run finds the last one. `main e2e` unless named. */
 const MAIN_E2E_SUITE = "main e2e";
@@ -41,14 +59,57 @@ export function mainE2eFailedJobs(results: Record<string, string>): string[] {
   );
 }
 
+const rowName = (test: TestTelemetryRecord) =>
+  `${path.basename(test.moduleId)}: ${test.leafName || test.fullName}`;
+
 /** The failed rows of a run's telemetry artifacts (testTelemetryFailed). Pure. */
 export function mainE2eFailingRows(artifacts: TestTelemetryArtifact[]): string[] {
   const rows = artifacts.flatMap((artifact) =>
-    artifact.tests
-      .filter(testTelemetryFailed)
-      .map((test) => `${path.basename(test.moduleId)}: ${test.leafName || test.fullName}`),
+    artifact.tests.filter(testTelemetryFailed).map(rowName),
   );
   return [...new Set(rows)];
+}
+
+/** A suite's rows: those tagged `tag`, or those whose title begins with `titlePrefix`. */
+export type SuiteRows = { tag: string } | { titlePrefix: string };
+
+/** What a suite's run proved: its verdict and failing rows, or why it proved nothing. */
+type SuiteOutcome = { verdict: MainE2eState; failingRows: string[] } | { broken: string };
+
+/** A suite's verdict from a run's telemetry: green when every one of its rows passed (on its retry
+ *  too), red naming each failed row with its first failure, or broken when the run proves nothing: no
+ *  telemetry, a runner that did not finish, none of its rows, or one of them not run. Rows outside
+ *  the suite are not its verdict, whatever their state. Pure. */
+export function suiteVerdict(artifacts: TestTelemetryArtifact[], rows: SuiteRows): SuiteOutcome {
+  const which = "tag" in rows ? `tagged ${rows.tag}` : `titled ${rows.titlePrefix}`;
+  if (artifacts.length === 0) return { broken: "no test telemetry" };
+  const unfinished = artifacts.find(
+    (artifact) => !["passed", "failed"].includes(artifact.run.status),
+  );
+  if (unfinished) return { broken: `a test run ended ${unfinished.run.status}` };
+  const tests = artifacts
+    .flatMap((artifact) => artifact.tests)
+    .filter((test) =>
+      "tag" in rows
+        ? test.tags.includes(rows.tag)
+        : (test.leafName || test.fullName).startsWith(rows.titlePrefix),
+    );
+  if (tests.length === 0) return { broken: `no row ${which}` };
+  const unrun = tests.filter((test) => test.state !== "passed" && !testTelemetryFailed(test));
+  if (unrun.length > 0)
+    return {
+      broken: `${unrun.length} row(s) ${which} did not run (${unrun[0]!.state}): ${rowName(unrun[0]!)}`,
+    };
+  const failingRows = [
+    ...new Set(
+      tests
+        .filter(testTelemetryFailed)
+        .map((test) =>
+          test.firstFailure ? `${rowName(test)} (${test.firstFailure})` : rowName(test),
+        ),
+    ),
+  ];
+  return { verdict: failingRows.length > 0 ? "red" : "green", failingRows };
 }
 
 /** The state the channel last announced: the newest of this suite's pages, else green. Pure. */
@@ -64,7 +125,7 @@ export function previousMainE2eState(
   return last?.text?.startsWith(`${red(suite)} `) ? "red" : "green";
 }
 
-/** The page for a change of state, or null. Pure. */
+/** The page for a change of state, or null. A suite's page names no jobs. Pure. */
 export function mainE2ePage(input: {
   suite?: string;
   previous: MainE2eState;
@@ -84,7 +145,7 @@ export function mainE2ePage(input: {
   const shown = input.failingRows.slice(0, 8);
   return [
     `${red(suite)} at ${commit} ${onCallMention}`,
-    `• failed: ${input.failedJobs.join(", ") || "a job"}`,
+    input.failedJobs.length > 0 && `• failed: ${input.failedJobs.join(", ")}`,
     shown.length > 0 &&
       `• failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,
     link,
@@ -93,11 +154,16 @@ export function mainE2ePage(input: {
     .join("\n");
 }
 
-/** `${{ toJSON(needs) }}`: each job's result, and e2e's failing rows. */
+/** `${{ toJSON(needs) }}`: each job's result, the test jobs' failing rows, and the verdict of the
+ *  suite a job judged (`failing-rows --suite`). */
 const Needs = z.record(
   z.string(),
   z.object({ result: z.string(), outputs: z.record(z.string(), z.string()).optional() }),
 );
+const JudgedSuite = z.union([
+  z.object({ suite: z.string(), verdict: MainE2eState, failingRows: z.array(z.string()) }),
+  z.object({ suite: z.string(), broken: z.string() }),
+]);
 
 /** Page #error-pulse when `suite` changed state since its last page there: the channel's history
  *  (a week of it) is the only state kept. The page names this checkout's HEAD. */
@@ -136,14 +202,21 @@ export async function pageOnChangeOfState(input: {
   if (!input.dryRun) await slack.chat.postMessage({ channel, text: page });
 }
 
+/** A judged suite's page on its change of state; a broken probe throws and pages nothing. */
+async function pageSuite(judged: z.infer<typeof JudgedSuite>, dryRun: boolean): Promise<void> {
+  console.log(JSON.stringify(judged));
+  if ("broken" in judged) throw new Error(`${judged.suite}: broken probe: ${judged.broken}`);
+  await pageOnChangeOfState({ ...judged, failedJobs: [], dryRun });
+}
+
 async function alert(dryRun: boolean): Promise<void> {
   const needs = Needs.parse(JSON.parse(process.env.NEEDS || "{}"));
   const results = Object.fromEntries(
     Object.entries(needs).map(([job, need]) => [job, need.result]),
   );
-  const failingRows = z
-    .array(z.string())
-    .parse(JSON.parse(needs.e2e?.outputs?.["failing-rows"] || "[]"));
+  const failingRows = Object.values(needs).flatMap((need) =>
+    z.array(z.string()).parse(JSON.parse(need.outputs?.["failing-rows"] || "[]")),
+  );
   console.log(JSON.stringify({ results, failingRows }));
   await pageOnChangeOfState({
     suite: MAIN_E2E_SUITE,
@@ -152,36 +225,65 @@ async function alert(dryRun: boolean): Promise<void> {
     failingRows,
     dryRun,
   });
+  // A job the deploy's failure skipped judged nothing: main's own page names that.
+  for (const need of Object.values(needs))
+    if (need.outputs?.["suite-verdict"])
+      await pageSuite(JudgedSuite.parse(JSON.parse(need.outputs["suite-verdict"])), dryRun);
 }
 
-function failingRows(directory: string): void {
-  const artifacts = existsSync(directory)
-    ? readdirSync(directory)
-        .filter((file) => file.endsWith(".json"))
-        .flatMap((file) => {
-          const parsed = TestTelemetryArtifact.safeParse(
-            JSON.parse(readFileSync(path.join(directory, file), "utf8")),
-          );
-          return parsed.success ? [parsed.data] : [];
-        })
-    : [];
-  const rows = mainE2eFailingRows(artifacts);
-  console.log(`${rows.length} failing rows in ${artifacts.length} telemetry artifacts`);
+type Suite = { suite: string; rows: SuiteRows };
+
+async function failingRows(directory: string, suite: Suite | undefined) {
+  const artifacts = (await loadTestTelemetryArtifacts(directory)).map(({ artifact }) => artifact);
+  const failing = mainE2eFailingRows(artifacts);
+  console.log(`${failing.length} failing rows in ${artifacts.length} telemetry artifacts`);
+  const judged = suite && { suite: suite.suite, ...suiteVerdict(artifacts, suite.rows) };
+  if (judged) console.log(JSON.stringify(judged));
   if (process.env.GITHUB_OUTPUT)
-    appendFileSync(process.env.GITHUB_OUTPUT, `failing-rows=${JSON.stringify(rows)}\n`);
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `failing-rows=${JSON.stringify(failing)}\n${judged ? `suite-verdict=${JSON.stringify(judged)}\n` : ""}`,
+    );
+}
+
+async function judge(directory: string, suite: Suite, dryRun: boolean) {
+  const artifacts = (await loadTestTelemetryArtifacts(directory)).map(({ artifact }) => artifact);
+  await pageSuite({ suite: suite.suite, ...suiteVerdict(artifacts, suite.rows) }, dryRun);
 }
 
 if (isMainModule(import.meta.url)) {
-  const [command, ...rest] = process.argv.slice(2);
-  const directory = rest.includes("--dir") ? rest[rest.indexOf("--dir") + 1] : undefined;
+  const { positionals, values } = parseArgs({
+    allowPositionals: true,
+    options: {
+      dir: { type: "string" },
+      suite: { type: "string" },
+      tag: { type: "string" },
+      "title-prefix": { type: "string" },
+      ref: { type: "string" },
+      "dry-run": { type: "boolean", default: false },
+    },
+  });
+  const dryRun = values["dry-run"] || values.ref !== "refs/heads/main";
+  const rows: SuiteRows | undefined = values.tag
+    ? { tag: values.tag }
+    : values["title-prefix"]
+      ? { titlePrefix: values["title-prefix"] }
+      : undefined;
+  const suite = values.suite && rows ? { suite: values.suite, rows } : undefined;
+  // a suite is named exactly when its rows are
+  const suiteWhole = Boolean(values.suite) === Boolean(rows);
   const done =
-    command === "failing-rows" && directory
-      ? Promise.resolve(failingRows(directory))
-      : command === "alert"
-        ? alert(rest.includes("--dry-run"))
-        : Promise.reject(
-            new Error("usage: main-e2e-alert.ts failing-rows --dir <dir> | alert [--dry-run]"),
-          );
+    positionals[0] === "failing-rows" && values.dir && suiteWhole
+      ? failingRows(values.dir, suite)
+      : positionals[0] === "alert" && values.ref
+        ? alert(dryRun)
+        : positionals[0] === "judge" && values.dir && suite && values.ref
+          ? judge(values.dir, suite, dryRun)
+          : Promise.reject(
+              new Error(
+                "usage: main-e2e-alert.ts failing-rows --dir <dir> [--suite <name> --tag <tag>] | alert --ref <ref> [--dry-run] | judge --dir <dir> --suite <name> (--tag <tag> | --title-prefix <prefix>) --ref <ref> [--dry-run]",
+              ),
+            );
   done.catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

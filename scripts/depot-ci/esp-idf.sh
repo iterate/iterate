@@ -2,8 +2,9 @@
 # ESP-IDF for Kit Firmware's build legs (.depot/workflows/kit-firmware.yml). This file is the pin.
 #
 #   esp-idf.sh install  Clone the pin into $IDF_PATH, install its tools and Python environment into
-#                       $IDF_TOOLS_PATH, then write a receipt of this file. The CI image bake
-#                       (bake-preview-ci-image.sh) runs it, so the image carries ESP-IDF.
+#                       $IDF_TOOLS_PATH, then write a receipt of this file. The legs' own image
+#                       bake (.depot/workflows/build-esp-idf-image.yml) runs it, so that image
+#                       carries ESP-IDF.
 #   esp-idf.sh ensure   Use the image's install when its receipt matches this file, downloading
 #                       nothing. Otherwise warn and install from GitHub, dl.espressif.com and PyPI,
 #                       which happens only while this file differs from the one the image was baked

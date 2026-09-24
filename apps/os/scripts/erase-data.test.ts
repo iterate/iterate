@@ -33,11 +33,11 @@ test("remaining Durable Objects prevent resource deletion", async () => {
   );
   expect(fixture).toMatchObject({ operations: ["retire"] });
 });
-test("a preview parent with branch namespaces cannot be erased by class name", async () => {
+test("two of the worker's own namespaces of one class cannot be erased by class name", async () => {
   using fixture = eraseFixture();
   fixture.branchNamespaces = true;
   await expect(eraseDataWith({ env: "preview" }, fixture.services)).rejects.toThrow(
-    "branch previews",
+    "share a class name",
   );
   expect(fixture).toMatchObject({ operations: [] });
 });

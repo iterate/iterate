@@ -78,11 +78,15 @@ export async function getWorkerDoNamespaces(
 ): Promise<{ className: string; namespaceId: string }[]> {
   const namespaces: { className: string; namespaceId: string }[] = [];
   for (let page = 1; ; page++) {
-    const batch = await ctx.cf<{ id: string; script: string | null; class: string }[]>(
-      `/workers/durable_objects/namespaces?per_page=100&page=${page}`,
-    );
+    const batch = await ctx.cf<
+      { id: string; script: string | null; class: string; preview?: { name: string } }[]
+    >(`/workers/durable_objects/namespaces?per_page=100&page=${page}`);
     for (const namespace of batch) {
-      if (namespace.script === workerName) {
+      // A Worker Preview's namespaces are listed under its parent's script, marked `preview`
+      // (`os_pr7_ProjectDurableObject`). They are the preview's: a tombstone on the parent leaves
+      // them and their data alone, and deleting the preview deletes them (measured 2026-09-24 on a
+      // throwaway worker).
+      if (namespace.script === workerName && !namespace.preview) {
         namespaces.push({ className: namespace.class, namespaceId: namespace.id });
       }
     }
@@ -484,6 +488,11 @@ export async function resetWorkerDurableObjects(input: {
             // Existing zone routes stay untouched (wrangler only manages routes
             // listed in config); don't let a route-less config enable workers.dev.
             workers_dev: false,
+            // A parent's Worker Previews keep serving while it is parked: an unset
+            // `preview_urls` follows `workers_dev` and takes every preview offline
+            // (404, 1042) until the next deploy (measured 2026-09-24 on a throwaway
+            // worker). Our workers run with preview URLs on anyway.
+            preview_urls: true,
             exports: {
               ...Object.fromEntries(
                 deletedClasses.map((className) => [

@@ -26,6 +26,10 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm spec`                              | Root browser specs: one project per app host, plus the issuer at phone width     |
 | `pnpm --dir apps/kit firmware:test:host` | Kit firmware host tests (needs cmake; not part of `pnpm test`)                   |
 
+`pnpm lint` and `pnpm lint:fix` run oxlint on one thread: at one per core every JS worker starts its
+own type-aware service, and a 16-core machine hits spawn ENOMEM. At 4, 8 and 12 threads it was no
+faster.
+
 > [!NOTE]
 > A quarantined suite is called out here, in a CAUTION box naming the skip,
 > its evidence and its restoration criteria, so nobody mistakes a hidden hole
@@ -111,14 +115,14 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | Playwright specs | `pnpm spec`                                                        | `specs/` (root `playwright.config.ts`, one project per app host: `os`, `os-phone`, `notes`, `voice`, `suite`) | Preview OS **e2e** job, every project, side by side with OS e2e; `notes` and `voice` against the preview's Notes and Voice apps              | Browser-level product flows: issuer sign-in and consent (plus a phone-width project), the issuer's server functions, the project mini-app, and the Notes and Voice flows.                                                                        |
 | Notes specs      | `pnpm spec --project notes` (`NOTES_BASE_URL`, `DEMO_BASE_URL`)    | `specs/notes/`                                                                                                | Preview OS **e2e** job, in the same `pnpm spec` run, against the preview's Notes app; a missing `NOTES_BASE_URL` fails in CI, skips locally  | Save a note and read it after reload, signed in by the fixture (`createFixture(…, { app })`); Notes sessions on its own origin, ended in the Dash, against the preview pair.                                                                     |
 | Main e2e         | `pnpm preview deploy`, then `e2e`, `--name main` (`apps/os`)       | The OS e2e and Playwright suites above                                                                        | **Main OS e2e** (`main-os-e2e.yml`), every main push to the preview paths, beside Deploy OS; pages #error-pulse when main turns red or green | The same suites, every row, against main's own preview, `main`, the pushed commit redeployed to it in place ([why](depot-ci.md#main-os-e2e-keeps-one-preview)).                                                                                  |
-| Slow rows        | `pnpm preview e2e --slow-rows only` (`apps/os`)                    | Rows tagged `slow`, `.depot/workflows/os-slow-e2e.yml`, `scripts/ci/os-slow-e2e-alert.ts`                     | **OS slow e2e**, every 2 hours, alone on its own preview; pages #error-pulse. Also Main OS e2e and the PRs that change their code            | The residency rows that wait out real quiet minutes: a careless facet stops a quiet minute after its last call, and after its claim ends ([slow rows](#slow-rows)).                                                                              |
+| Slow rows        | `pnpm preview e2e --slow-rows only` (`apps/os`)                    | Rows tagged `slow`, `scripts/ci/main-e2e-alert.ts`                                                            | **Main OS e2e**, every main push, with every other row; pages #error-pulse on their own change of state. Also the PRs that change their code | The residency rows that wait out real quiet minutes: a careless facet stops a quiet minute after its last call, and after its claim ends ([slow rows](#slow-rows)).                                                                              |
 | Kit host         | `pnpm --dir apps/kit firmware:test:host` (needs cmake)             | `apps/kit/firmware/tests/`                                                                                    | Depot **Test** workflow, every PR (its own step after `pnpm test`)                                                                           | Firmware logic compiled for the host and run under CTest.                                                                                                                                                                                        |
 | Kit ESP builds   | `node apps/kit/scripts/firmware-release.ts build …`                | `apps/kit/firmware/targets/`, `apps/kit/scripts/firmware-release.ts`                                          | **Kit Firmware** workflow, firmware PRs and main (not required)                                                                              | Builds each changed board with ESP-IDF (active), checks its flash layout, its inputs and an unchanged tree; main publishes the releases.                                                                                                         |
 | Dummy petshop    | `pnpm test` (its unit suite)                                       | `apps/dummy-petshop/src/`                                                                                     | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                                                       | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                                                      |
 | Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)         | `apps/os/scripts/e2e-soak.ts`                                                                                 | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                           | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time; never a real model.                                                                                   |
 | Perf budgets     | `pnpm --dir apps/os perf` (`WORKER_BASE_URL`)                      | `apps/os/perf/*.perf.test.ts`, every metric and budget in `apps/os/perf/latency.ts`                           | The latency guard below; every soak run, after the e2e suite                                                                                 | Latency and throughput budgets over the same client and worker, measured alone: files one at a time, rows in order, each budget on the median of its rounds (p95 where a run has dozens).                                                        |
-| Latency guard    | Dispatch `os-latency.yml` (`--input budget-scale=0.01` test-pages) | `.depot/workflows/os-latency.yml`, `scripts/ci/os-latency-guard.ts`                                           | **OS latency**, every 3 hours and every main push to the Worker's paths, beside everything (nothing waits on it); pages #error-pulse         | The perf suite against main's own preview `latency`, in place: every metric to PostHog (`os latency measured`), paged red once when it crossed its budget or a sharp regression on its rolling baseline two runs in a row, green once when back. |
-| Real model       | Dispatch `os-real-model.yml`                                       | `REAL:` rows (`realModelOnly`), `.depot/workflows/os-real-model.yml`, `scripts/ci/os-real-model-alert.ts`     | **OS real model**, daily and every main push to the agents runtime, on its own preview; pages #error-pulse                                   | The turns every other run gives a fake provider, against real models: OpenAI's astra (the default) and Workers AI accept the request and answer. [Real-model rows](#real-model-rows).                                                            |
+| Latency guard    | Dispatch `os-latency.yml` (`--input budget-scale=0.01` test-pages) | `.depot/workflows/os-latency.yml`, `scripts/ci/os-latency-guard.ts`                                           | **OS latency**, every 3 hours, beside everything (nothing waits on it); pages #error-pulse                                                   | The perf suite against main's own preview `latency`, in place: every metric to PostHog (`os latency measured`), paged red once when it crossed its budget or a sharp regression on its rolling baseline two runs in a row, green once when back. |
+| Real model       | Dispatch `os-real-model.yml`                                       | `REAL:` rows (`realModelOnly`), `.depot/workflows/os-real-model.yml`, `scripts/ci/main-e2e-alert.ts`          | **OS real model**, daily and every main push to the agents runtime, on its own preview; pages #error-pulse                                   | The turns every other run gives a fake provider, against real models: OpenAI's astra (the default) and Workers AI accept the request and answer. [Real-model rows](#real-model-rows).                                                            |
 | Crash hunt       | `RUN_ISOLATE_CRASH_HUNT=1 pnpm e2e isolate-ceilings`               | `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts`                                                           | Nightly against prd (`os-crash-hunt.yml`); opt-in rows, so the preview run stays deterministic                                               | Drives one context's Durable Object up to and past its isolate ceiling on purpose.                                                                                                                                                               |
 | Bench            | `pnpm --dir apps/os bench` (`BENCH_OUT=<file.json>`)               | `apps/os/bench/`                                                                                              | **Manual**                                                                                                                                   | Latency scenarios over the same client and worker, files one at a time.                                                                                                                                                                          |
 
@@ -129,10 +133,9 @@ step of the same job (`pnpm --dir apps/kit firmware:test:host`), so `pnpm test`
 runs on machines without cmake; that step runs even when `pnpm test` fails.
 OS's `test`, `e2e` and `bench` scripts run the Vite build first, so every suite
 tests the built worker. Live tests belong to preview CI instead: the Preview OS workflow's
-`e2e` job runs the OS e2e project and `pnpm spec` side by side against the
-PR's preview (`apps/os/scripts/preview.ts` `runE2e`; it runs `pnpm e2e:run`,
-which skips the build, so the preview's built `dist/` stays intact while
-Playwright runs), and only once that preview's deploy succeeded.
+E2E tests job runs the OS e2e project and its Browser specs job `pnpm spec`, side by side against
+the PR's preview (`apps/os/scripts/preview.ts` `runSuite`; E2E tests runs `pnpm e2e:run`, which
+skips the build), and both fail rather than skip when that preview's deploy did not succeed.
 The OS e2e rows that talk to the petshop dial the deployed fixture; they
 cannot silently skip back out of preview CI.
 
@@ -309,7 +312,7 @@ pnpm e2e
 
 # a PR preview (its URL is in the PR body)
 doppler run --project os --config preview -- \
-  env WORKER_BASE_URL=https://pr<n>-<branch-slug>-os-preview.iterate-dev-preview.workers.dev pnpm e2e
+  env WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev pnpm e2e
 
 # production
 doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm e2e
@@ -318,9 +321,9 @@ doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.
 Specs take the same shape with `DEMO_BASE_URL`; without it Playwright starts
 `pnpm dev` on `DEMO_PORT` (8788) and reuses an existing server locally. To run
 both suites against a preview exactly as CI does, run
-`pnpm preview e2e --pr <number> --name <branch>` from `apps/os` under the same
-Doppler config; `--slow-rows run|skip|only` picks the rows tagged `slow`
-([slow rows](#slow-rows)). A deployed target is always described by its own `APP_CONFIG`
+`pnpm preview e2e --pr <number> --name <branch>` and `pnpm preview specs` with
+the same flags from `apps/os` under the same Doppler config; `--slow-rows run|skip|only` picks the
+e2e rows tagged `slow` ([slow rows](#slow-rows)). A deployed target is always described by its own `APP_CONFIG`
 and its `envs.ts` entry; there are no per-run credential overrides.
 
 ## Reaching the test runner from a deployed Worker
@@ -354,7 +357,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `DASH_BASE_URL`                               | The preview script, or you                                  | The Dash deployment the Notes session specs sign in to, to end a Notes session                                                                    | Unset → skipped locally, a failure in CI    |
 | `RUN_ISOLATE_CRASH_HUNT`                      | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
 | `E2E_REAL_MODELS`                             | The real-model suite (`os-real-model.yml`)                  | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
-| `E2E_SLOW_ROWS`                               | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone, no specs); vitest then holds each row to its timeout ceiling      | Unset → the PR's paths and label            |
+| `E2E_SLOW_ROWS`                               | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone); vitest then holds each row to its timeout ceiling                | Unset → the PR's paths and label            |
 | `BENCH_OUT`                                   | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                            | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
 | `TEST_TELEMETRY_ARTIFACT_FILE`                | You                                                         | Optional named immediate canonical JSON copy                                                                                                      | Unset → no immediate copy                   |
@@ -558,7 +561,7 @@ only on genuine infra wedges).
 | One Workers-suite test/hook | `testTimeout` / `hookTimeout`    | 120s / 120s (the first test pays workerd boot)                                                     | fail                      |
 | One perf test               | `testTimeout` / `hookTimeout`    | 240s / 120s (`apps/os/vitest.config.ts`, `perf`); concurrent project creation 420s                 | fail (no retry)           |
 | One bench file              | `testTimeout` / `hookTimeout`    | 300s                                                                                               | fail                      |
-| The Depot CI job            | `timeout-minutes`                | Test 20, preview deploy 40, preview e2e 30, latency guard 45 minutes                               | outer edge: re-run button |
+| The Depot CI job            | `timeout-minutes`                | Test 20, Deploy preview 40, E2E tests and Browser specs 30 each, latency guard 45 minutes          | outer edge: re-run button |
 
 The ladder is strictly ordered, and a new knob keeps it that way. Note the
 deliberate rule-3 consequence: no watchdog budgets for a test double-burning
@@ -573,30 +576,25 @@ every PR wait for it. The numbers live in `e2e-policy/budgets.ts`.
 | Number                       | Value | What it does                                                                                                                                                                       |
 | ---------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `E2E_ROW_BUDGET_MS`          | 60s   | An e2e row that runs on every PR finishes within it at its p95.                                                                                                                    |
-| `E2E_ROW_WARN_MS`            | 45s   | `RetryTelemetryReporter` prints each e2e row that ran longer, `[row-budget]` in the e2e step's log, and marks exempt rows.                                                         |
+| `E2E_ROW_WARN_MS`            | 45s   | `RetryTelemetryReporter` prints each e2e row that ran longer, `[row-budget]` in the e2e step's log.                                                                                |
 | `E2E_ROW_TIMEOUT_CEILING_MS` | 90s   | The longest timeout such a row may declare. A `createFlake` / `createFailing` deadline counts, plus the second the wrapper adds.                                                   |
 | `E2E_SLEEP_CEILING_MS`       | 30s   | The longest fixed wait (`sleep`, a `setTimeout` that does not reject) such a row may make. Poll for the condition instead.                                                         |
 | `E2E_SLOW_ROW_TIMEOUT_MS`    | 300s  | The timeout of a row tagged `slow`.                                                                                                                                                |
 | `UNIT_ROW_WARN_MS`           | 10s   | The Test job's telemetry finalizer prints each unit or Workers row that ran longer and is not in `UNIT_ROW_WARN_EXEMPTIONS`, and each entry no row needs any more. A warning only. |
 
-`scripts/ci/e2e-policy.test.ts`, in the Test job, reads every e2e row with
-the TypeScript parser and fails when a row that runs on PRs declares a timeout
-over the ceiling or waits a fixed time over 30s. A run the preview script
-starts holds every row to the same ceiling at runtime too
-(`e2e/support/setup.ts`): a row whose timeout is over it fails before it
-starts, which catches a timeout the parser cannot read. A row gated on an opt-in
-variable (`RUN_*`, `E2E_REAL_MODELS`) or on a local worker (`localOnly`) is
-out of its scope: the PR's e2e job, against the preview, never starts it. The
-same file pins the run's parallelism (`--sequence.concurrent`, `maxWorkers` 16
-in CI, `maxConcurrency` 32) and `E2E_CI_RETRIES` as the only retry setting.
+A run the preview script starts holds every row to its timeout ceiling
+(`e2e/support/setup.ts`): a row whose resolved timeout is over it fails before
+it starts, in the E2E tests job. A row gated on an opt-in variable (`RUN_*`,
+`E2E_REAL_MODELS`) or on a local worker (`localOnly`) never starts there, so
+the ceiling does not apply to it. `scripts/ci/e2e-policy.test.ts`, in the Test
+job, regex-matches the e2e files for a `sleep`, `delay` or `setTimeout` whose
+literal is over 30s, and fails unless the wait is listed in its
+`ALLOWED_WAITS` (the slow rows' waits). A wait written with a named constant
+passes unseen. The same file keeps `E2E_CI_RETRIES` as the only retry setting.
 
-A row over the budget has three ways out:
+A row over the budget has two ways out:
 
 - **Make it faster.** Poll for the condition instead of sleeping through it.
-- **Exempt it** in `E2E_BUDGET_EXEMPTIONS`, with the reason, when it guards a
-  production incident or a behaviour no faster row can show. An entry may
-  carry its own timeout above the ceiling. An exempt row is only ever proposed
-  for making faster.
 - **Tag it `slow`** when it waits out real platform time (a quiet minute, a
   sweep, an alarm). It then runs only where that costs no PR
   ([slow rows](#slow-rows)), with a timeout up to `E2E_SLOW_ROW_TIMEOUT_MS`,
@@ -619,24 +617,28 @@ A row that waits out real platform time is tagged `slow`
 tag, with `E2E_SLOW_ROW_TIMEOUT_MS` as its timeout, and sets `strictTags`, so
 a misspelled tag fails its row. Today these are the three residency rows in
 `context-residency.e2e.test.ts` that prove a careless facet stops, each
-sleeping 110–180 s. Every PR used to wait for the longest of them.
+sleeping 110–180 s, and the pin in `facet-abort-storage-reset.e2e.test.ts` of a
+Cloudflare fault that resets the context it runs on. Every PR used to wait for
+the longest residency row. The claimed-work row in
+`context-residency.e2e.test.ts` is not `slow`: it waits 30 s, so the claim's
+alarm lands mid-attempt, and runs on every PR.
 
 `pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`)
 and prints its choice as `[slow-rows] <run|skip|only>: <reason>`:
 
-| Run                                            | The slow rows                                                                                                                                                  |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A PR push (Preview OS)                         | Skipped, unless the PR changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label. When GitHub does not answer, every row runs.                        |
-| A Preview OS dispatch                          | As its `slow-rows` input says (`run` or `skip`); empty, as a push. `--input action=e2e --input slow-rows=run` runs them against the live preview.              |
-| Main OS e2e, every main push                   | Run, with every other row (`E2E_SLOW_ROWS: run`).                                                                                                              |
-| OS slow e2e (`os-slow-e2e.yml`), every 2 hours | Run alone against main's preview `slow-e2e`; pages #error-pulse on its own change of state (`scripts/ci/os-slow-e2e-alert.ts`).                                |
-| You                                            | `--slow-rows run`, `skip` or `only` (alone, no specs): `pnpm preview e2e --pr <n> --name <branch> --slow-rows only` from `apps/os` under Doppler `os/preview`. |
+| Run                          | The slow rows                                                                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A PR push (Preview OS)       | Skipped, unless the PR changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label. When GitHub does not answer, every row runs.                 |
+| A Preview OS dispatch        | As its `slow-rows` input says (`run` or `skip`); empty, as a push. `--input action=e2e --input slow-rows=run` runs them against the live preview.       |
+| Main OS e2e, every main push | Run, with every other row (`E2E_SLOW_ROWS: run`); pages #error-pulse on their own change of state, as "slow e2e rows" (`scripts/ci/main-e2e-alert.ts`). |
+| You                          | `--slow-rows run`, `skip` or `only` (alone): `pnpm preview e2e --pr <n> --name <branch> --slow-rows only` from `apps/os` under Doppler `os/preview`.    |
 
 The label is read when the e2e job starts, so add it before the push, or
-dispatch the run afterwards. Main OS e2e pages only when main changes state,
-so a slow row broken while main is red would page nobody; the 2-hourly run
-pages on its own. A PR that changes none of `SLOW_ROW_PATHS` and still breaks a
-slow row reaches production first, and that run finds it within 2 hours. The
+dispatch the run afterwards. Main OS e2e pages when main changes state, and
+pages the slow rows of the same run under their own name, "slow e2e rows", on
+their own change of state, so a slow row broken while main is already red
+still pages. A PR that changes none of `SLOW_ROW_PATHS` and still breaks a slow
+row reaches production first, and its main push finds it. The
 code those rows guard says so in its own `AGENTS.md`
 (`apps/os/src/context/AGENTS.md`). The preview e2e suite summary records
 whether they ran (`slowRows`), and the PR time-to-green guard splits pushes on
@@ -677,8 +679,8 @@ be diagnosed, even though the same test outcome remains green in normal CI.
   suite's contention as much as the platform's. A latency or throughput
   budget belongs in `apps/os/perf/` (the `perf` project), which runs alone and
   asserts the median of several rounds; an e2e row may print its numbers. The
-  latency guard (`os-latency.yml`) runs that suite every 3 hours and on every
-  main push, alone on a preview of its own, and pages when a metric crosses its
+  latency guard (`os-latency.yml`) runs that suite every 3 hours, alone on a
+  preview of its own, and pages when a metric crosses its
   budget or regresses sharply two runs in a row; a new perf row records its
   metrics with `recordLatency` (`apps/os/perf/record.ts`) and names them, with
   a calibrated budget, in `apps/os/perf/latency.ts`.
@@ -696,14 +698,13 @@ protocol below instead of repeatedly making unrelated PRs pay for it.
 
 ### Flaky-test quarantine protocol
 
-A row leaves the PR's way in one of four forms, each with a way back:
+A row leaves the PR's way in one of three forms, each with a way back:
 
-| Cause                                                      | Form                                                 | Where it runs                                                                                                   | Way back                                                      |
-| ---------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Flaky, always with the same error                          | `createFlake` ([below](#flakes-and-pinned-failures)) | Every PR, where it cannot fail the run                                                                          | Unwrapped once its records show it passes consistently        |
-| Slow: waits out real platform time, or its p95 is over 60s | The `slow` tag ([slow rows](#slow-rows))             | PRs that change its code or carry `slow-e2e`, every main push, every 2 hours (pages on its own change of state) | Rewritten to a p95 of 45s or less, then untagged              |
-| Guards an incident, over the budget                        | An `E2E_BUDGET_EXEMPTIONS` entry with its reason     | Every PR                                                                                                        | Never proposed for `slow` or deletion, only for making faster |
-| Hangs, or harms the rest of the suite                      | A dated skip ([parked](#parked-tests-expire))        | Nowhere; it needs an issue                                                                                      | The date forces a decision                                    |
+| Cause                                                      | Form                                                 | Where it runs                                                                                    | Way back                                               |
+| ---------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| Flaky, always with the same error                          | `createFlake` ([below](#flakes-and-pinned-failures)) | Every PR, where it cannot fail the run                                                           | Unwrapped once its records show it passes consistently |
+| Slow: waits out real platform time, or its p95 is over 60s | The `slow` tag ([slow rows](#slow-rows))             | PRs that change its code or carry `slow-e2e`, every main push (pages on its own change of state) | Rewritten to a p95 of 45s or less, then untagged       |
+| Hangs, or harms the rest of the suite                      | A dated skip ([parked](#parked-tests-expire))        | Nowhere; it needs an issue                                                                       | The date forces a decision                             |
 
 A flaky or pathologically slow test may be quarantined only after the current
 change is shown not to cause its failure. Failures on behavior changed by the
@@ -745,7 +746,7 @@ Two wrappers in `packages/shared/src/test-support` register through the runner's
 - `createFlake(test, /pattern/)` ([flake-test.ts](../packages/shared/src/test-support/flake-test.ts)) marks a known flake. The body asserts real behavior. A pass or a failure matching the pattern is green, any other failure or a hang is red, and the test is never retried: one sample per run.
 - `createFailing(test, /pattern/)` ([failing-test.ts](../packages/shared/src/test-support/failing-test.ts)) pins a known bug. The body asserts the desired behavior and must fail with the pattern. A pass (the bug looks fixed) or a different failure is red.
 
-Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|preview>`) adds each suite's `suite-summary.json`, and the job uploads `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
+Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|specs|preview-e2e>`, one suite per job) adds the suite's `suite-summary.json`, and the job uploads `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
 
 Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. The three have distinct names, so each gets its own dashboard row: `flake sentinel` (`packages/shared/src/test-support/flake-sentinel.test.ts`), `flake sentinel (specs)` (`specs/flake-sentinel.spec.ts`) and `flake sentinel (e2e)` (`apps/os/e2e/flake-sentinel.e2e.test.ts`). A sentinel that reads 0% or goes red means the recording or ingestion pipeline is broken; distrust the dashboard, not the sentinel. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
 

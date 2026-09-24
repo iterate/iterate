@@ -309,29 +309,30 @@ test("the operator's project in a named organization lands on the organization's
     "prj_seeded",
     "prj_seeded_earlier",
   ]);
-  // a member who takes a project's key first — the same body, or another — leaves no gap: the fold
-  // ignores their event (not the platform's), and the record read again lands the platform's unkeyed
+  // a member can't take a project's key first (src/context/built-ins.ts `append`): the same event
+  // unkeyed stays on the log, attributed to them, and the fold ignores it; the platform's lands once
   using ownersRecord = await owner.organizations.get(org.id);
-  for (const [slug, squatted] of [
-    ["squatted", "squatted"],
-    ["squatted-other", "someone-elses"],
-  ] as const)
-    await ownersRecord.append({
-      type: "events.iterate.com/organization/project-created",
-      payload: { projectId: `prj_${slug.replace("-", "_")}`, slug: squatted },
-      idempotencyKey: `organization/project-created:prj_${slug.replace("-", "_")}`,
-    });
+  const squat = {
+    type: "events.iterate.com/organization/project-created",
+    payload: { projectId: "prj_squatted", slug: "someone-elses" },
+  };
+  await refused(
+    () =>
+      ownersRecord.append({
+        ...squat,
+        idempotencyKey: "organization/project-created:prj_squatted",
+      }),
+    "FORBIDDEN",
+    /the platform's/,
+  );
+  await ownersRecord.append(squat);
   using _squatted = await restore("squatted", "prj_squatted");
-  using _squattedOther = await restore("squatted-other", "prj_squatted_other");
   expect((await organizationState(owner, org.id)).projects).toMatchObject({
     prj_squatted: { slug: "squatted" },
-    prj_squatted_other: { slug: "squatted-other" },
   });
   expect((await projectFacts()).slice(3)).toEqual([
-    { payload: { projectId: "prj_squatted", slug: "squatted" }, platform: undefined },
-    { payload: { projectId: "prj_squatted_other", slug: "someone-elses" }, platform: undefined },
+    { payload: { projectId: "prj_squatted", slug: "someone-elses" }, platform: undefined },
     { payload: { projectId: "prj_squatted", slug: "squatted" }, platform: true },
-    { payload: { projectId: "prj_squatted_other", slug: "squatted-other" }, platform: true },
   ]);
   // the deployment's own organization (the operator's projects with no orgId) has no record to land on
   using _own = await admin.projects.create({ project: "operator-own" });

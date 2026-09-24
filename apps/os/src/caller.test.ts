@@ -1,7 +1,15 @@
-// caller.test.ts — the signed-claims codec as a table: what verifies, what does not; the admin
-// secret's compare; and `stampCaller`, the attribution an event is stored with.
+// caller.test.ts — the signed-claims codec as a table: what verifies, what does not; the digest and
+// the secrets' compare; and `stampCaller`, the attribution an event is stored with.
+import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
-import { signClaims, stampCaller, verifyAdminSecret, verifyClaims } from "./caller.ts";
+import {
+  secretsEqual,
+  sha256Hex,
+  signClaims,
+  stampCaller,
+  verifyAdminSecret,
+  verifyClaims,
+} from "./caller.ts";
 
 const SECRET = "test-secret";
 const claims = { actor: "user_a", email: "a@example.com", next: "/" };
@@ -43,6 +51,14 @@ for (const { title, token, secret = SECRET } of refusals)
   test(`refused: ${title}`, async () => {
     expect(await verifyClaims(await token(), secret)).toBeNull();
   });
+
+test("sha256Hex is node's SHA-256 in hex; secretsEqual compares whole strings", async () => {
+  expect(await sha256Hex("itk_☃")).toBe(createHash("sha256").update("itk_☃").digest("hex"));
+  expect(await secretsEqual("abc", "abc")).toBe(true);
+  expect(await secretsEqual("abc", "abd")).toBe(false);
+  expect(await secretsEqual("abc", "ab")).toBe(false);
+  expect(await secretsEqual("", "")).toBe(true);
+});
 
 // ── the admin secret ── `verifyAdminSecret(candidate, secret)`: `{ candidate, secret, becomes }` rows.
 const adminRows: { candidate: string; secret: string; becomes: boolean }[] = [

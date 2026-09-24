@@ -1,25 +1,32 @@
-# THE LATENCY GUARD for apps/os: every 3 hours, and on every main push to what reaches the platform,
-# redeploy main IN PLACE to the Worker Preview `latency`, which nothing else touches (Main OS e2e has
-# its own; a latency measured beside another suite measures that suite), run the perf suite against
-# it (apps/os/perf: concurrent project creation at 1, 10 and 25 people, sign-in, MCP, a context's
-# first append, wake and processor cold start, rule invocation, stream fan-out — every metric and its
-# budget in apps/os/perf/latency.ts), and judge the run. No run deletes the preview: a brand-new one
-# answers Cloudflare's `internal error` for seconds after it is created (main-os-e2e.yml), and a
-# preview redeployed in place is what production is. Every perf row mints its own people and
-# projects, so nothing it measures reads what earlier runs left.
+# THE LATENCY GUARD for apps/os: every 3 hours, redeploy main IN PLACE to the Worker Preview
+# `latency`, which nothing else touches (Main OS e2e has its own; a latency measured beside another
+# suite measures that suite), run the perf suite against it (apps/os/perf: concurrent project
+# creation at 1, 10 and 25 people, sign-in, MCP, a context's first append, wake and processor cold
+# start, rule invocation, stream fan-out — every metric and its budget in apps/os/perf/latency.ts),
+# and judge the run. No run deletes the preview: a brand-new one answers Cloudflare's `internal
+# error` for seconds after it is created (main-os-e2e.yml), and a preview redeployed in place is what
+# production is. Every perf row mints its own people and projects, so nothing it measures reads what
+# earlier runs left.
 #
 # The judge (scripts/ci/os-latency-guard.ts) records every measurement to PostHog (`os latency
 # measured`) and pages Slack #error-pulse when a metric crosses its budget or regresses sharply
 # against its rolling baseline, on a change of state only: red once when it crossed in two runs in a
 # row, green once when it is back. A page leaves the run green (a scheduled run reports on main's head,
 # where red reads as "this commit broke"); a BROKEN PROBE — the deploy, a row failing for anything but
-# a budget, a metric not recorded — fails the run. Its memory is its own `os-latency-state` artifact,
+# a budget, a metric not recorded — fails the run, unless it is ONE row the platform broke (a
+# connection reset, a socket the edge dropped, a stalled edge: the judge's PLATFORM_FAILURES) that did
+# not break in the run before: that is recorded, a warning, a step-summary line and a PostHog event,
+# and the run stays green. Its memory is its own `os-latency-state` artifact,
 # which the next run reads back (Depot organization token from Doppler _shared/preview).
 #
-# Nothing waits on it: its own concurrency group, beside Deploy OS and Main OS e2e. One run at a time,
-# since each redeploys the preview the run before measures: a push or schedule that lands meanwhile
-# queues, and Depot keeps only the newest queued run, so a burst of merges measures its last commit.
-# A running measurement is never cut short: merge after merge, that would starve the guard.
+# Not on main pushes: every 3 hours the baseline (the last 10 runs) spans about 30 hours, where a busy
+# merge day's pushes filled it in two and a lasting regression became it. A regression pages 3 to 6
+# hours after it lands (two crossings in a row), naming the merges of those hours; to find the one,
+# dispatch on a branch cut at a suspect commit (a run off main keeps no state).
+#
+# Nothing waits on it: its own concurrency group. One run at a time, since each redeploys the preview
+# the run before measures: a run that lands meanwhile queues, and a running measurement is never cut
+# short.
 #
 # Test a branch, and the Slack hookup end to end, by dispatching it: a budget scale of 0.01 puts every
 # budget under what anything measures, so every metric crosses and the run pages at once, marked
@@ -29,7 +36,7 @@
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-latency.yml \
 #     --ref <branch> --input budget-scale=0.01
 #
-# Depot registers the schedule and the push trigger once this file is on the default branch.
+# Depot registers the schedule once this file is on the default branch.
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN only.
 
 name: OS latency
@@ -41,24 +48,6 @@ on:
   schedule:
     # Every 3 hours, off the other schedules' minutes (:07/:22/:37/:52, :13, :41).
     - cron: "29 */3 * * *"
-  push:
-    branches: [main]
-    # What reaches the Worker (deploy-os.yml's list) plus the perf suite and this guard.
-    paths:
-      - .depot/workflows/os-latency.yml
-      - scripts/ci/os-latency-guard.ts
-      - apps/os/**
-      - "!apps/os/*.md"
-      - "!apps/os/docs/**"
-      - configs/**
-      - packages/iterate/**
-      - packages/shared/**
-      - packages/ui/**
-      - envs.ts
-      - scripts/lib/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
   workflow_dispatch:
     inputs:
       budget-scale:
@@ -98,12 +87,6 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # the `latency-<run>-<attempt>` previews this workflow deployed and deleted until 2026-09-24
-      - name: Delete the per-run previews this one replaced
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm preview delete-superseded
       # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
       # still answers in (up to ~100 s measured), so its reset lands on a probe, never on a measurement
       # (apps/os/scripts/preview-readiness.ts).

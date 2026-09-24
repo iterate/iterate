@@ -1,6 +1,6 @@
 # PR TIME TO GREEN (scripts/ci/pr-ttg-guard.ts): every hour, how long each pull request push waited
-# for its checks (Lint and Typecheck, Test, and Preview OS when it ran), read from Depot's API and
-# split by what the Preview OS e2e job ran. Each push is a PostHog event (`pr checks settled`), and
+# for its checks (Lint and Typecheck, Test, and Preview OS), read from Depot's API and split by what
+# the Preview OS E2E tests job ran. Each push is a PostHog event (`pr checks settled`), and
 # Slack #error-pulse is paged on a change of state: red once when the pushes that skipped the slow
 # e2e rows took a median over 165 s or a p90 over 200 s across the last 24 hours (at least 20 of
 # them), green once when both are back under. Those lines are defaults for the owner to confirm. A

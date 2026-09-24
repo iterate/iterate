@@ -1,10 +1,11 @@
 # MAIN'S E2E RUN on the dev/preview account, in parallel with Deploy OS, which waits for none of
 # it: a push to main (the paths a PR preview runs for) redeploys apps/os's Worker Preview `main` IN
 # PLACE, with the clients on top of the same name, and runs the e2e suite and the browser specs
-# against it: every row, the ones tagged `slow` that most PRs skip too. No run deletes it: a
-# BRAND-NEW preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
-# seconds after it is created, which the deploy's readiness gate
-# (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place has a window
+# against it, each in its own job, the jobs a PR's Preview OS has, by the same names: Deploy
+# preview, then E2E tests (every row, the ones tagged `slow` that most PRs skip too) and Browser
+# specs side by side, then CI trace. No run deletes it: a BRAND-NEW preview's Durable Objects answer
+# Cloudflare's `internal error; reference = …` for seconds after it is created, which the deploy's
+# readiness gate (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place has a window
 # of its own instead, its previous version answering for up to ~100 s before a reset, which the
 # gate holds through (`--settle 150`; docs/depot-ci.md#main-os-e2e-keeps-one-preview). Nothing resets
 # it either: a reset deletes it and creates it brand-new. Every row mints its own people and
@@ -16,12 +17,12 @@
 # tests its last commit). So every started run that is not cancelled by hand reaches a verdict, a
 # job that hits its timeout counting as red. The `alert` job pages #error-pulse only when main
 # changes state — once when it goes red, naming the failed jobs and the failing rows, once when it is
-# green again (scripts/ci/main-e2e-alert.ts). Nothing is written to any PR. The `trace` job, beside
+# green again (scripts/ci/main-e2e-alert.ts) — and pages the rows tagged `slow` the same way under
+# their own name, "slow e2e rows", so a slow row that breaks while main is already red still pages
+# (docs/testing.md#slow-rows). A run off main pages nobody: it prints what it would post. Nothing is
+# written to any PR. The `trace` job, beside
 # alert, posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
 # preview's does (docs/ci-traces.md).
-#
-# Each run first deletes any `main-<short sha>` preview, the per-run shape this workflow deployed and
-# deleted until 2026-09-24 (`pnpm preview delete-superseded`).
 #
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
@@ -79,9 +80,6 @@ env:
   PREVIEW_NAME: main
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
-  # TEST EVIDENCE IN R2 (docs/test-evidence.md): `r2` puts each test job attempt's test-results/
-  # folder in the iterate-ci bucket; `off` skips that step.
-  TEST_EVIDENCE_UPLOAD: r2
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
   # lifecycle records, as `@@ci-trace` lines in the Depot logs the trace job reads.
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
@@ -92,40 +90,10 @@ defaults:
     shell: bash
 
 jobs:
-  # THE PREVIEW PARENT FROM MAIN: every preview branches from os-preview (envs.ts
-  # osEnvs.preview), and nothing else redeployed it when main changed: after #2888 it ran code from
-  # before ControlPlaneDurableObject (2026-09-23). Its own group, so two pushes never deploy it at
-  # once. The start-app parents need no such job: their one Durable Object class never changes.
-  parent:
-    name: deploy the preview parent from main
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
-    concurrency:
-      group: os-preview-parent
-      cancel-in-progress: false
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy os-preview from main
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy --env preview
-
+  # The parent this preview branches from is main's too, deployed beside this by
+  # preview-parents.yml; a preview does not depend on its parent's code.
   deploy:
-    name: deploy
-    needs: parent
+    name: Deploy preview
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -142,11 +110,6 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Delete the per-run previews this one replaced
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm preview delete-superseded
       # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
       # still answers in (up to ~100 s measured), so its reset lands on a probe, never on e2e
       # (apps/os/scripts/preview-readiness.ts).
@@ -158,22 +121,38 @@ jobs:
           PREVIEW_APPS: all
         run: doppler run -- pnpm preview deploy --settle 150
 
+  # THE TWO SUITES, as a PR's Preview OS runs them (preview-os.yml): E2E tests and Browser specs,
+  # side by side after the deploy, and ONE DEFINITION. Browser specs runs E2E tests' runner, outputs
+  # and steps (the `suite-runner`, `suite-outputs` and `suite-steps` anchors); the two differ only in
+  # the suite their env names. Their steps are a PR preview's, less the guard and the PR's checkouts,
+  # plus the failing rows the alert names (scripts/ci/depot-workflows.test.ts keeps them alike).
   e2e:
-    name: e2e
+    name: E2E tests
     needs: deploy
-    runs-on:
-      size: 4x16
+    runs-on: &suite-runner
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
-    # TEST TELEMETRY, as a PR preview's e2e job writes it; main's suite summaries feed the flake
-    # dashboard (scripts/ci/flake-dashboard/update.ts SUITE_WORKFLOWS).
     env:
+      # THE SUITE, as in preview-os.yml: `pnpm preview <suite>`, its flake records' suite, and the
+      # workspace its telemetry names
+      SUITE: e2e
+      FLAKE_SUITE: preview-e2e
+      TEST_TELEMETRY_EXPECTED_WORKSPACES: os
+      # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows). The
+      # alert pages them under their own name, from the verdict the failing-rows step judges.
+      E2E_SLOW_ROWS: run
+      JUDGED_SUITE: slow e2e rows
+      JUDGED_TAG: slow
+      # TEST TELEMETRY, as a PR preview's test jobs write it; main's suite summaries feed the flake
+      # dashboard (scripts/ci/flake-dashboard/update.ts SUITE_WORKFLOWS).
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
-    outputs:
+    outputs: &suite-outputs
       failing-rows: ${{ steps.failing-rows.outputs.failing-rows }}
-    steps:
+      suite-verdict: ${{ steps.failing-rows.outputs.suite-verdict }}
+    steps: &suite-steps
       # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
       # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
       # colliding with them or, with overwrite, deleting them. First, so every upload can name itself.
@@ -195,29 +174,29 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Run the e2e suite and the browser specs against the preview
+      - name: Run the suite against the preview
         # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
-        id: e2e
+        id: suite
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows)
-          E2E_SLOW_ROWS: run
-        run: doppler run -- pnpm preview e2e
-      # The rows the alert names when main goes red.
+        run: doppler run -- pnpm preview "$SUITE"
+      # The rows the alert names when main goes red, and the verdict of the suite the job judges
+      # (JUDGED_SUITE, the rows tagged JUDGED_TAG), which the alert pages under its own name. A job
+      # that judges none (both empty) outputs only its failing rows.
       - name: Collect the failing rows
         id: failing-rows
         if: always()
-        run: pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
-      - name: Check test telemetry and write the suite summaries
+        run: >-
+          pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
+          --suite "$JUDGED_SUITE" --tag "$JUDGED_TAG"
+      - name: Check test telemetry and write the suite summary
         if: always()
-        env:
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
-        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
       # attempt's tests left, and target.json the deployment they ran against. This adds one row per
-      # test (tables/tests.parquet), then manifest.json: the run's result (from the suites' step and
+      # test (tables/tests.parquet), then manifest.json: the run's result (from the suite's step and
       # the finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
       # Neither this nor the upload decides the job; the tests did.
       - name: Write the test evidence manifest
@@ -226,71 +205,84 @@ jobs:
         continue-on-error: true
         timeout-minutes: 2
         env:
-          TEST_EVIDENCE_STEPS: e2e=${{ steps.e2e.outcome }}
+          TEST_EVIDENCE_STEPS: ${{ env.SUITE }}=${{ steps.suite.outcome }}
         run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
-      # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys. A
-      # cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/ copy.
-      # A failure is a warning and a line of the job's summary, never the job's result.
-      - name: Upload the test evidence to R2
-        id: evidence-upload
-        if: ${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
-        continue-on-error: true
-        timeout-minutes: 3
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+      # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
+      # one finish whatever another does (docs/depot-ci.md#parallel-steps).
+      - fail-fast: false
+        parallel:
+          # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
+          # A cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/
+          # copy. A failure is a warning and a line of the job's summary, never the job's result.
+          - name: Upload the test evidence to R2
+            id: evidence-upload
+            if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
+            continue-on-error: true
+            timeout-minutes: 3
+            env:
+              DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+            run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+          - name: Upload flake records
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results/flake-records/${{ env.FLAKE_SUITE }}
+              if-no-files-found: ignore
+          - name: Upload test telemetry artifacts
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results/ci-telemetry
+              include-hidden-files: true
+              if-no-files-found: error
+          # EVERYTHING THE RUN WROTE and the specs' Playwright HTML report, as a PR preview's test
+          # jobs keep them (docs/depot-ci.md#browser-reports-from-artifacts).
+          - name: Upload results
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results
+              include-hidden-files: true
+              if-no-files-found: error
+          - name: Upload public Playwright HTML report
+            if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+            uses: actions/upload-artifact@v4
+            with:
+              name: public-playwright-report
+              path: test-results/playwright-html
+              if-no-files-found: error
+              retention-days: 30
+              overwrite: true
       # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
-      - name: Upload specs flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/flake-records/specs
-          if-no-files-found: ignore
-      - name: Upload preview e2e flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-preview-e2e-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/flake-records/preview-e2e
-          if-no-files-found: ignore
-      - name: Upload test telemetry artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/ci-telemetry
-          include-hidden-files: true
-          if-no-files-found: error
-      # THE BROWSER EVIDENCE, as a PR preview's e2e job keeps it (docs/depot-ci.md#browser-reports-from-artifacts).
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results
-          include-hidden-files: true
-          if-no-files-found: error
-      - name: Upload public Playwright HTML report
-        if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: public-playwright-report
-          path: test-results/playwright-html
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
 
-  # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the parent, deploy and e2e
-  # jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on the
-  # pushed commit. Beside alert, which waits for none of it.
+  specs:
+    name: Browser specs
+    needs: deploy
+    runs-on: *suite-runner
+    timeout-minutes: 30
+    env:
+      SUITE: specs
+      FLAKE_SUITE: specs
+      TEST_TELEMETRY_EXPECTED_WORKSPACES: iterate-root
+      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+      TEST_TELEMETRY_BRANCH: main
+      TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
+    outputs: *suite-outputs
+    steps: *suite-steps
+
+  # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the deploy and two
+  # test jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on
+  # the pushed commit. Beside alert, which waits for none of it.
   trace:
-    name: trace
-    needs: [parent, deploy, e2e]
+    name: CI trace
+    needs: [deploy, e2e, specs]
     if: always()
     runs-on:
       size: 2x8
@@ -335,12 +327,12 @@ jobs:
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
 
-  # Main's state changes only: red once, green again once. A job that hit its timeout is red; a run
-  # cancelled by hand gets no alert.
+  # Main's and the slow rows' state changes only: red once, green again once. A job that hit its
+  # timeout is red; a run cancelled by hand gets no alert, and a run off main pages nobody.
   alert:
     name: alert
-    needs: [parent, deploy, e2e]
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    needs: [deploy, e2e, specs]
+    if: ${{ !cancelled() }}
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -357,4 +349,5 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           NEEDS: ${{ toJSON(needs) }}
-        run: pnpm tsx scripts/ci/main-e2e-alert.ts alert
+        run: >-
+          pnpm tsx scripts/ci/main-e2e-alert.ts alert --ref "${{ github.ref }}"

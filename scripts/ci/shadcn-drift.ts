@@ -11,7 +11,8 @@
 // vendored file, or upstream moved since the last refresh; the fix is the same, `refresh`.
 // `report` (.depot/workflows/shadcn-upstream.yml, daily on main) posts to #ci when the set of files
 // upstream has moved changes, and passes: upstream moving is news, not a broken main. Either fails
-// only when it could not ask the registry (three tries).
+// when it could not ask the registry, with no retry: neither is a required check, and the next run
+// asks again.
 // `refresh` overwrites every vendored file with upstream's, and lets the CLI add any dependency a
 // new version needs; review the diff before committing it.
 //
@@ -21,7 +22,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
 
@@ -167,30 +167,28 @@ function shadcnAdd(args: string[]) {
   );
 }
 
-/** Every file `add` would write, with its content (parseView), retried twice when the CLI could not
- *  print them (the registry is a network call). Throws after the third failure. */
-async function dryRun() {
-  for (let attempt = 1; ; attempt++) {
-    // `--view <path>` shows every file whose path contains it, CSS included, with no cap on count
-    const run = shadcnAdd(["--dry-run", "--view", "src/"]);
-    const output = `${run.stdout}${run.stderr}`;
-    if (run.status === 0 && /^└ Run without --dry-run to apply\.$/m.test(output))
-      return parseView(output);
-    console.warn(`shadcn add --dry-run, attempt ${attempt}/3, exited ${run.status}:\n${output}`);
-    if (attempt === 3) throw new Error("could not ask the shadcn registry what `add` would write");
-    await sleep(attempt * 15_000);
-  }
+/** Every file `add` would write, with its content (parseView). Throws with the CLI's output when it
+ *  could not print them (the registry is a network call). */
+function dryRun() {
+  // `--view <path>` shows every file whose path contains it, CSS included, with no cap on count
+  const run = shadcnAdd(["--dry-run", "--view", "src/"]);
+  const output = `${run.stdout}${run.stderr}`;
+  if (run.status === 0 && /^└ Run without --dry-run to apply\.$/m.test(output))
+    return parseView(output);
+  throw new Error(
+    `could not ask the shadcn registry what \`add\` would write: shadcn add --dry-run exited ${run.status}:\n${output}`,
+  );
 }
 
-async function drift() {
-  return driftOf(await dryRun(), (path) => {
+function drift() {
+  return driftOf(dryRun(), (path) => {
     const file = resolve(repoRoot, path);
     return existsSync(file) ? readFileSync(file, "utf8") : undefined;
   });
 }
 
 async function check() {
-  const found = await drift();
+  const found = drift();
   if (found.length === 0)
     return console.log(`${VENDORED_FILES.length} vendored files match upstream byte for byte`);
   for (const line of found) {
@@ -213,7 +211,7 @@ async function check() {
 }
 
 async function report(dryRunOnly: boolean) {
-  const found = await drift();
+  const found = drift();
   console.log(JSON.stringify({ drift: found }));
   const slack = getSlackClient();
   const channel = slackChannelIds["#ci"];

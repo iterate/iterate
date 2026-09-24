@@ -17,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
+import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { AllowOrganizations } from "../../components/allow-organizations.tsx";
 import { reloadOrganizationTree } from "../../components/organization-tree.tsx";
@@ -126,7 +127,13 @@ function InvitationPage() {
               You will join as <span className="text-foreground">{info.principal.email}</span>.
             </p>
           ) : null}
-          {canWrite ? null : <AllowOrganizations next={`/invitations/${token}`} />}
+          {canWrite ? null : (
+            // never in a session replay or autocapture: the link's `next` holds the invitation
+            // token, and a session that cannot accept it leaves it unused
+            <NotRecorded>
+              <AllowOrganizations next={`/invitations/${token}`} />
+            </NotRecorded>
+          )}
           {error ? (
             <p role="alert" data-type="error" className="text-destructive">
               {error}

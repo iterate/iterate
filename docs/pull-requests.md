@@ -89,7 +89,7 @@ gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 
 ## Previews
 
-Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys one Cloudflare Worker Preview of `apps/os` per PR, plus the Dash, Agents, Notes, Voice and Kit clients on top, runs the integration suite and the browser specs against it, and writes the links and operations into the PR body. Commands for resetting, re-running e2e or deleting it: [apps/os/README.md](../apps/os/README.md).
+Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys one Cloudflare Worker Preview of `apps/os` per PR, plus the Dash, Agents, Notes, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both skip, which counts as passing. Commands for resetting, re-running the suites or deleting the preview: [apps/os/README.md](../apps/os/README.md).
 
 For operational changes, inspect the preview's resulting state and telemetry in addition to test results. Production rollout remains gated on the [engineering invariant](engineering-invariants.md).
 
@@ -142,10 +142,14 @@ same three ways. The rules that survive contact:
    first line so a stale monitor is recognizable at a glance.
 
 Also know what actually blocks the merge: `gh pr view --json mergeStateStatus`
-answers `BLOCKED` (required things missing — the `main` ruleset requires
-**Lint and Typecheck / lint-typecheck** and **Test / test**), `UNSTABLE`
-(something failing that is NOT required — the Preview OS deploy and e2e are in
-this category), or `CLEAN`. A wait-for-green loop that treats `UNSTABLE` as
+answers `BLOCKED` (required things missing — the "Required CI" ruleset requires
+**Lint and Typecheck / lint-typecheck**, **Test / test**, **Preview OS / E2E
+tests** and **Preview OS / Browser specs**; `gh api
+repos/iterate/iterate/rulesets/18718115 --jq '.rules'` lists them), `UNSTABLE`
+(something failing that is NOT required — Preview OS / Deploy preview, whose
+failure turns both suites red anyway, and Preview OS / CI trace are in this
+category), or `CLEAN`. A PR whose last push predates a required check has no
+run of it: push again (a rebase does) to get one. A wait-for-green loop that treats `UNSTABLE` as
 fatal waits forever on a red non-required check. GitHub does not enforce
 review-thread resolution on `main`; this doc does.
 

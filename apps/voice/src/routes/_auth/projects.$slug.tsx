@@ -13,7 +13,7 @@ import {
 } from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { cn } from "cn";
 import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
 import { openAudio, type AudioSession } from "../../audio.ts";
@@ -121,7 +121,7 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
       {needsOpenaiKey ? (
         <Field>
           <FieldLabel htmlFor="openai-key">OpenAI API key</FieldLabel>
-          <Input
+          <SecretInput
             id="openai-key"
             name="openai-key"
             type="password"

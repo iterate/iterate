@@ -77,9 +77,7 @@ export default {
         // the node programs (build/dev/deploy/preview and the operator CLIs) and their tests, so the
         // library modules beside them (preview-config, preview-sweep, generate-wrangler-config) get
         // unused-export checks
-        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,replay-directory,control-plane-load,project-seed,e2e-soak,inspect-context,fresh-preview-repro}.ts",
-        // the minimal repro's Worker, which fresh-preview-repro.ts deploys rather than imports
-        "scripts/fresh-preview-repro/worker.ts",
+        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,replay-directory,control-plane-load,project-seed,e2e-soak,inspect-context}.ts",
         "scripts/*.test.ts",
         "examples/**/*.ts",
       ],

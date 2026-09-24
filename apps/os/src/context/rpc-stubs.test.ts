@@ -31,6 +31,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-platform-origin",
     "x-itx-rpc-stub-pager",
     "x-itx-fetch-upgrade",
+    "x-itx-fetch-upgrade-eyeball",
   ];
   const forged = () =>
     new Headers([
@@ -51,6 +52,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-platform-origin": "https://os.iterate.com",
     "x-itx-rpc-stub-pager": null,
     "x-itx-fetch-upgrade": null,
+    "x-itx-fetch-upgrade-eyeball": null,
   });
 });
 
@@ -117,6 +119,49 @@ test("a borrowed stub after a rejected call: a late transport failure of a stub 
   expect(await rpcStubDirectory.invokeRpcStub("k", [["", 2]])).toBe("ok");
   expect(replacement).toMatchObject({ disposed: false });
   expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(true);
+});
+
+// A PAGE THAT TIMES OUT loses what waited on it — a live client's push among them, which delivery
+// treats as heal-by-read and never logs — so the timeout is logged where it happens, once per page
+// however many calls share it. 2026-09-24: 33 of 200 pushes lost this way left no trace.
+test("a page the relay never answers fails every call waiting on it after 10 s, logged once", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const pager = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => ({ rpcStubKey: "fan-7" }),
+    send: vi.fn(),
+  };
+  const rpcStubDirectory = new RpcStubDirectory({
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [pager as unknown as WebSocket] },
+    onPresence: () => {},
+    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
+    appendEvents: () => {},
+  });
+  const waiting = [1, 2].map((round) =>
+    rpcStubDirectory.invokeRpcStub("fan-7", [["", round]]).catch((error: unknown) => error),
+  );
+  expect(pager.send).toHaveBeenCalledOnce(); // one page for both calls
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(warn).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  for (const error of await Promise.all(waiting))
+    expect(error).toMatchObject({
+      code: "RPC_STUB_OFFLINE",
+      message: expect.stringContaining("page timed out"),
+    });
+  expect(warn.mock).toMatchObject({
+    calls: [
+      [
+        expect.objectContaining({
+          event: "rpc-stub-page-timed-out",
+          rpcStubKey: "fan-7",
+          waitedMs: 10_000,
+        }),
+      ],
+    ],
+  });
 });
 
 // ── rpc stub relay ── a regression pin on the relay: it registers `onRpcBroken` on
@@ -287,6 +332,51 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
   expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
 });
 
+// A voice board that goes away takes its /api session with it, and its pager often drops a moment
+// before the session's own end reaches the lend. The drop is logged with its outcome, so a session
+// that ends while the re-dial is in flight logs nothing; a live one logs the drop once it is back.
+test.each([
+  {
+    session: "ends while the re-dial is in flight",
+    endSession: true,
+    logged: [],
+  },
+  {
+    session: "is live",
+    endSession: false,
+    logged: [{ event: "rpc-stub-pager-redialed", code: 1006, attempt: 1, downMs: 200 }],
+  },
+])(
+  "a pager that drops (1006) while its session $session: logged $logged.length time(s), with its outcome",
+  async ({ endSession, logged }) => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    warn.mockClear();
+    error.mockClear();
+    const redialed = new FakePagerWebSocket();
+    const closed = vi.spyOn(redialed, "close");
+    const fake = await relayOverFakeDurableObject(async (dial) => {
+      if (dial === 1) return new FakePagerWebSocket();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return redialed;
+    });
+
+    fake.pagers[0].close(1006);
+    if (endSession) fake.breakSession();
+    await vi.advanceTimersByTimeAsync(200);
+    await fake.waitedUntil[0];
+    expect({
+      logged: [...warn.mock.calls, ...error.mock.calls].map(([line]) => line),
+      redialedPagerClosed: closed.mock.calls.length > 0,
+    }).toEqual({
+      logged: logged.map((line) => expect.objectContaining(line)),
+      redialedPagerClosed: endSession,
+    });
+  },
+);
+
 test("a lend recalled while a re-dial hangs ends quietly at the deadline: no error, the late pager closed", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
@@ -454,9 +544,13 @@ async function relayOverFakeDurableObject(
     disposed: 0,
     waitedUntil: [] as Promise<unknown>[],
     dials: 0,
+    /** capnweb's death signal for the client's session (`onRpcBroken`). */
+    breakSession: () => {},
   };
   const lent = {
-    onRpcBroken() {},
+    onRpcBroken(breakSession: () => void) {
+      fake.breakSession = breakSession;
+    },
     [Symbol.dispose]() {
       fake.disposed += 1;
     },

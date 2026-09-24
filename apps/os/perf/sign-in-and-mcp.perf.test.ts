@@ -36,12 +36,29 @@ test("an MCP tool call on a project, with a personal access token", async ({ tas
   const { token } = await minter
     .authenticate({ type: "from-server-cookie" })
     .grants.mint({ name: "perf MCP call", projects: [projectId] });
-  const call = () =>
+  const once = () =>
     mcpCall(
       "tools/call",
       { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
       token,
     );
+  // ONE more call when the first got no answer at all — `fetch` rejected before any response: the
+  // network between the runner and Cloudflare's edge reset the connection (2026-09-24, 1 run in 13:
+  // `read ECONNRESET`, and no request reached the Worker). `itx.whoami()` changes nothing, so asking
+  // again is safe; the retry is logged and timed with the sample, and a second failure fails the row.
+  const call = async () => {
+    try {
+      return await once();
+    } catch (error) {
+      if (!(error instanceof TypeError && error.message === "fetch failed")) throw error;
+      console.warn({
+        event: "perf.mcp-call-retried",
+        error: String(error),
+        cause: String(error.cause),
+      });
+      return once();
+    }
+  };
   // the first call loads the run tool's worker: warm it, as an agent's session would be
   expect(JSON.stringify(await call())).toContain(projectId);
   const samples: number[] = [];

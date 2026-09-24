@@ -263,7 +263,7 @@ test("a runner that finished with an error is failure evidence, not incomplete e
   expect(readManifest(root.path)).toMatchObject({ incompleteArtifactIds: [] });
 });
 
-test.each([undefined, "unit", "preview"] as const)(
+test.each([undefined, "unit", "specs", "preview-e2e"] as const)(
   "retains an empty cancelled manifest without inventing a %s suite result before reporters start",
   async (flakeSuites) => {
     using root = temporaryDirectory();

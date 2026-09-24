@@ -133,6 +133,8 @@
     "iterate/import-rules": "warn",
     "iterate/no-sr-only-data-attributes": "error",
     "iterate/icon-button-has-hover-text": "error",
+    "iterate/secret-field-not-recorded": "error",
+    "iterate/secret-shown-not-recorded": "error",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/no-raw-durable-object-binding-access": "error",
@@ -278,7 +280,7 @@
                 "target": ["./packages/**", "./apps/!(os)/**"],
                 "from": "./apps/os",
                 "except": ["./e2e/support", "./__workers-tests__/support.ts"],
-                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in apps/os. Tests may drive a real platform through apps/os's test harnesses, apps/os/e2e/support/ and apps/os/__workers-tests__/support.ts (docs/2026-09-24-sdk-platform-line.md)."
+                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in apps/os. Tests may drive a real platform through apps/os's test harnesses, apps/os/e2e/support/ and apps/os/__workers-tests__/support.ts (packages/iterate/README.md#the-sdkplatform-line)."
               }
             ]
           }

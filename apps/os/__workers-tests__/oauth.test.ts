@@ -1,20 +1,30 @@
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
+import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { OAuthAuthorizationServer } from "@cloudflare/workers-oauth-provider";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { appSession } from "iterate/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
-import type { GrantEnded } from "../src/account/contract.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { projectsForClient } from "../src/consent.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
-import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oauth.ts";
-import { rpcResponse } from "../src/rpc.ts";
+import { accountStateOf, authorizationForToken } from "../src/oauth.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { adminSession, controlPlane, loginPassword, ORIGIN, stub, until } from "./support.ts";
+import {
+  actingAs,
+  authorizationRequest,
+  call,
+  endGrantOnAccount,
+  fetchReachesThisWorker,
+  grant,
+  helpers,
+  issuerApprover,
+  removeMembership,
+  restoreMembership,
+  rpc,
+} from "./oauth-support.ts";
+import { controlPlane, loginPassword, ORIGIN } from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
@@ -484,167 +494,6 @@ test("issuer login uses the same revocable API session and has no independent id
   expect(fresh.headers.has("set-cookie")).toBe(false);
 });
 
-test.for(["revoked", "membership"])(
-  "a live session loses held capabilities after %s within 60 seconds",
-  async (reason) => {
-    fetchReachesThisWorker();
-    const flow = await grant([`${ORIGIN}/api`]);
-    const { root, closed, boundAt } = await rpc(flow.token!.access_token);
-    using context = await root.projects.get(flow.oauthA.id);
-    const native = (await context.invoke(
-      `itx.workers.get({source: {"cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
-    )) as unknown as { ping(): Promise<string> };
-    expect(await native.ping()).toBe("pong");
-    class Echo extends RpcTarget {
-      ping() {
-        return "lent";
-      }
-    }
-    using echo = new RpcStub(new Echo());
-    // The local target becomes a ClientRpcStub on the wire; its index-signature type is wider than this typed stub.
-    await context.provide(
-      "itx.liveAuthEcho",
-      echo as unknown as Parameters<typeof context.provide>[1],
-    );
-    const lent = (await context.invoke("itx.liveAuthEcho")) as unknown as {
-      ping(): Promise<string>;
-    };
-    expect(await lent.ping()).toBe("lent");
-    const org = flow.oauthA.orgId;
-    const [, grantId] = flow.token!.access_token.split(":");
-    if (reason === "revoked") await endGrantOnAccount(flow.user.id, grantId!);
-    else await removeMembership(org, flow.user.id);
-    try {
-      // Real elapsed time: the guard's own timer closes the socket — no sooner than 30 s after the
-      // bind (less a second of timer slack), within its 60 s hard bound — and only then are the
-      // stubs asserted dead, so no call races the close.
-      let bound: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        closed,
-        new Promise<never>((_, reject) => {
-          bound = setTimeout(
-            () => reject(new Error("the guard did not close the socket within 60 s")),
-            60_000,
-          );
-        }),
-      ]).finally(() => clearTimeout(bound));
-      expect(Date.now() - boundAt).toBeGreaterThanOrEqual(29_000);
-      await expect(root.whoami()).rejects.toThrow(/Session|closed|RPC|revoked/i);
-      await expect(context.invoke("itx.kv.get('live-auth-probe')")).rejects.toThrow(
-        /Session|closed|RPC|revoked/i,
-      );
-      await expect(native.ping()).rejects.toThrow(/Session|closed|RPC|revoked/i);
-      await expect(lent.ping()).rejects.toThrow(/Session|closed|RPC|revoked/i);
-    } finally {
-      if (reason === "membership") await restoreMembership(org, flow.user.id);
-    }
-  },
-);
-
-test("a socket holding no project re-checks its grant every thirty seconds and reads no membership", async () => {
-  fetchReachesThisWorker();
-  const flow = await grant([`${ORIGIN}/api`]);
-  const { root } = await rpc(flow.token!.access_token);
-  expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
-  // The worker under test runs in this isolate: the guard's membership read (rpc.ts —
-  // `controlPlane.reachableProjects`, the one read behind every reach check) passes this spy.
-  const membershipReads = vi.spyOn(ControlPlane.prototype, "reachableProjects");
-  onTestFinished(() => {
-    membershipReads.mockRestore();
-  });
-  // Real elapsed time: one tick of the deployed 30 s interval, nothing test-only.
-  await new Promise((resolve) => setTimeout(resolve, 31_000));
-  membershipReads.mockRestore();
-  // Every socket in this test holds no project (this one, and `grant()`'s issuer session that
-  // approved the consent): each tick reads its grant on the account and no membership at all.
-  expect(membershipReads).not.toHaveBeenCalled();
-  expect(await root.whoami()).toMatchObject({ actor: flow.user.id }); // still live: it holds nothing to lose
-});
-
-test("a live session rides out a deploy's Durable Object reset, and a control-plane read that gave up, during its re-check", async () => {
-  fetchReachesThisWorker();
-  const flow = await grant([`${ORIGIN}/api`]);
-  // THE GUARD FROM SOURCE (src/rpc.ts), not through `exports.default`: it serves the built worker, whose own
-  // copy of ControlPlane a spy on the source class never sees. Same admission as /api's.
-  const request = new Request(`${ORIGIN}/api`, {
-    headers: { Upgrade: "websocket", Origin: ORIGIN },
-  });
-  const executionContext = createExecutionContext();
-  const authorization = await authorizationForToken(
-    env,
-    flow.token!.access_token,
-    platformAddressesOf(env, request),
-    "api",
-  );
-  const response = await rpcResponse(request, env, executionContext, authorization);
-  expect(response).toMatchObject({ status: 101 });
-  response.webSocket!.accept();
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  onTestFinished(() => {
-    transport[Symbol.dispose]();
-  });
-  const root = transport.authenticate({ type: "from-server-cookie" });
-  using context = await root.projects.get(flow.oauthA.id);
-  await context.invoke("itx.kv.get('live-auth-probe')"); // holds the project: the tick reads membership
-  // What a deploy does to the tick's membership read (prd, 2026-09-23 after #2888): the control
-  // plane's Durable Object is reset for its new code and workerd stamps the cut call retryable.
-  const membershipReads = vi
-    .spyOn(ControlPlane.prototype, "reachableProjects")
-    .mockImplementationOnce(() =>
-      Promise.reject(
-        Object.assign(new Error("Durable Object reset because its code was updated."), {
-          retryable: true,
-          durableObjectReset: true,
-        }),
-      ),
-    )
-    // then what an outage does to it: the edge's bounded read gives up (control-plane/edge.ts),
-    // which no transport flag marks — the control plane is down, not the session
-    .mockImplementationOnce(() =>
-      Promise.reject(
-        new ControlPlaneUnavailableError({
-          method: "accessibleTo",
-          waitedMs: 3_000,
-          boundMs: 3_000,
-        }),
-      ),
-    );
-  const warns = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    membershipReads.mockRestore();
-    warns.mockRestore();
-  });
-  // Real elapsed time: the 30 s tick meets the reset, its retry 2 s later the outage, and the next
-  // retry reads through.
-  await until(
-    "the re-check's retry reads through",
-    () => membershipReads.mock.settledResults.some((result) => result.type === "fulfilled"),
-    45_000,
-  );
-  const reads = membershipReads.mock.calls.length; // mockRestore clears the record
-  membershipReads.mockRestore();
-  expect(reads).toBeGreaterThanOrEqual(3);
-  // a deploy's reset is expected, never a platform failure the prd fault alarm counts
-  expect(warns).toHaveBeenCalledWith({
-    event: "oauth.deploy-reset-live-authorization-retry",
-    name: "live-authorization",
-    grantId: flow.token!.access_token.split(":")[1],
-    message: "Error: Durable Object reset because its code was updated.",
-  });
-  // the outage's is a platform failure the fault alarm counts, retried all the same
-  expect(warns).toHaveBeenCalledWith({
-    event: "oauth.platform-failure-live-authorization-retry",
-    name: "live-authorization",
-    grantId: flow.token!.access_token.split(":")[1],
-    message:
-      "ControlPlaneUnavailableError: The control plane did not answer accessibleTo within 3000 ms",
-  });
-  expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
-  await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers
-});
-
 test("console and project browsers use the same CIMD flow and independent grants", async () => {
   let logoutUnavailable = false;
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -962,62 +811,6 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
   }
 });
 
-/** An admin session — `as` the person `email` names, when given — disposed when the test finishes. */
-function actingAs(email?: string) {
-  const sessions: Disposable[] = [];
-  onTestFinished(() => {
-    for (const session of sessions) session[Symbol.dispose]();
-  });
-  return adminSession(sessions, email);
-}
-
-/** A PKCE authorization request for `clientId`, as a client sends it to /oauth2/auth. */
-async function authorizationRequest(clientId: string, resources: string[] = []) {
-  const verifier =
-    crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
-  );
-  const challenge = btoa(String.fromCharCode(...digest))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-  const query = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: "https://client.test/callback",
-    scope: "iterate",
-    state: "test-state",
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-  });
-  for (const resource of resources) query.append("resource", resource);
-  return { query, verifier };
-}
-
-/** The consent capability of the issuer session a browser's sign-in `cookie` holds. */
-async function issuerApprover(cookie: string) {
-  const issuerSession = appSession(
-    env.BROWSER_SESSION,
-    new Request(ORIGIN, { headers: { cookie } }),
-  )!;
-  return (await rpc((await issuerSession.bearer())!)).root;
-}
-
-function helpers() {
-  return oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));
-}
-
-/** `fetch` reaches this worker until the test finishes (the network is out of reach here). */
-function fetchReachesThisWorker() {
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => {
-    spy.mockRestore();
-  });
-}
-
 /** `OAUTH_KV` as a location that cached every key at its first write: each read answers that
  *  write, whatever was written since (until the test finishes). Answers the first writes by key. */
 function kvServesFirstWrites(): Map<string, string> {
@@ -1040,82 +833,6 @@ function kvServesFirstWrites(): Map<string, string> {
     gets.mockRestore();
   });
   return firstWrites;
-}
-
-function call(path: string, init?: RequestInit) {
-  const headers = new Headers(init?.headers);
-  if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
-  return exports.default.fetch(
-    new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }),
-  );
-}
-
-async function rpc(
-  token: string,
-  credential: "from-server-cookie" | "bearer" = "from-server-cookie",
-) {
-  const response = await call("/api", {
-    headers: { Upgrade: "websocket", Authorization: `Bearer ${token}`, Origin: ORIGIN },
-  });
-  expect(response, await (response.status === 101 ? "" : response.text())).toMatchObject({
-    status: 101,
-  });
-  response.webSocket!.accept();
-  // The server's close, as the client sees it: what a row awaits before asserting that every stub
-  // is dead — a call sent while the close is in flight surfaces capnweb's `'' is not a function`,
-  // not the close reason (2 of 8 Test jobs, 2026-09-22).
-  const closed = new Promise<void>((resolve) =>
-    response.webSocket!.addEventListener("close", () => resolve(), { once: true }),
-  );
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  onTestFinished(() => {
-    transport[Symbol.dispose]();
-  });
-  // The guard's 30 s timer is armed when the socket binds its grant — here, for an upgrade's bearer
-  // — so a row that measures the interval measures from this instant, not from its own later revoke.
-  const boundAt = Date.now();
-  const root = transport.authenticate({ type: credential });
-  return { root, closed, boundAt };
-}
-
-/** THE REVOCATION TRUTH, landed by hand: `account/grant-ended` on the person's account — the fact
- *  grants.ts `end` awaits before it touches the provider — with the provider's rows left as they
- *  are, so what denies the token next is the account alone (oauth.ts `grantIsRevoked`). */
-async function endGrantOnAccount(userId: string, grantId: string): Promise<void> {
-  const account = stub(`global.iterate/users/${userId}`);
-  await account.invoke(["itx", "processors", ["enable", "account"]]);
-  // As grants.ts lands it: through the fixed point, stamped `source.platform` — the only end the
-  // account folds.
-  await account.invoke(
-    [
-      "itx",
-      "builtins",
-      [
-        "append",
-        {
-          type: "events.iterate.com/account/grant-ended",
-          idempotencyKey: `account/grant-ended/${grantId}`,
-          payload: { grantId } satisfies GrantEnded,
-        },
-      ],
-    ],
-    [],
-    { principal: null, platform: true },
-  );
-}
-
-/** A person's membership of `orgId` removed by the operator — the org given a second owner first
- *  when the person is its last (the control plane keeps at least one). */
-async function removeMembership(orgId: string, userId: string): Promise<void> {
-  const admin = await actingAs();
-  const standIn = await admin.users.create({ email: "oauth-stand-in-owner@example.com" });
-  await admin.organizations.addMember(orgId, { userId: standIn.id, role: "owner" });
-  await admin.organizations.removeMember(orgId, { userId });
-}
-async function restoreMembership(orgId: string, userId: string): Promise<void> {
-  await (await actingAs()).organizations.addMember(orgId, { userId, role: "owner" });
 }
 
 async function tool(token: string, name: string, args: object = {}) {
@@ -1148,68 +865,4 @@ async function tool(token: string, name: string, args: object = {}) {
               .find((message) => message.id === 1)
           : JSON.parse(text),
   };
-}
-
-/** Local HTTPS client metadata is not public. Only registration is a fixture;
- * consent, PKCE, exchange, refresh and resource admission all use the real server. The person
- * holds two projects, `oauth-a` and `oauth-b` (their rows come back); the consent ticks the
- * `projects` named by slug — `oauth-a` alone by default. */
-async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
-  const login = await call("/login", {
-    method: "POST",
-    body: new URLSearchParams({
-      email: "oauth-new@example.com",
-      password: loginPassword(),
-      next: "/",
-    }),
-  });
-  const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
-  // the sign-in found-or-created the person; their projects are made as them
-  const user = await controlPlane().ensureUser("oauth-new@example.com");
-  const theirs = await actingAs(user.email);
-  using _a = await theirs.projects.create({ project: "oauth-a" });
-  using _b = await theirs.projects.create({ project: "oauth-b" });
-  const oauthA = (await controlPlane().getProject("oauth-a"))!;
-  const oauthB = (await controlPlane().getProject("oauth-b"))!;
-  const client = await helpers().createClient({
-    clientName: "OAuth integration",
-    redirectUris: ["https://client.test/callback"],
-    tokenEndpointAuthMethod: "none",
-    grantTypes: ["authorization_code", "refresh_token"],
-    responseTypes: ["code"],
-  });
-  const { query, verifier } = await authorizationRequest(client.clientId, resources);
-  const approver = await issuerApprover(cookie);
-  // a ticked box submits the project's id
-  const approval = await approver.consent.approve({
-    query: `?${query}`,
-    projects: [oauthA, oauthB]
-      .filter((project) => projects.includes(project.slug))
-      .map((project) => project.id),
-  });
-  if ("error" in approval) throw new Error(approval.error);
-  const redirect = new URL(approval.redirectTo);
-  const code = redirect.searchParams.get("code");
-  if (!code)
-    return {
-      error: redirect.searchParams.get("error"),
-      cookie,
-      clientId: client.clientId,
-      user,
-      oauthA,
-      oauthB,
-    };
-  const tokenResponse = await call("/oauth2/token", {
-    method: "POST",
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code,
-      client_id: client.clientId,
-      redirect_uri: "https://client.test/callback",
-      code_verifier: verifier,
-    }),
-  });
-  const token = await tokenResponse.json<{ access_token: string; refresh_token: string }>();
-  expect(tokenResponse, JSON.stringify(token)).toMatchObject({ status: 200 });
-  return { token, cookie, clientId: client.clientId, user, oauthA, oauthB };
 }

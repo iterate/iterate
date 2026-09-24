@@ -108,8 +108,8 @@ type VitestJson = {
 /** One Vitest run of `project` with its JSON report at `file`, every row folded into the tally;
  *  how many rows failed, or undefined when Vitest wrote no report. --retry=0: the e2e project retries
  *  once in CI, which is right for a gate and wrong for a soak — a row that failed its first attempt
- *  and passed its second is exactly what the soak exists to count (soak qx2jhwrrlk, 2026-09-22: the
- *  tally said 1/100 for a row that had failed 3 first attempts). Otherwise the `e2e:run` and
+ *  and passed its second is exactly what the soak exists to count (with the retry, a row that failed
+ *  3 first attempts in 100 tallied 1/100, 2026-09-22). Otherwise the `e2e:run` and
  *  `perf:run` scripts' argv, minus the reporters: vitest adds repeated `--reporter` flags together,
  *  and the retry-telemetry one would record flakes on every run. */
 function soakRun(

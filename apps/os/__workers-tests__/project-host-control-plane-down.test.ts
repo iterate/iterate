@@ -1,28 +1,26 @@
-// A project host while the control plane is down (src/worker.ts, src/control-plane/last-known-project.ts).
-// On 2026-09-24 the `CONTROL_PLANE` singleton was unreachable for 188 s, a deploy landed inside the
-// outage, and every project host failed after 12–15 s: the new isolates had no project memo. Each
-// row here creates its project (and claims its own hostname) straight on the control plane's Durable
-// Object, so the worker under test (Vite's built worker, in this isolate) has never looked either
-// up — a fresh isolate, as the deploy's were — then makes that Durable Object's reads throw what the
-// outage threw, lose their connection, or never answer.
+// A project host while the control plane is down or slow (src/worker.ts,
+// src/control-plane/last-known-project.ts). On 2026-09-24 the `CONTROL_PLANE` singleton was
+// unreachable for 188 s, a deploy landed inside the outage, and every project host failed after
+// 12–15 s: the new isolates had no project memo. Each row here creates its project (and claims its
+// own hostname) straight on the control plane's Durable Object, so the worker under test (Vite's
+// built worker, in this isolate) has never looked either up — a fresh isolate, as the deploy's were
+// — then makes that Durable Object's reads throw what the outage threw, lose their connection, or
+// not answer until the row lets them.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
-import { appConfigOf, sessionSigningSecretOf } from "../src/app-config.ts";
-import { signClaims, verifyClaims } from "../src/caller.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
-import { admitProjectHost } from "../src/control-plane/last-known-project.ts";
-import { controlPlane, controlPlaneStub, ORIGIN, signedInSession, until } from "./support.ts";
+import { lastKnownKey } from "../src/control-plane/last-known-project.ts";
+import { controlPlaneStub, signedInSession, until } from "./support.ts";
 
-/** How long a failing read may keep a visitor: a throw or a cut at once; a hang its bound, 3 s
- *  (edge.ts READ_TIMEOUT_MS). The platform took 12–15 s to fail. */
+/** How long a failing read may keep a visitor who has a copy: a throw or a cut at once; a hang the
+ *  3 s admission waits before a copy stands in. The platform took 12–15 s to fail. */
 const WAIT_MS = { throws: 1_000, "is cut": 1_000, hangs: 4_500 } as const;
 
 test.for(["throws", "is cut", "hangs"] as const)(
-  "the control plane's reads %s: a host this data center served before serves from its last-known copy, logged once as a platform failure; once the control plane answers again, it answers",
+  "the control plane's reads %s: a host serves from the copy the control plane wrote, logged once as a platform failure; once the control plane answers again, it answers",
   async (how) => {
     const { slug, host } = await catalogOnlyProject(`stale-${how}`);
-    await rememberedByAnEarlierIsolate(host);
     const outage = await failReads(how);
     const warn = vi.spyOn(console, "warn");
     onTestFinished(() => warn.mockRestore());
@@ -41,7 +39,7 @@ test.for(["throws", "is cut", "hangs"] as const)(
         method: "project",
         waitedMs: expect.any(Number),
         message: failed(how, "project"),
-        copies: [{ what: `project/${slug}`, ageMs: expect.any(Number) }],
+        copies: [lastKnownKey("project", slug)],
       },
     ]);
 
@@ -53,16 +51,15 @@ test.for(["throws", "is cut", "hangs"] as const)(
   },
 );
 
-test("a project's own hostname: its address and its row both stand in, after ONE bounded wait", async () => {
+test("a project's own hostname: its copy stands in for its address and its row, after ONE 3 s wait", async () => {
   const { projectId, host } = await catalogOnlyProject("stale-own", { ownHostname: true });
-  await rememberedByAnEarlierIsolate(host);
   const outage = await failReads("hangs");
   const warn = vi.spyOn(console, "warn");
   onTestFinished(() => warn.mockRestore());
 
   const started = Date.now();
   const served = await call(host);
-  // one bounded wait (the hostname's read), not two: the row's copy is tried first
+  // one wait (the hostname's read), not two: the hostname's copy holds the row
   expect(Date.now() - started).toBeLessThan(WAIT_MS.hangs);
   expect(served).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
@@ -74,19 +71,16 @@ test("a project's own hostname: its address and its row both stand in, after ONE
       method: "projectByHostname",
       waitedMs: expect.any(Number),
       message: failed("hangs", "projectByHostname"),
-      copies: [
-        { what: `hostname/${new URL(host).hostname}`, ageMs: expect.any(Number) },
-        { what: `project/${projectId}`, ageMs: expect.any(Number) },
-      ],
+      copies: [lastKnownKey("hostname", new URL(host).hostname)],
     },
   ]);
   expect(outage.reads.project).not.toHaveBeenCalled();
 });
 
-test.for(["throws", "is cut", "hangs"] as const)(
-  "the control plane's reads %s: a host with no last-known copy answers 503 at once, logged as a platform failure",
+test.for(["throws", "is cut"] as const)(
+  "the control plane's reads %s: a host with no copy answers 503 at once, logged as a platform failure",
   async (how) => {
-    const { host } = await catalogOnlyProject(`uncached-${how}`);
+    const { host } = await catalogOnlyProject(`uncopied-${how}`, { copies: false });
     await failReads(how);
     const warn = vi.spyOn(console, "warn");
     onTestFinished(() => warn.mockRestore());
@@ -107,47 +101,39 @@ test.for(["throws", "is cut", "hangs"] as const)(
   },
 );
 
-test("a copy the platform did not sign is no copy: one in an older shape, or signed with another secret, and the host answers 503", async () => {
-  for (const forged of [
-    (_key: string, value: unknown) => JSON.stringify({ value, rememberedAt: Date.now() }),
-    (key: string, value: unknown) =>
-      signClaims(
-        { copy: "last-known-project", key, value, rememberedAt: Date.now() },
-        "not-the-platform-secret",
-      ),
-  ]) {
-    const { slug, projectId, host } = await catalogOnlyProject("forged");
-    const key = keyOf(`project/${slug}`);
-    const cache = await caches.open("last-known-projects");
-    await cache.put(
-      key,
-      new Response(await forged(key, { id: projectId, slug, orgId: "org_forged" })),
-    );
-    const outage = await failReads("throws");
-    const warn = vi.spyOn(console, "warn");
+test("a slow read with no copy is waited for: the control plane's late answer serves the host, not a 503", async () => {
+  const { host } = await catalogOnlyProject("uncopied-slow", { copies: false });
+  const outage = await failReads("hangs");
+  const warn = vi.spyOn(console, "warn");
+  onTestFinished(() => warn.mockRestore());
 
-    await expectUnavailable(await call(host), new URL(host).hostname);
-    expect(controlPlaneWarns(warn)).toEqual([
-      expect.objectContaining({ event: "control-plane.platform-failure-unavailable" }),
-    ]);
-    warn.mockRestore();
-    await outage.end();
-  }
+  let settled = false;
+  const answer = call(host).finally(() => (settled = true));
+  await new Promise((resolve) => setTimeout(resolve, WAIT_MS.hangs));
+  expect(settled).toBe(false);
+  await outage.end();
+  const served = await answer;
+  expect(served).toMatchObject({ status: 404 });
+  expect(await served.text()).toMatch(/has no site yet/);
+  expect(controlPlaneWarns(warn)).toEqual([]);
 });
 
-test("a hostname moved to another project: the control plane's next answer rewrites the copy, so an outage reaches the new project, never the old", async () => {
+test("the control plane writes a project's copies when it creates it, and a hostname's when it claims it", async () => {
+  const { slug, projectId, host } = await catalogOnlyProject("written", { ownHostname: true });
+  const row = { id: projectId, slug, orgId: expect.any(String) };
+
+  expect(await copyAt(lastKnownKey("project", slug))).toEqual(row);
+  expect(await copyAt(lastKnownKey("project", projectId))).toEqual(row);
+  expect(await copyAt(lastKnownKey("hostname", new URL(host).hostname))).toEqual(row);
+});
+
+test("a hostname moved to another project: the release deletes its copy and the claim writes the new one, so an outage reaches the new project, never the old", async () => {
   const from = await catalogOnlyProject("moved-from", { ownHostname: true });
   const to = await catalogOnlyProject("moved-to");
   const { hostname } = new URL(from.host);
-  await rememberedByAnEarlierIsolate(from.host); // this isolate's copy: `from`
   await controlPlaneStub().releaseHostname(from.projectId, hostname);
+  expect(await env.OAUTH_KV.get(lastKnownKey("hostname", hostname))).toBe(null);
   await controlPlaneStub().claimHostname(to.projectId, hostname);
-  // the same isolate, past its thirty-second hostname memo, asks again and hears `to`
-  vi.useFakeTimers({ toFake: ["Date"] });
-  onTestFinished(() => void vi.useRealTimers());
-  vi.setSystemTime(Date.now() + 31_000);
-  await rememberedByAnEarlierIsolate(from.host);
-  vi.useRealTimers();
   await failReads("throws");
   const warn = vi.spyOn(console, "warn");
   onTestFinished(() => warn.mockRestore());
@@ -161,81 +147,97 @@ test("a hostname moved to another project: the control plane's next answer rewri
   ]);
 });
 
-test("a hostname its project removed: the control plane's null answer deletes the copy, so an outage answers 503", async () => {
+test("a hostname its project removed: its copy goes before its claim, so an outage answers 503", async () => {
   const { projectId, host } = await catalogOnlyProject("removed", { ownHostname: true });
   const { hostname } = new URL(host);
-  await rememberedByAnEarlierIsolate(host);
   await controlPlaneStub().releaseHostname(projectId, hostname);
-  vi.useFakeTimers({ toFake: ["Date"] });
-  onTestFinished(() => void vi.useRealTimers());
-  vi.setSystemTime(Date.now() + 31_000);
-  await rememberedByAnEarlierIsolate(host, { admitted: false });
-  vi.useRealTimers();
-  expect(
-    await (await caches.open("last-known-projects")).match(keyOf(`hostname/${hostname}`)),
-  ).toBe(undefined);
+  expect(await env.OAUTH_KV.get(lastKnownKey("hostname", hostname))).toBe(null);
   await failReads("throws");
 
   await expectUnavailable(await call(host), hostname);
 });
 
-test("a host the worker admits leaves this data center a signed copy of each answer", async () => {
-  const { projectId, host } = await catalogOnlyProject("written", { ownHostname: true });
-  const { hostname } = new URL(host);
+test("an unreadable copy of the host's own name is no copy, even when a name above it has one: the host answers 503, never the other project", async () => {
+  const above = await catalogOnlyProject("above", { ownHostname: true });
+  const below = await catalogOnlyProject("below");
+  // claimed first: a claim is refused under another project's name, not above one
+  const hostname = `docs.${new URL(above.host).hostname}`;
+  await controlPlaneStub().releaseHostname(above.projectId, new URL(above.host).hostname);
+  await controlPlaneStub().claimHostname(below.projectId, hostname);
+  await controlPlaneStub().claimHostname(above.projectId, new URL(above.host).hostname);
+  await failReads("throws");
+  const get = env.OAUTH_KV.get.bind(env.OAUTH_KV) as (key: string, type: "json") => unknown;
+  const gets = vi
+    .spyOn(env.OAUTH_KV, "get")
+    .mockImplementation(((key: string) =>
+      key === lastKnownKey("hostname", hostname)
+        ? Promise.reject(new Error("KV unavailable"))
+        : get(key, "json")) as never);
+  onTestFinished(() => gets.mockRestore());
 
-  expect(await call(host)).toMatchObject({ status: 404 });
-  const [address, row] = await until("the worker's copies", async () => {
-    const copies = await Promise.all([
-      copyAt(`hostname/${hostname}`),
-      copyAt(`project/${projectId}`),
-    ]);
-    return copies.every(Boolean) && copies;
-  });
-  expect(address).toMatchObject({
-    copy: "last-known-project",
-    key: keyOf(`hostname/${hostname}`),
-    value: { project: projectId, routingSlug: null, basePath: "" },
-  });
-  expect(row).toMatchObject({
-    copy: "last-known-project",
-    key: keyOf(`project/${projectId}`),
-    value: { id: projectId },
-  });
+  await expectUnavailable(await call(`https://${hostname}/`), hostname);
+  expect(gets).toHaveBeenCalledWith(lastKnownKey("hostname", hostname), "json");
 });
 
-test("while the control plane answers, a request never reads the last-known copies: the control plane admits it", async () => {
-  const { projectId, host } = await catalogOnlyProject("copy-unread", { ownHostname: true });
-  await rememberedByAnEarlierIsolate(host);
-  const prototype = Object.getPrototypeOf(await caches.open("last-known-projects")) as Cache;
-  const matches = vi.spyOn(prototype, "match");
-  const puts = vi.spyOn(prototype, "put");
-  onTestFinished(() => {
-    matches.mockRestore();
-    puts.mockRestore();
+test("a release the KV delete fails keeps the claim, so the copy never outlives it: the hostname's processor asks again", async () => {
+  const { projectId, host } = await catalogOnlyProject("release-fails", { ownHostname: true });
+  const { hostname } = new URL(host);
+  await runInDurableObject(controlPlaneStub(), async (instance: ControlPlaneDurableObject) => {
+    const deletes = vi
+      .spyOn((instance as unknown as { env: typeof env }).env.OAUTH_KV, "delete")
+      .mockRejectedValueOnce(new Error("KV unavailable"));
+    await expect(instance.releaseHostname(projectId, hostname)).rejects.toThrow(/KV unavailable/);
+    deletes.mockRestore();
   });
+  expect(await controlPlaneStub().projectByHostname([hostname])).toMatchObject({
+    project: { id: projectId },
+  });
+  expect(await copyAt(lastKnownKey("hostname", hostname))).toMatchObject({ id: projectId });
+});
+
+test("the rows the catalog held before copies were written are backfilled once, by the control plane's alarm", async () => {
+  const { slug, projectId, host } = await catalogOnlyProject("backfilled", { ownHostname: true });
+  const keys = [
+    lastKnownKey("project", slug),
+    lastKnownKey("project", projectId),
+    lastKnownKey("hostname", new URL(host).hostname),
+  ];
+  // the rows as they stood before this change: no copies, and no backfill yet
+  await Promise.all(keys.map((key) => env.OAUTH_KV.delete(key)));
+  // what the constructor does on the first start after this change: the alarm, due at once
+  await runInDurableObject(controlPlaneStub(), async (_, state) => {
+    state.storage.kv.delete("last-known-backfill");
+    await state.storage.setAlarm(Date.now());
+  });
+
+  for (const key of keys) expect(await copyAt(key)).toMatchObject({ id: projectId });
+  expect(
+    await runInDurableObject(controlPlaneStub(), (_, state) =>
+      state.storage.kv.get("last-known-backfill"),
+    ),
+  ).toBe("done");
+});
+
+test("while the control plane answers, a request never reads the copies, and a project's own hostname is ONE read", async () => {
+  const { host } = await catalogOnlyProject("copy-unread", { ownHostname: true });
+  const gets = vi.spyOn(env.OAUTH_KV, "get");
+  onTestFinished(() => gets.mockRestore());
   const reads = await spyOnReads();
 
   const served = await call(host);
   expect(served).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
   expect(reads.projectByHostname).toHaveBeenCalledOnce();
-  expect(reads.project).toHaveBeenCalledWith(projectId);
-  // the one match a worker makes while the control plane answers is an isolate's single read-back
-  // of a copy it has just written, never a read before its write
-  for (const [index, [key]] of matches.mock.calls.entries()) {
-    const written = puts.mock.calls.findIndex(([put]) => String(put) === String(key));
-    expect(written).toBeGreaterThanOrEqual(0);
-    expect(puts.mock.invocationCallOrder[written]).toBeLessThan(
-      matches.mock.invocationCallOrder[index]!,
-    );
-  }
+  // the hostname's read brought the row: the admission's second read is a memo hit
+  expect(reads.project).not.toHaveBeenCalled();
+  expect(gets.mock.calls.filter(([key]) => String(key).startsWith("last-known:"))).toEqual([]);
 });
 
 test("a signed-in visitor while admission found the control plane down: their access has no copy, so a 503 at once, logged once", async () => {
   const visitor = await signedInVisitor();
   const host = `https://${visitor.slug}-own.example.test/`;
   await controlPlaneStub().claimHostname(visitor.projectId, new URL(host).hostname);
-  await rememberedByAnEarlierIsolate(host);
+  await copiesLanded(visitor);
   const outage = await failReads("throws", ["projectByHostname", "project", "accessibleTo"]);
   const warn = vi.spyOn(console, "warn");
   onTestFinished(() => warn.mockRestore());
@@ -254,6 +256,29 @@ test("a signed-in visitor while admission found the control plane down: their ac
     },
   ]);
   expect(outage.reads.accessibleTo).not.toHaveBeenCalled();
+});
+
+test("a signed-in visitor while admission's read was only slow: their access is read, and they are served as a member", async () => {
+  const visitor = await signedInVisitor();
+  // a hostname of its own: the worker under test has never read it
+  const host = `https://${visitor.slug}-own.example.test/`;
+  await controlPlaneStub().claimHostname(visitor.projectId, new URL(host).hostname);
+  await copiesLanded(visitor);
+  await failReads("hangs");
+  const warn = vi.spyOn(console, "warn");
+  onTestFinished(() => warn.mockRestore());
+
+  const started = Date.now();
+  const served = await call(host, { authorization: `Bearer ${visitor.token}` });
+  expect(Date.now() - started).toBeLessThan(WAIT_MS.hangs);
+  expect(served).toMatchObject({ status: 404 });
+  expect(await served.text()).toMatch(/has no site yet/);
+  expect(controlPlaneWarns(warn)).toEqual([
+    expect.objectContaining({
+      event: "control-plane.platform-failure-stale-project",
+      message: failed("hangs", "projectByHostname"),
+    }),
+  ]);
 });
 
 test("a signed-in visitor whose access read fails while admission read through: a 503, logged once", async () => {
@@ -307,30 +332,38 @@ async function expectUnavailable(response: Response, hostname: string) {
   );
 }
 
-/** A copy's cache key (last-known-project.ts): the platform's origin and what was read. */
-const keyOf = (what: string) => `${ORIGIN}/.iterate/last-known/${what}`;
+/** The copy at `key` in `OAUTH_KV`, once it is there. */
+const copyAt = (key: string) =>
+  until(`the copy ${key}`, async () => (await env.OAUTH_KV.get(key, "json")) ?? undefined);
 
-/** The claims a copy holds, verified with the platform's secret; undefined when there is none. */
-async function copyAt(what: string) {
-  const cached = await (await caches.open("last-known-projects")).match(keyOf(what));
-  if (!cached) return undefined;
-  return verifyClaims(await cached.text(), await sessionSigningSecretOf(appConfigOf(env)));
+/** A project's copies, once the control plane's creation has written them. */
+async function copiesLanded(project: { slug: string; projectId: string }) {
+  await copyAt(lastKnownKey("project", project.slug));
+  await copyAt(lastKnownKey("project", project.projectId));
 }
 
 /** A project the catalog holds and the worker under test never looked up; with no site, its apex
  *  answers its context's own 404 — the proof a request was admitted to it. `ownHostname`: the
  *  project also holds a hostname of its own (claimed on the catalog, as project/custom-hostnames.ts
- *  does once Cloudflare answers), and the row's host is that. */
-async function catalogOnlyProject(prefix: string, options: { ownHostname?: boolean } = {}) {
+ *  does once Cloudflare answers), and the row's host is that. `copies: false`: its copies are
+ *  deleted once written, as for a row the control plane never wrote down. */
+async function catalogOnlyProject(
+  prefix: string,
+  options: { ownHostname?: boolean; copies?: boolean } = {},
+) {
   const slug = `${prefix.replaceAll(" ", "-")}-${crypto.randomUUID().slice(0, 8)}`;
-  const project = await controlPlaneStub().createProject(
+  const { id: projectId } = await controlPlaneStub().createProject(
     { principal: { actor: "admin" } },
     { project: slug },
   );
-  if (!options.ownHostname)
-    return { slug, projectId: project.id, host: `https://${slug}.projects.test/` };
-  await controlPlaneStub().claimHostname(project.id, `${slug}.example.test`);
-  return { slug, projectId: project.id, host: `https://${slug}.example.test/` };
+  await copiesLanded({ slug, projectId });
+  if (options.copies === false)
+    await Promise.all(
+      [slug, projectId].map((label) => env.OAUTH_KV.delete(lastKnownKey("project", label))),
+    );
+  if (!options.ownHostname) return { slug, projectId, host: `https://${slug}.projects.test/` };
+  await controlPlaneStub().claimHostname(projectId, `${slug}.example.test`);
+  return { slug, projectId, host: `https://${slug}.example.test/` };
 }
 
 /** A person signed in, with a project of their own and a personal token for it. */
@@ -344,45 +377,36 @@ async function signedInVisitor() {
   return { slug, projectId: projectId as string, token: token as string };
 }
 
-/** What an earlier isolate did on its first visit while the control plane answered: the source
- *  module's own admission (its memos are not the built worker's) keeps this data center's copies
- *  current. `admitted: false`: the host is no project host now. */
-async function rememberedByAnEarlierIsolate(host: string, { admitted = true } = {}) {
-  const writes: Promise<unknown>[] = [];
-  const admission = await admitProjectHost(controlPlane(), {
-    config: appConfigOf(env),
-    url: new URL(host),
-    platformOrigin: ORIGIN,
-    ctx: { waitUntil: (write) => writes.push(write) },
-  });
-  expect(Boolean(admission?.project)).toBe(admitted);
-  await Promise.all(writes);
-}
-
 /** The control plane Durable Object's reads a project host makes (`projectByHostname`, `project`,
  *  or those `methods`), failing until the row ends (or `end()`): throwing workerd's opaque internal
  *  error, as the outage did; cut at the transport (workerd's `retryable` stamp, retryable-error.ts);
- *  or never answering. The Durable Object runs in this isolate, so its class's methods are replaced
- *  where every call finds them. */
+ *  or not answering until then, when each answers what it would have. The Durable Object runs in
+ *  this isolate, so its class's methods are replaced where every call finds them. */
 async function failReads(
   how: Failure,
   methods: readonly (keyof ControlPlaneDurableObject & string)[] = ["project", "projectByHostname"],
 ) {
   const answers: (() => void)[] = [];
-  const failing = () => {
-    if (how === "throws") throw new Error("internal error; reference = workers-test");
-    if (how === "is cut")
-      throw Object.assign(new Error("Network connection lost."), { retryable: true });
-    // the reads are synchronous; over RPC a promise is awaited all the same — this one only once
-    // the row ends
-    return new Promise<null>((resolve) => answers.push(() => resolve(null)));
-  };
   const reads = await runInDurableObject(
     controlPlaneStub(),
     (instance: ControlPlaneDurableObject) => {
-      const prototype = Object.getPrototypeOf(instance) as Record<string, () => unknown>;
+      const prototype = Object.getPrototypeOf(instance) as Record<
+        string,
+        (...args: unknown[]) => unknown
+      >;
       return Object.fromEntries(
-        methods.map((method) => [method, vi.spyOn(prototype, method).mockImplementation(failing)]),
+        methods.map((method) => {
+          const read = prototype[method]!;
+          const failing = function (this: unknown, ...args: unknown[]) {
+            if (how === "throws") throw new Error("internal error; reference = workers-test");
+            if (how === "is cut")
+              throw Object.assign(new Error("Network connection lost."), { retryable: true });
+            // the reads are synchronous; over RPC a promise is awaited all the same — this one only
+            // once the row lets it answer
+            return new Promise((resolve) => answers.push(() => resolve(read.apply(this, args))));
+          };
+          return [method, vi.spyOn(prototype, method).mockImplementation(failing)];
+        }),
       );
     },
   );
@@ -391,10 +415,10 @@ async function failReads(
   const end = async () => {
     if (ended) return;
     ended = true;
+    for (const read of Object.values(reads)) read.mockRestore();
     await runInDurableObject(controlPlaneStub(), () => {
       for (const answer of answers.splice(0)) answer();
     });
-    for (const read of Object.values(reads)) read.mockRestore();
   };
   onTestFinished(end);
   return { end, reads };

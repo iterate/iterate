@@ -56,7 +56,7 @@
   // NO Artifacts simulator — the binding is a proxy to the real product on the block's account — so
   // local runs (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
   // (created by hand), so local runs never write repos into prd's. A deployment's is envs.ts
-  // `artifactsNamespace`; a preview's is `os-preview-<name>-repos`, created and deleted with
+  // `artifactsNamespace`; a preview's is `os-<name>-repos`, created and deleted with
   // the preview (scripts/preview.ts).
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-dev-repos" }],
 
@@ -91,7 +91,9 @@
     // unused standalone namespace; agent streams and facet storage belong to the context.
     "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
     "ControlPlaneDurableObject": { "type": "durable-object", "storage": "sqlite" },
-    "IngressRoutesDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    // The route table moved into each project root's core state (src/fetch-routes.ts); the class
+    // was only ever hosted as a facet, so its standalone namespace holds no object. Retire it.
+    "IngressRoutesDurableObject": { "type": "durable-object", "state": "deleted" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
@@ -100,7 +102,8 @@
   },
 
   // OAUTH_KV = the in-process OAuth AS's tokens and DCR clients (its grants are in the control plane,
-  // src/oauth-store.ts), and the sign-in challenges.
+  // src/oauth-store.ts), the sign-in challenges, the personal access tokens' index and the control
+  // plane's last-known copies (src/control-plane/last-known-project.ts).
   "kv_namespaces": [
     // itx.kv backing — project-prefixed (the D8 portability proof point).
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },

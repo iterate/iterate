@@ -5,8 +5,10 @@
 //   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
+//   what reset it             context/aborted, then stream/woken            → wokenAfterContextAbortedOffset
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
 //   where the project apex goes project/ingress-configured { target|null } → ingressTarget
+//   which requests go where   fetch-route/configured { fetchRouteName, … } → fetchRoutes (every `match`)
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
 //   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
@@ -27,7 +29,8 @@
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
 // it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
-// validation, and `append` refuses them. No stored row predates its event's normalization.
+// validation, and `append` refuses them. The route fold parses what it reads all the same
+// (src/fetch-routes.ts): one route that does not compile must never break every request's `match`.
 
 import {
   itxExpressionStepName,
@@ -43,6 +46,11 @@ import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/p
 import type { RewriteRuleConfigured } from "iterate/api";
 import { RunRequested, RunSettled } from "iterate/stream/run";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
+import {
+  FetchRouteConfiguredPayload,
+  reduceFetchRouteConfigured,
+  type FetchRouteTable,
+} from "../fetch-routes.ts";
 import {
   BUILT_IN_ROOTS,
   builtInsGetStep,
@@ -242,6 +250,12 @@ export type CoreState = {
   createdAt?: string;
   /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
   incarnation?: number;
+  /** The newest `context/aborted` (`itx.abort()`'s record) since the last wake record: the reset it
+   *  asked for is still to come. */
+  contextAbortedOffset?: number;
+  /** Set by the wake record: the `context/aborted` whose reset began this incarnation — a recorded,
+   *  deliberate reset (the fetch-upgrade 101s name it, context/rpc-stubs.ts). */
+  wokenAfterContextAbortedOffset?: number;
   paused: { reason: string } | null;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
    *  configured target REPLACES; `null` is kept as a MASK where something beneath would answer the
@@ -255,6 +269,10 @@ export type CoreState = {
   subscriptions: Record<string, Subscription>;
   /** Explicit fetch target for the project apex; null until configured. */
   ingressTarget: ItxExpression | null;
+  /** THE FETCH ROUTES, by name (src/fetch-routes.ts): which requests on the project's hosts go
+   *  where. Read by `itx.fetchRoutes` on a project's root — the config worker's `match` on every
+   *  request — straight from memory. */
+  fetchRoutes: FetchRouteTable;
   schedules: Record<string, ScheduledAppend>;
   /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`context/run-requested`)
    *  and not yet settled — what is running right now, or what a restart left open (never re-run:
@@ -289,7 +307,7 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "13.0.0",
+  version: "15.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas:
    *  iterate/stream/run). A processor that consumes them names the contract in its
    *  `processorDeps` (the agent); the runner and `itx.run` read them here. */
@@ -310,6 +328,7 @@ export const CoreContract = {
     itxExpressionRewriteRules: {},
     subscriptions: {},
     ingressTarget: null,
+    fetchRoutes: {},
     schedules: {},
     scriptRuns: {},
   }),
@@ -360,6 +379,12 @@ export function reduceCoreEvent(
         ? undefined
         : { ...state, ingressTarget: target };
     }
+    case "events.iterate.com/fetch-route/configured": {
+      const fetchRoutes = reduceFetchRouteConfigured(state.fetchRoutes, event, (table) =>
+        draftOf(table, draftTables),
+      );
+      return fetchRoutes && { ...state, fetchRoutes };
+    }
     case "events.iterate.com/stream/append-scheduled":
     case "events.iterate.com/stream/append-schedule-cancelled":
     case "events.iterate.com/stream/append-schedule-completed":
@@ -389,7 +414,14 @@ export function reduceCoreEvent(
         createdAt: event.createdAt,
       };
     case "events.iterate.com/stream/woken":
-      return { ...state, incarnation: payload.incarnation as number };
+      return {
+        ...state,
+        incarnation: payload.incarnation as number,
+        wokenAfterContextAbortedOffset: state.contextAbortedOffset,
+        contextAbortedOffset: undefined,
+      };
+    case "events.iterate.com/context/aborted":
+      return { ...state, contextAbortedOffset: event.offset };
     case "events.iterate.com/stream/paused":
       return { ...state, paused: { reason: (payload.reason as string | undefined) ?? "paused" } };
     case "events.iterate.com/stream/resumed":
@@ -643,6 +675,10 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
   if (event.type === "events.iterate.com/project/ingress-configured") {
     if (event.ephemeral) throw new Error("ingress configuration must be durable");
     return { ...event, payload: normalizeIngressConfigured(event.payload) };
+  }
+  if (event.type === "events.iterate.com/fetch-route/configured") {
+    if (event.ephemeral) throw new Error("a fetch route must be durable");
+    return { ...event, payload: FetchRouteConfiguredPayload.parse(event.payload) };
   }
   // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
   // its own message — this prefix check runs first and must not throw a TypeError of its own.

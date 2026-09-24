@@ -14,9 +14,11 @@
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
-// is all it takes to be alarmed.
+// is all it takes to be alarmed. One whose defect is too rare to pin with a failing test is pinned
+// here instead (PINNED_WORKAROUNDS): the alarm posts once when its heal has been absent for weeks.
 //
 //   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+//   … run --ref <git ref> --state <previous.json> --state-out <next.json>   # keeps state on main only
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay the half hour to then, post nothing
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -34,7 +36,7 @@ import {
   spaEnvs,
   voiceEnvs,
 } from "../../envs.ts";
-import { newestArtifactFile } from "./depot.ts";
+import { saveNewestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
@@ -58,34 +60,57 @@ export const stateArtifact = {
 };
 
 /** The prd account's Workers Logs API access. */
-export type CloudflareCredentials = { accountId: string; apiToken: string };
+type CloudflareCredentials = { accountId: string; apiToken: string };
 
 /** One window's rows per signal: [label, count], biggest first. `pagers` is not a fault: the
  *  rpc-stub pagers' re-dial outcomes by event, the recovery a page shows beside a connection's
- *  close (apps/os context/rpc-stubs.ts); one that gives up logs an error, which is. */
+ *  close (apps/os context/rpc-stubs.ts); one that gives up logs an error, which is. `healEvents` is
+ *  `heals` by event instead of by name, for PINNED_WORKAROUNDS. */
 export type FaultReading = Record<
-  "serverErrors" | "heals" | "errors" | "pagers",
+  "serverErrors" | "heals" | "healEvents" | "errors" | "pagers",
   [string, number][]
 >;
+
+/**
+ * WORKAROUNDS PINNED BY PRD TELEMETRY. A workaround for a platform defect stays only while a test
+ * fails once the defect is fixed (docs/engineering-invariants.md). A defect too rare to reproduce in
+ * a test is pinned here instead, by the heal its workaround logs: each run notes when prd last
+ * logged it, and once prd has logged none for `PIN_QUIET_DAYS`, the run posts once to #error-pulse
+ * that the workaround can go. A heal seen again starts the count over. The count lives in the
+ * state, because Workers Logs cannot answer for 28 days: on 2026-09-24 a query spanning six days or
+ * more answered empty, with success, where one of five found the heals, and empty would read as
+ * fixed. A run without state starts the count again: a late post, never a false one.
+ */
+export const PINNED_WORKAROUNDS = [
+  {
+    /** What every `event` of the workaround's heals starts with. */
+    event: "iterate-context.platform-failure-alarm-",
+    /** The post, once the heal has been absent `PIN_QUIET_DAYS`. */
+    post: "Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts",
+  },
+];
+export const PIN_QUIET_DAYS = 28;
 
 /** The logs one run reads: from where the last run stopped to now. */
 export type LogWindow = { from: Date; to: Date };
 
 /** What the alarm remembers between runs. `readUntil` is where the next read starts; each open
  *  incident, by its key, holds the thread of the page that opened it, how often it was seen and the
- *  count the channel last heard. */
+ *  count the channel last heard. Each pinned workaround, by its event, holds when prd last logged
+ *  its heal (or when the count started) and whether its post went out. */
 export const AlarmState = z.object({
   readUntil: z.string(),
   incidents: z.record(
     z.string(),
     z.object({ thread: z.string(), lastSeen: z.string(), count: z.number(), told: z.number() }),
   ),
+  pins: z.record(z.string(), z.object({ lastSeen: z.string(), told: z.boolean() })).optional(),
 });
 export type AlarmState = z.infer<typeof AlarmState>;
 
 /** Reads the prd Workers' Logs since the last run and pages #error-pulse on a fault. */
 export async function run(
-  options: { at?: string; dryRun?: boolean; state?: string; stateOut?: string } = {},
+  options: { at?: string; dryRun?: boolean; ref?: string; state?: string; stateOut?: string } = {},
 ) {
   const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
   if (!accountId || !apiToken) throw new Error("run under doppler --project os --config prd");
@@ -104,8 +129,9 @@ export async function run(
     slack: options.dryRun ? null : getSlackClient,
   });
   // After every post: a run that failed to post keeps no state, so the next one reads its window
-  // again and posts what this one owed.
-  if (options.stateOut && !options.at && !options.dryRun) {
+  // again and posts what this one owed. Only a run on main (`ref`, the run's git ref) keeps it: a
+  // dispatch on a branch must not move main's read window or its open incidents.
+  if (options.stateOut && options.ref === "refs/heads/main" && !options.at && !options.dryRun) {
     mkdirSync(dirname(options.stateOut), { recursive: true });
     writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
   }
@@ -128,8 +154,10 @@ export async function alarm(input: {
   const reading = await readWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
+  const pinned = pinnedWorkarounds(reading.healEvents, window, input.state);
   // Only a run that owes a post needs Slack: a quiet run stays green whatever its token does.
-  const slack = triage.page || triage.replies.length ? input.slack?.() : undefined;
+  const slack =
+    triage.page || triage.replies.length || pinned.posts.length ? input.slack?.() : undefined;
   const channel = slackChannelIds["#error-pulse"];
   const incidents = { ...triage.incidents };
   if (triage.page && slack) {
@@ -144,13 +172,43 @@ export async function alarm(input: {
       text: reply.text,
       reply_broadcast: reply.broadcast,
     });
-  const summary = [triage.page?.text, ...triage.replies.map((reply) => reply.text)]
+  for (const text of pinned.posts) await slack?.chat.postMessage({ channel, text });
+  const summary = [triage.page?.text, ...triage.replies.map((reply) => reply.text), ...pinned.posts]
     .filter(Boolean)
     .join("\n\n");
   return {
     summary: summary || "prd is quiet",
-    next: { readUntil: window.to.toISOString(), incidents } satisfies AlarmState,
+    next: {
+      readUntil: window.to.toISOString(),
+      incidents,
+      pins: pinned.pins,
+    } satisfies AlarmState,
   };
+}
+
+/** What PINNED_WORKAROUNDS owe after `window`: each pin's next state, and the posts of those whose
+ *  heal has now been absent `PIN_QUIET_DAYS` and not yet posted. Pure. */
+export function pinnedWorkarounds(
+  healEvents: [string, number][],
+  window: LogWindow,
+  state: AlarmState | null,
+) {
+  const pins: NonNullable<AlarmState["pins"]> = {};
+  const posts: string[] = [];
+  for (const pin of PINNED_WORKAROUNDS) {
+    const before = state?.pins?.[pin.event];
+    const seen = healEvents.some(([event, count]) => event.startsWith(pin.event) && count > 0);
+    const lastSeen = seen || !before ? window.to.toISOString() : before.lastSeen;
+    const told = !seen && before?.told === true;
+    const quietMs = window.to.getTime() - Date.parse(lastSeen);
+    const post = !told && quietMs >= PIN_QUIET_DAYS * 86_400_000;
+    if (post)
+      posts.push(
+        `✅ ${pin.post}. prd has logged no \`${pin.event}*\` since ${lastSeen.slice(0, 10)} (${PIN_QUIET_DAYS} days) ${onCallMention}`,
+      );
+    pins[pin.event] = { lastSeen, told: told || post };
+  }
+  return { pins, posts };
 }
 
 /** The logs a run at `now` reads. Workers Logs can land a minute or so after the event, so a run
@@ -246,9 +304,12 @@ export function triageIncidents(
   }
   const span = `${hhmm(window.from)}–${hhmm(window.to)} UTC`;
   const pagers = Object.fromEntries(reading.pagers);
+  // a pager's drop is logged with its outcome (apps/os context/rpc-stubs.ts `redialPager`)
+  const pagersRedialed = pagers["rpc-stub-pager-redialed"] ?? 0;
+  const pagersGaveUp = pagers["rpc-stub-pager-redial-failed"] ?? 0;
   const recovery =
-    (pagers["rpc-stub-pager-dropped"] ?? 0) > 0 &&
-    `• pagers in the window: ${pagers["rpc-stub-pager-dropped"]} dropped, ${pagers["rpc-stub-pager-redialed"] ?? 0} re-dialed, ${pagers["rpc-stub-pager-redial-failed"] ?? 0} gave up`;
+    pagersRedialed + pagersGaveUp > 0 &&
+    `• pagers in the window: ${pagersRedialed + pagersGaveUp} dropped, ${pagersRedialed} re-dialed, ${pagersGaveUp} gave up`;
   const page = opened.length
     ? {
         keys: opened.map(([key]) => key),
@@ -310,18 +371,45 @@ async function readWindow(
 ): Promise<FaultReading> {
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
   // or past 2,000 groups, drop out) — a burst still pages.
-  const query = (view: "calculations" | "events", filters: object[], parameters: object) =>
-    queryWorkersLogs(
-      { accountId, apiToken },
+  const query = async (view: "calculations" | "events", filters: object[], parameters: object) => {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
       {
-        view,
-        services: PRD_WORKERS,
-        from: window.from.getTime(),
-        to: window.to.getTime(),
-        filters,
-        parameters,
+        method: "POST",
+        signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
+        headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          queryId: "prd-fault-alarm",
+          view,
+          ...(view === "events" && { limit: 100 }),
+          timeframe: { from: window.from.getTime(), to: window.to.getTime() },
+          parameters: {
+            datasets: ["cloudflare-workers"],
+            ...parameters,
+            filters: [
+              {
+                key: "$metadata.service",
+                operation: "in",
+                value: PRD_WORKERS.join(","),
+                type: "string",
+              },
+              ...filters,
+            ],
+          },
+        }),
       },
     );
+    const body = z
+      .object({
+        success: z.boolean(),
+        errors: z.unknown().optional(),
+        result: z.unknown().optional(),
+      })
+      .parse(await response.json());
+    // A broken token or a renamed field must fail the run, never read as a quiet prd.
+    if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
+    return body.result;
+  };
   // Without `groupBy`, one row: ["", the total].
   const rows = async (filters: object[], groupBy?: string): Promise<[string, number][]> => {
     const result = z
@@ -346,11 +434,64 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
+  // A fetch route whose target is not connected (`iterate tunnel` killed without Ctrl-C) answers
+  // 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
+  // "fetch-route.target-offline", … })` (apps/os context/built-ins.ts); a Vite tab left open
+  // re-requests it every second. Each hop of that request logs its own 502 summary at error level
+  // under its own requestId: the project host's Worker, the context DO's fetch, the ItxEntrypoint of
+  // the config worker's `env.ITX.fetch`, and the DO's fetch again. The loaded config worker starts a
+  // new traceId, so only the edge's rayId joins all four to the info line (a preview's Workers Logs,
+  // 2026-09-24). These filters keep every event EXCEPT a 502 summary in a ray that logged the info
+  // line: another status, another event or another ray still pages. One `not_in` takes 500 IDs here
+  // (2,000 answers "Internal error"). A capped or failed read excludes nothing: it can only remove
+  // noise, never lose an observed fault.
+  const notTargetOffline = await rows(
+    [{ key: "event", operation: "eq", value: "fetch-route.target-offline", type: "string" }],
+    "$metadata.rayId",
+  ).then(
+    (found) => {
+      const rays = found.map(([rayId]) => rayId).filter(Boolean);
+      const capped = rays.length >= 2000;
+      console.log(
+        JSON.stringify({
+          event: "prd-fault-alarm.target-offline-evidence",
+          rays: rays.length,
+          capped,
+        }),
+      );
+      if (capped) return [];
+      const chunks: string[][] = [];
+      for (let start = 0; start < rays.length; start += 500)
+        chunks.push(rays.slice(start, start + 500));
+      return chunks.map((chunk) => ({
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key: "$metadata.type", operation: "is_null", type: "string" },
+          { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+          { key: "$workers.event.response.status", operation: "is_null", type: "number" },
+          { key: "$workers.event.response.status", operation: "neq", value: 502, type: "number" },
+          { key: "$metadata.rayId", operation: "is_null", type: "string" },
+          { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
+        ],
+      }));
+    },
+    (error: unknown) => {
+      console.warn(
+        JSON.stringify({
+          event: "prd-fault-alarm.target-offline-classification-failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return [];
+    },
+  );
   // Every 5xx pages, so they are counted twice: by URL, and in all. The ones the URL rows miss
   // (no URL logged, or past 2,000 groups) page as `unknown`.
   const readServerErrors = async () => {
     const status = [
       { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
+      ...notTargetOffline,
     ];
     const [byUrl, all] = await Promise.all([
       rows(status, "$workers.event.request.url"),
@@ -374,6 +515,7 @@ async function readWindow(
     const common = [
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
+      ...notTargetOffline,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([
@@ -404,28 +546,30 @@ async function readWindow(
     ]);
     return [...errors, ...apiUnreadBodyErrors];
   };
-  const [serverErrors, heals, initialErrors, structuredErrors, pagers] = await Promise.all([
-    readServerErrors(),
-    rows(
-      [{ key: "event", operation: "includes", value: "platform-failure", type: "string" }],
-      "name",
-    ),
-    readErrors("$metadata.message"),
-    readErrors("$metadata.error", [
-      {
-        kind: "group",
-        filterCombination: "or",
-        filters: [
-          { key: "$metadata.message", operation: "is_null", type: "string" },
-          { key: "$metadata.message", operation: "eq", value: "", type: "string" },
-        ],
-      },
-    ]),
-    rows(
-      [{ key: "event", operation: "includes", value: "rpc-stub-pager-", type: "string" }],
-      "event",
-    ),
-  ]);
+  const healed = [
+    { key: "event", operation: "includes", value: "platform-failure", type: "string" },
+  ];
+  const [serverErrors, heals, healEvents, initialErrors, structuredErrors, pagers] =
+    await Promise.all([
+      readServerErrors(),
+      rows(healed, "name"),
+      rows(healed, "event"),
+      readErrors("$metadata.message"),
+      readErrors("$metadata.error", [
+        {
+          kind: "group",
+          filterCombination: "or",
+          filters: [
+            { key: "$metadata.message", operation: "is_null", type: "string" },
+            { key: "$metadata.message", operation: "eq", value: "", type: "string" },
+          ],
+        },
+      ]),
+      rows(
+        [{ key: "event", operation: "includes", value: "rpc-stub-pager-", type: "string" }],
+        "event",
+      ),
+    ]);
   let errors = initialErrors;
   if (errors.length) {
     try {
@@ -507,62 +651,10 @@ async function readWindow(
   return {
     serverErrors,
     heals,
+    healEvents,
     errors: [...errors, ...structuredErrors],
     pagers,
   };
-}
-
-/** ONE read of prd `services`' Workers Logs (the telemetry query API), bounded at 30 s: `events`
- *  (the newest 100) or `calculations`, from `from` to `to` (epoch ms), under `filters`. A failed read
- *  throws — a broken token or a renamed field must never read as a quiet prd. Also the prd
- *  post-deploy check's, on os-prd alone (prd-post-deploy-check.ts `readFailureCause`). */
-export async function queryWorkersLogs(
-  { accountId, apiToken }: CloudflareCredentials,
-  input: {
-    view: "calculations" | "events";
-    services: readonly string[];
-    from: number;
-    to: number;
-    filters: object[];
-    parameters?: object;
-  },
-): Promise<unknown> {
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
-    {
-      method: "POST",
-      signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
-      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        queryId: "prd-fault-alarm",
-        view: input.view,
-        ...(input.view === "events" && { limit: 100 }),
-        timeframe: { from: input.from, to: input.to },
-        parameters: {
-          datasets: ["cloudflare-workers"],
-          ...input.parameters,
-          filters: [
-            {
-              key: "$metadata.service",
-              operation: "in",
-              value: input.services.join(","),
-              type: "string",
-            },
-            ...input.filters,
-          ],
-        },
-      }),
-    },
-  );
-  const body = z
-    .object({
-      success: z.boolean(),
-      errors: z.unknown().optional(),
-      result: z.unknown().optional(),
-    })
-    .parse(await response.json());
-  if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
-  return body.result;
 }
 
 const WorkerErrorEvent = z.object({
@@ -640,14 +732,7 @@ export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[])
 
 /** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
 export async function previousState(options: { out: string }) {
-  const state = await newestArtifactFile({
-    repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
-    ...stateArtifact,
-  });
-  if (!state) return "no previous state";
-  mkdirSync(dirname(options.out), { recursive: true });
-  writeFileSync(options.out, state);
-  return `previous state: ${state.length} bytes`;
+  return saveNewestArtifactFile({ ...stateArtifact, out: options.out });
 }
 
 if (isMainModule(import.meta.url))

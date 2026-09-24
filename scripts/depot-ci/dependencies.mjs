@@ -32,7 +32,8 @@ const files = repositoryFiles.filter(
       file,
     ) ||
     file.startsWith("patches/") ||
-    file === "scripts/depot-ci/bake-preview-ci-image.sh",
+    file === "scripts/depot-ci/bake-preview-ci-image.sh" ||
+    file === ".depot/workflows/build-preview-ci-image.yml",
 );
 // Local file dependencies also depend on their source contents, unlike live
 // workspace links. Include every visible file beneath those package paths.

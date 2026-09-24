@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "../ci-telemetry.ts";
-import { E2E_BUDGET_EXEMPTIONS } from "./budgets.ts";
 import { RetryTelemetryReporter } from "./retry-telemetry-reporter.ts";
 
 test("records module timing when Vitest omits the queued callback", () => {
@@ -267,7 +266,7 @@ test("writes unit tests without performing network I/O", async () => {
   rmSync(directory, { recursive: true });
 });
 
-test("prints the e2e rows that ran past the row budget's warning, marking exempt rows", async () => {
+test("prints the e2e rows that ran past the row budget's warning", async () => {
   onTestFinished(() => {
     vi.unstubAllEnvs();
   });
@@ -286,13 +285,12 @@ test("prints the e2e rows that ran past the row budget's warning, marking exempt
     diagnostic: () => ({ retryCount: 0, flaky: false, duration, startTime: 2_000 }),
     result: () => ({ state: "passed", errors: [] }),
   });
-  const exempt = Object.keys(E2E_BUDGET_EXEMPTIONS)[0]!;
   const testModule = {
     moduleId: "/repo/residency.e2e.test.ts",
     children: {
       allTests: () => [
         row("a quick row", "e2e", 44_000),
-        row(exempt, "e2e", 61_700),
+        row("a row past the budget", "e2e", 61_700),
         row("a quiet minute", "e2e", 181_400),
         row("a slow row", "e2e", 181_400, ["slow"]),
         row("a long unit row", "unit", 60_000),
@@ -305,6 +303,6 @@ test("prints the e2e rows that ran past the row budget's warning, marking exempt
   expect(log.mock.calls.flat().filter((line) => String(line).startsWith("[row-budget]"))).toEqual([
     "[row-budget] 2 e2e row(s) ran longer than 45 s; a row that runs on every PR finishes within 60 s at its p95:",
     "[row-budget] 181.4 s a quiet minute",
-    `[row-budget] 61.7 s (exempt) ${exempt}`,
+    "[row-budget] 61.7 s a row past the budget",
   ]);
 });

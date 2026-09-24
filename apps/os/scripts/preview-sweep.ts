@@ -4,10 +4,10 @@
 //
 // A preview is STALE (deletePreview takes it and everything it owns) when
 //   1. its last deploy is more than 7 days old, whatever its name;
-//   2. it is named `pr<n>-…` and pull request #n is closed or does not exist;
+//   2. it is named `pr<n>` and pull request #n is closed or does not exist;
 //   3. it names no pull request (a branch, or a hand-picked name like `exp-…` or `soak`), its last
 //      deploy is more than 24 h old, no open pull request's head branch slugifies to its name, and it
-//      is no CI workflow's own (CI_WORKFLOW_PREVIEWS: `main`, `latency`, `real-model`, `slow-e2e`). A quiet day
+//      is no CI workflow's own (CI_WORKFLOW_PREVIEWS: `main`, `latency`, `real-model`). A quiet day
 //      is no reason to make a workflow's next preview brand-new; rule 1 takes the preview of a
 //      workflow that stopped.
 // Anything else is kept. A GitHub lookup that failed never makes a preview stale: a PR state of
@@ -17,9 +17,10 @@
 //   4. its name is `<parent>-<preview>-<suffix>` with a suffix of its kind (previewResourceSuffixes:
 //      KV `itx-kv`, `oauth-kv`; R2 `files`; D1 `db`; Artifacts `repos`) and `<preview>` a name a
 //      preview can have (lowercase letters and digits in hyphen-separated words, at most 28
-//      characters). Nothing else ever is: not the parent's own (`os-preview-files`), not
-//      `IterateDataResources-…`, not another worker's whose name begins `<parent>-` (a former
-//      `os-preview-2`'s `os-preview-2-files`);
+//      characters). Nothing else ever is: not one the account has for something else
+//      (preview-config.ts accountResourceNames: the parent's own `os-parent-files`, local dev's
+//      `os-dev-repos`), not `IterateDataResources-…`, not another worker's whose name begins
+//      `<parent>-` (the former parent `os-preview`'s `os-preview-files`);
 //   5. no listed preview, stale or kept, owns that exact name. The caller lists the previews AFTER
 //      the resources: wrangler creates a preview before it provisions the preview's KV and R2, so a
 //      first deploy in flight always shows its preview;
@@ -28,8 +29,9 @@
 //   7. it was not created before the parent worker was: a preview's resources come from a deploy
 //      of that preview, which the parent's existence precedes. The legacy platform's preview slots
 //      left `os-preview-<n>-repos` namespaces (2026-05 and 2026-07, tens of thousands of repos each)
-//      whose names read as previews `1`…`18` of the parent `os-preview`; they are older than it, and
-//      no preview of it owns them. A resource with no creation stamp (KV) is judged on 4–6 alone.
+//      whose names read as previews `1`…`18` of the then parent `os-preview`; they are older than
+//      it, and no preview of it owns them. A resource with no creation stamp (KV) is judged on 4–6
+//      alone.
 //      When the parent's creation time is unknown (the scripts listing does not name it) or a stamp
 //      does not parse, every stamped resource is kept: a failed lookup never deletes.
 // scripts/preview.ts looks each orphan's preview up once more right before deleting it.
@@ -51,19 +53,10 @@ export type SweptPreview = { name: string; lastDeployedAt?: string };
 
 /** THE CI WORKFLOWS' OWN PREVIEWS, by name: one per serialized workflow of main, redeployed in place
  *  by every run of it and deleted by none — Main OS e2e's `main` (.depot/workflows/main-os-e2e.yml),
- *  the latency guard's `latency` (os-latency.yml), the real-model suite's `real-model`
- *  (os-real-model.yml), the slow e2e rows' `slow-e2e` (os-slow-e2e.yml), each deploy's readiness gate
- *  held past the window its previous version still answers in
- *  (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Each maps to the per-run names its workflow gave
- *  its previews before (`main-<short sha>`, `latency-<run id>-<attempt>`,
- *  `real-model-<run id>-<attempt>`), which `supersededMainPreviews` deletes; `slow-e2e` always had
- *  its one. */
-export const CI_WORKFLOW_PREVIEWS: ReadonlyMap<string, RegExp | undefined> = new Map([
-  ["main", /^main-[0-9a-f]{7}$/],
-  ["latency", /^latency-[0-9a-z]+-[0-9]+$/],
-  ["real-model", /^real-model-[0-9a-z]+-[0-9]+$/],
-  ["slow-e2e", undefined],
-]);
+ *  the latency guard's `latency` (os-latency.yml) and the real-model suite's `real-model`
+ *  (os-real-model.yml), each deploy's readiness gate held past the window its previous version still
+ *  answers in (docs/depot-ci.md#main-os-e2e-keeps-one-preview). */
+export const CI_WORKFLOW_PREVIEWS: ReadonlySet<string> = new Set(["main", "latency", "real-model"]);
 
 /** One row of an account listing: a KV namespace (id + title), an R2 bucket (id = name), a D1
  *  (uuid + name), an Artifacts namespace (id = name). `createdAt` where the listing has one. */
@@ -78,6 +71,9 @@ export type PreviewSweepInput = {
   now: number;
   /** Every worker script on the account (rule 4: another worker whose name begins `<parent>-`). */
   workerNames: string[];
+  /** The resources the account has for something other than a preview (rule 4;
+   *  preview-config.ts accountResourceNames). */
+  accountResourceNames: Set<string>;
   /** When the parent worker was created (the scripts listing's `created_on`; rule 7), or undefined
    *  when the listing does not name it, which keeps every resource that has a creation stamp. */
   parentCreatedAt: string | undefined;
@@ -99,8 +95,9 @@ export type PreviewSweepPlan = {
  *  preview's. */
 export function previewNameOfSweptResource(
   resource: SweptResource,
-  input: Pick<PreviewSweepInput, "workerNames" | "resourceSuffixes">,
+  input: Pick<PreviewSweepInput, "workerNames" | "accountResourceNames" | "resourceSuffixes">,
 ) {
+  if (input.accountResourceNames.has(resource.name)) return undefined;
   const parent = PREVIEW_PARENT.workerName;
   const ownedByAnotherWorker = input.workerNames.some(
     (workerName) =>
@@ -182,15 +179,4 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     orphans.push({ ...resource, previewName, reason });
   }
   return { previews, orphans };
-}
-
-/** The per-run previews `current`'s CI workflow made before it kept one preview
- *  (CI_WORKFLOW_PREVIEWS): Main OS e2e's `main-<short sha>`, the latency guard's
- *  `latency-<run id>-<attempt>`, the real-model suite's `real-model-<run id>-<attempt>`, a run
- *  cancelled before its delete had left behind. Each run deletes its own workflow's before it
- *  deploys; no run ever deletes another workflow's. A `current` that is no such workflow's preview
- *  supersedes nothing. Pure. */
-export function supersededMainPreviews(previewNames: string[], current: string) {
-  const perRun = CI_WORKFLOW_PREVIEWS.get(current);
-  return perRun ? previewNames.filter((name) => perRun.test(name)) : [];
 }

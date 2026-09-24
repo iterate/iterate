@@ -613,7 +613,7 @@ test("a step starting after Depot records cancellation stays incomplete", () => 
       { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
     ]),
   });
-  for (const name of ["Preview OS", "Deploy"]) {
+  for (const name of ["Preview OS", "Deploy preview"]) {
     expect(spans.find((span) => span.name === name)).toMatchObject({
       endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
       attributes: expect.arrayContaining([
@@ -782,7 +782,7 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
     startTimeUnixNano: suite.endTimeUnixNano,
     endTimeUnixNano: finish.startTimeUnixNano,
   });
-  expect(spans.find((span) => span.name === "E2E")).toMatchObject({
+  expect(spans.find((span) => span.name === "E2E tests")).toMatchObject({
     endTimeUnixNano: String(BigInt(ms(33)) * 1_000_000n),
   });
 });
@@ -814,7 +814,9 @@ test("cancelling before runner startup does not invent an attempt duration", () 
     },
     new Map(),
   );
-  const job = trace.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === "Deploy")!;
+  const job = trace.resourceSpans[0].scopeSpans[0].spans.find(
+    (span) => span.name === "Deploy preview",
+  )!;
   expect(job).toMatchObject({ startTimeUnixNano: job.endTimeUnixNano });
   expect(job.attributes).toContainEqual({
     key: "ci.evidence",
@@ -875,9 +877,9 @@ test("the standalone report embeds OTLP without allowing source names to break o
   ).toEqual(report);
 });
 
-// --- the Preview OS workflow: deploy → e2e, then the trace job ---
+// --- the Preview OS workflow: Deploy preview → E2E tests and Browser specs, then the trace job ---
 
-test("the preview trace covers deploy and e2e: green at e2e completion, the trace job excluded", () => {
+test("the preview trace covers the deploy and both test jobs: green at the last one's completion, the trace job excluded", () => {
   const trace = assembleTrace(
     osPreviewWorkflow(),
     new Map([
@@ -886,8 +888,15 @@ test("the preview trace covers deploy and e2e: green at e2e completion, the trac
         [
           line("install", { kind: "shell-start", id: "install", step: "install", time: ms(42) }),
           line("install", { kind: "shell-end", id: "install", time: ms(50), exitCode: 0 }),
-          line("e2e", { kind: "shell-start", id: "suite", step: "e2e", time: ms(52) }),
-          line("e2e", { kind: "shell-end", id: "suite", time: ms(170), exitCode: 0 }),
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(52) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(170), exitCode: 0 }),
+        ],
+      ],
+      [
+        "specs-attempt",
+        [
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(110), exitCode: 0 }),
         ],
       ],
     ]),
@@ -896,13 +905,18 @@ test("the preview trace covers deploy and e2e: green at e2e completion, the trac
   expect(spans.map((span) => span.name)).toEqual([
     "Preview OS",
     "Workflow queue",
-    "Deploy",
-    "E2E",
+    "Deploy preview",
+    "E2E tests",
     "Setup",
     "Test",
     "Finish",
     "install",
-    "e2e",
+    "suite",
+    "Browser specs",
+    "Setup",
+    "Test",
+    "Finish",
+    "suite",
   ]);
   expect(spans[0]).toMatchObject({
     endTimeUnixNano: String(BigInt(ms(180)) * 1_000_000n),
@@ -911,19 +925,27 @@ test("the preview trace covers deploy and e2e: green at e2e completion, the trac
       { key: "ci.time_to_green_ms", value: { stringValue: "180000" } },
     ]),
   });
-  // The suite's own step opens the Test phase; its exit opens Finish (telemetry and uploads).
-  expect(spans.find((span) => span.name === "Test")).toMatchObject({
-    startTimeUnixNano: String(BigInt(ms(52)) * 1_000_000n),
-    endTimeUnixNano: String(BigInt(ms(170)) * 1_000_000n),
-  });
+  // Each job's suite step opens its Test phase; its exit opens Finish (telemetry and uploads).
+  expect(spans.filter((span) => span.name === "Test")).toMatchObject([
+    {
+      startTimeUnixNano: String(BigInt(ms(52)) * 1_000_000n),
+      endTimeUnixNano: String(BigInt(ms(170)) * 1_000_000n),
+    },
+    {
+      startTimeUnixNano: String(BigInt(ms(50)) * 1_000_000n),
+      endTimeUnixNano: String(BigInt(ms(110)) * 1_000_000n),
+    },
+  ]);
 });
 
-test("a failed deploy is red at its completion and e2e never ran", () => {
+test("a failed deploy is red at its completion and neither suite ran", () => {
   const workflow = osPreviewWorkflow();
   workflow.jobs[0]!.status = "failed";
   workflow.jobs[0]!.attempts[0]!.status = "failed";
-  workflow.jobs[1]!.status = "skipped";
-  workflow.jobs[1]!.attempts = [];
+  for (const suite of [workflow.jobs[1]!, workflow.jobs[2]!]) {
+    suite.status = "skipped";
+    suite.attempts = [];
+  }
   const root = assembleTrace(workflow, new Map()).resourceSpans[0].scopeSpans[0].spans[0];
   expect(root).toMatchObject({
     attributes: expect.arrayContaining([
@@ -936,6 +958,7 @@ test("a failed deploy is red at its completion and e2e never ran", () => {
 
 test.each([
   ["preview-os.yml:e2e", "e2e"],
+  ["preview-os.yml:specs", "specs"],
   ["preview-os.yml:deploy", "deploy"],
 ])("%s is job %s of its workflow", (jobKey, key) => {
   expect(jobKeyInWorkflow(jobKey)).toBe(key);
@@ -980,7 +1003,7 @@ function producerWorkflow(status: string) {
   };
 }
 
-/** A Preview OS run: deploy and e2e passed; the trace job is still running. */
+/** A Preview OS run: the deploy and both test jobs passed; the trace job is still running. */
 function osPreviewWorkflow() {
   const job = (key: string, status: string, startedAt: number, finishedAt: number) => ({
     jobId: key,
@@ -1014,6 +1037,7 @@ function osPreviewWorkflow() {
     jobs: [
       job("deploy", "finished", 3, 40),
       job("e2e", "finished", 41, 180),
+      job("specs", "finished", 41, 120),
       job("trace", "running", 181, 0),
     ],
   };

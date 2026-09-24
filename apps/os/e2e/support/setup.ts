@@ -26,17 +26,13 @@ afterEach(() => disposeSessions());
 // What a file opened outside a test — a `beforeAll`, the benchmarks — belongs to the file.
 afterAll(() => disposeFileSessions());
 
-// THE ROW BUDGET, AT RUNTIME (docs/testing.md#the-row-budget): a run against a preview
+// THE ROW BUDGET'S TIMEOUT CEILING (docs/testing.md#the-row-budget): a run against a preview
 // (`pnpm preview e2e`, which sets E2E_SLOW_ROWS) fails an e2e row whose timeout is over its ceiling
-// before the row starts, since a hung row holds the whole run for its timeout.
-// scripts/ci/e2e-policy.test.ts holds every row to the same ceiling from source; this catches a
-// timeout it cannot read.
+// before the row starts, since a hung row holds the whole run for its timeout. `task.timeout` is
+// the resolved one: a createFlake deadline, the slow tag's timeout and imported constants included.
 beforeEach(({ task }) => {
   if (!process.env.E2E_SLOW_ROWS || task.file.projectName !== "e2e") return;
-  const ceilingMs = e2eRowTimeoutCeilingMs({
-    title: task.name,
-    slow: task.tags?.includes("slow") ?? false,
-  });
+  const ceilingMs = e2eRowTimeoutCeilingMs({ slow: task.tags?.includes("slow") ?? false });
   if (task.timeout > ceilingMs)
     throw new Error(
       `this row's timeout is ${task.timeout / 1000} s, over its ${ceilingMs / 1000} s ceiling: make it faster, or tag it "slow" if it waits out real platform time (docs/testing.md#the-row-budget)`,

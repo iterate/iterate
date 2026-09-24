@@ -92,17 +92,17 @@ setup.
 
 Use this to prove that a PR's deployed preview works through the real browser,
 the issuer's sign-in, routing and the app UI. The automated smoke is the Preview
-OS workflow's `e2e` job (the integration suite and the browser specs against the
-PR's preview). Re-run it from `apps/os` with
-`doppler run --project os --config preview -- pnpm preview e2e --pr <number> --name <branch>`
-(see its [README](../apps/os/README.md)).
+OS workflow's Browser specs job (the browser specs against the PR's preview,
+beside its E2E tests job). Re-run it from `apps/os` with
+`doppler run --project os --config preview -- pnpm preview specs --pr <number> --name <branch>`,
+or from CI without redeploying (see its [README](../apps/os/README.md)).
 
 For a hands-on smoke, take the preview URL from the PR body and sign in as in
 [Disposable sessions](#disposable-sessions), with the preview's password kept
 in a shell variable — never echo it:
 
 ```bash
-BASE_URL=https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev   # from the PR body
+BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev   # from the PR body
 PASSWORD=$(doppler secrets get APP_CONFIG --project os --config preview --plain | jq -r .login.password)
 ```
 

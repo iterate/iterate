@@ -81,14 +81,18 @@ iterate tunnel 5173 --project my-project --name blog
 iterate tunnel 3000 --project my-project --public   # anyone may use it; the name is random
 ```
 
-The tunnel lends the local port to the project as `itx.tunnels.<name>` and sets the ingress
-route `tunnel-<name>` (`itx.ingressRoutes`), which the project's config worker consults first
+The tunnel lends the local port to the project as `itx.tunnels.<name>` and sets the fetch
+route `tunnel-<name>` (`itx.fetchRoutes`), which the project's config worker consults first
 (the default templates do; an older project adds the lines from `configs/default/worker.ts` to
 its own `worker.ts`). By default only signed-in project members get through; others are sent to
 sign in. Ctrl-C deletes the route; a tunnel that dies without it leaves the host answering 502
-until it runs again. The local server sees `x-forwarded-host` and `x-forwarded-proto`. On a
-deployment that serves projects under paths, the local server must serve under the printed base
-path (Vite: `--base`). `--json` prints the URL and each request as NDJSON.
+until it runs again. The local server sees `x-forwarded-host` and `x-forwarded-proto`.
+`--json` prints the URL and each request as NDJSON.
+
+On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
+platform's own origin, such as a per-PR preview), only `--public` tunnels work: the tunnel's pages
+run sandboxed with an opaque origin, so their requests carry no sign-in cookie, and `tunnel`
+refuses a private one. The local server must serve under the printed base path (Vite: `--base`).
 
 ## Configs
 

@@ -10,10 +10,10 @@
 # spent it and turned every PR's preview e2e red (docs/testing.md#real-model-rows). A run here costs
 # about $0.06.
 #
-# The judge (scripts/ci/os-real-model-alert.ts) pages Slack #error-pulse on a change of state only: red
-# once, green again once, with the channel's last page as its state, the way Main OS e2e pages. A page
-# leaves the run green; a BROKEN PROBE (the deploy, no report, the REAL: rows not run) fails the run. A
-# run off main never pages: it prints what it would post. A dispatch redeploys the workflow's preview
+# The judge (scripts/ci/main-e2e-alert.ts `judge`, reading the run's test telemetry) pages Slack
+# #error-pulse on a change of state only: red once, green again once, with the channel's last page as
+# its state, the way Main OS e2e pages. A page leaves the run green; a BROKEN PROBE (the deploy, no
+# telemetry, a REAL: row not run) fails the run. A run off main never pages: it prints what it would post. A dispatch redeploys the workflow's preview
 # with the branch; the next run of main puts main back. One run at a time, each run's deploy waiting
 # for the run before it to finish with the preview.
 #
@@ -36,7 +36,7 @@ on:
     # How an agent calls its model: the default model, the request, the byte transport, and this suite.
     paths:
       - .depot/workflows/os-real-model.yml
-      - scripts/ci/os-real-model-alert.ts
+      - scripts/ci/main-e2e-alert.ts
       - apps/agents/runtime/**
       - apps/agents/e2e/agents-default-model.e2e.test.ts
   workflow_dispatch:
@@ -59,6 +59,11 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
+    # The vitest reporter's telemetry (`pnpm e2e:run`), which the judge reads.
+    env:
+      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+      TEST_TELEMETRY_BRANCH: ${{ github.ref_name }}
+      TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,12 +76,6 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # the `real-model-<run>-<attempt>` previews this workflow deployed and deleted until 2026-09-24
-      - name: Delete the per-run previews this one replaced
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm preview delete-superseded
       # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
       # still answers in (up to ~100 s measured), so its reset lands on a probe, never on a REAL: row
       # (apps/os/scripts/preview-readiness.ts).
@@ -96,21 +95,20 @@ jobs:
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
           export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
-          doppler run -- pnpm exec vitest run --configLoader runner --project e2e --sequence.concurrent \
-            --reporter=default --reporter=json --outputFile.json=output/real-model-report.json \
-            agents-default-model ai-root-shadow-and-fable \
+          doppler run -- pnpm e2e:run agents-default-model ai-root-shadow-and-fable \
             || echo "the real-model rows exited $?: the judge decides"
       - name: Judge, page #error-pulse on a change of state
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: >-
-          pnpm tsx scripts/ci/os-real-model-alert.ts --report apps/os/output/real-model-report.json
-          ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}
-      - name: Keep the report
+          pnpm tsx scripts/ci/main-e2e-alert.ts judge --dir test-results/ci-telemetry/raw
+          --suite "real-model e2e" --title-prefix "REAL:" --ref "${{ github.ref }}"
+      - name: Keep the telemetry
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: os-real-model-report
-          path: apps/os/output/real-model-report.json
+          name: os-real-model-telemetry
+          path: test-results/ci-telemetry
+          include-hidden-files: true
           if-no-files-found: ignore
           overwrite: true

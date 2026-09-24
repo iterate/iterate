@@ -5,7 +5,6 @@
 // ./update.ts is the scheduled writer that feeds this fold from Depot artifacts and writes #2580.
 import type { z } from "zod";
 import {
-  E2E_BUDGET_EXEMPTIONS,
   E2E_ROW_BUDGET_MS,
   UNIT_ROW_WARN_EXEMPTIONS,
   UNIT_ROW_WARN_MS,
@@ -801,7 +800,7 @@ function renderCost(state: FlakeDashboardState): string[] {
     "",
     "## Cost",
     "",
-    `_Where each suite's time goes, over its last ${COST_RUNS} complete runs on any branch. A row is sampled in a run when it ran ${seconds(COST_SAMPLE_FLOOR_MS)} or longer, ended the run, retried or failed; the percentiles count the runs it was not sampled in as under ${seconds(COST_SAMPLE_FLOOR_MS)}. **Marginal** is how much sooner the run would have ended without the row, at the median. A failure ${INCIDENT_ROWS} or more rows of one run share is one incident, not a failure of each row. A row past its budget at p95 (preview-e2e ${seconds(E2E_ROW_BUDGET_MS)}, unit ${seconds(UNIT_ROW_WARN_MS)}), or with ${seconds(COST_MARGINAL_BUDGET_MS)} of marginal wall, is proposed: make it faster, or in preview-e2e tag it \`slow\`. An exempt row is only ever made faster. A proposal to delete a row must name the coverage that replaces it. [The row budget](https://github.com/iterate/iterate/blob/main/docs/testing.md#the-row-budget)._`,
+    `_Where each suite's time goes, over its last ${COST_RUNS} complete runs on any branch. A row is sampled in a run when it ran ${seconds(COST_SAMPLE_FLOOR_MS)} or longer, ended the run, retried or failed; the percentiles count the runs it was not sampled in as under ${seconds(COST_SAMPLE_FLOOR_MS)}. **Marginal** is how much sooner the run would have ended without the row, at the median. A failure ${INCIDENT_ROWS} or more rows of one run share is one incident, not a failure of each row. A row past its budget at p95 (preview-e2e ${seconds(E2E_ROW_BUDGET_MS)}, unit ${seconds(UNIT_ROW_WARN_MS)}), or with ${seconds(COST_MARGINAL_BUDGET_MS)} of marginal wall, is proposed: make it faster, or in preview-e2e tag it \`slow\`. An exempt unit row is only ever made faster. A proposal to delete a row must name the coverage that replaces it. [The row budget](https://github.com/iterate/iterate/blob/main/docs/testing.md#the-row-budget)._`,
     ...suites.flatMap(([suite, cost]) => {
       const runs = cost.runs.length;
       // Nearest rank over every run in the window, the unsampled ones below the floor.
@@ -818,8 +817,7 @@ function renderCost(state: FlakeDashboardState): string[] {
           row.samples.map(([, , marginalMs]) => marginalMs),
           0.5,
         );
-        const exempt =
-          suite === "unit" ? !!UNIT_ROW_WARN_EXEMPTIONS[name] : !!E2E_BUDGET_EXEMPTIONS[name];
+        const exempt = suite === "unit" && !!UNIT_ROW_WARN_EXEMPTIONS[name];
         const overBudget = p95 > budgetMs || (marginal || 0) >= COST_MARGINAL_BUDGET_MS;
         const proposal = row.tags.includes("slow")
           ? "tagged `slow`"

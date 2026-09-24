@@ -10,8 +10,9 @@
 //
 // SCOPE, deliberately small: branch `main` only (REF); text content only. A read is ONE ls-refs, and
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
-// memory under the tip it was read at. A commit is compare-and-swapped on the tip (a concurrent push
-// refuses it — no merge; the caller reads again and retries).
+// memory under the tip it was read at, or the commit this facet pushed. A commit is
+// compare-and-swapped on the tip (a concurrent push refuses it — no merge; the caller reads again
+// and retries).
 // Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, the git codec and pako
 // with it, reached as `itx.facets.get("repo")` (library.ts).
 
@@ -32,6 +33,7 @@ import {
   type RawGitObject,
   type RepoManifest,
 } from "@iterate-com/shared/git-wire";
+import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   assertCreated,
@@ -95,25 +97,28 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
 
   /** The entity lifecycle (src/project/entity-lifecycle.ts): its sagas provision the Artifacts repo
    *  (one that exists is fine) and tear it down (false when already gone). */
-  processor = new EntityLifecycleProcessor(RepoContract, (call) => this.withItx(call), {
-    provision: (path) => this.withItx((itx) => itx.cfArtifacts.create(path)),
-    teardown: (path) => this.withItx((itx) => itx.cfArtifacts.delete(path)),
-  });
+  processor = new EntityLifecycleProcessor(
+    RepoContract,
+    (call) => this.withItx(call),
+    () => this.#path,
+    {
+      provision: (path) => this.withItx((itx) => itx.cfArtifacts.create(path)),
+      teardown: (path) => this.withItx((itx) => itx.cfArtifacts.delete(path)),
+    },
+  );
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and
-   *  at `itx.cfArtifacts` (which derives the Artifacts name from it). */
-  #pathRead?: string;
-  async #path(): Promise<string> {
-    if (this.#pathRead) return this.#pathRead;
-    const { path } = await this.withItx((itx) => itx.whoami());
-    return (this.#pathRead = path);
+   *  at `itx.cfArtifacts` (which derives the Artifacts name from it) — the context's name in this
+   *  facet's props, so no call reads it. */
+  get #path(): string {
+    return DurableObjectNameCodec.parse(this.ctx.props.iterateContextName).path;
   }
 
   /** The remote the proxy names for this path — fixed for the repo's life; read once per incarnation. */
   #remoteRead?: string;
   async #remote(): Promise<string> {
     if (this.#remoteRead) return this.#remoteRead;
-    const path = await this.#path();
+    const path = this.#path;
     return (this.#remoteRead = await this.withItx((itx) => itx.cfArtifacts.get(path).remote()));
   }
 
@@ -125,7 +130,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const cached = this.#tokens[scope];
     if (cached && Date.now() < cached.until - TOKEN_REUSE_MARGIN_MS)
       return createGitWireTransport({ remote: await this.#remote(), token: cached.token });
-    const path = await this.#path();
+    const path = this.#path;
     const [remote, minted] = await Promise.all([
       this.#remote(),
       this.withItx((itx) => itx.cfArtifacts.get(path).createToken(scope, TOKEN_TTL_SECONDS)),
@@ -151,10 +156,38 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return { manifest: manifestOf(parseTree(tree.payload), objects), objects };
   }
 
-  /** The tip's files under the tip they were read at — dropped by a commit through this facet,
-   *  re-fetched when the remote's tip is not the memo's. */
+  /** The files of the tip they were read at, or of the commit this facet just pushed — re-fetched
+   *  when the remote's tip is not the memo's. A commit's files never change, so the memo answers a
+   *  read AT its commit without asking the remote at all: the project's saga reads the seed it just
+   *  pushed (project/processor.ts), and Artifacts answered that fetch, right after the push, 500 or
+   *  503 (2026-09-24, the latency guard: 2 of the 8 creations that failed in ~1,470). */
   #snapshotMemo: { tip: string | null; files: Record<string, string> } | null = null;
+  /** The read AT a commit in flight, one per commitOid: every caller asking for that commit while it
+   *  runs waits on it, since its files cannot change. Dropped when it settles, so a rejection is the
+   *  next caller's to retry. The memo alone is set only once a read COMPLETES: on prd at 14:36 UTC on
+   *  2026-09-24 ~915 concurrent `modules({ commitOid })` calls for one config worker each fetched the
+   *  same pack. The loader now asks once per context (worker-loader.ts), but callers of one commit
+   *  still overlap here: several contexts, and a `getCode` Cloudflare may run more than once. */
+  #snapshotReadsAtCommit = new Map<
+    string,
+    Promise<{ tip: string | null; files: Record<string, string> }>
+  >();
   async #fresh(commitOid?: string): Promise<{ tip: string | null; files: Record<string, string> }> {
+    if (!commitOid) return this.#fetchSnapshot();
+    if (this.#snapshotMemo?.tip === commitOid) return this.#snapshotMemo;
+    let read = this.#snapshotReadsAtCommit.get(commitOid);
+    if (!read) {
+      read = this.#fetchSnapshot(commitOid).finally(() =>
+        this.#snapshotReadsAtCommit.delete(commitOid),
+      );
+      this.#snapshotReadsAtCommit.set(commitOid, read);
+    }
+    return read;
+  }
+  /** The snapshot at `commitOid`, or at the remote's tip: the memo when it is that tip, else one fetch. */
+  async #fetchSnapshot(
+    commitOid?: string,
+  ): Promise<{ tip: string | null; files: Record<string, string> }> {
     const transport = await this.#transport("read");
     const tip = commitOid || (await transport.tipOf(REF)) || null;
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
@@ -174,7 +207,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
 
   /** Every verb starts here (`assertCreated`), answering the repo's path. */
   async #created(): Promise<string> {
-    const path = await this.#path();
+    const path = this.#path;
     assertCreated("repo", path, (await this.snapshot()).state);
     return path;
   }
@@ -283,7 +316,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       .nullable()
       .optional()
       .parse(input.parent);
-    this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches
+    this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches — or reads the push's
     const transport = await this.#transport("write");
     const tip = (await transport.tipOf(REF)) || null;
     // A fact still OWED from a push that landed without its facts (below: the caller saw the throw)
@@ -310,6 +343,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       : { manifest: new Map(), objects: new Map() };
     const toPush: { payload: Uint8Array; type: GitObjectType }[] = [];
     const changedPaths: string[] = [];
+    /** Each written file's text by its blob's oid: with the snapshot's blobs, the pushed tree's files. */
+    const written = new Map<string, string>();
     // Deletes first, whatever the order given: a batch is one tree, so a write may take a path a
     // delete in the same batch frees (a directory replaced by a file, or the reverse).
     for (const change of input.changes) {
@@ -326,6 +361,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
           throw new Error(`repo.commitFiles: "${file}" collides with "${existing}"`);
       const blob = textEncoder.encode(change.content);
       const oid = await hashObject("blob", blob);
+      written.set(oid, change.content);
       const current = manifest.get(file);
       if (current?.oid === oid) continue;
       manifest.set(file, { oid, mode: current ? current.mode : "100644" });
@@ -362,8 +398,29 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       await this.ctx.storage.delete("commit-fact"); // nothing landed, nothing owed
       throw new Error(`repo ${path}: the commit was refused: ${refused}`);
     }
+    this.#snapshotMemo = this.#pushedSnapshot(commitOid, manifest, objects, written);
     await this.#commitFact(committed);
     return { commitOid, changedPaths };
+  }
+
+  /** The files of the commit just pushed, as `#fresh` would fetch them: every text blob of its tree,
+   *  from what was written or the snapshot it was applied to — or null, re-fetched on the next read,
+   *  when the snapshot lacks one (a pack that left a blob out). */
+  #pushedSnapshot(
+    commitOid: string,
+    manifest: RepoManifest,
+    objects: Map<string, RawGitObject>,
+    written: Map<string, string>,
+  ): { tip: string; files: Record<string, string> } | null {
+    const files: Record<string, string> = {};
+    for (const [file, entry] of manifest) {
+      if (entry.mode === "160000") continue; // a submodule pointer has no text
+      const blob = objects.get(entry.oid);
+      if (written.has(entry.oid)) files[file] = written.get(entry.oid)!;
+      else if (blob?.type === "blob") files[file] = textDecoder.decode(blob.payload);
+      else return null;
+    }
+    return { tip: commitOid, files };
   }
 
   /** THE COMMIT'S FACT: cross-posted to `/` FIRST — the project processor follows the config repo's

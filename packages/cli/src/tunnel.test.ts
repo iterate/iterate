@@ -1,13 +1,14 @@
 // tunnel.test.ts — the tunnel's local proxy, `LocalPortRpcTarget`, against real local servers: what
 // the project host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
-// the local server chose, and the 502 when nothing listens. The platform half (the route, the host,
+// the local server chose, and the 502 when nothing listens; and `runTunnel` refusing a private
+// tunnel where projects are served under paths. The platform half (the route, the host,
 // the lent stub) is apps/os e2e/tunnel.e2e.test.ts.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 import { WebSocketServer } from "ws";
-import { expect, test } from "vitest";
-import { LocalPortRpcTarget, randomRoutingSlug } from "./tunnel.ts";
+import { expect, test, vi } from "vitest";
+import { LocalPortRpcTarget, randomRoutingSlug, runTunnel } from "./tunnel.ts";
 
 test("HTTP: path, query, method, headers and body reach localhost:<port>, with the visitor's host as x-forwarded-host; a redirect is handed back; a gzipped body arrives decoded", async () => {
   const seen: {
@@ -154,6 +155,59 @@ test("WebSocket: the requested subprotocols reach the local server, its choice n
 
 test("a random routing slug is a letter and seven letters or digits", () => {
   for (let i = 0; i < 50; i++) expect(randomRoutingSlug()).toMatch(/^[a-z][a-z0-9]{7}$/);
+});
+
+// Under paths routing a tunnel's pages are sandboxed on the platform's origin: no cookie reaches
+// their subresources, so a private tunnel could never load one.
+test.for([
+  ["paths", "private", "refused"],
+  ["paths", "public", "set"],
+  ["subdomains", "private", "set"],
+] as const)("a %s deployment, a %s tunnel: %s", async ([routing, visibility, outcome]) => {
+  const url =
+    routing === "paths"
+      ? "https://os.example.com/projects/p/blog/"
+      : "https://blog--p.example.com/";
+  const calls: string[] = [];
+  const project = {
+    url: async () => url,
+    fetchRoutes: {
+      list: async () => [],
+      set: async (name: string, route: unknown) =>
+        void calls.push(`set ${name} ${route && "route"}`),
+    },
+    provide: async (target: string) => {
+      calls.push(`provide ${target}`);
+      return { [Symbol.dispose]: () => {} };
+    },
+    [Symbol.dispose]: () => {},
+  };
+  const connection = {
+    session: { projects: { get: async () => project } },
+    // the tunnel ends as soon as it is live: the connection is already closed
+    closed: Promise.resolve({ code: 1006, reason: "" }),
+  } as unknown as Parameters<typeof runTunnel>[0]["connection"];
+  using _stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const run = runTunnel({
+    connection,
+    project: "p",
+    port: 5173,
+    routingSlug: "blog",
+    public: visibility === "public",
+  });
+  if (outcome === "refused") {
+    await expect(run).rejects.toThrow(
+      "Private tunnels need their own origin; this deployment serves projects under paths (https://os.example.com/projects/p/blog/). Use --public, or give the deployment a domain (subdomain routing).",
+    );
+    expect(calls).toEqual([]);
+  } else {
+    await expect(run).rejects.toThrow("The tunnel disconnected");
+    expect(calls).toEqual([
+      "provide itx.tunnels.blog",
+      "set tunnel-blog route",
+      "set tunnel-blog null",
+    ]);
+  }
 });
 
 type VisitorSocket = {

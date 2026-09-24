@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { Octokit } from "@octokit/rest";
 
+import { PLATFORM_FAILURE_DELAYS_MS, retryPlatformFailures } from "./platform-retry.ts";
+
 export function getOctokit() {
   const auth = process.env.GITHUB_TOKEN;
   if (!auth) {
@@ -12,45 +14,37 @@ export function getOctokit() {
 
 /** Every CI script's Octokit: one that asks again when GitHub itself fails an idempotent call. */
 export function createOctokit(auth: string | undefined) {
-  return retryGithubPlatformFailures(new Octokit({ auth }), [2_000, 5_000, 10_000]);
+  return retryGithubPlatformFailures(new Octokit({ auth }), PLATFORM_FAILURE_DELAYS_MS);
 }
 
 /**
  * GitHub answers a small share of API calls with a 5xx, or the connection drops before it
  * answers at all. One such 500 on `GET /pulls/2899` failed a LOC report whose same-sha rerun
  * passed a quarter of an hour later. A call that GitHub failed is asked again after each of
- * `delaysMs`, then the last failure is thrown, so recovery is bounded and a lasting outage
- * still fails the job.
+ * `delaysMs` (platform-retry.ts), with a `github.platform-failure-retry` warn per repeat.
  *
  * Only GET, HEAD, PUT, PATCH and DELETE are asked again: each names its whole end state, so a
  * repeat after a write that did land is harmless. A POST creates (a release, a comment), and a
  * repeat after a 5xx that had landed would create a second one, so a POST's failure is thrown at
  * once, except a commit status: GitHub reports the latest status per context, so a second copy
  * changes nothing (a 503 on the CI trace's status failed Main OS e2e's trace job, 2026-09-24).
- * A 4xx is an answer about the request and is never asked again. Each repeat logs a
- * `github.platform-failure-retry` warn.
+ * A 4xx is an answer about the request and is never asked again. A caller whose write must go out
+ * once (a PR body PATCHed from a read seconds earlier) passes `request: { askOnce: true }`.
  */
 export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly number[]) {
-  octokit.hook.wrap("request", async (request, options) => {
+  octokit.hook.wrap("request", (request, options) => {
     const route = `${options.method} ${options.url}`;
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await request(options);
-      } catch (error) {
-        const delayMs = delaysMs[attempt - 1];
+    const repeatable =
+      (idempotentMethods.has(options.method) || repeatableRoutes.has(route)) &&
+      options.request?.askOnce !== true;
+    return retryPlatformFailures(async () => request(options), {
+      event: "github.platform-failure-retry",
+      delaysMs: repeatable ? delaysMs : [],
+      platformFailure: (error) => {
         const failure = githubPlatformFailure(error);
-        if (delayMs === undefined || !failure) throw error;
-        if (!idempotentMethods.has(options.method) && !repeatableRoutes.has(route)) throw error;
-        console.warn({
-          event: "github.platform-failure-retry",
-          route,
-          ...failure,
-          attempt,
-          retryInMs: delayMs,
-        });
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
+        return failure && { route, ...failure };
+      },
+    });
   });
   return octokit;
 }

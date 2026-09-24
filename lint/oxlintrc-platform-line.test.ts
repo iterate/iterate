@@ -1,4 +1,4 @@
-// The SDK/platform line (docs/2026-09-24-sdk-platform-line.md): outside apps/os, nothing imports
+// The SDK/platform line (packages/iterate/README.md#the-sdkplatform-line): outside apps/os, nothing imports
 // apps/os except its two test harnesses. The rows run .oxlintrc.json's own overrides for
 // `import-js/no-restricted-paths`, copied verbatim, over one temp project linted once by the real
 // oxlint binary; `reported` says whether the rule flags that file.

@@ -1,5 +1,5 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
-// preview's name (`pr<n>-<branch slug>`, cloudflare-os's), the parent it branches from (envs.ts
+// preview's name (`pr<n>`, or a slug without a PR), the parent it branches from (envs.ts
 // `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
 // change touches, the PR body's managed section and its status line, the template quick-launch
 // links, the config `wrangler preview` reads — a
@@ -25,7 +25,8 @@ export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
 
 /** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
  *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
- *  that worker — os-preview on the dev/preview account (envs.ts). Nothing reads its data. */
+ *  that worker — `os` on the dev/preview account (envs.ts), itself deployed from main
+ *  (preview-parents.yml). */
 export const PREVIEW_PARENT = osEnvs.preview!;
 
 /** cloudflare-os's limit: the slug is the URL's first label, and KV/R2 names carry it too. */
@@ -49,8 +50,8 @@ const SHARED_APP_PATHS = [
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
 /** Slugify a ref into a legal preview name, truncating with a stable hash (cloudflare-os). */
-export function slugifyPreviewName(raw: string, { reserve = 0 }: { reserve?: number } = {}) {
-  const budget = MAX_PREVIEW_NAME_LENGTH - reserve;
+export function slugifyPreviewName(raw: string) {
+  const budget = MAX_PREVIEW_NAME_LENGTH;
   const slug = raw
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -61,18 +62,40 @@ export function slugifyPreviewName(raw: string, { reserve = 0 }: { reserve?: num
   return `${slug.slice(0, budget - hash.length - 1).replace(/-+$/, "")}-${hash}`;
 }
 
-/** `pr<n>-<branch slug>`: recognizable, unique per pull request. Two live branches can slugify to
- *  one name (`feature/foo`, `feature-foo`) and would otherwise share an instance. Without a number
- *  — a local run — the bare slug, which the sweep judges on age alone. */
-export function resolvePreviewName({ name, prNumber }: { name: string; prNumber?: string }) {
+/** THE FORMER PARENT, until 2026-09-24. Its own stores (`os-preview-files`, `os-preview-repos`) and
+ *  the legacy platform's slot namespaces (`os-preview-<n>-repos`, tens of thousands of repos each)
+ *  are all `os-preview-…`: what a preview named `preview` or `preview-…` would call its own under
+ *  the parent `os`, and a delete of that preview would take them. They outlive any worker, so the
+ *  name is refused whether or not the worker still exists. */
+const FORMER_PARENT = "os-preview";
+
+/** `pr<n>` for a pull request: its URLs are `pr<n>-os.…`, `pr<n>-dash.…`, one per PR whatever its
+ *  branch is called. Without a number — a CI workflow's own preview, a laptop's experiment — the
+ *  slugified name, which the sweep judges on age alone. A name whose resources would be one the
+ *  account already has for something else (`dev` → local dev's `os-dev-repos`), or under the former
+ *  parent's prefix, is refused. */
+export function resolvePreviewName({ name, prNumber }: { name?: string; prNumber?: string }) {
   const pr = (prNumber || "").trim();
-  if (!/^\d+$/.test(pr)) return slugifyPreviewName(name);
-  const prefix = `pr${pr}-`;
-  return `${prefix}${slugifyPreviewName(name, { reserve: prefix.length })}`;
+  if (/^\d+$/.test(pr)) return `pr${pr}`;
+  if (!name) throw new Error("a preview needs a PR number (--pr) or a name (--name)");
+  const previewName = slugifyPreviewName(name);
+  const taken = accountResourceNames();
+  const clash = Object.values(previewResourceSuffixes())
+    .flat()
+    .map((suffix) => previewResourceName(previewName, suffix))
+    .find((resourceName) => taken.has(resourceName));
+  if (clash)
+    throw new Error(`preview name ${previewName} would take ${clash}, which is not a preview's`);
+  const repos = previewResourceName(previewName, "repos");
+  if (repos.startsWith(`${FORMER_PARENT}-`))
+    throw new Error(
+      `preview name ${previewName} would take ${repos}, under the former parent ${FORMER_PARENT}'s prefix`,
+    );
+  return previewName;
 }
 
 export function previewPullRequestNumber(previewName: string) {
-  const match = /^pr(\d+)-/.exec(previewName);
+  const match = /^pr(\d+)$/.exec(previewName);
   return match ? Number(match[1]) : undefined;
 }
 
@@ -139,9 +162,28 @@ export function previewResourceSuffixes(
   };
 }
 
+/** THE ACCOUNT'S OTHER RESOURCES that still read as `<parent>-<preview>-<suffix>`: every OS
+ *  deployment's own (envs.ts — the parent's `os-parent-files` reads as preview `parent`'s R2) and
+ *  local dev's (wrangler.base.jsonc — `os-dev-repos` reads as preview `dev`'s Artifacts namespace).
+ *  No preview may take a name that would claim one (resolvePreviewName), and the sweep never
+ *  deletes one (preview-sweep.ts rule 4). KV is bound by id, so only its titles count. */
+export function accountResourceNames(template = readWranglerBase()) {
+  return new Set([
+    ...Object.values(osEnvs).flatMap((env) => [
+      `${env.resourceNamePrefix}-oauth`,
+      `${env.resourceNamePrefix}-itx`,
+      `${env.resourceNamePrefix}-files`,
+      env.artifactsNamespace,
+    ]),
+    ...template.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name),
+    ...template.artifacts.map((artifacts: { namespace: string }) => artifacts.namespace),
+  ]);
+}
+
 /** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
- *  for a name of another shape: the parent's own (`os-preview-repos`), another worker's,
- *  another binding's. How the sweep reads a leftover resource (scripts/preview-sweep.ts). */
+ *  for a name of another shape: another binding's, or one with nothing between the parent and the
+ *  suffix (local dev's `os-files`). How the sweep reads a leftover resource
+ *  (scripts/preview-sweep.ts). */
 export function previewNameOfResource(resourceName: string, binding: string) {
   const prefix = `${PREVIEW_PARENT.workerName}-`;
   const suffix = `-${binding}`;
@@ -180,20 +222,31 @@ export function splicePullRequestBody(body: string, section: string) {
 const STATUS_BEGIN = "<!-- os-preview-status:begin -->";
 const STATUS_END = "<!-- os-preview-status:end -->";
 
-/** Where a PR's preview stands, as its body's status line says: the deploy job writes `deploying`,
- *  then `deployed` with the whole section or `deploy failed`; the e2e job rewrites the line alone
- *  with `e2e passed` or `e2e failed`. */
+/** Where a PR's preview stands, as its body's status line says: the Deploy preview job writes
+ *  `deploying`, then `deployed` with the whole section or `deploy failed`. */
 export type PreviewStatus = {
-  state: "deploying" | "deployed" | "deploy failed" | "e2e passed" | "e2e failed";
+  state: "deploying" | "deployed" | "deploy failed";
   /** the commit the job checked out: the PR merged into main, or the head alone */
   commit: string;
   /** the CI job that wrote it (Depot's `DEPOT_JOB_URL`); absent from a laptop */
   runUrl?: string;
   at: Date;
-  /** e2e failed: which of the two suites */
-  failedSuites?: string[];
   /** a failure's error: its first line is the summary, the rest's tail goes under `<details>` */
   error?: string;
+};
+
+/** The suites a deployed preview runs, each its own CI job and check (preview-os.yml), by their
+ *  names there: `e2e`, the vitest e2e suite, and `specs`, the Playwright specs. Their lines follow
+ *  the status line in SUITE_ORDER. */
+export const PREVIEW_SUITES = { e2e: "E2E tests", specs: "Browser specs" } as const;
+export type PreviewSuite = keyof typeof PREVIEW_SUITES;
+const SUITE_ORDER: PreviewSuite[] = ["e2e", "specs"];
+
+/** A suite's line under the status line, which its own job writes once it ran: passed or failed,
+ *  on the commit it tested. Both jobs run at once, so each rewrites its own line alone. */
+export type PreviewSuiteStatus = Omit<PreviewStatus, "state"> & {
+  suite: PreviewSuite;
+  state: "passed" | "failed";
 };
 
 /** The last `count` lines of a command's output, colour codes stripped: what a failure keeps. */
@@ -203,11 +256,13 @@ export function lastLines(text: string, count: number) {
   return plain.split("\n").slice(-count).join("\n");
 }
 
-/** The status line, and on a failure its one-line summary and the error's tail, folded. After a
- *  failed deploy the rest of the section is the last good deploy's, and the line says so. */
-export function renderPreviewStatus(status: PreviewStatus) {
+/** The status line or a suite's, and on a failure its one-line summary and the error's tail,
+ *  folded. After a failed deploy the rest of the section is the last good deploy's, and the line
+ *  says so. */
+export function renderPreviewStatus(status: PreviewStatus | PreviewSuiteStatus) {
+  const label = "suite" in status ? PREVIEW_SUITES[status.suite] : "Status";
   const line = [
-    `Status: **${status.state}** on \`${status.commit.slice(0, 9)}\`${status.failedSuites?.length ? ` (${status.failedSuites.join(", ")})` : ""}`,
+    `${label}: **${status.state}** on \`${status.commit.slice(0, 9)}\``,
     ...(status.runUrl ? [`[CI job ↗](${status.runUrl})`] : []),
     `updated ${status.at.toISOString().slice(0, 16).replace("T", " ")} UTC`,
   ].join(" · ");
@@ -240,22 +295,90 @@ export function renderPreviewStatus(status: PreviewStatus) {
 
 const statusBlock = (status: PreviewStatus) =>
   `${STATUS_BEGIN}\n${renderPreviewStatus(status)}\n${STATUS_END}`;
+const suiteMarkers = (suite: PreviewSuite) =>
+  [`<!-- os-preview-${suite}:begin -->`, `<!-- os-preview-${suite}:end -->`] as const;
+const suiteBlock = (status: PreviewSuiteStatus) => {
+  const [begin, end] = suiteMarkers(status.suite);
+  return `${begin}\n${renderPreviewStatus(status)}\n${end}`;
+};
 
-/** Rewrite the status line alone, leaving the rest of the managed section as it is: in place, at
- *  the top of a section that has none, or as the whole section of a body that has none. */
-export function splicePreviewStatus(body: string, status: PreviewStatus) {
-  const block = statusBlock(status);
+/** Rewrite the managed section's inside with `rewrite`, or make the body's section `block` alone
+ *  when it has none (the first deploy failed before writing one). */
+function spliceSection(body: string, block: string, rewrite: (inner: string) => string) {
   const begin = body.indexOf(SECTION_BEGIN);
   const end = body.indexOf(SECTION_END, begin);
   if (begin < 0 || end < begin) return splicePullRequestBody(body, block);
   const inner = body.slice(begin + SECTION_BEGIN.length, end);
-  const statusBegin = inner.indexOf(STATUS_BEGIN);
-  const statusEnd = inner.indexOf(STATUS_END, statusBegin);
-  const spliced =
-    statusBegin >= 0 && statusEnd > statusBegin
-      ? inner.slice(0, statusBegin) + block + inner.slice(statusEnd + STATUS_END.length)
-      : `\n${block}\n${inner.replace(/^\n/, "")}`;
-  return body.slice(0, begin + SECTION_BEGIN.length) + spliced + body.slice(end);
+  return body.slice(0, begin + SECTION_BEGIN.length) + rewrite(inner) + body.slice(end);
+}
+
+/** `inner` with the block between `begin` and `end` replaced by `block`, or undefined without one. */
+function replaceBlock(inner: string, begin: string, end: string, block: string) {
+  const from = inner.indexOf(begin);
+  const to = inner.indexOf(end, from);
+  if (from < 0 || to < from) return undefined;
+  return inner.slice(0, from) + block + inner.slice(to + end.length);
+}
+
+/** Rewrite the status line alone, leaving the rest of the managed section as it is: in place, at
+ *  the top of a section that has none, or as the whole section of a body that has none. A new
+ *  deploy (`deploying`) drops the suites' lines, which were the previous deploy's. */
+export function splicePreviewStatus(body: string, status: PreviewStatus) {
+  const block = statusBlock(status);
+  return spliceSection(body, block, (inner) => {
+    const kept =
+      status.state === "deploying"
+        ? SUITE_ORDER.reduce((text, suite) => {
+            const [begin, end] = suiteMarkers(suite);
+            return replaceBlock(text, `\n${begin}`, end, "") ?? text;
+          }, inner)
+        : inner;
+    return (
+      replaceBlock(kept, STATUS_BEGIN, STATUS_END, block) ??
+      `\n${block}\n${kept.replace(/^\n/, "")}`
+    );
+  });
+}
+
+/** Rewrite one suite's line alone: in place, else after the status line and the lines of the
+ *  suites before it (SUITE_ORDER), else at the top of the section. */
+export function splicePreviewSuite(body: string, status: PreviewSuiteStatus) {
+  const block = suiteBlock(status);
+  const [begin, end] = suiteMarkers(status.suite);
+  return spliceSection(body, block, (inner) => {
+    const replaced = replaceBlock(inner, begin, end, block);
+    if (replaced) return replaced;
+    const anchors = [
+      STATUS_END,
+      ...SUITE_ORDER.slice(0, SUITE_ORDER.indexOf(status.suite)).map(
+        (suite) => suiteMarkers(suite)[1],
+      ),
+    ];
+    const at = Math.max(
+      ...anchors.map((marker) =>
+        inner.includes(marker) ? inner.indexOf(marker) + marker.length : -1,
+      ),
+    );
+    return at < 0
+      ? `\n${block}\n${inner.replace(/^\n/, "")}`
+      : `${inner.slice(0, at)}\n${block}${inner.slice(at)}`;
+  });
+}
+
+/** Whether another suite's job may still overwrite this suite's line: the two jobs write at once,
+ *  each a read, a splice and a PATCH, and a PATCH made from a read that predates this line's write
+ *  drops it. Once every other suite's line names this line's commit, their writes have landed and
+ *  none can: so only the first of the two to finish waits to look again (scripts/preview.ts
+ *  `writePullRequestBody`), never the one that decides the run's time to green. */
+export function suiteLineMayBeOverwritten(body: string, status: PreviewSuiteStatus) {
+  const commit = `on \`${status.commit.slice(0, 9)}\``;
+  return SUITE_ORDER.some((suite) => {
+    if (suite === status.suite) return false;
+    const [begin, end] = suiteMarkers(suite);
+    const from = body.indexOf(begin);
+    const to = body.indexOf(end, from);
+    return from < 0 || to < from || !body.slice(from, to).includes(commit);
+  });
 }
 
 /** A deploy's status writes around its steps. The PR body has no conditional update, so the last

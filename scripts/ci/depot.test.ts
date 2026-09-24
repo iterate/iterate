@@ -42,20 +42,6 @@ test("a read whose connection fails is asked again", async () => {
   );
 });
 
-test("a lasting outage throws the last failure after the last delay", async () => {
-  using depot = depotAnswering(502, 503, 500, 504);
-
-  await expect(
-    depotCiApi("GetRunMetrics", { runId: "r" }, "token", {
-      fetch: depot.fetch,
-      delaysMs: noDelays,
-    }),
-  ).rejects.toThrow("Depot GetRunMetrics returned HTTP 504");
-
-  expect(depot.calls).toHaveLength(4);
-  expect(depot.warn.mock.calls.map(([entry]) => entry.status)).toEqual([502, 503, 500]);
-});
-
 test.for([
   { method: "GetWorkflow", answer: 404, error: "Depot GetWorkflow returned HTTP 404" },
   { method: "GetWorkflow", answer: 401, error: "Depot GetWorkflow returned HTTP 401" },

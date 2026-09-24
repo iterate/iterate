@@ -25,10 +25,10 @@ import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
  *   pnpm tsx scripts/ci/test-evidence.ts write [--cancelled]  # tests.parquet, then manifest.json
  *   pnpm tsx scripts/ci/test-evidence.ts upload               # into R2, the manifest last
  *
- * `upload` runs where a workflow sets TEST_EVIDENCE_UPLOAD to `r2`, with Doppler `_shared/preview`'s
- * CLOUDFLARE_API_TOKEN. Neither step decides the job (both are `continue-on-error`): the tests did.
- * A step that fails says so in a warning annotation and a line of the job's summary
- * (reportStepFailure); one that fails before it can, the workflow's next step reports
+ * `upload` runs in the Test, Preview OS and Main OS e2e jobs (testEvidenceJobs), with Doppler
+ * `_shared/preview`'s CLOUDFLARE_API_TOKEN. Neither step decides the job (both are
+ * `continue-on-error`): the tests did. A step that fails says so in a warning annotation and a line
+ * of the job's summary (reportStepFailure); one that fails before it can, a later step reports
  * (scripts/ci/test-evidence-unreported.sh).
  */
 export async function writeTestEvidence(input: {
@@ -499,8 +499,8 @@ function describeError(error: unknown): string {
  * The source a manifest records. `tree` is the files on disk, not HEAD's tree: a copy of the index
  * with every change and untracked file added (`git add --all`, which leaves ignored files such as
  * test-results/ out) is written as a tree, and the real index is not touched. It is the tree the
- * tests read, and the one a proof that they ran would name
- * (docs/test-evidence.md#skipping-ci-when-a-trusted-run-proves-it).
+ * tests read, and the one a proof that they ran would name (skipping CI on such a proof is
+ * designed, not built: https://github.com/iterate/iterate/issues/3110).
  */
 export async function testEvidenceSource(repoRoot: string) {
   const git = (args: string[], env: Record<string, string> = {}) =>
@@ -587,7 +587,13 @@ export function testEvidenceUploadedPrefix(summary: string) {
  * The CI jobs that write and upload a test evidence folder, as Depot keys them (`<file>:<job>`).
  * scripts/ci/depot-workflows.test.ts holds this to the workflows.
  */
-export const testEvidenceJobs = ["test.yml:test", "preview-os.yml:e2e", "main-os-e2e.yml:e2e"];
+export const testEvidenceJobs = [
+  "test.yml:test",
+  "preview-os.yml:e2e",
+  "preview-os.yml:specs",
+  "main-os-e2e.yml:e2e",
+  "main-os-e2e.yml:specs",
+];
 
 /** A failed step's warning title, which its summary line and the fallback report's repeat. */
 export const stepFailureTitles = {

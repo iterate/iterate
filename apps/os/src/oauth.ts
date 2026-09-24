@@ -12,7 +12,7 @@ import { z } from "zod";
 import { reportIssue } from "iterate/lib";
 import { OAuthScope, OAuthScopes } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
-import { verifyAdminSecret } from "./caller.ts";
+import { secretsEqual, sha256Hex, verifyAdminSecret } from "./caller.ts";
 import type { Env } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
@@ -20,11 +20,10 @@ import { type Reach } from "./control-plane/edge.ts";
 import { emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import { providerStore } from "./oauth-store.ts";
+import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 import {
   isPersonalAccessToken,
   parsePersonalAccessToken,
-  personalAccessTokenHash,
-  personalAccessTokenHashMatches,
   personalAccessTokenIndexed,
 } from "./personal-access-token.ts";
 
@@ -97,16 +96,38 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
 /** THE ACCOUNT'S STATE — the person's own record (src/account/contract.ts), read AT HEAD from the
  *  `account` facet on `/users/<id>` (the facet catches up from its log before answering): whether
  *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
- *  awaits it), when each was last used. One hop to the person's own Durable Object. */
+ *  awaits it), when each was last used. One hop to the person's own Durable Object.
+ *
+ *  Read again ONCE, on a fresh stub, when the read was cut at the transport (retryable-error.ts):
+ *  every admission and every code exchange reads here (`grantLifetime`), so a deploy's reset of
+ *  the person's Durable Object would otherwise fail a sign-in's token request with a 500. The read
+ *  is idempotent; a second failure throws. A deploy's reset is expected; any other cut is a
+ *  platform failure the prd fault alarm counts. */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
   // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
   // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
-  const { state } = (await ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
-    ["itx", "facets", ["get", "account"], ["snapshot"]],
-    [],
-    { principal: null },
-  )) as { state: AccountState };
-  return state;
+  const read = async () =>
+    (
+      (await ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
+        ["itx", "facets", ["get", "account"], ["snapshot"]],
+        [],
+        { principal: null },
+      )) as { state: AccountState }
+    ).state;
+  try {
+    return await read();
+  } catch (error) {
+    if (!isRetryableTransportError(error)) throw error;
+    console.warn({
+      event: isDeployReset(error)
+        ? "oauth.deploy-reset-account-state-retry"
+        : "oauth.platform-failure-account-state-retry",
+      name: "account-state",
+      userId,
+      message: String(error),
+    });
+    return read();
+  }
 }
 
 async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
@@ -379,7 +400,7 @@ async function personalAccessTokenAdmission(
 > {
   const named = parsePersonalAccessToken(token);
   if (!named) return { ok: false, reason: "token_unknown_or_expired" };
-  const hash = await personalAccessTokenHash(token);
+  const hash = await sha256Hex(token);
   // THE INDEX FIRST (personal-access-token.ts): a key it does not hold is refused on one KV read, so
   // a forged key dials no Durable Object, neither a stranger's (which would be created) nor a real
   // person's (whose account every one of their grants reads).
@@ -387,7 +408,7 @@ async function personalAccessTokenAdmission(
     return { ok: false, reason: "token_unknown_or_expired" };
   const account = await accountStateOf(env, named.userId);
   const key = account.personalAccessTokens[named.id];
-  if (!key || !personalAccessTokenHashMatches(hash, key.hash))
+  if (!key || !(await secretsEqual(hash, key.hash)))
     return { ok: false, reason: "token_unknown_or_expired" };
   const expiresAt = key.expiresAt ?? Infinity;
   if (expiresAt <= Date.now()) return { ok: false, reason: "token_unknown_or_expired" };

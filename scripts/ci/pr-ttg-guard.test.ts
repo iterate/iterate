@@ -26,7 +26,7 @@ const pxt90nlfvh: RunMetrics = {
   ],
 };
 
-test("a green push's time to green runs from the run's creation to its last check's end, trace included", () => {
+test("a green push's time to green runs from the run's creation to its last check's end", () => {
   expect(
     measurePush({
       metrics: pxt90nlfvh,
@@ -44,6 +44,65 @@ test("a green push's time to green runs from the run's creation to its last chec
     seconds: 316,
   });
 });
+
+// Depot's GetRunMetrics for run l9b40r65b2 (PR #3094) and v7gm132nt1 (PR #3009, whose e2e failed
+// and passed on a re-run), cut to the fields the guard reads.
+test.each<{
+  metrics: RunMetrics;
+  firstExecutions: Parameters<typeof measurePush>[0]["firstExecutions"];
+  expected: object;
+}>([
+  {
+    metrics: {
+      run: {
+        runId: "l9b40r65b2",
+        ref: "refs/pull/3094/merge",
+        createdAt: "2026-09-24T19:56:00.152Z",
+      },
+      workflows: [
+        workflow("fn4fhm8q96", "Lint and Typecheck", "finished", "2026-09-24T19:57:04.915Z"),
+        workflow("xh81bck8bm", "Test", "finished", "2026-09-24T19:58:40.106Z"),
+        previewOs("26hmfc2c77", "finished", "2026-09-24T20:02:19.475Z", {
+          deploy: ["2026-09-24T19:57:40.086Z"],
+          e2e: ["2026-09-24T20:01:31.057Z"],
+          specs: ["2026-09-24T19:59:19.763Z"],
+          trace: ["2026-09-24T20:02:11.591Z"],
+        }),
+      ],
+    },
+    firstExecutions: {},
+    // E2E tests' end, 48 s before the trace's
+    expected: { outcome: "green", seconds: 330.9 },
+  },
+  {
+    metrics: {
+      run: {
+        runId: "v7gm132nt1",
+        ref: "refs/pull/3009/merge",
+        createdAt: "2026-09-24T11:37:49.951Z",
+      },
+      workflows: [
+        workflow("jkmnhnhp8z", "Lint and Typecheck", "finished", "2026-09-24T11:38:23.614Z"),
+        workflow("v5lv047b1c", "Test", "finished", "2026-09-24T11:41:01.194Z"),
+        previewOs("2lprg4f8q9", "finished", "2026-09-24T11:47:33.757Z", {
+          deploy: ["2026-09-24T11:39:25.275Z"],
+          e2e: ["2026-09-24T11:42:46.744Z", "2026-09-24T11:47:18.153Z"],
+          trace: ["2026-09-24T11:43:00.575Z", "2026-09-24T11:47:31.889Z"],
+        }),
+      ],
+    },
+    firstExecutions: { "2lprg4f8q9": { status: "failed", finishedAt: "2026-09-24T11:43:01Z" } },
+    // the first E2E tests attempt's end, before its trace and the re-run
+    expected: { outcome: "red", seconds: 296.8 },
+  },
+])(
+  "Preview OS reaches its verdict at its last job but the CI trace: $metrics.run.runId",
+  ({ metrics, firstExecutions, expected }) => {
+    expect(
+      measurePush({ metrics, firstExecutions, nextRunAt: undefined, summary: {} }),
+    ).toMatchObject(expected);
+  },
+);
 
 test.each([
   { summary: { slowRows: "skipped" as const }, e2e: "slow-rows-skipped" },
@@ -70,6 +129,34 @@ test("a push without Preview OS waits for Lint and Typecheck and Test alone", ()
       summary: undefined,
     }),
   ).toMatchObject({ outcome: "green", e2e: "no-preview", seconds: 191.7 });
+});
+
+// Since Preview OS runs on every push, a push that changes no preview path runs its Deploy preview
+// job alone, to decide so, and skips E2E tests.
+test("a push whose Preview OS skipped E2E tests has no preview, and still waits for Preview OS", () => {
+  const skipped = {
+    ...pxt90nlfvh,
+    workflows: pxt90nlfvh.workflows.map((entry) =>
+      entry.workflow.name === "Preview OS"
+        ? {
+            workflow: { ...entry.workflow, finishedAt: "2026-09-24T11:52:30.000Z" },
+            jobs: [
+              { job: { jobKey: "preview-os.yml:deploy", status: "finished" }, attempts: [{}] },
+              { job: { jobKey: "preview-os.yml:e2e", status: "skipped" }, attempts: [] },
+              { job: { jobKey: "preview-os.yml:specs", status: "skipped" }, attempts: [] },
+            ],
+          }
+        : entry,
+    ),
+  };
+  expect(
+    measurePush({
+      metrics: skipped,
+      firstExecutions: {},
+      nextRunAt: undefined,
+      summary: undefined,
+    }),
+  ).toMatchObject({ outcome: "green", e2e: "no-preview", seconds: 200.5 });
 });
 
 test("a re-run check counts at its first execution: red at that execution's end", () => {
@@ -113,19 +200,39 @@ test.each([
   },
 );
 
-test("a cancelled Preview OS is red even when the PR's next run came first: it never cancels for a newer push", () => {
-  expect(
-    measurePush({
-      metrics: withWorkflow("nsbcf2f8mt", {
-        status: "cancelled",
-        finishedAt: "2026-09-24T12:30:00.000Z",
+// Preview OS cancels its run in progress when the PR's next push starts (preview-os.yml
+// `concurrency:`), even in the CI trace, after its suites passed.
+test.each([
+  { nextRunAt: "2026-09-24T11:55:00Z", ended: "2026-09-24T12:30:00.000Z", outcome: "superseded" },
+  { nextRunAt: "2026-09-24T11:54:20Z", ended: "2026-09-24T11:54:25.587Z", outcome: "superseded" },
+  // cancelled before the next push: a timeout or a person
+  { nextRunAt: "2026-09-24T11:55:00Z", ended: "2026-09-24T11:54:25.587Z", outcome: "red" },
+  { nextRunAt: undefined, ended: "2026-09-24T11:54:25.587Z", outcome: "red" },
+])(
+  "a Preview OS cancelled in its trace at $ended, the next run created at $nextRunAt → $outcome",
+  ({ nextRunAt, ended, outcome }) => {
+    expect(
+      measurePush({
+        metrics: {
+          ...pxt90nlfvh,
+          workflows: pxt90nlfvh.workflows.map((entry) =>
+            entry.workflow.name === "Preview OS"
+              ? previewOs("nsbcf2f8mt", "cancelled", ended, {
+                  deploy: ["2026-09-24T11:50:40.000Z"],
+                  e2e: ["2026-09-24T11:53:59.000Z"],
+                  specs: ["2026-09-24T11:52:10.000Z"],
+                  trace: [ended],
+                })
+              : entry,
+          ),
+        },
+        firstExecutions: {},
+        nextRunAt,
+        summary: { slowRows: "skipped" },
       }),
-      firstExecutions: {},
-      nextRunAt: "2026-09-24T11:55:00Z",
-      summary: undefined,
-    }),
-  ).toMatchObject({ outcome: "red", e2e: "no-summary" });
-});
+    ).toMatchObject({ outcome });
+  },
+);
 
 test("a PR run without Test is not a push; one with a check still unfinished is not measured yet", () => {
   expect(
@@ -303,6 +410,24 @@ test("the state round-trips through its schema", () => {
 
 function workflow(workflowId: string, name: string, status: string, finishedAt: string) {
   return { workflow: { workflowId, name, status, finishedAt }, jobs: [{ attempts: [{}] }] };
+}
+
+/** A Preview OS workflow whose jobs (by their key in preview-os.yml) ended each attempt at `ends`. */
+function previewOs(
+  workflowId: string,
+  status: string,
+  finishedAt: string,
+  ends: Record<string, string[]>,
+): RunMetrics["workflows"][number] {
+  return {
+    workflow: { workflowId, name: "Preview OS", status, finishedAt },
+    jobs: Object.entries(ends).map(([job, attempts]) => ({
+      job: { jobKey: `preview-os.yml:${job}`, status: "finished" },
+      attempts: attempts.map((end, index) => ({
+        attempt: { attempt: index + 1, finishedAt: end },
+      })),
+    })),
+  };
 }
 
 function withWorkflow(

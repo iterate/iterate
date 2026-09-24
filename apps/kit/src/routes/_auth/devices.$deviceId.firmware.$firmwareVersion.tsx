@@ -14,9 +14,9 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
-  InputGroupInput,
 } from "@iterate-com/ui/components/input-group";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
+import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import {
   Select,
   SelectContent,
@@ -357,7 +357,7 @@ function KitPage() {
                 OpenAI API key
               </FieldLabel>
               <FieldContent>
-                <Input
+                <SecretInput
                   id="openai-key"
                   name="openai-key"
                   type="password"
@@ -450,7 +450,13 @@ function PasswordInput(props: ComponentProps<"input"> & { id: string }) {
   const shown = useQuery({ queryKey: shownKey, queryFn: skipToken, initialData: false }).data;
   return (
     <InputGroup>
-      <InputGroupInput {...props} type={shown ? "text" : "password"} />
+      {/* InputGroupInput's slot and look, on the SecretInput that keeps it out of session replay */}
+      <SecretInput
+        {...props}
+        type={shown ? "text" : "password"}
+        data-slot="input-group-control"
+        className="flex-1 rounded-none border-0 bg-transparent shadow-none ring-0 focus-visible:ring-0 dark:bg-transparent"
+      />
       <InputGroupAddon align="inline-end">
         <InputGroupButton
           size="icon-xs"

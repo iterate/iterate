@@ -14,8 +14,8 @@
 //
 //   • the alarm serves durable obligations only: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
-//     created + woken before the first request is served) yet OWES no alarm (its one alarm is the
-//     residency watchdog's, support.ts `owedAlarm`) — a pin (a borrowed rpc stub, an open socket) is
+//     created + woken before the first request is served) yet OWES no alarm (support.ts
+//     `owedAlarm`) — a pin (a borrowed rpc stub, an open socket) is
 //     released by a timer, never the alarm; only storage.getAlarm() can see that (the deployed e2e
 //     tests pin the records but cannot read the alarm);
 //   • the entry points themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's

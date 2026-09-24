@@ -230,6 +230,48 @@ test("deletes a retired container application before tombstoning its class", asy
   expect(cf.mock.calls.some(([path]) => path.includes("/settings"))).toBe(false);
 });
 
+test("retires a preview parent's own classes, not its Worker Previews' namespaces of the same classes", async () => {
+  let deployedMetadata: unknown;
+  const cf = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/workers/scripts") return [{ id: "os" }];
+    if (path.startsWith("/workers/durable_objects/namespaces?")) {
+      return [
+        { id: "own", script: "os", class: "ProjectDurableObject" },
+        { id: "pr7", script: "os", class: "ProjectDurableObject", preview: { name: "pr7" } },
+        { id: "main", script: "os", class: "ProjectDurableObject", preview: { name: "main" } },
+      ];
+    }
+    if (path === "/containers/applications") return [];
+    if (path === "/workers/scripts/os") {
+      const body = init?.body;
+      if (!(body instanceof FormData)) throw new Error("expected a FormData worker upload");
+      deployedMetadata = JSON.parse(String(body.get("metadata")));
+      return undefined;
+    }
+    throw new Error(`unexpected Cloudflare request: ${path}`);
+  });
+
+  await expect(
+    resetWorkerDurableObjects({
+      ctx: { cf } as never,
+      workerName: "os",
+      cwd: "/tmp/os",
+      credentials: {},
+      compatibilityDate: "2026-07-01",
+      containerClassNames: [],
+    }),
+  ).resolves.toEqual({
+    action: "reset",
+    deletedClasses: ["ProjectDurableObject"],
+    keptContainerClasses: [],
+  });
+  // one tombstone per class: Cloudflare refuses a class that is "the target of more than one
+  // migration" (10021)
+  expect(deployedMetadata).toMatchObject({
+    migrations: { steps: [{ deleted_classes: ["ProjectDurableObject"] }] },
+  });
+});
+
 test("scans only a Worker named by Cloudflare when its external binding blocks retirement", async () => {
   const sidecarSettings: Settings = {
     bindings: [

@@ -13,7 +13,7 @@ import {
   type ModuleTelemetryRecord,
   type TestTelemetryRecord,
 } from "../ci-telemetry.ts";
-import { E2E_BUDGET_EXEMPTIONS, E2E_ROW_BUDGET_MS, E2E_ROW_WARN_MS } from "./budgets.ts";
+import { E2E_ROW_BUDGET_MS, E2E_ROW_WARN_MS } from "./budgets.ts";
 
 interface ReportedTestCase {
   id?: string;
@@ -399,9 +399,7 @@ export class RetryTelemetryReporter {
           `[row-budget] ${overBudget.length} e2e row(s) ran longer than ${E2E_ROW_WARN_MS / 1000} s; a row that runs on every PR finishes within ${E2E_ROW_BUDGET_MS / 1000} s at its p95:`,
         );
         for (const row of overBudget.toSorted((a, b) => b.durationMs - a.durationMs))
-          console.log(
-            `[row-budget] ${(row.durationMs / 1000).toFixed(1)} s${E2E_BUDGET_EXEMPTIONS[row.name] ? " (exempt)" : ""} ${row.name}`,
-          );
+          console.log(`[row-budget] ${(row.durationMs / 1000).toFixed(1)} s ${row.name}`);
       }
     } catch (error) {
       console.error("[retry-telemetry] failed to record test telemetry:", error);

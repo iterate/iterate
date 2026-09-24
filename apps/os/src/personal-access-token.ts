@@ -25,6 +25,8 @@
 // which stays the truth of the key: its hash, its end, its expiry. An entry the account does not
 // back (a record that failed to land, an end whose clean-up failed) admits nothing.
 
+import { sha256Hex } from "./caller.ts";
+
 const PREFIX = "itk_";
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const SHAPE = /^itk_([0-9a-f]{32})_([0-9a-f]{16})_[0-9A-Za-z]{43}([0-9A-Za-z]{6})$/;
@@ -33,7 +35,8 @@ const SHAPE = /^itk_([0-9a-f]{32})_([0-9a-f]{16})_[0-9A-Za-z]{43}([0-9A-Za-z]{6}
 export const isPersonalAccessToken = (token: string) => token.startsWith(PREFIX);
 
 /** A new key for `userId`: its id, the bearer (answered once, then only its hash exists) and that
- *  hash. The id and user are readable in the bearer; the 256-bit secret is what proves it. */
+ *  hash. The id and user are readable in the bearer; the 256-bit secret is what proves it. The hash
+ *  is a plain SHA-256: a salt or a slow hash would buy nothing for 256 random bits. */
 export async function newPersonalAccessToken(userId: string) {
   // control-plane/catalog.ts `newId` mints `user_` and 32 hex; the key reads the account back from it
   const user = /^user_([0-9a-f]{32})$/.exec(userId)?.[1];
@@ -49,7 +52,7 @@ export async function newPersonalAccessToken(userId: string) {
       if (byte < 248 && secret.length < 43) secret += BASE62[byte % 62];
   const body = `${PREFIX}${user}_${key}_${secret}`;
   const token = `${body}${checksum(body)}`;
-  return { id: `pat_${key}`, token, hash: await personalAccessTokenHash(token) };
+  return { id: `pat_${key}`, token, hash: await sha256Hex(token) };
 }
 
 /** The account and key a bearer names: null unless it has the format above and its checksum holds.
@@ -59,22 +62,6 @@ export function parsePersonalAccessToken(token: string) {
   const match = SHAPE.exec(token);
   if (!match || checksum(token.slice(0, -6)) !== match[3]) return null;
   return { userId: `user_${match[1]}`, id: `pat_${match[2]}` };
-}
-
-/** The SHA-256 of a key, in hex: all the account keeps. A salt or a slow hash would buy nothing for
- *  256 random bits, which no dictionary holds. */
-export async function personalAccessTokenHash(token: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/** Whether a presented key's SHA-256 is the account's `hash`, compared in constant time with
- *  Workers' `crypto.subtle.timingSafeEqual`
- *  (https://developers.cloudflare.com/workers/examples/protect-against-timing-attacks/). */
-export function personalAccessTokenHashMatches(presented: string, hash: string) {
-  const left = new TextEncoder().encode(presented);
-  const right = new TextEncoder().encode(hash);
-  return left.byteLength === right.byteLength && crypto.subtle.timingSafeEqual(left, right);
 }
 
 const indexKey = (hash: string) => `personal-access-token:${hash}`;

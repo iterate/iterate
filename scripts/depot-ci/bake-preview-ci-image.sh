@@ -59,15 +59,11 @@ doppler --version
 echo "==> Installing preview browser"
 pnpm exec playwright install chromium
 
-echo "==> Installing ESP-IDF for Kit Firmware"
-scripts/depot-ci/esp-idf.sh install
-
 echo "==> Reporting baked cache size"
 echo "pnpm-store=$(pnpm store path)"
 du -sh "$(pnpm store path)" || true
 du -sh node_modules || true
 du -sh /home/runner/.cache/ms-playwright || true
-du -sh /home/runner/esp-idf /home/runner/.espressif || true
 
 # Seal only after every setup step succeeds. This receipt travels with the tree.
 /usr/local/bin/node scripts/depot-ci/dependencies.mjs seal

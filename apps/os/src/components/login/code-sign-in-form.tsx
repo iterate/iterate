@@ -1,7 +1,7 @@
 import { useId } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { focusOnMount } from "../focus-on-mount.ts";
 
 /** The mailed code, and the way back to another email. */
@@ -16,7 +16,8 @@ export function CodeSignInForm({ next, codeSentTo }: { next: string; codeSentTo:
         <input type="hidden" name="next" value={next} />
         <Field>
           <FieldLabel htmlFor={codeId}>Code</FieldLabel>
-          <Input
+          {/* it signs in until it is used: not in a replay */}
+          <SecretInput
             id={codeId}
             type="text"
             name="code"

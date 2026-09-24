@@ -3,22 +3,26 @@
 // that gets slow.
 //
 // A PUSH is a Depot run of a pull request that runs Test: its ref is `refs/pull/<n>/merge`. Its
-// CHECKS are the two the main ruleset requires, Lint and Typecheck and Test, and Preview OS when the
-// push touched the preview's paths. Each push is measured once it settled:
+// CHECKS are Lint and Typecheck, Test and Preview OS, whose E2E tests and Browser specs jobs the main
+// ruleset requires with the other two, and which runs on every push since 2026-09-24 (on those that
+// touched the preview's paths before). Each push is measured once it settled:
 //   • TIME TO FIRST VERDICT: from the run's creation (about the push, and where the CI trace's clock
-//     starts) to the end of the last check's first execution, the Preview OS trace job included, and
-//     a Preview OS that queued behind the PR's previous run. A red run, and one whose checks were
-//     re-run, counts at its first execution's end, so a flake costs what it costs.
+//     starts) to the end of the last check's first execution, a Preview OS that queued behind the
+//     PR's previous run included. Preview OS ends at its last job but the CI trace, which reports
+//     and gates nothing. A red run, and one whose checks were re-run, counts at its first
+//     execution's end, so a flake costs what it costs.
 //   • TIME TO GREEN: the same, for the pushes whose checks all passed on their first execution.
-// A push whose Test or Lint was cancelled because the PR's next push superseded it has no verdict and
-// is left out. Any other cancel, a job's timeout say, is red.
+// A push whose check was cancelled because the PR's next push superseded it has no verdict and is left
+// out, even when its suites had passed and the cancel cut its CI trace. Any other cancel, a job's
+// timeout say, is red.
 //
-// Pushes are split by what their Preview OS e2e job ran, from its suite summary (`slowRows` in
+// Pushes are split by what their Preview OS E2E tests job ran, from its suite summary (`slowRows` in
 // packages/shared/src/test-support/flake-suite-summary.ts):
 //   slow rows skipped   the e2e rows tagged `slow` were left out, as they are for most PRs
 //   every row           they ran: the PR touched their code, or the summary predates the tag
 //   no summary          e2e wrote none (its deploy failed, say), so which rows would have run is unknown
-//   no Preview OS       the push ran Lint and Typecheck and Test alone
+//   no Preview OS       no preview: the push changed no preview path, so E2E tests skipped, or it
+//                       ran no Preview OS at all
 //
 // THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
 // and at least 20 of them, has a median over 165 s or a p90 over 200 s, #error-pulse is paged red,
@@ -27,7 +31,7 @@
 // head, where red reads as "this commit broke"); failing to read Depot fails it.
 //
 // The memory between runs is the previous main run's `pr-ttg-state` artifact (depot.ts
-// `newestArtifactFile`): the pushes of the last 7 days as measured, and what the channel was last
+// `saveNewestArtifactFile`): the pushes of the last 7 days as measured, and what the channel was last
 // told. Each run lists the PR runs of the last 26 hours and measures those it has not. Every push it
 // measures is also a PostHog event, `pr checks settled`. A run off main, or with `--test-page`, keeps
 // no state and sends nothing to PostHog; `--test-page` posts its numbers marked 🧪, mentioning nobody.
@@ -42,7 +46,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
-import { depotCiApi, mapConcurrent, newestArtifactFile, unzip } from "./depot.ts";
+import { depotCiApi, mapConcurrent, saveNewestArtifactFile, unzip } from "./depot.ts";
 import { sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
@@ -59,6 +63,8 @@ export const stateArtifact = {
  *  rename to preview-os.yml. LOC report and the PR dashboard gate nothing and finish within a
  *  minute; Kit Firmware runs only on firmware PRs. */
 export const CHECKS = ["Lint and Typecheck", "Test", "Preview OS"];
+/** Preview OS's CI trace job: it only reports, so a push's wait ends before it. */
+const TRACE_JOB = "preview-os.yml:trace";
 const HOUR_MS = 3_600_000;
 
 const E2eRows = z.enum(["slow-rows-skipped", "every-row", "no-summary", "no-preview"]);
@@ -100,29 +106,26 @@ export function measurePush(input: {
   const base = { run: run.runId, pr: Number(run.ref.split("/")[2]), createdAt: run.createdAt };
   const checks = workflows
     .filter(({ workflow }) => CHECKS.includes(workflow.name))
-    .map(({ workflow }) => ({
-      name: workflow.name,
-      ...(input.firstExecutions[workflow.workflowId] || workflow),
-    }));
+    .map(({ workflow, jobs }) => {
+      const first = input.firstExecutions[workflow.workflowId] || workflow;
+      return { name: workflow.name, ...first, verdictAt: verdictEnd(first.finishedAt, jobs) };
+    });
   if (!checks.some((check) => check.name === "Test")) return { ...base, outcome: "not-a-push" };
   if (checks.some((check) => !check.finishedAt)) return undefined;
-  // Lint and Test cancel a run in progress when the PR's next push starts (their `concurrency:`);
-  // Preview OS never does, so its cancel is always a timeout or a person.
+  // Every check cancels its run in progress when the PR's next push starts (their `concurrency:`), so
+  // one cancelled once the next run existed was superseded; before, it was a timeout or a person.
   const nextRunAt = input.nextRunAt ? Date.parse(input.nextRunAt) : Infinity;
   if (
     checks.some(
-      (check) =>
-        check.name !== "Preview OS" &&
-        check.status === "cancelled" &&
-        nextRunAt <= Date.parse(check.finishedAt),
+      (check) => check.status === "cancelled" && nextRunAt <= Date.parse(check.finishedAt),
     )
   )
     return { ...base, outcome: "superseded" };
-  const verdictAt = Math.max(...checks.map((check) => Date.parse(check.finishedAt)));
+  const verdictAt = Math.max(...checks.map((check) => Date.parse(check.verdictAt)));
   return {
     ...base,
     outcome: checks.every((check) => check.status === "finished") ? "green" : "red",
-    e2e: !checks.some((check) => check.name === "Preview OS")
+    e2e: !previewTested(workflows)
       ? "no-preview"
       : !input.summary
         ? "no-summary"
@@ -131,6 +134,29 @@ export function measurePush(input: {
           : "every-row",
     seconds: Math.round((verdictAt - Date.parse(run.createdAt)) / 100) / 10,
   };
+}
+
+/** When a settled check's first execution reached its verdict: its end or, when it has a CI trace
+ *  job, the end of the first attempt of its last job but that one. Pure. */
+function verdictEnd(finishedAt: string, jobs: RunMetrics["workflows"][number]["jobs"]) {
+  if (!finishedAt || !jobs.some(({ job }) => job?.jobKey === TRACE_JOB)) return finishedAt;
+  const ends = jobs.flatMap(({ job, attempts }) => {
+    const first = attempts.find(({ attempt }) => attempt?.attempt === 1)?.attempt;
+    return job?.jobKey !== TRACE_JOB && first?.finishedAt ? [Date.parse(first.finishedAt)] : [];
+  });
+  return ends.length ? new Date(Math.max(...ends)).toISOString() : finishedAt;
+}
+
+/** Whether the push's Preview OS tested a preview: it ran, and its E2E tests job was not skipped,
+ *  as it is for a push that changes no preview path (preview-os.yml). Pure. */
+function previewTested(workflows: RunMetrics["workflows"]) {
+  const preview = workflows.find(({ workflow }) => workflow.name === "Preview OS");
+  return (
+    !!preview &&
+    !preview.jobs.some(
+      ({ job }) => job?.jobKey === "preview-os.yml:e2e" && job.status === "skipped",
+    )
+  );
 }
 
 /** The pushes created in [from, to), by what their e2e ran and all together: each group's time to
@@ -395,8 +421,7 @@ async function readRun(depot: (method: string, body: object) => Promise<unknown>
 }
 
 /** The suite summary of the Preview OS e2e job's first attempt (preview-os.yml uploads it as
- *  `flake-records-preview-e2e-attempt-<id>`, and as `flake-records-preview-e2e` before 2026-09-24),
- *  or undefined when it uploaded none. */
+ *  `flake-records-preview-e2e-attempt-<id>`), or undefined when it uploaded none. */
 async function readE2eSummary(
   depot: (method: string, body: object) => Promise<unknown>,
   runId: string,
@@ -472,7 +497,22 @@ const RunMetrics = z.object({
           status: z.string(),
           finishedAt: z.string().default(""),
         }),
-        jobs: z.array(z.object({ attempts: z.array(z.unknown()).default([]) })).default([]),
+        jobs: z
+          .array(
+            z.object({
+              job: z.object({ jobKey: z.string(), status: z.string() }).optional(),
+              attempts: z
+                .array(
+                  z.object({
+                    attempt: z
+                      .object({ attempt: z.number(), finishedAt: z.string().default("") })
+                      .optional(),
+                  }),
+                )
+                .default([]),
+            }),
+          )
+          .default([]),
       }),
     )
     .default([]),
@@ -505,15 +545,7 @@ if (isMainModule(import.meta.url)) {
   });
   const done =
     positionals[0] === "previous-state" && values.out
-      ? newestArtifactFile({
-          repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
-          ...stateArtifact,
-        }).then((state) => {
-          console.log(state ? `previous state: ${state.length} bytes` : "no previous state");
-          if (!state) return;
-          mkdirSync(dirname(values.out!), { recursive: true });
-          writeFileSync(values.out!, state);
-        })
+      ? saveNewestArtifactFile({ ...stateArtifact, out: values.out }).then(console.log)
       : positionals[0] === "measure" && values.ref
         ? measure({
             token: z

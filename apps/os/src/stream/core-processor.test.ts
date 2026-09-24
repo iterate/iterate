@@ -10,6 +10,7 @@
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
   reduceCoreEvent,
@@ -17,6 +18,7 @@ import {
   type CoreState,
   normalizeControlEvent,
 } from "./core-processor.ts";
+import { Stream } from "./stream.ts";
 import { nodeSqliteStream } from "./test-support.ts";
 
 // ── the contract ──
@@ -28,6 +30,7 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
     itxExpressionRewriteRules: {},
     subscriptions: {},
     ingressTarget: null,
+    fetchRoutes: {},
     schedules: {},
     scriptRuns: {},
   });
@@ -176,6 +179,35 @@ test("woken → incarnation; every wake overwrites (growth across idle is the hi
   expect(s).toMatchObject({ incarnation: 2, projectId: "prj_t" });
 });
 
+test.each([
+  {
+    log: "aborted, then woken (the reset itx.abort() asked for)",
+    types: ["context/aborted", "stream/woken"],
+    wokenAfterContextAbortedOffset: 2,
+  },
+  {
+    log: "aborted, woken, woken again (a later wake: hibernation, a platform reset)",
+    types: ["context/aborted", "stream/woken", "stream/woken"],
+    wokenAfterContextAbortedOffset: undefined,
+  },
+  {
+    log: "woken, then aborted (the reset still to come)",
+    types: ["stream/woken", "context/aborted"],
+    wokenAfterContextAbortedOffset: undefined,
+  },
+])("$log → wokenAfterContextAbortedOffset $wokenAfterContextAbortedOffset", (row) => {
+  const s = reduceAll(
+    row.types.map((type, index) =>
+      at(
+        index + 2,
+        `events.iterate.com/${type}`,
+        type === "stream/woken" ? { incarnation: index } : {},
+      ),
+    ),
+  );
+  expect(s).toMatchObject({ wokenAfterContextAbortedOffset: row.wokenAfterContextAbortedOffset });
+});
+
 test("pause is a latch: paused → resumed round-trips; reason carried", () => {
   const paused = reduceAll([at(1, "events.iterate.com/stream/paused", { reason: "maintenance" })]);
   expect(paused).toMatchObject({ paused: { reason: "maintenance" } });
@@ -235,6 +267,133 @@ test("ingress target: an ephemeral configuration cannot be published", () => {
     ),
   ).toThrow("must be durable");
 });
+
+// ── the fetch routes — fetch-route/configured, folded by src/fetch-routes.ts ──
+
+const routeType = "events.iterate.com/fetch-route/configured";
+const blogRoute = {
+  fetchRouteName: "tunnel-blog",
+  requestMatcher: { routingSlug: "blog" },
+  target: ["itx", "tunnels", "blog"],
+};
+
+test("fetch routes: a fact sets its route at its offset and a null matcher deletes it; deleting a route that is not there, or an ephemeral fact, keeps the state", () => {
+  const set = reduceAll([at(4, routeType, blogRoute)]);
+  expect(set).toEqual(
+    expect.objectContaining({
+      fetchRoutes: {
+        "tunnel-blog": {
+          requestMatcher: { routingSlug: "blog" },
+          target: ["itx", "tunnels", "blog"],
+          authRequirement: null,
+          priority: 0,
+          configuredOffset: 4,
+        },
+      },
+    }),
+  );
+  const deleted = { fetchRouteName: "tunnel-blog", requestMatcher: null };
+  expect(reduceAll([at(5, routeType, deleted)], set)).toEqual(
+    expect.objectContaining({ fetchRoutes: {} }),
+  );
+  expect(
+    reduceCoreEvent({
+      event: at(5, routeType, { ...deleted, fetchRouteName: "gone" }),
+      state: set,
+    }),
+  ).toBeUndefined();
+  expect(
+    reduceCoreEvent({
+      event: { ...at(5, routeType, blogRoute), ephemeral: true },
+      state: CoreContract.initialState(),
+    }),
+  ).toBeUndefined();
+});
+
+test("fetch routes: a malformed fact in the log is skipped by the reduce, never thrown, so one route that does not compile never breaks every request's match", () => {
+  const badUrl = {
+    ...blogRoute,
+    fetchRouteName: "bad-url",
+    requestMatcher: { url: { pathname: "(" } },
+  };
+  const state = reduceCoreEventBatch(
+    [at(1, routeType, badUrl), at(2, routeType, blogRoute)],
+    CoreContract.initialState(),
+    onError,
+  );
+  expect(Object.keys(state.fetchRoutes)).toEqual(["tunnel-blog"]);
+});
+
+test("fetch routes: the append boundary parses the fact and refuses a malformed or ephemeral one", () => {
+  expect(normalizeControlEvent({ type: routeType, payload: blogRoute }, "/")).toEqual({
+    type: routeType,
+    payload: blogRoute,
+  });
+  for (const payload of [
+    {},
+    { ...blogRoute, fetchRouteName: "Tunnel_Blog" },
+    { fetchRouteName: "no-target", requestMatcher: {} },
+    { ...blogRoute, requestMatcher: { url: { pathname: "(" } } },
+    { ...blogRoute, requestMatcher: { method: "GET" } },
+  ])
+    expect(() => normalizeControlEvent({ type: routeType, payload }, "/")).toThrow();
+  expect(() =>
+    normalizeControlEvent({ type: routeType, payload: blogRoute, ephemeral: true }, "/"),
+  ).toThrow("must be durable");
+});
+
+test("fetch routes: a root whose core checkpoint was written by 14.0.0, when the table was `ingressRoutes`, re-reduces its log on the next wake into `fetchRoutes`; an `ingress-route/configured` fact is not read", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
+  const before = new Stream(deps);
+  before.append(
+    { type: "events.iterate.com/ingress-route/configured", payload: { ...blogRoute } },
+    normalizeControlEvent(
+      { type: routeType, payload: { ...blogRoute, fetchRouteName: "api" } },
+      "/",
+    ),
+  );
+  const { fetchRoutes, ...rest } = before.coreReducedState;
+  expect(Object.keys(fetchRoutes)).toEqual(["api"]);
+  before.storage.reduceCheckpoints.write(
+    CoreContract.slug,
+    { reducerVersion: "14.0.0", reducedThroughOffset: before.highestDurableOffset() },
+    { ...rest, ingressRoutes: { "tunnel-blog": fetchRoutes.api } },
+    true,
+  );
+  const after = new Stream(deps).coreReducedState;
+  expect(after.fetchRoutes).toMatchObject({
+    api: { target: ["itx", "tunnels", "blog"], configuredOffset: 2 },
+  });
+  expect(after).not.toHaveProperty("ingressRoutes");
+});
+
+test(
+  "fetch routes: a core-version bump re-reduces a root's routes in O(routes) per page — 14,000 routes (a core checkpoint of ~2 MB) well under the CPU limit (a copy per fact is O(routes²): ~25 s on a laptop)",
+  { timeout: 60_000 },
+  () => {
+    const storage = nodeSqliteDurableObjectStorage();
+    const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
+    const before = new Stream(deps);
+    for (let first = 0; first < 14_000; first += 500)
+      before.append(
+        ...Array.from({ length: 500 }, (_, i) =>
+          normalizeControlEvent({ type: routeType, payload: numberedRoute(first + i) }, "/"),
+        ),
+      );
+    before.storage.reduceCheckpoints.write(
+      CoreContract.slug,
+      { reducerVersion: "13.0.0", reducedThroughOffset: before.highestDurableOffset() },
+      undefined,
+      false,
+    );
+    const startedAt = performance.now();
+    const rebuilt = new Stream(deps);
+    const rereduceMs = performance.now() - startedAt;
+    expect(Object.keys(rebuilt.coreReducedState.fetchRoutes)).toHaveLength(14_000);
+    expect(rereduceMs).toBeLessThan(5_000);
+  },
+);
 
 // ── the rewrite-rule table — a MAP by match ──
 
@@ -616,8 +775,20 @@ test("purity: an event the reduce does not know → undefined (keep the state)",
 // ── reduceCoreEventBatch — a batch's draft tables never leak into the state it was given ──
 
 test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the input state and its tables are untouched — and a second batch over the result leaves the first result untouched too", () => {
-  const first = [configured(1, "a"), rule(2, "itx.x", "itx.kv"), configured(3, "b")];
-  const second = [configured(4, "a", "itx.y.f"), rule(5, "itx.x", null), configured(6, "b", null)];
+  const first = [
+    configured(1, "a"),
+    rule(2, "itx.x", "itx.kv"),
+    configured(3, "b"),
+    at(4, routeType, numberedRoute(1)),
+    at(5, routeType, numberedRoute(2)),
+  ];
+  const second = [
+    configured(6, "a", "itx.y.f"),
+    rule(7, "itx.x", null),
+    configured(8, "b", null),
+    at(9, routeType, { fetchRouteName: "route-1", requestMatcher: null }),
+    at(10, routeType, { ...numberedRoute(2), priority: 5 }),
+  ];
   const initial = CoreContract.initialState();
   const afterFirst = reduceCoreEventBatch(first, initial, onError);
   expect(afterFirst).toEqual(reduceAll(first));
@@ -631,6 +802,9 @@ test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the inp
   expect(afterSecond.subscriptions).not.toBe(afterFirst.subscriptions);
   // oxlint-disable-next-line iterate/prefer-object-property-match -- identity: not the same table object
   expect(afterSecond.itxExpressionRewriteRules).not.toBe(afterFirst.itxExpressionRewriteRules);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- identity: not the same table object
+  expect(afterSecond.fetchRoutes).not.toBe(afterFirst.fetchRoutes);
+  expect(Object.keys(afterSecond.fetchRoutes)).toEqual(["route-2"]);
 });
 
 test("reduceCoreEventBatch: a batch that touches nothing hands the SAME state back (identity is the host's change signal — no checkpoint rewrite, no live delta)", () => {
@@ -1104,6 +1278,15 @@ function configured(offset: number, name: string, target: string | null = "itx.x
 /** A durable rewrite-rule-configured for `match`. */
 function rule(offset: number, match: string, target: string | null): StreamEvent {
   return at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
+}
+
+/** The payload of route `route-<n>`: requests on routing slug `s<n>` go to `itx.t<n>`. */
+function numberedRoute(n: number) {
+  return {
+    fetchRouteName: `route-${n}`,
+    requestMatcher: { routingSlug: `s${n}` },
+    target: ["itx", `t${n}`],
+  };
 }
 
 function onError(error: unknown, event: StreamEvent) {
