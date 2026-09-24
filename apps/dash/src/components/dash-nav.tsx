@@ -2,7 +2,7 @@
 // overview, MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
 // organizations, each with its projects (components/organization-tree.tsx, live) — and the other
 // first-party apps.
-import { Link, useMatchRoute } from "@tanstack/react-router";
+import { getRouteApi, Link, useMatchRoute } from "@tanstack/react-router";
 import {
   Activity,
   Building2,
@@ -25,8 +25,10 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@iterate-com/ui/components/sidebar";
-import { APPS } from "../apps.ts";
 import { useOrganizationTree } from "./organization-tree.tsx";
+
+/** The root loader's: the directory of apps this deployment has (apps.ts `appDirectory`). */
+const root = getRouteApi("__root__");
 
 const PROJECT_PAGES = [
   { to: "/projects/$slug", label: "Overview", icon: LayoutDashboard },
@@ -64,6 +66,7 @@ function ProjectNav({
   host: string | null;
 }) {
   const matchRoute = useMatchRoute();
+  const { apps } = root.useLoaderData();
   return (
     <SidebarGroup>
       <SidebarGroupContent>
@@ -98,7 +101,7 @@ function ProjectNav({
               </SidebarMenuButton>
             </SidebarMenuItem>
           ) : null}
-          {APPS.map((app) => (
+          {apps.map((app) => (
             <SidebarMenuItem key={app.url}>
               <SidebarMenuButton
                 tooltip={`${app.name} for ${project.slug}`}
@@ -126,6 +129,7 @@ function ProjectNav({
  *  organization the person belongs to, its projects under it; and the other first-party apps. */
 function TopLevelNav() {
   const matchRoute = useMatchRoute();
+  const { apps } = root.useLoaderData();
   return (
     <>
       <SidebarGroup>
@@ -147,26 +151,28 @@ function TopLevelNav() {
         </SidebarGroupContent>
       </SidebarGroup>
       <OrganizationTreeNav />
-      <SidebarGroup>
-        <SidebarGroupLabel>Apps</SidebarGroupLabel>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            {APPS.map((app) => (
-              <SidebarMenuItem key={app.url}>
-                <SidebarMenuButton
-                  tooltip={app.name}
-                  render={
-                    <a href={app.url} target="_blank" rel="noreferrer" aria-label={app.name} />
-                  }
-                >
-                  <ExternalLink />
-                  <span>{app.name}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
+      {apps.length ? (
+        <SidebarGroup>
+          <SidebarGroupLabel>Apps</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {apps.map((app) => (
+                <SidebarMenuItem key={app.url}>
+                  <SidebarMenuButton
+                    tooltip={app.name}
+                    render={
+                      <a href={app.url} target="_blank" rel="noreferrer" aria-label={app.name} />
+                    }
+                  >
+                    <ExternalLink />
+                    <span>{app.name}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      ) : null}
     </>
   );
 }

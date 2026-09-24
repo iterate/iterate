@@ -16,6 +16,8 @@ declare global {
       ITERATE_ORIGIN: string;
       /** zones a connectable issuer may not live under (the SDK's `issuerOriginOf`) — this deployment's own, comma-separated */
       ITERATE_DENY_ZONES: string;
+      /** the first-party apps' origins by name, JSON — the dash's for the device-token link (routes/__root.tsx) */
+      ITERATE_APP_ORIGINS: string;
     }
   }
 }

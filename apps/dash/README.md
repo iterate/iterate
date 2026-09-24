@@ -13,7 +13,10 @@ state of its own — sessions, projects and organizations belong to the platform
 
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to
 `https://os.iterate.com` by default; to use a local OS (`pnpm --dir ../os dev -- --port 8788`)
-put `ITERATE_ORIGIN=http://localhost:8788` in a gitignored `.dev.vars` here.
+put `ITERATE_ORIGIN=http://localhost:8788` in a gitignored `.dev.vars` here. The sidebar's directory
+of apps (`src/apps.ts`) links to the origins in the worker's `ITERATE_APP_ORIGINS` — prd's from
+`envs.ts` by default, the same PR's app previews in a preview; a local one takes, say,
+`ITERATE_APP_ORIGINS={"notes":"http://localhost:5174"}` in the same file.
 
 Deploy: `pnpm --dir apps/dash run deploy --env prd` serves `https://dash.iterate.com` (a route on
 the `iterate.com` zone; `pnpm ensure-resources --env prd` creates the proxied DNS record).

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   APPS,
+  appPreviewOrigins,
   changedApps,
   isDurableObjectClassNotExportedError,
   MAX_PREVIEW_NAME_LENGTH,
@@ -185,6 +186,24 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
     expect(withDash.previews.vars.APP_CONFIG_URLS__DASH).toBe(dashOrigin);
     expect(config.previews.vars.APP_CONFIG_URLS__DASH).toBeUndefined();
   });
+});
+
+test("a preview's apps link to each other at this PR's preview of each one's parent, the URLs the PR body lists", () => {
+  expect(appPreviewOrigins(APPS, "pr123-feature-foo")).toEqual({
+    dash: "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev",
+    agents: "https://pr123-feature-foo-agents-preview.iterate-dev-preview.workers.dev",
+    notes: "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev",
+    voice: "https://pr123-feature-foo-voice-preview.iterate-dev-preview.workers.dev",
+    kit: "https://pr123-feature-foo-kit-preview.iterate-dev-preview.workers.dev",
+  });
+});
+
+test("an app the preview run does not deploy is named nowhere, never at its production origin", () => {
+  const dashOnly = appPreviewOrigins(changedApps(["apps/dash/src/apps.ts"]), "pr123-feature-foo");
+  expect(dashOnly).toEqual({
+    dash: "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev",
+  });
+  expect(appPreviewOrigins([], "pr123-feature-foo")).toEqual({});
 });
 
 describe("which apps on top a preview run deploys", () => {

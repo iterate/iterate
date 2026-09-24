@@ -93,6 +93,21 @@ export function previewUrl(previewName: string) {
   return `https://${previewName}-${host}`;
 }
 
+/** An app on top's preview URL, `https://<name>-<its parent's workers.dev host>` — known before
+ *  anything deploys, by the same rule as apps/os's `previewUrl`. */
+export const appPreviewUrl = (app: StartApp, previewName: string) =>
+  `https://${previewName}-${new URL(app.envs.preview!.baseUrl).hostname}`;
+
+/** The apps a run previews, by name, at their preview URLs: every link between this preview's
+ *  apps — the dash the OS preview's landing page names (`APP_CONFIG_URLS__DASH`), and each app
+ *  preview's `ITERATE_APP_ORIGINS` (scripts/lib/start-app.ts: the dash's directory of apps, Kit's
+ *  link to the sessions in the dash). An app the run does not deploy (`--apps auto|none`) is named
+ *  nowhere: a link leads into this PR's preview or does not exist, never to production, where a
+ *  preview's projects do not. */
+export function appPreviewOrigins(apps: StartApp[], previewName: string) {
+  return Object.fromEntries(apps.map((app) => [app.name, appPreviewUrl(app, previewName)]));
+}
+
 /** Every preview-owned resource is `<worker>-<preview>-<binding>`, the name wrangler's preview
  *  auto-provisioning gives the KV namespaces and the R2 bucket; the Artifacts namespace follows it
  *  by hand. */

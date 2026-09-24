@@ -296,7 +296,11 @@ account: a Cloudflare Worker Preview of the parent `os-next-preview`, named
 `https://pr<n>-<branch slug>-os-next-preview.iterate-dev-preview.workers.dev`,
 with Durable Objects, KV, R2 and an Artifacts namespace of its own. The
 five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
-own parents, wired to it. Previews use workers.dev and have no project hosts:
+own parents, wired to it and to each other: each signs in against it, and every link
+between them — the platform's landing page to the Dash, the Dash's directory of apps,
+Kit's link to the sessions in the Dash — names the same PR's app previews
+(`appPreviewOrigins` in `apps/os/scripts/preview-config.ts`), only the ones the run
+deployed. Previews use workers.dev and have no project hosts:
 projects are paths on the one origin. The recipe is cloudflare-os's
 (`apps/os/scripts/preview.ts`; commands in `apps/os/README.md`).
 

@@ -1,15 +1,20 @@
 import { createRootRoute, HeadContent, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
+import { appDirectory } from "../apps.ts";
 import css from "../styles.css?url";
-/** The worker's PostHog project key (envs.ts, prd only; wrangler var `POSTHOG_PROJECT_KEY`). */
-const posthogProjectKey = createServerFn().handler(async () => {
+/** What the worker's vars say about this deployment: its PostHog project key (envs.ts, prd only;
+ *  `POSTHOG_PROJECT_KEY`) and its directory of apps (`ITERATE_APP_ORIGINS`, apps.ts). */
+const deployment = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
-  return env.POSTHOG_PROJECT_KEY || null;
+  return {
+    posthogProjectKey: env.POSTHOG_PROJECT_KEY || null,
+    apps: appDirectory(env.ITERATE_APP_ORIGINS),
+  };
 });
 
 export const Route = createRootRoute({
-  loader: () => posthogProjectKey(),
+  loader: () => deployment(),
   staleTime: Infinity,
   head: () => ({
     meta: [
@@ -23,7 +28,7 @@ export const Route = createRootRoute({
 });
 
 function Root() {
-  const apiKey = Route.useLoaderData();
+  const { posthogProjectKey } = Route.useLoaderData();
   // false in the server's HTML, true once React owns the page: the specs' hydration-waiter
   // (specs/AGENTS.md) holds actions until then
   const hydrated = useHydrated();
@@ -34,7 +39,7 @@ function Root() {
       </head>
       <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
         {/* light only, like every client app: no theme picker, no system theme */}
-        <AppProviders posthogApiKey={apiKey || undefined}>
+        <AppProviders posthogApiKey={posthogProjectKey || undefined}>
           <Outlet />
         </AppProviders>
         <Scripts />

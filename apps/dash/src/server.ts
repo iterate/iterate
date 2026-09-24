@@ -16,6 +16,8 @@ declare global {
       ITERATE_DENY_ZONES: string;
       /** PostHog's project key (envs.ts, prd only); unset ⇒ no PostHog */
       POSTHOG_PROJECT_KEY?: string;
+      /** the first-party apps' origins by name, JSON — the directory of apps (apps.ts) */
+      ITERATE_APP_ORIGINS: string;
     }
   }
 }
