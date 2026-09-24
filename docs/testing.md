@@ -6,12 +6,12 @@ policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
 timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
-For cross-run timing analysis and the telemetry event/query contract, see
+For the test telemetry artifact contract, see
 [CI and test telemetry](ci-test-telemetry.md). Every runner writes the same raw
-artifact contract (not only retries); one always-running CI finalizer validates,
-normalizes and retains Vitest hook/body/module/import timing and attempts as a
-workflow artifact. PostHog delivery of those events is downsampled to zero
-(`scripts/ci/posthog-events.ts`, since #2494): the artifacts are the record.
+artifact (not only retries); one always-running CI finalizer checks that every
+expected runner left one, and the job retains them, with Vitest hook, body,
+module and import timing and Playwright attempts, as a workflow artifact.
+Nothing per test goes to PostHog (#2494): the artifacts are the record.
 
 Run commands from the repository root unless stated otherwise.
 
@@ -343,11 +343,10 @@ for it. The Playwright config additionally honors the Playwright-conventional
 
 - **Every instrumented runner** atomically writes schema-validated JSON under
   `test-results/ci-telemetry/raw`. The finalizer
-  (`scripts/ci/upload-test-telemetry.ts`) writes the normalized batch and
-  manifest under `test-results/ci-telemetry/normalized`. Both remain in the
-  uploaded workflow artifact (`unit-test-telemetry`) even when a test or
-  delivery fails, next to `flake-records-unit`. See
-  [CI and test telemetry](ci-test-telemetry.md) for replay and query examples.
+  (`scripts/ci/upload-test-telemetry.ts`) writes `manifest.json` beside them.
+  Both remain in the uploaded workflow artifact (`unit-test-telemetry`) even
+  when a test fails, next to `flake-records-unit`. See
+  [CI and test telemetry](ci-test-telemetry.md) for downloading and checking one.
 - **The Vitest e2e suite** streams to the job log; the soak writes one JSON
   report per run under `apps/os/output/soak/` plus `summary.json`.
 - **Playwright** writes the repo-level `test-results/`:
@@ -701,7 +700,7 @@ must be allowlisted in that guard with a note; the allowlist holds structural
 gates only and never grows to excuse a parked bug. A `createFailing` pin is
 not a marker: it runs, and turns red once the bug it pins is fixed.
 
-The Depot Test workflow runs workspace tests and keeps their normalized
+The Depot Test workflow runs workspace tests and keeps their raw
 telemetry as a job artifact. Production's deploy runs only its readiness
 probes and the read-only host check. The Preview OS workflow deploys a per-PR
 platform and all five hosted clients, then runs integration and browser tests;

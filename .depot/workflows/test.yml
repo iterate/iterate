@@ -59,18 +59,15 @@ jobs:
       - name: Run Kit firmware host tests
         if: ${{ !cancelled() }}
         run: pnpm --dir apps/kit firmware:test:host
-      - name: Normalize and send test telemetry
+      # Fails when a test workspace left no complete artifact, and writes the unit suite summary next
+      # to its flake lines. A superseded run still keeps its raw evidence, but the job's own
+      # cancelled outcome is the record; killed runner sentinels are not test failures.
+      - name: Check test telemetry and write the suite summary
         if: always()
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
-        # A superseded run still normalizes and uploads its raw evidence, but
-        # GitHub's job telemetry owns the cancelled outcome; do not turn killed
-        # runner sentinels into test failures.
-        # Test execution uses test/dev, but analytics always belongs to the
-        # canonical production PostHog project shared with preview telemetry.
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit ${{ cancelled() && '--cancelled' || '' }}
+        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit ${{ cancelled() && '--cancelled' || '' }}
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow
       # artifact for the flake dashboard to pull

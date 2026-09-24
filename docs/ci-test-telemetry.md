@@ -1,837 +1,220 @@
 # CI And Test Telemetry
 
-> **What still runs.** PostHog delivery has been off on purpose since #2494:
-> `scripts/ci/posthog-events.ts` drops every event. The test finalizers still
-> validate, normalize and retain their evidence as Depot artifacts, but nothing
-> reaches the PostHog dashboards below. The GitHub, Depot and review-bot
-> collector (`.depot/workflows/ci-telemetry.yml`) runs only when dispatched and
-> delivers nothing today: PostHog is its only output, and it keeps no artifact.
-> Its schedule returns in the change that restores delivery. Where the
-> sections below describe a preview orchestrator, six Playwright shards, agent
-> smoke and TUI lanes or `node:test`, they describe an earlier pipeline that no
-> longer runs. The Preview OS workflow's `e2e` job (and Main OS e2e's) runs one
-> Vitest e2e runner and one Playwright runner and finalizes them with
-> `upload-test-telemetry.ts --flake-suites preview`. The flake dashboard
-> (issue #2580) is written by `.depot/workflows/flake-dashboard.yml`
-> hourly (`scripts/ci/flake-dashboard/`), as the iterate GitHub App with a
-> token limited to this repository's issues,
-> following the rules in [Current unknown flakes](#current-unknown-flakes).
-> A suite's run counts as main when its summary names `main` as its branch; a
-> workflow that uploads `flake-records-*` must be listed in the writer's
-> `SUITE_WORKFLOWS` (a workflow test enforces it).
+Two things, kept apart on purpose:
 
-PostHog is the historical query layer for test performance, failures, flakes,
-CI queueing, Depot utilization, and automated-review outcomes. Retained CI
-artifacts are the replayable source evidence. Vitest unit/e2e, Playwright e2e,
-Node tests, and standalone smoke scripts all use one runner-neutral data model.
+- **CI telemetry in PostHog**: one event per Depot workflow run and one per job
+  attempt, from an hourly sync. It answers which workflow and job ran for which
+  pull request, branch and commit, on which runner size, how long it queued and
+  ran, and whether it succeeded. Nothing per test.
+- **Test telemetry as CI artifacts**: every test runner writes a raw JSON
+  artifact, a finalizer checks that every runner left one, and the job keeps
+  them as a Depot artifact beside the flake records the
+  [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds.
+  Nothing from here goes to PostHog.
 
-This page is linked from the repository README and is the canonical contract.
+Per-test events were over 70% of the PostHog project's ingestion (millions a
+month), which is why #2494 cut CI delivery to zero. The workflow and job events
+are a few thousand a day.
 
-## Architecture
+## CI events in PostHog
+
+`.depot/workflows/ci-telemetry.yml` runs `scripts/ci/sync-ci-telemetry.ts`
+hourly. It reads Depot's CI API (the Connect methods the Depot CLI uses,
+[`ci.proto`](https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto))
+and GitHub's, and posts to PostHog's
+[batch endpoint](https://posthog.com/docs/api/capture#batch-events) in the
+iterate project (EU, project 115112) with the project key `envs.ts` gives
+production (`osEnvs.prd.posthogProjectKey`; a project key is public).
+
+It is a schedule rather than a last step in every workflow because a step
+inside a workflow cannot see that workflow's own outcome or duration, a
+cancelled workflow skips it, and it would boot one more runner per workflow
+run.
+
+**Window.** A sync reports what finished between the previous successful
+scheduled sync's creation and its own, both less five minutes (Depot can show
+a job as running for a few seconds after its recorded finish). Successful syncs
+therefore tile time without a stored cursor, and a failed sync leaves its
+window to the next one. A window longer than six hours is cut to the last six,
+with a warning naming the dropped start. Every event's UUID derives from
+Depot's execution or attempt ID, and PostHog deduplicates by it, so replaying
+an overlapping window does not double count.
+
+**Listing.** Depot's `ListWorkflows` returns at most the newest 200 and has no
+paging, so the sync lists each workflow named in `.depot/workflows` (on main)
+separately, plus one unnamed listing for workflows that exist only on a branch.
+It fails when a named listing fills its 200 without reaching two hours before
+the window (the longest a push, pull-request or scheduled workflow runs;
+`os-e2e-soak` is dispatch-only).
+
+**Late re-runs are not reported.** A re-run keeps its workflow's original
+creation time, and Depot's listings offer no update or finish time to list by,
+so a re-run started more than two hours after its workflow was created sends
+no events. Finding those would mean fetching every workflow a re-run could come
+from, every hour.
+
+| Event                      | One per                                                  | Timestamp  |
+| -------------------------- | -------------------------------------------------------- | ---------- |
+| `ci workflow run finished` | settled workflow execution (a re-run is a new execution) | its finish |
+| `ci job attempt finished`  | finished job attempt (a retried job is a new attempt)    | its finish |
+
+A skipped job has no attempt and no event; its workflow run still has one.
+
+Both carry `schema_version: 3` (earlier CI events, from before #2494, have 2
+and other properties) and:
+
+| Property                                                                       | Meaning                                                                                                                              |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `workflow_name`                                                                | The workflow's `name:` (`Preview OS`)                                                                                                |
+| `workflow_path`                                                                | Its file (`preview-os.yml`); absent for a workflow file run with `depot ci run`                                                      |
+| `workflow_id`                                                                  | Depot's workflow ID; `url` links to it on Depot                                                                                      |
+| `depot_run_id`                                                                 | The Depot run (one GitHub event) the workflow belongs to                                                                             |
+| `trigger`                                                                      | `pull_request`, `push`, `schedule`, `workflow_dispatch`, `api` (`depot ci run`)                                                      |
+| `sha` / `head_sha`                                                             | The commit Depot ran (a pull request's test merge) and the pushed head                                                               |
+| `pull_request_number`                                                          | The pull request; for a push to main, the pull request whose merge made the commit. Absent for schedules and dispatches              |
+| `branch`                                                                       | The pull request's head branch, or the branch a merge landed on. Absent where Depot records no branch (schedules, dispatches by SHA) |
+| `attempt`                                                                      | Execution number (workflow runs) or attempt number (job attempts)                                                                    |
+| `conclusion`                                                                   | `success`, `failure` or `cancelled`                                                                                                  |
+| `queued_at` / `started_at` / `finished_at`, `queue_duration_ms`, `duration_ms` | Depot's times; queue is created → started, duration is started → finished                                                            |
+| `job_name`, `job_id`, `attempt_id`                                             | Job attempts only: the job's key in its file (`e2e`, `build-firmware:matrix-5`) and Depot's IDs                                      |
+| `runner_size`                                                                  | Job attempts only: the job's `runs-on` in the workflow file at `sha` (`4x16`, or a label such as `depot-ubuntu-24.04`)               |
+
+Pull requests and branches come from GitHub because Depot records only the ref
+it ran: `refs/pull/<n>/merge` for a pull request, the merge commit for a pull
+request's `closed` event, a bare SHA for a push and nothing for a schedule.
+
+Credentials: the Depot organization token `DEPOT_CI_TELEMETRY_TOKEN` in Doppler
+`_shared/preview` (Depot has no read-only token, so it has organization API
+scope; never reuse a personal login), and the job's `${{ github.token }}`
+(`contents: read`, `pull-requests: read`). Rotate the Depot token at Depot if it
+is ever exposed; deleting the Doppler secret does not revoke it.
+
+See what a window would send without sending it, or replay a window:
+
+```bash
+DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" \
+GITHUB_TOKEN="$(gh auth token)" \
+  pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z [--until …]
+```
+
+Without `--dry-run` a `--since` run delivers. On 2026-09-24, a night with about
+25 merged pull requests, it counted about 4,800 events a day between 18:30 and
+23:30 UTC and about 7,000 a day between 23:30 and 05:30.
+
+The PostHog dashboards from before #2494 (CI reliability & performance,
+839069; Test reliability & performance, 839068) were built on the old events
+and have not been rebuilt for these.
+
+## Test telemetry artifacts
 
 ```text
-Vitest / Playwright / node:test / smoke script
+Vitest (retry-telemetry-reporter.ts) / Playwright (playwright-telemetry-reporter.ts)
                     │
                     ▼
-  test-results/ci-telemetry/raw/*.json
-  (schema-validated, atomic, no network I/O)
+  test-results/ci-telemetry/raw/*.json      schema-validated, atomic, no network I/O
                     │
                     ▼  if: always()
- scripts/ci/upload-test-telemetry.ts
-     validate schema, IDs, and expected runner cardinality
+  scripts/ci/upload-test-telemetry.ts --flake-suites unit|preview
+     checks every expected runner left a complete artifact
+     writes test-results/ci-telemetry/manifest.json
+     writes each suite's suite-summary.json beside its flake records
                     │
-          ┌─────────┴──────────┐
-          ▼                    ▼
- normalized/manifest.json   normalized/posthog-events.json
-          │                    │
-          └─────────┬──────────┘
-                    ├── PostHog batch upload
-                    └── actions/upload-artifact@v4 (always)
+                    ▼  if: always(), if-no-files-found: error
+  actions/upload-artifact: unit-test-telemetry / preview-test-telemetry / main-test-telemetry
 ```
 
-Reporters never know about PostHog and never perform network I/O. The single
-finalizer in each CI job reads every canonical raw artifact, transmogrifies it
-into schema-v2 events, writes the exact replayable batch, then uploads it. The
-following artifact-upload step also uses `if: always()` and
-`if-no-files-found: error`, so a failed test or failed PostHog delivery still
-retains the evidence and missing evidence cannot look healthy.
+The contract is `packages/shared/src/test-support/ci-telemetry.ts`. Two
+producers write it: `vitest-retry-telemetry-reporter` (every workspace's unit
+tests and the OS e2e suite) and `playwright-telemetry-reporter` (the root
+browser specs). Writers use `writeTestTelemetryArtifact()`, which validates and
+atomically renames, so a killed process cannot leave a valid-looking partial
+file. Each runner first writes a pessimistic sentinel from its first real
+lifecycle hook and replaces it at normal shutdown; merely importing or
+constructing a reporter writes nothing. A runner killed after it started
+therefore leaves an explicit `TestTelemetryIncompleteError` artifact instead of
+nothing.
 
-Every CI finalizer explicitly runs under Doppler `_shared/prd`, the canonical
-PostHog project used by the dashboards below. Test execution may use a
-lane-specific config such as `test/dev`, but the finalizer must never inherit
-that config's analytics key: doing so produces a successful capture response
-in a different PostHog project and silently splits the dataset. Workflow tests
-enforce the canonical finalizer command for unit, preview, and marathon runs.
+`TEST_TELEMETRY_ARTIFACT_DIR` (CI sets `test-results/ci-telemetry/raw`) is the
+directory the finalizer reads; relative paths resolve from `GITHUB_WORKSPACE`.
+`TEST_TELEMETRY_ARTIFACT_FILE` adds a named copy. With neither set a reporter
+writes nothing. File names carry a short hash of the full artifact ID.
+`TEST_TELEMETRY_HEAD_SHA`, `TEST_TELEMETRY_BRANCH` and
+`TEST_TELEMETRY_PULL_REQUEST_NUMBER` pin the tested source when it differs from
+the workflow's ref.
 
-The raw-artifact contract lives in
-`packages/shared/src/test-support/ci-telemetry.ts`. Writers use
-`writeTestTelemetryArtifact()`, which validates and atomically renames JSON so
-a killed process cannot leave a valid-looking partial file. Each runner first
-writes a pessimistic failure sentinel from its first real lifecycle hook and
-replaces it at normal shutdown. Merely importing or constructing a reporter
-must not write evidence. A watchdog kill after runner startup therefore leaves
-an explicit `TestTelemetryIncompleteError` run/lane instead of disappearing
-from the dataset. A reporter may set both outputs:
+A raw artifact lives for one CI run: the same job's finalizer reads it, and so
+does Main OS e2e's failing-rows step (`scripts/ci/main-e2e-alert.ts`). Change
+its schema in place, together with those readers; there is no versioned
+migration.
 
-- `TEST_TELEMETRY_ARTIFACT_FILE` is a named immediate copy that the preview
-  orchestrator can read for its PR retry summary.
-- `TEST_TELEMETRY_ARTIFACT_DIR` is the durable directory consumed by the final
-  CI step. Relative paths resolve from `GITHUB_WORKSPACE`, even when pnpm runs a
-  reporter from a child workspace.
+What the artifacts hold, by runner:
 
-The named canonical file is not a runner-native report. Keep it at a distinct
-path from outputs such as Playwright's `test-results/playwright-results.json`;
-otherwise the reporters can overwrite one another during shutdown. Targeted
-preview Playwright runs use
-`test-results/preview-target-playwright-telemetry.json` for the canonical file
-and retain `playwright-results.json` separately for runner-native inspection.
+| Runner     | Attempts                   | Detail                                                                                                              |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Playwright | every attempt              | every nested step including hooks, fixtures, expects and API calls; worker and parallel index; errors; output sizes |
+| Vitest     | aggregate retry count only | before/after-each and body time, `e2e-phase` annotations, module lifecycle and import costs                         |
 
-The preview orchestrator also supplies `TEST_TELEMETRY_HEAD_SHA`,
-`TEST_TELEMETRY_BRANCH`, and `TEST_TELEMETRY_PULL_REQUEST_NUMBER`. That keeps
-manually dispatched runner artifacts attached to the selected PR head instead
-of the workflow-dispatch ref. Durable filenames contain a short hash of the
-full artifact ID, avoiding collisions after path-unsafe characters are
-normalized.
+Vitest's public reporter receives one final `onTestCaseResult` with aggregate
+duration and retry count, not each attempt's duration: do not rank a retried
+Vitest row as a no-retry sample or manufacture attempt durations. Playwright
+nested steps overlap their parents, so group or rank them rather than summing.
+Playwright only creates steps for its own APIs, hooks, fixtures, assertions and
+explicit `test.step` calls; wrap long domain helpers in a stable `test.step`
+name or their time stays unattributed (`helpers.createFixture` does this for
+every spec). The reporters follow the runners' reporter APIs
+([Playwright](https://playwright.dev/docs/api/class-reporter),
+[Vitest](https://vitest.dev/api/advanced/reporters)) rather than parsing
+console text.
 
-CI sets the directory to `test-results/ci-telemetry/raw`. A local reporter does
-nothing when neither output is configured. There is deliberately no
-`TEST_TELEMETRY_ENABLED` switch and no direct-send path.
+### The finalizer's completeness check
 
-Raw artifacts currently use `artifactSchemaVersion: 1`; normalized PostHog
-events use `schema_version = 2`. Both are durable interfaces. Never change the
-meaning of an existing field or version in place. A breaking raw-artifact
-change must add a new discriminated schema version and an explicit migration in
-the finalizer, with a fixture proving that retained artifacts from every older
-supported version still produce the same normalized events. A breaking event
-change must emit a new `schema_version` and keep dashboard queries pinned to
-the version whose semantics they expect.
+The finalizer fails the job, after writing the manifest and the summaries, when:
 
-List and download an artifact from the Depot run that owns normal CI:
+- a workspace in `TEST_TELEMETRY_EXPECTED_WORKSPACES` left no artifact. The
+  Test workflow names all ten test workspaces (a workflow test keeps the list
+  equal to the workspaces with a `test` script); Preview OS and Main OS e2e
+  name `iterate-root,os`. This is what catches a runner that never started;
+- a sentinel was never replaced (a runner started and was killed);
+- an artifact belongs to another CI run, attempt or job than the newest
+  artifact's (a stale or foreign file);
+- two artifacts share an ID.
+
+A superseded run passes `--cancelled`: its partial evidence is checked and kept
+but not reported as failures, and a run cancelled before any reporter started
+keeps an empty manifest. `manifest.json` lists the expected, observed and
+missing workspaces, the incomplete and foreign artifact IDs, and each
+artifact's producer and test count.
+
+List and download a job's artifact from its Depot run (the upload action prints
+a GitHub-looking URL that `gh run download` cannot fetch):
 
 ```bash
-ci_head_sha="$(git rev-parse HEAD)"
-depot_run_id="$(depot ci run list \
-  --org 0p91s0lz49 \
-  --repo iterate/iterate \
-  --sha "$ci_head_sha" \
-  --output json | jq -r '.[0].run_id')"
-artifact_name=unit-test-telemetry
-artifact_id="$(depot ci artifacts list "$depot_run_id" \
-  --org 0p91s0lz49 \
-  --output json | jq -r --arg name "$artifact_name" \
-  '.artifacts[] | select(.name == $name) | .artifact_id')"
-depot ci artifacts download "$artifact_id" \
-  --org 0p91s0lz49 \
-  --output-file "/tmp/$artifact_name.zip"
-unzip -q "/tmp/$artifact_name.zip" -d "/tmp/$artifact_name"
+depot_run_id="$(depot ci run list --org 0p91s0lz49 --repo iterate/iterate \
+  --sha "$(git rev-parse HEAD)" --output json | jq -r '.[0].run_id')"
+artifact_id="$(depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json \
+  | jq -r '.artifacts[] | select(.name == "unit-test-telemetry") | .artifact_id')"
+depot ci artifacts download "$artifact_id" --org 0p91s0lz49 --output-file /tmp/unit.zip
+unzip -q /tmp/unit.zip -d /tmp/unit
+jq '.tests[] | {moduleId, fullName, durationMs, retryCount, phases}' /tmp/unit/raw/*.json
 ```
 
-Depot owns artifacts produced by its workflows. The upload action can print a
-GitHub-looking actions URL, but `gh run download` or the GitHub Actions
-artifact API may return 404 for it. Use `depot ci artifacts` for Depot runs;
-use `gh run download` only for a real GitHub Actions run.
-
-Replay or inspect the downloaded artifact without sending it:
-
-```bash
-pnpm tsx scripts/ci/upload-test-telemetry.ts \
-  --artifact-root "/tmp/$artifact_name" \
-  --dry-run
-
-jq '.tests[] | {moduleId, fullName, durationMs, retryCount, phases}' \
-  "/tmp/$artifact_name"/raw/*.json
-```
-
-`--dry-run` still writes `normalized/manifest.json` and
-`normalized/posthog-events.json`. To intentionally replay the same retained
-evidence to the canonical project, use:
-
-```bash
-doppler run --project _shared --config prd -- \
-  pnpm tsx scripts/ci/upload-test-telemetry.ts \
-  --artifact-root "/tmp/$artifact_name"
-```
-
-Every event has both a readable stable `$insert_id` property and a
-deterministic top-level `uuid`; PostHog deduplicates retries and replays by the
-UUID. A repeated normalized batch is therefore idempotent.
-
-The unit job also sets `TEST_TELEMETRY_EXPECTED_WORKSPACES` to all ten test
-workspaces. Preview cannot use a static workspace list because its selected app
-set varies. Before it starts an app command, its orchestration artifact instead
-records one exact expected source per sub-runner: producer, framework, test
-kind, lane, and workspace. The finalizer compares source **cardinality** across
-all artifacts, so two expected marathon invocations require two artifacts and
-a lookalike producer or stale artifact from another run/attempt/job cannot
-satisfy the contract. Foreign artifacts are retained and fail the finalizer.
-Commands pin
-`TEST_TELEMETRY_WORKSPACE` rather than relying on pnpm's ambient package name.
-
-The finalizer writes the normalized evidence and manifest, delivers every valid
-artifact plus one `ci test telemetry finalized` completeness event, then fails
-if a workspace/source is absent or a pessimistic sentinel was never replaced.
-One crashed runner therefore cannot suppress the other runners' queryable
-evidence, while incomplete telemetry can never leave a green job. The retained
-manifest keeps exhaustive expected, observed, and missing workspaces and
-sources; the PostHog event keeps counts and compact source labels. A
-superseded/cancelled CI run uses
-`--cancelled`: any partial evidence (or an explicit empty manifest when
-cancellation preceded runner startup) is normalized and retained but not sent
-as a test failure; `ci workflow finished` owns that cancelled outcome.
-`--dry-run` remains the strict no-delivery mode for local inspection and replay
-validation.
-
-## One Test Model
-
-Every test event has `schema_version = 2`. Framework and test type are
-dimensions, never separate event families.
-
-| Dimension           | Values / examples                                                                      |
-| ------------------- | -------------------------------------------------------------------------------------- |
-| `framework`         | `vitest`, `playwright`, `node-test`, `script`; orchestration aggregates may be `mixed` |
-| `test_kind`         | `unit`, `integration`, `e2e`                                                           |
-| `workspace` / `app` | pnpm package and deployed application                                                  |
-| `lane`              | `unit`, `vitest`, `playwright`, `agent-smoke`, `tui`, `preview`                        |
-| source              | repository, SHA, branch, pull request                                                  |
-| execution           | workflow/run/attempt/job URLs, runner provider, preview slot, test project             |
-| identity            | stable artifact, test-run, logical-test, and execution IDs                             |
-
-| Event                            | Grain                                  | Evidence                                                                                                                             |
-| -------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `ci test run started/finished`   | runner or orchestration operation      | status, wall duration, test/failure/retry/module/lane counts, incomplete-telemetry flag                                              |
-| `ci test lane finished`          | app/lane command                       | status, exit code, wall duration, collection errors and incomplete-telemetry flag                                                    |
-| `ci test finished`               | logical test                           | source location, raw state, expected outcome, total/body/hooks/schedule time, timeout, retries, heap, tags, annotations, first error |
-| `ci test attempt finished`       | concrete attempt                       | index, state, duration, schedule delay, worker, attachments, stdout/stderr bytes, error                                              |
-| `ci test phase finished`         | explicit operation or Playwright step  | nested title, category, start/duration, source, attachments, error                                                                   |
-| `ci test module finished`        | Vitest module                          | environment, prepare, collect, setup, import, queue, and execution timing                                                            |
-| `ci test import finished`        | imported module within a Vitest module | self and total import duration                                                                                                       |
-| `ci test telemetry finalized`    | one finalizer job                      | expected/observed/missing workspaces and runner sources, incomplete artifacts, runner-event count, final status                      |
-| `ci deploy run started/finished` | preview deployment operation           | status, total wall duration, preview slot, and bounded error                                                                         |
-| `ci deploy lane finished`        | one preview app deployment             | app wall duration, Worker identity, and config/command/readiness/reuse-proof timings                                                 |
-| `ci deploy phase finished`       | one measured app-deploy phase          | phase name and duration, app, slot, status, and immutable Worker identity                                                            |
-
-`attempt_detail` is `complete` when all attempts are present and
-`aggregate-only` when only the runner's aggregate retry count/duration exists.
-`started_at_source` is `runner`, `reporter-clock`, or `inferred`; never compare
-inferred Node scheduling latency as if it were a native runner timestamp.
-Run/lane status keeps `timedout`, `interrupted`, and `cancelled` separate from
-`failed`. For Playwright, `test_state` is the final raw runner result while
-`test_outcome` says whether that result was expected, unexpected, flaky, or
-skipped. Expected failures therefore remain visible without inflating the
-failure rate.
-
-Raw artifacts retain every Playwright phase and Vitest import. The PostHog
-normalizer bounds each parent to its 100 most diagnostic detail events,
-prioritizing errors, user-authored `test.step`s, and duration. Parent events
-carry total/emitted/omitted counts (`phase_*` and `import_*`), so truncation is
-explicit; retained raw JSON remains available if a deeper one-run audit needs
-the full graph.
-
-### Runner Capability Matrix
-
-| Runner      | Complete attempts              | Native start time | Root-cause detail                                                                                                                                                  |
-| ----------- | ------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Playwright  | yes                            | yes               | all nested steps including hooks, fixtures, expects, and API calls; worker/parallel index; errors; output/attachment sizes; timeout/tags/annotations               |
-| Node `test` | yes                            | no                | runner attempt duration and error; reporter infers start from observation time minus duration and labels it `inferred`                                             |
-| Vitest      | no: aggregate retry count only | yes               | before/after-each duration, body remainder, explicit `e2e-phase` annotations, heap/slow/repeat diagnostics when enabled, module lifecycle, individual import costs |
-| Agent smoke | yes                            | reporter clock    | explicit project creation, agent creation, reply, and failure phases, including partial phases on a failed attempt                                                 |
-
-Vitest's public reporter receives one final `onTestCaseResult`; its diagnostic
-contains aggregate duration/retry count but not each attempt's duration. Do not
-rank a retried Vitest row as a no-retry sample, and do not manufacture attempt
-durations. Playwright nested steps can overlap their parents, so group or rank
-them; do not sum every parent and child row. Playwright only creates native
-steps for its own APIs, hooks, fixtures, assertions, and explicit `test.step`
-calls. Wrap long domain helpers or plain asynchronous operations in stable,
-low-cardinality `test.step` names or the time between native steps remains
-unattributed. The shared `helpers.createFixture` does this for every spec.
-
-The implementation follows the runners' supported reporter surfaces rather
-than parsing console text: [Playwright Reporter API](https://playwright.dev/docs/api/class-reporter),
-[Playwright JSON/blob reports](https://playwright.dev/docs/test-reporters), and
-[Vitest advanced reporter lifecycle](https://vitest.dev/api/advanced/reporters).
-GitHub artifacts are intended for retained test output and cross-step/job data
-([GitHub workflow artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)).
-The run/job/result/URL vocabulary also follows the direction of OpenTelemetry's
-[CI/CD semantic conventions](https://opentelemetry.io/docs/specs/semconv/cicd/),
-while PostHog events remain the query representation used by this repository.
-
-## GitHub Actions, Depot, And Review Bots
-
-`.depot/workflows/ci-telemetry.yml` runs
-`scripts/ci/sync-ci-telemetry.ts` over a rolling window. It is dispatch-only
-while PostHog delivery is off, since a run would collect and drop everything;
-restoring delivery brings back its 15-minute schedule over the last day.
-Stable insert IDs make overlapping windows and manual backfills of immutable
-completion events idempotent. Review-state events are periodic snapshots and
-therefore use the sync's actual observation time. Event timestamps are the
-provider's completion time or the snapshot's observation time, not an
-unrelated PR-updated timestamp.
-
-The collector reads `github-actions`, `github-reviews`, and `depot` as
-independent sources. A failed provider cannot erase healthy events from either
-of the others: the collector sends every successful source plus one health
-event per source, then fails the job. All three health rows share
-`telemetry_sync_id`; CI rows also share `collector_head_sha`. Each records
-status, event count, lookback, duration, and a bounded error name/message.
-PostHog delivery failure still fails the job, and the dashboard then becomes
-stale rather than claiming the collection was healthy. The two GitHub sources
-run serially on their shared token while Depot collects concurrently.
-
-| Event                               | Source                        | Questions answered                                                        |
-| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------- |
-| `ci workflow finished`              | GitHub Actions and Depot APIs | failure/cancellation rate, queue/run/total wall time by workflow/provider |
-| `ci job finished`                   | GitHub Actions and Depot APIs | slow/failing jobs and failed-step rate                                    |
-| `ci job attempt finished`           | Depot metrics                 | retries, availability, queue/run time, average/peak CPU and memory        |
-| `ci review finished`                | GitHub checks/reviews         | immutable completion/duration for Cursor Bugbot and Iterate Review        |
-| `ci review state observed`          | GitHub review threads         | current findings and unresolved findings by provider and PR head          |
-| `ci telemetry source sync finished` | collector                     | freshness, success/failure, event count, error, and collector version     |
-
-Finding counts are mutable and therefore belong only to the state snapshot;
-they are not rewritten into immutable review-completion events. Iterate Review
-is captured from submitted GitHub App reviews even when it has no check-run.
-Thread authors are normalized to the correct provider before counting.
-
-CI needs a dedicated [Depot organization API token](https://depot.dev/docs/cli/authentication#organization-tokens) named
-`DEPOT_CI_TELEMETRY_TOKEN`. Depot does not currently expose a read-only token
-limited to CI metrics, so this credential has broad organization API scope.
-Never reuse a developer's personal Depot login token. Create a dedicated token
-named `CI telemetry` in Depot Organization Settings, then store it as a masked
-secret in the inheritable Doppler `_shared/preview` base config. Enter the
-value interactively so it does not land in shell history:
-
-```bash
-doppler --silent secrets set DEPOT_CI_TELEMETRY_TOKEN \
-  --project _shared \
-  --config preview \
-  --visibility masked
-```
-
-The collector reads only that credential from `_shared/preview`,
-then runs the uploader under `_shared/prd`. This split is deliberate:
-`_shared/preview` and `_shared/prd` belong to different PostHog projects, and
-running the whole collector under preview would silently send CI history away
-from the canonical dashboards. The job fails if the Depot credential is
-missing.
-
-`DOPPLER_TOKEN` is the only long-lived secret stored in Depot CI. GitHub API
-calls use the workflow's short-lived `${{ github.token }}` with explicit
-least-privilege permissions; every other credential comes from Doppler. Check
-the invariant without displaying any values:
-
-```bash
-depot ci secrets list --org 0p91s0lz49
-doppler secrets --project _shared --config preview --only-names \
-  | rg DEPOT_CI_TELEMETRY_TOKEN
-```
-
-Rotate or revoke the organization token immediately if it is ever exposed;
-deleting the Doppler secret alone does not revoke the token at Depot.
-
-Local collection uses `gh` auth and the developer's Depot CLI login:
-
-```bash
-GH_TOKEN="$(gh auth token)" \
-  doppler run --project _shared --config prd -- \
-  pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run
-```
-
-## Dashboards
-
-- [Test reliability & performance](https://eu.posthog.com/project/115112/dashboard/839068)
-  ranks no-retry tests, failure/flake rates, module/import startup, scheduling,
-  hooks/body, named phases, and incomplete/missing runner evidence. The first
-  two tables make finalizer completeness explicit for both unit jobs (expected
-  workspaces) and preview jobs (expected runner sources).
-- [CI reliability & performance](https://eu.posthog.com/project/115112/dashboard/839069)
-  covers GitHub/Depot workflow and job reliability, queue/execution latency,
-  Depot saturation, telemetry-source freshness, and Cursor/Iterate review
-  outcomes and unresolved state.
-
-Both dashboards default to 30 days and honor the dashboard date filter. A
-healthy zero never renders as a blank table:
-
-- test finalizers say `HEALTHY` or `INCOMPLETE`;
-- review snapshots say `HEALTHY`, `ACTION REQUIRED`, or
-  `NO SNAPSHOTS RECEIVED`;
-- source health says `HEALTHY`, `EMPTY COLLECTION`, `STALE`,
-  `ACTION REQUIRED`, or `NO HEALTH EVENT`.
-
-`EMPTY COLLECTION` means the provider call succeeded but returned no events;
-inspect it whenever repository activity was expected. `STALE` means the newest
-health event is more than 30 minutes old (twice the collector's 15-minute
-schedule, which is off while delivery is). Blank,
-missing, stale, unknown, incomplete, and foreign evidence are never success
-states.
-
-Workflow, job, and review tables keep failures, cancellations,
-skipped/neutral outcomes, and unknown outcomes in separate columns. Failure
-rate is `failures / (successes + failures)`; cancellation rate is
-`cancellations / all observations`. Any non-zero `unknown_outcomes` is a data
-model defect to investigate, not a bucket to normalize away.
-
-Dashboards answer routine questions. Use HogQL for one SHA, run, branch, test,
-or unusual time window. Production test insights filter
-`execution_context = 'ci'` where that property applies.
-
-### Dashboard acceptance check
-
-After changing ingestion or a saved insight, force every tile to execute. The
-command must return every listed tile with no query error. Seeded health tiles
-must return their documented status rows; pure aggregations may have zero rows
-for a legitimately quiet filtered window. Then read once through the cache
-path used by the UI:
-
-```bash
-posthog-cli api info dashboard-insights-run
-posthog-cli api call dashboard-insights-run \
-  '{"id":839068,"refresh":"force_blocking"}'
-posthog-cli api call dashboard-insights-run \
-  '{"id":839069,"refresh":"force_blocking"}'
-posthog-cli api call dashboard-insights-run \
-  '{"id":839068,"refresh":"force_cache"}'
-posthog-cli api call dashboard-insights-run \
-  '{"id":839069,"refresh":"force_cache"}'
-```
-
-Finally open both links in PostHog and verify the rendered tables with the same
-date filter. API success is necessary but does not prove that the saved tile
-renders or that the browser is using the intended project.
-
-## Analyse With `posthog-cli`
-
-Use the repository's PostHog workflow before guessing a schema or tool:
-
-```bash
-posthog-cli api --agent-help
-posthog-cli api skill list
-posthog-cli api search 'schema events SQL HogQL'
-posthog-cli api info read-data-schema
-posthog-cli api call read-data-schema \
-  '{"query":{"kind":"event_properties","event_name":"ci test finished"}}'
-posthog-cli api info execute-sql
-```
-
-Longest test without a retry at an exact SHA, across all runners:
-
-```bash
-posthog-cli api call execute-sql '{"query":"SELECT properties.framework AS framework, properties.test_kind AS kind, properties.test_name AS test, properties.test_module AS module, max(toFloat(properties.duration_ms)) AS worst_ms, avg(toFloat(properties.duration_ms)) AS mean_ms, count() AS samples FROM events WHERE event = '\''ci test finished'\'' AND toInt(properties.schema_version) = 2 AND toInt(properties.retry_count) = 0 AND properties.head_sha = '\''<full SHA>'\'' GROUP BY framework, kind, test, module ORDER BY worst_ms DESC LIMIT 25"}'
-```
-
-Failure and flake rate by runner over 30 days:
-
-```sql
-SELECT
-  properties.framework AS framework,
-  properties.test_kind AS kind,
-  count() AS executions,
-  countIf(properties.failed = true) AS failures,
-  round(100 * failures / executions, 2) AS failure_rate_pct,
-  countIf(toInt(properties.retry_count) > 0) AS retried,
-  round(100 * retried / executions, 2) AS retry_rate_pct
-FROM events
-WHERE event = 'ci test finished'
-  AND timestamp >= now() - INTERVAL 30 DAY
-  AND properties.execution_context = 'ci'
-GROUP BY framework, kind
-ORDER BY failure_rate_pct DESC, retry_rate_pct DESC
-```
-
-Find missing/interrupted runner evidence before trusting an apparently
-green/fast sample. This job-grain event still exists when one expected runner
-artifact is wholly absent:
-
-```sql
-SELECT properties.workflow_name AS workflow,
-  properties.job_name AS job,
-  count() AS finalizer_count,
-  countIf(properties.telemetry_incomplete = true) AS incomplete_count,
-  sum(toInt(properties.expected_workspace_count)) AS expected_workspaces,
-  sum(toInt(properties.observed_workspace_count)) AS observed_workspaces,
-  sum(toInt(properties.missing_workspace_count)) AS missing_workspaces,
-  sum(toInt(properties.expected_artifact_source_count)) AS expected_sources,
-  sum(toInt(properties.observed_artifact_source_count)) AS observed_sources,
-  sum(toInt(properties.matched_expected_artifact_source_count)) AS matched_sources,
-  sum(toInt(properties.missing_artifact_source_count)) AS missing_source_count,
-  sum(toInt(properties.incomplete_artifact_count)) AS incomplete_artifact_count,
-  sum(toInt(properties.foreign_artifact_count)) AS foreign_artifact_count
-FROM events
-WHERE event = 'ci test telemetry finalized'
-  AND timestamp >= now() - INTERVAL 30 DAY
-  AND toInt(properties.schema_version) = 2
-  AND properties.execution_context = 'ci'
-GROUP BY workflow, job
-ORDER BY incomplete_count DESC, missing_source_count DESC, finalizer_count DESC
-```
-
-Unit finalizers enforce workspace cardinality and can legitimately have zero
-expected runner sources. Preview finalizers enforce exact runner-source
-cardinality and can legitimately have zero expected workspaces. Always inspect
-both sets of columns; source counts alone make healthy unit evidence look
-incomplete.
-
-Check whether the historical CI dataset itself is trustworthy before using its
-rates or latency:
-
-```sql
-SELECT properties.telemetry_source AS telemetry_source,
-  argMax(properties.status, timestamp) AS latest_status,
-  max(timestamp) AS last_observed_at,
-  dateDiff('minute', last_observed_at, now()) AS age_minutes,
-  argMax(toInt(properties.event_count), timestamp) AS event_count,
-  argMax(properties.telemetry_sync_id, timestamp) AS telemetry_sync_id,
-  argMax(properties.collector_head_sha, timestamp) AS collector_head_sha,
-  nullIf(argMax(ifNull(properties.error_name, ''), timestamp), '') AS error_name,
-  nullIf(argMax(ifNull(properties.error_message, ''), timestamp), '') AS error_message
-FROM events
-WHERE event = 'ci telemetry source sync finished'
-  AND timestamp >= now() - INTERVAL 7 DAY
-  AND toInt(properties.schema_version) = 2
-GROUP BY telemetry_source
-ORDER BY telemetry_source
-```
-
-Expect one fresh row each for `github-actions`, `github-reviews`, and `depot`.
-Do not trust a provider's downstream tiles when its row is missing, failed, or
-older than 30 minutes.
-
-The `ifNull` inside `argMax` is load-bearing: ClickHouse skips null aggregate
-arguments, so a plain `argMax(properties.error_message, timestamp)` can attach
-an older failure to the latest healthy row. Converting null to an empty string
-before aggregation and back afterwards makes the error fields belong to the
-same latest observation as the status.
-
-`telemetry_incomplete = true` means reporter shutdown did not finish and the
-dataset may omit test details, or an expected runner artifact is wholly absent.
-Inspect `normalized/manifest.json`, then the retained raw artifact and any
-`TestTelemetryIncompleteError`, before drawing a performance conclusion.
-`collection_error_count` on `ci test run finished` separately records completed
-runner/global failures that could not be attributed to one test. Those errors
-can fail a lane, but do not by themselves mean its telemetry evidence is
-incomplete.
-
-Explain one slow execution by joining its phases and attempts via
-`test_execution_id`:
-
-```sql
-SELECT event, properties.phase_category, properties.phase_name,
-  properties.attempt_index, properties.duration_ms,
-  properties.schedule_delay_ms, properties.error_message
-FROM events
-WHERE timestamp >= now() - INTERVAL 7 DAY
-  AND properties.test_execution_id = '<execution id>'
-  AND event IN ('ci test finished', 'ci test attempt finished', 'ci test phase finished')
-ORDER BY timestamp
-```
-
-Find import/bootstrap culprits rather than blaming test bodies:
-
-```sql
-SELECT properties.test_module, properties.imported_module,
-  quantile(0.95)(toFloat(properties.self_duration_ms)) AS p95_self_ms,
-  max(toFloat(properties.total_duration_ms)) AS worst_total_ms,
-  count() AS samples
-FROM events
-WHERE event = 'ci test import finished'
-  AND timestamp >= now() - INTERVAL 30 DAY
-GROUP BY properties.test_module, properties.imported_module
-ORDER BY p95_self_ms DESC
-LIMIT 50
-```
-
-Separate infrastructure queueing from execution:
-
-```sql
-SELECT properties.automation_platform, properties.job_name,
-  quantile(0.95)(toFloat(properties.queue_duration_ms)) AS p95_queue_ms,
-  quantile(0.95)(toFloat(properties.duration_ms)) AS p95_run_ms,
-  avg(toFloat(properties.average_cpu_utilization)) AS avg_cpu,
-  avg(toFloat(properties.average_memory_utilization)) AS avg_memory
-FROM events
-WHERE event IN ('ci job finished', 'ci job attempt finished')
-  AND timestamp >= now() - INTERVAL 30 DAY
-GROUP BY properties.automation_platform, properties.job_name
-ORDER BY p95_queue_ms DESC
-```
-
-Current unresolved automated-review findings:
-
-```sql
-SELECT review_provider,
-  count() AS pull_requests,
-  sum(finding_count) AS findings,
-  sum(unresolved_finding_count) AS unresolved
-FROM (
-  SELECT properties.review_provider AS review_provider,
-    toInt(properties.pull_request_number) AS pull_request_number,
-    properties.head_sha AS head_sha,
-    argMax(toInt(properties.finding_count), timestamp) AS finding_count,
-    argMax(toInt(properties.unresolved_finding_count), timestamp) AS unresolved_finding_count
-  FROM events
-  WHERE event = 'ci review state observed'
-    AND timestamp >= now() - INTERVAL 30 DAY
-    AND toInt(properties.schema_version) = 2
-  GROUP BY review_provider, pull_request_number, head_sha
-)
-GROUP BY review_provider
-ORDER BY unresolved DESC
-```
-
-Review state is a snapshot. Never sum every observation directly: the rolling
-sync sees the same PR more than once. Select the latest snapshot with `argMax`
-per provider/PR/head first, as above. Review completion events are immutable;
-filter them to `review_provider IN ('cursor', 'iterate')` so historical rows
-from an older broad check-name collector cannot pollute review-bot rates.
-
-Every exploratory query must use a bounded timestamp or an exact SHA/run ID.
-Inspect the event schema first: Depot workflow outcome uses `status`; GitHub
-Actions uses `conclusion`.
-
-## Analyse Through The PostHog MCP Server
-
-The CLI is preferred when available. In an MCP-only client, follow the same
-discovery sequence rather than inventing tool arguments:
-
-1. Search for `schema events SQL HogQL`.
-2. Inspect `read-data-schema`, then call it for the event being queried.
-3. Inspect `execute-sql`, then pass one of the bounded HogQL queries above.
-4. For a dashboard, discover and inspect `dashboard-insights-run`, then run
-   dashboard `839068` or `839069` with `refresh = force_blocking`. Every tile
-   must return no error; seeded health tiles must return status rows, while a
-   pure aggregation may be empty in a legitimately quiet filtered window.
-   Repeat with `force_cache` to verify the UI cache path.
-
-Conceptual call payload after discovery:
-
-```json
-{
-  "name": "execute-sql",
-  "arguments": {
-    "query": "SELECT properties.framework, properties.test_kind, properties.test_name, max(toFloat(properties.duration_ms)) AS worst_ms FROM events WHERE event = 'ci test finished' AND timestamp >= now() - INTERVAL 7 DAY AND toInt(properties.retry_count) = 0 GROUP BY properties.framework, properties.test_kind, properties.test_name ORDER BY worst_ms DESC LIMIT 25"
-  }
-}
-```
-
-Use the identical sequence for workflow, job, attempt, import, phase, and
-review-state events. The dashboard links above are stable human hand-offs.
-
-## How To Read A Slow Run
-
-- High test `schedule_delay_ms` or module `queue_duration_ms`: runner-worker
-  contention.
-- High before/after-each duration or Playwright `hook`/`fixture` phase:
-  fixture setup or cleanup.
-- High environment/prepare/collect/setup/import duration: runner bootstrap or
-  module graph; inspect `ci test import finished` next.
-- Dominant named phase: product operation, external call, polling invariant,
-  or intentional wait in that phase.
-- High stdout/stderr bytes: logging or diagnostic volume may itself be slowing
-  the test.
-- Lane wall time much larger than its test/module intervals: install,
-  subprocess startup, browser launch, collection, reporting, or orchestration.
-- High Depot queue time with low utilization: infrastructure queueing, not
-  slow test execution.
-- Low CPU plus a long runtime/network phase: waiting on external state rather
-  than compute saturation.
-
-## Investigation Case Studies
-
-These are dated examples of how telemetry changed a diagnosis, not live
-performance baselines. Keep a case only while it explains an enduring test or
-analysis technique; replace superseded snapshots instead of appending a run
-log. Use the dashboards and exact-head queries above for current measurements.
-
-The first 2026-07-21 PostHog sample (eight executions per test) changed the
-original diagnosis. The longest no-retry test was Vitest e2e
-`a 10MB script result spills to a workspace file the agent can page through`,
-at about 125 seconds p95. The earlier Playwright half-open WebSocket test was
-about 48 seconds after its first shrink.
-
-The spill test was doing four expensive things in one assertion: waiting for
-the asynchronously seeded project repository, transferring and serializing a
-10 MB result across the agent DO and workspace DO into R2, waiting for the
-agent processor to render the spill reference, then downloading and parsing
-the full file. Ten megabytes was not a product boundary. The workspace spill
-boundary is about 1.5 MB, while the agent context boundary is 30,000
-characters. The test now uses 2 MB, which still crosses both boundaries with a
-safe margin, and records these phases separately:
-
-- create test project;
-- create agent;
-- wait for project repository seed;
-- append oversized result and trigger spill processing;
-- wait for spill context;
-- read and verify the complete spilled result.
-
-The next preview run will therefore distinguish lifecycle/processor waiting
-from payload transfer and readback instead of attributing the entire duration
-to an opaque Vitest body. Use the named-phase dashboard, then join one
-`test_execution_id` with the phase query above before changing another timeout
-or payload.
-
-The investigation that started this work found the no-retry Playwright test
-`feed resumes after the /api WebSocket goes half-open (no close frame)` taking
-about 96 seconds. Its test code imposed a fixed 35-second sleep even though the
-product invariant was two 10-second liveness-probe strikes. It also failed to
-trigger the returning tab's real `visibilitychange` signal or wait directly on
-transport eviction. The test now dispatches that signal, polls the muted socket
-closure, and names greeting, eviction, redial/delivery, and composer-settlement
-steps. A direct zero-retry preview run passed in 48.6 seconds (51.2 seconds with
-runner startup). The named phases make future variance attributable instead of
-speculative.
-
-After those reductions, an exact-head query across the artifact-finalized unit
-and preview lanes identified the Playwright `repo-edit-file` REPL catalogue
-case as the next longest zero-retry execution at 67.8 seconds. Its emitted
-native Playwright API phases explained only 17.9 seconds; hooks and fixtures
-explained about 0.1 seconds. The remaining time crossed a plain
-`helpers.createFixture` await and the catalogue operation itself, which native
-Playwright instrumentation cannot label. That observation found a telemetry
-gap, not a retrospective cause. `helpers.createFixture`, project REPL opening,
-the catalogue run, and cleanup now emit stable `test.step` parents. A direct
-zero-retry `preview_19` validation did not reproduce the outlier: it passed in
-16.3 seconds, split into 7.3 seconds of fixture creation, 3.9 seconds of page
-navigation/readiness, 5.0 seconds of catalogue execution, and no cleanup time.
-Future recurrences will therefore distinguish project bootstrap, page
-readiness, the example operation, and cleanup instead of leaving an opaque gap.
-
-The completed PR #2237 preview artifact at historical branch head
-`4556d58d12d6ed4d0f4864ade32270671a890950` (2026-07-22) then made the new
-longest Playwright result unambiguous: `feed resumes after page freeze + socket
-death` took 63.4 seconds, including two sequential, named `Wait for timeout`
-phases of 25.0 seconds each. The first was an arbitrary frozen-page hold even
-though the test explicitly kills the socket; a timer probe then proved its
-experimental `Page.setWebLifecycleState` command did not actually suspend the
-current headless CI browser. The second slept for a guessed probe window before
-beginning the actual delivery assertion. The test now uses
-`Emulation.setScriptExecutionDisabled`, verifies the two-second suspension with
-an armed page-timer gap, appends its durable marker immediately after resume,
-and polls marker delivery for the existing bounded 90-second recovery window.
-A healthy run can finish as soon as recovery is observed, while the historical
-permanent wedge still exhausts the same ceiling and fails with its runtime
-evidence. This verification is required because the CDP lifecycle command is
-experimental and only promises to _try_ the transition; see the official
-[Page domain](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-setWebLifecycleState)
-and [Emulation domain](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setScriptExecutionDisabled).
-
-The longest Vitest result in that artifact was the concurrency proof at 60.7
-seconds. Its phases account for the time: 11.9 seconds creating the project,
-48.8 seconds executing the scripts, and an intentional 30-second remote hold
-inside that execution phase. The remaining 18.8 seconds is actual orchestration
-and completion overhead. This is why named phases matter: the dashboard can
-separate a test's contractual wait from runner contention and product latency
-without inferring a cause from one aggregate duration.
-
-The PR #2241 deployment-shaped validation at historical branch head
-`382a2e7d95c00215345d92cb8eeba321de8192c4` (2026-07-22) then completed the
-shortened suspend test in 18.2 seconds with zero retries, down 71% from 63.4
-seconds. Its largest phases were 10.2 seconds of project-fixture creation, 3.0
-seconds waiting for real post-thaw delivery, and the one-second suspend
-stimulus. The same run also showed why lane timing must stay separate from
-individual test timing: Playwright took 140.8 seconds because an unrelated
-project-creation test spent 60 seconds waiting for its composer and then passed
-its retry. That test recorded 85.6 seconds total, including 66.7 seconds of
-retry work, while the preview test orchestrator recorded 148.8 seconds for the
-whole OS lane. With the fixed sleeps gone, the longest no-retry e2e on that code
-head became the Vitest sandbox-deadline proof at 55.1 seconds. All 55.1 seconds
-were test body time with no hook or retry work. That duration is contractual:
-the test sets a 60-second absolute script deadline and proves that a requested
-20-minute sandbox timeout is capped to it. The next result was the concurrency
-proof at 53.9 seconds, including its explicit 30-second remote hold. Neither
-should be reported as unexplained runner idle time.
-
-The finalizer retained seven raw artifacts, normalized 5,732 events, matched
-all six expected preview runner sources, and reported no missing, incomplete,
-or foreign artifacts. The seventh artifact was the preview orchestrator's own
-artifact, which declared the six expected runner sources. The full SHAs above
-are historical PostHog `head_sha` values rather than promises that their branch
-refs or retained raw artifacts live forever. Query them with the CLI examples
-above while they remain in the configured PostHog retention window.
-
-A later PR #2241 preview at head
-`510a34bcbcb51bb822d7758f7e8221c53ee90c1a` caught a remaining modelling
-mistake: the suspend case still took 52.2 seconds. Timestamped step evidence
-showed about 22 seconds of fixture/subscription setup and another 30 seconds
-after socket close. The runtime logged a 10-second liveness timeout because CDP
-disabled page script before the browser delivered the socket's close event;
-the case had accidentally become a second half-open test and paid two guarded
-timeout windows plus redial. The suite already has a dedicated no-close-frame
-case for that path. The suspend case now waits for every original socket's
-close event, takes the network offline, freezes script for two seconds, then
-retires any replacement dial created synchronously by the close handler before
-emitting the returning browser's online signal. This prevents either a
-race-to-open dial or Chromium's offline-started dial from bypassing the intended
-transition. Three zero-retry headed runs against that same preview completed in
-29.4, 28.3, and 30.4 seconds, with the recovered runtime subscribed, zero timeout
-strikes, and no reconnect warning. This is the kind of distinction the phase
-model is meant to force: a shorter stimulus did not remove the slow path until
-the evidence proved which production recovery lane the test was actually
-exercising. A later review caught the remaining close-handler race. The
-hardened version retired exactly one transition socket in each of two headed,
-zero-retry runs, passed in 35.9 and 17.9 seconds, returned subscribed with zero
-connect failures and timeout strikes, and emitted no reconnect warnings. A
-constructor-throw gate was explicitly rejected: its trial reproduced the
-permanent reconnect wedge for 1.8 minutes because it poisoned the shared dial
-path instead of preserving real WebSocket close semantics.
-
-The next exact-head artifact made the Vitest sandbox-deadline proof the longest
-zero-retry E2E at 65.1 seconds. Aggregate runner telemetry could localize all of
-that time to the test body, but could not explain the body because the test had
-no named phases. An instrumented zero-retry baseline against `preview_1` took
-48.5 seconds: 7.6 seconds creating the project, 3.8 seconds creating the agent,
-3.6 seconds creating the sandbox, 1.6 seconds warming its container, and 30.8
-seconds waiting for script settlement. Vitest setup, collection, and scheduling
-were negligible. The actual cause was therefore the test's own 60-second
-absolute horizon. Production reserves 15 seconds for durable settlement and
-another 15 seconds for sandbox process-tree cleanup; the generated worker then
-capped the requested 20-minute command timeout to the remainder.
-
-The minimum safe horizon was established experimentally rather than guessed. A
-35-second trial left a nominal five-second command ceiling, but failed in 22.6
-seconds because dynamic-worker startup consumed that remainder before the
-sandbox command began. A 45-second horizon leaves a 15-second command ceiling
-before startup overhead. Two deployment-shaped, zero-retry validations passed
-in 35.2 and 34.1 seconds; the latter split into 16.6 seconds of fixtures, 16.5
-seconds waiting for the deliberately bounded script, 0.5 seconds verifying the
-process group, and 0.3 seconds of cleanup. The test now records every one of
-those phases plus the configured horizon, derived command ceiling, actual
-timeout forwarded to the sandbox, and pre-command budget consumption. Deadline
-and budget configuration use distinct categories from elapsed
-`configured-delay` phases so attribution queries cannot mistake them for wall
-time. This preserves the production contract and makes future regressions
-distinguish fixture provisioning, pre-command startup, sandbox execution,
-verification, and cleanup. The amended artifact passed in 33.5 seconds and
-reported a 12.1-second timeout actually forwarded to the sandbox plus 2.9
-seconds of pre-command budget consumption; a future margin regression is now
-visible before it becomes the failed "no time to start" settlement seen in the
-35-second experiment.
-
-## Adding Or Changing A Reporter
-
-1. Extend the canonical Zod schema only with runner-neutral fields; missing
-   runner capabilities stay optional or are explicitly quality-labelled. For
-   a breaking change, add a new discriminated raw version plus an explicit
-   finalizer migration; never reinterpret retained version-1 artifacts.
-2. Write raw artifacts only. Do not import PostHog delivery into a reporter.
-3. Include every final test, failed attempt/error, partial phase, module, and
-   run status. Never silently drop a failed or incomplete result.
-4. Add a unit test that validates the artifact, its timestamps/quality labels,
-   and absence of network calls.
-5. Add/retain the reporter alongside the human console reporter.
-6. If a dynamic orchestrator starts it, declare its exact
-   `expectedArtifactSources` entry before process startup and pin the matching
-   workspace in the command environment.
-7. Keep the CI finalizer and artifact upload as strict `if: always()` steps.
-8. Add a finalizer test proving the new raw field reaches the common PostHog
-   event, then update this capability matrix and event table.
-
-A green test with missing telemetry, an invalid artifact, duplicate artifact
-ID, missing PostHog configuration, or failed delivery is an observability
-failure and fails the finalizer. The subsequent artifact step still runs so
-the failure remains diagnosable. Normalize runner placeholders before schema
-validation: for example, Playwright uses negative durations for steps that were
-still active at interruption, so the reporter records zero duration plus an
-explicit `PlaywrightIncompleteStepError` instead of losing the whole artifact.
+Re-run the check on a downloaded artifact with
+`pnpm tsx scripts/ci/upload-test-telemetry.ts --artifact-root /tmp/unit`.
+
+### Adding or changing a reporter
+
+1. Extend the Zod schema only with runner-neutral fields; a capability a
+   runner lacks stays optional.
+2. Write raw artifacts only; a reporter performs no network I/O.
+3. Include every final test, failed attempt and error, partial phase, module
+   and run status. Never drop a failed or incomplete result. Normalize runner
+   placeholders before validation: Playwright reports negative durations for
+   steps still active at interruption, so the reporter records zero duration
+   and a `PlaywrightIncompleteStepError`.
+4. Write the sentinel from the first real lifecycle hook.
+5. Add the workspace to its workflow's `TEST_TELEMETRY_EXPECTED_WORKSPACES` and
+   pin `TEST_TELEMETRY_WORKSPACE` in the command's environment.
+6. Keep the finalizer and the artifact upload as `if: always()` steps.
 
 ## Current unknown flakes
 

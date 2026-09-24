@@ -179,12 +179,11 @@ jobs:
         id: failing-rows
         if: always()
         run: pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
-      - name: Normalize test telemetry and write the suite summaries
+      - name: Check test telemetry and write the suite summaries
         if: always()
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
       - name: Upload specs flake records
         if: always()
         uses: actions/upload-artifact@v4

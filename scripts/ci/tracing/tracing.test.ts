@@ -6,62 +6,11 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { assembleTrace, jobKeyInWorkflow, renderTrace, stepCommands } from "./tracing.ts";
 
-test("the test trace ends at green and excludes cleanup, even if cleanup later fails", () => {
-  const workflow = previewWorkflow("failed");
-  const spans = assembleTrace(
-    workflow,
-    new Map([
-      [
-        "finish-attempt",
-        [
-          line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 }),
-          line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(26) }),
-          line("erase", { kind: "shell-end", id: "erase", time: ms(85), exitCode: 1 }),
-        ],
-      ],
-    ]),
-  ).resourceSpans[0].scopeSpans[0].spans;
-  expect(spans[0]).toMatchObject({
-    endTimeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
-    attributes: expect.arrayContaining([
-      { key: "ci.status", value: { stringValue: "finished" } },
-      { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
-    ]),
-  });
-  expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
-});
-
-test("a local validation exit is red even before Depot exposes its shell start", () => {
-  const workflow = previewWorkflow("failed");
-  const spans = assembleTrace(
-    workflow,
-    new Map([
-      [
-        "finish-attempt",
-        [line("merge_reports", { kind: "shell-end", id: "merge", time: ms(24), exitCode: 1 })],
-      ],
-    ]),
-  ).resourceSpans[0].scopeSpans[0].spans;
-  expect(spans[0]).toMatchObject({
-    endTimeUnixNano: String(BigInt(ms(24)) * 1_000_000n),
-    attributes: expect.arrayContaining([
-      { key: "ci.status", value: { stringValue: "failed" } },
-      { key: "ci.time_to_red_ms", value: { stringValue: "24000" } },
-      {
-        key: "ci.red.evidence",
-        value: { stringValue: "Failed test-result validation (merge_reports)" },
-      },
-    ]),
-  });
-  expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
-});
-
 test("workflow queue is visible without removing it from elapsed time", () => {
   const workflow = producerWorkflow("finished");
   const spans = assembleTrace(
     {
       ...workflow,
-      workflowPath: "preview-main.yml",
       workflowStartedAt: at(40),
       executions: [{ ...workflow.executions[0], startedAt: at(40) }],
       jobs: [],
@@ -135,7 +84,7 @@ test.each([false, true])(
             ? [
                 {
                   jobId: "trace",
-                  jobKey: "preview.yml:preview:trace",
+                  jobKey: "preview-os.yml:trace",
                   status: "cancelled",
                   attempts: [],
                 },
@@ -171,7 +120,7 @@ test.each(["finished", "failed", "cancelled"])(
     workflow.workflowFinishedAt = "";
     workflow.jobs.push({
       jobId: "trace",
-      jobKey: "preview.yml:preview:trace",
+      jobKey: "preview-os.yml:trace",
       status: "running",
       attempts: [
         {
@@ -210,7 +159,7 @@ test("replaying an inline report excludes a failed collector from the preview ou
   workflow.workflowFinishedAt = at(100);
   workflow.jobs.push({
     jobId: "trace",
-    jobKey: "preview.yml:preview:trace",
+    jobKey: "preview-os.yml:trace",
     status: "failed",
     attempts: [
       {
@@ -236,7 +185,7 @@ test("retrying only the collector retains the execution that ran the preview", (
   workflow.executions.push({ executionId: "collector-retry", execution: 2, createdAt: at(120) });
   workflow.jobs.push({
     jobId: "trace",
-    jobKey: "preview.yml:preview:trace",
+    jobKey: "preview-os.yml:trace",
     status: "running",
     attempts: [
       {
@@ -261,130 +210,34 @@ test("inline collection refuses to label still-running preview jobs as finished"
   const workflow = producerWorkflow("running");
   workflow.jobs.push({
     jobId: "trace",
-    jobKey: "preview.yml:preview:trace",
+    jobKey: "preview-os.yml:trace",
     status: "running",
     attempts: [],
   });
   expect(() => assembleTrace(workflow, new Map())).toThrow("Preview jobs have not settled");
 });
 
-test.each(["running", "finished", "failed", "cancelled"])(
-  "cleanup status %s cannot change an observed green test result",
-  (status) => {
-    const workflow = previewWorkflow(status);
-    const spans = assembleTrace(
-      workflow,
-      new Map([
-        [
-          "finish-attempt",
-          [line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 })],
-        ],
-      ]),
-    ).resourceSpans[0].scopeSpans[0].spans;
-    expect(spans[0]).toMatchObject({
-      endTimeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
-      attributes: expect.arrayContaining([
-        { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
-        { key: "ci.status", value: { stringValue: "finished" } },
-      ]),
-      events: [expect.objectContaining({ name: "ci.check.green" })],
-    });
-    expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
-  },
-);
-
-test("passing producers without a recorded verdict do not invent green", () => {
-  const root = assembleTrace(previewWorkflow("running"), new Map()).resourceSpans[0].scopeSpans[0]
-    .spans[0];
-  expect(root.attributes).toContainEqual({
-    key: "ci.status",
-    value: { stringValue: "incomplete" },
-  });
-  expect(root.attributes.some((a) => a.key === "ci.time_to_green_ms")).toBe(false);
-});
-
-test("a finish-only retry cannot extend or relabel the original test result", () => {
-  const workflow = previewWorkflow("running");
-  workflow.executions.push({ executionId: "finish-retry", execution: 3, createdAt: at(120) });
-  workflow.jobs[1].attempts.push({
-    attemptId: "finish-retry-attempt",
-    attempt: 2,
-    status: "running",
-    startedAt: at(125),
-    finishedAt: "",
-  });
-  const root = assembleTrace(
-    workflow,
-    new Map([
-      [
-        "finish-attempt",
-        [line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 })],
-      ],
-      [
-        "finish-retry-attempt",
-        [line("tests_passed", { kind: "check-green", time: ms(130), checkId: 456 })],
-      ],
-    ]),
-  ).resourceSpans[0].scopeSpans[0].spans[0];
-  expect(root).toMatchObject({
-    endTimeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
-    attributes: expect.arrayContaining([
-      { key: "ci.execution.id", value: { stringValue: "execution" } },
-      { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
-    ]),
-  });
-  // If the original acknowledgement is missing, the retry's must not fill it in.
-  const missing = assembleTrace(
-    workflow,
-    new Map([
-      [
-        "finish-retry-attempt",
-        [line("tests_passed", { kind: "check-green", time: ms(130), checkId: 456 })],
-      ],
-    ]),
-  ).resourceSpans[0].scopeSpans[0].spans[0];
-  expect(missing.attributes.some((attribute) => attribute.key === "ci.time_to_green_ms")).toBe(
-    false,
-  );
-});
-
 test("time to red uses the first failed job, ignoring a recovered job attempt", () => {
   const workflow = producerWorkflow("failed");
-  workflow.jobs.push(
-    {
-      jobId: "recovered",
-      jobKey: "preview.yml:preview:apps",
-      status: "finished",
-      attempts: [
-        { attemptId: "old", attempt: 1, status: "failed", startedAt: at(1), finishedAt: at(20) },
-        { attemptId: "new", attempt: 2, status: "finished", startedAt: at(21), finishedAt: at(40) },
-      ],
-    },
-    {
-      jobId: "shard",
-      jobKey: "preview.yml:preview:playwright:matrix-1",
-      status: "failed",
-      attempts: [
-        {
-          attemptId: "shard-attempt",
-          attempt: 1,
-          status: "failed",
-          startedAt: at(1),
-          finishedAt: at(60),
-        },
-      ],
-    },
-  );
+  workflow.jobs.push({
+    jobId: "recovered",
+    jobKey: "preview-os.yml:e2e",
+    status: "finished",
+    attempts: [
+      { attemptId: "old", attempt: 1, status: "failed", startedAt: at(1), finishedAt: at(20) },
+      { attemptId: "new", attempt: 2, status: "finished", startedAt: at(21), finishedAt: at(40) },
+    ],
+  });
   const trace = assembleTrace(workflow, new Map());
   expect(trace.resourceSpans[0].scopeSpans[0].spans[0]).toMatchObject({
     attributes: expect.arrayContaining([
-      { key: "ci.time_to_red_ms", value: { stringValue: "60000" } },
+      { key: "ci.time_to_red_ms", value: { stringValue: "90000" } },
       { key: "ci.red.evidence", value: { stringValue: "First failed job completion (Depot)" } },
     ]),
     events: [
       expect.objectContaining({
         name: "ci.check.red",
-        timeUnixNano: String(BigInt(ms(60)) * 1_000_000n),
+        timeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
       }),
     ],
   });
@@ -422,34 +275,8 @@ test.each(["missing", "previous execution"])(
   },
 );
 
-test.each([0, 1])(
-  "historical runs use the early-green step only when it succeeds (exit %s)",
-  (exitCode) => {
-    const trace = assembleTrace(
-      previewWorkflow("failed"),
-      new Map([
-        [
-          "finish-attempt",
-          [
-            line("tests_passed", {
-              kind: "shell-start",
-              step: "tests_passed",
-              id: "publish",
-              time: ms(24),
-            }),
-            line("tests_passed", { kind: "shell-end", id: "publish", time: ms(25), exitCode }),
-          ],
-        ],
-      ]),
-    );
-    const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
-    const green = root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms");
-    expect(green?.value.stringValue).toBe(exitCode === 0 ? "25000" : undefined);
-  },
-);
-
 test.each(["finished", "failed", "cancelled"])(
-  "without an early signal, only successful completion establishes green (%s)",
+  "only successful completion establishes green (%s)",
   (status) => {
     const trace = assembleTrace(producerWorkflow(status), new Map());
     const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
@@ -457,26 +284,6 @@ test.each(["finished", "failed", "cancelled"])(
     expect(green?.value.stringValue).toBe(status === "finished" ? "90000" : undefined);
   },
 );
-
-test("a rerun does not inherit green from a previous execution", () => {
-  const workflow = previewWorkflow("failed");
-  workflow.jobs[0].attempts[0].finishedAt = at(60);
-  workflow.executions.push({ executionId: "rerun", execution: 2, createdAt: at(30) });
-  const trace = assembleTrace(
-    workflow,
-    new Map([
-      [
-        "finish-attempt",
-        [line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 })],
-      ],
-    ]),
-  );
-  const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
-  expect(
-    root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms"),
-  ).toBeUndefined();
-  expect(root.events?.find((event) => event.name === "ci.check.green")).toBeUndefined();
-});
 
 test("the shell hook preserves failures and does not double-count nested bash", async () => {
   const result = await promisify(execFile)("bash", ["-c", "bash -c 'echo nested'; exit 7"], {
@@ -571,7 +378,7 @@ test("nested concurrent deploys and readiness become measured children of their 
         let started = 0;
         const bothStarted = new Promise(resolve => { release = resolve; });
         process.stdout.write("transforming...");
-        const result = await traceOperation("Deploy", async () => {
+        const result = await traceOperation("Deploy apps", async () => {
           await Promise.all(["OS", "Auth"].map(name => traceOperation(name, async () => {
             if (++started === 2) release();
             await bothStarted;
@@ -599,8 +406,8 @@ test("nested concurrent deploys and readiness become measured children of their 
   const trace = assembleTrace(
     {
       workflowId: "workflow",
-      workflowName: "Preview",
-      workflowPath: "preview.yml",
+      workflowName: "Preview OS",
+      workflowPath: "preview-os.yml",
       repo: "iterate/iterate",
       headSha: "head",
       sha: "merge",
@@ -611,8 +418,8 @@ test("nested concurrent deploys and readiness become measured children of their 
       executions: [{ executionId: "execution", execution: 1, createdAt: startedAt }],
       jobs: [
         {
-          jobId: "prepare",
-          jobKey: "preview.yml:preview:prepare",
+          jobId: "deploy",
+          jobKey: "preview-os.yml:deploy",
           status: "failed",
           attempts: [{ attemptId: "attempt", attempt: 1, status: "failed", startedAt, finishedAt }],
         },
@@ -622,17 +429,17 @@ test("nested concurrent deploys and readiness become measured children of their 
       [
         "attempt",
         [
-          `@@ci-trace ${JSON.stringify({ kind: "shell-start", id: "shell", step: "prepare", time: Date.parse(startedAt) })}`,
+          `@@ci-trace ${JSON.stringify({ kind: "shell-start", id: "shell", step: "deploy", time: Date.parse(startedAt) })}`,
           ...events,
           `@@ci-trace ${JSON.stringify({ kind: "shell-end", id: "shell", exitCode: 1, time: Date.parse(finishedAt) })}`,
-        ].map((body) => ({ body, stepKey: "step", stepId: "prepare" })),
+        ].map((body) => ({ body, stepKey: "step", stepId: "deploy" })),
       ],
     ]),
   );
   const spans = trace.resourceSpans[0].scopeSpans[0].spans;
   const byName = (name: string) => spans.find((span) => span.name === name)!;
-  const deploy = byName("Deploy");
-  const shell = byName("prepare");
+  const deploy = byName("Deploy apps");
+  const shell = byName("deploy");
   expect(deploy).toMatchObject({ parentSpanId: shell.spanId, status: { code: 0 } });
   for (const name of ["OS", "Auth"]) {
     const app = byName(name);
@@ -655,8 +462,8 @@ test("nested concurrent deploys and readiness become measured children of their 
 test("quiet steps retain their duration, retries have distinct parents, and unfinished tests stay incomplete", () => {
   const workflow = {
     workflowId: "workflow",
-    workflowName: "Preview",
-    workflowPath: "preview.yml",
+    workflowName: "Preview OS",
+    workflowPath: "preview-os.yml",
     repo: "iterate/iterate",
     headSha: "abc",
     sha: "merge",
@@ -668,8 +475,8 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
     jobs: [
       {
-        jobId: "shard",
-        jobKey: "preview.yml:preview:playwright:matrix-0",
+        jobId: "e2e",
+        jobKey: "preview-os.yml:e2e",
         status: "cancelled",
         attempts: [
           {
@@ -711,26 +518,11 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           exitCode: 0,
         }),
         {
-          ...line("wait_for_preview", {
-            kind: "shell-start",
-            id: "wait",
-            step: "wait_for_preview",
-            time: ms(33),
-          }),
-          command: "pnpm exec trpc-cli scripts/ci/status.ts wait-for prepare preview-ready",
-        },
-        line("wait_for_preview", { kind: "shell-end", id: "wait", time: ms(60), exitCode: 0 }),
-        {
-          ...line("playwright", {
-            kind: "shell-start",
-            id: "tests",
-            step: "playwright",
-            time: ms(61),
-          }),
+          ...line("e2e", { kind: "shell-start", id: "tests", step: "e2e", time: ms(61) }),
           stepId: "",
           command: "pnpm spec",
         },
-        line("playwright", {
+        line("e2e", {
           kind: "test-start",
           id: "test/0",
           title: "greets",
@@ -740,7 +532,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           retry: 0,
           time: ms(62),
         }),
-        line("playwright", {
+        line("e2e", {
           kind: "test-end",
           id: "test/0",
           time: ms(82),
@@ -748,7 +540,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           expectedStatus: "passed",
           worker: 0,
         }),
-        line("playwright", {
+        line("e2e", {
           kind: "test-start",
           id: "test/1",
           title: "greets",
@@ -771,7 +563,6 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
       { key: "ci.command", value: { stringValue: "pnpm install" } },
     ]),
   });
-  expect(spans.find((span) => span.name === "wait_for_preview")).toBeDefined();
   expect(Number(install.endTimeUnixNano) - Number(install.startTimeUnixNano)).toBe(30e9);
   expect(spans.find((span) => span.name === "Interrupted setup operation")).toMatchObject({
     parentSpanId: install.spanId,
@@ -792,7 +583,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     value: { stringValue: "incomplete; end bounded by job finish" },
   });
   expect([...new Set(spans.map((span) => span.traceId))]).toHaveLength(1);
-  expect(spans.filter((span) => ["Setup", "Wait", "Test"].includes(span.name))).toHaveLength(3);
+  expect(spans.filter((span) => ["Setup", "Test"].includes(span.name))).toHaveLength(2);
   expect(
     spans.every(
       (span) => !span.parentSpanId || spans.some((parent) => parent.spanId === span.parentSpanId),
@@ -808,7 +599,7 @@ test("a step starting after Depot records cancellation stays incomplete", () => 
     workflow,
     new Map([
       [
-        "prepare-attempt",
+        "deploy-attempt",
         [line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(92.311) })],
       ],
     ]),
@@ -822,7 +613,7 @@ test("a step starting after Depot records cancellation stays incomplete", () => 
       { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
     ]),
   });
-  for (const name of ["Preview", "Prepare"]) {
+  for (const name of ["Preview OS", "Deploy"]) {
     expect(spans.find((span) => span.name === name)).toMatchObject({
       endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
       attributes: expect.arrayContaining([
@@ -854,7 +645,7 @@ test.for([
     producerWorkflow("cancelled"),
     new Map([
       [
-        "prepare-attempt",
+        "deploy-attempt",
         [
           line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(89) }),
           line("erase", { ...event, time: ms(92.311) }),
@@ -910,7 +701,7 @@ test.for([
       workflow,
       new Map([
         [
-          "prepare-attempt",
+          "deploy-attempt",
           [line("erase", { ...start, time: ms(92.311) }), line("erase", { ...end, time: ms(94) })],
         ],
       ]),
@@ -927,7 +718,7 @@ test.for([
         workflow,
         new Map([
           [
-            "prepare-attempt",
+            "deploy-attempt",
             [
               line("erase", { ...start, time: ms(92.311) }),
               line("erase", { ...end, time: ms(91) }),
@@ -942,9 +733,9 @@ test.for([
 test("a second-precision Depot finish does not invent a negative finish phase", () => {
   const report = assembleTrace(
     {
-      workflowId: "failed-wait",
-      workflowName: "Preview",
-      workflowPath: "preview.yml",
+      workflowId: "failed-e2e",
+      workflowName: "Preview OS",
+      workflowPath: "preview-os.yml",
       repo: "iterate/iterate",
       headSha: "abc",
       sha: "merge",
@@ -955,8 +746,8 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
       executions: [{ executionId: "one", execution: 1, createdAt: at(0) }],
       jobs: [
         {
-          jobId: "shard",
-          jobKey: "preview.yml:preview:playwright:matrix-0",
+          jobId: "e2e",
+          jobKey: "preview-os.yml:e2e",
           status: "failed",
           attempts: [
             {
@@ -974,29 +765,24 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
       [
         "attempt",
         [
-          line("wait_for_preview", {
-            kind: "shell-start",
-            id: "wait",
-            step: "wait_for_preview",
-            time: ms(2),
-          }),
-          line("wait_for_preview", { kind: "shell-end", id: "wait", time: ms(33.5), exitCode: 1 }),
+          line("e2e", { kind: "shell-start", id: "suite", step: "e2e", time: ms(2) }),
+          line("e2e", { kind: "shell-end", id: "suite", time: ms(33.5), exitCode: 1 }),
         ],
       ],
     ]),
   );
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const wait = spans.find((span) => span.name === "wait_for_preview")!;
+  const suite = spans.find((span) => span.name === "e2e")!;
   const finish = spans.find((span) => span.name === "Finish")!;
-  expect(wait).toMatchObject({
+  expect(suite).toMatchObject({
     status: { code: 2 },
     endTimeUnixNano: String(BigInt(ms(33.5)) * 1_000_000n),
   });
   expect(finish).toMatchObject({
-    startTimeUnixNano: wait.endTimeUnixNano,
+    startTimeUnixNano: suite.endTimeUnixNano,
     endTimeUnixNano: finish.startTimeUnixNano,
   });
-  expect(spans.find((span) => span.name === "Playwright 1/6")).toMatchObject({
+  expect(spans.find((span) => span.name === "E2E")).toMatchObject({
     endTimeUnixNano: String(BigInt(ms(33)) * 1_000_000n),
   });
 });
@@ -1005,8 +791,8 @@ test("cancelling before runner startup does not invent an attempt duration", () 
   const trace = assembleTrace(
     {
       workflowId: "cancelled",
-      workflowName: "Preview",
-      workflowPath: "preview.yml",
+      workflowName: "Preview OS",
+      workflowPath: "preview-os.yml",
       repo: "iterate/iterate",
       headSha: "abc",
       sha: "merge",
@@ -1018,7 +804,7 @@ test("cancelling before runner startup does not invent an attempt duration", () 
       jobs: [
         {
           jobId: "job",
-          jobKey: "preview.yml:preview:prepare",
+          jobKey: "preview-os.yml:deploy",
           status: "cancelled",
           attempts: [
             { attemptId: "never-started", attempt: 1, status: "cancelled", finishedAt: at(2) },
@@ -1028,7 +814,7 @@ test("cancelling before runner startup does not invent an attempt duration", () 
     },
     new Map(),
   );
-  const job = trace.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === "Prepare")!;
+  const job = trace.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === "Deploy")!;
   expect(job).toMatchObject({ startTimeUnixNano: job.endTimeUnixNano });
   expect(job.attributes).toContainEqual({
     key: "ci.evidence",
@@ -1039,209 +825,28 @@ test("cancelling before runner startup does not invent an attempt duration", () 
 test("uses authored commands, strips Doppler wrappers and walks parallel/sequential steps", () => {
   const commands = stepCommands(`
 jobs:
-  prepare:
+  deploy:
     steps:
       - id: install_dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
-      - id: prepare
+      - id: deploy
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-          pnpm preview ci-prepare $PREVIEW_TARGET_ARGS
-  finish:
+          pnpm preview deploy $PREVIEW_ARGS
+  e2e:
     steps:
       - parallel:
-          - id: erase
-            run: doppler run --project _shared --config prd -- pnpm preview erase
+          - id: specs
+            run: doppler run --project _shared --config prd -- pnpm spec
           - sequential:
-              - id: merge_reports
-                run: pnpm preview ci-finish
+              - id: e2e
+                run: pnpm preview e2e
 `);
   expect(Object.fromEntries(commands)).toEqual({
-    "prepare/install_dependencies": "pnpm install --frozen-lockfile --prefer-offline",
-    "prepare/prepare": "pnpm preview ci-prepare $PREVIEW_TARGET_ARGS",
-    "finish/erase": "pnpm preview erase",
-    "finish/merge_reports": "pnpm preview ci-finish",
-  });
-});
-
-test.each([true, false])(
-  "wait links use the recorded producer attempt (milestone observed: %s)",
-  (ready) => {
-    const jobs = [
-      ["shard", "playwright:matrix-0", "shard-attempt"],
-      ["app", "apps", "app-attempt"],
-      ["prepare", "prepare", "prepare-attempt"],
-    ].map(([jobId, key, attemptId]) => ({
-      jobId,
-      jobKey: `preview.yml:preview:${key}`,
-      status: "finished",
-      attempts: [
-        { attemptId, attempt: 1, status: "finished", startedAt: at(1), finishedAt: at(99) },
-      ],
-    }));
-    // A later attempt must never become the target of a wait for the first attempt.
-    jobs[2].attempts.push({
-      attemptId: "replacement",
-      attempt: 2,
-      status: "finished",
-      startedAt: at(80),
-      finishedAt: at(99),
-    });
-    const trace = assembleTrace(
-      {
-        workflowId: "workflow",
-        workflowName: "Preview",
-        workflowPath: "preview.yml",
-        repo: "iterate/iterate",
-        headSha: "head",
-        sha: "merge",
-        ref: "refs/pull/2697/merge",
-        workflowStatus: "finished",
-        workflowCreatedAt: at(0),
-        workflowFinishedAt: at(100),
-        executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
-        jobs,
-      },
-      new Map([
-        [
-          "shard-attempt",
-          [
-            line("wait_for_preview", {
-              kind: "shell-start",
-              id: "wait",
-              step: "wait_for_preview",
-              time: ms(3),
-            }),
-            line("wait_for_preview", {
-              kind: "dependency",
-              targetId: "prepare-attempt",
-              milestone: "preview-ready",
-            }),
-            line("wait_for_preview", {
-              kind: "shell-end",
-              id: "wait",
-              time: ms(50),
-              exitCode: ready ? 0 : 1,
-            }),
-          ],
-        ],
-        [
-          "app-attempt",
-          [
-            line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(50) }),
-            line("consumers", { kind: "dependency", targetId: "shard-attempt", milestone: "" }),
-            line("consumers", { kind: "shell-end", id: "wait", time: ms(99), exitCode: 0 }),
-          ],
-        ],
-        [
-          "prepare-attempt",
-          ready
-            ? [line("signal_ready", { kind: "milestone", name: "preview-ready", time: ms(49) })]
-            : [],
-        ],
-        [
-          "replacement",
-          [line("signal_ready", { kind: "milestone", name: "preview-ready", time: ms(90) })],
-        ],
-      ]),
-    );
-    const spans = trace.resourceSpans[0].scopeSpans[0].spans;
-    const wait = spans.find((span) => span.name === "wait_for_preview")!;
-    const prepare = spans.find((span) => span.name === "Prepare")!;
-    const target = ready
-      ? spans.find((span) => span.name === "preview-ready" && span.parentSpanId === prepare.spanId)!
-      : prepare;
-    expect(wait).toMatchObject({
-      links: [
-        {
-          traceId: target.traceId,
-          spanId: target.spanId,
-          attributes: [
-            {
-              key: "ci.link.label",
-              value: {
-                stringValue: ready
-                  ? "Requires preview-ready"
-                  : "Requires preview-ready (not observed)",
-              },
-            },
-          ],
-        },
-      ],
-    });
-    const shard = spans.find((span) => span.name === "Playwright 1/6")!;
-    expect(spans.find((span) => span.name === "consumers")).toMatchObject({
-      links: [
-        {
-          traceId: shard.traceId,
-          spanId: shard.spanId,
-          attributes: [{ key: "ci.link.label", value: { stringValue: "Waits for job to settle" } }],
-        },
-      ],
-    });
-    // Links supplement parentage; waiting still belongs to the shard's Wait phase.
-    expect(spans.find((span) => span.spanId === wait.parentSpanId)).toMatchObject({
-      name: "Wait",
-      parentSpanId: shard.spanId,
-    });
-  },
-);
-
-test("a wait can link to a cancelled consumer whose runner never started", () => {
-  const trace = assembleTrace(
-    {
-      workflowId: "workflow",
-      workflowName: "Preview",
-      workflowPath: "preview.yml",
-      repo: "iterate/iterate",
-      headSha: "head",
-      sha: "merge",
-      ref: "refs/pull/2697/merge",
-      workflowStatus: "failed",
-      workflowCreatedAt: at(0),
-      workflowFinishedAt: at(100),
-      executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
-      jobs: [
-        {
-          jobId: "consumer",
-          jobKey: "preview.yml:preview:apps",
-          status: "cancelled",
-          attempts: [
-            { attemptId: "never-started", attempt: 1, status: "cancelled", finishedAt: at(80) },
-          ],
-        },
-        {
-          jobId: "shard",
-          jobKey: "preview.yml:preview:playwright:matrix-0",
-          status: "finished",
-          attempts: [
-            {
-              attemptId: "app-attempt",
-              attempt: 1,
-              status: "finished",
-              startedAt: at(50),
-              finishedAt: at(100),
-            },
-          ],
-        },
-      ],
-    },
-    new Map([
-      [
-        "app-attempt",
-        [
-          line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(51) }),
-          line("consumers", { kind: "dependency", targetId: "never-started", milestone: "" }),
-          line("consumers", { kind: "shell-end", id: "wait", time: ms(90), exitCode: 0 }),
-        ],
-      ],
-    ]),
-  );
-  const spans = trace.resourceSpans[0].scopeSpans[0].spans;
-  const consumer = spans.find((span) => span.name === "App tests")!;
-  expect(consumer).toMatchObject({ startTimeUnixNano: consumer.endTimeUnixNano });
-  expect(spans.find((span) => span.name === "consumers")).toMatchObject({
-    links: [{ spanId: consumer.spanId }],
+    "deploy/install_dependencies": "pnpm install --frozen-lockfile --prefer-offline",
+    "deploy/deploy": "pnpm preview deploy $PREVIEW_ARGS",
+    "e2e/specs": "pnpm spec",
+    "e2e/e2e": "pnpm preview e2e",
   });
 });
 
@@ -1250,7 +855,7 @@ test("the standalone report embeds OTLP without allowing source names to break o
     {
       workflowId: "run",
       workflowName: '</script><img src=x onerror="alert(1)">',
-      workflowPath: "preview.yml",
+      workflowPath: "preview-os.yml",
       repo: "iterate/iterate",
       headSha: "abc",
       sha: "merge",
@@ -1270,9 +875,9 @@ test("the standalone report embeds OTLP without allowing source names to break o
   ).toEqual(report);
 });
 
-// --- the Preview OS workflow: deploy → e2e, then the trace job and cleanup ---
+// --- the Preview OS workflow: deploy → e2e, then the trace job ---
 
-test("the preview trace covers deploy and e2e: green at e2e completion, post-suite jobs excluded", () => {
+test("the preview trace covers deploy and e2e: green at e2e completion, the trace job excluded", () => {
   const trace = assembleTrace(
     osPreviewWorkflow(),
     new Map([
@@ -1332,8 +937,6 @@ test("a failed deploy is red at its completion and e2e never ran", () => {
 test.each([
   ["preview-os.yml:e2e", "e2e"],
   ["preview-os.yml:deploy", "deploy"],
-  ["preview.yml:preview:playwright:matrix-2", "playwright:matrix-2"],
-  ["preview.yml:preview:finish", "finish"],
 ])("%s is job %s of its workflow", (jobKey, key) => {
   expect(jobKeyInWorkflow(jobKey)).toBe(key);
 });
@@ -1348,8 +951,8 @@ function markers(stdout: string) {
 function producerWorkflow(status: string) {
   return {
     workflowId: "green-workflow",
-    workflowName: "Preview",
-    workflowPath: "preview.yml",
+    workflowName: "Preview OS",
+    workflowPath: "preview-os.yml",
     repo: "iterate/iterate",
     headSha: "head",
     sha: "merge",
@@ -1360,12 +963,12 @@ function producerWorkflow(status: string) {
     executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
     jobs: [
       {
-        jobId: "prepare",
-        jobKey: "preview.yml:preview:prepare",
+        jobId: "deploy",
+        jobKey: "preview-os.yml:deploy",
         status,
         attempts: [
           {
-            attemptId: "prepare-attempt",
+            attemptId: "deploy-attempt",
             attempt: 1,
             status,
             startedAt: at(10),
@@ -1375,28 +978,6 @@ function producerWorkflow(status: string) {
       },
     ],
   };
-}
-
-function previewWorkflow(cleanupStatus: string) {
-  const workflow = producerWorkflow("finished");
-  workflow.workflowStatus = cleanupStatus;
-  workflow.workflowFinishedAt = cleanupStatus === "running" ? "" : at(90);
-  workflow.jobs[0].attempts[0].finishedAt = at(20);
-  workflow.jobs.push({
-    jobId: "finish",
-    jobKey: "preview.yml:preview:finish",
-    status: cleanupStatus,
-    attempts: [
-      {
-        attemptId: "finish-attempt",
-        attempt: 1,
-        status: cleanupStatus,
-        startedAt: at(10),
-        finishedAt: cleanupStatus === "running" ? "" : at(90),
-      },
-    ],
-  });
-  return workflow;
 }
 
 /** A Preview OS run: deploy and e2e passed; the trace job is still running. */
@@ -1434,8 +1015,6 @@ function osPreviewWorkflow() {
       job("deploy", "finished", 3, 40),
       job("e2e", "finished", 41, 180),
       job("trace", "running", 181, 0),
-      job("cleanup", "skipped", 0, 0),
-      job("sweep", "skipped", 0, 0),
     ],
   };
 }

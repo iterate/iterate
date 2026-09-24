@@ -305,12 +305,7 @@ describe("Depot credential boundaries", () => {
   test.each([
     {
       file: ".depot/workflows/ci-telemetry.yml",
-      permissions: {
-        actions: "read",
-        checks: "read",
-        contents: "read",
-        "pull-requests": "read",
-      },
+      permissions: { contents: "read", "pull-requests": "read" },
     },
     {
       file: ".depot/workflows/preview-os.yml",
@@ -387,17 +382,16 @@ describe("Depot credential boundaries", () => {
     expect(releaseInfo?.run).toContain("git describe --tags --abbrev=0 --match 'v[0-9]*'");
   });
 
-  test("loads the Depot telemetry token from preview without changing the PostHog config", () => {
+  test("the CI telemetry sync runs hourly with the Depot token from Doppler _shared/preview", () => {
     const workflow = loadWorkflow(".depot/workflows/ci-telemetry.yml");
-    const collector = workflow.jobs.sync.steps?.find((step) =>
+    const sync = workflow.jobs.sync.steps?.find((step) =>
       step.run?.includes("scripts/ci/sync-ci-telemetry.ts"),
     );
 
-    expect(collector?.run).toContain(
+    expect(workflow.on?.schedule).toEqual([{ cron: expect.stringMatching(/^\d+ \* \* \* \*$/) }]);
+    expect(sync?.run).toContain(
       "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
     );
-    expect(collector?.run).toContain("doppler run --project _shared --config prd");
-    expect(collector?.run).toContain("--preserve-env=DEPOT_CI_TELEMETRY_TOKEN,GITHUB_TOKEN");
   });
 
   test("the flake dashboard lists every workflow that uploads flake records", () => {
@@ -717,7 +711,7 @@ describe("Depot validation capacity", () => {
       expect(finalizer?.run, `${file} must write its suites' summaries`).toContain(
         `--flake-suites ${group}`,
       );
-      expect(upload, `${file} must retain raw and normalized telemetry`).toMatchObject({
+      expect(upload, `${file} must retain the raw telemetry and its manifest`).toMatchObject({
         if: "always()",
         with: expect.objectContaining({
           path: expect.stringContaining("test-results"),
@@ -773,16 +767,5 @@ describe("Depot validation capacity", () => {
       TEST_TELEMETRY_HEAD_SHA: "${{ github.event.pull_request.head.sha || github.sha }}",
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: "${{ github.event.pull_request.number }}",
     });
-  });
-
-  test.each([
-    [".depot/workflows/test.yml", "test"],
-    [".depot/workflows/preview-os.yml", "e2e"],
-  ])("%s finalizes test telemetry under the canonical PostHog project", (file, jobId) => {
-    const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
-      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
-    );
-
-    expect(finalizer?.run).toContain("doppler run --project _shared --config prd --");
   });
 });
