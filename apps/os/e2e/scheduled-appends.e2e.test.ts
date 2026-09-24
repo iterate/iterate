@@ -139,19 +139,24 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
 
 test("pause holds a deadline until resume; session attribution names the definition's author", async () => {
   const itx = openItx(freshCtx("schedule_pause"));
+  // Relative to its own commit, as in the replacement row below: an absolute `now + 1.5 s` from
+  // before this first call's birth of the project had already passed when it committed, so it
+  // fired before the pause and `schedules.get` read null (2 of 40 runs, 2026-09-24).
   const definition = await itx.schedules.set({
     key: "held",
-    when: { at: new Date(Date.now() + 1500).toISOString() },
+    when: { afterMs: 2500 },
     events: [{ type: "held/due" }],
   });
-  expect(await itx.schedules.get("held")).toMatchObject({
-    source: { principal: { actor: "admin" } },
-  });
-  await itx.append({
+  const held = await itx.schedules.get("held");
+  expect(held).toMatchObject({ source: { principal: { actor: "admin" } } });
+  const [paused] = await itx.append({
     type: "events.iterate.com/stream/paused",
     payload: { reason: "maintenance" },
   });
-  await sleep(2000);
+  expect(Date.parse(paused.createdAt), "the pause must land before the deadline").toBeLessThan(
+    Date.parse(held.nextAt),
+  );
+  await sleep(Date.parse(held.nextAt) - Date.now() + 500);
   expect((await readAll(itx)).some((event) => event.type === "held/due")).toBe(false);
   expect(await itx.schedules.get("held")).not.toBeNull();
   await expect(
@@ -175,18 +180,30 @@ test("pause holds a deadline until resume; session attribution names the definit
 
 test("replacing an already-armed deadline with a later instant cannot fire the old batch", async () => {
   const itx = openItx(freshCtx("schedule_later"));
+  // The old deadline is relative to its own commit, not to the client's clock: this first call
+  // births the project, and a birth slower than an absolute `now + 1.5 s` committed the deadline
+  // already past, so it fired at once and there was nothing left to replace (2026-09-24: `at`
+  // 09:16:13.141Z committed at 09:16:13.149Z, 1 of 18 runs of this file on a busy preview).
   await itx.schedules.set({
     key: "replace",
-    when: { at: new Date(Date.now() + 1500).toISOString() },
+    when: { afterMs: 2500 },
     events: [{ type: "old/due" }],
   });
-  const at = new Date(Date.now() + 3500).toISOString();
+  const armed = await itx.schedules.get("replace");
+  const at = new Date(Date.now() + 4500).toISOString();
   const replacement = await itx.schedules.set({
     key: "replace",
     when: { at },
     events: [{ type: "new/due" }],
   });
-  await sleep(2000);
+  const replaced = (await readAll(itx)).find(
+    (event) => event.offset === replacement.scheduledAtOffset,
+  )!;
+  expect(
+    Date.parse(replaced.createdAt),
+    "the replacement must land while the old deadline is still armed",
+  ).toBeLessThan(Date.parse(armed.nextAt));
+  await sleep(Date.parse(armed.nextAt) - Date.now() + 500);
   expect((await readAll(itx)).filter((event) => event.type.endsWith("/due"))).toEqual([]);
   const due = await itx.waitForEvent({
     type: "new/due",
