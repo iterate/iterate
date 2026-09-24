@@ -23,9 +23,11 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -47,8 +49,6 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     if (!args.includes("--detach")) return serve(args);
     const running = await runningServer();
     if (running) return console.log(`already running: ${describe(running)}`);
-    const starting = holder();
-    if (starting) return console.log(`running: ${describe(await readied(starting))}`);
     await startDetached(args.filter((argument) => argument !== "--detach"));
   },
   status: async () => {
@@ -100,11 +100,26 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
 };
 await (command && command in commands ? commands[command]!(rest) : serve(process.argv.slice(2)));
 
-/** Run the server in this process's foreground: build, `vite dev` as a child, the record once it
- *  answers. A detached one's `startDetached` hears "ready" over IPC. */
+/** Run the server in this process's foreground: the lock, the build, `vite dev` as a child, the
+ *  record once it answers. A detached one is handed the lock by `startDetached`, which hears
+ *  "ready" over IPC. */
 async function serve(argv: string[]) {
   const args = argv.filter((argument) => argument !== "--");
-  acquire();
+  if (process.send) {
+    // detached: ask `startDetached` for the lock (asking, so its answer cannot beat our listener)
+    const handed = new Promise((resolve) => process.once("message", resolve));
+    process.send("lock?");
+    await handed;
+  } else {
+    const held = acquire();
+    if (held)
+      throw new Error(
+        `this worktree's dev server is already running or starting (pid ${held}): \`pnpm dev attach\` or \`pnpm dev kill\``,
+      );
+  }
+  process.on("exit", () => {
+    if (lockPid() === process.pid) rmSync(lockPath);
+  });
   const portIndex = args.indexOf("--port");
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : await defaultPort();
   const viteArgs = portIndex >= 0 ? args : [...args, "--port", `${port}`];
@@ -147,7 +162,12 @@ async function serve(argv: string[]) {
  *  vite and workerd with it), stdout and stderr to the log, "ready" over the IPC channel — no
  *  waiting on files. Returns once it answers; a server that dies first fails with its log's tail. */
 async function startDetached(args: string[]) {
-  mkdirSync(stateDir, { recursive: true });
+  // the lock first, so a concurrent start (two `getin`s) waits here rather than racing to spawn
+  const held = acquire();
+  if (held) return console.log(`running: ${describe(await readied(held))}`);
+  process.on("exit", () => {
+    if (lockPid() === process.pid) rmSync(lockPath);
+  });
   const log = openSync(logPath, "w");
   // process.execArgv carries tsx's loader (`--import …/tsx/…`), so the child runs this .ts file
   const child = spawn(
@@ -158,7 +178,14 @@ async function startDetached(args: string[]) {
   closeSync(log);
   console.log(`starting the dev server (pid ${child.pid}, log ${logPath}) …`);
   const outcome = await new Promise<{ ready: DevServer } | { exit: number | null }>((resolve) => {
-    child.on("message", (message) => resolve(message as { ready: DevServer }));
+    child.on("message", (message) => {
+      if (message !== "lock?") return resolve(message as { ready: DevServer });
+      // hand it the lock — an atomic replace — and say so: it builds only once it holds it
+      const handover = `${lockPath}.${child.pid}`;
+      writeFileSync(handover, `${child.pid}`);
+      renameSync(handover, lockPath);
+      child.send("lock");
+    });
     child.on("exit", (code) => resolve({ exit: code }));
   });
   if ("exit" in outcome) {
@@ -170,42 +197,59 @@ async function startDetached(args: string[]) {
   console.log(`running: ${describe(outcome.ready)}`);
 }
 
-/** Take .wrangler/dev-server.lock for this process's life: created exclusively (`wx`), before the
- *  build, so two `pnpm dev`s in one worktree — two `getin`s at once, say — cannot both start a
- *  workerd on its state, the second finding the first before it answers. */
-function acquire() {
-  const held = holder();
-  if (held)
-    throw new Error(
-      `this worktree's dev server is already running or starting (pid ${held}): \`pnpm dev attach\` or \`pnpm dev kill\``,
-    );
+/** Take .wrangler/dev-server.lock, created exclusively (`wx`) before any build, so two servers
+ *  cannot both start a workerd on this worktree's state — two `getin`s at once, say. null once
+ *  taken; else the pid of the `serve` that holds it, starting or running. */
+function acquire(): number | null {
   mkdirSync(stateDir, { recursive: true });
-  // throws EEXIST when another took it since `holder()` looked
-  writeFileSync(lockPath, `${process.pid}`, { flag: "wx" });
-  process.on("exit", () => {
-    if (holder() === process.pid) rmSync(lockPath);
-  });
+  for (;;) {
+    try {
+      writeFileSync(lockPath, `${process.pid}`, { flag: "wx" });
+      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const held = holder();
+    if (held) return held;
+  }
 }
 
-/** The pid of this worktree's `serve` — starting or running — from the lock, when that process is
- *  still a dev.ts: a lock a killed server left behind (SIGKILL runs no exit handler) goes, rather
- *  than naming a pid the system has since reused. */
-function holder() {
-  if (!existsSync(lockPath)) return null;
-  const pid = Number(readFileSync(lockPath, "utf8"));
+/** The pid of this worktree's `serve` — starting or running — from the lock, while that process is
+ *  still a dev.ts. A lock a killed server left behind (SIGKILL runs no exit handler) is cleared
+ *  rather than trusted with a pid the system may have reused — by compare-and-delete: moved aside
+ *  atomically, and put back if what moved was a lock another process took meanwhile. */
+function holder(): number | null {
+  const pid = lockPid();
+  if (pid === null) return null;
   const command = spawnSync("ps", ["-o", "command=", "-p", `${pid}`], { encoding: "utf8" }).stdout;
   if (command.includes(path.join("scripts", "dev.ts"))) return pid;
-  rmSync(lockPath, { force: true });
-  return null;
+  const aside = `${lockPath}.stale-${process.pid}`;
+  try {
+    renameSync(lockPath, aside);
+  } catch {
+    return holder(); // another process cleared it first
+  }
+  if (Number(readFileSync(aside, "utf8")) !== pid) linkSync(aside, lockPath);
+  rmSync(aside);
+  return holder();
 }
 
-/** Wait for a server another `start --detach` is starting to answer, or to give up. */
+function lockPid() {
+  try {
+    return Number(readFileSync(lockPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Wait for the server another `start --detach` is starting to answer — through its launcher
+ *  handing the lock to it — or to give up. */
 async function readied(pid: number) {
   console.log(`waiting for the dev server (pid ${pid}) to answer …`);
   for (;;) {
     const running = await runningServer();
     if (running) return running;
-    if (holder() !== pid) throw new Error(`the dev server pid ${pid} exited before answering`);
+    if (!holder()) throw new Error("the dev server being started exited before answering");
     await sleep(500);
   }
 }
