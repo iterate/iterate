@@ -4,9 +4,9 @@
  * every commit) and .husky/prepare-commit-msg (no `git commit --amend`). The last two load this file
  * with Node's own type stripping, so it stays import-free erasable TypeScript.
  *
- * - Claude Code sets CLAUDE_CODE_CHILD_SESSION=1 in its tool, hook and status-line subprocesses
- *   (v2.1.172 and later). Not CLAUDECODE: Claude Code's IDE extensions also set that in the
- *   integrated terminal a person types into. https://code.claude.com/docs/en/env-vars
+ * - Claude Code sets CLAUDE_CODE_CHILD_SESSION=1 in the processes its tool calls and hooks spawn.
+ *   Not CLAUDECODE: Claude Code's IDE extensions also set that in the integrated terminal a person
+ *   types into. https://code.claude.com/docs/en/env-vars
  * - OpenCode sets OPENCODE=1 and OPENCODE_SESSION.
  * - AGENT=1 is the generic marker for other agents.
  */
