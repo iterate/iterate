@@ -9,14 +9,12 @@ import {
   adminCredentials,
   freshCtx,
   mcpCall,
-  publicSession,
   openItx,
   processorNames,
   readAll,
   rejection,
   session,
   sleep,
-  until,
   untilValue,
   workerUrl,
 } from "./support/client.ts";
@@ -25,6 +23,7 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
+  projectUrlSocket,
   publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
@@ -246,11 +245,18 @@ test("the built-in cd carries the OAuth principal to a sibling context", async (
 });
 
 /** An app that echoes who the platform says is asking — the stamped principal — and whether the
- *  bearer it was presented with reached it (it must not: the platform's credential is stripped). */
+ *  bearer it was presented with reached it (it must not: the platform's credential is stripped);
+ *  on a WebSocket upgrade, it echoes each message. */
 const SRC_ECHO_APP = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) {
+    if ((request.headers.get("upgrade") || "").toLowerCase() === "websocket") {
+      const pair = new WebSocketPair();
+      pair[1].accept();
+      pair[1].addEventListener("message", (event) => pair[1].send("echo:" + event.data));
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
     return Response.json({
       principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
       authorization: request.headers.get("authorization"),
@@ -259,150 +265,209 @@ export default class Echo extends WorkerEntrypoint {
 }`,
 };
 
-test("a personal access token — one OAuth grant the account mints, for one resource — is the user's bearer on /api and a covered project host, or on /mcp, and nowhere else; an uncovered project is FORBIDDEN; grants.end refuses it at once", async () => {
-  const slug = freshDnsSafeProjectSlug("personal");
-  const otherSlug = freshDnsSafeProjectSlug("personal-other");
-  const member = { email: `${slug}@example.com` };
-  const projectId = await registerProject(slug, member);
-  const other = await registerProject(otherSlug, member); // the same org: the USER reaches it, the token will not
-  for (const id of [projectId, other])
-    await publishConfigWorker(openItx(id), ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
-  const { issuerHeaders, principal } = await oauthSession(projectId, member);
-  // The account's own session (the login cookie) is what the sessions page speaks; a batch session
-  // is one-shot, so each account call below opens its own.
-  const accountRequest = () => new Request(workerUrl("/api"), { headers: issuerHeaders });
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A bounded mint through the account capability, the console's own client.
-  using minter = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
-  const { token, expiresAt } = await minter
-    .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "E2E personal access token", projects: [projectId] });
-  expect(expiresAt).toBeGreaterThan(Date.now());
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint, the token for /mcp.
-  using mcpMinter = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
-  const { token: mcpToken } = await mcpMinter
-    .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "E2E MCP access token", projects: [projectId], resource: "mcp" });
+test(
+  "a personal access token — the person's own API key — is their one bearer at /api, at /mcp (a handshake and a tool call) and on a covered project's host; an uncovered project is refused at /api and /mcp, and on its host the request arrives anonymous; revoked, it is refused at once at all three, and its live /api socket and project-host WebSocket close",
+  { timeout: 75_000 },
+  async () => {
+    const slug = freshDnsSafeProjectSlug("personal");
+    const otherSlug = freshDnsSafeProjectSlug("personal-other");
+    const member = { email: `${slug}@example.com` };
+    const projectId = await registerProject(slug, member);
+    const other = await registerProject(otherSlug, member); // the same org: the USER reaches it, the key will not
+    for (const id of [projectId, other])
+      await publishConfigWorker(openItx(id), ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+    const { issuerHeaders, principal } = await oauthSession(projectId, member);
+    // The account's own session (the login cookie) is what the sessions page speaks; a batch session
+    // is one-shot, so each account call below opens its own.
+    const accountSession = () =>
+      // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded account call on the login cookie, as the sessions page makes it.
+      newHttpBatchRpcSession<IterateRpcTarget>(
+        new Request(workerUrl("/api"), { headers: issuerHeaders }),
+      );
+    using minter = accountSession();
+    const { id, token, expiresAt } = await minter
+      .authenticate({ type: "from-server-cookie" })
+      .grants.mint({ name: "E2E personal access token", projects: [projectId] });
+    expect(id).toMatch(/^pat_[0-9a-f]{16}$/);
+    expect(token).toMatch(/^itk_[0-9a-f]{32}_[0-9a-f]{16}_[0-9A-Za-z]{49}$/);
+    expect(expiresAt).toBeNull(); // none asked for: it ends when it is revoked
 
-  // /api: the bearer IS the user, with the token's project ceiling
-  const api = publicSession(token);
-  expect(await api.whoami()).toEqual(principal);
-  expect((await api.projects.list()).map((project) => project.id)).toEqual([projectId]);
-  expect(errorCode(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
+    // A LIVE SOCKET on the key, opened first: its 30 s re-check (src/rpc.ts) must close it after the
+    // revocation below
+    const url = new URL(workerUrl("/api"));
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
+    const closed = new Promise<void>((resolve) =>
+      socket.addEventListener("close", () => resolve(), { once: true }),
+    );
+    using held = newWebSocketRpcSession<IterateRpcTarget>(socket as unknown as WebSocket);
+    const api = held.authenticate({ type: "from-server-cookie" });
 
-  // /mcp: the one tool is `run`; this token reaches exactly one project, so `run(script)` omits it
-  const ran = await mcpCall(
-    "tools/call",
-    { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
-    mcpToken,
-  );
-  expect(JSON.stringify(ran)).toContain(projectId); // itx.whoami() names the project the token reaches
-  // each token is for its one resource (RFC 8707): the /api token is no /mcp token, nor the reverse
-  await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
-  const mcpAtApi = await fetch(workerUrl("/api"), {
-    method: "POST",
-    headers: { Authorization: `Bearer ${mcpToken}` },
-  });
-  expect(mcpAtApi).toMatchObject({ status: 401 });
-  await mcpAtApi.body?.cancel();
+    // /api: the bearer IS the person, within the key's projects
+    expect(await api.whoami()).toEqual(principal);
+    expect((await api.projects.list()).map((project) => project.id)).toEqual([projectId]);
+    expect(errorCode(await rejection(api.projects.get(other).whoami()))).toBe("FORBIDDEN");
+    using heldProject = await api.projects.get(projectId);
+    expect(await heldProject.whoami()).toMatchObject({ projectId });
 
-  // a project host: the covered project's app sees the stamped principal and no bearer; on a project
-  // the token does not cover the request arrives anonymous
-  const echoOf = (project: string) => projectUrl({ project, routingSlug: "echo", path: "/" });
-  const bearer = { Authorization: `Bearer ${token}` };
-  const covered = await fetchProjectUrl(echoOf(slug), bearer);
-  expect(covered, covered.text).toMatchObject({ status: 200 });
-  expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
-  const uncovered = await fetchProjectUrl(echoOf(otherSlug), bearer);
-  expect(uncovered, uncovered.text).toMatchObject({ status: 200 });
-  expect(JSON.parse(uncovered.text)).toEqual({ principal: null, authorization: null });
-  expect(
-    await fetchProjectUrl(echoOf(slug), { Authorization: `Bearer ${mcpToken}` }),
-  ).toMatchObject({ status: 401 });
-
-  // the account lists it as what it is …
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
-  using lister = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
-  const listed = await lister.authenticate({ type: "from-server-cookie" }).grants.list();
-  const grant = listed.items.find((item) => item.name === "E2E personal access token");
-  const mcpGrant = listed.items.find((item) => item.name === "E2E MCP access token");
-  expect(grant?.kind).toBe("personal");
-  expect(mcpGrant?.kind).toBe("personal");
-  // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
-  expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
-  // MCP runs on the project root, with the user and grant stamped on the request.
-  const runPair = (await readAll(api.projects.get(projectId))).filter((e) =>
-    e.type.startsWith("events.iterate.com/context/run-"),
-  );
-  expect(runPair.map((e) => e.type)).toEqual([
-    "events.iterate.com/context/run-requested",
-    "events.iterate.com/context/run-settled",
-  ]);
-  expect(runPair[0]).toMatchObject({ source: { principal, grant: mcpGrant!.id } });
-  expect(runPair[1]).toMatchObject({
-    payload: {
-      requestOffset: runPair[0].offset,
-      settlement: {
-        status: "succeeded",
-        result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
+    // /mcp: the same key, through an MCP client's handshake and the one tool
+    const initialized = await mcpCall(
+      "initialize",
+      {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "personal-access-token-e2e", version: "1.0.0" },
       },
-    },
-  });
-  // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
-  // the issuer session it was minted through (best-effort and async: wait for it)
-  const accountEvents = async () => {
-    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read of the account context per attempt.
-    using reader = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
-    return (await reader.authenticate({ type: "from-server-cookie" }).user.readEvents(0, 500))
-      .events as { type: string; payload: Record<string, unknown>; source?: unknown }[];
-  };
-  const minted = await until("the mint is on the account context", async () =>
-    (await accountEvents()).find(
-      (e) =>
-        e.type === "events.iterate.com/account/grant-minted" && e.payload.grantId === grant!.id,
-    ),
-  );
-  expect(minted).toMatchObject({
-    payload: {
-      grantId: grant!.id,
+      token,
+    );
+    expect(initialized.instructions).toContain(`This token reaches one project, ${slug}`);
+    const ran = await mcpCall(
+      "tools/call",
+      { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
+      token,
+    );
+    expect(JSON.stringify(ran)).toContain(projectId); // itx.whoami() names the project the key reaches
+    const outside = await mcpCall(
+      "tools/call",
+      { name: "run", arguments: { project: other, script: "async (itx) => itx.whoami()" } },
+      token,
+    );
+    expect(outside).toMatchObject({ isError: true });
+
+    // a project host: the covered project's app sees the stamped principal and no bearer; a project
+    // the key does not cover is refused before any Durable Object is dialled
+    const echoOf = (project: string) => projectUrl({ project, routingSlug: "echo", path: "/" });
+    const bearer = { Authorization: `Bearer ${token}` };
+    const covered = await fetchProjectUrl(echoOf(slug), bearer);
+    expect(covered, covered.text).toMatchObject({ status: 200 });
+    expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
+    expect(
+      await fetchProjectUrl(echoOf(slug), { Authorization: "Bearer itk_forged" }),
+    ).toMatchObject({ status: 401 });
+    // a project the key does not cover: the request arrives anonymous, the key stamped on nothing
+    const uncovered = await fetchProjectUrl(echoOf(otherSlug), bearer);
+    expect(uncovered, uncovered.text).toMatchObject({ status: 200 });
+    expect(JSON.parse(uncovered.text)).toEqual({ principal: null, authorization: null });
+    // a WebSocket the key holds open on the project's host: the edge relays it on the key's lease
+    // (src/project-host-lease.ts)
+    const hostSocket = projectUrlSocket(echoOf(slug), bearer);
+    const hostClosed = new Promise<number>((resolve) =>
+      hostSocket.addEventListener("close", (event) => resolve(event.code), { once: true }),
+    );
+    await new Promise((resolve, reject) => {
+      hostSocket.addEventListener("open", resolve, { once: true });
+      hostSocket.addEventListener("error", reject, { once: true });
+    });
+    const echoed = new Promise<string>((resolve) =>
+      hostSocket.addEventListener("message", (event) => resolve(String(event.data)), {
+        once: true,
+      }),
+    );
+    hostSocket.send("ping");
+    expect(await echoed).toBe("echo:ping");
+
+    // the account lists it as what it is, with its projects, never its bearer
+    using lister = accountSession();
+    const listed = await lister.authenticate({ type: "from-server-cookie" }).grants.list();
+    expect(listed.items.find((item) => item.id === id)).toMatchObject({
       name: "E2E personal access token",
+      kind: "personal",
       projects: [projectId],
-      expiresAt,
-    },
+      expiresAt: null,
+    });
+    expect(JSON.stringify(listed)).not.toContain(token);
+    // MCP ran on the project root, with the person and the key stamped on the request (the call on
+    // the uncovered project was refused before any root)
+    const runPair = (await readAll(openItx(projectId))).filter((e) =>
+      e.type.startsWith("events.iterate.com/context/run-"),
+    );
+    expect(runPair.map((e) => e.type)).toEqual([
+      "events.iterate.com/context/run-requested",
+      "events.iterate.com/context/run-settled",
+    ]);
+    expect(runPair[0]).toMatchObject({ source: { principal, grant: id } });
+    // THE ACCOUNT'S RECORD: the key's SHA-256, never the key, landed before the mint answered;
+    // stamped with the CONNECTION that minted it (the login's grant, the provider's 16 characters)
+    // and as the platform's own fact, the only kind the account folds
+    const accountEvents = async () => {
+      using reader = accountSession();
+      return (await reader.authenticate({ type: "from-server-cookie" }).user.readEvents(0, 500))
+        .events as { type: string; payload: Record<string, unknown>; source?: unknown }[];
+    };
+    const events = await accountEvents();
+    const minted = events.find(
+      (e) => e.type === "events.iterate.com/account/personal-access-token-minted",
+    );
+    expect(minted).toMatchObject({
+      payload: {
+        id,
+        name: "E2E personal access token",
+        hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        email: member.email,
+        projects: [projectId],
+        expiresAt: null,
+        mintedBy: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+      },
+      source: {
+        principal,
+        grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+        platform: true,
+      },
+    });
+    // the session that minted it, by the grant its fact is stamped with
+    expect(minted!.payload).toMatchObject({
+      mintedBy: (minted!.source as { grant: string }).grant,
+    });
+    expect(JSON.stringify(events)).not.toContain(token);
+
+    // REVOKED: `grants.end` answers once `account/grant-ended` has landed on the person's account, so
+    // every entry refuses the key at once …
+    using ender = accountSession();
+    await ender.authenticate({ type: "from-server-cookie" }).grants.end(id);
+    const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
+    expect(endedApi).toMatchObject({ status: 401 });
+    await endedApi.body?.cancel();
+    await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
+    expect(await fetchProjectUrl(echoOf(slug), bearer)).toMatchObject({ status: 401 });
+    // … and the sockets it opened close at their next re-check: the /api socket, taking its
+    // capability with it, and the project host's WebSocket, closed by the edge with 1008
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const [, hostCloseCode] = await Promise.race([
+        Promise.all([closed, hostClosed]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("The revoked key's sockets survived their 60-second lease")),
+            60_000,
+          );
+        }),
+      ]);
+      expect(hostCloseCode).toBe(1008);
+    } finally {
+      clearTimeout(timer);
+      hostSocket.close();
+    }
+    await expect(heldProject.whoami()).rejects.toThrow();
+  },
+);
+
+test("the operator bearer is /api's machine credential: refused at /mcp and on a project's host", async () => {
+  const { secret } = adminCredentials();
+  const bearer = { Authorization: `Bearer ${secret}` };
+  // a project's host: its app would see an operator over every project
+  const slug = freshDnsSafeProjectSlug("operator-host");
+  await registerProject(slug);
+  expect(await fetchProjectUrl(projectUrl({ project: slug, path: "/" }), bearer)).toMatchObject({
+    status: 401,
   });
-  // stamped with the CONNECTION that minted it — the browser session's grant, the provider's 16
-  // characters — and as the platform's own fact, the only kind the account folds
-  expect(minted).toMatchObject({
-    source: {
-      principal,
-      grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
-      platform: true,
-    },
-  });
-  // … and ends them: each bearer is refused where it worked, at once
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
-  using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
-  // `grants.end` answers once `account/grant-ended` has landed on the person's account — nothing to
-  // clean up later, so nothing to return
-  const account = ender.authenticate({ type: "from-server-cookie" });
-  await Promise.all([account.grants.end(grant!.id), account.grants.end(mcpGrant!.id)]);
-  const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
-  expect(endedApi).toMatchObject({ status: 401 });
-  await endedApi.body?.cancel();
-  expect(await fetchProjectUrl(echoOf(slug), bearer)).toMatchObject({ status: 401 });
-  await expect(mcpCall("tools/list", {}, mcpToken)).rejects.toThrow("answered 401");
-  // … and the end is the account's fact too
-  const ended = await until("the end is on the account context", async () =>
-    (await accountEvents()).find(
-      (e) => e.type === "events.iterate.com/account/grant-ended" && e.payload.grantId === grant!.id,
-    ),
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded whoami with the bearer on the request, as the e2e harness and deploy gates use /api.
+  using batch = newHttpBatchRpcSession<IterateRpcTarget>(
+    new Request(workerUrl("/api"), { headers: bearer }),
   );
-  expect(ended).toMatchObject({
-    source: {
-      principal,
-      grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
-      platform: true,
-    },
+  expect(await batch.authenticate({ type: "from-server-cookie" }).whoami()).toEqual({
+    actor: "admin",
   });
+  await expect(mcpCall("tools/list", {}, secret)).rejects.toThrow("answered 401");
 });
 
 // ── the entry points ──

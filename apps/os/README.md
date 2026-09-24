@@ -117,6 +117,8 @@ that.
 The MCP endpoint is `/mcp` on each platform deployment (production also serves
 https://mcp.iterate.com). It exposes `run({ project?, script })`, where `script` is an
 `async (itx) => …` function. The deployed integration test
-[shows runnable examples](e2e/mcp-project-root.e2e.test.ts).
+[shows runnable examples](e2e/mcp-project-root.e2e.test.ts). An MCP client signs in with OAuth or
+presents a personal access token; [credentials](docs/credentials.md) says which bearer works
+where, and why the operator bearer is `/api`'s alone.
 
 For a deployment in another Cloudflare account, follow [self-hosting](SELF-HOSTING.md).

@@ -367,11 +367,12 @@ export interface IterateContextApi {
   };
 }
 
-/** What a grant is: a sign-in not yet exchanged, a device's token, a personal access token, or a
+/** What a grant is: a sign-in not yet exchanged, a device's key, a personal access token, or a
  *  browser or app session. A client labels it for display. */
 export type GrantKind = "pending" | "device" | "personal" | "session";
 
-/** One OAuth grant as `grants.list()` shows it: a session, a connected app, a minted token. */
+/** One grant as `grants.list()` shows it: a session or a connected app (an OAuth grant), or a
+ *  personal access token or a device's key (the account's own API key, `pat_…`). */
 export interface GrantRecord {
   id: string;
   clientId?: string;
@@ -379,15 +380,20 @@ export interface GrantRecord {
   clientDomain?: string;
   name: string;
   kind: GrantKind;
-  /** The one platform resource its tokens are for: Cap'n Web at `/api` (and the projects' hosts),
-   *  or `/mcp`. */
+  /** An OAuth grant's one resource: Cap'n Web at `/api` (and the projects' hosts), or `/mcp`. A
+   *  personal access token has none: it works at `/api`, at `/mcp` and on its projects' hosts. */
   resource?: "api" | "mcp";
+  /** A personal access token's projects, by id: all it reaches. */
+  projects?: string[];
   createdAt: number;
   expiresAt: number | null;
   lastUsedAt: number | null;
   expired: boolean;
   /** The grant this very session rides on. */
   current?: boolean;
+  /** A personal access token's: the grant of the session that minted it (listed here while it
+   *  lives). */
+  mintedBy?: string;
 }
 
 /** What the consent screen shows for an authorization request. */
@@ -451,7 +457,9 @@ export interface IterateSessionApi {
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
   };
-  /** OAuth grants this session may manage (a signed-in person's): list, end, mint one for a device. */
+  /** The grants this session may manage (a signed-in person's with the `account` scope): list and
+   *  end its sessions and personal access tokens, and mint a personal access token — its bearer
+   *  answered once, `expiresAt` null for a key that never expires. */
   grants: {
     list(cursor?: string): Promise<{
       items: GrantRecord[];
@@ -461,7 +469,15 @@ export interface IterateSessionApi {
     }>;
     end(grantId: string): Promise<unknown>;
     endCurrent(): Promise<unknown>;
-    mint(input: unknown): Promise<{ token: string; expiresAt: number }>;
+    mint(input: {
+      name: string;
+      /** project ids, each one the person reaches */
+      projects: string[];
+      /** epoch ms; omitted, the key never expires */
+      expiresAt?: number;
+      /** a device's public client metadata document (Kit): the key is listed as that device */
+      clientId?: string;
+    }): Promise<{ id: string; token: string; expiresAt: number | null }>;
   };
   /** The consent screen's methods (the OAuth authorize flow): describe a request, approve it. */
   consent: {

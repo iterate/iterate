@@ -1,4 +1,5 @@
-// The public MCP endpoint, real OAuth grant, real repo and worker publication. No capability fakes.
+// The public MCP endpoint with a person's personal access token, real repo and worker publication.
+// No capability fakes.
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -25,10 +26,9 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   using minter = newHttpBatchRpcSession<IterateRpcTarget>(
     new Request(workerUrl("/api"), { headers: issuerHeaders }),
   );
-  const { token } = await minter
+  const { token, id: grantId } = await minter
     .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "MCP root regression", projects: [projectId], resource: "mcp" });
-  const grantId = token.split(":")[1]!;
+    .grants.mint({ name: "MCP root regression", projects: [projectId] });
   const request = (method: string, params: unknown, bearer = token) =>
     mcpCall(method, params, bearer);
   const run = (script: string, project?: string) =>
@@ -142,7 +142,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   );
   const second = await secondMinter
     .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "Second MCP connection", projects: [projectId], resource: "mcp" });
+    .grants.mint({ name: "Second MCP connection", projects: [projectId] });
   const secondRun = await request(
     "tools/call",
     { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
@@ -153,7 +153,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     structuredContent: { result: { projectId, path: "/" } },
   });
   const afterSecond = await readAll(root);
-  const secondGrantId = second.token.split(":")[1]!;
+  const secondGrantId = second.id;
   expect(
     afterSecond.filter((e) => e.type === "events.iterate.com/context/run-requested").at(-1)?.source,
   ).toEqual({ principal, grant: secondGrantId });

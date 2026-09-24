@@ -8,14 +8,14 @@
 // when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
 // timeline from the press.
 //
-//   WORKER_BASE_URL=https://os.iterate.com \
-//   ADMIN_API_SECRET=$(doppler secrets get APP_CONFIG --project os --config prd --plain | jq -r .secrets.adminBearer) \
+//   WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
 //   pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
 //   pnpm exec tsx scripts/voice-call.ts --say "Say: ready."
 //
-// PROJECT=prj-voice.
+// ITERATE_BEARER_TOKEN is a personal access token for the project
+// (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
 import { readFileSync, writeFileSync } from "node:fs";
-import { adminCredentials, disposeSessions, session } from "./client.ts";
+import { credentials, disposeSessions, session } from "./client.ts";
 
 const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
 
   // ONE warm authenticated session and the project root — what a connected device holds.
   const api = session();
-  const root = api.authenticate(adminCredentials()).projects.get(PROJECT);
+  const root = api.authenticate(credentials()).projects.get(PROJECT);
   const warm0 = now();
   await root.invoke(["itx", ["whoami"]]);
   console.log(`session + project root ready in ${now() - warm0}ms`);

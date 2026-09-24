@@ -15,13 +15,13 @@ const platformFactRenderers: EventRenderers = {
       </>
     );
   },
-  "events.iterate.com/account/grant-minted": (e) => {
+  "events.iterate.com/account/personal-access-token-minted": (e) => {
     const p = record(e.payload);
     const projects = list(p.projects);
     return (
       <>
         Minted the personal access token <strong>{str(p.name, "unnamed")}</strong> for{" "}
-        {projects.length} {projects.length === 1 ? "project" : "projects"} {mono(str(p.grantId))}
+        {projects.length} {projects.length === 1 ? "project" : "projects"} {mono(str(p.id))}
       </>
     );
   },

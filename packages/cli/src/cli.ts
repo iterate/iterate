@@ -139,6 +139,32 @@ const credentialsForConfig = async (config: Config, name: string): Promise<Sessi
   if (token) return { type: "bearer", token };
   return await storedCredentials(config, name);
 };
+/** THE `tokens` COMMANDS' OWN SIGN-IN, a step up from the stored login: a person's keys are managed
+ *  only with the `account` scope, which `iterate login` does not ask for, so the refresh token a
+ *  config file keeps on disk mints nothing. Each `tokens` command signs in in the browser asking for
+ *  `account`, holds that session in memory for its one call, and ends it before it returns (the key
+ *  it minted outlives it, and lists it as `mintedBy`). Whatever the environment holds is not used: a
+ *  key in `ITERATE_BEARER_TOKEN` has `iterate` alone, and the operator's bearer names no person. */
+const withAccountSession = async <T>(
+  run: (session: Awaited<ReturnType<typeof connectIterate>>["session"]) => Promise<T>,
+): Promise<T> => {
+  const { config } = resolveConfig(process.cwd(), { throw: true });
+  console.error(`Signing in to ${config.osBaseUrl} to manage your personal access tokens...`);
+  const stepUp = await oauthLogin({
+    issuer: config.osBaseUrl,
+    openBrowser: openBrowserForLogin,
+    scopes: ["iterate", "account"],
+  });
+  using connection = await connectIterate({
+    baseUrl: config.osBaseUrl,
+    auth: { type: "bearer", token: stepUp.token },
+  });
+  try {
+    return await run(connection.session);
+  } finally {
+    await connection.session.logout();
+  }
+};
 const connectConfigured = async () => {
   const resolved = resolveConfig(process.cwd(), { throw: true });
   const connection = await connectIterate({
@@ -177,18 +203,21 @@ const readErrorBody = async (response: Response) => {
   return text.length > 300 ? `${text.slice(0, 300)}...` : text;
 };
 
+/** The authorization URL, printed (an agent, or `ITERATE_SKIP_BROWSER_OPEN=1`, opens it itself)
+ *  and opened in the person's browser. */
+const openBrowserForLogin = async (url: URL) => {
+  console.error(`\nOpening browser to authenticate with Iterate:\n`);
+  console.error(`  ${url.href}\n`);
+  if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") await openUrlInBrowser(url.href);
+};
+
 const loginToResolvedConfig = async (resolved: { name: string; config: Config }) => {
   const { config } = resolved;
 
   console.error(`Logging in to ${config.osBaseUrl}...`);
   const oauthResult = await oauthLogin({
     issuer: config.osBaseUrl,
-    openBrowser: async (url) => {
-      console.error(`\nOpening browser to authenticate with Iterate:\n`);
-      console.error(`  ${url.href}\n`);
-      if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1")
-        await openUrlInBrowser(url.href);
-    },
+    openBrowser: openBrowserForLogin,
   });
 
   // Update in-memory config so subsequent verification and calls see the token.
@@ -325,6 +354,93 @@ const launcherProcedures = {
         return await context.run(`async (itx) => {\n${script}\n}`);
       }),
   },
+  tokens: {
+    create: os
+      .input(
+        z.object({
+          name: z
+            .string()
+            .trim()
+            .min(1)
+            .describe("What the token is for, as the sessions list shows it"),
+          project: z
+            .array(z.string())
+            .min(1)
+            .describe("The projects the token may reach, by id or slug"),
+          expiresInDays: z
+            .number()
+            .int()
+            .positive()
+            .default(30)
+            .describe("Days until the token expires"),
+          neverExpires: z
+            .boolean()
+            .optional()
+            .describe("A token that ends only when it is revoked"),
+        }),
+      )
+      .meta({
+        description:
+          "Mint a personal access token: your bearer at /api, at /mcp and on the projects' hosts, printed once (signs in with the account scope for this one call)",
+      })
+      .handler(async ({ input }) =>
+        withAccountSession(async (session) => {
+          const reachable = await session.projects.list();
+          const projects = input.project.map((ref) => {
+            const project = reachable.find((row) => row.id === ref || row.slug === ref);
+            if (!project)
+              throw new Error(
+                `No project ${JSON.stringify(ref)} in this session. Accessible projects: ${reachable.map((row) => row.slug).join(", ") || "none"}.`,
+              );
+            return project.id;
+          });
+          return await session.grants.mint({
+            name: input.name,
+            projects,
+            expiresAt: input.neverExpires
+              ? undefined
+              : Date.now() + input.expiresInDays * 24 * 3600_000,
+          });
+        }),
+      ),
+    list: os
+      .input(z.object({}))
+      .meta({
+        description:
+          "List your personal access tokens, never their bearers (signs in with the account scope for this one call)",
+      })
+      .handler(async () =>
+        withAccountSession(async (session) => {
+          const { items } = await session.grants.list();
+          return items
+            .filter((item) => item.kind === "personal" || item.kind === "device")
+            .map(({ id, name, projects, expiresAt, lastUsedAt, mintedBy }) => ({
+              id,
+              name,
+              projects: projects?.join(", "),
+              expiresAt: expiresAt ? new Date(expiresAt).toISOString() : "never",
+              lastUsedAt: lastUsedAt ? new Date(lastUsedAt).toISOString() : null,
+              mintedBy:
+                items.find((item) => item.id === mintedBy)?.name ??
+                `${mintedBy} (no longer listed)`,
+            }));
+        }),
+      ),
+    revoke: os
+      .input(
+        z.object({ id: z.string().meta({ positional: true }).describe("The token's id, pat_…") }),
+      )
+      .meta({
+        description:
+          "Revoke a personal access token: refused everywhere at once (signs in with the account scope for this one call)",
+      })
+      .handler(async ({ input }) =>
+        withAccountSession(async (session) => {
+          await session.grants.end(input.id);
+          return { revoked: input.id };
+        }),
+      ),
+  },
   mcp: {
     claude: os
       .input(
@@ -337,24 +453,24 @@ const launcherProcedures = {
       )
       .meta({
         description:
-          "Claude Code against the config's /mcp with the operator bearer (APP_CONFIG_ADMIN_API_SECRET): checks tools/list, then prints or runs the command",
+          "Claude Code against the config's /mcp with a personal access token (ITERATE_BEARER_TOKEN): checks tools/list, then prints or runs the command",
       })
       .handler(async ({ input }) => {
-        const token = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+        const token = process.env.ITERATE_BEARER_TOKEN?.trim();
         if (!token)
           throw new Error(
-            "iterate mcp claude needs APP_CONFIG_ADMIN_API_SECRET, the operator bearer of the deployment the config names (local dev's is dev-admin-api-secret; a deployed one comes from its Doppler config).",
+            "iterate mcp claude needs ITERATE_BEARER_TOKEN, a personal access token of the deployment the config names: `iterate tokens create --name claude --project <slug>` mints one.",
           );
         const resolved = resolveConfig(process.cwd(), { throw: true });
         const { mcpUrl, tools } = await preflightMcp(resolved.config.osBaseUrl, token);
         console.error(`${mcpUrl} accepted the bearer; tools: ${tools.join(", ")}`);
-        const args = claudeMcpArgs({ mcpUrl, token });
         if (!input.exec) {
-          // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it
-          console.log(shellCommand(["claude", ...args]));
+          // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it; the key
+          // stays in the environment, never in a transcript
+          console.log(claudeMcpCommand(mcpUrl));
           return;
         }
-        const claude = spawnSync("claude", args, { stdio: "inherit" });
+        const claude = spawnSync("claude", claudeMcpArgs({ mcpUrl, token }), { stdio: "inherit" });
         if (claude.error)
           throw new Error(`Could not start claude: ${claude.error.message}`, {
             cause: claude.error,
@@ -563,7 +679,7 @@ export const preflightMcp = async (osBaseUrl: string, token: string) => {
   }
   if (response.status === 401)
     throw new Error(
-      `${mcpUrl} rejected the bearer (401). APP_CONFIG_ADMIN_API_SECRET must be the operator bearer of the deployment at ${osBaseUrl}.`,
+      `${mcpUrl} rejected the bearer (401). ITERATE_BEARER_TOKEN must be a live personal access token of the deployment at ${osBaseUrl}.`,
     );
   if (!response.ok)
     throw new Error(
@@ -618,6 +734,17 @@ export const claudeMcpArgs = (input: { mcpUrl: string; token: string }) => [
   }),
   "--strict-mcp-config",
 ];
+
+/** `claude` with `claudeMcpArgs` as a shell command that reads the key from `$ITERATE_BEARER_TOKEN`
+ *  when it runs: printed, it carries no key. */
+export const claudeMcpCommand = (mcpUrl: string) => {
+  const placeholder = "ITERATE_BEARER_TOKEN_PLACEHOLDER";
+  // the argument holding it is single-quoted JSON; the variable is spliced in double quotes
+  return shellCommand(["claude", ...claudeMcpArgs({ mcpUrl, token: placeholder })]).replace(
+    placeholder,
+    `'"$ITERATE_BEARER_TOKEN"'`,
+  );
+};
 
 /** POSIX-shell-quoted: plain words bare, anything else single-quoted with `'` spelled `'\''`. */
 export const shellCommand = (argv: string[]) =>

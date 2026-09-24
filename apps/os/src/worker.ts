@@ -28,6 +28,7 @@ import { appCookies, browserAuthorization, browserClient } from "./browser-clien
 import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
+import { leasedProjectHostAnswer } from "./project-host-lease.ts";
 import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-sign-in.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
@@ -90,17 +91,18 @@ function sandboxed(response: Response): Response {
 }
 
 /** WHO a project host's request is, as the context DO's `fetch` reads it: `principal` is the
- *  verified stamp the context runs the call under (null: nobody) and `grant` the OAuth grant it
- *  acts through (absent for the admin secret); `platformBearer` says the `Authorization: Bearer`
- *  was the platform's own credential, which an app never sees. */
+ *  verified stamp the context runs the call under (null: nobody) and `grant` the OAuth grant or
+ *  personal access token it acts through; `platformBearer` says the `Authorization: Bearer` was the
+ *  platform's own credential, which an app never sees. The operator's bearer is refused here
+ *  (oauth.ts `authorizationForToken`). */
 type ProjectHostIdentity = { principal: Principal | null; grant?: string; platformBearer: boolean };
 
 /** The Request a project host hands the context DO — the same Request, its URL, method, body and a
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
- *  (an OAuth access token, the admin secret) removed (a site's own bearer scheme passes through
- *  untouched), then THE PROJECT'S INGRESS TARGET — the empty expression, which the DO resolves to
+ *  (an OAuth access token, a personal access token) removed (a site's own bearer scheme passes
+ *  through untouched), then THE PROJECT'S INGRESS TARGET — the empty expression, which the DO resolves to
  *  the config worker stored on the root context, for every host of the project — the routing slug
  *  the host names in `x-iterate-routing-slug` (deleted for the apex, so a visitor's copy never
  *  survives), the hop count and the principal's stamp. The edge picks the project only; the config
@@ -262,7 +264,7 @@ export default {
       }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
-        ? await authorizationForToken(env, bearer, addresses)
+        ? await authorizationForToken(env, bearer, addresses, "project-host")
         : await browserAuthorization(env, request);
       if (bearer && !authorization)
         return new Response("Invalid or revoked bearer", {
@@ -315,7 +317,14 @@ export default {
         loginUrl: `${routing?.type === "paths" ? platformOrigin : url.origin}/.auth/login`,
       });
       if (signIn && answer.body) ctx.waitUntil(answer.body.cancel());
-      const response = signIn || answer;
+      // A MEMBER'S BEARER GRANT holds what stays open (a WebSocket, a streamed body) to its lease:
+      // ended, expired or out of the project, the connection closes within a minute
+      // (project-host-lease.ts).
+      const response =
+        signIn ||
+        (bearer && stamped?.grant
+          ? leasedProjectHostAnswer(env, stamped.grant, stamped.reach, projectId, answer)
+          : answer);
       // Under paths the app answered on the platform's own origin: its document runs sandboxed.
       return routing?.type === "paths" ? sandboxed(response) : response;
     }

@@ -47,8 +47,9 @@ const onUnhandledError = (error: unknown): boolean | void => {
  *  170 s instead of its floor (measured 2026-09-21). These files start in slot one, longest first;
  *  everything else follows vitest's own order, which runs every unit file before the first workers
  *  file. `pnpm test` (unit + workers, 3 slots in CI), 2026-09-24: oauth's 30 s re-check rows 128 s
- *  (the run's floor), the facet-push watchdog 62 s, the CPU-bound memory children 20 s beside those
- *  two idle waits; alarm-and-pins (42 s, fixed sub-second waits) starts in the first free slot.
+ *  (the run's floor), the facet-push watchdog 62 s, personal access tokens' 30 s re-check 35 s, the
+ *  CPU-bound memory children 20 s beside those idle waits; alarm-and-pins (42 s, fixed sub-second
+ *  waits) starts in the first free slot.
  *  `pnpm e2e`, with rows concurrent (deployed): context-watchdog's two eviction windows 37 s (it
  *  started 13 s in behind the first sixteen files), session's 30 s grant re-check 34 s, the dormant
  *  deadline 24 s, the 144 MiB file's sequential rows, the slow client's upload 10–15 s. A file that
@@ -56,6 +57,7 @@ const onUnhandledError = (error: unknown): boolean | void => {
 const LONG_POLES = [
   "__workers-tests__/oauth.test.ts",
   "__workers-tests__/facet-push-timeout-heals.test.ts",
+  "__workers-tests__/personal-access-tokens.test.ts",
   "src/stream/memory-budget.test.ts",
   "e2e/context-watchdog.e2e.test.ts",
   "e2e/session.e2e.test.ts",

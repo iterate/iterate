@@ -23,7 +23,9 @@ export interface PosthogContext {
 }
 
 // Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK sends.
-// Nothing is masked in replays: every app here is ours, and seeing it is the point. `api_host` is
+// Nothing is masked in replays: every app here is ours, and seeing it is the point. A secret on
+// screen (a key shown once) is the exception: it goes in a `NotRecorded` (not-recorded.tsx), which
+// replay and autocapture leave out. Password inputs are always masked by posthog-js. `api_host` is
 // this app's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog), resolved against
 // the page's origin.
 function posthogInitOptions() {

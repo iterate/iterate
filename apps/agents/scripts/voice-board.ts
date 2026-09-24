@@ -8,7 +8,7 @@
 // the call became active (and how long that took), microphone frames left the device, an answer
 // reached its speaker, and the provider transcribed the words and the board answered them.
 //
-//   WORKER_BASE_URL=https://os.iterate.com ADMIN_API_SECRET=… PROJECT=prj-voice \
+//   WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… PROJECT=prj-voice \
 //   pnpm exec tsx scripts/voice-board.ts --device home_assistant_voice_preview_edition \
 //     --prompt "Hello there. Please reply with the single word banana." --expect banana
 //
@@ -16,7 +16,7 @@
 // models say numbers as digits or as words, so ask for either: --expect "132|thirty-two".
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { adminCredentials, disposeSessions, session } from "./client.ts";
+import { credentials, disposeSessions, session } from "./client.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,7 +57,7 @@ async function healthWithRetry(kit: any, attempts = 20): Promise<Health> {
 }
 
 async function main(): Promise<void> {
-  const root = session().authenticate(adminCredentials()).projects.get(PROJECT);
+  const root = session().authenticate(credentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
   const before = await healthWithRetry(kit);

@@ -17,12 +17,17 @@ const log = [
   at(1, "events.iterate.com/stream/created", { path: "/" }),
   at(
     2,
-    "events.iterate.com/account/grant-minted",
-    { grantId: "grant_a", name: "laptop" },
+    "events.iterate.com/account/personal-access-token-minted",
+    { id: "pat_a", name: "laptop" },
     "user_1",
   ),
-  at(3, "events.iterate.com/account/grant-ended", { grantId: "grant_a" }, "user_2"),
-  at(4, "events.iterate.com/account/grant-minted", { grantId: "grant_b", name: "phone" }, "user_1"),
+  at(3, "events.iterate.com/account/grant-ended", { grantId: "pat_a" }, "user_2"),
+  at(
+    4,
+    "events.iterate.com/account/personal-access-token-minted",
+    { id: "pat_b", name: "phone" },
+    "user_1",
+  ),
 ];
 
 // ── filterEvents ──
@@ -31,7 +36,7 @@ test("no filter shows everything; types narrow to the set; the query searches ty
   expect(
     filterEvents(log, {
       query: "",
-      types: new Set(["events.iterate.com/account/grant-minted"]),
+      types: new Set(["events.iterate.com/account/personal-access-token-minted"]),
     }).map((e) => e.offset),
   ).toEqual([2, 4]);
   expect(filterEvents(log, { query: "phone", types: new Set() }).map((e) => e.offset)).toEqual([4]);
@@ -45,7 +50,7 @@ test("no filter shows everything; types narrow to the set; the query searches ty
 
 test("typeCounts: most frequent first, ties by name", () => {
   expect(typeCounts(log)).toEqual([
-    ["events.iterate.com/account/grant-minted", 2],
+    ["events.iterate.com/account/personal-access-token-minted", 2],
     ["events.iterate.com/account/grant-ended", 1],
     ["events.iterate.com/stream/created", 1],
   ]);
@@ -56,11 +61,13 @@ test("rendererFor: an exact type wins over a prefix, the longest prefix wins ove
   const account = () => null;
   const all = () => null;
   const renderers = {
-    "events.iterate.com/account/grant-minted": exact,
+    "events.iterate.com/account/personal-access-token-minted": exact,
     "events.iterate.com/account/*": account,
     "events.iterate.com/*": all,
   };
-  expect(rendererFor(renderers, "events.iterate.com/account/grant-minted")).toBe(exact);
+  expect(rendererFor(renderers, "events.iterate.com/account/personal-access-token-minted")).toBe(
+    exact,
+  );
   expect(rendererFor(renderers, "events.iterate.com/account/grant-ended")).toBe(account);
   expect(rendererFor(renderers, "events.iterate.com/stream/created")).toBe(all);
   expect(rendererFor(renderers, "custom/thing")).toBeUndefined();
@@ -68,7 +75,9 @@ test("rendererFor: an exact type wins over a prefix, the longest prefix wins ove
 });
 
 test("the short forms: the prefix dropped, the payload on one line and cut", () => {
-  expect(shortEventType("events.iterate.com/account/grant-minted")).toBe("account/grant-minted");
+  expect(shortEventType("events.iterate.com/account/personal-access-token-minted")).toBe(
+    "account/personal-access-token-minted",
+  );
   expect(payloadPreview({ a: 1 })).toBe('{"a":1}');
   expect(payloadPreview("x".repeat(200), 20)).toHaveLength(20);
   expect(payloadPreview(undefined)).toBe("");

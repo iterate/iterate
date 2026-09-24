@@ -10,7 +10,7 @@ test("OAuth uses the platform's API audience including the local port", () => {
   expect(oauthResourceForOsBaseUrl("https://os.iterate.com")).toBe("https://os.iterate.com/api");
 });
 
-test("login registers a native client, sends PKCE and the API audience, and redeems the redirect", async () => {
+test("login registers a native client, sends PKCE, the API audience and the iterate scope alone, and redeems the redirect", async () => {
   await using issuer = await startIssuer();
   const session = await oauthLogin({ issuer: issuer.url, openBrowser: consent });
   expect(session).toMatchObject({
@@ -34,7 +34,7 @@ test("login registers a native client, sends PKCE and the API audience, and rede
       response_type: "code",
       client_id: "cli-client",
       redirect_uri: redirectUri,
-      scope: "iterate",
+      scope: "iterate", // no `account`: the stored login mints no key (`iterate tokens` steps up)
       state: expect.any(String),
       code_challenge: expect.any(String),
       code_challenge_method: "S256",
@@ -51,6 +51,12 @@ test("login registers a native client, sends PKCE and the API audience, and rede
       },
     ],
   });
+});
+
+test("the tokens commands' step-up sign-in asks for the account scope too", async () => {
+  await using issuer = await startIssuer();
+  await oauthLogin({ issuer: issuer.url, openBrowser: consent, scopes: ["iterate", "account"] });
+  expect(issuer.seen).toMatchObject({ authorize: { scope: "iterate account" } });
 });
 
 test.for<{ name: string; redirect: Record<string, string>; message: string }>([

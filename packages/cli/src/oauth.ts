@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import * as oauth from "oauth4webapi";
 import { isLocalOrigin } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
+import type { OAuthScope } from "iterate/oauth-scopes";
 import type { StoredSession } from "./config.ts";
 
 /** The platform API's audience (the RFC 8707 resource) at `osBaseUrl`, local port included. */
@@ -17,10 +18,14 @@ export const oauthResourceForOsBaseUrl = (osBaseUrl: string) => new URL("/api", 
 
 /** Sign in at `issuer` in a browser: `openBrowser` gets the authorization URL, and the redirect
  *  back to this process's loopback listener is validated (state, `iss`, no `error`) before its code
- *  is redeemed with the PKCE verifier. */
+ *  is redeemed with the PKCE verifier. `iterate login` asks for `iterate` alone, so the session it
+ *  stores on disk mints no key; `iterate tokens` signs in again for its one call with `account`
+ *  (cli.ts `withAccountSession`). */
 export async function oauthLogin(input: {
   issuer: string;
   openBrowser: (url: URL) => void | Promise<void>;
+  /** `iterate` is always asked for (iterate/oauth-scopes) */
+  scopes?: OAuthScope[];
 }) {
   const as = authorizationServer(input.issuer);
   const resource = oauthResourceForOsBaseUrl(input.issuer);
@@ -44,6 +49,7 @@ export async function oauthLogin(input: {
     clientId: client.client_id,
     redirectUri: loopback.redirectUri,
     resources: [resource],
+    scopes: input.scopes,
   });
   await input.openBrowser(request.url);
   let callback: URLSearchParams;

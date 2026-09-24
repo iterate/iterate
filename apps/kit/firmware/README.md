@@ -158,12 +158,12 @@ and ends the process. Health carries `macCaptureFrames`, `macCaptureDropped`,
 ### Provisioning
 
 Kit Flasher's **Prepare device** step installs the voice agent when missing,
-asks for an OpenAI key if needed, and verifies `itx.voice.health()` before it mints a ten-year personal access token scoped to that
-project, named `Kit <board> <date>` in the person's OS sessions list. The
-browser writes Wi-Fi, OS URL, project id and that token into the versioned
-`iterate_kit` partition on the connected board. Credentials never enter the Kit
-worker or a URL. The token is retired by revocation from that list, never
-refreshed.
+asks for an OpenAI key if needed, and verifies `itx.voice.health()` before it mints a personal access token scoped to that
+project with no expiry, listed as the device (`Kit <board> <date>`) in the
+person's OS sessions list. The browser writes Wi-Fi, OS URL, project id and that
+token into the versioned `iterate_kit` partition on the connected board.
+Credentials never enter the Kit worker or a URL. The token is retired by
+revocation from that list.
 
 To write that partition by hand instead — which is how a bench board is
 provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
@@ -181,8 +181,8 @@ python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
 ```
 
 `$KIT_TOKEN` is a personal access token scoped to the project: the one Kit
-Flasher's Prepare device step mints, or one minted the same way through
-the OS's `grants.mint` (`projects: [<project>]`, `expiresAt` up to ten years).
+Flasher's Prepare device step mints, or one from the Dash's Sessions page or
+`pnpm exec iterate tokens create --name <board> --project <project> --never-expires`.
 The same image is what `iterate-kit-mac --config` reads.
 
 At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
@@ -261,11 +261,14 @@ air-path proof:
 
 ```sh
 cd apps/agents
-WORKER_BASE_URL=https://os.iterate.com ADMIN_API_SECRET=… PROJECT=prj-voice \
+WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… PROJECT=prj-voice \
   pnpm exec tsx scripts/voice-board.ts --device <device_name> \
     --prompt "Hello there. Please reply with the single word banana." --expect banana
 ```
 
+`ITERATE_BEARER_TOKEN` is a personal access token for the device's project
+(the Dash's Sessions page, or `pnpm exec iterate --config prd tokens create`;
+[credentials](../../os/docs/credentials.md)).
 `voice-board.ts` asks the device to start a conversation (a remote press),
 speaks the prompt out of this Mac's speaker so the device's microphone has to
 hear it, watches the conversation for what the provider heard and said back,

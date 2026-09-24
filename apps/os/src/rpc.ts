@@ -35,7 +35,7 @@ export async function rpcResponse(
     principal: authorization.principal,
     grant: authorization.grant?.grantId,
     reach: authorization.reach,
-    grants: new GrantsRpcTarget(env, ctx, authorization, addresses),
+    grants: new GrantsRpcTarget(env, authorization, addresses),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
       consent: new ConsentRpcTarget(env, ctx, authorization.grant, addresses),
@@ -59,7 +59,7 @@ export async function rpcResponse(
       if (bound || binding) throw new Error("This transport already carries a session");
       binding = true;
       try {
-        const authorization = await authorizationForToken(env, token, addresses);
+        const authorization = await authorizationForToken(env, token, addresses, "api");
         if (!authorization) return null;
         if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
         bound = authorization;

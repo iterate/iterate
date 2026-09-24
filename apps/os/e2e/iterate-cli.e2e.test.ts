@@ -16,7 +16,7 @@ import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host
 const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
-  "published CLI: OAuth PKCE login, refresh, project listing and an itx script with durable settlement",
+  "published CLI: OAuth PKCE login, refresh, project listing, an itx script with durable settlement, and a personal access token it mints, uses at /api and /mcp, and revokes",
   // The package build runs inside the row (capped at a minute below): 8–14 s in all against a
   // preview, 30 runs on 2026-09-24.
   { timeout: 90_000 },
@@ -40,28 +40,32 @@ test(
       ITERATE_BEARER_TOKEN: "",
       APP_CONFIG_ADMIN_API_SECRET: "",
     };
-    const run = (args: string[]) =>
-      promisify(execFile)(process.execPath, [bin, ...args], { env, timeout: 30_000 });
-    const login = run(["login"]);
-    // Attach a rejection handler while consent is driven so an early process failure cannot go unhandled.
-    void login.catch(() => {});
-    let stderr = "";
-    login.child.stderr!.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    try {
-      await expect.poll(() => stderr.match(/https?:\/\/\S+\/oauth2\/auth\?\S+/)?.[0]).toBeTruthy();
-      const authorize = new URL(stderr.match(/https?:\/\/\S+\/oauth2\/auth\?\S+/)![0]);
-      expect(authorize.searchParams.get("scope")).toBe("iterate");
-      expect(authorize.searchParams.get("resource")).toBe(workerUrl("/api"));
-      expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+    const run = (args: string[], extra: Record<string, string> = {}) =>
+      promisify(execFile)(process.execPath, [bin, ...args], {
+        env: { ...env, ...extra },
+        timeout: 30_000,
+      });
+    const cookie = await issuerCookie(member.email);
+    const children: ReturnType<typeof run>["child"][] = [];
+    /** `args` run as a command that signs in in the browser: the person consents to the URL it
+     *  prints (the issuer's consent action with their cookie, the project ticked) and its loopback
+     *  gets the code. The authorize URL is handed back for its scope. */
+    const consented = async (args: string[], extra: Record<string, string> = {}) => {
+      const running = run(args, extra);
+      children.push(running.child);
+      // A rejection handler while consent is driven, so an early process failure cannot go unhandled.
+      void running.catch(() => {});
+      let stderr = "";
+      running.child.stderr!.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      const url = () => stderr.match(/https?:\/\/\S+\/oauth2\/auth\?\S+/)?.[0];
+      await expect.poll(url).toBeTruthy();
+      const authorize = new URL(url()!);
       // oxlint-disable-next-line iterate/no-capnweb-http-batch -- The issuer's one consent action, with the signed-in user's cookie.
       using issuer = newHttpBatchRpcSession<IterateRpcTarget>(
         new Request(workerUrl("/api"), {
-          headers: {
-            Origin: new URL(workerUrl("/")).origin,
-            Cookie: await issuerCookie(member.email),
-          },
+          headers: { Origin: new URL(workerUrl("/")).origin, Cookie: cookie },
         }),
       );
       const approved = await issuer
@@ -71,7 +75,15 @@ test(
       const callback = await fetch(approved.redirectTo);
       expect(callback).toMatchObject({ status: 200 });
       await callback.body?.cancel();
-      expect((await login).stdout).toContain("Logged in successfully");
+      return { authorize, result: await running };
+    };
+    try {
+      const login = await consented(["login"]);
+      // `iterate` alone: the session stored on disk mints no key (the `tokens` commands step up)
+      expect(login.authorize.searchParams.get("scope")).toBe("iterate");
+      expect(login.authorize.searchParams.get("resource")).toBe(workerUrl("/api"));
+      expect(login.authorize.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(login.result.stdout).toContain("Logged in successfully");
       const stored = JSON.parse(await readFile(path, "utf8"));
       expect(stored.configs.e2e.session.refreshToken).toBeTruthy();
       stored.configs.e2e.session.expiresAt = new Date(0).toISOString();
@@ -93,9 +105,32 @@ test(
       const events = await readAll(openItx(project));
       expect(events.filter((event) => event.type === "cli-proof")).toHaveLength(1);
       expect(events.some((event) => event.type.endsWith("run-settled"))).toBe(true);
+
+      // A PERSONAL ACCESS TOKEN (the project by slug), printed once: `tokens` signs in again with
+      // `account` for its one call, and ends that session before it returns
+      const create = await consented(["tokens", "create", "--name", "cli-e2e", "--project", slug]);
+      expect(create.authorize.searchParams.get("scope")).toBe("iterate account");
+      const created = create.result.stdout;
+      const token = /itk_[0-9a-f]{32}_[0-9a-f]{16}_[0-9A-Za-z]{49}/.exec(created)?.[0];
+      const id = /pat_[0-9a-f]{16}/.exec(created)?.[0];
+      expect({ token, id }, created).toEqual({ token: expect.any(String), id: expect.any(String) });
+      const key = { ITERATE_BEARER_TOKEN: token! };
+      // the key is the CLI's bearer on /api, and Claude Code's on /mcp (the preflight's tools/list);
+      // the command printed for Claude Code reads it from the environment, never spells it
+      expect((await run(["ping"], key)).stdout).toContain(member.email);
+      const claude = await run(["mcp", "claude"], key);
+      expect(claude.stderr).toContain("accepted the bearer; tools: run");
+      expect(claude.stdout).toContain("$ITERATE_BEARER_TOKEN");
+      expect(claude.stdout + claude.stderr).not.toContain(token);
+      // the `tokens` commands sign in for themselves, whatever key the environment holds; the list
+      // names the session that minted the key, which ended with its command
+      const listed = (await consented(["tokens", "list"], key)).result.stdout;
+      expect(listed).toContain(id);
+      expect(listed).toContain("(no longer listed)");
+      await consented(["tokens", "revoke", id!], key);
+      await expect(run(["ping"], key)).rejects.toThrow(/Invalid or revoked bearer/);
     } finally {
-      login.child.kill();
-      await login.catch(() => {});
+      for (const child of children) child.kill();
       await rm(directory, { recursive: true, force: true });
     }
   },

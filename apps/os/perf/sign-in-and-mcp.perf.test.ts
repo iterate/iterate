@@ -35,7 +35,7 @@ test("an MCP tool call on a project, with a personal access token", async ({ tas
   );
   const { token } = await minter
     .authenticate({ type: "from-server-cookie" })
-    .grants.mint({ name: "perf MCP call", projects: [projectId], resource: "mcp" });
+    .grants.mint({ name: "perf MCP call", projects: [projectId] });
   const call = () =>
     mcpCall(
       "tools/call",

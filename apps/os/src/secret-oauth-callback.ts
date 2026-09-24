@@ -70,7 +70,7 @@ export async function secretOAuthCallback(
     return answer(400, "This link is not one the platform issued, or it has expired.");
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const authorization = bearer
-    ? await authorizationForToken(env, bearer, addresses)
+    ? await authorizationForToken(env, bearer, addresses, "secret-oauth-callback")
     : await browserAuthorization(env, request);
   if (!authorization)
     return answer(

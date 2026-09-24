@@ -27,9 +27,14 @@ shrink the fixture.
 
 ## 2. Dump the log
 
-Use the deployment's operator bearer: `secrets.adminBearer` in the `APP_CONFIG` of Doppler
-`os/prd`, or `os/preview` for any preview. It reaches every project, so
-keep it in the command's environment and never print it
+Use a personal access token for the chat's project, as `ITERATE_BEARER_TOKEN`: the
+person who reported the chat can mint one on the Dash's Sessions page, and if you are signed
+in yourself, `pnpm exec iterate --config prd tokens create --name fix-stream --project <slug>`
+prints one ([credentials](../../../apps/os/docs/credentials.md)). Keep it in the command's
+environment and never print it. A key covers only projects its person belongs to. For a
+project nobody at hand belongs to, use the deployment's operator bearer on `/api` instead:
+`APP_CONFIG_ADMIN_API_SECRET` set to `secrets.adminBearer` from the `APP_CONFIG` of Doppler
+`os/prd` (`os/preview` for any preview), in place of `ITERATE_BEARER_TOKEN` below
 ([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
 
 Save this in your scratchpad as `dump-agent.js`, with the agent's path filled in:
@@ -47,13 +52,14 @@ return JSON.stringify(events);
 ```
 
 ```sh
-APP_CONFIG_ADMIN_API_SECRET="$(doppler secrets get APP_CONFIG --project os --config prd --plain | jq -r .secrets.adminBearer)" \
+ITERATE_BEARER_TOKEN=itk_… \
   pnpm exec iterate --config prd itx run --project <slug> --file dump-agent.js > agent.json
 ```
 
 For a preview, point a CLI config at it once
 (`pnpm exec iterate config set --name pr<n> --os-base-url <preview os url>`) and use
-`--config pr<n>` with the `preview` Doppler config. `--project` takes the slug or the `prj_` id.
+`--config pr<n>`, with a key minted on that preview (or the `preview` Doppler config's operator
+bearer). `--project` takes the slug or the `prj_` id.
 To list the agents instead, run `--eval 'return await itx.agents.list()'`.
 
 Run at the project root, which is the default `--context /`. Never pass
@@ -65,7 +71,7 @@ event, with payloads cut to 200 characters, and then the subscription rows:
 
 ```sh
 cd apps/os
-WORKER_BASE_URL=https://os.iterate.com ADMIN_API_SECRET="$(…same as above…)" \
+WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
   PROJECT=<slug> CTX_PATH=/agents/web/<moment> pnpm exec tsx scripts/inspect-context.ts
 ```
 

@@ -29,13 +29,15 @@ projects in the `CONTROL_PLANE` Durable Object's own SQLite; see
 mechanisms its `APP_CONFIG.login` enables: a global password, a mailed code,
 Google, or Cloudflare. Two deployment secrets let you act as anyone, instantly:
 the **password** (`login.password`) signs in as whatever email you type, and
-the **operator bearer** (`secrets.adminBearer`) opens an operator session that
-reaches every project, optionally as a named user (see
+the **operator bearer** (`secrets.adminBearer`) opens an operator session on
+`/api` that reaches every project, optionally as a named user (see
 [Acting as users](#acting-as-users-and-admins)). `login.allowedEmails` limits
 who may sign in by any of them (`["*@iterate.com"]`, or the var
-`APP_CONFIG_LOGIN__ALLOWED_EMAILS=*@iterate.com,*@nustom.com`); a live grant for
-an address it stops naming is refused at its next use. The operator bearer is
-not limited by it.
+`APP_CONFIG_LOGIN__ALLOWED_EMAILS=*@iterate.com,*@nustom.com`); a live grant or
+personal access token for an address it stops naming is refused at its next
+use. The operator bearer is not limited by it. People, agents and MCP clients
+use a **personal access token** instead of the bearer:
+[credentials](../apps/os/docs/credentials.md) says which works where.
 
 ## Local dev
 
@@ -87,6 +89,9 @@ read secrets.
   `http://localhost:5173` whose `ITERATE_ORIGIN` is this server, it lands on the
   Dash's project page with no Allow page; else on `/login`. `-e`/`-p` pick
   another `@preview.iterate.test` person and project; `--dash` another Dash.
+  `pnpm -s getin --token` prints a personal access token for that person and
+  project instead (30 days): their bearer at `/api`, `/mcp` and the project's
+  hosts.
 - The port is the one you chose (default `8788`); wrangler prints
   `Ready on http://localhost:<port>`. `GET /version` answers
   `<deployment id> <base url>` once the worker is up — poll it before driving
@@ -100,31 +105,33 @@ read secrets.
   header. Deployed previews route projects as paths instead
   (`/projects/<slug>/<routingSlug>/…`), because workers.dev has no wildcard
   subdomains.
-- Local MCP is the platform route: `http://localhost:<port>/mcp`. The
-  operator bearer works there (it reaches every project, so every call names
-  one). Smoke it with the MCP Inspector:
+- Local MCP is the platform route: `http://localhost:<port>/mcp`. It takes a
+  person's bearer: a personal access token (`pnpm -s getin --token`), or an
+  MCP client's own OAuth sign-in. The operator bearer is refused there. Smoke it
+  with the MCP Inspector:
 
   ```bash
+  TOKEN=$(pnpm -s getin --token)
   npx -y @modelcontextprotocol/inspector --cli http://localhost:8788/mcp \
     --transport http \
     --method tools/list \
-    --header "Authorization: Bearer dev-admin-api-secret"
+    --header "Authorization: Bearer $TOKEN"
   ```
 
-  If `tools/list` works, call the one tool with the smallest harmless script:
+  If `tools/list` works, call the one tool with the smallest harmless script
+  (the key reaches one project, so `project` may be omitted):
 
   ```bash
   npx -y @modelcontextprotocol/inspector --cli http://localhost:8788/mcp \
     --transport http \
     --method tools/call \
     --tool-name run \
-    --tool-arg project=<project-slug> \
     --tool-arg "script=async (itx) => itx.whoami()" \
-    --header "Authorization: Bearer dev-admin-api-secret"
+    --header "Authorization: Bearer $TOKEN"
   ```
 
   Drive it from Claude Code: after `pnpm exec iterate config set --name local --os-base-url http://localhost:8788`,
-  `APP_CONFIG_ADMIN_API_SECRET=dev-admin-api-secret pnpm exec iterate mcp claude --config local`
+  `ITERATE_BEARER_TOKEN=$TOKEN pnpm exec iterate --config local mcp claude`
   checks `tools/list` and prints the `claude --mcp-config … --strict-mcp-config` command (`--exec` runs it).
 
 - Sign in as a human at `http://localhost:<port>/login`: any email, password
@@ -191,16 +198,22 @@ and its clients.
 
 ## Acting as users and admins
 
-For product administration and support, use the operator bearer. It needs only
-the selected environment's `secrets.adminBearer` and opens a session with the
-`admin` actor, which reaches every project. It does not impersonate a customer
-unless you ask it to: `authenticate({ type: "admin-secret", secret, as: { email } })`
-acts as that user's session (the projects of their organizations). The e2e
-suite's `adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly
-this.
+As yourself, on projects you belong to, use your own login
+(`iterate login`) or a personal access token (`ITERATE_BEARER_TOKEN`; locally
+`pnpm -s getin --token`); see [credentials](../apps/os/docs/credentials.md).
+
+For automation, and for a project you are not a member of, use the operator
+bearer on `/api` (`/mcp`, project hosts and a secret's OAuth callback refuse
+it). It needs only the selected environment's
+`secrets.adminBearer` and opens a session with the `admin` actor, which reaches
+every project. It does not impersonate a customer unless you ask it to:
+`authenticate({ type: "admin-secret", secret, as: { email } })` acts as that
+user's session (the projects of their organizations). The e2e suite's
+`adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly this.
 
 The `iterate` CLI (`packages/cli`) takes the bearer from
-`APP_CONFIG_ADMIN_API_SECRET`, ahead of any stored login:
+`APP_CONFIG_ADMIN_API_SECRET`, ahead of `ITERATE_BEARER_TOKEN` and any stored
+login:
 
 ```bash
 # point a named CLI config at the local server once
@@ -222,9 +235,11 @@ Read them under `doppler run`, never into a shared channel.
 
 The deployment's two secrets give you three ways in:
 
-1. **API**: an operator session with the bearer (above), or a user's OAuth
-   access token as `Authorization: Bearer <token>` on the one resource it was
-   issued for: `/api` (and the projects' hosts) or `/mcp`.
+1. **API**: an operator session with the bearer on `/api` (above); a person's
+   personal access token as `Authorization: Bearer <token>` on `/api`, `/mcp`
+   and the hosts of the projects it covers; or an app's OAuth access token on
+   the one resource it was issued for: `/api` (and the projects' hosts) or
+   `/mcp`.
 2. **Browser**: `POST /login` with an email and the deployment's password —
    the sign-in page's own form post — sets the issuer session cookie.
    `issuerCookie` in `apps/os/e2e/support/principal.ts` does this for tests;
@@ -295,11 +310,22 @@ The `os-phone` project covers the platform's own pages at phone width.
 
 ### Minting in production
 
-The same mechanism works against **production**: you can open an operator
-session on `https://os.iterate.com` to poke around in prd. Production sets no
-`login.password`: its people sign in with Google, Cloudflare or the mailed code,
-each of which proves the email, and only as an address `login.allowedEmails`
-names. The operator bearer's `as` acts as a chosen user instead.
+For your own projects in **production**, mint yourself a personal access token
+and use it like any key:
+
+```bash
+# signs you in in the browser with the `account` scope for this one call
+pnpm exec iterate --config prd tokens create --name debugging --project <slug>
+ITERATE_BEARER_TOKEN=itk_… pnpm exec iterate --config prd \
+  itx run --project <slug> --eval 'return await itx.whoami();'
+```
+
+(https://dash.iterate.com's Sessions page mints the same key.) For a project you
+are not a member of, the same mechanism works with an operator session on
+`https://os.iterate.com`. Production sets no `login.password`: its people sign
+in with Google, Cloudflare or the mailed code, each of which proves the email,
+and only as an address `login.allowedEmails` names. The operator bearer's `as`
+acts as a chosen user instead.
 
 ```bash
 # an operator session against production (reaches every project); the bearer is
@@ -313,7 +339,7 @@ Production's operator bearer is a **master key**: anyone holding
 as any user. Every run is attributed on the project's root log to the
 principal that made it, but the bearer's principal is the operator, not a
 person. Guard those Doppler values like any production secret, and prefer a
-scoped identity (a real user's OAuth grant) when you can.
+scoped identity (your own login or personal access token) when you can.
 
 Each environment (local dev, the preview parent, prd) has its own
 `secrets.key`, bearer and password, so a leak is scoped to one environment;

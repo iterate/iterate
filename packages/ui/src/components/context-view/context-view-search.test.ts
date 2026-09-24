@@ -8,7 +8,7 @@ test("a valid search parses as is", () => {
     ContextViewState.parse({
       mode: "raw",
       q: "grant",
-      types: ["events.iterate.com/account/grant-minted"],
+      types: ["events.iterate.com/account/personal-access-token-minted"],
       actor: "user_1",
       event: 12,
       processors: true,
@@ -17,7 +17,7 @@ test("a valid search parses as is", () => {
   ).toEqual({
     mode: "raw",
     q: "grant",
-    types: ["events.iterate.com/account/grant-minted"],
+    types: ["events.iterate.com/account/personal-access-token-minted"],
     actor: "user_1",
     event: 12,
     processors: true,

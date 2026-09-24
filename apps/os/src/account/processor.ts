@@ -27,17 +27,16 @@ export class AccountProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/account/authenticated":
         return { ...state, authentications: [...state.authentications, event.payload] };
-      case "events.iterate.com/account/grant-minted": {
-        const { grantId, ...token } = event.payload;
-        if (state.personalAccessTokens[grantId]) return undefined; // minted once
-        // Both facts are published after the fact, in whatever order they land: an end already
-        // recorded closes the row as it is born.
-        const endedAt = state.endedGrants[grantId]?.at ?? null;
+      case "events.iterate.com/account/personal-access-token-minted": {
+        const { id, ...key } = event.payload;
+        if (state.personalAccessTokens[id]) return undefined; // minted once
+        // An end already recorded under the id closes the key as it is born.
+        const endedAt = state.endedGrants[id]?.at ?? null;
         return {
           ...state,
           personalAccessTokens: {
             ...state.personalAccessTokens,
-            [grantId]: { ...token, mintedAt: event.createdAt, endedAt },
+            [id]: { ...key, mintedAt: event.createdAt, endedAt },
           },
         };
       }
