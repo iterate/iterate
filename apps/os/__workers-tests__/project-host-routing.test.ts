@@ -191,7 +191,12 @@ function fakeCloudflareCustomHostnames() {
     const url = new URL(request.url);
     if (url.hostname !== "api.cloudflare.com") return through(request);
     const ok = (result: unknown) => Response.json({ success: true, result });
-    const entry = (hostname: string) => ({ id: `ch-${hostname}`, hostname, status: "pending" });
+    const entry = (hostname: string) => ({
+      id: `ch-${hostname}`,
+      hostname,
+      status: "pending",
+      ssl: { wildcard: true },
+    });
     if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-saas" }]);
     if (request.method === "POST") {
       const { hostname } = (await request.json()) as { hostname: string };
