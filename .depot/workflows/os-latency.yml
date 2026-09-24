@@ -46,7 +46,7 @@ on:
       - apps/os/**
       - "!apps/os/*.md"
       - "!apps/os/docs/**"
-      - configs-next/**
+      - configs/**
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**
