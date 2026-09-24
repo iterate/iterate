@@ -1,7 +1,7 @@
 // app-server.ts — THE BROWSER-AUTH GATE every app worker runs first: the OAuth client (one CIMD
 // client id per app origin, PKCE, the `__Host-` cookie), the `/api` proxy, and the few pages the gate
 // serves itself. A browser session is an ordinary OAuth client of ONE issuer — by default the
-// deployment's own (`config.issuer`), or any os-next issuer a person CONNECTS the app to on purpose (a
+// deployment's own (`config.issuer`), or any Iterate issuer a person CONNECTS the app to on purpose (a
 // self-hosted platform). Connecting is deliberate: a same-origin POST from `/.auth/connect`, a page
 // that names the issuer and asks — never a link, because a link would be a forced login: it could
 // bind a browser to an issuer of the linker's choosing, and the app would then show that issuer's
@@ -572,7 +572,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (!token && request.method !== "OPTIONS") {
       // THE COOKIE'S AUTHORITY IS SAME-ORIGIN ONLY (CSRF): a page on another origin that happens to
       // carry this app's cookie gets nothing from it — its request goes on BARE, and a WebSocket then
-      // authenticates in-band with its own token, `authenticate({ type: "bearer", token })` (os-next
+      // authenticates in-band with its own token, `authenticate({ type: "bearer", token })` (apps/os
       // api.ts), or holds no session at all.
       const bearer =
         session && request.headers.get("origin") === url.origin ? await session.bearer() : null;

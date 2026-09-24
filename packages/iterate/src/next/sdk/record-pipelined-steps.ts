@@ -1,8 +1,27 @@
-// sdk/record-pipelined-steps.ts — the one thing `StreamProcessorDurableObject.withItx` needs to RELEASE
-// a Workers-RPC round trip completely: every call it made, not only the last. No workerd import, so
+// sdk/record-pipelined-steps.ts — what the SDK's hosts (`StreamProcessorDurableObject.withItx`,
+// `ConfigWorker.processEventBatch`) need to RELEASE a Workers-RPC round trip completely: every call it
+// made, not only the last. No workerd import, so
 // the unit tests run it in node (record-pipelined-steps.test.ts); on native RpcPromises it is proven by
-// every os-next e2e row that reaches a facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts
+// every apps/os e2e row that reaches a facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts
 // ("… does not outlive …": a facet that kept one value from its context stayed running, billed).
+
+import { releaseRpcSessions } from "../lib.ts";
+
+/** ONE round trip on `entrypoint.get()`, then RELEASE EVERYTHING IT REACHED: the scope and every call
+ *  `call` made through it, the last first. A release that throws is reported and the rest still run
+ *  (lib.ts `releaseRpcSessions`), so the call's answer stands. */
+export async function callReleasing<Scope, T>(
+  entrypoint: { get(): Scope },
+  call: (itx: Scope) => T,
+): Promise<Awaited<T>> {
+  const steps: unknown[] = [];
+  const itx = entrypoint.get();
+  try {
+    return await call(recordPipelinedSteps(itx, steps));
+  } finally {
+    releaseRpcSessions([itx, ...steps]);
+  }
+}
 
 /** `stub` as the caller sees it, except that every CALL made through it — at any depth, on the stub or
  *  on a call's result — is pushed onto `steps`, so the caller can dispose each one: a Workers-RPC

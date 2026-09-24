@@ -717,7 +717,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     const deviceInventory = await consoleLogin.root.grants.list();
     expect(deviceInventory.items.find((item) => item.id === firstDeviceId)).toMatchObject({
       name: "Kit HAVPE",
-      kind: "Device",
+      kind: "device",
       clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
       logoUri: "https://kit.test/vendors/home-assistant.png",
     });
@@ -752,7 +752,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     const [, personalId] = personal.token.split(":");
     expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({
       name: "My CLI",
-      kind: "Personal access token",
+      kind: "personal",
       current: false,
     });
     expect(JSON.stringify(inventory)).not.toContain(personal.token);

@@ -6,6 +6,7 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
+import type { GrantKind } from "iterate/next/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -29,6 +30,13 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { AllowAccount } from "../../components/allow-account.tsx";
+
+const GRANT_KIND_LABELS: Record<GrantKind, string> = {
+  pending: "Pending sign-in",
+  device: "Device",
+  personal: "Personal access token",
+  session: "Session",
+};
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: z.object({ cursor: z.string().optional().catch(undefined) }),
@@ -166,7 +174,7 @@ function SessionsPage() {
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>{item.kind}</TableCell>
+                <TableCell>{GRANT_KIND_LABELS[item.kind]}</TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
                 </TableCell>
@@ -195,7 +203,7 @@ function SessionsPage() {
                   >
                     {item.expired
                       ? "Remove"
-                      : item.kind === "Personal access token" || item.kind === "Device"
+                      : item.kind === "personal" || item.kind === "device"
                         ? "Revoke"
                         : "Log out"}
                   </Button>

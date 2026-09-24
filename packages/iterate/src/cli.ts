@@ -9,7 +9,7 @@ import * as prompts from "@clack/prompts";
 import { os } from "@orpc/server";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import { connectOsNext } from "./next-node.ts";
+import { connectIterate } from "./next-node.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import type { SessionCredentials } from "./next/api.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
@@ -138,14 +138,14 @@ const credentialsForConfig = async (config: Config, name: string): Promise<Sessi
 };
 const connectConfigured = async () => {
   const resolved = resolveConfig(process.cwd(), { throw: true });
-  const connection = await connectOsNext({
+  const connection = await connectIterate({
     baseUrl: resolved.config.osBaseUrl,
     auth: await credentialsForConfig(resolved.config, resolved.name),
   });
   return { resolved, connection };
 };
 const selectProject = async (
-  connection: Awaited<ReturnType<typeof connectOsNext>>,
+  connection: Awaited<ReturnType<typeof connectIterate>>,
   configured?: string,
 ) => {
   if (configured) return configured;
@@ -480,7 +480,7 @@ const loginToResolvedConfig = async (resolved: { name: string; config: Config })
   // Update in-memory config so subsequent verification and calls see the token.
   config.session = oauthResult;
 
-  using connection = await connectOsNext({
+  using connection = await connectIterate({
     baseUrl: config.osBaseUrl,
     auth: { type: "bearer", token: oauthResult.token },
   });
@@ -494,11 +494,11 @@ const launcherProcedures = {
   ping: os.input(z.object({})).handler(async () => {
     const { connection } = await connectConfigured();
     using owned = connection;
-    return { message: "OS Next session valid", principal: await owned.session.whoami() };
+    return { message: "Iterate session valid", principal: await owned.session.whoami() };
   }),
   login: os
     .input(z.object({}))
-    .meta({ description: "Authenticate with OS Next via browser OAuth" })
+    .meta({ description: "Authenticate with Iterate via browser OAuth" })
     .handler(async () => {
       const session = await loginToResolvedConfig(resolveConfig(process.cwd(), { throw: true }));
       return {
@@ -595,7 +595,7 @@ const launcherProcedures = {
             "Specify exactly one of --eval or --file",
           ),
       )
-      .meta({ description: "Run an itx script once on OS Next" })
+      .meta({ description: "Run an itx script once on Iterate" })
       .handler(async ({ input }) => {
         let script = input.eval;
         if (input.file === "-") {
@@ -780,7 +780,7 @@ const getCli = async () => {
   const cli = createCli({
     router: launcherProcedures,
     name: "iterate",
-    description: "Iterate CLI for OS Next. Run itx scripts, authenticate, and share your computer.",
+    description: "Iterate CLI. Run itx scripts, authenticate, and share your computer.",
   });
   return {
     cli,

@@ -1,6 +1,6 @@
-// next/api.ts — THE API AN APP DIALS: the shapes of os-next's `/api` root, the session it vends and a
+// next/api.ts — THE API AN APP DIALS: the shapes of apps/os's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
-// platform's classes: os-next asserts that `IterateRpcTarget` satisfies `IterateApi` and that
+// platform's classes: apps/os asserts that `IterateRpcTarget` satisfies `IterateApi` and that
 // `IterateContextRpcTarget` satisfies `IterateContextApi` (src/session.ts, src/iterate-context.ts),
 // so an app built against this package types against exactly what the deployment answers. A context
 // has ONE method — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the
@@ -38,8 +38,8 @@ export type WaitForEventFilter = {
   timeoutMs?: number;
 };
 
-/** The `rewrite-rule-configured` event's payload — what `provide` takes, what `itx.append` writes
- *  durably: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
+/** The `rewrite-rule-configured` event's payload — what `itx.append` writes durably and `provide`
+ *  writes for its session: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
  *  line a model reads for the name; it rides the row into `rewriteRules.list()`. */
 export type RewriteRuleConfigured = {
   match: ItxExpressionInput;
@@ -84,8 +84,8 @@ export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
 /** A secret's material: one string (`getSecret("/secrets/<name>")` is the whole value) or a JSON
  *  object whose string fields `getSecret("/secrets/<name>", { field: "a.b" })` picks — the
  *  multidimensional shape a credential exchange needs (`{ username, password, accessToken }`,
- *  `{ clientId, clientSecret, refreshToken, accessToken }`). A JSON STRING still works as an object
- *  (`set(name, JSON.stringify({...}))`). */
+ *  `{ clientId, clientSecret, refreshToken, accessToken }`). A string is always the one value: it has
+ *  no fields, whether or not it parses as JSON. */
 export type SecretMaterial = string | Record<string, unknown>;
 
 /** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`
@@ -225,6 +225,8 @@ export interface IterateContextApi {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
   };
+  /** The rpc stubs lent to this context right now, by key (a live session's `provide`). */
+  rpcStubs: { list(): string[] };
   processors: {
     enable(
       name: string,
@@ -252,14 +254,15 @@ export interface IterateContextApi {
     consumes?: string[];
     afterOffset?: number;
   }): Promise<{ [Symbol.dispose](): void }>;
-  /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): the event's
-   *  payload `{ match, target, description? }`, or the shorthand `(match, target)`. `target` is an
-   *  expression, or null to deny. The durable spelling is the same payload through `itx.append`. */
-  provide(input: RewriteRuleConfigured): Promise<{ [Symbol.dispose](): void }>;
+  /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
+   *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a
+   *  model reads for the name. The durable spelling is the rule's event (`RewriteRuleConfigured`)
+   *  through `itx.append`. */
   provide(
     match: ItxExpressionInput,
     // Expressions, null, or live RPC references (RpcTarget / callable), serialized by capnweb.
     target: unknown,
+    options?: { description?: string },
   ): Promise<{ [Symbol.dispose](): void }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
@@ -305,6 +308,10 @@ export interface IterateContextApi {
   };
 }
 
+/** What a grant is: a sign-in not yet exchanged, a device's token, a personal access token, or a
+ *  browser or app session. A client labels it for display. */
+export type GrantKind = "pending" | "device" | "personal" | "session";
+
 /** One OAuth grant as `grants.list()` shows it: a session, a connected app, a minted token. */
 export interface GrantRecord {
   id: string;
@@ -312,7 +319,7 @@ export interface GrantRecord {
   logoUri?: string;
   clientDomain?: string;
   name: string;
-  kind: string;
+  kind: GrantKind;
   createdAt: number;
   expiresAt: number | null;
   lastUsedAt: number | null;
@@ -397,7 +404,8 @@ export interface IterateSessionApi {
     list(): Promise<ProjectRecord[]>;
     /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
-    /** Config repository presets available on this platform. */
+    /** Config repository presets available on this platform, besides the default config a
+     *  creation that names no template gets. */
     templates(): Promise<{ label: string; reference: string }[]>;
     /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
      *  context's `whoami()` says it, so does `list()` */

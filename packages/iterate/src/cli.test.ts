@@ -8,7 +8,7 @@ import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
 import { oauthResourceForOsBaseUrl, refreshOAuthSession } from "./cli.ts";
-import { connectOsNext } from "./next-node.ts";
+import { connectIterate } from "./next-node.ts";
 import { Config } from "./config.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
@@ -53,13 +53,13 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
   }
 });
 
-test("OAuth uses OS Next's API audience including the local port", () => {
+test("OAuth uses the platform's API audience including the local port", () => {
   expect(Config.parse({}).osBaseUrl).toBe("https://os.iterate.com");
   expect(oauthResourceForOsBaseUrl("http://localhost:54896/")).toBe("http://localhost:54896/api");
   expect(oauthResourceForOsBaseUrl("https://os.iterate.com")).toBe("https://os.iterate.com/api");
 });
 
-test("refresh goes to the same OS Next issuer and rejects malformed tokens", async () => {
+test("refresh goes to the same issuer and rejects malformed tokens", async () => {
   const fetch = vi
     .fn()
     .mockResolvedValue(
@@ -85,7 +85,7 @@ test("refresh goes to the same OS Next issuer and rejects malformed tokens", asy
 });
 
 test(
-  "CLI authenticates and runs inline/file/stdin scripts exactly once over the OS Next protocol",
+  "CLI authenticates and runs inline/file/stdin scripts exactly once over the platform protocol",
   { timeout: 30_000 },
   async () => {
     const calls: unknown[] = [];
@@ -255,7 +255,7 @@ test("failed authentication releases the websocket", async () => {
   if (typeof address === "string" || !address) throw new Error("No port");
   try {
     await expect(
-      connectOsNext({
+      connectIterate({
         baseUrl: `http://localhost:${address.port}`,
         auth: { type: "bearer", token: "bad" },
       }),
@@ -351,11 +351,11 @@ test("an authentication timeout closes the transport without an unhandled RPC re
   if (typeof address === "string" || !address) throw new Error("No port");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    const pending = connectOsNext({
+    const pending = connectIterate({
       baseUrl: `http://localhost:${address.port}`,
       auth: { type: "bearer", token: "stalled" },
     });
-    const rejected = expect(pending).rejects.toThrow("OS Next authentication: no answer in 20s");
+    const rejected = expect(pending).rejects.toThrow("Iterate authentication: no answer in 20s");
     await entered.promise;
     await vi.advanceTimersByTimeAsync(20_000);
     await rejected;
@@ -414,9 +414,9 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No port");
   const source = `
-    import { connectOsNext } from ${JSON.stringify(new URL("./next-node.ts", import.meta.url).href)};
+    import { connectIterate } from ${JSON.stringify(new URL("./next-node.ts", import.meta.url).href)};
     import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
-    using connection = await connectOsNext({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
+    using connection = await connectIterate({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
     await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });
   `;
   try {

@@ -285,7 +285,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const error = connectError || logError;
   const live = useLiveState<unknown>(context, {
     key: "agent",
-    door: async () =>
+    readSeed: async () =>
       z
         .object({ rev: z.number(), state: z.unknown() })
         .parse(await context!.invoke("itx.facets.get('agent').liveSnapshot()")),

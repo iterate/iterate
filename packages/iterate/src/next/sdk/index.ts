@@ -3,7 +3,7 @@
 //
 //   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 //
-// The workerd HOSTS live here too (this file imports cloudflare:workers; the node lane never imports it):
+// The workerd HOSTS live here too (this file imports cloudflare:workers; the Node unit tests never import it):
 //   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
 //                                  the methods a caller reaches by itx expression (`publicMethods`)
 //   StreamProcessorDurableObject — the facet shell that hosts ONE `StreamProcessor`
@@ -20,17 +20,20 @@ import {
   type StreamEventInput,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
-import { recordPipelinedSteps } from "./record-pipelined-steps.ts";
-export { auth };
+import { callReleasing } from "./record-pipelined-steps.ts";
 export {
+  // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
+  // `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
+  // cannot await — then `set` to mutate and `snapshot()` as the client's seed read (stream/processor.ts).
+  LiveState,
   StreamProcessor,
   defineProcessorContract,
-  jsonEqual,
   type ConsumedEvent,
   type EventCatalog,
   type EventDefinition,
   type EmittedEventInput,
   type EventInput,
+  type LiveStateSink,
   type ProcessorContract,
   type ProcessorState,
   type ProcessorStream,
@@ -48,11 +51,7 @@ export { z } from "zod";
 // to hold across calls, and a one-shot POST is the honest shape (the lint rule targets long-lived workers).
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
-export { applyPatch, diff, type PatchOp } from "../lib.ts";
-export { LiveState, type LiveStateSink } from "../stream/processor.ts";
-// LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
-// `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
-// cannot await — then `set` to mutate and `snapshot()` as the client seed door (stream/processor.ts).
+export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -111,7 +110,7 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
 }
 
 /** The itx scope as `env.ITX.get()` hands it over: a context's declared API (api.ts) — a capnweb stub
- *  of os-next's `IterateContextRpcTarget`, which satisfies it. */
+ *  of apps/os's `IterateContextRpcTarget`, which satisfies it. */
 export type ItxScope = IterateContextApi;
 /** What hands the scope over: the loopback entrypoint a loaded worker has as `env.ITX`, or the one a
  *  class of the platform's own worker mints from `ctx.exports`. */
@@ -186,7 +185,7 @@ export abstract class StreamProcessorDurableObject<
   snapshot(): Promise<{ offset: number; state: State }> {
     return this.#engine.snapshot();
   }
-  /** The live-state seed door: `{ rev, state: projectLiveState(reduced) }`. */
+  /** The live-state seed read: `{ rev, state: projectLiveState(reduced) }`. */
   liveSnapshot(): Promise<{ rev: number; state: unknown }> {
     return this.#engine.liveSnapshot();
   }
@@ -248,24 +247,14 @@ export abstract class StreamProcessorDurableObject<
    *  `invoke` cannot end this from its side: the facet holds the value (context-residency.e2e.test.ts,
    *  "… does not outlive …"). Protected: a host with methods of its own (the workspace,
    *  src/workspace/durable-object.ts) reaches its context the same way. */
-  protected async withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
-    const steps: unknown[] = [];
-    const itx = this.#itxEntrypoint().get();
-    try {
-      return await call(recordPipelinedSteps(itx, steps));
-    } finally {
-      // A step is whatever a call answered — a Workers-RPC promise (disposable), or a void call's undefined.
-      for (const step of steps.reverse())
-        (step as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
+  protected withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
+    return callReleasing(this.#itxEntrypoint(), call);
   }
 }
 
 // ConfigWorker is a stateless event handler loaded with an explicit workers.get spec.
 // Subscribe its processEventBatch method explicitly; fetch routing is configured separately.
-export type ConfigWorkerItx = ItxScope;
-export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ConfigWorkerItx };
+export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ItxScope };
 
 export abstract class ConfigWorker<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
@@ -274,14 +263,17 @@ export abstract class ConfigWorker<
   protected readonly auth = auth;
   /** Process an explicitly subscribed batch with this worker's context scope. */
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    const itx = this.env.ITX.get();
-    try {
+    await this.withItx(async (itx) => {
       for (const event of events) {
         await this.processEvent({ event, range, itx });
       }
-    } finally {
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
+    });
+  }
+
+  /** ONE round trip on the itx scope, then release the scope and every call made through it
+   *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). */
+  protected withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
+    return callReleasing(this.env.ITX, call);
   }
 
   /** THE AUTHOR HOOK — one event at a time, in offset order. Append reactions through the itx scope;

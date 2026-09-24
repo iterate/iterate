@@ -226,7 +226,7 @@ export interface BuiltInScope extends LibraryRoots {
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
     /** VERIFY — a webhook's signature checked against a secret WITHOUT revealing it: is
      *  `signature` (hex, either case) the HMAC-SHA256 of `payload` (a string is its UTF-8 bytes)
-     *  under the secret's material — the whole value, or the string at `field` of a JSON value?
+     *  under the secret's material — the whole value, or the string at `field` of an object material?
      *  Runs in the secret's facet on its own context; one bit comes back. Constant-time, and a
      *  secret never set (or a material with no key at the field) answers false, never a description
      *  — the candidate comes from an unauthenticated request. The caller assembles the signed bytes the

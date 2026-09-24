@@ -17,7 +17,7 @@ import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router"
 import { Plus } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
-import type { SecretCatalogEntry } from "iterate/next/api";
+import type { SecretCatalogEntry, SecretMaterial } from "iterate/next/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -314,6 +314,22 @@ function ProjectSecrets() {
   );
 }
 
+/** The typed value as material: text that parses as a JSON object is that object (its fields are
+ *  what `{ field }` picks); anything else is the one string, as typed. The platform never parses a
+ *  string (iterate/next/api `SecretMaterial`), so this form is where pasted JSON becomes fields. */
+function secretMaterialOf(value: string): SecretMaterial {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return value;
+  }
+  // JSON.parse answers any JSON value; only an object (not null, an array, a number) has fields.
+  return parsed instanceof Object && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : value;
+}
+
 /** The sheet's body: the name, the value and the pin — one `secrets.set`. On an existing row
  *  (`updating`) the name is locked and the pin pre-filled; the value is always typed here. */
 function SecretForm({
@@ -373,7 +389,9 @@ function SecretForm({
         setError("This collection link is for a different Iterate instance or project.");
         return;
       }
-      await api.projects.get(projectId).secrets.set(path, value, { urls: origins });
+      await api.projects.get(projectId).secrets.set(path, secretMaterialOf(value), {
+        urls: origins,
+      });
       let notification = "";
       if (requestingAgent) {
         try {

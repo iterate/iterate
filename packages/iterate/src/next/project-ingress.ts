@@ -1,5 +1,5 @@
 // next/project-ingress.ts — HOW PROJECTS ARE REACHED OVER HTTP, both directions in ONE pure file. A
-// deployment's `urls.ingressRouting` (os-next app-config.ts) names the mechanism; `projectAddressOf`
+// deployment's `urls.ingressRouting` (apps/os app-config.ts) names the mechanism; `projectAddressOf`
 // parses a request's URL into the project and app it names, `projectUrlOf` composes the URL of an
 // app in a project. The platform's edge parses; the platform, the dash and an app compose — one
 // implementation, table-tested to round-trip (project-ingress.test.ts). No imports.
@@ -67,7 +67,7 @@ export function projectAddressOf(
   return { app, project, basePath: `/projects/${project}/${app}` };
 }
 
-/** A CUSTOM HOSTNAME — one of a deployment's own that IS a project's apex (os-next
+/** A CUSTOM HOSTNAME — one of a deployment's own that IS a project's apex (apps/os
  *  `urls.temporaryCustomHostnames`, `{ "iterate.com": "iterate" }`): the apex shape, `app: null`, so the
  *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for a
  *  hostname the map does not name, unless the optional first-level wildcard names a project.

@@ -135,7 +135,7 @@ function Editor({
   const context = useProjectContext(api, project);
   const live = useLiveState<unknown>(context, {
     key: "project",
-    door: async () =>
+    readSeed: async () =>
       z
         .object({ rev: z.number(), state: z.unknown() })
         .parse(await context!.invoke("itx.facets.get('project').liveSnapshot()")),

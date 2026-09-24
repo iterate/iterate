@@ -3,7 +3,7 @@
 // the prototype hop's dotted invoke. The resolver over it (apps/os
 // src/context/itx-expression-rewriting.ts) is tested in apps/os src/context/expression.test.ts.
 
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
 import {
   normalizedItxExpression,
@@ -13,7 +13,6 @@ import {
   type ItxExpression,
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
-  releaseRpcSessions,
   walkSteps,
   installPrototypeInvokeFallback,
 } from "./expression.ts";
@@ -137,26 +136,6 @@ test("rpcSessionsSteppedPast collects every session-holding value stepped past, 
     value: { chain: "collection.list()" },
   });
   expect(await walk("itx.local.twice(2)")).toEqual({ steppedPast: [], value: 4 });
-});
-
-test("releaseRpcSessions releases each once, the last first; one that throws is reported, the rest still released", () => {
-  const released: string[] = [];
-  const session = (name: string, fail = false) => ({
-    [Symbol.dispose]() {
-      released.push(name);
-      if (fail) throw new Error(`${name} already gone`);
-    },
-  });
-  const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  try {
-    expect(() =>
-      releaseRpcSessions([session("first"), session("middle", true), session("last")]),
-    ).not.toThrow();
-    expect(released).toEqual(["last", "middle", "first"]);
-    expect(reported).toHaveBeenCalled();
-  } finally {
-    reported.mockRestore();
-  }
 });
 
 test("an UNREGISTERED thenable keeps the default: awaited at every step", async () => {

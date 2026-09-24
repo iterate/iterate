@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { newHttpBatchRpcSession } from "capnweb";
-import { connectOsNext } from "iterate/next/node";
+import { connectIterate } from "iterate/next/node";
 import { beforeAll, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { MyComputer } from "../../../packages/iterate/src/use-my-computer.ts";
@@ -111,7 +111,7 @@ test("computer provider is callable from another connection and released on disp
   expect,
 }) => {
   const projectId = freshCtx("cli-computer");
-  using connection = await connectOsNext({ baseUrl: workerUrl("/"), auth: adminCredentials() });
+  using connection = await connectIterate({ baseUrl: workerUrl("/"), auth: adminCredentials() });
   using project = await connection.session.projects.get(projectId);
   const provider = await project.provide("itx.myComputer", new MyComputer());
   const caller = openItx(projectId);

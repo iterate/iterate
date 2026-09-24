@@ -3,21 +3,21 @@ import WebSocket from "ws";
 import type { IterateApi, SessionCredentials } from "./next/api.ts";
 import { withTimeout } from "./next/lib.ts";
 
-/** One OS Next connection. Dispose the owner to close every child capability and its socket.
+/** One connection to an Iterate deployment. Dispose the owner to close every child capability and its socket.
  * Operations are never retried: replaying a script could duplicate its effects. */
-export type OsNextConnection = Disposable & {
+export type IterateConnection = Disposable & {
   session: Awaited<ReturnType<RpcStub<IterateApi>["authenticate"]>>;
   closed: Promise<{ code: number; reason: string }>;
 };
 
 // Explicit return type keeps declaration emit from expanding capnweb's recursive mapped types.
-export async function connectOsNext(input: {
+export async function connectIterate(input: {
   baseUrl: string;
   auth: SessionCredentials;
-}): Promise<OsNextConnection> {
+}): Promise<IterateConnection> {
   const url = new URL("/api", input.baseUrl);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("OS Next URL must use http or https.");
+    throw new Error("Iterate URL must use http or https.");
   }
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url.href, { handshakeTimeout: 15_000 });
@@ -32,7 +32,7 @@ export async function connectOsNext(input: {
     const session = await withTimeout(
       root.authenticate(input.auth),
       20_000,
-      "OS Next authentication",
+      "Iterate authentication",
     );
     return {
       session,

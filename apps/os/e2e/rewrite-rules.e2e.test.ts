@@ -137,11 +137,7 @@ test("rewriteRules.list() is the EFFECTIVE table, DESCRIBED: every implicit row 
   });
   expect(before.every((row) => row.context === "/" && row.description)).toBe(true);
 
-  await itx.provide({
-    match: "itx.kv",
-    target: "itx.builtins.whoami",
-    description: "who, not what",
-  });
+  await itx.provide("itx.kv", "itx.builtins.whoami", { description: "who, not what" });
   const after = (await itx.rewriteRules.list()) as typeof before;
   expect(after.filter((row) => row.match === "itx.kv")).toEqual([
     { match: "itx.kv", target: "itx.builtins.whoami", description: "who, not what", context: "/" },

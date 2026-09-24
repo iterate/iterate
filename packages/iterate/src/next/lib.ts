@@ -1,7 +1,8 @@
 // lib.ts — the pure helpers every layer shares, one platform-neutral file (it rides the SDK bundle
-// and the node unit lane, so no cloudflare:workers here):
+// and the Node unit tests, so no cloudflare:workers here):
 //   errors  — `codedError` / `errorCode` / `reportIssue` / `forwardIssues`: THE machine-readable
 //             error channel
+//   release — `releaseRpcSessions`: dispose the Workers-RPC values a round trip reached
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
 //   timeout — `withTimeout`: a promise raced against a deadline (code TIMEOUT)
 //   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries;
@@ -33,10 +34,10 @@ type ErrorCode =
   | "STREAM_PAUSED"
   | "INVALID_CONTEXT" // a context name / project id the codec refuses (apps/os context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
-  | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
+  | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused on entry
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (os-next first-party-facet-placement.ts)
+  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (apps/os first-party-facet-placement.ts)
   | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that slug exists in another org
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
@@ -45,7 +46,7 @@ type ErrorCode =
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
-// (There is no separate boundary-validation library: the append door's own runtime guards
+// (There is no separate boundary-validation library: the append method's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 
 /** A plain Error carrying `code` (+ optional `data`) as own enumerable properties. */
@@ -122,6 +123,22 @@ export function reportIssue(
   } catch {
     // Reporting must never disturb the caller — swallow and move on.
   }
+}
+
+// ── release ── a Workers-RPC value (a stub, a call's promise) keeps its session, and the actor at
+// its far end, open until disposed.
+
+/** Release each of `rpcSessions`, the last first. The answer they served is already in, so a release
+ *  that throws is reported, never made the call's failure. */
+export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
+  for (const rpcSession of [...rpcSessions].reverse())
+    try {
+      // A session-brand value or an RPC result object carries a disposer; a void call's undefined
+      // answer, or a plain value, has nothing to release.
+      (rpcSession as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
+    } catch (error) {
+      reportIssue("itx-expression.release-rpc-session", error);
+    }
 }
 
 // ── patch ── the LiveView-style delta that rides every live-state change event. `diff` runs at
@@ -280,7 +297,7 @@ export async function withTimeout<T>(
 }
 
 // ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
-// `from-server-cookie`, the issuer's form posts in os-next issuer-pages.ts).
+// `from-server-cookie`, the issuer's form posts in apps/os issuer-pages.ts).
 
 /** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
  *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
@@ -300,7 +317,7 @@ export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "heade
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
  *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
- *  issuer's login redirect uses it too (os-next issuer-pages.ts). */
+ *  issuer's login redirect uses it too (apps/os issuer-pages.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);

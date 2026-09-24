@@ -1,7 +1,7 @@
 {
   "name": "iterate",
   "version": "0.3.0",
-  "description": "CLI and SDK for Iterate OS Next",
+  "description": "CLI and SDK for Iterate",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

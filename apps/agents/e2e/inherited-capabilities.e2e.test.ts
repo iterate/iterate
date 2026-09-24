@@ -8,11 +8,7 @@ import { openAgentItx } from "./support.ts";
 test("THE CHAIN: a subagent two levels down resolves a capability provided at the root through parent links, lists it with its description and origin, and births its own children relative to itself", async () => {
   const ctx = freshCtx("chain");
   const root = await openAgentItx(ctx);
-  await root.provide({
-    match: "itx.tool",
-    target: () => "hello-from-root",
-    description: "says hello",
-  });
+  await root.provide("itx.tool", () => "hello-from-root", { description: "says hello" });
   await root.agents.create("/agents/a");
   // /agents/a was linked to its creator (the root). An agent's scripts run in ITS SANDBOX
   // (`/agents/a/sandbox`, linked to the agent), so a script there that creates `./b` births

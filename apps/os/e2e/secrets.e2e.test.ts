@@ -2,7 +2,7 @@
 // SECRET IS ITS PATH: a domain object on the context at `/secrets/<name>` under the resource owner's
 // root (a project's `/`), hosted as the first-party facet `secret` — the value's one keeper — and the
 // path is what the placeholder spells: `getSecret("/secrets/<name>")`, and `getSecret("/secrets/<name>",
-// { field: "a.b" })` for one field of a JSON value. The verbs are path-keyed and run ON THE SECRET'S
+// { field: "a.b" })` for one field of an object. The verbs are path-keyed and run ON THE SECRET'S
 // OWN CONTEXT: `set(path, material, { urls, refresh? })`, `delete(path)`, `list()` (the owner root's
 // catalog — paths, pins, strategy kinds and when first set, never a value). Every change is ONE fact
 // that never carries the value — `events.iterate.com/secret/set { path, urls, refresh? }`,
@@ -213,10 +213,10 @@ test("the pin at egress: a secret is refused, 502, for any origin but its pinned
   expect(left.text).not.toContain("v\n");
 });
 
-test("`{ field }` in the egress placeholder: a field the JSON value has no string at, and a field of a non-JSON value, are 502s naming the placeholder; a path never set is a 502 too", async () => {
+test("`{ field }` in the egress placeholder: a field the object value has no string at, and a field of a string value, are 502s naming the placeholder; a path never set is a 502 too", async () => {
   const itx = openItx(freshCtx("secrets-field"));
   const urls = ["https://egress.invalid"];
-  await itx.secrets.set("/secrets/tg", JSON.stringify({ bot: { token: "123:abc" } }), { urls });
+  await itx.secrets.set("/secrets/tg", { bot: { token: "123:abc" } }, { urls });
   await itx.secrets.set("/secrets/plain", "p", { urls });
   const refusal = async (authorization: string): Promise<string> => {
     const res = await itx.fetch(
@@ -229,7 +229,7 @@ test("`{ field }` in the egress placeholder: a field the JSON value has no strin
     'no string at field "bot.nope"',
   );
   expect(await refusal('getSecret("/secrets/plain", { field: "x" })')).toContain(
-    "not a JSON value",
+    "one string, not an object",
   );
   // a path never set: its facet holds nothing, the placeholder finds nothing, the request never leaves
   expect(await refusal('Bearer getSecret("/secrets/never-set")')).toContain(
@@ -431,7 +431,7 @@ test("a set refused by a paused stream on the secret's path leaves no value behi
   expect(await res.text()).toContain('no stored project secret for getSecret("/secrets/ghost")');
 });
 
-test("verifyHmac: a webhook's HMAC-SHA256 hex signature is checked inside the secret's facet — true for the right key and signed bytes (a string or bytes, hex in either case, the whole material or one field of a JSON value), false for a tampered payload, a wrong signature, a wrong field or a secret never set; the same from loaded code through its creator's link; no fact and no value leaves the facet", async () => {
+test("verifyHmac: a webhook's HMAC-SHA256 hex signature is checked inside the secret's facet — true for the right key and signed bytes (a string or bytes, hex in either case, the whole material or one field of an object), false for a tampered payload, a wrong signature, a wrong field or a secret never set; the same from loaded code through its creator's link; no fact and no value leaves the facet", async () => {
   const itx = openItx(freshCtx("secrets-verify"));
   const urls = ["https://api.stripe.com"];
   await itx.secrets.set("/secrets/hook", "whsec_test_key", { urls });

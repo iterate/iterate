@@ -3,9 +3,9 @@
 // ephemeral event like any other. Live state is not a subscription MODE: a client subscribes to the
 // one event type (`consumes: ["events.iterate.com/live-state/changed"]`), receives every key's deltas
 // in ordinary event batches, and keeps its key. The client is THE SHIPPED ONE (src/client:
-// `connectLiveState` over `createLiveStateStore`): subscribe → read the producer's door {rev, state}
-// → apply payloads whose `from` matches the held rev, re-read the door on any mismatch. Proves: the
-// client loop converges byte-identical with the door, the steady path needs zero re-reads, revisions
+// `connectLiveState` over `createLiveStateStore`): subscribe → read the producer's seed {rev, state}
+// → apply payloads whose `from` matches the held rev, re-read the seed on any mismatch. Proves: the
+// client loop converges byte-identical with the seed, the steady path needs zero re-reads, revisions
 // chain exactly (mini-app AND processor flavors), out-of-order/duplicate frames are harmless, the
 // change events are unconsumable, REDUCED ⊕ RUNTIME state rides ONE projection through the same
 // store, and a malformed delta is the subscriber's to skip — never a rejected append.
@@ -29,7 +29,7 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
  *  notifies — too); `reseeds` is the client's `onResync("healed")` count. */
 async function watchedLiveState<S>(
   itx: any,
-  input: { key: string; name: string; door: () => Promise<LiveStateSeed<S>> },
+  input: { key: string; name: string; readSeed: () => Promise<LiveStateSeed<S>> },
 ) {
   const frames: LiveStateDelta[] = [];
   const counts = { reseeds: 0, notifications: 0 };
@@ -70,7 +70,7 @@ async function watchedLiveState<S>(
   };
 }
 
-test("live state chains client-side from the door — mini-app + processor flavors", async () => {
+test("live state chains client-side from the seed — mini-app + processor flavors", async () => {
   const itx = openItx(freshCtx("live"));
 
   // ── mini-app flavor: the chatroom (SDK LiveState helper), behind the rewrite rule itx.chat ──
@@ -83,7 +83,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   const chat = await watchedLiveState<{ messages: { text: string }[] }>(itx, {
     key: "chat",
     name: "chatwatch",
-    door: async () => clone(await itx.invoke("itx.chat.state()")),
+    readSeed: async () => clone(await itx.invoke("itx.chat.state()")),
   });
   const chatSeedRev = chat.store.rev()!; // an incarnation EPOCH, not 0 — reborn holders never re-use old revs
   expect(typeof chatSeedRev).toBe("number");
@@ -98,10 +98,10 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(chat.store.rev()).toBe(chatSeedRev + 2);
   expect(chat.store.get()!.messages[1].text).toBe("again");
 
-  const door = clone(await itx.invoke("itx.chat.state()")) as { rev: number; state: unknown };
-  // door and patched client doc are byte-identical
-  expect(door.rev).toBe(chat.store.rev());
-  expect(JSON.stringify(door.state)).toBe(JSON.stringify(chat.store.get()));
+  const seed = clone(await itx.invoke("itx.chat.state()")) as { rev: number; state: unknown };
+  // seed and patched client doc are byte-identical
+  expect(seed).toMatchObject({ rev: chat.store.rev() });
+  expect(JSON.stringify(seed.state)).toBe(JSON.stringify(chat.store.get()));
 
   // out-of-order / duplicate frames are harmless: replay an old payload, then a gapped one
   chat.inject(clone(chat.frames[0]!)); // replay a real old frame — at-or-behind the held rev
@@ -111,12 +111,12 @@ test("live state chains client-side from the door — mini-app + processor flavo
   const rev = chat.store.rev()!;
   chat.inject({ key: "chat", from: rev + 5, to: rev + 6, patch: [] });
   await until("gap healed", () => chat.reseeds >= 1);
-  // a gapped frame triggers one door re-read and converges
-  expect(JSON.stringify(chat.store.get())).toBe(JSON.stringify(door.state));
+  // a gapped frame triggers one seed re-read and converges
+  expect(JSON.stringify(chat.store.get())).toBe(JSON.stringify(seed.state));
   expect(chat.store.rev()).toBe(chatSeedRev + 2);
   expect(chat.applied).toBe(2);
 
-  // ── processor flavor: chunky's reduce, door = liveSnapshot() ──
+  // ── processor flavor: chunky's reduce, seed = liveSnapshot() ──
   await itx.processors.enable("chunky", {
     source: SOURCES.chunky,
     className: "ChunkyDurableObject",
@@ -124,7 +124,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   const proc = await watchedLiveState<{ marks: number; chunks: number }>(itx, {
     key: "chunky",
     name: "chunkywatch",
-    door: async () => clone(await itx.invoke("itx.facets.get('chunky').liveSnapshot()")),
+    readSeed: async () => clone(await itx.invoke("itx.facets.get('chunky').liveSnapshot()")),
   });
   const seedRev = proc.store.rev()!;
   expect(typeof seedRev).toBe("number");
@@ -155,24 +155,24 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // PresenceProcessor's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
   // consumes rule (absent = durable events only; naming a type opts its ephemerals in) sits in
   // front of the facet's own contract filter — hence `consumes` on the enable. The facet is
-  // materialized at enable time whatever the filter says (subscription-delivery.ts), so the door
-  // answers before the first consumed event.
+  // materialized at enable time whatever the filter says (subscription-delivery.ts), so its
+  // `liveSnapshot()` answers before the first consumed event.
   await itx.processors.enable("presence", {
     source: SOURCES.presence,
     className: "PresenceDurableObject",
     consumes: ["tick", "poke"],
   });
 
-  const door = async (): Promise<{ rev: number; state: PresenceLive }> =>
+  const readSeed = async (): Promise<{ rev: number; state: PresenceLive }> =>
     clone(await itx.invoke("itx.facets.get('presence').liveSnapshot()"));
 
   const { store } = await connectLiveState<PresenceLive>(itx, {
     key: "presence",
     name: "watch",
-    door,
+    readSeed,
   });
 
-  // Seed: reduced 0 ticks, runtime lastPokeMs 0 — the whole projection, read atomically through the door.
+  // Seed: reduced 0 ticks, runtime lastPokeMs 0 — the whole projection, read atomically by `liveSnapshot()`.
   expect(store.get()).toEqual({ ticks: 0, lastPokeMs: 0 });
 
   // REDUCED change: a durable 'tick' advances the reduce → one delta syncs `ticks`; runtime untouched.
@@ -186,8 +186,8 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   await until("poke synced", () => (store.get()?.lastPokeMs ?? 0) > 0);
   expect(store.get()!.ticks).toBe(1);
 
-  // Both fields ride ONE chain: the producer's door and the patched client doc agree byte-for-byte.
-  const seed = await door();
+  // Both fields ride ONE chain: the producer's seed and the patched client doc agree byte-for-byte.
+  const seed = await readSeed();
   expect(store.get()).toEqual(seed.state);
   expect(store.rev()).toBe(seed.rev);
 

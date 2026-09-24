@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Iterate — a small macOS menu-bar app. Today it's the human-in-the-loop
-// companion for sign-in and computer sharing on OS Next.
+// companion for sign-in and computer sharing on Iterate.
 // The legacy approval watcher and UI remain dormant.
 //
 // A thin shell over `iterate ping`, `iterate login`, and
 // `iterate use-my-computer --json`. The CLI owns authentication and transport.
-// Legacy approval models are retained below but are not started on OS Next.
+// Legacy approval models are retained below but are not started.
 //
 // Single file, compiled with swiftc and wrapped in a minimal .app bundle by
 // build-menubar-app.sh — no Xcode project, no asset catalog: the 𝑖 icon is
@@ -106,7 +106,7 @@ final class ApprovalController: ObservableObject {
     start()
   }
 
-  // OS Next has no approval transport. Keep the legacy watcher below dormant;
+  // The platform has no approval transport. Keep the legacy watcher below dormant;
   // use a bounded CLI authentication check for the menu bar's sign-in state.
   func start() {
     stop()
@@ -333,7 +333,7 @@ final class ApprovalController: ObservableObject {
         ruleKey: event["ruleKey"] as? String ?? "",
         body: bodyContent
       )
-      // A backlog batch that already has a decision is shown awaiting the door
+      // A backlog batch that already has a decision is shown awaiting the platform
       // (spinner), not as a fresh Approve prompt.
       request.submitting = event["submitted"] as? Bool ?? false
       if !requests.contains(where: { $0.offset == offset }) {
@@ -342,8 +342,8 @@ final class ApprovalController: ObservableObject {
       }
     case "submitted":
       // A decision landed (this app's or another approver's): show the row
-      // awaiting the door rather than a fresh prompt, and pull any delivered
-      // banner — the door only honors the first decision anyway.
+      // awaiting the platform rather than a fresh prompt, and pull any delivered
+      // banner — the platform only honors the first decision anyway.
       if let offset = event["offset"] as? Int {
         setSubmitting(offset, true)
         ApprovalNotifications.withdraw(offset)
@@ -354,7 +354,7 @@ final class ApprovalController: ObservableObject {
         ApprovalNotifications.withdraw(offset)
       }
     case "unsettled":
-      // The door ignored the decision (key not enrolled / revoked) and the hold is
+      // The platform ignored the decision (key not enrolled / revoked) and the hold is
       // still open — clear the spinner so Approve/Reject return, and say why.
       if let offset = event["offset"] as? Int {
         setSubmitting(offset, false)
@@ -653,7 +653,7 @@ struct DropdownView: View {
       header
       Divider()
       if controller.requests.isEmpty {
-        Text("Approvals are not available on OS Next yet.")
+        Text("Approvals are not available yet.")
           .foregroundStyle(.secondary)
           .font(.callout)
           .padding(.vertical, 4)
@@ -753,7 +753,7 @@ struct DropdownView: View {
         if let project = controller.project {
           Text(project).font(.caption).foregroundStyle(.secondary)
         }
-        Text("OS Next")
+        Text("Iterate")
           .font(.caption2).foregroundStyle(.secondary)
       }
     }
@@ -818,7 +818,7 @@ enum ApprovalNotifications {
 
   /// Pull a delivered banner once its request is no longer answerable here — a
   /// decision landed or it settled — so a stale Reject tap can't send a
-  /// dead-weight contradiction (the door only honors the first decision).
+  /// dead-weight contradiction (the platform only honors the first decision).
   static func withdraw(_ offset: Int) {
     UNUserNotificationCenter.current().removeDeliveredNotifications(
       withIdentifiers: [identifier(offset)])
@@ -852,7 +852,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)  // menu-bar only, no dock icon
 
-    // Approval notifications stay dormant until OS Next supports approvals.
+    // Approval notifications stay dormant until the platform supports approvals.
     if !receivedConfiguration { ApprovalController.shared.start() }
     // Computer sharing is opt-in — it stays idle until the human flips it on.
   }

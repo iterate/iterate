@@ -44,7 +44,7 @@ const secrets: Record<string, SecretMaterial> = {
   "/secrets/a": "alpha",
   "/secrets/b": "bravo",
   "/secrets/api.key_v-2": "REAL",
-  "/secrets/tg": JSON.stringify({ bot: { token: "123:abc", id: 7 }, plain: "p" }),
+  "/secrets/tg": { bot: { token: "123:abc", id: 7 }, plain: "p" },
   "/secrets/obj": { accessToken: "AT", nested: { deep: "D" } },
 };
 const rows: {
@@ -111,7 +111,7 @@ const rows: {
     },
   },
   {
-    name: "`{ field }` at a path the JSON value has no string at refuses, naming the placeholder and where it sat",
+    name: "`{ field }` at a path the object value has no string at refuses, naming the placeholder and where it sat",
     headers: { "x-auth": 'getSecret("/secrets/tg", { field: "bot.nope" })' },
     becomes: {
       refused:
@@ -127,11 +127,11 @@ const rows: {
     },
   },
   {
-    name: "`{ field }` on a non-JSON value refuses",
+    name: "`{ field }` on a string value refuses",
     headers: { "x-auth": 'getSecret("/secrets/a", { field: "x" })' },
     becomes: {
       refused:
-        'itx.fetch: getSecret("/secrets/a", { field: "x" }) in header "x-auth" names a field, but the secret is not a JSON value',
+        'itx.fetch: getSecret("/secrets/a", { field: "x" }) in header "x-auth" names a field, but the secret is one string, not an object',
     },
   },
   {
@@ -252,12 +252,12 @@ test("hmacSha256Hex agrees with node's HMAC over a string and over bytes; consta
   expect(await constantTimeEquals("", "")).toBe(true);
 });
 
-test("secretMaterialStringOf: the whole string, or one string field of a JSON value (object or JSON string); an object with no field, a non-string field, an empty string and unparseable JSON are no key", () => {
+test("secretMaterialStringOf: the whole string, or one string field of an object; an object with no field, a field on a string (JSON or not), a non-string field and an empty string are no key", () => {
   expect(secretMaterialStringOf("whsec_k")).toBe("whsec_k");
   expect(secretMaterialStringOf({ signing: "s" })).toBeNull();
   expect(secretMaterialStringOf({ signing: "s", n: 1 }, "signing")).toBe("s");
   expect(secretMaterialStringOf({ a: { b: "deep" } }, "a.b")).toBe("deep");
-  expect(secretMaterialStringOf(JSON.stringify({ signing: "s" }), "signing")).toBe("s");
+  expect(secretMaterialStringOf(JSON.stringify({ signing: "s" }), "signing")).toBeNull();
   expect(secretMaterialStringOf({ n: 1 }, "n")).toBeNull();
   expect(secretMaterialStringOf({ signing: "" }, "signing")).toBeNull();
   expect(secretMaterialStringOf("not json", "signing")).toBeNull();
@@ -417,7 +417,7 @@ test("oauth-refresh-token: a public client sends client_id in the body; a refusa
   const pub = scripted(() => Response.json({ access_token: "AT" }));
   const next = await refreshSecretMaterial(
     { kind: "oauth-refresh-token", tokenEndpoint: "https://auth.example/token" },
-    JSON.stringify({ clientId: "public-client", refreshToken: "RT" }),
+    { clientId: "public-client", refreshToken: "RT" },
     pub.fetchFn,
   );
   expect(next).toEqual({ clientId: "public-client", refreshToken: "RT", accessToken: "AT" });
