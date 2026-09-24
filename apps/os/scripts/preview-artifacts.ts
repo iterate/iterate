@@ -4,6 +4,7 @@
 // unit-tests against a fake API (preview-artifacts.test.ts); scripts/preview.ts is the caller.
 import { z } from "zod";
 import type { OsEnv } from "../../../envs.ts";
+import { onCallMention } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
@@ -17,7 +18,7 @@ const CloudflareErrors = z.array(z.object({ code: z.number() }));
 
 /** A Cloudflare refusal with this status and error code. Each one used here was measured:
  *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos) and
- *  409/10305 (namespace deletion already in progress); KV
+ *  409/10305 (another delete of the namespace in flight: deleteArtifactsNamespace); KV
  *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
  *  preview). */
 export const isCloudflareError = (error: unknown, status: number, code: number) =>
@@ -30,6 +31,23 @@ export const isCloudflareError = (error: unknown, status: number, code: number) 
  *  answered 500/10400 "An internal error occurred." on and off for nine minutes on 2026-09-23
  *  (20:33–20:42 UTC): two PR-close deletes each failed on one repo delete. */
 const MAX_PLATFORM_FAILURE_ROUNDS = 8;
+
+/** How many rounds, 2 s apart, an empty namespace may answer "not empty" before it is reported
+ *  stuck (~2 minutes). Accepted repo deletes land well inside that: 89 landed in under 15 s in the
+ *  2026-09-24 sweep. */
+const STUCK_AFTER_REFUSED_ROUNDS = 60;
+
+/** An Artifacts namespace Cloudflare will not delete: its repos list reads empty, yet the namespace
+ *  delete keeps answering 409/10202 "Namespace is not empty". A platform fault, not ours, and not
+ *  one a retry heals: pr2817's namespace has held `repo_count: 1` with an empty repos list since at
+ *  least 2026-09-23 (every list parameter tried; alone, 150 of 150 deletes answered 10202 on
+ *  2026-09-24). The sweep pages it (preview.ts) and tries again the next night. */
+export type StuckArtifactsNamespace = {
+  namespace: string;
+  /** Cloudflare's own count, which disagrees with its empty repos list. */
+  repoCount: number | undefined;
+  createdAt: string | undefined;
+};
 
 /** A preview's namespace, by name. The worker's repo create does NOT provision one: on a missing
  *  namespace it fails with "Namespace is not active" (measured 2026-09-22), and the binding names
@@ -58,34 +76,84 @@ export async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: s
  *
  *  A round that meets a Cloudflare 5xx — a platform failure; every request here is idempotent and
  *  the next round lists what is left — logs `preview.platform-failure-retry`, waits and goes again,
- *  at most MAX_PLATFORM_FAILURE_ROUNDS times, after which the 5xx surfaces as what it is. */
+ *  at most MAX_PLATFORM_FAILURE_ROUNDS times, after which the 5xx surfaces as what it is.
+ *
+ *  An empty namespace that keeps answering "not empty" for STUCK_AFTER_REFUSED_ROUNDS is Cloudflare's
+ *  (StuckArtifactsNamespace): logged as `preview.platform-failure-stuck-namespace` and resolved to,
+ *  not thrown, so the caller decides (the sweep pages it). It throws only when this run could not
+ *  act.
+ *
+ *  No single answer says a namespace is gone. While any delete of it is in flight, Cloudflare
+ *  answers some requests as if it were: on 2026-09-24, with three other delete loops running
+ *  against pr2817's stuck namespace, 10 of 60 deletes answered 409/10305 ("deletion in
+ *  progress"), 9 of 60 reads 404/10200 and 12 of 60 account listings left it out, and it stayed.
+ *  Taking 10305 as deleted is how the 2026-09-23 sweep reported pr2817's namespace deleted. So an
+ *  accepted delete is confirmed by reads (confirmedGone), and 10305 is waited out like 10202. */
 export async function deleteArtifactsNamespace(
   cf: Cf,
   artifactsNamespaceName: string,
   wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
-) {
+): Promise<StuckArtifactsNamespace | undefined> {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
   // The namespace itself is what answers "does not exist" (404, code 10200); its repos list answers
   // an empty page for a missing namespace (measured 2026-09-22), so the check is on the namespace.
-  const existing = await cf<ArtifactsNamespaceRow>(route).catch((error) => {
-    if (isCloudflareError(error, 404, 10200)) return undefined;
-    throw error;
-  });
-  if (!existing)
-    return console.warn(`Artifacts namespace ${artifactsNamespaceName} did not exist; continuing.`);
+  const readNamespace = () =>
+    cf<ArtifactsNamespaceRow>(route).catch((error) => {
+      if (isCloudflareError(error, 404, 10200)) return undefined;
+      throw error;
+    });
+  /** A read that met a 5xx: the namespace's state unknown, to be read again on a later round. */
+  const readThroughPlatformFailure = () =>
+    readNamespace().catch((error) => {
+      if (!isPlatformFailure(error)) throw error;
+      return "unread" as const;
+    });
+  /** Gone when three reads 2 s apart all answer 404: one 404 can be another delete in flight. */
+  const confirmedGone = async () => {
+    for (let read = 0; read < 3; read++) {
+      if (read > 0) await wait(2000);
+      if (await readThroughPlatformFailure()) return false;
+    }
+    return true;
+  };
+  // One read, not three: a 404 here while another run's delete is in flight leaves the namespace to
+  // that run, and to the sweep if it fails.
+  if (!(await readNamespace())) {
+    console.warn(`Artifacts namespace ${artifactsNamespaceName} did not exist; continuing.`);
+    return undefined;
+  }
   let deletedRepos = 0;
   let platformFailureRounds = 0;
+  let refusedRounds = 0;
   for (let round = 1; ; round++) {
     if (round > 200)
       throw new Error(
-        `Artifacts namespace ${artifactsNamespaceName} is still not empty after ${deletedRepos} repo deletes`,
+        `Artifacts namespace ${artifactsNamespaceName} still lists repos after ${deletedRepos} repo deletes`,
       );
     const outcome: ArtifactsDeleteRound = await deleteArtifactsRound(cf, route).catch((error) => {
       if (!isPlatformFailure(error)) throw error;
       return { deletedRepos: 0, next: "again", platformFailure: error };
     });
     deletedRepos += outcome.deletedRepos;
-    if (outcome.next === "done") break;
+    if (outcome.deletedRepos > 0) refusedRounds = 0;
+    if (outcome.next === "accepted" && (await confirmedGone())) break;
+    if (outcome.next === "accepted" || outcome.next === "not-empty") refusedRounds++;
+    if (refusedRounds >= STUCK_AFTER_REFUSED_ROUNDS) {
+      const read = await readThroughPlatformFailure();
+      const row = read === "unread" ? undefined : read;
+      const stuck = {
+        namespace: artifactsNamespaceName,
+        repoCount: row?.repo_count,
+        createdAt: row?.created_at,
+      };
+      console.warn({
+        event: "preview.platform-failure-stuck-namespace",
+        ...stuck,
+        listedRepos: 0,
+        refusedRounds,
+      });
+      return stuck;
+    }
     if (outcome.platformFailure) {
       const error = outcome.platformFailure;
       if (++platformFailureRounds > MAX_PLATFORM_FAILURE_ROUNDS) throw error;
@@ -99,9 +167,28 @@ export async function deleteArtifactsNamespace(
         message: error.message,
       });
       await wait(Math.min(2000 * 2 ** (platformFailureRounds - 1), 15_000));
-    } else if (outcome.next === "not-empty") await wait(2000); // accepted deletes still landing
+    } else if (outcome.next !== "again") await wait(2000); // accepted deletes still landing
   }
   console.log(`deleted Artifacts namespace ${artifactsNamespaceName} (${deletedRepos} repos)`);
+  return undefined;
+}
+
+/** The sweep's page for the namespaces Cloudflare would not delete: what to escalate, and to whom. */
+export function renderStuckArtifactsNamespacesPage(
+  stuck: StuckArtifactsNamespace[],
+  jobUrl: string | undefined,
+) {
+  return [
+    `🚨 preview sweep: Cloudflare will not delete ${stuck.length} Artifacts namespace(s) ${onCallMention}`,
+    ...stuck.map(
+      ({ namespace, repoCount, createdAt }) =>
+        `• ${namespace}: repo_count ${repoCount ?? "?"} but no repos listed; the namespace DELETE answers 409/10202 "Namespace is not empty"${createdAt ? ` (created ${createdAt.slice(0, 10)})` : ""}`,
+    ),
+    "A Cloudflare Artifacts fault, not a commit's: escalate it to Cloudflare with these names. The sweep tries again each night.",
+    jobUrl && `<${jobUrl}|sweep run>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** A Cloudflare 5xx: the platform failed the request, not refused it. */
@@ -110,8 +197,9 @@ const isPlatformFailure = (error: unknown): error is CloudflareApiError =>
 
 type ArtifactsDeleteRound = {
   deletedRepos: number;
-  /** `again`: repos were deleted, list again; `not-empty`: the namespace still holds some */
-  next: "done" | "again" | "not-empty";
+  /** `again`: repos were deleted, list again; `accepted`: the namespace delete was accepted (or it
+   *  answered 404), to be confirmed; `not-empty`: it answered 409/10202 or 409/10305 */
+  next: "accepted" | "again" | "not-empty";
   /** the round's first 5xx — its other requests still ran */
   platformFailure?: CloudflareApiError;
 };
@@ -144,16 +232,16 @@ async function deleteArtifactsRound(cf: Cf, route: string): Promise<ArtifactsDel
       platformFailure: platformFailures[0],
     };
   }
-  // gone under this run (the sweep and the close job can race) is deleted, and so is one whose
-  // deletion Cloudflare already has in progress (409/10305; one sat there with `repo_count: 1` and
-  // an empty repos list for minutes, 2026-09-23)
-  const deleted = await cf(route, { method: "DELETE" }).then(
+  // Accepted, or already gone (the sweep and the close job can race): the caller confirms it. Not
+  // empty yet (accepted repo deletes still landing) or another delete of it in flight: asked again.
+  const accepted = await cf(route, { method: "DELETE" }).then(
     () => true,
     (error) => {
-      if (isCloudflareError(error, 404, 10200) || isCloudflareError(error, 409, 10305)) return true;
-      if (!isCloudflareError(error, 409, 10202)) throw error;
-      return false;
+      if (isCloudflareError(error, 404, 10200)) return true;
+      if (isCloudflareError(error, 409, 10202) || isCloudflareError(error, 409, 10305))
+        return false;
+      throw error;
     },
   );
-  return { deletedRepos: 0, next: deleted ? "done" : "not-empty" };
+  return { deletedRepos: 0, next: accepted ? "accepted" : "not-empty" };
 }
