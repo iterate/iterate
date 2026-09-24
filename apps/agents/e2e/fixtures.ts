@@ -9,8 +9,10 @@ import { readAll, sleep, until } from "../../os/e2e/support/client.ts";
  *  no stream), so the loop journals its one chunk window; streaming proper is the deployed story. */
 export class ScriptedAi extends RpcTarget {
   readonly calls: { model: string; messages: { role: string; content: string }[] }[] = [];
-  constructor(private readonly replies: (string | Error | { text: string; afterMs: number })[]) {
+  private readonly replies: (string | Error | { text: string; afterMs: number })[];
+  constructor(replies: (string | Error | { text: string; afterMs: number })[]) {
     super();
+    this.replies = replies;
   }
   async run(model: string, inputs: { messages: { role: string; content: string }[] }) {
     this.calls.push({ model, messages: inputs.messages });

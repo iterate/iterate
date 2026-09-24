@@ -13,12 +13,19 @@ import type { ProjectState } from "./contract.ts";
 import type { EntityCreationAndDeletionState } from "./entity-state.ts";
 
 export class EntityCollectionRpcTarget extends RpcTarget {
+  private readonly slug: "repo" | "workspace";
+  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly catalog: () => Promise<ProjectState>;
+
   constructor(
-    private readonly slug: "repo" | "workspace",
-    private readonly withItx: WithItx<ItxEntrypointScope>,
-    private readonly catalog: () => Promise<ProjectState>,
+    slug: "repo" | "workspace",
+    withItx: WithItx<ItxEntrypointScope>,
+    catalog: () => Promise<ProjectState>,
   ) {
     super();
+    this.slug = slug;
+    this.withItx = withItx;
+    this.catalog = catalog;
   }
 
   /** Every entity of this kind born under the project, by path — the certificates cross-posted to

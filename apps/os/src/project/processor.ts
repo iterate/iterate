@@ -57,8 +57,11 @@ export class ProjectProcessor extends StreamProcessor<
 > {
   readonly contract = ProjectContract;
 
-  constructor(private readonly withItx: WithItx<ItxEntrypointScope>) {
+  private readonly withItx: WithItx<ItxEntrypointScope>;
+
+  constructor(withItx: WithItx<ItxEntrypointScope>) {
     super();
+    this.withItx = withItx;
   }
 
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable

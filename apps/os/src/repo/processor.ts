@@ -21,8 +21,11 @@ import { RepoContract, type RepoState } from "./contract.ts";
 export class RepoProcessor extends StreamProcessor<RepoState, ConsumedEvent<typeof RepoContract>> {
   readonly contract = RepoContract;
 
-  constructor(private readonly withItx: WithItx<ItxEntrypointScope>) {
+  private readonly withItx: WithItx<ItxEntrypointScope>;
+
+  constructor(withItx: WithItx<ItxEntrypointScope>) {
     super();
+    this.withItx = withItx;
   }
 
   /** This incarnation's provisioning attempt, so one at-head pass does not start a second; the
