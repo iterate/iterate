@@ -281,7 +281,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 
 // Promise brands the step walk threads UNAWAITED: property access and calls pipeline on them
 // natively, so the whole chain reduces into one round trip and the caller's terminal await is the
-// single flush. os-next iterate-context.ts registers the native cloudflare:workers brands and capnweb's at boot — that
+// single flush. apps/os iterate-context.ts registers the native cloudflare:workers brands and capnweb's at boot — that
 // import can't live here because the unit lane runs this module in Node, where the list stays empty
 // and every step is simply awaited.
 const PIPELINED_RPC_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];
@@ -293,7 +293,7 @@ const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v in
 
 // Workers-RPC brands whose every value HOLDS A SESSION — and the actor at its far end — open until
 // disposed: a stub, a call's promise, a property. Registered at boot beside the pipelined brands
-// (os-next iterate-context.ts), for the same reason: the unit tests run this module in Node.
+// (apps/os iterate-context.ts), for the same reason: the unit tests run this module in Node.
 const RPC_SESSION_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];
 /** Register a brand whose values hold a Workers-RPC session until disposed. */
 export function registerRpcSessionBrand(brand: abstract new (...args: never[]) => unknown): void {

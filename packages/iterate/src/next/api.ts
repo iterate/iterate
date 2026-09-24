@@ -1,6 +1,6 @@
-// next/api.ts — THE API AN APP DIALS: the shapes of os-next's `/api` root, the session it vends and a
+// next/api.ts — THE API AN APP DIALS: the shapes of apps/os's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
-// platform's classes: os-next asserts that `IterateRpcTarget` satisfies `IterateApi` and that
+// platform's classes: apps/os asserts that `IterateRpcTarget` satisfies `IterateApi` and that
 // `IterateContextRpcTarget` satisfies `IterateContextApi` (src/session.ts, src/iterate-context.ts),
 // so an app built against this package types against exactly what the deployment answers. A context
 // has ONE method — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the

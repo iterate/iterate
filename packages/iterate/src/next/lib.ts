@@ -36,7 +36,7 @@ type ErrorCode =
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (os-next first-party-facet-placement.ts)
+  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (apps/os first-party-facet-placement.ts)
   | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that slug exists in another org
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
@@ -280,7 +280,7 @@ export async function withTimeout<T>(
 }
 
 // ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
-// `from-server-cookie`, the issuer's form posts in os-next issuer-pages.ts).
+// `from-server-cookie`, the issuer's form posts in apps/os issuer-pages.ts).
 
 /** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
  *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
@@ -300,7 +300,7 @@ export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "heade
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
  *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
- *  issuer's login redirect uses it too (os-next issuer-pages.ts). */
+ *  issuer's login redirect uses it too (apps/os issuer-pages.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);

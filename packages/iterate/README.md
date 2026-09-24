@@ -1,6 +1,6 @@
 # iterate
 
-CLI for OS Next (`apps/os`). Requires Node >=22.15; no Bun runtime.
+CLI for Iterate (`apps/os`). Requires Node >=22.15; no Bun runtime.
 
 ```sh
 npx iterate                       # offline help
@@ -23,7 +23,7 @@ command when close to expiry. `ITERATE_BEARER_TOKEN` supplies a token for script
 
 ## Running scripts
 
-`itx run` executes a JavaScript function body on OS Next with `itx` in scope.
+`itx run` executes a JavaScript function body on the platform with `itx` in scope.
 Use `return` for the result. The server records the run and its settlement;
 the CLI never retries a script automatically. Scripts execute on the server,
 so local Node APIs and local filesystem access are unavailable.
@@ -43,7 +43,7 @@ config's `defaultProject`, or the only project accessible to the session.
 
 ## Use my computer
 
-`use-my-computer` shares a Mac as a live OS Next capability until Ctrl-C:
+`use-my-computer` shares a Mac as a live Iterate capability until Ctrl-C:
 
 - `itx.myComputer.ask({ question, buttons? })`: native choice dialog.
 - `itx.myComputer.notify({ message, title? })`: desktop notification.
@@ -84,13 +84,13 @@ ends the REPL visibly; it never silently repeats your commands.
 
 ## Node connections
 
-`iterate/next/node` exposes a connection owner for OS Next scripts and live
+`iterate/next/node` exposes a connection owner for Iterate scripts and live
 providers. It uses the same protocol and cleanup as the CLI:
 
 ```js
-import { connectOsNext } from "iterate/next/node";
+import { connectIterate } from "iterate/next/node";
 
-using connection = await connectOsNext({
+using connection = await connectIterate({
   baseUrl: "https://os.iterate.com",
   auth: { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN },
 });
@@ -103,4 +103,4 @@ uses the published build when installed through `npx`.
 
 ## SDK
 
-The OS Next SDK exposes context APIs, stream processors, reactive clients, React bindings, and OAuth app sessions under `iterate/next/*`. The package exports source in this workspace and compiled JavaScript with declarations when packed.
+The SDK exposes context APIs, stream processors, reactive clients, React bindings, and OAuth app sessions under `iterate/next/*`. The package exports source in this workspace and compiled JavaScript with declarations when packed.

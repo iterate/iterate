@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Iterate — a small macOS menu-bar app. Today it's the human-in-the-loop
-// companion for sign-in and computer sharing on OS Next.
+// companion for sign-in and computer sharing on Iterate.
 // The legacy approval watcher and UI remain dormant.
 //
 // A thin shell over `iterate ping`, `iterate login`, and
 // `iterate use-my-computer --json`. The CLI owns authentication and transport.
-// Legacy approval models are retained below but are not started on OS Next.
+// Legacy approval models are retained below but are not started.
 //
 // Single file, compiled with swiftc and wrapped in a minimal .app bundle by
 // build-menubar-app.sh — no Xcode project, no asset catalog: the 𝑖 icon is
@@ -106,7 +106,7 @@ final class ApprovalController: ObservableObject {
     start()
   }
 
-  // OS Next has no approval transport. Keep the legacy watcher below dormant;
+  // The platform has no approval transport. Keep the legacy watcher below dormant;
   // use a bounded CLI authentication check for the menu bar's sign-in state.
   func start() {
     stop()
@@ -653,7 +653,7 @@ struct DropdownView: View {
       header
       Divider()
       if controller.requests.isEmpty {
-        Text("Approvals are not available on OS Next yet.")
+        Text("Approvals are not available yet.")
           .foregroundStyle(.secondary)
           .font(.callout)
           .padding(.vertical, 4)
@@ -753,7 +753,7 @@ struct DropdownView: View {
         if let project = controller.project {
           Text(project).font(.caption).foregroundStyle(.secondary)
         }
-        Text("OS Next")
+        Text("Iterate")
           .font(.caption2).foregroundStyle(.secondary)
       }
     }
@@ -852,7 +852,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)  // menu-bar only, no dock icon
 
-    // Approval notifications stay dormant until OS Next supports approvals.
+    // Approval notifications stay dormant until the platform supports approvals.
     if !receivedConfiguration { ApprovalController.shared.start() }
     // Computer sharing is opt-in — it stays idle until the human flips it on.
   }

@@ -21,12 +21,12 @@ and is layered so every app shares one implementation:
 | `iterate/next/client`     | The framework-free live-state client: `createLiveStateStore` (seed, apply deltas, heal a gap) and `connectLiveState` (wire a context's `subscribe` and a seed door to the store). Node test clients use the same code.                  |
 | `iterate/next/app-server` | The app Worker's half: `appAuth` (the OAuth client, the `/.auth/*` pages and the authenticated `/api` proxy), `appSession`, `issuerOriginOf`. With `BrowserSession` from `iterate/next/app-session`, the Durable Object each app binds. |
 | `iterate/next/api`        | The declared shapes of the platform's `/api`: `IterateApi`, `IterateSessionApi`, `IterateContextApi` — what an app types against.                                                                                                       |
-| `iterate/next/node`       | `connectOsNext({ baseUrl, auth })` — the node one-shot dial (`ws`) for scripts and the CLI; `Disposable`, never retried.                                                                                                                |
+| `iterate/next/node`       | `connectIterate({ baseUrl, auth })` — the node one-shot dial (`ws`) for scripts and the CLI; `Disposable`, never retried.                                                                                                               |
 
 In a browser the client needs zero configuration beyond its scopes (it dials
 the page's own `/api`, and the app Worker's `appAuth` gate forwards it to the
 platform with the session's bearer); non-browser consumers dial a deployment
-with `connectOsNext({ baseUrl, auth })` and a `SessionCredentials` value. That
+with `connectIterate({ baseUrl, auth })` and a `SessionCredentials` value. That
 is the entire runtime-specific binding around the shared client.
 
 ## The stack

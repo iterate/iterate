@@ -111,7 +111,7 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
 }
 
 /** The itx scope as `env.ITX.get()` hands it over: a context's declared API (api.ts) — a capnweb stub
- *  of os-next's `IterateContextRpcTarget`, which satisfies it. */
+ *  of apps/os's `IterateContextRpcTarget`, which satisfies it. */
 export type ItxScope = IterateContextApi;
 /** What hands the scope over: the loopback entrypoint a loaded worker has as `env.ITX`, or the one a
  *  class of the platform's own worker mints from `ctx.exports`. */

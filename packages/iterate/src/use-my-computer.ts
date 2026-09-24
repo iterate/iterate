@@ -2,7 +2,7 @@ import { hostname } from "node:os";
 import * as prompts from "@clack/prompts";
 import { RpcTarget } from "capnweb";
 import { run } from "./run-command.ts";
-import type { connectOsNext } from "./next-node.ts";
+import type { connectIterate } from "./next-node.ts";
 
 type ComputerEvent =
   | { type: "status"; loggedIn: true; name: string }
@@ -113,7 +113,7 @@ function proposeComputerName(): string {
 /** Provision belongs to this connection; signals release it before closing the transport.
  * A disconnect ends sharing visibly. The caller explicitly starts each new share. */
 export async function shareMyComputer(input: {
-  connection: Awaited<ReturnType<typeof connectOsNext>>;
+  connection: Awaited<ReturnType<typeof connectIterate>>;
   project: string;
   name?: string;
   json?: boolean;

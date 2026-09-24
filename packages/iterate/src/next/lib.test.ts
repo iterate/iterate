@@ -101,7 +101,7 @@ describe("diff + applyPatch", () => {
 });
 
 // ── origin ── the check `from-server-cookie` (session.ts) and the console's POST doors
-// (os-next issuer-pages.ts) ride on: `{ origin, becomes }` rows for a request to https://worker.example/api.
+// (apps/os issuer-pages.ts) ride on: `{ origin, becomes }` rows for a request to https://worker.example/api.
 
 describe("isSameOriginBrowserRequest", () => {
   const rows: { headers: Record<string, string>; becomes: boolean }[] = [
