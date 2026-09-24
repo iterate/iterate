@@ -476,8 +476,20 @@ export function buildFirmwareRelease(input: {
   const ownFiles = read.filter((file) => file.startsWith(`${FIRMWARE_DIRECTORY}/`));
   // a path mismatch between ninja and git would otherwise make the check vacuous
   if (!ownFiles.includes(`${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt`)) {
+    // TEMPORARY diagnostics (PR #2934): how the regeneration statement names its inputs
+    const manifest = readFileSync(join(build, "build.ninja"), "utf8");
+    const rerun = manifest.slice(manifest.indexOf("RERUN_CMAKE") - 300).slice(0, 3000);
     throw new Error(
-      `ninja listed none of ${FIRMWARE_DIRECTORY}/targets/${device.target}; the input check proves nothing.`,
+      [
+        `ninja listed no ${FIRMWARE_DIRECTORY}/targets/${device.target}/CMakeLists.txt; the input check proves nothing.`,
+        `It listed ${read.length} paths, ${ownFiles.length} under ${FIRMWARE_DIRECTORY}, for example:`,
+        ...[...new Set(ownFiles)]
+          .sort()
+          .slice(0, 40)
+          .map((file) => `  ${file}`),
+        "build.ninja around RERUN_CMAKE:",
+        rerun,
+      ].join("\n"),
     );
   }
   console.log(
