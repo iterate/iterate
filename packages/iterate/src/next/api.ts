@@ -135,7 +135,6 @@ export type CollectSecretInput = {
 export type CollectSecretLink = { path: string; url: string };
 
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
-
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */

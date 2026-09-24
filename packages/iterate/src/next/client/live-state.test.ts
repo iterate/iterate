@@ -5,8 +5,7 @@ import { connectLiveState, type LiveStateDelta, type LiveStateSeed } from "./liv
 
 // ── live state client ── `connectLiveState` (client/live-state.ts) over a fake
 // itx session and a door whose reads the test resolves BY HAND, so the heal window is a thing the
-// test controls rather than a race it hopes for. The store's own reduce is the section above;
-// this is the transport: the first paint's door read, gap heals SINGLE-FLIGHT, and a delta that
+// test controls rather than a race it hopes for. This is the transport: the first paint's door read, gap heals SINGLE-FLIGHT, and a delta that
 // lands WHILE a heal is in flight (the seed being read may predate it).
 
 type Seed = LiveStateSeed<{ n: number }>;

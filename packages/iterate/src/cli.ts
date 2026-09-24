@@ -62,7 +62,6 @@ const resolveConfigName = (workspacePath: string): string | Error => {
     return configFlagOverride;
   }
 
-  // Walk up directory tree for workspace match
   let dir = workspacePath;
   while (dir && dir !== "/") {
     const match = configFile.workspaces?.[dir];
@@ -84,7 +83,6 @@ const resolveConfigName = (workspacePath: string): string | Error => {
     return configFile.default;
   }
 
-  // If there's exactly one config, use it
   const configNames = Object.keys(configFile.configs || {});
   if (configNames.length === 1) return configNames[0];
 

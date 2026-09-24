@@ -223,13 +223,12 @@ async function signInAgainPage(input: {
   const permissions = `Permissions: ${scopes.map((scope) => scopeLabels[scope] || scope).join(", ")}.`;
   const signedIn = [
     grant?.email ? `Signed in as <strong>${text(grant.email)}</strong>` : "Signed in",
-    ` through <strong>${text(new URL(issuer).host)}</strong>.`,
+    `through <strong>${text(new URL(issuer).host)}</strong>.`,
     reaches,
     permissions,
   ]
     .filter(Boolean)
-    .join(" ")
-    .replace("</strong>  through", "</strong> through");
+    .join(" ");
   const dress = dressOf(issuer, defaultIssuer);
   const back = nextPathOf(url.pathname + url.search, url.origin);
   return gatePage({

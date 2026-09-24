@@ -547,7 +547,7 @@ export class ProcessorEngine<State> {
    *  promises. SHARED by the live flow and `#rereduceIfVersionChanged`, so the two can never diverge
    *  (a coercion applied live but not on replay would make a version bump rewrite state). A payload-less
    *  event validates as `{}` (the "empty defaults" convention the contract requires of its stateSchema);
-   *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated, as before. */
+   *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated. */
   #validateNormalizeAndReduce(
     event: StreamEvent,
     state: State,
@@ -881,9 +881,9 @@ export class LiveState<S> {
    *  CROSS-HOP sink: `env.ITX.get().append(e)` mints a FRESH capability per call, so two deltas
    *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
    *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
-   *  but it costs every watcher the full door re-read the deltas exist to avoid. A lone delta (the
-   *  chain idle) is issued synchronously; only when an append is already in flight does the next
-   *  queue behind it. Nobody waits on this. */
+   *  but it costs every watcher the full door re-read the deltas exist to avoid. Every delta rides
+   *  this ONE chain and is emitted only after the previous append settles (see set()). Nobody waits
+   *  on this. */
   #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
 
   constructor(sink: LiveStateSink, key: string, initial: S) {

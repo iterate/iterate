@@ -1,9 +1,9 @@
 // next/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
 // STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar, comments included
 // (no hand-rolled number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting
-// one IS revocation. The rewrite rules (match, rank, rewrite) are apps/os
-// src/context/itx-expression-rewriting.ts. Two more concepts ride with the codec, the only platform
-// primitives the library tier may import:
+// one IS revocation. The rewrite rules (match, rank, rewrite) are
+// apps/os/src/context/itx-expression-rewriting.ts. Two more concepts ride with the codec, the only
+// platform primitives the library tier may import:
 //   dispatch      — `walkSteps` / `callOn`: EXECUTE a rewritten call's steps against a live object graph
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED SURFACE, every unknown chain one `invoke(expression)`
 import JSON5 from "json5";
@@ -47,9 +47,9 @@ const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 // string like any other); `...@` as an object-literal entry is the merge form. In the array half the
 // marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
 // `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
-// target (the codec's one reservation). What `@` MEANS is apps/os src/context/itx-expression-rewriting.ts
-// `fillItxExpressionHoles`; here it is only lexed (parse, targets only) and printed back (print,
-// targets only).
+// target (the codec's one reservation). What `@` MEANS is `fillItxExpressionHoles` in
+// apps/os/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
+// printed back (print, targets only).
 /** The marker's array-half spelling, the one reserved literal. */
 const ITX_EXPRESSION_HOLE = { "@": true } as const;
 /** The merge entry's key — `...@` — read by apps/os `fillItxExpressionHoles`. */
@@ -273,9 +273,9 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 
 // ── dispatch ── EXECUTE a rewritten call's steps against a LIVE object graph (the codec that
 // turns strings ⇄ these structures is above; the rules that rewrite a call to a built-in
-// root are ./itx-expression-rewriting.ts). `walkSteps` is THE step walk — `ItxExpressionResolver`
-// replays the steps after the root with it; the facet door and the delivery loop walk steps on a
-// local object with it. `callOn` applies args to a resolved value. The dotted write-half (a handle
+// root are apps/os/src/context/itx-expression-rewriting.ts). `walkSteps` is THE step walk —
+// `ItxExpressionResolver` replays the steps after the root with it; the facet door and the delivery
+// loop walk steps on a local object with it. `callOn` applies args to a resolved value. The dotted write-half (a handle
 // whose dotted access reduces into one dispatch) is `InvokeHandle` (the next section) — the
 // ONE such primitive, pipelinable over Workers RPC.
 
@@ -601,6 +601,9 @@ export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown
 /** `itx.facets.get(name)` / `itx.facets.get(name, { source, className })` — a facet of this context. */
 export class FacetHandle extends InvokeHandle {}
 
+/** `itx.rpcStubs.get(key)` — a live stub lent to the registry. */
+export class RpcStubHandle extends InvokeHandle {}
+
 /** A HANDLE ON THE WIRE IS THE EXPRESSION THAT NAMES IT. An `InvokeHandle` a context mints (`repos.get(path)`,
  *  `workspaces.get(path)`, `facets.get(name)`, `cd(path)`, `workers.get(spec)`, `rpcStubs.get(key)`)
  *  holds no state — it is a dispatch closure over a path or a key — yet as a Workers-RPC result it would
@@ -687,5 +690,3 @@ export function materializeItxHandleReference(
     ),
   );
 }
-/** `itx.rpcStubs.get(key)` — a live stub lent to the registry. */
-export class RpcStubHandle extends InvokeHandle {}
