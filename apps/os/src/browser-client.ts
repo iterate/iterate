@@ -18,7 +18,12 @@ export async function browserAuthorization(env: Env, request: Request) {
   const session = appSession(env.BROWSER_SESSION, request);
   const token = await session?.bearer();
   if (!token) return null;
-  const authorization = await authorizationForToken(env, token, platformAddressesOf(env, request));
+  const authorization = await authorizationForToken(
+    env,
+    token,
+    platformAddressesOf(env, request),
+    "browser-session",
+  );
   if (!authorization) await session!.discard();
   return authorization;
 }

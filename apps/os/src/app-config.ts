@@ -202,9 +202,11 @@ export const AppConfig = z.object({
       /** The key before a rotation, decrypt-only: a record it opens is written back under `key` on that
        *  read, so it can be dropped once every record has been read once. Blank when not rotating. */
       previousKey: redacted(z.string().trim().default("")),
-      /** THE OPERATOR'S BEARER — `authenticate({ type: "admin-secret" })` on `/api` (every project, `as`
-       *  a user without a login) and a bearer on `/mcp`: the deployed specs, CI, tooling. Blank ⇒ no
-       *  operator access (a self-host needs none: a personal access token covers scripting). */
+      /** THE OPERATOR'S BEARER, the deployment's machine credential — `authenticate({ type:
+       *  "admin-secret" })` on `/api` (every project, `as` a user without a login) or a bearer there,
+       *  never at `/mcp` (oauth.ts `validateToken`): the e2e harness, the deployed specs, deploy
+       *  gates, load scripts (docs/credentials.md). Blank ⇒ no operator access (a self-host needs
+       *  none: a personal access token covers scripting). */
       adminBearer: redacted(z.string().trim().default("")),
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key

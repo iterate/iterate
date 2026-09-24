@@ -7,10 +7,11 @@
 // them into the state a client reads through live state (the dash's tree: which organizations a
 // person belongs to is THIS fold, bounded per person); durable-object.ts hosts it as the
 // first-party facet `account` (first-party-facets.ts), the row enabled where the first fact is
-// published. A PURE FOLD: no effect lives here. Credentials are NOT here: a token is an OAuth grant
-// (grants.ts), listed and ended through `session.grants`; whether a grant is revoked IS read here
-// (`endedGrants`, oauth.ts) — the account is the truth of its own grants' ends. Every type is
-// derived:
+// published. A PURE FOLD: no effect lives here. No credential is here: an OAuth token is the
+// provider's (grants.ts), and a personal access token is kept as its SHA-256 alone
+// (`personalAccessTokens`, which oauth.ts admits a key against). Whether a grant or a key is revoked
+// IS read here (`endedGrants`, oauth.ts): the account is the truth of its own grants' ends. Every
+// type is derived:
 //   AccountState = ProcessorState<typeof AccountContract>   the reduced state below
 //   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
@@ -30,18 +31,34 @@ const AuthenticationFact = z.object({
   operationId: z.string(),
 });
 export type AuthenticationFact = z.infer<typeof AuthenticationFact>;
-/** `events.iterate.com/account/grant-minted`: a personal access token minted through
- *  `session.grants.mint` (grants.ts) — the grant's id, the name given, the projects it reaches. */
-export const GrantMinted = z.object({
-  grantId: z.string().min(1),
+/** `events.iterate.com/account/personal-access-token-minted`: a personal access token minted
+ *  through `session.grants.mint` (grants.ts), and THE KEY'S RECORD, which oauth.ts admits its bearer
+ *  against (personal-access-token.ts): its id, the name given, the SHA-256 of the bearer (never the
+ *  bearer), the email it acts as, the projects it reaches, when it expires (epoch ms; null: never),
+ *  the session (the grant id) that minted it, and, for a device's key, the device's client and how
+ *  it is shown. AWAITED by the mint: the key works the moment its bearer is answered. */
+export const PersonalAccessTokenMinted = z.object({
+  id: z.string().startsWith("pat_"),
   name: z.string(),
-  projects: z.array(z.string()),
-  expiresAt: z.number(),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+  email: z.string(),
+  projects: z.array(z.string()).min(1),
+  expiresAt: z.number().nullable(),
+  device: z
+    .object({
+      clientId: z.string(),
+      logoUri: z.string().optional(),
+      clientDomain: z.string().optional(),
+    })
+    .optional(),
+  /** The grant of the session that minted the key: the list shows it, so a person can tell which
+   *  sign-in made each key. The key outlives it (the CLI ends its minting session at once). */
+  mintedBy: z.string().min(1),
 });
-export type GrantMinted = z.infer<typeof GrantMinted>;
-/** `events.iterate.com/account/grant-ended`: a grant ended — a session logged out, a token revoked
- *  (grants.ts `end` / `endCurrent`). AWAITED by the verb: from this fact on, every admission of the
- *  grant is refused (oauth.ts reads `endedGrants`). */
+export type PersonalAccessTokenMinted = z.infer<typeof PersonalAccessTokenMinted>;
+/** `events.iterate.com/account/grant-ended`: a grant or a personal access token ended — a session
+ *  logged out, a key revoked (grants.ts `end` / `endCurrent`). AWAITED by the verb: from this fact
+ *  on, every admission of it is refused (oauth.ts reads `endedGrants`). */
 export const GrantEnded = z.object({ grantId: z.string().min(1) });
 export type GrantEnded = z.infer<typeof GrantEnded>;
 /** `events.iterate.com/account/grant-used`: the grant was presented — at most once an hour per
@@ -65,28 +82,26 @@ export const AccountContract = defineProcessorContract({
   slug: "account",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "4",
+  version: "5",
   description:
     "The user's account: authentications, personal access tokens, ended and used grants, consents, the organizations the person belongs to, and the catalog of the user's own secrets.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
    *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
   stateSchema: z.object({
     authentications: z.array(AuthenticationFact).default([]),
-    /** Personal access tokens minted, by grant id — and when each was ended. */
+    /** Personal access tokens minted, by key id (`pat_…`): each key's record — when it was
+     *  minted, and ended. */
     personalAccessTokens: z
       .record(
         z.string(),
-        z.object({
-          name: z.string(),
-          projects: z.array(z.string()),
-          expiresAt: z.number(),
+        PersonalAccessTokenMinted.omit({ id: true }).extend({
           mintedAt: z.string(),
           endedAt: z.string().nullable(),
         }),
       )
       .default({}),
-    /** Every grant ended — a session logged out, a token revoked — by grant id: when. THE
-     *  REVOCATION TRUTH: oauth.ts refuses a grant found here on every admission. */
+    /** Every grant and key ended — a session logged out, a token revoked — by its id: when. THE
+     *  REVOCATION TRUTH: oauth.ts refuses a grant or key found here on every admission. */
     endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** When each grant was last seen in use, by grant id (the sessions page's "last used"). */
     grantUses: z.record(z.string(), z.object({ at: z.number() })).default({}),
@@ -105,9 +120,10 @@ export const AccountContract = defineProcessorContract({
       description: "A successful authentication on the user's account (platform fact).",
       payloadSchema: AuthenticationFact,
     },
-    "events.iterate.com/account/grant-minted": {
-      description: "A personal access token was minted for the account (platform fact).",
-      payloadSchema: GrantMinted,
+    "events.iterate.com/account/personal-access-token-minted": {
+      description:
+        "A personal access token was minted for the account: its record, with the key's SHA-256 (platform fact).",
+      payloadSchema: PersonalAccessTokenMinted,
     },
     "events.iterate.com/account/grant-ended": {
       description:
@@ -131,7 +147,7 @@ export const AccountContract = defineProcessorContract({
   processorDeps: [SecretContract, OrganizationContract],
   consumes: [
     "events.iterate.com/account/authenticated",
-    "events.iterate.com/account/grant-minted",
+    "events.iterate.com/account/personal-access-token-minted",
     "events.iterate.com/account/grant-ended",
     "events.iterate.com/account/grant-used",
     "events.iterate.com/account/consent-approved",

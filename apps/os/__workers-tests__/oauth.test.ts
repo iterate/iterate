@@ -66,23 +66,33 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   }
 });
 
-test("the configured header bearer is the same administrator at both protocols", async () => {
+test("the operator bearer is the administrator at /api and is refused at /mcp; the global namespace is no project at either", async () => {
   fetchReachesThisWorker();
   const { root } = await rpc(adminSecret);
   expect(await root.whoami()).toEqual({ actor: "admin" });
+  // /mcp: every caller is a person (an OAuth grant for /mcp, or a personal access token); the
+  // deployment's machine credential is refused there, and the refusal says so
+  const warns = vi.spyOn(console, "warn");
+  onTestFinished(() => {
+    warns.mockRestore();
+  });
   expect(
-    JSON.parse(
-      (
-        await tool(adminSecret, "run", {
-          project: "admin-probe",
-          script: "async (itx) => itx.whoami()",
-        })
-      ).body.result.content[0].text,
-    ),
-  ).toEqual({ projectId: "admin-probe", path: "/" }); // MCP executes on the authorized project root.
-  // the global namespace is no project, even for the admin secret — at either protocol
+    await tool(adminSecret, "run", {
+      project: "admin-probe",
+      script: "async (itx) => itx.whoami()",
+    }),
+  ).toMatchObject({ status: 401 });
+  expect(warns).toHaveBeenCalledWith({
+    event: "oauth.refusal",
+    category: "protected-resource",
+    reason: "operator_bearer_not_accepted",
+    resource: `${ORIGIN}/mcp`,
+  });
+  warns.mockRestore();
+  // the global namespace is no project, even for the admin secret — nor at /mcp for a person
   await expect(root.projects.get("global")).rejects.toThrow(/deployment-global namespace/);
-  const global = await tool(adminSecret, "run", {
+  const mcpToken = (await grant([`${ORIGIN}/mcp`])).token!.access_token;
+  const global = await tool(mcpToken, "run", {
     project: "global",
     script: "async (itx) => itx.whoami()",
   });
@@ -94,7 +104,7 @@ test("the configured header bearer is the same administrator at both protocols",
   await expect(root.projects.get("global--users--u1")).rejects.toThrow(
     /global namespace's resource prefix/,
   );
-  const owner = await tool(adminSecret, "run", {
+  const owner = await tool(mcpToken, "run", {
     project: "global--users--u1",
     script: "async (itx) => itx.whoami()",
   });
@@ -230,10 +240,12 @@ test("login.allowedEmails: a live grant whose email the list stops naming is ref
   const token = flow.token!.access_token;
   const listing = (patterns: string) =>
     ({ ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: patterns }) as typeof env;
-  expect(await authorizationForToken(listing("*@example.com"), token, addresses)).toMatchObject({
+  expect(
+    await authorizationForToken(listing("*@example.com"), token, addresses, "api"),
+  ).toMatchObject({
     principal: { actor: flow.user.id },
   });
-  expect(await authorizationForToken(listing("*@iterate.com"), token, addresses)).toBeNull();
+  expect(await authorizationForToken(listing("*@iterate.com"), token, addresses, "api")).toBeNull();
 });
 
 test("a refresh a second after the code exchange reads the grant the exchange wrote, whatever copy KV serves", async () => {
@@ -562,6 +574,7 @@ test("a live session rides out a deploy's Durable Object reset, and a control-pl
     env,
     flow.token!.access_token,
     platformAddressesOf(env, request),
+    "api",
   );
   const response = await rpcResponse(request, env, executionContext, authorization);
   expect(response).toMatchObject({ status: 101 });
@@ -637,18 +650,6 @@ test("console and project browsers use the same CIMD flow and independent grants
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
-    if (url.href === "https://kit.test/devices/missing.json")
-      return new Response("Not found", { status: 404 });
-    if (url.origin === "https://kit.test" && url.pathname.startsWith("/devices/"))
-      return Response.json({
-        client_id: url.href,
-        client_name: "Home Assistant Voice Preview Edition",
-        logo_uri: "https://kit.test/vendors/home-assistant.png",
-        redirect_uris: ["https://kit.test/.auth/callback"],
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code"],
-        response_types: ["code"],
-      });
     if (!["/.auth/client.json", "/oauth2/token", "/api"].includes(url.pathname))
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
@@ -762,128 +763,43 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect(repeatedLogin).toMatchObject({ status: 303 });
     expect(repeatedLogin.headers.get("set-cookie")).toBeNull();
     expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
-    const personal = await consoleLogin.root.grants.mint({
-      name: "My CLI",
-      projects: [browserA.id],
-    });
+    // only the console's session holds `account`: an app's may neither list, mint nor end (the
+    // personal access tokens themselves: personal-access-tokens.test.ts)
     await expect(logins[1]!.root.grants.list()).rejects.toThrow(/Account permission/);
     await expect(
       logins[1]!.root.grants.mint({ name: "Denied", projects: [browserA.id] }),
     ).rejects.toThrow(/Account permission/);
     await expect(logins[1]!.root.grants.end("foreign-grant")).rejects.toThrow(/Account permission/);
-    const storedPersonal = await helpers().unwrapToken(personal.token);
-    expect(storedPersonal).not.toBeNull();
-    expect(storedPersonal!.expiresAt * 1000 - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
-    // The provider rounds TTLs to seconds; the displayed deadline must agree with its actual token.
-    expect(Math.abs(storedPersonal!.expiresAt * 1000 - personal.expiresAt)).toBeLessThan(2000);
-    // A token is for one resource: the default `api` token is refused at /mcp, where a token minted
-    // for `mcp` runs as the person, on the project it covers.
-    expect(
-      await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" }),
-    ).toMatchObject({ status: 401 });
-    const personalMcp = await consoleLogin.root.grants.mint({
-      name: "My MCP client",
-      projects: [browserA.id],
-      resource: "mcp",
+    const inventory = await consoleLogin.root.grants.list();
+    expect(inventory.items.find((item) => item.current)).toMatchObject({
+      kind: "session",
+      resource: "api",
     });
-    expect(
-      await call("/api", {
-        method: "POST",
-        body: "",
-        headers: { Authorization: `Bearer ${personalMcp.token}` },
-      }),
-    ).toMatchObject({ status: 401 });
-    expect(
-      JSON.parse(
-        (await tool(personalMcp.token, "run", { script: "async (itx) => itx.whoami()" })).body
-          .result.content[0].text,
-      ),
-    ).toEqual({
-      projectId: browserA.id,
-      path: "/", // the token's own connection context, named by its grant (mcp.ts)
-      projectSlug: "browser-a",
-      projectUrl: "https://browser-a.projects.test/",
-    });
-    const { root: personalApi } = await rpc(personal.token);
-    expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
-      browserA.id,
-    ]);
-    // A device says `bearer` for the same act (Kit firmware, itx_mount.c): the token rode the
-    // upgrade, hand me that session.
-    const { root: bearerApi } = await rpc(personal.token, "bearer");
-    expect((await bearerApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
-      browserA.id,
-    ]);
-    // Bound to a project, the token opens none of the person's own: no `.user` context.
-    await expect(Promise.resolve().then(() => personalApi.user.whoami())).rejects.toThrow(
-      /bound to projects/,
+    await expect(consoleLogin.root.grants.end("foreign-grant")).rejects.toThrow(
+      /Session not found/,
     );
-    await expect(
-      consoleLogin.root.grants.mint({
-        name: "Unavailable device",
-        projects: [browserA.id],
-        clientId: "https://kit.test/devices/missing.json",
-      }),
-    ).rejects.toMatchObject({
-      code: "INVALID_INPUT",
-      message: "The device's OAuth metadata could not be loaded. Try preparing the device again.",
-    });
-    // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
-    const device = await consoleLogin.root.grants.mint({
-      name: "Kit HAVPE",
-      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
-      projects: [browserA.id],
-      expiresAt: Date.now() + 20 * 365 * 24 * 3600_000,
-    });
-    expect(device.expiresAt - Date.now()).toBeGreaterThan(9 * 365 * 24 * 3600_000);
-    expect(device.expiresAt - Date.now()).toBeLessThan(11 * 365 * 24 * 3600_000);
-    const storedDevice = await helpers().unwrapToken(device.token);
-    expect(Math.abs(storedDevice!.expiresAt * 1000 - device.expiresAt)).toBeLessThan(2000);
-    const secondDevice = await consoleLogin.root.grants.mint({
-      name: "Kit HAVPE two",
-      projects: [browserA.id],
-      clientId: "https://kit.test/devices/havpe/clients/unit-two.json",
-    });
-    const [, firstDeviceId] = device.token.split(":");
-    const [, secondDeviceId] = secondDevice.token.split(":");
-    const deviceInventory = await consoleLogin.root.grants.list();
-    expect(deviceInventory.items.find((item) => item.id === firstDeviceId)).toMatchObject({
-      name: "Kit HAVPE",
-      kind: "device",
-      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
-      logoUri: "https://kit.test/vendors/home-assistant.png",
-    });
-    expect(deviceInventory.items.find((item) => item.id === secondDeviceId)?.clientId).toBe(
-      "https://kit.test/devices/havpe/clients/unit-two.json",
-    );
-    const { root: deviceApi } = await rpc(device.token, "bearer");
-    expect((await deviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
-    await expect(deviceApi.grants.list()).rejects.toThrow(/Account permission/);
-    await consoleLogin.root.grants.end(firstDeviceId!);
-    expect(
-      await call("/api", { headers: { Authorization: `Bearer ${device.token}` } }),
-    ).toMatchObject({ status: 401 });
-    const { root: secondDeviceApi } = await rpc(secondDevice.token, "bearer");
-    expect((await secondDeviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
-    await expect(
-      consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
-    ).rejects.toThrow(/at least a minute/);
+    // a foreign grant ends nothing: no end lands on the account
+    expect((await accountStateOf(env, user.id)).endedGrants["foreign-grant"]).toBeUndefined();
     const refusals = vi.spyOn(console, "warn");
     onTestFinished(() => {
       refusals.mockRestore();
     });
+    const consoleToken = await appSession(
+      env.BROWSER_SESSION,
+      new Request(ORIGIN, { headers: { cookie: consoleLogin.cookie } }),
+    )!.bearer();
     expect(
       await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
-          refresh_token: personal.token,
+          refresh_token: consoleToken!,
           client_id: `${ORIGIN}/.auth/client.json`,
         }),
       }),
     ).toMatchObject({ status: 400 });
-    // the token is an access token, which the library refuses as a refresh token before any
-    // lifetime policy runs (the mint discards the grant's refresh token): logged as that refusal
+    // an access token presented as a refresh token: the library refuses it before any lifetime
+    // policy runs, logged as that refusal (`onError`)
     expect(refusals).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "oauth.refusal",
@@ -893,30 +809,6 @@ test("console and project browsers use the same CIMD flow and independent grants
       }),
     );
     refusals.mockRestore();
-    const inventory = await consoleLogin.root.grants.list();
-    const [, personalId] = personal.token.split(":");
-    expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({
-      name: "My CLI",
-      kind: "personal",
-      current: false,
-    });
-    expect(JSON.stringify(inventory)).not.toContain(personal.token);
-    await expect(consoleLogin.root.grants.end("foreign-grant")).rejects.toThrow(
-      /Session not found/,
-    );
-    // a foreign grant ends nothing: no end lands on the account
-    expect((await accountStateOf(env, user.id)).endedGrants["foreign-grant"]).toBeUndefined();
-    await consoleLogin.root.grants.end(personalId!);
-    // the end is on the account — the revocation truth — and the list no longer carries the grant
-    expect((await accountStateOf(env, user.id)).endedGrants[personalId!]).toEqual({
-      at: expect.any(String),
-    });
-    expect(
-      (await consoleLogin.root.grants.list()).items.find((item) => item.id === personalId),
-    ).toBeUndefined();
-    expect(
-      await call("/api", { headers: { Authorization: `Bearer ${personal.token}` } }),
-    ).toMatchObject({ status: 401 });
     const cookieRequest = new Request(`${ORIGIN}/`, { headers: { cookie: consoleLogin.cookie } });
     const heldSession = appSession(env.BROWSER_SESSION, cookieRequest)!;
     const bearerBefore = await heldSession.bearer();

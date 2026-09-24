@@ -12,15 +12,27 @@ npx @iterate-com/cli orgs list
 npx @iterate-com/cli ping
 npx @iterate-com/cli repl --project my-project     # local Node REPL
 npx @iterate-com/cli itx run --project my-project --eval 'return await itx.whoami();'
+npx @iterate-com/cli tokens create --name my-script --project my-project   # a personal access token
+npx @iterate-com/cli tokens list
+npx @iterate-com/cli tokens revoke pat_…
+npx @iterate-com/cli mcp claude                    # Claude Code on /mcp with ITERATE_BEARER_TOKEN
 npx @iterate-com/cli use-my-computer --project my-project --name myComputer
 npx @iterate-com/cli menubar --project my-project  # macOS app
 npx @iterate-com/cli logout
 ```
 
 The default server is `https://os.iterate.com`. Login uses that server's OAuth
-issuer, PKCE and a loopback callback. Tokens refresh automatically before a
-command when close to expiry. `ITERATE_BEARER_TOKEN` supplies a token for scripts;
-`APP_CONFIG_ADMIN_API_SECRET` supplies operator credentials and takes precedence.
+issuer, PKCE and a loopback callback, and asks for the `iterate` scope alone.
+Tokens refresh automatically before a command when close to expiry.
+`ITERATE_BEARER_TOKEN` supplies a personal access token for scripts and
+`mcp claude` (`tokens create` prints one once; it works at `/api`, `/mcp` and the
+projects' hosts). `APP_CONFIG_ADMIN_API_SECRET` supplies the operator's
+credentials, which only `/api` accepts, and takes precedence. The `tokens`
+commands use neither, nor the stored login: each signs in in the browser with the
+`account` scope for its one call and ends that sign-in, so a stored login mints
+no key. `mcp claude` prints a command that reads the key from
+`$ITERATE_BEARER_TOKEN`, never the key itself. See
+[credentials](../../apps/os/docs/credentials.md).
 `ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
 
 ## Running scripts

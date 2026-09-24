@@ -176,8 +176,15 @@ test("a client cannot forge a platform fact in its own user context: its account
         source: claimed,
       },
       {
-        type: "events.iterate.com/account/grant-minted",
-        payload: { grantId: "grant_forged", name: "forged", projects: [], expiresAt: 9 },
+        type: "events.iterate.com/account/personal-access-token-minted",
+        payload: {
+          id: "pat_forged",
+          name: "forged",
+          hash: "0".repeat(64),
+          email: "forge@sec.test",
+          projects: ["prj_forged"],
+          expiresAt: null,
+        },
         source: claimed,
       },
       {
@@ -197,7 +204,7 @@ test("a client cannot forge a platform fact in its own user context: its account
     ]);
   const { state } = await account();
   expect.soft(state.authentications.map((fact) => fact.operationId)).not.toContain("forged");
-  expect.soft(state.personalAccessTokens).not.toHaveProperty("grant_forged");
+  expect.soft(state.personalAccessTokens).not.toHaveProperty("pat_forged");
   expect(state.secrets).not.toHaveProperty("/secrets/forged");
 });
 

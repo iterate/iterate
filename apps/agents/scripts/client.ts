@@ -4,10 +4,15 @@ import type { SessionCredentials } from "iterate/api";
 
 const connections: { socket: WebSocket; rpc: Disposable }[] = [];
 
-export function adminCredentials(): SessionCredentials {
-  const secret = process.env.ADMIN_API_SECRET;
-  if (!secret) throw new Error("ADMIN_API_SECRET is required");
-  return { type: "admin-secret", secret };
+/** The person's personal access token for the project (apps/os/docs/credentials.md), presented
+ *  in-band on the bare socket `session()` opens. */
+export function credentials(): SessionCredentials {
+  const token = process.env.ITERATE_BEARER_TOKEN;
+  if (!token)
+    throw new Error(
+      "ITERATE_BEARER_TOKEN is required: a personal access token for the project (`pnpm exec iterate tokens create`, or the Dash's Sessions page)",
+    );
+  return { type: "bearer", token };
 }
 
 /** App scripts call installed capabilities such as voice, which are outside the platform's types. */

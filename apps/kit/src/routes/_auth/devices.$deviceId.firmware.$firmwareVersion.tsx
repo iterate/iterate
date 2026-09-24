@@ -370,11 +370,11 @@ function KitPage() {
                       const { token } = await api.grants.mint({
                         name: `Kit ${device.name} ${new Date().toISOString().slice(0, 10)}`,
                         projects: [projectId],
-                        // The same identity the person saw and authorized, chosen before login.
+                        // The same identity the person saw and authorized, chosen before login:
+                        // the key is listed as this device.
                         clientId: deviceSession.clientId,
-                        // The device can neither refresh nor reflash itself: it is retired by
-                        // revocation from the sessions list, not by expiry.
-                        expiresAt: Date.now() + 10 * 365 * 24 * 3600_000,
+                        // No `expiresAt`: the device cannot reflash itself, so its key never
+                        // expires and is retired by revocation from the sessions list.
                       });
                       setPrepared({
                         key: preparationKey,

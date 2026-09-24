@@ -80,7 +80,9 @@ Run these commands from `apps/agents`. The installer also installs the agents co
 
 ```bash
 export WORKER_BASE_URL=https://os.iterate.com
-export ADMIN_API_SECRET=$(doppler secrets get APP_CONFIG --project os --config prd --plain | jq -r .secrets.adminBearer)
+# a personal access token for prj-voice (apps/os/docs/credentials.md): the Dash's Sessions page, or
+# `pnpm exec iterate --config prd tokens create --name voice-scripts --project prj-voice`
+export ITERATE_BEARER_TOKEN=itk_…
 export OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config prd --plain)
 # First prepare the project at https://k.iterate.com
 say -o ask.wav --data-format LEI16@16000 --channels=1 "What is two plus two?"

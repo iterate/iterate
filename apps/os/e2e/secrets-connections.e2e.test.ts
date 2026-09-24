@@ -44,6 +44,7 @@ import {
   petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
 } from "./support/petshop.ts";
+import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
@@ -259,13 +260,17 @@ test("oauth-refresh-token through a token-endpoint outage: one failed refresh, t
 // THE FIRST TOKENS, obtained by the platform: `itx.secrets.beginOAuth` hands back the provider's
 // authorize URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for
 // the page); the provider redirects the human to the platform's one callback with the code; the
-// callback admits only a signed-in member of the project (here the admin bearer, the suite's session),
-// and the secret's Durable Object exchanges the code. From then on it is the ordinary
+// callback admits only a signed-in member of the project (here the member's OAuth bearer; never the
+// operator's, which is `/api`'s alone), and the secret's Durable Object exchanges the code. From then on it is the ordinary
 // `oauth-refresh-token` secret the story above proves. No code outside that object ever held a token
 // — not even the test.
 test("beginOAuth, confidential client, in a catalogued project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
-  // a REAL project: a row in the control plane's catalog (the console lists it), not an ad-hoc context
-  const itx = openItx(await registerProject(freshDnsSafeProjectSlug("secrets-connect")));
+  // a REAL project: a row in the control plane's catalog (the console lists it), not an ad-hoc
+  // context, of a member who completes the consent
+  const slug = freshDnsSafeProjectSlug("secrets-connect");
+  const projectMember = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, projectMember);
+  const itx = openItx(projectId);
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
     await petshopAuthorizationServer();
@@ -307,7 +312,12 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   // follows it is REFUSED (the secret's stream paused), the tokens stay: the code is spent and the
   // consent cannot be re-obtained by a retry, so the callback answers the error and its replay
   // lands the facts (the facet completes the attempt it completed idempotently — no second exchange)
-  const member = { headers: { authorization: `Bearer ${adminCredentials().secret}` } };
+  // the operator's bearer is refused here: it would complete any project's consent
+  const operator = { headers: { authorization: `Bearer ${adminCredentials().secret}` } };
+  expect(await fetch(back, operator)).toMatchObject({ status: 401 });
+  const member = {
+    headers: { authorization: `Bearer ${(await oauthSession(projectId, projectMember)).token}` },
+  };
   const secret = itx.cd("/secrets/petshop");
   await secret.append({ type: "events.iterate.com/stream/paused" });
   const refused = await fetch(back, member);
@@ -359,7 +369,10 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
 // redirect URI, PKCE alone proves the exchange, and every later refresh identifies the client with
 // `client_id` in the body. This is how an MCP client (and any DCR-registered client) connects.
 test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in the body on refresh): the same flow, no secret involved at any point", async () => {
-  const itx = openItx(await registerProject(freshDnsSafeProjectSlug("secrets-connect-public")));
+  const slug = freshDnsSafeProjectSlug("secrets-connect-public");
+  const projectMember = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, projectMember);
+  const itx = openItx(projectId);
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
     await petshopAuthorizationServer();
@@ -382,7 +395,7 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   const back = new URL(consent.headers.get("location")!);
   expect(back.origin + back.pathname).toBe(callback);
   const done = await fetch(back, {
-    headers: { authorization: `Bearer ${adminCredentials().secret}` },
+    headers: { authorization: `Bearer ${(await oauthSession(projectId, projectMember)).token}` },
   });
   expect(done, await done.text()).toMatchObject({ status: 200 });
 

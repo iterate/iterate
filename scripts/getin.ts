@@ -4,6 +4,8 @@
 //
 //   pnpm getin                    # signed in as test@preview.iterate.test, in project `test`
 //   pnpm -s getin --print         # only the URL, on stdout — for Playwright and agents
+//   pnpm -s getin --token         # only a personal access token for that person and project, on
+//                                 # stdout: their bearer at /api, /mcp and the project's hosts
 //   pnpm getin -e ada@preview.iterate.test -p demo
 //
 // 1. the worktree's dev server: `pnpm dev start --detach` (apps/os/scripts/dev.ts), which returns at
@@ -14,14 +16,15 @@
 // 3. a test link signed with the local `secrets.key`, for this server's origin, landing in the local
 //    Dash's project page when a Dash wired to this server is up (and pre-approving it: no Allow
 //    page), else on the issuer's `/login` ("Signed in as");
-// 4. open it, or print it.
+// 4. open it, or print it; or, for `--token`, sign the person in with local dev's password and
+//    mint them a personal access token for the project (apps/os/src/grants.ts `mint`), 30 days.
 //
 // Local dev only: the credentials are local dev's (apps/os/scripts/generate-wrangler-config.ts
 // `viteWranglerConfig`); a deployment answers the link's `aud` with a 403, prd with a 404.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { newWebSocketRpcSession } from "capnweb";
+import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { createCli } from "trpc-cli";
 import { mintTestLink, TEST_LINK_EMAIL_DOMAIN, TEST_LINK_PATH } from "../apps/os/src/test-link.ts";
 
@@ -38,6 +41,8 @@ export default async function getin(
     project?: string;
     /** print the sign-in URL on stdout instead of opening a browser */
     print?: boolean;
+    /** print a personal access token for the person and project on stdout instead: their bearer at /api, /mcp and the project's hosts, for 30 days */
+    token?: boolean;
     /** the local Dash to land in (default http://localhost:5173, used when it is up and wired to this server) */
     dash?: string;
   } = {},
@@ -60,8 +65,9 @@ export default async function getin(
     baseUrl: string;
   };
 
-  await createProject(server.baseUrl, { email, project });
+  const projectId = await createProject(server.baseUrl, { email, project });
   console.error(`project: ${project}, owned by ${email}`);
+  if (options.token) return console.log(await mintToken(server.baseUrl, { email, projectId }));
 
   const dash = await localDash(options.dash || "http://localhost:5173", server.baseUrl);
   const token = await mintTestLink({
@@ -87,7 +93,8 @@ export default async function getin(
   spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "inherit" });
 }
 
-/** `projects.create` as `email`, found or created, over the local operator bearer — idempotent. */
+/** `projects.create` as `email`, found or created, over the local operator bearer — idempotent.
+ *  Answers the project's id. */
 async function createProject(baseUrl: string, input: { email: string; project: string }) {
   const url = new URL("/api", baseUrl);
   url.protocol = "ws:";
@@ -95,17 +102,55 @@ async function createProject(baseUrl: string, input: { email: string; project: s
   // `previewSignIn` does the same).
   using rpc = newWebSocketRpcSession<{
     authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {
-      projects: { create(input: { project: string }): Promise<unknown> };
+      projects: {
+        create(input: { project: string }): { whoami(): Promise<{ projectId: string }> };
+      };
     };
   }>(url.href);
-  await rpc
+  const { projectId } = await rpc
     // local dev's `secrets.adminBearer` (generate-wrangler-config.ts `viteWranglerConfig`)
     .authenticate({
       type: "admin-secret",
       secret: "dev-admin-api-secret",
       as: { email: input.email },
     })
-    .projects.create({ project: input.project });
+    .projects.create({ project: input.project })
+    .whoami();
+  return projectId;
+}
+
+/** A personal access token for `email` on `projectId`, minted as the Dash's Sessions page mints
+ *  one: the person signed in with local dev's password (the sign-in page's own post), their
+ *  session's `grants.mint`. */
+async function mintToken(baseUrl: string, input: { email: string; projectId: string }) {
+  const login = await fetch(new URL("/login", baseUrl), {
+    method: "POST",
+    headers: { Origin: baseUrl },
+    // local dev's `login.password` (generate-wrangler-config.ts `viteWranglerConfig`)
+    body: new URLSearchParams({ email: input.email, password: "dev", next: "/" }),
+    redirect: "manual",
+  });
+  if (login.status !== 302) throw new Error(`sign-in: ${login.status} ${await login.text()}`);
+  const cookie = login.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded mint on the login cookie, as the Dash's Sessions page makes it.
+  using rpc = newHttpBatchRpcSession<{
+    authenticate(credentials: { type: "from-server-cookie" }): {
+      grants: {
+        mint(input: { name: string; projects: string[]; expiresAt: number }): Promise<{
+          token: string;
+        }>;
+      };
+    };
+  }>(new Request(new URL("/api", baseUrl), { headers: { Origin: baseUrl, cookie } }));
+  const { token } = await rpc.authenticate({ type: "from-server-cookie" }).grants.mint({
+    name: "pnpm getin --token",
+    projects: [input.projectId],
+    expiresAt: Date.now() + 30 * 24 * 3600_000,
+  });
+  return token;
 }
 
 /** `origin` when a Dash answers there as a client of `issuer` (iterate/app-server.ts serves

@@ -20,11 +20,18 @@ import { type Reach } from "./control-plane/edge.ts";
 import { emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import { providerStore } from "./oauth-store.ts";
+import {
+  isPersonalAccessToken,
+  parsePersonalAccessToken,
+  personalAccessTokenHash,
+  personalAccessTokenHashMatches,
+  personalAccessTokenIndexed,
+} from "./personal-access-token.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization, so it is bound to
- * one of the authorization server's two resources. */
+ * one of the authorization server's two resources: the issuer's own session or a client's. */
 export const GrantProps = z.object({
-  kind: z.enum(["issuer", "app", "personal"]),
+  kind: z.enum(["issuer", "app"]),
   userId: z.string().startsWith("user_"),
   email: z.string(),
   /** the identity provider's picture and display name of the person (when the provider supplies them), shown where the
@@ -49,9 +56,15 @@ const TokenProps = GrantProps.extend({
   grantId: z.string().min(1),
 });
 
-/** A grant as one of its access tokens presents it: the props, with the token's scope and expiry
- *  (epoch ms) as the provider verified them (`ctx.auth`). */
-export type AccessGrant = z.infer<typeof TokenProps> & { scope: string[]; expiresAt: number };
+/** A grant as its bearer presents it: an OAuth access token's props, with the token's scope and
+ *  expiry (epoch ms) as the provider verified them (`ctx.auth`), or a personal access token
+ *  (`personal`, personal-access-token.ts: the key's id is its `grantId`, and a key that never expires
+ *  has an `expiresAt` and a `deadline` of `Infinity`). */
+export type AccessGrant = Omit<z.infer<typeof TokenProps>, "kind"> & {
+  kind: GrantProps["kind"] | "personal";
+  scope: string[];
+  expiresAt: number;
+};
 
 export type Authorization = {
   principal: Principal;
@@ -114,20 +127,43 @@ export async function grantIsLive(env: Env, grant: AccessGrant): Promise<boolean
   );
 }
 
-/** THE PLATFORM'S TOKEN VALIDATOR, for either resource (api.ts hosts both with it): a token the
- *  authorization server issued for `resource` (audience-checked, its props decrypted) whose grant
- *  is still live, else the operator's bearer. The props are the platform's `Authorization` — what
- *  the resource's handler reads as `ctx.props`. Null refuses the bearer (the resource server's 401
- *  challenge), logged as an `oauth.refusal` like the authorization server's own (`onError`). The
- *  operator's bearer is no token of this server's: a static credential accepted at both resources
- *  with every scope — at `/mcp` outside the MCP authorization profile (the library's
- *  docs/advanced-configuration.md, "MCP compatibility warning"). */
+/** THE PLATFORM'S TOKEN VALIDATOR, for either resource (api.ts hosts both with it). Three bearers:
+ *  - a token the authorization server issued for `resource` (audience-checked, its props
+ *    decrypted) whose grant is still live;
+ *  - a personal access token (personal-access-token.ts), at either resource: the library's
+ *    resource servers take any validator ("`validateToken` is just a function",
+ *    docs/resource-servers.md "Another issuer, at your own risk"), so the key's check is a branch
+ *    here, and it names the resource that asked as its audience. At `/mcp` a key is outside the MCP
+ *    authorization profile (docs/advanced-configuration.md, "MCP compatibility warning"), which
+ *    asks for a token issued for that resource: the platform accepts one anyway, so a person can
+ *    use the key they made in an MCP client, and MCP never forwards it anywhere;
+ *  - the operator's bearer, at `/api` alone: the deployment's machine credential for automation (the
+ *    e2e harness, deploy gates, load scripts). It is refused at `/mcp`, where an MCP client would
+ *    hold it.
+ *  The props are the platform's `Authorization`, what the resource's handler reads as `ctx.props`.
+ *  Null refuses the bearer (the resource server's 401 challenge), logged as an `oauth.refusal` like
+ *  the authorization server's own (`onError`). No bearer is ever logged. */
 export async function validateToken(
   env: Env,
   addresses: PlatformAddresses,
   resource: string,
   token: string,
 ) {
+  if (isPersonalAccessToken(token)) {
+    const admission = await personalAccessTokenAdmission(env, token);
+    if (!admission.ok) {
+      logRefusal(resource, admission.reason);
+      return null;
+    }
+    const { grant } = admission.authorization;
+    return {
+      props: admission.authorization,
+      audience: resource,
+      scope: grant.scope,
+      userId: grant.userId,
+      ...(Number.isFinite(grant.expiresAt) && { expiresAt: Math.floor(grant.expiresAt / 1000) }),
+    };
+  }
   const libraryToken = new TextEncoder().encode(token).byteLength <= LIBRARY_TOKEN_MAX_BYTES;
   const validated = libraryToken
     ? await authorizationServer(env, addresses).validateToken(resource, token, providerEnv(env))
@@ -138,12 +174,20 @@ export async function validateToken(
     logRefusal(resource, "grant_not_live");
     return null;
   }
-  if (await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret()))
-    return {
-      props: { principal: { actor: "admin" }, reach: "every", grant: null } satisfies Authorization,
-      audience: resource,
-      scope: [...OAuthScope.options],
-    };
+  if (await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret())) {
+    if (resource === addresses.api)
+      return {
+        props: {
+          principal: { actor: "admin" },
+          reach: "every",
+          grant: null,
+        } satisfies Authorization,
+        audience: resource,
+        scope: [...OAuthScope.options],
+      };
+    logRefusal(resource, "operator_bearer_not_accepted");
+    return null;
+  }
   // Why the library said no, read again only now: a token it holds for the other resource, or none.
   const held = libraryToken && (await oauthHelpers(env, addresses).unwrapToken(token));
   logRefusal(resource, held ? "audience_mismatch" : "token_unknown_or_expired");
@@ -151,9 +195,16 @@ export async function validateToken(
 }
 
 /** A bearer the resource refused, as the authorization server's refusals are logged (`onError`):
- *  its category and the check that failed. */
-export function logRefusal(resource: string, reason: string) {
-  console.warn({ event: "oauth.refusal", category: "protected-resource", reason, resource });
+ *  its category, the check that failed and, outside the resource servers, the entry point it came
+ *  to. */
+export function logRefusal(resource: string, reason: string, entryPoint?: BearerEntryPoint) {
+  console.warn({
+    event: "oauth.refusal",
+    category: "protected-resource",
+    reason,
+    resource,
+    entryPoint,
+  });
 }
 
 /** The longest bearer the library is asked about. Its tokens are about 90 characters, and it looks
@@ -161,18 +212,30 @@ export function logRefusal(resource: string, reason: string) {
  *  throws, which would answer a stranger's bearer with a 503 and a reported issue. */
 const LIBRARY_TOKEN_MAX_BYTES = 256;
 
-/** A bearer as `/api` admits it, where no resource server's handler runs: a project host's bearer,
- * a bare socket's in-band `authenticate` (rpc.ts), a browser session's held token (browser-client.ts).
- * A token for `/mcp` is no token here. */
+/** Where a bearer is presented outside the resource servers' handlers: `/api`'s own in-band
+ *  `authenticate` on a bare socket (rpc.ts), a project host (worker.ts), a browser session's held
+ *  token (browser-client.ts) and a secret's OAuth callback (secret-oauth-callback.ts). */
+export type BearerEntryPoint = "api" | "project-host" | "browser-session" | "secret-oauth-callback";
+
+/** A bearer as `/api` admits it, at an entry point where no resource server's handler runs
+ * (`BearerEntryPoint`). An OAuth token for `/mcp` is no token here; a personal access token is. The
+ * operator's bearer is `/api`'s alone: admitted in-band there, refused at every other entry point
+ * (a project host would hand its app `{ actor: "admin" }` over every project, the callback would
+ * let it complete any project's consent), and logged as `operator_bearer_not_accepted`. */
 export async function authorizationForToken(
   env: Env,
   token: string,
   addresses: PlatformAddresses,
+  entryPoint: BearerEntryPoint,
 ): Promise<Authorization | null> {
   const validation = await validateToken(env, addresses, addresses.api, token);
   if (!validation) return null;
+  if (!validation.props.grant && entryPoint !== "api") {
+    logRefusal(addresses.api, "operator_bearer_not_accepted", entryPoint);
+    return null;
+  }
   if (validation.scope.includes("iterate")) return validation.props;
-  logRefusal(addresses.api, "insufficient_scope");
+  logRefusal(addresses.api, "insufficient_scope", entryPoint);
   return null;
 }
 
@@ -298,14 +361,67 @@ async function authorizationOf(
   };
 }
 
+/** A personal access token's admission: the index holds the bearer's SHA-256 under the key it
+ *  names (personal-access-token.ts), then a fresh read of the person's account on every request, as
+ *  `grantIsLive` makes for an OAuth grant: the key's record, with that SHA-256, not ended, not
+ *  expired, and for an email `login.allowedEmails` admits. The bearer acts as the person, with
+ *  `iterate` alone, on the projects the key covers: a key manages no sessions and no
+ *  organizations, so a leaked one mints no other. A malformed, forged or unknown key, a wrong
+ *  secret or a revoked key (its index entry gone) is `token_unknown_or_expired`, like a token the
+ *  library does not hold; an ended one the index still holds, or one whose email the list no
+ *  longer names, `grant_not_live`. */
+async function personalAccessTokenAdmission(
+  env: Env,
+  token: string,
+): Promise<
+  | { ok: true; authorization: Authorization & { grant: AccessGrant } }
+  | { ok: false; reason: "token_unknown_or_expired" | "grant_not_live" }
+> {
+  const named = parsePersonalAccessToken(token);
+  if (!named) return { ok: false, reason: "token_unknown_or_expired" };
+  const hash = await personalAccessTokenHash(token);
+  // THE INDEX FIRST (personal-access-token.ts): a key it does not hold is refused on one KV read, so
+  // a forged key dials no Durable Object, neither a stranger's (which would be created) nor a real
+  // person's (whose account every one of their grants reads).
+  if (!(await personalAccessTokenIndexed(env.OAUTH_KV, hash, named)))
+    return { ok: false, reason: "token_unknown_or_expired" };
+  const account = await accountStateOf(env, named.userId);
+  const key = account.personalAccessTokens[named.id];
+  if (!key || !personalAccessTokenHashMatches(hash, key.hash))
+    return { ok: false, reason: "token_unknown_or_expired" };
+  const expiresAt = key.expiresAt ?? Infinity;
+  if (expiresAt <= Date.now()) return { ok: false, reason: "token_unknown_or_expired" };
+  if (
+    account.endedGrants[named.id] ||
+    !emailAllowed(appConfigOf(env).login.allowedEmails, key.email)
+  )
+    return { ok: false, reason: "grant_not_live" };
+  const grant: AccessGrant = {
+    kind: "personal",
+    userId: named.userId,
+    email: key.email,
+    projects: key.projects,
+    deadline: expiresAt,
+    grantId: named.id,
+    scope: ["iterate"],
+    expiresAt,
+  };
+  return {
+    ok: true,
+    authorization: {
+      principal: { actor: named.userId, email: key.email },
+      reach: { userId: named.userId, projectIds: key.projects },
+      grant,
+    },
+  };
+}
+
 /** A GRANT'S LIFETIME, decided at its code exchange and at every refresh — the library's
  *  `tokenExchangeCallback`, "the place for lifetime policy" (docs/advanced-configuration.md,
  *  "Sliding expiry"). A grant whose end is on the person's account, or past its `deadline`, is
- *  refused. A personal token never refreshes: its one access token, and the grant with it, live
- *  until its deadline (30 days by default, up to ten years for a device — grants.ts `mint`). Every
- *  other grant lives a week unused (the server's `refreshTokenTTL` and `refreshTokenIdleTTL`), and
- *  within a week of its deadline, 30 days after the sign-in or consent that made it, only until
- *  that deadline. */
+ *  refused. Every grant lives a week unused (the server's `refreshTokenTTL` and
+ *  `refreshTokenIdleTTL`), and within a week of its deadline, 30 days after the sign-in or consent
+ *  that made it, only until that deadline. */
 async function grantLifetime(
   env: Env,
   input: TokenExchangeCallbackOptions,
@@ -327,11 +443,6 @@ async function grantLifetime(
   // KV's shortest expiry, below which the library refuses a lifetime (`invalid_request`).
   if (remaining < 60) throw refused("deadline_passed", "The session has expired.");
   const accessTokenProps = { ...grant, grantId: input.grantId };
-  if (grant.kind === "personal") {
-    if (input.grantType !== GrantType.AUTHORIZATION_CODE)
-      throw refused("personal_token_refresh", "Personal tokens cannot refresh.");
-    return { accessTokenProps, accessTokenTTL: remaining, refreshTokenTTL: remaining };
-  }
   if (remaining >= SESSION_IDLE_SECONDS) return { accessTokenProps };
   // The library honors `refreshTokenTTL` only at the code exchange and `refreshTokenIdleTTL` only at
   // a refresh, and refuses either key anywhere else.

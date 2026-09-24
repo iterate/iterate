@@ -71,7 +71,8 @@ APP_CONFIG_SECRETS__KEY=<openssl rand -hex 32>
 ```
 
 - `password`: anyone who has it can sign in as any email they type.
-- `adminBearer`: operator access to every project over `/mcp`. You use it to verify.
+- `adminBearer`: operator access to every project over `/api` (`/mcp` refuses it). You use it to
+  find the user's project.
 - The key encrypts project secrets at rest; losing it loses them.
 
 Never print these in chat. When the user needs the password, copy it (it's JSON inside a dotenv
@@ -106,13 +107,15 @@ Signing in at the origin creates nothing: the organization and project are creat
 page, when an app connects. So send the user to the dash's connect page,
 `https://dash.iterate.com/.auth/connect?issuer=<origin>` (the origin's landing page links there too).
 They click Continue, sign in with any email and the password, then name the organization and project
-on the consent page. Wait for them, then find the slug yourself with the admin bearer (from
-`iterate/apps/os`, where the SDK resolves). Ask only if there are several:
+on the consent page. Wait for them, then find the slug and the email they signed in with yourself,
+with the admin bearer (from `iterate/apps/os`, where the SDK resolves). Ask only if there are
+several:
 
 ```bash
 ADMIN_BEARER=<adminBearer> pnpm exec tsx --eval 'import("iterate/node").then(async ({ connectIterate }) => {
   const c = await connectIterate({ baseUrl: process.argv[1], auth: { type: "admin-secret", secret: process.env.ADMIN_BEARER } });
-  console.log((await c.session.projects.list()).map((p) => p.slug).join("\n")); process.exit(0); })' <origin>
+  console.log((await c.session.projects.list()).map((p) => `project ${p.slug}`).join("\n"));
+  console.log((await c.session.users.list()).map((u) => `user ${u.email}`).join("\n")); process.exit(0); })' <origin>
 ```
 
 The project row exists even when Artifacts is missing and project creation failed.
@@ -124,17 +127,42 @@ drop the issuer too, so don't send the user through them.
 
 ## 7. Verify
 
-`/mcp` is stateless streamable HTTP. With the admin bearer, `project` is required:
+`/mcp` takes a person's bearer, so verify it as the user: sign in with their email and the password,
+and mint a personal access token for their project that expires in an hour (what the dash's
+Sessions page does). From `iterate/apps/os`, where capnweb resolves:
+
+```bash
+TOKEN=$(PASSWORD=<password> pnpm exec tsx --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
+  const [origin, email, slug] = process.argv.slice(1);
+  const login = await fetch(`${origin}/login`, { method: "POST", redirect: "manual", headers: { origin },
+    body: new URLSearchParams({ email, password: process.env.PASSWORD, next: "/" }) });
+  const cookie = login.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  const account = () => newHttpBatchRpcSession(new Request(`${origin}/api`, { headers: { origin, cookie } }))
+    .authenticate({ type: "from-server-cookie" });
+  const project = (await account().projects.list()).find((p) => p.slug === slug);
+  const { token } = await account().grants.mint({ name: "setup check", projects: [project.id], expiresAt: Date.now() + 3600_000 });
+  console.log(token); })' <origin> <email> <slug>)
+```
+
+`/mcp` is stateless streamable HTTP. The token reaches one project, so `project` may be omitted:
 
 ```bash
 jq -nc --arg s 'async (itx) => ({ who: await itx.whoami(), files: await itx.repos.get("/repos/config").listFiles() })' \
-  '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"run",arguments:{project:"<slug>",script:$s}}}' |
-curl -s <origin>/mcp -H "Authorization: Bearer $ADMIN_BEARER" -H 'content-type: application/json' \
+  '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"run",arguments:{script:$s}}}' |
+curl -s <origin>/mcp -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' -d @-
 ```
 
-Expect the project's id, slug and URL, plus the config repo's files. `repo /repos/config: not created`
-means project creation failed. Check the project's page in the dash for the reason. For `Namespace
+Expect the project's id, slug and URL, plus the config repo's files. Then revoke the key: it is the
+user's, and the check is done. A key can end itself (`logout`), so no sign-in is needed:
+
+```bash
+TOKEN=$TOKEN pnpm exec tsx --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
+  await newHttpBatchRpcSession(new Request(`${process.argv[1]}/api`, { headers: { authorization: `Bearer ${process.env.TOKEN}` } }))
+    .authenticate({ type: "from-server-cookie" }).logout(); })' <origin>
+```
+
+`repo /repos/config: not created` means project creation failed. Check the project's page in the dash for the reason. For `Namespace
 is not active`, create the namespace (step 5), then have the user create the project again from the
 dash's projects page. That starts a new attempt.
 

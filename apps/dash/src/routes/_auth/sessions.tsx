@@ -1,9 +1,9 @@
-// /sessions: every OAuth grant the signed-in user holds (browsers, connected apps, personal access
-// tokens), each endable on its own, and the one place a personal access token is minted: a name,
-// the projects it may reach and the one resource it is for → `api.grants.mint` → the token, shown
-// ONCE (it is a finite provider access token, never stored readable). The list is one page of
-// `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end invalidates
-// the router, which reloads it.
+// /sessions: every grant the signed-in user holds (browsers and connected apps, which are OAuth
+// grants; personal access tokens and devices' keys), each endable on its own, and the one place in
+// the Dash a personal access token is minted: a name, the projects it may reach and when it expires
+// → `api.grants.mint` → the key, shown ONCE (the account keeps only its hash). The list is one page
+// of `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end
+// invalidates the router, which reloads it.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
@@ -23,6 +23,7 @@ import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import {
   Table,
   TableBody,
@@ -52,9 +53,17 @@ export const Route = createFileRoute("/_auth/sessions")({
   component: SessionsPage,
 });
 
+/** How long a new key lives, in days; `never` mints one that ends only when it is revoked. */
+const TOKEN_LIFETIMES = [
+  { value: "30", label: "30 days" },
+  { value: "90", label: "90 days" },
+  { value: "365", label: "1 year" },
+  { value: "never", label: "No expiry" },
+];
+
 /** A personal access token as the form just minted it — held only in this page's state, shown
  *  once; a reload forgets it, as the server already has. */
-type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number };
+type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number | null };
 
 function SessionsPage() {
   const data = Route.useLoaderData();
@@ -63,7 +72,7 @@ function SessionsPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [tokenName, setTokenName] = useState("");
-  const [tokenResource, setTokenResource] = useState<"api" | "mcp">("api");
+  const [tokenLifetime, setTokenLifetime] = useState("30");
   const [excludedProjectIds, setExcludedProjectIds] = useState<Set<string>>(new Set());
   const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
@@ -84,6 +93,7 @@ function SessionsPage() {
   const selectedProjectIds = projects
     .filter((project) => !excludedProjectIds.has(project.id))
     .map((project) => project.id);
+  const slugOf = new Map(projects.map((project) => [project.id, project.slug]));
 
   const mintPersonalAccessToken = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -94,7 +104,10 @@ function SessionsPage() {
       const { token, expiresAt } = await api.grants.mint({
         name,
         projects: selectedProjectIds,
-        resource: tokenResource,
+        expiresAt:
+          tokenLifetime === "never"
+            ? undefined
+            : Date.now() + Number(tokenLifetime) * 24 * 3600_000,
       });
       setMinted({ name, token, expiresAt });
       setCopied(false);
@@ -178,6 +191,18 @@ function SessionsPage() {
                           {item.clientDomain}
                         </span>
                       )}
+                      {item.projects && (
+                        <span className="max-w-64 truncate font-mono text-xs font-normal text-muted-foreground">
+                          {item.projects.map((id) => slugOf.get(id) ?? id).join(", ")}
+                        </span>
+                      )}
+                      {item.mintedBy && (
+                        <span className="max-w-64 truncate text-xs font-normal text-muted-foreground">
+                          Minted by{" "}
+                          {items.find((session) => session.id === item.mintedBy)?.name ??
+                            "a session no longer listed"}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </TableCell>
@@ -198,7 +223,7 @@ function SessionsPage() {
                     ? "Expired"
                     : item.expiresAt
                       ? new Date(item.expiresAt).toISOString()
-                      : "—"}
+                      : "Never"}
                 </TableCell>
                 <TableCell>
                   <Button
@@ -250,21 +275,24 @@ function SessionsPage() {
         <CardHeader>
           <CardTitle>Personal access tokens</CardTitle>
           <CardDescription>
-            A personal access token is one OAuth grant: it acts as you, for the projects you choose,
-            for 30 days, and is shown once. It is for one place: <code>/api</code> and your
-            projects' hosts, or <code>/mcp</code>. Send it as <code>Authorization: Bearer</code>;
-            revoke it from the list above.
+            A personal access token is your API key: it acts as you, on the projects you choose,
+            until it expires or you revoke it from the list above. It is shown once. Send it as{" "}
+            <code>Authorization: Bearer</code> to <code>/api</code>, to <code>/mcp</code> from an
+            MCP client, or to your projects' hosts.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {minted && (
-            <p
+            // never in a session replay or autocapture: the key is shown once, here
+            <NotRecorded
               role="status"
               data-testid="minted"
               className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-3 text-sm"
             >
-              <strong>{minted.name}</strong> — copy it now; it is not shown again. Expires{" "}
-              {new Date(minted.expiresAt).toISOString()}.{" "}
+              <strong>{minted.name}</strong> — copy it now; it is not shown again.{" "}
+              {minted.expiresAt
+                ? `Expires ${new Date(minted.expiresAt).toISOString()}.`
+                : "It never expires."}{" "}
               <code data-testid="minted-token" className="break-all">
                 {minted.token}
               </code>
@@ -274,7 +302,7 @@ function SessionsPage() {
               <Button type="button" size="sm" variant="ghost" onClick={() => setMinted(null)}>
                 Dismiss
               </Button>
-            </p>
+            </NotRecorded>
           )}
           {canMintToken ? (
             <form onSubmit={mintPersonalAccessToken} className="flex flex-col gap-4">
@@ -291,17 +319,18 @@ function SessionsPage() {
                 />
               </Label>
               <Label className="flex flex-col items-start gap-2">
-                For
+                Expires
                 <NativeSelect
-                  aria-label="Token resource"
-                  value={tokenResource}
+                  aria-label="Token expiry"
+                  value={tokenLifetime}
                   disabled={minting}
-                  onChange={(event) =>
-                    setTokenResource(event.target.value === "mcp" ? "mcp" : "api")
-                  }
+                  onChange={(event) => setTokenLifetime(event.target.value)}
                 >
-                  <NativeSelectOption value="api">The API and project hosts</NativeSelectOption>
-                  <NativeSelectOption value="mcp">MCP</NativeSelectOption>
+                  {TOKEN_LIFETIMES.map((lifetime) => (
+                    <NativeSelectOption key={lifetime.value} value={lifetime.value}>
+                      {lifetime.label}
+                    </NativeSelectOption>
+                  ))}
                 </NativeSelect>
               </Label>
               <div

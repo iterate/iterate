@@ -16,6 +16,30 @@ const authenticated = (operationId: string, credential: "from-server-cookie" | "
   source: platform,
 });
 
+/** A personal access token's record as grants.ts `mint` lands it: `hash` is the key's SHA-256. */
+const minted = (id: string, name: string, expiresAt: number | null) => ({
+  type: "events.iterate.com/account/personal-access-token-minted",
+  payload: {
+    id,
+    name,
+    hash: "a".repeat(64),
+    email: "me@example.com",
+    projects: ["prj_1"],
+    expiresAt,
+    mintedBy: "grant_cli",
+  },
+});
+const key = (name: string, expiresAt: number | null, endedAt: string | null) => ({
+  name,
+  hash: "a".repeat(64),
+  email: "me@example.com",
+  projects: ["prj_1"],
+  expiresAt,
+  mintedBy: "grant_cli",
+  mintedAt: expect.any(String),
+  endedAt,
+});
+
 const rows: {
   name: string;
   events: { type: string; payload?: unknown; source?: typeof platform }[];
@@ -48,37 +72,31 @@ const rows: {
     },
   },
   {
-    name: "a token minted, a grant ended, a consent approved: each a fact where it happened — the token's row closes when its grant ends; a stranger's end is recorded too; a second mint or end is ignored",
+    name: "a key minted, a grant ended, a consent approved: each a fact where it happened — the key's record closes when it ends; a stranger's end is recorded too; a second mint or end is ignored; a record with no hash is no key",
     events: [
+      { ...minted("pat_a", "laptop", 9), source: platform },
+      { ...minted("pat_a", "again", 1), source: platform },
       {
-        type: "events.iterate.com/account/grant-minted",
-        payload: { grantId: "grant_a", name: "laptop", projects: ["prj_1"], expiresAt: 9 },
-        source: platform,
-      },
-      {
-        type: "events.iterate.com/account/grant-minted",
-        payload: { grantId: "grant_a", name: "again", projects: [], expiresAt: 1 },
+        type: "events.iterate.com/account/grant-ended",
+        payload: { grantId: "pat_b" },
         source: platform,
       },
       {
         type: "events.iterate.com/account/grant-ended",
-        payload: { grantId: "grant_b" },
+        payload: { grantId: "pat_a" },
         source: platform,
       },
       {
         type: "events.iterate.com/account/grant-ended",
-        payload: { grantId: "grant_a" },
+        payload: { grantId: "pat_a" },
         source: platform,
       },
+      // an end already under the id: the key is born closed
+      { ...minted("pat_b", "phone", null), source: platform },
+      // malformed: skipped by the engine's contract validation, never a key
       {
-        type: "events.iterate.com/account/grant-ended",
-        payload: { grantId: "grant_a" },
-        source: platform,
-      },
-      // the end landed before the mint (both are published after the fact): born closed
-      {
-        type: "events.iterate.com/account/grant-minted",
-        payload: { grantId: "grant_b", name: "phone", projects: [], expiresAt: 5 },
+        type: "events.iterate.com/account/personal-access-token-minted",
+        payload: { id: "pat_c", name: "no hash", projects: ["prj_1"], expiresAt: null },
         source: platform,
       },
       {
@@ -96,22 +114,10 @@ const rows: {
       authentications: [],
       secrets: {},
       personalAccessTokens: {
-        grant_a: {
-          name: "laptop",
-          projects: ["prj_1"],
-          expiresAt: 9,
-          mintedAt: expect.any(String),
-          endedAt: expect.any(String),
-        },
-        grant_b: {
-          name: "phone",
-          projects: [],
-          expiresAt: 5,
-          mintedAt: expect.any(String),
-          endedAt: expect.any(String),
-        },
+        pat_a: key("laptop", 9, expect.any(String)),
+        pat_b: key("phone", null, expect.any(String)),
       },
-      endedGrants: { grant_b: { at: expect.any(String) }, grant_a: { at: expect.any(String) } },
+      endedGrants: { pat_b: { at: expect.any(String) }, pat_a: { at: expect.any(String) } },
       grantUses: {},
       memberships: {},
       consents: [
@@ -216,10 +222,7 @@ const rows: {
         type: "events.iterate.com/account/authenticated",
         payload: { credential: "admin-secret", at: 1, operationId: "forged" },
       },
-      {
-        type: "events.iterate.com/account/grant-minted",
-        payload: { grantId: "grant_f", name: "forged", projects: [], expiresAt: 9 },
-      },
+      minted("pat_f", "forged", null),
       {
         type: "events.iterate.com/secret/set",
         payload: { path: "/secrets/forged", urls: ["https://evil.example.test"] },
@@ -229,26 +232,14 @@ const rows: {
         payload: { orgId: "org_forged", userId: "user_me", role: "owner" },
       },
       authenticated("op-1", "from-server-cookie"),
-      // the platform's mint of a real grant, then an end the person appended: the grant stays open
-      {
-        type: "events.iterate.com/account/grant-minted",
-        payload: { grantId: "grant_a", name: "laptop", projects: [], expiresAt: 9 },
-        source: platform,
-      },
-      { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
-      { type: "events.iterate.com/account/grant-used", payload: { grantId: "grant_a", at: 7 } },
+      // the platform's mint of a real key, then an end the person appended: the key stays open
+      { ...minted("pat_a", "laptop", 9), source: platform },
+      { type: "events.iterate.com/account/grant-ended", payload: { grantId: "pat_a" } },
+      { type: "events.iterate.com/account/grant-used", payload: { grantId: "pat_a", at: 7 } },
     ],
     state: {
       authentications: [{ credential: "from-server-cookie", at: 1, operationId: "op-1" }],
-      personalAccessTokens: {
-        grant_a: {
-          name: "laptop",
-          projects: [],
-          expiresAt: 9,
-          mintedAt: expect.any(String),
-          endedAt: null,
-        },
-      },
+      personalAccessTokens: { pat_a: key("laptop", 9, null) },
       endedGrants: {},
       grantUses: {},
       consents: [],

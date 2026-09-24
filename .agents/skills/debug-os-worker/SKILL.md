@@ -103,14 +103,20 @@ lines are incomplete evidence.
 
 ## The durable side
 
+- **Credentials**: a personal access token for the project, as `ITERATE_BEARER_TOKEN`. Ask the
+  person for one, or mint your own if you are signed in
+  (`pnpm exec iterate --config prd tokens create --name debugging --project <slug>`;
+  [credentials](../../../apps/os/docs/credentials.md)). It covers only projects its person
+  belongs to. For anyone else's project use the operator bearer on `/api` instead:
+  `APP_CONFIG_ADMIN_API_SECRET` (the deployment's `secrets.adminBearer`) in place of
+  `ITERATE_BEARER_TOKEN` below.
 - **A context's log and processor rows**: `apps/os/scripts/inspect-context.ts`, with
-  `WORKER_BASE_URL`, `ADMIN_API_SECRET` (the deployment's `secrets.adminBearer`), `PROJECT`
-  and `CTX_PATH`. The fix-stream skill shows the full-JSON dump.
+  `WORKER_BASE_URL`, `ITERATE_BEARER_TOKEN`, `PROJECT` and `CTX_PATH`. The fix-stream skill
+  shows the full-JSON dump.
 - **Anything else a script can read**: run it at the project root with
-  `APP_CONFIG_ADMIN_API_SECRET=… pnpm exec iterate --config prd itx run --project <slug> --eval '…'`
-  ([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
-  That is an operator run. It is recorded on the project's root log, and reading an idle context
-  wakes it.
+  `ITERATE_BEARER_TOKEN=… pnpm exec iterate --config prd itx run --project <slug> --eval '…'`.
+  The run is recorded on the project's root log under the key's person, and reading an idle
+  context wakes it.
 - **Local dev**: `pnpm dev` prints a Local Explorer. Its
   `POST /cdn-cgi/local/explorer/api/local/observability/query` runs SQL over the captured `logs`
   and `spans` tables. Use it to reproduce a line before you hunt for it on prd.

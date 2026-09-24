@@ -1,44 +1,40 @@
 import { z } from "zod";
 import { CimdFetchError, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
-import { codedError, isLocalOrigin } from "iterate/lib";
+import { codedError, isLocalOrigin, reportIssue } from "iterate/lib";
 import type { GrantRecord } from "iterate/api";
-import { authorizationCodeRequest } from "iterate/oauth";
-import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
+import { type GrantEnded, type PersonalAccessTokenMinted } from "./account/contract.ts";
 import type { PlatformAddresses } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import {
   accountStateOf,
-  authorizationServerFetch,
   grantIsLive,
   oauthHelpers,
-  parseAuthorization,
   revokeGrant,
-  TOKEN_ENDPOINT,
-  type GrantProps,
   type Authorization,
 } from "./oauth.ts";
 import { ClientDisplayUrl, clientDisplay } from "./client-display.ts";
-import { appendPlatformFacts, publishPlatformFacts } from "./session.ts";
+import {
+  indexPersonalAccessToken,
+  newPersonalAccessToken,
+  unindexPersonalAccessToken,
+} from "./personal-access-token.ts";
+import { appendPlatformFacts } from "./session.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
-  tokenKind: z.string().optional(),
   logoUri: ClientDisplayUrl.optional().catch(undefined),
   clientDomain: z.string().optional(),
 });
 const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
   projects: z.array(z.string()).min(1),
-  /** A public CIMD client for a separately provisioned device. */
+  /** A device's public CIMD client (Kit's Prepare device): the key is listed as that device, with
+   *  the name and logo its metadata document gives. */
   clientId: z.url({ protocol: /^https$/ }).optional(),
-  /** Epoch ms. Default 30 days; at most ten years — a device that can neither refresh nor
-   *  reflash itself is retired by revocation from the sessions list, not by a clock. */
+  /** Epoch ms. Absent: the key never expires, and ends only when it is revoked. */
   expiresAt: z.number().int().positive().optional(),
-  /** The one resource the token is for (RFC 8707: the provider binds each grant to one): `api`,
-   *  Cap'n Web at `/api` and the covered projects' hosts, or `mcp`. */
-  resource: z.enum(["api", "mcp"]).default("api"),
 });
 
 /** Whether this deployment mints personal access tokens: a bearer that acts as a person must only
@@ -47,17 +43,17 @@ const MintInput = z.object({
 const mintsPersonalAccessTokens = (issuer: string): boolean =>
   issuer.startsWith("https:") || isLocalOrigin(issuer);
 
-/** Account capabilities are consented independently of project access. */
+/** A PERSON'S SESSIONS AND KEYS: their OAuth grants (the provider's inventory) and their personal
+ *  access tokens (their account's records, personal-access-token.ts), listed and ended alike, and
+ *  where a key is minted. Account capabilities are consented independently of project access. */
 export class GrantsRpcTarget extends RpcTarget {
   readonly #env: Env;
-  readonly #ctx: ExecutionContext;
   readonly #auth: Authorization;
   /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
   readonly #addresses: PlatformAddresses;
-  constructor(env: Env, ctx: ExecutionContext, auth: Authorization, addresses: PlatformAddresses) {
+  constructor(env: Env, auth: Authorization, addresses: PlatformAddresses) {
     super();
     this.#env = env;
-    this.#ctx = ctx;
     this.#auth = auth;
     this.#addresses = addresses;
   }
@@ -70,33 +66,50 @@ export class GrantsRpcTarget extends RpcTarget {
       );
     return { sub: grant.userId, email: grant.email, reach: this.#auth.reach, grant };
   }
-  /** AN ACCOUNT FACT THE VERB AWAITS — a grant's end: from the moment it lands, every admission of
-   *  the grant is refused (oauth.ts `grantIsRevoked` reads the account's `endedGrants`), whatever
-   *  the provider's rows still say. Keyed on the grant, and stamped `source.platform`
-   *  (session.ts `appendPlatformFacts`): the account folds nothing else, so an end a person appends
-   *  themselves revokes nothing. */
-  async #landGrantEnded(userId: string, grantId: string): Promise<void> {
-    await appendPlatformFacts(
-      this.#env.ITERATE_CONTEXT,
-      { account: userId },
-      {
-        type: "events.iterate.com/account/grant-ended",
-        idempotencyKey: `account/grant-ended/${grantId}`,
-        payload: { grantId } satisfies GrantEnded,
-      },
-      { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
-    );
+  /** A PLATFORM FACT ON THE ACCOUNT THE VERB AWAITS, stamped with this session: a key's record, or
+   *  an end. Stamped `source.platform` (session.ts `appendPlatformFacts`): the account folds
+   *  nothing else, so a fact a person appends themselves mints and revokes nothing. */
+  async #land(userId: string, fact: Parameters<typeof appendPlatformFacts>[2]): Promise<void> {
+    await appendPlatformFacts(this.#env.ITERATE_CONTEXT, { account: userId }, fact, {
+      principal: this.#auth.principal,
+      grant: this.#auth.grant?.grantId,
+    });
   }
-  /** Any client can end its own grant. It cannot address another user's session. */
+  /** A grant's or a key's end: from the moment it lands, every admission of it is refused (oauth.ts
+   *  reads the account's `endedGrants`), whatever the provider's rows still say. Keyed on its id. */
+  #landGrantEnded(userId: string, grantId: string) {
+    return this.#land(userId, {
+      type: "events.iterate.com/account/grant-ended",
+      idempotencyKey: `account/grant-ended/${grantId}`,
+      payload: { grantId } satisfies GrantEnded,
+    });
+  }
+  /** A key's index entry (personal-access-token.ts) goes AFTER its end landed on the account, the
+   *  revocation truth: an entry that outlives a failed delete admits nothing, so a failure is
+   *  reported, not thrown. The key's hash is `key`'s, or its record's on the account. */
+  async #unindex(userId: string, id: string, key?: { hash: string }) {
+    try {
+      const hash = (key || (await accountStateOf(this.#env, userId)).personalAccessTokens[id])
+        ?.hash;
+      if (hash) await unindexPersonalAccessToken(this.#env.OAUTH_KV, hash);
+    } catch (error) {
+      reportIssue("personal-access-token.unindex-failed", error, { id });
+    }
+  }
+  /** Any client can end its own grant, and a personal access token its own key. It cannot address
+   *  another user's session. */
   async endCurrent() {
     const grant = this.#auth.grant;
     if (!grant) throw codedError("FORBIDDEN", "The administrator credential has no user session.");
     await this.#landGrantEnded(grant.userId, grant.grantId);
-    return revokeGrant(this.#env, this.#addresses, grant);
+    // a key has no provider rows to clean up: its end on the account, then its index entry
+    if (grant.kind === "personal") await this.#unindex(grant.userId, grant.grantId);
+    else await revokeGrant(this.#env, this.#addresses, grant);
   }
 
-  /** Provider pagination is the inventory; the person's own account (src/account/contract.ts) says
-   *  which grants have ended and when each was last used. */
+  /** The person's personal access tokens (their account, on the first page), then a page of their
+   *  OAuth grants (the provider's inventory); the account says which have ended and when each was
+   *  last used. */
   async list(cursor?: string) {
     const env = this.#env;
     const session = this.#account();
@@ -104,12 +117,35 @@ export class GrantsRpcTarget extends RpcTarget {
       oauthHelpers(env, this.#addresses).listUserGrants(session.sub, { limit: 50, cursor }),
       accountStateOf(env, session.sub),
     ]);
+    const now = Date.now();
+    const keys = cursor
+      ? []
+      : Object.entries(account.personalAccessTokens).flatMap(([id, key]): GrantRecord[] => {
+          if (account.endedGrants[id]) return [];
+          return [
+            {
+              id,
+              name: key.name,
+              kind: key.device ? "device" : "personal",
+              clientId: key.device?.clientId,
+              logoUri: key.device?.logoUri,
+              clientDomain: key.device?.clientDomain,
+              projects: key.projects,
+              createdAt: Date.parse(key.mintedAt),
+              expiresAt: key.expiresAt,
+              lastUsedAt: account.grantUses[id]?.at ?? null,
+              current: id === session.grant.grantId,
+              expired: key.expiresAt !== null && key.expiresAt <= now,
+              mintedBy: key.mintedBy,
+            },
+          ];
+        });
     const { api, mcp } = this.#addresses;
     const resourceNames = new Map<string, GrantRecord["resource"]>([
       [api, "api"],
       [mcp, "mcp"],
     ]);
-    const items = page.items.flatMap((grant): GrantRecord[] => {
+    const sessions = page.items.flatMap((grant): GrantRecord[] => {
       if (account.endedGrants[grant.id]) return [];
       const metadata = DisplayMetadata.parse(grant.metadata ?? {});
       // The provider stores an unexchanged grant with the code's ten-minute KV TTL.
@@ -121,38 +157,36 @@ export class GrantsRpcTarget extends RpcTarget {
           clientId: grant.clientId,
           logoUri: metadata.logoUri,
           clientDomain: metadata.clientDomain,
-          kind: !grant.expiresAt
-            ? "pending"
-            : metadata.tokenKind === "device"
-              ? "device"
-              : metadata.tokenKind === "personal"
-                ? "personal"
-                : "session",
+          kind: grant.expiresAt ? "session" : "pending",
           resource: resourceNames.get(String(grant.resource)),
           createdAt: grant.createdAt * 1000,
           expiresAt,
           lastUsedAt: account.grantUses[grant.id]?.at ?? null,
           current: grant.id === session.grant.grantId,
-          expired: Boolean(expiresAt && expiresAt <= Date.now()),
+          expired: expiresAt <= now,
         },
       ];
     });
     return {
-      items,
+      items: [...keys, ...sessions],
       cursor: page.cursor,
       projects: await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach),
       canMintToken: mintsPersonalAccessTokens(this.#addresses.platformOrigin),
     };
   }
 
-  /** Ownership comes from the account (a grant already ended there) or a full provider inventory
-   * scan — an arbitrary foreign grant id ends nothing. The end lands on the account FIRST and is
-   * awaited (the revocation truth); then the provider's rows go. */
+  /** Ownership comes from the account (a key it holds, or an end already there) or a full provider
+   * inventory scan — an arbitrary foreign id ends nothing. The end lands on the account FIRST and
+   * is awaited (the revocation truth); then an OAuth grant's provider rows go, or a key's index
+   * entry. `/api`, `/mcp` and the project hosts refuse it at once; a connection it holds open (an
+   * `/api` socket, rpc.ts; a project host's WebSocket or streamed body, project-host-lease.ts)
+   * closes at its next 30 s re-check. */
   async end(grantId: string) {
     const env = this.#env;
     const session = this.#account();
     const account = await accountStateOf(env, session.sub);
-    if (!account.endedGrants[grantId]) {
+    const key = account.personalAccessTokens[grantId];
+    if (!key && !account.endedGrants[grantId]) {
       let owned: GrantSummary | undefined;
       let cursor: string | undefined;
       do {
@@ -165,153 +199,79 @@ export class GrantsRpcTarget extends RpcTarget {
       if (!owned) throw codedError("GRANT_NOT_FOUND", "Session not found");
     }
     await this.#landGrantEnded(session.sub, grantId);
-    return revokeGrant(env, this.#addresses, { userId: session.sub, grantId });
+    if (key) await this.#unindex(session.sub, grantId, key);
+    else await revokeGrant(env, this.#addresses, { userId: session.sub, grantId });
   }
 
-  /** The console's own OAuth client the personal-token exchange runs through: the client id
-   * metadata document at `/.auth/client.json` on an HTTPS issuer; on the local worker (a plain-http
-   * client id is no CIMD client) a public client registered with the provider, as the browser
-   * session's login registers one. The local harness's KV does not promise
-   * read-your-write (a lookup right after the put has missed under load), and the exchange below
-   * reads the row three times — so the id is returned only once the provider sees it. */
-  async #consoleClientId(issuer: string, redirectUri: string): Promise<string> {
-    if (!isLocalOrigin(issuer)) return `${issuer}/.auth/client.json`;
-    const helpers = oauthHelpers(this.#env, this.#addresses);
-    const client = await helpers.createClient({
-      clientName: new URL(issuer).host,
-      redirectUris: [redirectUri],
-      tokenEndpointAuthMethod: "none",
-      grantTypes: ["authorization_code"],
-      responseTypes: ["code"],
-    });
-    for (let attempt = 0; attempt < 40; attempt++) {
-      if (await helpers.lookupClient(client.clientId)) return client.clientId;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error("The local console client did not become visible to the provider.");
-  }
-
-  /** A PERSONAL ACCESS TOKEN: one finite OAuth grant of this user's — 30 days unless `expiresAt`
-   * says longer (up to ten years, for a device that holds it), scoped to the `projects` named (each
-   * one the user reaches), revocable from `list`/`end` like any grant — whose
-   * access token is answered ONCE and never stored readable; it carries no refresh credential
-   * (oauth.ts `grantLifetime` refuses a refresh of a personal grant). The bearer acts as the user at
-   * its one `resource`: `api` opens `/api` and a project host of a covered project
-   * (`authorizationForToken`), `mcp` opens `/mcp`. The console's client, or the device's public
-   * CIMD client, performs the exchange in process. */
+  /** A PERSONAL ACCESS TOKEN (personal-access-token.ts): a key of this person's, scoped to the
+   * `projects` named (each one they reach), expiring at `expiresAt` or never, revocable from
+   * `list`/`end` like any grant. Its bearer is answered ONCE: the account keeps its SHA-256 alone.
+   * The bearer acts as the person, with the `iterate` scope, at `/api`, at `/mcp` and on a covered
+   * project's hosts (oauth.ts `validateToken`). The key's index entry and its record land before
+   * the bearer is answered, so it works at once; the record names the session that minted it
+   * (`mintedBy`), which the list shows. */
   async mint(input: unknown) {
     const env = this.#env;
-    const ctx = this.#ctx;
     const session = this.#account();
     if (!(await grantIsLive(env, session.grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
-    const { platformOrigin: issuer } = this.#addresses;
-    if (!mintsPersonalAccessTokens(issuer))
+    if (!mintsPersonalAccessTokens(this.#addresses.platformOrigin))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
+    if (data.expiresAt && data.expiresAt < Date.now() + 60_000)
+      throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
     const projects = (
       await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach, data.projects)
     )
       .filter((project) => data.projects.includes(project.id))
       .map((project) => project.id);
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");
-    const redirectUri = `${data.clientId ? new URL(data.clientId).origin : issuer}/.auth/callback`;
-    const clientId = data.clientId || (await this.#consoleClientId(issuer, redirectUri));
-    const helpers = oauthHelpers(env, this.#addresses);
-    const client = data.clientId
-      ? await helpers.lookupClient(clientId).catch((error: unknown) => {
-          if (!(error instanceof CimdFetchError)) throw error;
-          throw codedError(
-            "INVALID_INPUT",
-            "The device's OAuth metadata could not be loaded. Try preparing the device again.",
-            { clientId, detail: error.detail },
-          );
-        })
-      : null;
-    if (data.clientId && (!client || client.tokenEndpointAuthMethod !== "none"))
-      throw codedError("INVALID_INPUT", "A device needs a public OAuth client metadata document.");
-    const flow = await authorizationCodeRequest({
-      issuer,
-      clientId,
-      redirectUri,
-      resources: [this.#addresses[data.resource]],
-    });
-    const auth = await parseAuthorization(env, new Request(flow.url));
-    const expiresAt = Math.min(
-      data.expiresAt ?? Date.now() + 30 * 24 * 3600_000,
-      Date.now() + 10 * 365 * 24 * 3600_000,
-    );
-    if (expiresAt < Date.now() + 60_000)
-      throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
-    const approved = await helpers.completeAuthorization({
-      request: auth,
-      userId: session.sub,
-      scope: ["iterate"],
-      revokeExistingGrants: false,
-      metadata: {
-        ...clientDisplay(client, clientId),
-        clientName: data.name,
-        tokenKind: data.clientId ? "device" : "personal",
-      },
-      props: {
-        kind: "personal",
-        userId: session.sub,
-        email: session.email,
-        projects,
-        deadline: expiresAt,
-      } satisfies GrantProps,
-    });
-    const code = new URL(approved.redirectTo).searchParams.get("code");
-    if (!code) throw new Error("The token authorization did not produce a code.");
-    // Personal token minting runs the code→token exchange through the SAME provider gate in process
-    // (browser apps hit its public endpoint instead).
-    const response = await authorizationServerFetch(
-      env,
-      this.#addresses,
-      new Request(`${issuer}${TOKEN_ENDPOINT}`, {
-        method: "POST",
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          client_id: clientId,
-          redirect_uri: redirectUri,
-          code_verifier: flow.verifier,
-          code,
-        }),
-      }),
-      ctx,
-    );
-    if (!response.ok) throw new Error(`Token exchange refused (${response.status}).`);
-    const tokens = z
-      .object({
-        token_type: z.literal("bearer"),
-        access_token: z.string(),
-        // The provider needs a finite refresh lifetime to expire its grant record.
-        // This credential is discarded here; the exchange callback refuses its use.
-        refresh_token: z.string(),
-      })
-      .parse(await response.json());
-    // The provider's access token is `<userId>:<grantId>:<secret>` (oauth-provider.ts): the grant's
-    // id is its middle — the only place the mint learns it. (`unwrapToken` would read the token
-    // back from KV, where a write is only usually visible at once.) A token of any other shape fails
-    // the mint rather than record the grant under a wrong id. The fact of the mint, on the account.
-    // Best-effort and async (session.ts `publishPlatformFacts`): the provider is the truth for the
-    // grant, this is the person's record of it.
-    const [tokenUserId, grantId] = tokens.access_token.split(":");
-    if (tokenUserId !== session.sub || !grantId)
-      throw new Error("The provider's access token is not `<userId>:<grantId>:<secret>`.");
-    publishPlatformFacts(
-      {
-        contextNamespace: this.#env.ITERATE_CONTEXT,
-        waitUntil: (promise) => this.#ctx.waitUntil(promise),
-      },
-      { account: session.sub },
-      {
-        type: "events.iterate.com/account/grant-minted",
-        idempotencyKey: `account/grant-minted/${grantId}`,
-        payload: { grantId, name: data.name, projects, expiresAt } satisfies GrantMinted,
-      },
-      { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
-    );
-    return { token: tokens.access_token, expiresAt };
+    let device: PersonalAccessTokenMinted["device"];
+    if (data.clientId) {
+      const { logoUri, clientDomain } = clientDisplay(
+        await this.#deviceClient(data.clientId),
+        data.clientId,
+      );
+      device = { clientId: data.clientId, logoUri, clientDomain };
+    }
+    const { id, token, hash } = await newPersonalAccessToken(session.sub);
+    const expiresAt = data.expiresAt ?? null;
+    // The index entry first, then the record: an entry whose record fails to land admits nothing
+    // (the account refuses a key it does not hold), and it goes with the failure.
+    await indexPersonalAccessToken(env.OAUTH_KV, { hash, userId: session.sub, id, expiresAt });
+    try {
+      await this.#land(session.sub, {
+        type: "events.iterate.com/account/personal-access-token-minted",
+        idempotencyKey: `account/personal-access-token-minted/${id}`,
+        payload: {
+          id,
+          name: data.name,
+          hash,
+          email: session.email,
+          projects,
+          expiresAt,
+          device,
+          mintedBy: session.grant.grantId,
+        } satisfies PersonalAccessTokenMinted,
+      });
+    } catch (error) {
+      await this.#unindex(session.sub, id, { hash });
+      throw error;
+    }
+    return { id, token, expiresAt };
+  }
+
+  /** A device's client metadata document, for its name and logo in the list. */
+  async #deviceClient(clientId: string) {
+    try {
+      return await oauthHelpers(this.#env, this.#addresses).lookupClient(clientId);
+    } catch (error) {
+      if (!(error instanceof CimdFetchError)) throw error;
+      throw codedError(
+        "INVALID_INPUT",
+        "The device's OAuth metadata could not be loaded. Try preparing the device again.",
+        { clientId, detail: error.detail },
+      );
+    }
   }
 }

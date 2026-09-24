@@ -147,8 +147,8 @@ const digestsEqual = (a: Uint8Array, b: Uint8Array): boolean => {
 };
 
 /** The principal the admin secret grants — `{ actor: "admin" }`, every project — when `candidate`
- *  IS `secret` (`APP_CONFIG_ADMIN_API_SECRET`: at `authenticate({ type: "admin-secret" })`, as a
- *  bearer token and on `/mcp`), else null. Both are SHA-256 hashed and the digests compared in
+ *  IS `secret` (`APP_CONFIG_ADMIN_API_SECRET`: at `authenticate({ type: "admin-secret" })`, and as
+ *  a bearer on `/api` — oauth.ts refuses it at `/mcp`), else null. Both are SHA-256 hashed and the digests compared in
  *  constant time. A blank secret matches nothing. */
 export async function verifyAdminSecret(
   candidate: string,

@@ -16,7 +16,7 @@ const log: ContextViewEvent[] = [
   at(8, "stream/woken", { incarnation: 2 }, "2026-09-23T12:00:00.000Z"),
   at(9, "stream/subscription-configured", { name: "sub-1" }, "2026-09-23T12:00:00.000Z"),
   at(10, "live-state/changed", undefined, "2026-09-23T12:00:01.000Z"),
-  at(11, "account/grant-minted", { grantId: "grant_a" }, "2026-09-23T12:00:02.000Z"),
+  at(11, "account/personal-access-token-minted", { id: "pat_a" }, "2026-09-23T12:00:02.000Z"),
 ];
 
 // ── foldEvents ──
@@ -96,7 +96,7 @@ test("sentenceText walks strings, numbers, arrays and elements' children", () =>
 
 test("whoBefore: carries the last named actor over housekeeping, starts afresh at a day mark", () => {
   const named = (offset: number, actor: string, iso?: string): ContextViewEvent => ({
-    ...at(offset, "account/grant-minted", { grantId: `g${String(offset)}` }, iso),
+    ...at(offset, "account/personal-access-token-minted", { id: `pat_${String(offset)}` }, iso),
     source: { principal: { actor } },
   });
   const items = foldEvents(

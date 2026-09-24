@@ -20,6 +20,7 @@ test("Google proves issuer identity; upstream credentials never become app token
     env,
     (await session.bearer())!,
     platformAddressesOf(env, new Request(`${ORIGIN}/`)),
+    "browser-session",
   );
   // the person's id is minted by the control plane; Google's subject names them from now on
   expect(auth?.principal).toEqual({
@@ -131,6 +132,7 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
     env,
     (await session.bearer())!,
     platformAddressesOf(env, new Request(ORIGIN)),
+    "browser-session",
   );
   expect(auth?.principal).toEqual({
     actor: expect.stringMatching(/^user_[0-9a-f]{32}$/),

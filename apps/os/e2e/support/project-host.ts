@@ -216,6 +216,16 @@ export async function fetchProjectHost(
   return { status: res.status, headers: Object.fromEntries(res.headers), text: await res.text() };
 }
 
+/** A WebSocket on a project address (`projectUrl`, its scheme turned to ws/wss) with `headers` (a
+ *  bearer: a browser cannot send one, a script or device can), through `projectHostDispatcher`,
+ *  held open for the caller: it opens, echoes and closes as the row drives it. */
+export function projectUrlSocket(url: URL, headers: Record<string, string> = {}): UndiciWebSocket {
+  return new UndiciWebSocket(url.href.replace(/^http/, "ws"), {
+    headers,
+    dispatcher: projectHostDispatcher(),
+  });
+}
+
 /** What one eyeball WebSocket round trip saw: `opened` (the 101), the subprotocol the 101 named,
  *  the first message, the close code. */
 type WebSocketRoundTrip = {

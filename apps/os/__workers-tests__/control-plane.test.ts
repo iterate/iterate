@@ -589,16 +589,11 @@ test("project ingress strips forged internal authority and never exposes platfor
   expect((await target.readEvents(0, 100)).events.some((event) => event.type === "forged")).toBe(
     false,
   );
+  // the operator's bearer is /api's alone: a project host refuses it before any Durable Object,
+  // so no app is ever handed an operator over every project (oauth.ts `authorizationForToken`)
   expect(
-    await (
-      await exports.default.fetch(host, { headers: { Authorization: `Bearer ${secret}` } })
-    ).json(),
-  ).toEqual({
-    principal: { actor: "admin" },
-    authorization: null,
-    cookie: null,
-    routingSlug: "echo",
-  });
+    await exports.default.fetch(host, { headers: { Authorization: `Bearer ${secret}` } }),
+  ).toMatchObject({ status: 401 });
   expect(
     await exports.default.fetch(host, { headers: { Authorization: "Bearer unrecognized" } }),
   ).toMatchObject({ status: 401 });

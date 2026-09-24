@@ -9,8 +9,10 @@ import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Authorization } from "./oauth.ts";
 
 // MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth
-// grant limits which projects can be selected; each run is attributed to that grant on the root
-// log. A connection is not a child sandbox with a second, narrower set of capabilities.
+// grant or personal access token limits which projects can be selected; each run is attributed to
+// it on the root log. A connection is not a child sandbox with a second, narrower set of
+// capabilities. The operator's bearer is refused here (oauth.ts `validateToken`): every caller is a
+// person.
 
 /** Resolve a project slug or id within this token's grant before obtaining its root context. */
 async function projectOfToolCall(
@@ -24,8 +26,7 @@ async function projectOfToolCall(
       throw new Error(
         `project: got a context name ${JSON.stringify(requested)} — pass the project and cd(path) in the expression`,
       );
-    // the same refusal as projects.get (session.ts): the admin secret reaches every project, and
-    // the global namespace is none
+    // the same refusal as projects.get (session.ts): the global namespace is no project
     if (projectId === GLOBAL_PROJECT_ID)
       throw codedError(
         "FORBIDDEN",
@@ -39,7 +40,6 @@ async function projectOfToolCall(
       );
     return id;
   }
-  if (reach === "every") throw new Error("the admin secret reaches every project — pass project");
   const reachable = (await controlPlane.reachableProjects(reach)).map((project) => project.id);
   if (reachable.length === 1) return reachable[0]!;
   throw new Error(
@@ -51,7 +51,7 @@ async function projectOfToolCall(
 
 // Shared by initialize and tools/list so clients receive the same usage guidance from either.
 const runInstructions = [
-  "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your grant reaches several projects; the admin secret always requires it.",
+  "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your token reaches several projects.",
   'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
   'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker, for at most ten minutes; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
   'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. Commit edits with `commitFiles({ message, changes: [{ path, content }] })`; file paths are repo-relative. A config-repo commit publishes the project worker.',
@@ -70,11 +70,6 @@ const runInstructions = [
 /** Initialization includes usage guidance and the projects this token reaches, so the client can
  *  select one before running a script. Read from the control plane, like the tool's project check. */
 async function serverInstructions(controlPlane: ControlPlane, reach: Reach): Promise<string> {
-  if (reach === "every")
-    return [
-      runInstructions,
-      "This token is the admin secret: pass `project` (slug or id) on every call.",
-    ].join("\n");
   const projects = await controlPlane.reachableProjects(reach);
   const reachable =
     projects.length === 0
@@ -117,7 +112,7 @@ async function buildServer(
             project: {
               type: "string",
               description:
-                "The project — its slug or its id. Optional when this token reaches exactly one; required for the admin secret.",
+                "The project — its slug or its id. Optional when this token reaches exactly one.",
             },
             script: {
               type: "string",
