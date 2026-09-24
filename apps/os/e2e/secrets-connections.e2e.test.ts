@@ -82,9 +82,10 @@ test("waitrose-session: a username/password secret mints its session on first us
   // client for its login door (apps/dummy-petshop/src/worker.ts), so this bump is deployment-wide:
   // safe because the account above is this run's alone and no other row in the suite logs in there.
   await petshopExpireTokens("graphql-session-login");
-  const pets = await bearerCall(itx, "/secrets/waitrose", "/api/pets");
-  expect(pets).toMatchObject({ status: 200 });
-  expect(Array.isArray(pets.body.pets ?? pets.body)).toBe(true);
+  expect(await bearerCall(itx, "/secrets/waitrose", "/api/pets")).toMatchObject({
+    status: 200,
+    body: { owner: username, pets: expect.any(Array) },
+  });
 
   // The two logins are two `secret/refreshed` facts on the secret's path — the first-use mint and
   // the re-mint on 401 — each the strategy's kind and the outcome.
@@ -474,7 +475,21 @@ const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path:
       headers: { authorization: `Bearer getSecret("${secret}", { field: "accessToken" })` },
     }),
   );
-  return { status: res.status, body: (await res.json().catch(() => null)) as any };
+  // The body as text first: an answer that is not JSON keeps what it was, so a failed match shows
+  // it (a null here once hid what a 200 carried).
+  const text = await res
+    .text()
+    .catch(
+      (error: unknown) =>
+        `<unreadable body: ${error instanceof Error ? error.message : String(error)}>`,
+    );
+  let body: any;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { notJson: text.slice(0, 500) };
+  }
+  return { status: res.status, body };
 };
 
 /** The `secret/refreshed` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the

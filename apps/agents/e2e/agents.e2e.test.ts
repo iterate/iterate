@@ -18,6 +18,7 @@ import {
   readAll,
   sleep,
   until,
+  untilValue,
 } from "../../os/e2e/support/client.ts";
 import { openAgentItx } from "./support.ts";
 import {
@@ -277,10 +278,18 @@ test("a script that returns nothing ends the turn: no result item, no further re
   await operatorPrompt(agent);
   await configureModel(support);
   await agent.message("Write the note.");
-  const settled = await until("the script's settlement", async () => {
-    const all = await readAll(support);
-    return all.find((e) => e.type === "events.iterate.com/context/run-settled");
-  });
+  // a wait that runs out names the turn's log so far (which hop it stopped at)
+  const isSettlement = (e: { type: string }) => e.type === "events.iterate.com/context/run-settled";
+  const settled = (
+    await untilValue(
+      "the script's settlement",
+      () => readAll(support),
+      (all) => all.some(isSettlement),
+      {
+        describe: short,
+      },
+    )
+  ).find(isSettlement);
   expect(settled.payload).toMatchObject({ settlement: { status: "succeeded" } });
   expect(settled.payload.settlement.result).toBeUndefined(); // no result — undefined, not null
   expect(await itx.kv.get("note")).toBe("written");

@@ -3,6 +3,7 @@
 // that fails every time is a bug; both are named by title, with the counts.
 //
 //   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
+//   pnpm e2e:soak --runs 100 --preview soak-mine     (the preview's URL; WORKER_BASE_URL wins)
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
 // e2e/support/global-setup.ts reads them out of it.
@@ -16,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { previewUrl, resolvePreviewName } from "./preview-config.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const OUT = path.join(ROOT, "output/soak");
@@ -23,18 +25,23 @@ const OUT = path.join(ROOT, "output/soak");
 function parseArgs(argv: string[]) {
   let runs = 100;
   let filter: string | undefined;
+  let preview: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--runs") runs = Number(argv[++i]);
     else if (argv[i] === "--filter") filter = argv[++i];
+    else if (argv[i] === "--preview") preview = argv[++i];
     else throw new Error(`unknown argument ${argv[i]}`);
   }
   if (!Number.isInteger(runs) || runs < 1) throw new Error("--runs must be a positive integer");
-  return { runs, filter };
+  return { runs, filter, preview };
 }
 
-const { runs, filter } = parseArgs(process.argv.slice(2));
+const { runs, filter, preview } = parseArgs(process.argv.slice(2));
+// An explicit WORKER_BASE_URL wins; otherwise the named preview (os-e2e-soak.yml deploys it first).
+process.env.WORKER_BASE_URL ||= preview ? previewUrl(resolvePreviewName({ name: preview })) : "";
 if (!process.env.WORKER_BASE_URL)
-  throw new Error("WORKER_BASE_URL is required: the soak runs against a deployment");
+  throw new Error("WORKER_BASE_URL or --preview is required: the soak runs against a deployment");
+console.log(`soaking ${process.env.WORKER_BASE_URL}`);
 mkdirSync(OUT, { recursive: true });
 
 const tally = new Map<
@@ -103,9 +110,18 @@ function soakRun(project: "e2e" | "perf", file: string): number | undefined {
       tally.set(row.fullName, entry);
     }
   }
-  return report.testResults
-    .flatMap((s) => s.assertionResults)
-    .filter((r) => r.status === "failed" || (r.failureMessages?.length ?? 0) > 0).length;
+  const failed = report.testResults.flatMap((suite) =>
+    suite.assertionResults
+      .filter((r) => r.status === "failed" || (r.failureMessages?.length ?? 0) > 0)
+      .map((r) => ({ file: path.relative(ROOT, suite.name), row: r })),
+  );
+  // EACH FAILURE IN THE LOG AS IT HAPPENS: file, title and the message's first line — a soak's log
+  // must say WHAT failed while it runs, not only how many (the reports arrive with the artifact).
+  for (const { file: failedFile, row } of failed)
+    console.log(
+      `  ✗ ${failedFile} › ${row.fullName.slice(0, 120)}\n      ${(row.failureMessages?.[0] ?? "").split("\n")[0]!.slice(0, 400)}`,
+    );
+  return failed.length;
 }
 
 // Each lane's wall time on its own: `wall` stays the e2e suite's, comparable with a CI e2e job's.

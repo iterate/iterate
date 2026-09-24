@@ -33,6 +33,7 @@ import {
   sleep,
   subscriptions,
   until,
+  untilValue,
 } from "./support/client.ts";
 import { HangTools, Tools } from "./support/targets.ts";
 
@@ -429,12 +430,18 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
 
   // PRESENCE (physical) is back to baseline: every stub the storm lent was recalled — by the
   // null-target subscribe, by the handle's dispose, or by session end (the pager closes are async; poll).
-  await until("presence back to baseline", async () => (await presence(observer)).length === 0);
+  // A wait that runs out names the keys still present (which exit did not recall its stub).
+  await untilValue(
+    "presence back to baseline",
+    () => presence(observer),
+    (keys) => keys.length === 0,
+  );
   // THE RULE TABLE (data) is back to baseline too: every rule was un-set by the same exit that
   // recalled its stub — a dead session leaves NO offline row behind.
-  await until(
+  await untilValue(
     "the rule table back to baseline",
-    async () => (await rpcStubRewriteRuleMatches(observer)).length === 0,
+    () => rpcStubRewriteRuleMatches(observer),
+    (matches) => matches.length === 0,
   );
   for (const match of ["itx.tool0", "itx.k0", "itx.k5"]) {
     const err = await rejection(observer.invoke(`${match}.hello()`), `call on ${match}`);
