@@ -69,12 +69,12 @@ does not support, belongs there too.
 | `test.yml`                   | PR, main push                                       | **Test** (required): `pnpm test`, then the Kit firmware host tests                   |
 | `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                         |
 | `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                       |
-| `preview-os.yml`             | PR touching the preview paths, dispatch             | **Preview OS**: the PR's preview, its e2e job and the CI trace                       |
+| `preview-os.yml`             | PR touching the preview paths, dispatch             | **Preview OS**: the PR's preview, its e2e job, the CI trace and report statuses      |
 | `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                             |
 | `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews and orphaned preview resources                                |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: a throwaway preview of main, e2e and specs, delete, alert           |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: a throwaway preview of main, e2e and specs, trace, delete, alert    |
 | `deploy-os.yml`              | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                               |
-| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Production deploy of Dash, Agents, Notes, Voice, Kit, SPA or dummy-petshop           |
+| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports          |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                             |
 | `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch | Bakes the CI image ([Custom Image](#custom-image))                                   |
 | `do-duration-probe.yml`      | Hourly, dispatch                                    | Durable Object cost alarm for both Cloudflare accounts                               |
@@ -336,15 +336,15 @@ freshness:
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
   lint is the common trigger for no-log `Sandbox terminated before worker
 reported completion` on main. Deploy OS uses `4x16`; the client
-  deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop), Main OS e2e's
-  delete and alert jobs, and the jobs that only call APIs (LOC report, PR
+  deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports),
+  the trace jobs, Main OS e2e's delete and alert jobs, and the jobs that only call APIs (LOC report, PR
   dashboard, Release) use `2x8`. Re-check with `depot ci metrics --run <run-id>`
   before increasing a size.
 
 These defaults keep a normal all-app main push to 34 requested vCPUs (lint 8,
 test 4, Deploy OS 4, 2 for each of the seven client deploys, and 4
 for Main OS e2e, whose parent, deploy and e2e jobs run one after another; its
-delete and alert jobs follow them), without reducing the parallel lint lane that
+trace, delete and alert jobs follow them), without reducing the parallel lint lane that
 uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
 
@@ -499,7 +499,7 @@ pins the exceptions:
 - Deploy SPA ignores the root manifests and lockfile: it ships static files
   and the zipped extension, with no npm dependency inside.
 
-Each deploy is one job. Every app but SPA and dummy-petshop posts to #ci from
+Each deploy is one job. Every app but SPA, dummy-petshop and ci-reports posts to #ci from
 that job's last step, with the deploy step's result: a failed, cancelled or
 timed-out deploy posts failure.
 
@@ -516,13 +516,17 @@ until the PR closes.
 
 ## Interactive trace reports
 
-The Preview OS workflow's `trace` job publishes a **CI trace** commit status
-after deploy and e2e, whatever their outcome: the time to green or red, linked
-to the job on Depot, where the `public-ci-trace-<workflow>-<execution>`
-artifact (`trace.html`, `trace.json`) downloads. The report shows workflow →
-jobs → setup/test phases → shell steps → Playwright attempts and Vitest
-tests. Download the artifact and open `trace.html`. See
-[CI traces](./ci-traces.md) for the timing model, publishing, replay commands
+The Preview OS and Main OS e2e workflows' `trace` job runs after the jobs it
+needs, whatever their outcome, and posts two commit statuses whose **Details**
+open the report in the browser:
+
+- **CI trace**: the time to green or red. The report shows workflow → jobs →
+  setup/test phases → shell steps → Playwright attempts and Vitest tests.
+- **Playwright report**: the e2e job's Playwright HTML report, when the suite
+  ran.
+
+A PR's statuses are on its head commit, main's on the pushed commit. See
+[CI traces](./ci-traces.md) for the timing model, the viewer, replay commands
 and OTLP JSON export.
 
 ## Browser reports from artifacts
@@ -530,15 +534,19 @@ and OTLP JSON export.
 A browser-readable report is uploaded as a Depot artifact even after test
 failures, and the check keeps the actual test outcome: a report link means the
 report is available, nothing more. Links use Depot artifact UUIDs and expire
-with their 30-day retention. Upload only files intended to be public.
+with their 30-day retention. An artifact whose name starts with `public-` can
+be opened by anyone at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
+([CI traces](./ci-traces.md#the-viewer)), so upload only files intended to be public.
 
-The Preview OS e2e job prints Playwright's report into the job log after
-Vitest's, and uploads two artifacts even when the suite fails:
+The Preview OS and Main OS e2e jobs print Playwright's report into the job log
+after Vitest's, and upload two artifacts even when the suite fails:
 
 - `public-playwright-report`: Playwright's HTML report
-  (`test-results/playwright-html`), kept 30 days.
-- `preview-os-test-artifacts-attempt-<id>`: all of `test-results/`, one per
-  job attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
+  (`test-results/playwright-html`), kept 30 days. The **Playwright report**
+  status opens it; a failed spec's trace opens in the report's trace viewer.
+- `preview-os-test-artifacts-attempt-<id>` (main:
+  `main-os-test-artifacts-attempt-<id>`): all of `test-results/`, one per job
+  attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
   `trace.zip`, screenshot and `error-context.md` are under
   `playwright-output/<test>/`, next to `playwright-results.json` and the
   telemetry.

@@ -10,7 +10,8 @@
 # cancelled by hand reaches `delete` and a verdict, a job that hits its timeout counting as red. The
 # `alert` job pages #error-pulse only when main changes state — once when it goes red, naming the
 # failed jobs and the failing rows, once when it is green again (scripts/ci/main-e2e-alert.ts).
-# Nothing is written to any PR.
+# Nothing is written to any PR. The `trace` job, beside delete, posts the "CI trace" and "Playwright
+# report" statuses on the pushed commit, as a PR preview's does (docs/ci-traces.md).
 #
 # A run cancelled by hand has its queued jobs cancelled with it, `delete` included, so each run
 # deletes every other `main-<sha>` preview before it deploys; the nightly sweep
@@ -24,6 +25,8 @@ name: Main OS e2e
 
 permissions:
   contents: read
+  # The trace job's "CI trace" and "Playwright report" commit statuses.
+  statuses: write
 
 on:
   push:
@@ -66,6 +69,14 @@ concurrency:
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
+  # lifecycle records, as `@@ci-trace` lines in the Depot logs the trace job reads.
+  BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
+  CI_TRACE_ENABLED: "1"
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   # THE PREVIEW PARENT FROM MAIN: every preview branches from os-next-preview (envs.ts
@@ -133,6 +144,7 @@ jobs:
           PREVIEW_NAME: ${{ steps.name.outputs.preview-name }}
         run: doppler run -- pnpm preview delete-superseded
       - name: Deploy the throwaway preview
+        id: deploy
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -178,6 +190,8 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run the e2e suite and the browser specs against the preview
+        # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
+        id: e2e
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -216,6 +230,24 @@ jobs:
           path: test-results/ci-telemetry
           include-hidden-files: true
           if-no-files-found: error
+      # THE BROWSER EVIDENCE, as a PR preview's e2e job keeps it (docs/depot-ci.md#browser-reports-from-artifacts).
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload public Playwright HTML report
+        if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-playwright-report
+          path: test-results/playwright-html
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   # ALWAYS, whatever happened before, cancelled included: the preview, its Artifacts
   # namespace, KV namespaces and R2 bucket, and the clients' previews of the same name.
@@ -245,6 +277,53 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete
+
+  # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the parent, deploy and e2e
+  # jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on the
+  # pushed commit. Beside delete and alert, which wait for none of it.
+  trace:
+    name: trace
+    needs: [parent, deploy, e2e]
+    if: always()
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Record the traced commit
+        run: echo "CI_TRACE_STATUS_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      # The Depot organization token CI telemetry uses (Doppler _shared/preview) reads the workflow
+      # and its jobs' logs; only `@@ci-trace` lines are kept.
+      - name: Collect the trace
+        id: trace
+        timeout-minutes: 5
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
+      - name: Upload the CI trace
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.trace.outputs.artifact-name }}
+          path: ci-trace.ignoreme/trace.*
+          if-no-files-found: error
+          retention-days: 30
+      # Finds both artifacts in Depot by name, so it runs after the upload.
+      - name: Post the report statuses
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
 
   # Main's state changes only: red once, green again once. A job that hit its timeout is red; a run
   # cancelled by hand gets no alert.

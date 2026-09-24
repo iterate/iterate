@@ -9,7 +9,8 @@
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       then their test telemetry and flake records as artifacts
 #   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
-#                       artifact plus a "CI trace" commit status with the time to green or red
+#                       artifact plus the "CI trace" and "Playwright report" commit statuses, which
+#                       open them in the ci-reports viewer
 # "e2e" skips only when deploy did not succeed. Closing the PR deletes the preview and everything it
 # owned (preview-delete.yml); the nightly sweep of previews whose PR closed without a delete, or
 # that went stale, is preview-sweep.yml.
@@ -35,7 +36,7 @@ name: Preview OS
 permissions:
   contents: read
   pull-requests: write
-  # The trace job's "CI trace" commit status.
+  # The trace job's "CI trace" and "Playwright report" commit statuses.
   statuses: write
 
 on:
@@ -264,10 +265,10 @@ jobs:
       # THE BROWSER EVIDENCE (docs/depot-ci.md#browser-reports-from-artifacts), whatever the suite's
       # outcome: everything the run wrote under test-results/ — each failed spec's trace.zip,
       # screenshot and error-context.md under playwright-output/, playwright-results.json, the
-      # telemetry — and Playwright's HTML report on its own. `depot ci artifacts download` fetches
-      # either; `pnpm exec playwright show-report` / `show-trace` open them. The report alone is named
-      # for the PR, not the attempt, and overwritten: it is the latest attempt's report, and each
-      # attempt's own copy is in its test-results artifact.
+      # telemetry — and Playwright's HTML report on its own, which the trace job links from the
+      # "Playwright report" status (its `public-` name lets the ci-reports viewer serve it). The report
+      # alone is named for the PR, not the attempt, and overwritten: it is the latest attempt's report,
+      # and each attempt's own copy is in its test-results artifact.
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -286,10 +287,12 @@ jobs:
           retention-days: 30
           overwrite: true
 
-  # THE CI TRACE (docs/ci-traces.md): the deploy and e2e jobs' Depot timings and `@@ci-trace` markers
-  # as trace.html and trace.json, this job's artifact, and a "CI trace" commit status whose
-  # description is the time to green (the e2e job's success) or to red (the first failed job), linking
-  # to this job. After both jobs settle, whatever their outcome; never when neither ran.
+  # THE CI TRACE (docs/ci-traces.md): the Depot timings and `@@ci-trace` markers of the jobs it
+  # needs as trace.html and trace.json, this job's artifact, then two commit statuses opening the
+  # ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to green (the e2e
+  # job's success) or to red (the first failed job), and "Playwright report", the e2e job's HTML
+  # report. After both jobs settle, whatever their outcome; never when neither ran. Main OS e2e has
+  # the same job (scripts/ci/main-os-e2e-workflow.test.ts keeps them alike).
   trace:
     name: trace
     needs: [deploy, e2e]
@@ -311,7 +314,7 @@ jobs:
         run: node scripts/depot-ci/dependencies.mjs install
       # The Depot organization token CI telemetry uses (Doppler _shared/preview) reads the workflow
       # and its jobs' logs; only `@@ci-trace` lines are kept.
-      - name: Collect the deploy and e2e trace
+      - name: Collect the trace
         id: trace
         timeout-minutes: 5
         env:
@@ -326,7 +329,11 @@ jobs:
           path: ci-trace.ignoreme/trace.*
           if-no-files-found: error
           retention-days: 30
-      - name: Post the CI trace status
+      # Finds both artifacts in Depot by name, so it runs after the upload.
+      - name: Post the report statuses
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme

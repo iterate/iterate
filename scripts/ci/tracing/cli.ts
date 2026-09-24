@@ -1,15 +1,23 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { z } from "zod";
+import { ciReportsEnvs } from "../../../envs.ts";
 import { depotCiApi } from "../depot.ts";
 import { getOctokit } from "../github.ts";
-import { assembleTrace, jobKeyInWorkflow, Workflow, renderTrace, stepCommands } from "./tracing.ts";
+import {
+  assembleTrace,
+  jobKeyInWorkflow,
+  Workflow,
+  renderTrace,
+  stepCommands,
+  tracedJobs,
+} from "./tracing.ts";
 
-/** The workflows whose runs are traced: the per-PR preview's deploy and e2e jobs. */
-const TRACED_WORKFLOWS = ["preview-os.yml"];
+/** The workflows whose runs are traced: a PR's preview, and main's e2e run of a throwaway one. */
+const TRACED_WORKFLOWS = ["preview-os.yml", "main-os-e2e.yml"];
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {
-  /** Collect the deploy and e2e jobs of the workflow run this job belongs to. */
+  /** Collect the jobs this `trace` job needs, in the workflow run it belongs to. */
   async current(directory: string) {
     const source = new URL(z.string().url().parse(process.env.DEPOT_JOB_URL));
     const workflowId = z
@@ -27,7 +35,7 @@ export default class CiTrace {
   private async write(workflowId: string, directory: string) {
     const workflow = Workflow.parse(await this.depot("GetWorkflow", { workflowId }));
     if (workflow.repo !== repository || !TRACED_WORKFLOWS.includes(workflow.workflowPath))
-      throw new Error("Only Iterate preview workflows can publish CI traces");
+      throw new Error(`Only ${TRACED_WORKFLOWS.join(" and ")} runs of ${repository} are traced`);
     const report = await this.collect(workflow);
     await mkdir(directory, { recursive: true });
     await writeFile(`${directory}/trace.json`, JSON.stringify(report, null, 2));
@@ -40,7 +48,7 @@ export default class CiTrace {
           (attribute) => attribute.key === "ci.execution.id",
         )?.value.stringValue,
       );
-    const name = `public-ci-trace-${workflow.workflowId}-${executionId}`;
+    const name = traceArtifactName(workflow.workflowId, executionId);
     if (process.env.GITHUB_OUTPUT)
       await appendFile(process.env.GITHUB_OUTPUT, `artifact-name=${name}\n`);
     return { directory, name };
@@ -52,11 +60,12 @@ export default class CiTrace {
       { signal: AbortSignal.timeout(30_000) },
     );
     if (!source.ok) throw new Error(`Could not read the source workflow: HTTP ${source.status}`);
-    const commands = stepCommands(await source.text());
-    const attempts = workflow.jobs
-      .filter((job) => !job.jobKey.endsWith(":trace"))
-      .flatMap((job) => job.attempts)
-      .filter((attempt) => attempt.startedAt);
+    const yaml = await source.text();
+    const commands = stepCommands(yaml);
+    const traced = tracedJobs(yaml);
+    // Main's delete and alert run beside the trace job, so the trace covers only what it waited for.
+    const jobs = workflow.jobs.filter((job) => traced.includes(jobKeyInWorkflow(job.jobKey)));
+    const attempts = jobs.flatMap((job) => job.attempts).filter((attempt) => attempt.startedAt);
     const entries = await Promise.all(
       attempts.map(async (attempt) => {
         const lines: z.infer<typeof LogPage>["lines"] = [];
@@ -73,7 +82,7 @@ export default class CiTrace {
           lines.push(...page.lines.filter((line) => line.body.startsWith("@@ci-trace ")));
           pageToken = page.nextPageToken;
         } while (pageToken);
-        const job = workflow.jobs.find((job) =>
+        const job = jobs.find((job) =>
           job.attempts.some((item) => item.attemptId === attempt.attemptId),
         );
         if (!job) throw new Error("Collected attempt has no job");
@@ -87,13 +96,14 @@ export default class CiTrace {
         ] as const;
       }),
     );
-    return assembleTrace(workflow, new Map(entries));
+    return assembleTrace({ ...workflow, jobs }, new Map(entries));
   }
 
   /**
-   * Post the "CI trace" commit status for a collected report: time to green or red in its
-   * description, linking to the collecting Depot job, whose artifacts hold trace.html and
-   * trace.json. The status says the report exists; the preview's own checks carry the verdict.
+   * Post the run's report links as commit statuses: **CI trace**, with the time to green or red, and
+   * **Playwright report** when the e2e job uploaded one. Each opens its Depot artifact in the
+   * ci-reports viewer (apps/ci-reports). A status says the report exists; the run's own checks carry
+   * the verdict. Runs after the upload step: Depot lists an artifact once its upload finished.
    */
   async publish(directory: string) {
     const trace = TraceFile.parse(JSON.parse(await readFile(`${directory}/trace.json`, "utf8")));
@@ -104,25 +114,65 @@ export default class CiTrace {
       .string()
       .regex(/^[0-9a-f]{40}$/)
       .parse(process.env.CI_TRACE_STATUS_SHA);
+    const workflowId = z
+      .string()
+      .regex(/^[a-z0-9]+$/)
+      .parse(new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname.split("/").at(-1));
+    const { runId } = z
+      .object({ runId: z.string() })
+      .parse(await this.depot("GetWorkflow", { workflowId }));
+    const artifacts: z.infer<typeof ArtifactPage>["artifacts"] = [];
+    let pageToken = "";
+    do {
+      const page = ArtifactPage.parse(
+        await this.depot("ListArtifacts", { runId, workflowId, pageSize: 100, pageToken }),
+      );
+      artifacts.push(...page.artifacts);
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+    // A job re-run uploads again under the same name; its newest upload is the run's report.
+    const latest = (name: string) =>
+      artifacts
+        .filter((artifact) => artifact.name === name)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .at(-1);
+    const traceName = traceArtifactName(
+      workflowId,
+      z.string().min(1).parse(attribute("ci.execution.id")),
+    );
+    const traceArtifact = latest(traceName);
+    if (!traceArtifact) throw new Error(`Depot lists no ${traceName} artifact in this run`);
     const green = attribute("ci.time_to_green_ms");
     const red = attribute("ci.time_to_red_ms");
-    const status = {
-      state: green ? ("success" as const) : red ? ("failure" as const) : ("error" as const),
-      context: "CI trace",
-      description: green
-        ? `Time to green ${duration(Number(green))} · report in the job's artifacts`
-        : red
-          ? `Time to red ${duration(Number(red))} · report in the job's artifacts`
-          : `No verdict (${attribute("ci.status")}) · report in the job's artifacts`,
-      target_url: z.string().url().parse(process.env.DEPOT_JOB_URL),
-    };
-    await getOctokit().rest.repos.createCommitStatus({
-      owner: "iterate",
-      repo: "iterate",
-      sha,
-      ...status,
-    });
-    return status;
+    const statuses = [
+      {
+        state: green ? ("success" as const) : red ? ("failure" as const) : ("error" as const),
+        context: "CI trace",
+        description: green
+          ? `Time to green ${duration(Number(green))}`
+          : red
+            ? `Time to red ${duration(Number(red))}`
+            : `No verdict (${attribute("ci.status")})`,
+        target_url: reportUrl(traceArtifact.artifactId),
+      },
+    ];
+    // None when the suite never ran: a failed deploy, or a run cancelled first.
+    const playwright = latest("public-playwright-report");
+    if (playwright)
+      statuses.push({
+        state: "success",
+        context: "Playwright report",
+        description: "Every spec, and each failure's trace, screenshot and error context",
+        target_url: reportUrl(playwright.artifactId),
+      });
+    for (const status of statuses)
+      await getOctokit().rest.repos.createCommitStatus({
+        owner: "iterate",
+        repo: "iterate",
+        sha,
+        ...status,
+      });
+    return statuses;
   }
 
   private async depot(method: string, body: object) {
@@ -131,6 +181,24 @@ export default class CiTrace {
 }
 
 const repository = "iterate/iterate";
+
+/** The trace job uploads its report under this name; `public-` lets the ci-reports viewer serve it. */
+function traceArtifactName(workflowId: string, executionId: string) {
+  return `public-ci-trace-${workflowId}-${executionId}`;
+}
+
+/** Where apps/ci-reports opens a public Depot artifact: its report, at the artifact's root. */
+function reportUrl(artifactId: string) {
+  return `${ciReportsEnvs.ci.baseUrl}/${artifactId}/`;
+}
+
+/** Depot's ListArtifacts page; a run without artifacts answers without the field. */
+const ArtifactPage = z.object({
+  artifacts: z
+    .array(z.object({ artifactId: z.uuid(), name: z.string(), createdAt: z.iso.datetime() }))
+    .default([]),
+  nextPageToken: z.string().default(""),
+});
 /** The part of a collected trace.json the status reads: the workflow span's attributes. */
 const TraceFile = z.object({
   resourceSpans: z.tuple([
