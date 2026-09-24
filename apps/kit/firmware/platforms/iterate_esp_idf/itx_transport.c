@@ -1738,22 +1738,9 @@ void iterate_kit_itx_transport_metrics(
   metrics->last_websocket_error_generation =
       atomic_load_u32(
           &transport->last_websocket_error_generation);
-  metrics->last_websocket_error_type = __atomic_load_n(
-      &transport->last_websocket_error_type,
-      __ATOMIC_ACQUIRE);
-  metrics->last_websocket_tls_error = __atomic_load_n(
-      &transport->last_websocket_tls_error,
-      __ATOMIC_ACQUIRE);
-  metrics->last_websocket_tls_stack_error = __atomic_load_n(
-      &transport->last_websocket_tls_stack_error,
-      __ATOMIC_ACQUIRE);
   metrics->last_websocket_transport_errno = __atomic_load_n(
       &transport->last_websocket_transport_errno,
       __ATOMIC_ACQUIRE);
-  metrics->last_websocket_handshake_status_code =
-      __atomic_load_n(
-          &transport->last_websocket_handshake_status_code,
-          __ATOMIC_ACQUIRE);
   metrics->last_websocket_close_status_code =
       __atomic_load_n(
           &transport->last_websocket_close_status_code,

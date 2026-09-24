@@ -1,8 +1,8 @@
-#ifndef ITERATE_KIT_FAKE_FREERTOS_TASK_H
-#define ITERATE_KIT_FAKE_FREERTOS_TASK_H
+#ifndef ITERATE_KIT_HOST_FREERTOS_TASK_H
+#define ITERATE_KIT_HOST_FREERTOS_TASK_H
 
 /*
- * Host stand-in. See ../README.md.
+ * Host stand-in. See ../esp_idf.h.
  *
  * NOTHING HERE SCHEDULES. `xTaskCreatePinnedToCore` records the request and
  * returns pdPASS without running the body, so a host test owns the whole

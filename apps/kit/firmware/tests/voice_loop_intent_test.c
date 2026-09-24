@@ -18,8 +18,6 @@
 
 #include "iterate/kit/voice/loop.h"
 
-#include "esp_timer.h"
-
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -185,7 +183,7 @@ static void boot(void) {
 
 static void step(void) {
   iterate_kit_host_esp_idf_advance_ms(50U);
-  iterate_kit_voice_loop_step((uint64_t)(esp_timer_get_time() / 1000));
+  iterate_kit_voice_loop_step();
 }
 
 /*

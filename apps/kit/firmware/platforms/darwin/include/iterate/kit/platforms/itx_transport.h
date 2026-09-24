@@ -85,8 +85,6 @@ struct iterate_kit_itx_transport_metrics {
   uint32_t last_application_capnweb_generation;
   int32_t last_control_receive_status;
   int32_t last_websocket_close_status_code;
-  int32_t last_websocket_error_type;
-  int32_t last_websocket_tls_error;
   int32_t last_websocket_transport_errno;
   uint32_t websocket_pongs_received;
   bool fatal_failure_latched;

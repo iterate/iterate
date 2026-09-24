@@ -91,7 +91,7 @@ static void reset_forgets_everything(void)
 static void applied_visemes_reach_the_snapshot(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
 
     face_animator_init(&animator, 16000);
     face_animator_apply_viseme(&animator, FACE_VISEME_O, 210);
@@ -108,7 +108,7 @@ static void applied_visemes_reach_the_snapshot(void)
 static void a_stalled_track_expires_back_to_rest(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     const int16_t silence[160] = {0};
 
     face_animator_init(&animator, 16000);
@@ -131,7 +131,7 @@ static void a_stalled_track_expires_back_to_rest(void)
 static void a_fresh_viseme_extends_the_expiry(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     const int16_t silence[160] = {0};
 
     face_animator_init(&animator, 16000);
@@ -150,7 +150,7 @@ static void a_fresh_viseme_extends_the_expiry(void)
 static void external_mouth_gates_the_envelope_but_not_the_eyes(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     int16_t voiced[320];
     for (size_t index = 0; index < 320; ++index) {
         voiced[index] = (index % 20 < 10) ? 12000 : -12000;
@@ -174,7 +174,7 @@ static void external_mouth_gates_the_envelope_but_not_the_eyes(void)
 static void disabling_external_mouth_returns_the_envelope(void)
 {
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     int16_t voiced[320];
     for (size_t index = 0; index < 320; ++index) {
         voiced[index] = (index % 20 < 10) ? 12000 : -12000;
@@ -194,7 +194,7 @@ static void queue_and_animator_compose(void)
     face_viseme_queue_t queue;
     face_viseme_change_t change;
     face_animator_t animator;
-    face_animator_state_t state;
+    face_pose_t state;
     const int16_t silence[320] = {0};
 
     face_viseme_queue_init(&queue);

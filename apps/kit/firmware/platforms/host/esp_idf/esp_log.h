@@ -1,14 +1,14 @@
-#ifndef ITERATE_KIT_FAKE_ESP_LOG_H
-#define ITERATE_KIT_FAKE_ESP_LOG_H
+#ifndef ITERATE_KIT_HOST_ESP_LOG_H
+#define ITERATE_KIT_HOST_ESP_LOG_H
 
 /*
- * Host stand-in. See README.md in this directory.
+ * Host stand-in. See esp_idf.h.
  *
  * The arguments are still evaluated and still format-checked: a log line whose
  * specifiers do not match its arguments is a real defect, and losing that check
  * would make the host build weaker than the device build rather than the same
  * program somewhere cheaper. Silent by default so a passing test is quiet; set
- * ITERATE_KIT_FAKE_ESP_LOG=1 in the environment to see what a board would say.
+ * ITERATE_KIT_ESP_LOG=1 in the environment to see what a board would say.
  */
 
 #include <stdio.h>

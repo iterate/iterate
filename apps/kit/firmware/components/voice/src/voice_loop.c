@@ -2640,13 +2640,11 @@ static const char *capnweb_status_name(int32_t status) {
 /*
  * ONE PASS OF THE DEVICE.
  *
- * `now_ms` is a parameter rather than a call, because a step that is handed
- * its clock can be driven by a virtual one — and a device whose every deadline
- * is measured against a clock it fetches itself cannot be tested at all.
+ * Every deadline reads the ESP clock (`esp_timer_get_time` via `now_ms`); host
+ * tests drive it virtually with `iterate_kit_host_esp_idf_set_now_us()`.
  */
-void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
+void iterate_kit_voice_loop_step(void) {
   static uint64_t next_control_poll_at;
-  (void)now_ms_value;
   {
     (void)esp_task_wdt_reset();
     (void)iterate_kit_itx_transport_poll(&transport, 16U);
@@ -2781,14 +2779,12 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         ESP_LOGE(
             tag,
             "left ready: recvStatus=%" PRId32 " wsClose=%" PRId32
-            " wsErrType=%" PRId32 " tlsErr=%" PRId32 " errno=%" PRId32
+            " errno=%" PRId32
             " protoFail=%" PRIu32 " recvFail=%" PRIu32 " sendFail=%" PRIu32
             " inboxDiscard=%" PRIu32 " outboxDiscard=%" PRIu32
             " appCapnweb=%" PRId32 " (%s)",
             metrics.last_control_receive_status,
             metrics.last_websocket_close_status_code,
-            metrics.last_websocket_error_type,
-            metrics.last_websocket_tls_error,
             metrics.last_websocket_transport_errno,
             metrics.protocol_failures,
             metrics.control_receive_failures,
@@ -3416,7 +3412,7 @@ void iterate_kit_voice_loop_run(
     return;
   }
   for (;;) {
-    iterate_kit_voice_loop_step(now_ms(NULL));
+    iterate_kit_voice_loop_step();
     DELAY_MS(5);
   }
 }

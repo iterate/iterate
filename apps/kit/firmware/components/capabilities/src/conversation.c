@@ -1,6 +1,6 @@
 #include "iterate/kit/capabilities/conversation.h"
 
-#include "rpc_internal.h"
+#include "iterate/kit/capabilities/arguments.h"
 
 #include <string.h>
 

@@ -51,7 +51,7 @@ typedef struct {
     bool listening_lock;
     bool external_mouth;
     uint8_t viseme_windows_left;
-    face_animator_state_t state;
+    face_pose_t state;
 } face_animator_t;
 
 extern const face_envelope_config_t FACE_ENVELOPE_DEFAULT_CONFIG;
@@ -91,7 +91,7 @@ void face_animator_clear_viseme(face_animator_t *animator);
  * try again on its next tick.
  */
 bool face_animator_snapshot(const face_animator_t *animator,
-                            face_animator_state_t *state);
+                            face_pose_t *state);
 
 #ifdef __cplusplus
 }

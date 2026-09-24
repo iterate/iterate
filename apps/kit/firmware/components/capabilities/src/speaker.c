@@ -1,6 +1,6 @@
 #include "iterate/kit/capabilities/speaker.h"
 
-#include "rpc_internal.h"
+#include "iterate/kit/capabilities/arguments.h"
 
 #include <stdio.h>
 #include <string.h>

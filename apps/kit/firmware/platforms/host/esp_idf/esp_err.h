@@ -1,7 +1,7 @@
-#ifndef ITERATE_KIT_FAKE_ESP_ERR_H
-#define ITERATE_KIT_FAKE_ESP_ERR_H
+#ifndef ITERATE_KIT_HOST_ESP_ERR_H
+#define ITERATE_KIT_HOST_ESP_ERR_H
 
-/* Host stand-in. See README.md in this directory. */
+/* Host stand-in. See esp_idf.h. */
 
 typedef int esp_err_t;
 

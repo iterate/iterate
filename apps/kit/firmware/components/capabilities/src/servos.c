@@ -1,6 +1,6 @@
 #include "iterate/kit/capabilities/servos.h"
 
-#include "rpc_internal.h"
+#include "iterate/kit/capabilities/arguments.h"
 
 #include <limits.h>
 #include <string.h>

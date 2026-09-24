@@ -61,7 +61,7 @@ enum iterate_kit_reach {
  * This is intentionally facts rather than pixels or device-driver state. A
  * physical LED ring, StackChan's two strips, and a tiny on-screen grid must all
  * answer the same questions even though their output APIs differ. The caller
- * owns timing and samples RSSI/audio elsewhere; this model owns no clock,
+ * owns timing and samples audio elsewhere; this model owns no clock,
  * GPIO, Wi-Fi, audio, task, queue, or heap allocation.
  *
  * The diagnostic renderer reserves three pixels each for network, assistant
@@ -72,8 +72,6 @@ struct iterate_kit_conversation_visual_state {
   enum iterate_kit_network_state network;
   /** How much of the chain to a live conversation is up; three pixels of it. */
   enum iterate_kit_reach reach;
-  bool has_wifi_rssi;
-  int32_t wifi_rssi_dbm;
   bool conversation_active;
   bool media_ready;
   bool media_failed;
@@ -125,13 +123,8 @@ void iterate_kit_conversation_lights_render(
         pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
 
 /**
- * Reports whether two snapshots produce exactly the same logical lights.
- *
- * This is view equality, not telemetry equality: two RSSI readings inside the
- * same displayed band are deliberately equal. Display adapters should use
- * this at their invalidation boundary so high-resolution diagnostic noise
- * cannot trigger pointless SPI traffic or visible flicker. Precise readings
- * remain available through metrics and are not discarded by this function.
+ * Reports whether two snapshots produce exactly the same logical lights;
+ * display adapters should use this at their invalidation boundary.
  */
 bool iterate_kit_conversation_lights_equal(
     const struct iterate_kit_conversation_visual_state *left,

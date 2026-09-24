@@ -187,7 +187,7 @@ static const struct iterate_kit_board_facts open_mic_facts = {
 /* --- driving the loop ----------------------------------------------------- */
 
 static void step(void) {
-  iterate_kit_voice_loop_step((uint64_t)(esp_timer_get_time() / 1000));
+  iterate_kit_voice_loop_step();
 }
 
 /** One pass of the speaker task, which on a board is a thread of its own. */
@@ -310,7 +310,7 @@ static const char *frames_b64(size_t frames) {
   static char encoded[8192];
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES;
+  const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES;
   const uint8_t fill = speaker_pcm_byte;
   size_t at = 0U;
   size_t out = 0U;

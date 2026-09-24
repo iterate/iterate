@@ -104,21 +104,6 @@ void iterate_kit_darwin_audio_codec_pump(
     struct iterate_kit_darwin_audio_codec *darwin,
     uint64_t now_us);
 
-/** The playback ring's lead for its mode: how far ahead to feed it. */
-uint32_t iterate_kit_darwin_audio_codec_playback_lead_bytes(
-    const struct iterate_kit_darwin_audio_codec *darwin);
-/** Barge-in: drop everything queued for the speaker; returns the bytes dropped. */
-uint32_t iterate_kit_darwin_audio_codec_discard_playback(
-    struct iterate_kit_darwin_audio_codec *darwin);
-void iterate_kit_darwin_audio_codec_set_playback_expected(
-    struct iterate_kit_darwin_audio_codec *darwin,
-    bool expected);
-
-enum iterate_kit_darwin_audio_output_status
-iterate_kit_darwin_audio_codec_drain(
-    struct iterate_kit_darwin_audio_codec *darwin,
-    uint32_t timeout_ms);
-
 void iterate_kit_darwin_audio_codec_metrics(
     const struct iterate_kit_darwin_audio_codec *darwin,
     struct iterate_kit_darwin_audio_codec_metrics *metrics);

@@ -55,5 +55,3 @@ typedef struct {
     bool speaking;
 } face_pose_t;
 
-/* Compatibility name retained while existing firmware callers migrate. */
-typedef face_pose_t face_animator_state_t;

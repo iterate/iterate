@@ -1,8 +1,8 @@
-#ifndef ITERATE_KIT_FAKE_FREERTOS_QUEUE_H
-#define ITERATE_KIT_FAKE_FREERTOS_QUEUE_H
+#ifndef ITERATE_KIT_HOST_FREERTOS_QUEUE_H
+#define ITERATE_KIT_HOST_FREERTOS_QUEUE_H
 
 /*
- * Host stand-in. See ../README.md.
+ * Host stand-in. See ../esp_idf.h.
  *
  * A REAL BOUNDED RING, unlike the rest of these fakes, because the loop's
  * microphone and speaker paths are the ring: a queue that always accepted or

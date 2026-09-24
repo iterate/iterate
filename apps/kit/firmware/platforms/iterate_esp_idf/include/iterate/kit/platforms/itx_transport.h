@@ -189,19 +189,11 @@ struct iterate_kit_itx_transport_metrics {
   int32_t last_application_capnweb_status;
   int32_t last_wifi_disconnect_reason;
   /*
-   * Historical managed-client detail retained in the public diagnostics shape
-   * while device/proxy schemas migrate. The taskless lower transport cannot
-   * obtain the managed client's event-only TLS/HTTP tuple, so those fields
-   * remain zero. `last_websocket_transport_errno` and `last_platform_error`
-   * retain the lower adapter's actual causal code instead of manufacturing a
-   * value for an unavailable domain.
+   * `last_websocket_transport_errno` and `last_platform_error` carry the lower
+   * adapter's actual causal code.
    */
   uint32_t last_websocket_error_generation;
-  int32_t last_websocket_error_type;
-  int32_t last_websocket_tls_error;
-  int32_t last_websocket_tls_stack_error;
   int32_t last_websocket_transport_errno;
-  int32_t last_websocket_handshake_status_code;
   int32_t last_websocket_close_status_code;
   /*
    * WEBSOCKET PONGs RECEIVED — idle-hop liveness, and nothing else.
@@ -372,16 +364,11 @@ struct iterate_kit_itx_transport {
   int32_t last_wifi_disconnect_reason;
   /*
    * These latest-incident fields deliberately survive a successful reconnect.
-   * The event-only managed-client subfields remain for schema compatibility as
-   * described above; the direct adapter publishes its actual errno through
+   * The direct adapter publishes its actual errno through
    * last_websocket_transport_errno.
    */
   uint32_t last_websocket_error_generation;
-  int32_t last_websocket_error_type;
-  int32_t last_websocket_tls_error;
-  int32_t last_websocket_tls_stack_error;
   int32_t last_websocket_transport_errno;
-  int32_t last_websocket_handshake_status_code;
   int32_t last_websocket_close_status_code;
   /* Application-task-only generation and lifecycle bookkeeping. */
   uint32_t handled_socket_generation;

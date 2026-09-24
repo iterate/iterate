@@ -49,17 +49,8 @@ void zectrix_epd_get_default_config(zectrix_epd_config_t* config);
 esp_err_t zectrix_epd_new(const zectrix_epd_config_t* config,
                           zectrix_epd_handle_t* out_handle);
 
-/** Release the driver. Powers the panel off first when necessary. */
-esp_err_t zectrix_epd_del(zectrix_epd_handle_t handle);
-
 /** Enable the external rail, reset SSD2683 and select its OTP waveform. */
 esp_err_t zectrix_epd_power_on(zectrix_epd_handle_t handle);
-
-/** Power down SSD2683 and disable the external panel rail. */
-esp_err_t zectrix_epd_power_off(zectrix_epd_handle_t handle);
-
-/** True after power_on and before power_off. */
-bool zectrix_epd_is_powered(zectrix_epd_handle_t handle);
 
 /**
  * Full-screen black/white refresh.

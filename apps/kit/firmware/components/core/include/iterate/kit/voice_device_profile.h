@@ -16,9 +16,6 @@ enum {
   ITERATE_KIT_VOICE_TOKEN_CAPACITY = 1024,
   ITERATE_KIT_VOICE_OUTPUT_CAPACITY = 128,
 
-  /* Leave 2 KiB in an outbox slot for the RPC envelope. */
-  ITERATE_KIT_VOICE_HEALTH_CAPACITY = 6144,
-
   /* Reserve outbox space so microphone traffic cannot starve RPC replies. */
   ITERATE_KIT_VOICE_CONTROL_INBOX_SLOT_CAPACITY = 16384,
   ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY = 8192,
@@ -61,15 +58,11 @@ enum {
   ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS = 500,
   ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS = 1500,
 
-
-  ITERATE_KIT_VOICE_TURN_MAX_MS = 30000,
-
   /* Device presence is separate from the backend’s continuous input clock. */
   ITERATE_KIT_VOICE_CALL_KEEPALIVE_MS = 20000,
 
   ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS = 10000,
   ITERATE_KIT_VOICE_CONTROL_POLL_MS = 25,
-  ITERATE_KIT_VOICE_STATS_INTERVAL_MS = 5000,
 
   /* Poll reduced face state only while answer audio is queued. */
   ITERATE_KIT_VOICE_FACE_POLL_MS = 100,

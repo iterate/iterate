@@ -387,7 +387,7 @@ void face_animator_clear_viseme(face_animator_t *animator)
 }
 
 bool face_animator_snapshot(const face_animator_t *animator,
-                            face_animator_state_t *state)
+                            face_pose_t *state)
 {
     if (animator == NULL || state == NULL) {
         return false;
@@ -399,7 +399,7 @@ bool face_animator_snapshot(const face_animator_t *animator,
         return false;
     }
 
-    face_animator_state_t candidate;
+    face_pose_t candidate;
     candidate.frame_index = __atomic_load_n(
         &animator->state.frame_index, __ATOMIC_RELAXED);
     candidate.playout_samples = __atomic_load_n(

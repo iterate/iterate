@@ -227,8 +227,8 @@ static void handle_spk_frame(
   struct capnweb_value flag;
   size_t b64_length;
   size_t chunk_length = 0U;
-  bool drop = false;
-  bool last = false;
+  bool clear_first = false;
+  bool last_frame = false;
 
   /*
    * NOTHING PLAYS INTO A CALL THIS DEVICE IS NOT ON. The end button's
@@ -239,51 +239,33 @@ static void handle_spk_frame(
    */
   if (!voice_stream->call_active) return;
 
-
   /*
-   * THE SAME INSTRUCTION UNDER THE SECOND AGENT'S NAME FOR IT.
-   *
-   * `drop` named no audio: it said "empty your ring" and nothing about which
-   * answer it meant, so a late one discarded the answer that had already
-   * replaced the one it was about. The rewrite binds the clear to a numbered
-   * frame and calls it what the device DOES — clear the buffer, then play THIS
-   * frame — and the device's whole buffer policy is readable off the payload.
-   *
-   * Both are honoured, because both agents are in service and the point of
-   * running them side by side is that the instrument does not change between
-   * them. Either being true means clear.
+   * The clear is bound to a numbered frame and says what the device DOES —
+   * clear the buffer, then play THIS frame — so a late clear cannot discard
+   * the answer that already replaced the one it was about.
    */
-  if (!drop &&
-      capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &drop);
+  if (capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &clear_first);
   }
-  /*
-   * The second agent's name for the same edge. It says what the frame MEANS —
-   * this is the last frame of the answer — rather than `last`, which needed
-   * the reader to already know what it was the last of.
-   */
-  if (!last && capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
-    (void)capnweb_value_get_boolean(&flag, &last);
+  if (capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &last_frame);
   }
 
   /*
-   * `drop` FIRST, AND BEFORE ANYTHING CAN GO WRONG WITH THE AUDIO.
+   * THE CLEAR FIRST, AND BEFORE ANYTHING CAN GO WRONG WITH THE AUDIO.
    *
    * The device does not decide turns; it does what the server's frames say.
-   * `drop` is the server saying "empty your ring", and it is true whether or
-   * not this chunk carries audio, so nothing about decoding audio may stand
-   * between it and being obeyed.
+   * The clear is true whether or not this chunk carries audio, so nothing
+   * about decoding audio may stand between it and being obeyed.
    *
-   * It used to sit BELOW the decode, which has an early `return` on failure.
    * A barge-in is exactly the case where the sender has no audio left to
    * attach the flag to — it has just thrown the answer away — so it sends the
-   * flag on an empty chunk, whose empty `pcm` string decodes to nothing, takes
-   * that early return, and never reaches the drop. The server said stop, the
-   * device agreed to obey, and the message was discarded on the doorstep for
-   * being an empty envelope. Three fixes upstream of here were measured
-   * against that and moved nothing.
+   * flag on an empty chunk, whose empty `pcm` string decodes to nothing. Below
+   * the decode's early `return`, the clear was discarded on the doorstep for
+   * being an empty envelope, and three fixes upstream were measured against
+   * that and moved nothing.
    */
-  if (drop && voice_stream->options.on_control != NULL) {
+  if (clear_first && voice_stream->options.on_control != NULL) {
     voice_stream->options.on_control(
         voice_stream->options.downlink_context,
         ITERATE_KIT_VOICE_STREAM_CONTROL_SPEECH_STARTED);
@@ -318,17 +300,16 @@ static void handle_spk_frame(
    * chunk is appended to the end of it; where one chunk stops and the next
    * starts is not a thing either side has to agree on.
    *
-   * IT USED TO GO OUT 640 BYTES AT A TIME, and that rule cost more than it ever
-   * bought. It made a chunk with anything left over on the end a protocol
-   * violation to be counted and dropped, which every chunk had, because audio
-   * deltas are of no particular length: 118 dropped chunks in three turns.
-   * Buying it back needed the sender to carry a remainder between deltas and pad
-   * an answer's tail with silence. The click that the rule was supposed to
-   * prevent cannot happen — a ring has no phase, and consecutive PCM16 samples
-   * written consecutively are the same waveform however they were cut.
+   * A 640-byte framing rule here would cost more than it buys: audio deltas
+   * are of no particular length, so it made nearly every chunk a protocol
+   * violation (118 dropped chunks in three turns), and the click it was meant
+   * to prevent cannot happen — a ring has no phase, and consecutive PCM16
+   * samples written consecutively are the same waveform however they were cut.
+   *
+   * The lane owes more frames until `lastFrameOfAnswer`; an empty clear frame
+   * owes none.
    */
-  /* The lane owes more frames until `last`; an empty clear frame owes none. */
-  voice_stream->answer_open = !last && chunk_length > 0U;
+  voice_stream->answer_open = !last_frame && chunk_length > 0U;
   if (chunk_length > 0U && voice_stream->options.on_speaker != NULL) {
     ++voice_stream->spk_frames_received;
     voice_stream->options.on_speaker(
@@ -342,7 +323,7 @@ static void handle_spk_frame(
    * terminal event on a separate lane, where it routinely
    * arrived FIRST and cost 258 received frames that were never played.
    */
-  if (last && voice_stream->options.on_control != NULL) {
+  if (last_frame && voice_stream->options.on_control != NULL) {
     voice_stream->options.on_control(
         voice_stream->options.downlink_context,
         ITERATE_KIT_VOICE_STREAM_CONTROL_RESPONSE_DONE);
@@ -492,8 +473,14 @@ static void process_batch(
   }
 }
 
-
-void iterate_kit_voice_stream_on_subscription_update(
+/*
+ * Generic-subscription callback for a bound call. The owner is the
+ * voice_stream; its epoch identifies one current or overlapping predecessor
+ * subscription. `events` is the delivery's events array itself — the OS calls
+ * the lent stub as a bare `(events, range)` function — and `range` is
+ * `{after, through}`.
+ */
+static void on_subscription_update(
     void *owner,
     uint32_t owner_epoch,
     const struct capnweb_value *events,
@@ -545,7 +532,7 @@ enum capnweb_status iterate_kit_voice_stream_bind(
   status = iterate_kit_stream_subscription_open(subscription, stream, key,
       consumed_event_types,
       sizeof(consumed_event_types) / sizeof(consumed_event_types[0]),
-      iterate_kit_voice_stream_on_subscription_update, voice_stream,
+      on_subscription_update, voice_stream,
       voice_stream->connection_generation);
   if (status != CAPNWEB_OK) {
     return fail(voice_stream, ITERATE_KIT_VOICE_STREAM_FAILURE_OPEN_CALL, status);
@@ -606,7 +593,7 @@ enum capnweb_status iterate_kit_voice_stream_recycle_subscription(
   status = iterate_kit_stream_subscription_open(fresh_subscription, voice_stream->stream,
       key, consumed_event_types,
       sizeof(consumed_event_types) / sizeof(consumed_event_types[0]),
-      iterate_kit_voice_stream_on_subscription_update, voice_stream,
+      on_subscription_update, voice_stream,
       voice_stream->connection_generation);
   if (status != CAPNWEB_OK) {
     (void)iterate_kit_stream_subscription_close(fresh_subscription);
@@ -636,7 +623,7 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
       frame_count == 0U ||
       frame_count > ITERATE_KIT_VOICE_STREAM_MAX_FRAMES_PER_APPEND ||
       frame_length == 0U ||
-      frame_length > ITERATE_KIT_VOICE_STREAM_FRAME_BYTES) {
+      frame_length > ITERATE_KIT_VOICE_FRAME_BYTES) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   if (voice_stream->state != ITERATE_KIT_VOICE_STREAM_READY) {
@@ -722,26 +709,11 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
   return status;
 }
 
-enum capnweb_status iterate_kit_voice_stream_append_raw(
-    struct iterate_kit_voice_stream *voice_stream,
-    const char *events_json_array,
-    size_t length) {
-  if (voice_stream == NULL || events_json_array == NULL || length == 0U) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voice_stream->state != ITERATE_KIT_VOICE_STREAM_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  return iterate_kit_stream_append(
-      voice_stream->stream, events_json_array, length);
-}
-
-
 /* --- the face, pulled out of the processor's own runtime bag ------------- */
 
 /*
  * A PLAIN METHOD NAME ON THE CONVERSATION'S CONTEXT, exactly like
- * `setupVoiceAgent` on the project root. os-next has no `getProcessorRuntimeState`
+ * `setupVoiceAgent` on the project root. The OS has no `getProcessorRuntimeState`
  * built-in; anything that is not a built-in resolves through the context's
  * rewrite rules, so the voice worker owns this name the same way it owns setup.
  * The device keeps the call and the reply shape and expresses no opinion about
@@ -910,20 +882,6 @@ enum capnweb_status iterate_kit_voice_stream_end_activation(
   if (length < 0 || (size_t)length >= sizeof(arguments)) return CAPNWEB_E_LIMIT;
   return iterate_kit_stream_append(stream, arguments, (size_t)length);
 }
-
-enum capnweb_status iterate_kit_voice_stream_end_call(
-    struct iterate_kit_voice_stream *voice_stream, const char *reason) {
-  enum capnweb_status status;
-  if (voice_stream == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
-  status = iterate_kit_voice_stream_end_activation(
-      voice_stream->stream, voice_stream->options.activation, reason);
-  if (status != CAPNWEB_OK) return status;
-  voice_stream->call_active = false;
-  voice_stream->answer_open = false;
-  voice_stream->last_presence_at_ms = 0U;
-  return CAPNWEB_OK;
-}
-
 
 enum capnweb_status iterate_kit_voice_stream_close(
     struct iterate_kit_voice_stream *voice_stream) {

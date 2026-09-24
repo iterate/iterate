@@ -125,8 +125,6 @@ void iterate_kit_i2s_codec_set_playback_callbacks(
     bool (*ready)(void *),
     void (*observed)(void *, const int16_t *, size_t, bool),
     void (*idle)(void *));
-/** Drop unsliced sound before M5 mutes its amp and deletes the shared pins. */
-void iterate_kit_i2s_codec_drop_pending_sound(void);
 /** Count a board-owned mode-switch/recorder failure with the task failures.
  * capture selects the direction. Do not also count an IO_ERROR returned to a
  * hardware task: that path is already counted by start_over.

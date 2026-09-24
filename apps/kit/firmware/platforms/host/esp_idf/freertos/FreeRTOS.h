@@ -1,7 +1,7 @@
-#ifndef ITERATE_KIT_FAKE_FREERTOS_H
-#define ITERATE_KIT_FAKE_FREERTOS_H
+#ifndef ITERATE_KIT_HOST_FREERTOS_H
+#define ITERATE_KIT_HOST_FREERTOS_H
 
-/* Host stand-in. See ../README.md. */
+/* Host stand-in. See ../esp_idf.h. */
 
 #include <stdint.h>
 

@@ -28,8 +28,8 @@ A test pins the clock with `iterate_kit_host_esp_idf_set_now_us()`. From then
 on time moves only through set, `iterate_kit_host_esp_idf_advance_ms()` and the
 delays the loop itself takes (`vTaskDelay` is a clock move, a queue timeout is
 spent only when it is actually waited out), and a restart is recorded, not
-honoured: `iterate_kit_host_esp_idf_restart_requested()` and `_restart_note()`
-read what `esp_restart()` recorded. Unpinned, `esp_restart()` prints the note
+honoured: `iterate_kit_host_esp_idf_restart_requested()` reads what
+`esp_restart()` recorded. Unpinned, `esp_restart()` prints the note
 and exits. Logging is quiet under a pinned clock unless `ITERATE_KIT_ESP_LOG`
 says otherwise. Every fixture calls `iterate_kit_host_esp_idf_reset()` first,
 because all of it is file-static, exactly like the firmware it stands in for.

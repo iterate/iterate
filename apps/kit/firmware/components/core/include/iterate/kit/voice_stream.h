@@ -14,8 +14,6 @@ extern "C" {
 #endif
 
 enum {
-  /** One 20 ms, 16 kHz mono PCM16 microphone frame. */
-  ITERATE_KIT_VOICE_STREAM_FRAME_BYTES = 640,
   /*
    * A flush encodes one contiguous PCM body. This limit must fit its base64
    * payload and envelope in one control outbox slot.
@@ -239,16 +237,6 @@ enum capnweb_status iterate_kit_voice_stream_recycle_subscription(
     struct iterate_kit_voice_stream *voice_stream,
     struct iterate_kit_stream_subscription *fresh_subscription);
 
-/** Generic-subscription callback for a bound call. The owner is the voice_stream;
- * its epoch identifies one current or overlapping predecessor subscription.
- * `events` is the delivery's events array itself — os-next calls the lent stub
- * as a bare `(events, range)` function — and `range` is `{after, through}`. */
-void iterate_kit_voice_stream_on_subscription_update(
-    void *owner,
-    uint32_t owner_epoch,
-    const struct capnweb_value *events,
-    const struct capnweb_value *range);
-
 /**
  * One-way append of up to MAX_FRAMES_PER_APPEND consecutive mic frames as
  * one atomic multi-event append — divides the outbound message rate (each
@@ -266,24 +254,6 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
     size_t frame_count,
     size_t frame_length,
     const char *activation);
-
-/**
- * One-way append of a caller-built JSON array of stream event inputs
- * (diagnostics/stats events). The caller owns JSON validity.
- */
-enum capnweb_status iterate_kit_voice_stream_append_raw(
-    struct iterate_kit_voice_stream *voice_stream,
-    const char *events_json_array,
-    size_t length);
-
-/**
- * Hang up: a durable events.iterate.com/voice-agent/conversation-ended event
- * carrying this call's id, which is what the bridge watches for. One-way —
- * the bridge's conversation-ended echo confirms it. `reason` must be a safe
- * JSON string; NULL becomes `hangup`.
- */
-enum capnweb_status iterate_kit_voice_stream_end_call(
-    struct iterate_kit_voice_stream *voice_stream, const char *reason);
 
 /**
  * Append an authoritative terminal event for `activation`.

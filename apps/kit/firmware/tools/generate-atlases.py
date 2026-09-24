@@ -382,14 +382,10 @@ def emit_catalog_inc(packs: list[dict]) -> str:
         symbol = f"face_sprite_{pack['prefix']}_atlas"
         if cat["atlas_variant"] is not None:
             symbol += f"_{cat['atlas_variant']}"
-        flags = " |\n            ".join(cat["render_flags"])
         lines.append("    {")
         lines.append(f'        "{cat["slug"]}",')
         lines.append(f'        "{cat["display_name"]}",')
         lines.append(f"        &{symbol},")
-        lines.append(f"        {cat['width']}U,")
-        lines.append(f"        {cat['height']}U,")
-        lines.append(f"        {flags},")
         lines.append("    },")
     lines.append("};")
     return "\n".join(lines) + "\n"
@@ -575,21 +571,15 @@ def parse_catalog_inc(path: Path) -> dict[str, dict]:
         r'        "([^"]+)",\n'
         r'        "([^"]+)",\n'
         r"        &face_sprite_(\w+?)_atlas(?:_(original))?,\n"
-        r"        (\d+)U,\n"
-        r"        (\d+)U,\n"
-        r"        ((?:\w+ \|\n            )*\w+),\n"
         r"    \},"
     )
     entries: dict[str, dict] = {}
     for m in entry_re.finditer(text):
-        slug, display, prefix, variant, width, height, flags_text = m.groups()
+        slug, display, prefix, variant = m.groups()
         entries[prefix] = {
             "slug": slug,
             "display_name": display,
             "atlas_variant": variant,
-            "width": int(width),
-            "height": int(height),
-            "render_flags": [t.strip() for t in flags_text.replace("\n", " ").split("|")],
         }
     if not entries:
         raise ValueError(f"{path}: no catalog entries matched")

@@ -235,9 +235,6 @@ enum iterate_kit_status iterate_kit_board_set_volume(uint8_t percent, uint8_t *a
   return ITERATE_KIT_OK;
 }
 
-/** Read the last presentation on the app task; extra consumes the same value. */
-const struct iterate_kit_voice_view *iterate_kit_board_view(void) { return &view; }
-
 /** Apply a signed percentage-point gesture through the RPC's volume path. */
 enum iterate_kit_status iterate_kit_board_nudge_volume(int step) {
   int64_t target = (int64_t)volume_percent + step;
@@ -249,7 +246,6 @@ enum iterate_kit_status iterate_kit_board_nudge_volume(int step) {
   return status;
 }
 
-uint8_t iterate_kit_board_volume(void) { return volume_percent; }
 static uint8_t volume(void *context) { (void)context; return volume_percent; }
 static enum iterate_kit_status set_volume(void *context, uint8_t percent, uint8_t *applied) {
   (void)context;

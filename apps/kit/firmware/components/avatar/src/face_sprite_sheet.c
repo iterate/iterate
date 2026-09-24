@@ -1313,7 +1313,7 @@ bool face_sprite_render(
         player, render_key, sample_clock, &surface);
 }
 
-bool face_sprite_render_snapshot_to(
+static bool face_sprite_render_snapshot_to(
     const face_sprite_player_t *validated_player,
     const face_render_key_t *render_key,
     uint32_t sample_clock,

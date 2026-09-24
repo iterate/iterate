@@ -123,13 +123,6 @@
   "catalog": {
     "slug": "furnace-imp",
     "display_name": "Furnace Imp",
-    "atlas_variant": "original",
-    "width": 80,
-    "height": 60,
-    "render_flags": [
-      "FACE_RENDER_FLAG_PIXELATED",
-      "FACE_RENDER_FLAG_SPRITE_MOUTH",
-      "FACE_RENDER_FLAG_IDLE_MOTION"
-    ]
+    "atlas_variant": "original"
   }
 }

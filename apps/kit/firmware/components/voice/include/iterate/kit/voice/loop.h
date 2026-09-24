@@ -302,7 +302,7 @@ bool iterate_kit_voice_loop_init(
     const struct iterate_kit_board_ops *ops,
     const struct iterate_kit_board_facts *facts,
     void *context);
-void iterate_kit_voice_loop_step(uint64_t now_ms);
+void iterate_kit_voice_loop_step(void);
 void iterate_kit_voice_loop_capture_step(void);
 void iterate_kit_voice_loop_playback_step(void);
 
