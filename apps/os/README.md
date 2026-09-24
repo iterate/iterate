@@ -77,11 +77,11 @@ pnpm's own command). A PR that itself adds a class needs the parent deployed fro
 Run preview operations from this directory under the parent Doppler config:
 
 ```sh
-doppler run --project project-worker --config preview -- \
+doppler run --project os --config preview -- \
   pnpm preview deploy --pr <number> --name <branch> --apps all
-doppler run --project project-worker --config preview -- \
+doppler run --project os --config preview -- \
   pnpm preview e2e --pr <number> --name <branch>
-doppler run --project project-worker --config preview -- \
+doppler run --project os --config preview -- \
   pnpm preview sweep
 ```
 

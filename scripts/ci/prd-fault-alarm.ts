@@ -8,7 +8,7 @@
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed.
 //
-//   doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+//   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay a window, post nothing
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
@@ -27,8 +27,7 @@ export type FaultReading = Record<"serverErrors" | "heals" | "errors", [string, 
 /** Reads the last half hour of os-prd's Workers Logs and pages #error-pulse on a fault. */
 export async function run(options: { at?: string; dryRun?: boolean } = {}) {
   const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
-  if (!accountId || !apiToken)
-    throw new Error("run under doppler --project project-worker --config prd");
+  if (!accountId || !apiToken) throw new Error("run under doppler --project os --config prd");
   const now = new Date();
   return alarm({
     now,

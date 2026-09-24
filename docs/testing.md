@@ -264,7 +264,7 @@ seconds?
 Every non-unit lane targets a live deployment and is invoked the same way:
 
 ```bash
-doppler run --project project-worker --config <cfg> -- env WORKER_BASE_URL=<url> pnpm <lane>
+doppler run --project os --config <cfg> -- env WORKER_BASE_URL=<url> pnpm <lane>
 ```
 
 The Doppler config supplies the deployment's own credentials — `APP_CONFIG`
@@ -277,11 +277,11 @@ entry the URL falls under, so a per-PR preview inherits its parent's:
 pnpm e2e
 
 # a PR preview (its URL is in the PR body)
-doppler run --project project-worker --config preview -- \
+doppler run --project os --config preview -- \
   env WORKER_BASE_URL=https://pr<n>-<branch-slug>-os-preview.iterate-dev-preview.workers.dev pnpm e2e
 
 # production
-doppler run --project project-worker --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm e2e
+doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm e2e
 ```
 
 Specs take the same shape with `DEMO_BASE_URL`; without it Playwright starts
@@ -314,7 +314,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `WORKER_BASE_URL`                             | You, the preview script, the soak and crash hunt            | THE deployed worker for `pnpm e2e`, the soak and bench                                                                                            | Boot the real worker in local workerd       |
 | `DEMO_BASE_URL`                               | You, the preview script                                     | THE deployment for `pnpm spec` (and the issuer for the `notes` project)                                                                           | Local `pnpm dev` on `DEMO_PORT`             |
 | `DEMO_PORT`                                   | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
-| `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`       | Doppler (`project-worker`, `preview` / `prd`)               | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
+| `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`       | Doppler (`os`, `preview` / `prd`)                           | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
 | `E2E_RUN_ID`                                  | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                           | Minted once per run                         |
 | `PETSHOP_BASE_URL`, `PETSHOP_BACKDOOR_SECRET` | You                                                         | Which dummy petshop the secret and connection rows dial, and its backdoor credential                                                              | `https://dummy-petshop.iterate.workers.dev` |
 | `NOTES_BASE_URL`                              | The preview script, or you                                  | The Notes deployment the `notes` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
@@ -417,9 +417,9 @@ npm by hand, the root `package.json` pins a pkg.pr.new build of it.
 # local dev, one flow (the config auto-starts the dev server)
 VIDEO_MODE=1 pnpm spec -g "consent"
 
-# against a deployed preview — note --project project-worker: the repo root
+# against a deployed preview — note --project os: the repo root
 # scopes to _shared, which lacks the APP_CONFIG the specs derive credentials from
-doppler run --project project-worker --config preview -- \
+doppler run --project os --config preview -- \
   env DEMO_BASE_URL=<preview url> VIDEO_MODE=1 pnpm spec -g "consent"
 ```
 

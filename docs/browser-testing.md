@@ -79,7 +79,7 @@ attachment the default.
 The automated browser suite is `pnpm spec` from the repository root: one root
 `playwright.config.ts`, the specs under `specs/` (see `specs/AGENTS.md`). It
 starts a local Worker by default. Set `DEMO_BASE_URL` and run under the
-target's Doppler config (`doppler run --project project-worker --config
+target's Doppler config (`doppler run --project os --config
 <preview|prd>`, which supplies its `APP_CONFIG`) to run against an existing
 deployment. Recorded demos for PRs: `VIDEO_MODE=1 pnpm spec -g <name>` — see
 [Pull requests](pull-requests.md#video) and [Testing](testing.md).
@@ -94,7 +94,7 @@ Use this to prove that a PR's deployed preview works through the real browser,
 the issuer's sign-in, routing and the app UI. The automated smoke is the Preview
 OS workflow's `e2e` job (the integration suite and the browser specs against the
 PR's preview). Re-run it from `apps/os` with
-`doppler run --project project-worker --config preview -- pnpm preview e2e --pr <number> --name <branch>`
+`doppler run --project os --config preview -- pnpm preview e2e --pr <number> --name <branch>`
 (see its [README](../apps/os/README.md)).
 
 For a hands-on smoke, take the preview URL from the PR body and sign in as in
@@ -103,7 +103,7 @@ in a shell variable — never echo it:
 
 ```bash
 BASE_URL=https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev   # from the PR body
-PASSWORD=$(doppler secrets get APP_CONFIG --project project-worker --config preview --plain | jq -r .login.password)
+PASSWORD=$(doppler secrets get APP_CONFIG --project os --config preview --plain | jq -r .login.password)
 ```
 
 To prove the UI can mutate deployed state, change something through the UI

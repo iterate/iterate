@@ -40,4 +40,4 @@ jobs:
       - name: Read os-prd's logs, page on a fault
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
