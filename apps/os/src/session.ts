@@ -1,9 +1,3 @@
-import {
-  normalizeConfigRepoTemplateReference,
-  parseConfigRepoTemplateReference,
-  formatConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
-import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 // Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
 // socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
 // project contexts and own their teardown. What a session KNOWS — which projects and organizations
@@ -13,6 +7,12 @@ import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-templat
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import {
+  normalizeConfigRepoTemplateReference,
+  parseConfigRepoTemplateReference,
+  formatConfigRepoTemplateReference,
+} from "@iterate-com/shared/config-repo-template/reference";
+import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
@@ -76,7 +76,7 @@ export interface SessionInput {
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
   /** The in-band bearer (rpc.ts): verify a token a bare socket presents and bind the transport to
-   *  its grant — null for a token the gate refuses. Absent on a door with no such form. */
+   *  its grant — null for a token the gate refuses. Absent on an endpoint with no such form. */
   resolveBearer?: (token: string) => Promise<SessionAuthority | null>;
 }
 
@@ -158,7 +158,7 @@ export class IterateRpcTarget extends RpcTarget {
    *  and project credentials name none. The fact rides `session.user`'s stream, where the
    *  AccountProcessor folds it into the account view (src/account/contract.ts). NOTE: the boundary is
    *  per-authenticate for now (a reconnect re-publishes); narrowing it to credential-establishment is
-   *  a later refinement. Attribution is the user's until the platform principal lands. */
+   *  a later refinement. */
   #publishAuthenticationFact(
     principal: Principal,
     credential: "from-server-cookie" | "admin-secret",

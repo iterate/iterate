@@ -1,5 +1,5 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the one object becomes,
-// what is refused by name, the per-env memo, the derived keys), the platform's own doors (the public
+// what is refused by name, the per-env memo, the derived keys), the platform's own endpoints (the public
 // protocol origins, `/version`, and under path routing the platform's own paths never a project).
 // The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
 // module and its own table.
@@ -248,8 +248,8 @@ describe("parseAppConfig", () => {
       },
       throws: /^APP_CONFIG urls\.mcp \(APP_CONFIG_URLS__MCP\): must differ from urls\.os$/,
     },
-    // a key the schema does not name — a typo inside the object, a stray var (the retired token
-    // secret a deployed worker may still carry) — is WARNED about loudly and dropped; the rest parses
+    // a key the schema does not name — a typo inside the object, a stray var — is WARNED about
+    // loudly and dropped; the rest parses
     {
       vars: {
         APP_CONFIG: JSON.stringify({
@@ -328,7 +328,7 @@ describe("public protocol origins", () => {
       { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
     );
 
-  test("MCP discovery uses its public origin and the console's issuer", async () => {
+  test("MCP discovery uses its public origin and the platform's issuer", async () => {
     const denied = await request("https://mcp.iterate.com/");
     expect(denied.status).toBe(401);
     const metadataUrl = /resource_metadata="([^"]+)"/.exec(
@@ -387,17 +387,17 @@ describe("public protocol origins", () => {
     expect(await response.text()).toBe("unversioned https://os.iterate.com\n");
   });
 
-  test("under path routing the platform's own paths are never a project (projects live under /projects/): the doors answer as themselves", async () => {
+  test("under path routing the platform's own paths are never a project (projects live under /projects/): its endpoints answer as themselves", async () => {
     const paths = {
       ...MINIMAL,
       APP_CONFIG_URLS__OS: "https://os.test",
       APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "paths",
     };
     // the bearer challenges (no session, no project lookup, no 421)
-    for (const door of ["/api", "/mcp"]) {
-      const answer = await request(`https://os.test${door}`, paths);
-      expect(answer.status, door).toBe(401);
-      expect(answer.headers.get("www-authenticate"), door).toBeTruthy();
+    for (const endpoint of ["/api", "/mcp"]) {
+      const answer = await request(`https://os.test${endpoint}`, paths);
+      expect(answer, endpoint).toMatchObject({ status: 401 });
+      expect(answer.headers.get("www-authenticate"), endpoint).toBeTruthy();
     }
     expect((await request("https://os.test/version", paths)).status).toBe(200);
     expect(

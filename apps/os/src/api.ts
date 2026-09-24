@@ -49,7 +49,7 @@ export function oauthResponse(
   // its token IN-BAND, `authenticate({ type: "bearer", token })` (capnweb's own pattern; session.ts,
   // bound to the socket by rpc.ts). Empty = the root and nothing else: no capability until that call
   // resolves through the same gate the header goes through. The HTTP form stays behind the gate —
-  // the console's sign-in probe (iterate/next/app) reads its 401.
+  // an app's sign-in probe (iterate/next/app) reads its 401.
   if (
     url.pathname === "/api" &&
     !request.headers.has("authorization") &&

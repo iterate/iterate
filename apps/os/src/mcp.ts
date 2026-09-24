@@ -149,7 +149,7 @@ async function buildServer(
         const json = JSON.stringify(value) ?? "null";
         return {
           content: [{ type: "text" as const, text: json }],
-          isError: false, // a success is an explicit non-error, mirroring the failure() channel
+          isError: false, // a success is an explicit non-error
           structuredContent: { result: JSON.parse(json) as unknown },
         };
       } catch (error) {

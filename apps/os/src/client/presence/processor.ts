@@ -1,5 +1,5 @@
 // src/client/presence/processor.ts — the presence processor's PURE class, unit-tested in
-// processor.test.ts. Imports only the pure kernel (no cloudflare:workers), so the node lane can
+// processor.test.ts. Imports only the pure kernel (no cloudflare:workers), so a node unit test can
 // construct it with `new`; durable-object.ts is the loadable host build-sdk.mjs bundles.
 import {
   type ConsumedEvent,

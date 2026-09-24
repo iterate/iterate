@@ -10,6 +10,7 @@
 // The host (secret/durable-object.ts) signs the `state`, keeps the pending attempt and runs these.
 
 import * as oauth from "oauth4webapi";
+import type { ClientAuth } from "iterate/next/api";
 import {
   clientAuthOf,
   isRecord,
@@ -18,7 +19,6 @@ import {
   originsOf,
   type SecretRecord,
 } from "./secrets.ts";
-import type { ClientAuth } from "iterate/next/api";
 
 /** What `itx.secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the project's
  *  own OAuth client (bring-your-own-app), the scope, the pin, and any extra authorize parameters the

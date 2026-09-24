@@ -200,8 +200,8 @@ export function providerOptions(
     defaultHandler,
     authorizeEndpoint: `${issuer}/oauth2/auth`,
     tokenEndpoint: `${issuer}/oauth2/token`,
-    // DCR is served on every deployment (not just local http): CIMD stays the console's own path
-    // (browser-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
+    // DCR is served on every deployment (not just local http): CIMD stays the apps' own path
+    // (iterate/next/app-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
     clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,

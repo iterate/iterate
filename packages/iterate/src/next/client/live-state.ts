@@ -18,7 +18,7 @@ import { applyPatch, type PatchOp } from "../lib.ts";
 //
 // The patch format is lib.ts (an RFC-6902 subset), so this store shares ONE applyPatch with
 // the producer — no second diff implementation. No capnweb import: a caller wires the transport and
-// hands deltas in, so the same store backs a node test client and the React hook (client/demo.tsx).
+// hands deltas in, so the same store backs a node test client and the React hook (client/react.tsx).
 
 /** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
  *  ephemeral event, delivered raw to the subscriber. */

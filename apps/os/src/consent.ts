@@ -45,7 +45,7 @@ export type ConsentView =
       scopes: ConsentScope[];
       denyLocation: string;
       /** how projects are reached over HTTP (project-ingress.ts) — the New project form's hint
-       *  composes `<slug>.<hostname>` or `<origin>/<slug>/` from it; null when this deployment
+       *  composes `<slug>.<hostname>` or `<origin>/projects/<slug>/` from it; null when this deployment
        *  serves no project ingress */
       ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name: from the person's display name,

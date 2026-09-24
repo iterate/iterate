@@ -8,7 +8,7 @@
 // lives beside its consumer. The object's keys are the schema's own names, nested as the schema is:
 //
 //   {
-//     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {} },
+//     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {}, projectWildcard: { hostname, project } },
 //     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret } },
 //     secrets: { key, previousKey, adminBearer },
 //   }
@@ -65,13 +65,13 @@ export const AppConfig = z.object({
       os: optionalOrigin,
       /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
       mcp: optionalOrigin,
-      /** The dash (apps/dash) — where the landing page (`/`, issuer-pages.ts) sends a person, this
+      /** The dash (apps/dash) — where the landing page (`/`, routes/index.tsx) sends a person, this
        *  origin being headless. Blank ⇒ the page names no dash. */
       dash: optionalOrigin,
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
        *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard on
        *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no
-       *  ingress: `/api` and `/mcp` still answer, no app has an HTTP door. */
+       *  ingress: `/api` and `/mcp` still answer, no app is reachable over HTTP. */
       ingressRouting: z
         .object({
           type: z.enum(["subdomains", "paths"], { error: 'expected "subdomains" or "paths"' }),
@@ -136,7 +136,7 @@ export const AppConfig = z.object({
       previousKey: redacted(z.string().trim().default("")),
       /** THE OPERATOR'S BEARER — `authenticate({ type: "admin-secret" })` on `/api` (every project, `as`
        *  a user without a login) and a bearer on `/mcp`: the deployed specs, CI, tooling. Blank ⇒ no
-       *  operator door (a self-host needs none: a personal access token covers scripting). */
+       *  operator access (a self-host needs none: a personal access token covers scripting). */
       adminBearer: redacted(z.string().trim().default("")),
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
@@ -207,7 +207,7 @@ function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): vo
 }
 
 /** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
- *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; the door every test goes through. A
+ *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; every test parses through it. A
  *  malformed field throws naming itself. */
 export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
   const configEnv: Record<string, unknown> = {};
@@ -316,7 +316,7 @@ export function atRestKeysOf(config: AppConfig): { current: string; previous?: s
  *  OAuth issuer identifier: the `__Host-` cookie's origin, what the issuer's pages and every composed
  *  URL hang under. `api` and `mcp` are the two resource identifiers a token is bound to, `/api` on
  *  the platform origin and the MCP root (a separate origin's `/` when `urls.mcp` names one, else
- *  `/mcp`). The edge computes them once per request and stamps every caller with the origin
+ *  `/mcp`). The edge stamps every caller with the origin
  *  (`Caller.platformOrigin`); a context persists what its callers said, for the calls that carry
  *  none (a loaded worker's, an alarm's). */
 export type PlatformAddresses = { platformOrigin: string; api: string; mcp: string };

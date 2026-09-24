@@ -23,7 +23,7 @@ export function withIssuerRequest<T>(
 
 export function issuerRequestContext() {
   const context = issuerRequests.getStore();
-  if (!context) throw new Error("Issuer page rendered outside the OS Next Worker");
+  if (!context) throw new Error("Issuer page rendered outside the OS worker");
   return context;
 }
 
