@@ -52,7 +52,15 @@ export async function deviceAuth(
     };
     try {
       // A deliberate POST replaces only this browser's installer session, never a flashed token.
-      await appSession(env.BROWSER_SESSION, request)?.end();
+      const previous = appSession(env.BROWSER_SESSION, request);
+      await previous?.end().catch(async (error: unknown) => {
+        // Ending it signs out at its platform. A platform that no longer answers as iterate (a
+        // self-host torn down) can't sign anyone out, and would block every other board in this
+        // browser, so the session is left behind instead. One that answers but failed still blocks.
+        const platform = await previous.host();
+        if (!platform || (await deps.issuerAnswersAt(platform.issuer)) === null) throw error;
+        console.warn("kit.device_login_left_session", { platform: platform.issuer });
+      });
       const { location, setCookie } = await startAppSession(
         env.BROWSER_SESSION,
         {
