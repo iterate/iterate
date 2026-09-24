@@ -73,7 +73,7 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
  *  reset (`resetUnclaimedLoadedFacets`). A call from loaded code counts while in flight but never
  *  restarts the wait, so a facet calling its own context more often than it would evict is still
- *  reset. The deadline is the DO's in-memory `#unclaimedFacetSweepArmedFor` on its one alarm: a
+ *  reset. The deadline is in memory on the context's one alarm (context/residency.ts): a
  *  context that evicted on time (~10 s) is woken fresh by it, and that birth does the reset; a
  *  context still resident does it in place. Past the ~10 s eviction and the pins' 30 s release, so a
  *  used context costs ONE extra alarm wake per quiet period — and a facet the last call left running
@@ -122,7 +122,7 @@ type FacetHostDeps = {
   stream: Stream;
   /** A claim changed: the DO reconciles its alarm against `deadlines()`. */
   reconcileAlarm: () => void;
-  /** A LOADED facet was materialized: the DO arms its sweep (`UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`). */
+  /** A LOADED facet was materialized: the context arms its sweep (context/residency.ts). */
   loadedFacetMaterialized: () => void;
 };
 

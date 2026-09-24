@@ -102,6 +102,10 @@ lists in `static publicMethods`: extend `FacetDurableObject` or `StreamProcessor
 `iterate/next/sdk` and add your own (`[...super.publicMethods, "send"]`); the platform's own calls
 go around the list (`src/context/facet-public-methods.ts`).
 
+Anything a caller or a facet keeps can hold a context resident and billed after its last call.
+[Context residency](docs/residency.md) explains the seven mechanisms that prevent, end or record
+that.
+
 The MCP endpoint is `/mcp` on each platform deployment (production also serves
 https://mcp.iterate.com). It exposes `run({ project?, script })`, where `script` is an
 `async (itx) => …` function. The deployed integration test

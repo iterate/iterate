@@ -1,9 +1,8 @@
 // alarm-coordinator.ts — THE ONE NATIVE ALARM of a context, derived: it holds no deadline of its
 // own. `reconcile()` asks the deadline sources — the earliest pending schedule (core state), the
 // earliest cursor-row claim (subscription-delivery.ts), the claims of hosted processors (the DO), the
-// residency watchdog (context/residency-watchdog.ts), the unclaimed-facet sweep (context/facet-host.ts
-// `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`, armed by the DO) — and arms the earliest, or deletes the
-// alarm when they report none. Every durable reason is derivable at construction (a schedule is
+// residency watchdog and the unclaimed-facet sweep (both context/residency.ts) — and arms the
+// earliest, or deletes the alarm when they report none. Every durable reason is derivable at construction (a schedule is
 // durable, a cursor row is durable and the log is, a claim is a kv row); the watchdog and the sweep
 // are in memory on purpose — each watches the incarnation that armed it, and a fresh one has nothing
 // to watch. So the alarm read from storage is only the DEDUPE SEED: the constructor's first reconcile
