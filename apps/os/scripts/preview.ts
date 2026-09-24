@@ -217,9 +217,14 @@ function requireEnv(name: string) {
 }
 
 /** A GitHub 5xx is asked again twice, 5 s apart: every call here is a read or a whole-body write,
- *  so a repeat is harmless, and one 500 had failed a run whose checks had passed (#2911). */
-async function github<T = unknown>(route: string, init: { method?: string; body?: unknown } = {}) {
+ *  so a repeat is harmless, and one 500 had failed a run whose checks had passed (#2911). A caller
+ *  whose write must not land late asks once (`attempts: 1`). */
+async function github<T = unknown>(
+  route: string,
+  init: { method?: string; body?: unknown; attempts?: number } = {},
+) {
   const method = init.method || "GET";
+  const attempts = init.attempts || 3;
   let response: Response;
   for (let attempt = 1; ; attempt++) {
     response = await fetch(`https://api.github.com${route}`, {
@@ -232,9 +237,9 @@ async function github<T = unknown>(route: string, init: { method?: string; body?
       },
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
-    if (response.status < 500 || attempt === 3) break;
+    if (response.status < 500 || attempt >= attempts) break;
     console.log(
-      `GitHub ${method} ${route} answered ${response.status}; asking again (${attempt}/3)`,
+      `GitHub ${method} ${route} answered ${response.status}; asking again (${attempt}/${attempts})`,
     );
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
@@ -253,7 +258,8 @@ const repository = () => requireEnv("GITHUB_REPOSITORY");
  *  the write in the log: the whole preview section, its status line, or a suite's line. A writer
  *  that may run at the same moment (the other suite's job: `mayBeOverwritten`, given the body just
  *  written) waits out that writer's read and PATCH before it reads back, since a PATCH made from a
- *  read that predates this write drops it. */
+ *  read that predates this write drops it. So every PATCH goes out once, straight after its read: a
+ *  5xx is not asked again with a body read seconds earlier, the next round reads anew. */
 async function writePullRequestBody(
   prNumber: string,
   what: string,
@@ -265,8 +271,14 @@ async function writePullRequestBody(
     const before = (await github<{ body: string | null }>(route)).body || "";
     const body = splice(before);
     if (body === before) return console.log(`PR #${prNumber}'s body already carries ${what}`);
-    await github(route, { method: "PATCH", body: { body } });
-    if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
+    const patchError = await github(route, { method: "PATCH", body: { body }, attempts: 1 }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    if (patchError) {
+      console.warn(`${describe(patchError)}; reading the body again`);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    } else if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
     const after = (await github<{ body: string | null }>(route)).body || "";
     if (splice(after) === after)
       return console.log(`wrote ${what} into the body of PR #${prNumber}`);
