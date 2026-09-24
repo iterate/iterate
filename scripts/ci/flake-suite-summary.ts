@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
-import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.ts";
+import {
+  analyzeTestTelemetryCompleteness,
+  testTelemetryFailed,
+} from "./test-telemetry-completeness.ts";
 
 /** Called only by full-suite CI finalizers, never by focused test invocations. */
 export async function writeFlakeSuiteSummaries(input: {
@@ -109,11 +112,7 @@ export async function writeFlakeSuiteSummaries(input: {
       })),
       unknownFlakeCount: tests.filter((test) => unknownFlakeRecordFromTelemetry(test) !== null)
         .length,
-      failedCount: tests.filter((test) =>
-        test.outcome
-          ? test.outcome === "unexpected"
-          : ["failed", "timedout"].includes(test.state.toLowerCase()),
-      ).length,
+      failedCount: tests.filter(testTelemetryFailed).length,
       diagnostics: [...new Set(diagnostics)],
       runUrl:
         source.ci.depotJobUrl ||

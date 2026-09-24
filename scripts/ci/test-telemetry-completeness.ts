@@ -85,6 +85,13 @@ export function analyzeTestTelemetryCompleteness(
   };
 }
 
+/** Whether a test failed: Playwright's unexpected outcome when it has one, otherwise vitest's final
+ *  failed or timed-out state. */
+export function testTelemetryFailed(test: TestTelemetryArtifact["tests"][number]): boolean {
+  if (test.outcome) return test.outcome === "unexpected";
+  return ["failed", "timedout"].includes(test.state.toLowerCase());
+}
+
 export function testTelemetryArtifactIncomplete(artifact: TestTelemetryArtifact) {
   return artifact.run.error?.name === TEST_TELEMETRY_INCOMPLETE_ERROR_NAME;
 }
