@@ -306,7 +306,10 @@ const COST_SUITES = ["preview-e2e", "unit"];
 const COST_RUNS = 100;
 /** A row is sampled in a run when it ran this long, ended the run, retried or failed. */
 const COST_SAMPLE_FLOOR_MS = 10_000;
-/** A failure this many rows of one run share is one incident, not a failure of each row. */
+/**
+ * A failed attempt this many rows of one run share, retried or not, is one incident: not a retry or
+ * failure of each row.
+ */
 const INCIDENT_ROWS = 8;
 /** A marginal wall this long at the median proposes the row, like a p95 past its budget. */
 const COST_MARGINAL_BUDGET_MS = 10_000;
@@ -858,7 +861,7 @@ function renderCost(state: FlakeDashboardState): string[] {
           .slice(0, 5)
           .map(
             (incident) =>
-              `- incident, ${shortDate(new Date(incident.at).toISOString())} UTC: ${incident.rows} rows failed with \`${incident.error.replaceAll("`", "'").replaceAll("|", "\\|")}\``,
+              `- incident, ${shortDate(new Date(incident.at).toISOString())} UTC: ${incident.rows} rows failed an attempt with \`${incident.error.replaceAll("`", "'").replaceAll("|", "\\|")}\``,
           ),
       ];
     }),

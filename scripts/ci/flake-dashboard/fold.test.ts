@@ -758,7 +758,7 @@ test("the Cost section prices each suite's rows: percentiles, marginal wall, ret
     "a flaky row | 3.0 s | 3.0 s | — | 4 | 1 | —",
   ]);
   expect(body).toContain(
-    "- incident, Jan 4, 12:00am UTC: 8 rows failed with `internal error; reference = …`",
+    "- incident, Jan 4, 12:00am UTC: 8 rows failed an attempt with `internal error; reference = …`",
   );
   expect(body).not.toContain("a quick row");
 });

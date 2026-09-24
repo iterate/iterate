@@ -198,7 +198,8 @@ export const FlakeDashboardState = z.object({
    * COST_RUNS complete runs, and each row's samples from those runs. A sample is
    * [run start (epoch ms), duration ms, marginal wall ms, retried, failed, on the default
    * branch], taken only when the row ran 10 s or longer, ended the run, retried or failed.
-   * A failure 8 or more rows of one run share is an incident, never a row's retry or failure.
+   * A failed attempt 8 or more rows of one run share, retried or not, is an incident, never a row's
+   * retry or failure.
    */
   costs: z
     .record(

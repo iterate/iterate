@@ -596,8 +596,9 @@ run's per-row durations: each row's p50 and p95 over the suite's last 100
 complete runs, its marginal wall (how much sooner the run would have ended
 without it), its retries and PR failures, and a proposal for a row past its
 budget or with 10s of marginal wall: make it faster, or tag it `slow`. A
-failure 8 or more rows of one run share counts once, as an incident. A
-proposal to delete a row must name the coverage that replaces it.
+failed attempt 8 or more rows of one run share, retried or not, counts once,
+as an incident, and as no row's retry or failure. A proposal to delete a row
+must name the coverage that replaces it.
 
 ### Retry telemetry
 
