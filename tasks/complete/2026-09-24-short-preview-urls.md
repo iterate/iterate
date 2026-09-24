@@ -1,13 +1,12 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
 # Short preview URLs, preview parents deployed from main
 
-**Status:** implemented, waiting on CI. Done: `pr<n>` names, parents renamed and deployed from this
-branch, Preview parents workflow, nightly reset of the `os` parent (run once for real), sweep guard,
-docs. Left: CI green, review, then the post-merge migration (steps 2–4 below).
+**Status:** done, CI green (#3091). Left: review, then the post-merge migration (steps 2–4 under
+Decisions).
 
 ## Why
 
@@ -101,7 +100,7 @@ just the app against the parent platform (not in this task).
 - [x] sweep: `pr<n>` rules, known-resource guard, table rows _(accountResourceNames)_
 - [x] nightly parent reset _(reset-parent; do-reset.ts preview filter + preview_urls on the park)_
 - [x] tests, fixtures and docs updated to the new URLs (README, docs/\*.md, skills, comments)
-- [ ] resources created, parents deployed from the branch, this PR's preview green under new names _(first two done; pr3091 deployed, suites pending)_
+- [x] resources created, parents deployed from the branch, this PR's preview green under new names _(pr3091: Deploy preview, E2E tests, Browser specs green on 2c673e611)_
 
 ## Not in this task
 
