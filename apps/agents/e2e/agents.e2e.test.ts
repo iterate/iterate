@@ -475,8 +475,8 @@ test("interrupted: the person's next words cut the running answer short — sett
   await agent.message("Tell me everything.");
   // The interrupt lands MID-CALL: the fake holds the first request, so the runner is awaiting its
   // 8 s answer. The request's own event is not enough: an interrupt that reaches the agent before
-  // its runner dialed cancels a request the fake never saw, and the next request takes the fake's
-  // first, 8 s answer (2 of 60 soak runs failed so on #3030 when this waited a fixed 500 ms).
+  // the agent has started the call cancels a request the fake never sees, and the next request
+  // takes the fake's first, 8 s answer (2 of 60 soak runs on #3030, when this waited a fixed 500 ms).
   await until("the runner has dialed the model", () => (ai.calls.length > 0 ? true : undefined));
   // The interrupt: a developer item from the person, its policy the cancellation.
   await support.append({
