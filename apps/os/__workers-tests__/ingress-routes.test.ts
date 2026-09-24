@@ -125,14 +125,18 @@ test("itx.ingressRoutes.set validates the route before it appends and is idempot
         event.type.startsWith("events.iterate.com/ingress-route/"),
       )
       .at(-1);
-  const rowsBeforeTheFirstRoute = (await itx.subscriptions.list()).map((row) => row.name);
+  const rowsBeforeTheFirstRoute = (await itx.subscriptions.list()).map(
+    (row: { name: string }) => row.name,
+  );
   await itx.ingressRoutes.set("api", route);
   const { offset } = (await lastRouteEvent())!;
   await itx.ingressRoutes.set("api", route); // the same route again appends nothing
   expect(await lastRouteEvent()).toMatchObject({ offset });
   // the fact is all `set` appends — no processor row, so a request's `match` calls no facet — and
   // the table is the root's core state
-  expect((await itx.subscriptions.list()).map((row) => row.name)).toEqual(rowsBeforeTheFirstRoute);
+  expect((await itx.subscriptions.list()).map((row: { name: string }) => row.name)).toEqual(
+    rowsBeforeTheFirstRoute,
+  );
   expect(await itx.facets.get("core").snapshot()).toMatchObject({
     state: { ingressRoutes: { api: { configuredOffset: offset } } },
   });
