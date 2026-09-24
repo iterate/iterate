@@ -1,6 +1,7 @@
 import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
+import { sessionRecordingPrivacy } from "@iterate-com/ui/components/not-recorded";
 import { getPosthogProjectKey } from "../issuer.functions.ts";
 import css from "../styles.css?url";
 
@@ -20,7 +21,8 @@ export const Route = createRootRoute({
 /** The sign-in and consent pages: pageviews and session replay, anonymous — the person is
  *  identified in the apps they sign in to (dash), and PostHog's shared `*.iterate.com` cookie joins
  *  this visit to them. posthog-js directly, not packages/ui's setup: this worker's type program has
- *  no DOM. Same settings: through `/e` (worker.ts), EU, nothing masked. */
+ *  no DOM. Same settings: through `/e` (worker.ts), EU, and the apps' replay privacy, so the
+ *  password and the mailed code (`SecretInput`s) are never recorded. */
 function RootDocument() {
   // `data-hydrated` is false in the server's HTML and true once React owns the page: the specs'
   // hydration-waiter (specs/AGENTS.md) waits on it before touching controls that do nothing yet.
@@ -34,7 +36,8 @@ function RootDocument() {
         ui_host: "https://eu.posthog.com",
         defaults: "2026-06-25",
         person_profiles: "identified_only",
-        session_recording: { maskAllInputs: false },
+        // a copy: posthog-js keeps the object it is given as its config
+        session_recording: { ...sessionRecordingPrivacy },
       }),
     );
   }, [apiKey]);

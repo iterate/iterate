@@ -272,6 +272,21 @@ proxy), a health check, and a signed-in redirect off the landing page
 Don't add a second data path; if a component needs project data, read it in the
 route `loader` or subscribe with `useLiveState`/`useIterateContext` at the leaf.
 
+## Secrets on the page
+
+In production every app, and the platform's sign-in pages, record PostHog session replays of what
+people type and see (`sessionRecordingPrivacy` in `packages/ui/src/components/not-recorded.tsx`).
+Secrets never go in one:
+
+- A field that takes a secret (a password, an API key, a secret's value, a sign-in code) is a
+  `SecretInput` or `SecretTextarea`. `iterate/secret-field-not-recorded` flags a raw input or
+  textarea that says it takes one by its `type`, `autoComplete`, `id`, `name` or `aria-label`.
+- A secret on screen (a personal access token or an invite link shown once) goes inside a
+  `NotRecorded`.
+
+Both replay as an empty box, and autocapture skips them. Any other password input replays as
+`***`. `posthog-replay.test.tsx` runs posthog-js's own recorder on these components.
+
 ## Where this is going
 
 The model is small on purpose: the SDK's React surface is two hooks over one

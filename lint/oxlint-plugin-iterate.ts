@@ -294,6 +294,59 @@ function getJSXAttributeName(attributeName: any) {
   return undefined;
 }
 
+/** The raw form fields: the vendored shadcn ones and the DOM's. A field that takes a secret renders
+ *  as SecretInput or SecretTextarea instead (packages/ui not-recorded.tsx). */
+const RAW_FORM_FIELDS = new Set([
+  "input",
+  "textarea",
+  "Input",
+  "Textarea",
+  "InputGroupInput",
+  "InputGroupTextarea",
+]);
+
+/** Words in an id, name or aria-label that name a secret's value, such as "openai-key", "API key",
+ *  "wifi-password" or "secret-value". A label that only mentions a secret, such as "secret-name"
+ *  or "Token name", is not one. */
+const SECRET_FIELD_NAME =
+  /pass(word|phrase|code)|api[-_ ]?key|private[-_ ]?key|secret[-_ ]?value|one[-_ ]?time|(^|[-_ ])(key|secret|token|otp)$/i;
+
+/** What says a raw field takes a secret, or undefined: `type="password"`, a credential
+ *  autocomplete, or an id, name or aria-label that names one. Only string literals count; an
+ *  expression or a spread could say anything. */
+function secretFieldEvidence(openingElement: any) {
+  const literal = (name: string): string | undefined => {
+    const attribute = openingElement.attributes.find(
+      (candidate: any) =>
+        candidate.type === "JSXAttribute" && getJSXAttributeName(candidate.name) === name,
+    );
+    let value = attribute?.value;
+    if (value?.type === "JSXExpressionContainer") value = value.expression;
+    if (value?.type === "TemplateLiteral" && value.expressions.length === 0)
+      return value.quasis[0].value.cooked;
+    return stringLiteralValue(value);
+  };
+  if (literal("type")?.toLowerCase() === "password") return 'type="password"';
+  const credential = literal("autoComplete")
+    ?.split(/\s+/)
+    .find((token) => ["current-password", "new-password", "one-time-code"].includes(token));
+  if (credential) return `autoComplete="${credential}"`;
+  for (const name of ["id", "name", "aria-label"]) {
+    const value = literal(name);
+    if (value && SECRET_FIELD_NAME.test(value)) return `${name}="${value}"`;
+  }
+  return undefined;
+}
+
+/** Whether the element is written inside a <NotRecorded> block in the same JSX tree. */
+function isInsideNotRecorded(node: any) {
+  for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+    const name = ancestor.type === "JSXElement" ? ancestor.openingElement.name : undefined;
+    if (name?.type === "JSXIdentifier" && name.name === "NotRecorded") return true;
+  }
+  return false;
+}
+
 function hasSrOnlyClassToken(classText: string) {
   return classText.split(/\s+/).includes("sr-only");
 }
@@ -546,6 +599,36 @@ const plugin: StrictPlugin = {
               message:
                 `An icon-only <${component} size="${size.value}"> has no visible text, so hovering users get ` +
                 `nothing. Add title="..." (it is the accessible name too, unless aria-label differs).`,
+            });
+          },
+        };
+      },
+    },
+    "secret-field-not-recorded": {
+      meta: {
+        docs: {
+          description:
+            "Require a field that takes a secret to render as <SecretInput> or <SecretTextarea> " +
+            "(@iterate-com/ui/components/not-recorded) or inside a <NotRecorded>: PostHog's session " +
+            "replay records what people type into any other field, and a secret must never reach " +
+            'it. Flags a raw input or textarea that says it takes one: type="password", an ' +
+            "autoComplete of current-password, new-password or one-time-code, or an id, name or " +
+            "aria-label naming a secret's value.",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          JSXOpeningElement: (node: any) => {
+            if (node.name.type !== "JSXIdentifier" || !RAW_FORM_FIELDS.has(node.name.name)) return;
+            const evidence = secretFieldEvidence(node);
+            if (!evidence || isInsideNotRecorded(node)) return;
+            context.report({
+              node,
+              message:
+                `<${node.name.name} ${evidence}> takes a secret, and session replay records what is ` +
+                `typed into it. Render <SecretInput> or <SecretTextarea> from ` +
+                `@iterate-com/ui/components/not-recorded, which replay and autocapture leave out.`,
             });
           },
         };

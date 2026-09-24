@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { sessionRecordingPrivacy } from "./not-recorded.tsx";
 
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
 // server bundle.
@@ -23,12 +24,11 @@ export interface PosthogContext {
 }
 
 // Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK sends.
-// Nothing is masked in replays: every app here is ours, and seeing it is the point. A secret on
-// screen (a key shown once) is the exception: it goes in a `NotRecorded` (not-recorded.tsx), which
-// replay and autocapture leave out. Password inputs are always masked by posthog-js. `api_host` is
-// this app's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog), resolved against
-// the page's origin.
-function posthogInitOptions() {
+// Replays record what people type, except secrets (`sessionRecordingPrivacy`, not-recorded.tsx): a
+// password replays as `***`, and a secret field (`SecretInput`, `SecretTextarea`) or a secret on
+// screen (`NotRecorded`) is not recorded at all. `api_host` is this app's own `/e` proxy
+// (proxyPosthogRequest in @iterate-com/shared/posthog), resolved against the page's origin.
+export function posthogInitOptions() {
   return {
     api_host: new URL("/e", window.location.origin).toString(),
     ui_host: "https://eu.posthog.com",
@@ -44,11 +44,8 @@ function posthogInitOptions() {
     disable_session_recording: false,
     disable_capture_url_hashes: true,
     strict_script_versioning: true,
-    session_recording: {
-      maskAllInputs: false,
-      recordBody: false,
-      recordHeaders: false,
-    },
+    // a copy: posthog-js keeps the object it is given as its config
+    session_recording: { ...sessionRecordingPrivacy },
   };
 }
 
