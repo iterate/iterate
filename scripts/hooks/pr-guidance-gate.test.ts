@@ -115,9 +115,11 @@ function pathWith(hashTools: string[]) {
 
 // the path of the first of `tools` on this machine's PATH
 function which(...tools: string[]) {
-  const found = spawnSync("bash", ["-c", 'command -v "$@"', "which", ...tools], {
-    encoding: "utf8",
-  }).stdout.split("\n")[0];
-  if (!found) throw new Error(`none of ${tools.join(", ")} is on the PATH`);
-  return found;
+  for (const tool of tools) {
+    const found = spawnSync("bash", ["-c", 'command -v "$1"', "which", tool], {
+      encoding: "utf8",
+    }).stdout.trim();
+    if (found) return found;
+  }
+  throw new Error(`none of ${tools.join(", ")} is on the PATH`);
 }
