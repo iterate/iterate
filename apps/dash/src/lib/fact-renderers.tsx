@@ -73,7 +73,7 @@ const platformFactRenderers: EventRenderers = {
     const p = record(e.payload);
     return (
       <>
-        Created the project <strong>{str(p.slug)}</strong> {mono(str(p.projectId))}
+        Added the project <strong>{str(p.slug)}</strong> {mono(str(p.projectId))}
       </>
     );
   },

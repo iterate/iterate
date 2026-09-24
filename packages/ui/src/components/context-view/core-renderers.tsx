@@ -13,8 +13,8 @@ const quiet = (text: string) => <span className="text-muted-foreground">{text}</
 export function isHousekeeping(type: string): boolean {
   return (
     type === "events.iterate.com/stream/woken" ||
-    type.startsWith("events.iterate.com/stream/subscription-") ||
-    type.startsWith("events.iterate.com/stream/append-schedule") ||
+    type.startsWith("events.iterate.com/itx/subscription-") ||
+    type.startsWith("events.iterate.com/itx/schedule-") ||
     type === "events.iterate.com/live-state/changed"
   );
 }
@@ -26,7 +26,7 @@ export function housekeepingSummary(types: readonly string[]): string {
     const label =
       type === "events.iterate.com/stream/woken"
         ? "woke"
-        : type.startsWith("events.iterate.com/stream/subscription-")
+        : type.startsWith("events.iterate.com/itx/subscription-")
           ? "subscriptions"
           : type === "events.iterate.com/live-state/changed"
             ? "live state"

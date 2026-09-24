@@ -2,7 +2,7 @@
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY in its handlers, event-sourced
 // from the context's own control events and nothing else:
 //
-//   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
+//   future event batches     itx/schedule-set · schedule-{cancelled,fired,failed}                   → schedules
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   what reset it             context/aborted, then stream/woken            → wokenAfterContextAbortedOffset
@@ -45,6 +45,8 @@ import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
 import { RunRequested, RunSettled } from "iterate/stream/run";
+import { CoreEventCatalog } from "./core-events.ts";
+import { retiredEventTypeRefusal } from "./retired-event-types.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   FetchRouteConfiguredPayload,
@@ -328,10 +330,12 @@ function parseSubscriptionName(name: string): string {
 export const CoreContract = {
   slug: "core",
   version: "15.0.0",
-  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas:
-   *  iterate/stream/run). A processor that consumes them names the contract in its
-   *  `processorDeps` (the agent); the runner and `itx.run` read them here. */
+  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas: iterate/stream/run
+   *  and core-events.ts). A processor that consumes them names a catalog in its `processorDeps`
+   *  (the agent names RunContract, the Project CoreEventCatalog); the runner and `itx.run` read them
+   *  here. */
   events: {
+    ...CoreEventCatalog.events,
     "events.iterate.com/context/run-requested": {
       description:
         "A script this context is asked to run once, against its own itx, by whoever appended it (source.principal); the event's offset is the run.",
@@ -648,7 +652,7 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
  *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
-export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
+export const ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
 
 /** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
  *  loop (the halted fact) and the DO's alarm (the trace) straight through `Stream.append`.
@@ -658,20 +662,22 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/created",
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/subscription-delivery-halted",
-  STREAM_ALARM_TRACE_EVENT,
+  ALARM_TRACE_EVENT,
 ]);
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
- *  other event passes through untouched. The DO runs this on every append
+ *  committing a durable no-op. A retired type (retired-event-types.ts) and a platform-only record
+ *  (`PLATFORM_ONLY_EVENT_TYPES`) are refused. Every other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   // A fixed type list is a stopgap: it isolates the platform's own records, but it cannot say who
   // may append what to a given stream. That needs provenance on the event itself — e.g. events
   // signed by their appender, and processors that ignore an event whose signature does not check.
+  const retired = retiredEventTypeRefusal(event);
+  if (retired) throw new Error(retired);
   if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
@@ -702,7 +708,7 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
   }
   // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
   // its own message — this prefix check runs first and must not throw a TypeError of its own.
-  if (String(event.type).startsWith("events.iterate.com/stream/append-schedule")) {
+  if (String(event.type).startsWith("events.iterate.com/itx/schedule-")) {
     if (event.ephemeral) throw new Error("scheduled append control events must be durable");
     if (event.type === "events.iterate.com/stream/append-scheduled") {
       const payload = ScheduledAppendInput.parse(event.payload);

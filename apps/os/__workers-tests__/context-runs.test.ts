@@ -183,7 +183,7 @@ async function read(ctx: string): Promise<StreamEvent[]> {
 }
 
 async function runEvents(ctx: string) {
-  return (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/context/run-"));
+  return (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/itx/run-"));
 }
 
 async function openScriptRuns(ctx: string) {

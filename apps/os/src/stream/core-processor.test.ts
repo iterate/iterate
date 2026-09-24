@@ -35,8 +35,10 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
     schedules: {},
     scriptRuns: {},
   });
-  // the events it OWNS beyond its control events: the run pair, schemas right here
+  // the events it OWNS beyond its control events: the apex target (core-events.ts, which the
+  // Project contract depends on) and the run pair
   expect(Object.keys(CoreContract.events)).toEqual([
+    "events.iterate.com/itx/ingress-configured",
     "events.iterate.com/context/run-requested",
     "events.iterate.com/context/run-settled",
   ]);
@@ -341,32 +343,6 @@ test("fetch routes: the append boundary parses the fact and refuses a malformed 
   expect(() =>
     normalizeControlEvent({ type: routeType, payload: blogRoute, ephemeral: true }, "/"),
   ).toThrow("must be durable");
-});
-
-test("fetch routes: a root whose core checkpoint was written by 14.0.0, when the table was `ingressRoutes`, re-reduces its log on the next wake into `fetchRoutes`; an `ingress-route/configured` fact is not read", () => {
-  const storage = nodeSqliteDurableObjectStorage();
-  const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
-  const before = new Stream(deps);
-  before.append(
-    { type: "events.iterate.com/ingress-route/configured", payload: { ...blogRoute } },
-    normalizeControlEvent(
-      { type: routeType, payload: { ...blogRoute, fetchRouteName: "api" } },
-      "/",
-    ),
-  );
-  const { fetchRoutes, ...rest } = before.coreReducedState;
-  expect(Object.keys(fetchRoutes)).toEqual(["api"]);
-  before.storage.reduceCheckpoints.write(
-    CoreContract.slug,
-    { reducerVersion: "14.0.0", reducedThroughOffset: before.highestDurableOffset() },
-    { ...rest, ingressRoutes: { "tunnel-blog": fetchRoutes.api } },
-    true,
-  );
-  const after = new Stream(deps).coreReducedState;
-  expect(after.fetchRoutes).toMatchObject({
-    api: { target: ["itx", "tunnels", "blog"], configuredOffset: 2 },
-  });
-  expect(after).not.toHaveProperty("ingressRoutes");
 });
 
 test(

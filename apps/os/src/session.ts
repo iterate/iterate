@@ -370,7 +370,7 @@ async function landProjectOnOrganization(
   // a project is created once and its slug never changes: every landing of it is the same event
   if (!record.projects[project.id])
     onOrganization.push({
-      ...projectCreatedFact(project.id, project.slug),
+      ...projectAddedFact(project.id, project.slug),
       idempotencyKey: `organization/project-created:${project.id}`,
     });
   if (onOrganization.length)
@@ -457,7 +457,7 @@ const invitationRevokedFact = (invitationId: string): StreamEventInput => ({
   type: "events.iterate.com/organization/invitation-revoked",
   payload: { invitationId },
 });
-const projectCreatedFact = (projectId: string, slug: string): StreamEventInput => ({
+const projectAddedFact = (projectId: string, slug: string): StreamEventInput => ({
   type: "events.iterate.com/organization/project-created",
   payload: { projectId, slug },
 });

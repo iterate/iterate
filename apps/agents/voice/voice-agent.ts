@@ -1160,7 +1160,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
   }
 
   /** The live model handed a request to the backend: emit `delegation-requested` with the words
-   * said so far (the voice-delegate facet on this context answers it with `commentary`) and tell the voice
+   * said so far (the voice-delegate facet on this context answers it with `commentary-added`) and tell the voice
    * it may keep talking. */
   #delegate(dial: Dial, delegationId: string): void {
     const transcript = this.#delegationTranscript(dial);

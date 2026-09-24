@@ -142,7 +142,8 @@ export const OrganizationContract = defineProcessorContract({
       payloadSchema: z.object({ invitationId: z.string().min(1) }),
     },
     "events.iterate.com/organization/project-created": {
-      description: "A project was created in the organization (platform fact).",
+      description:
+        "A project joined the organization's catalog (platform fact). It lands before, and whatever becomes of, the project's own `project/created`.",
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
     },
   },

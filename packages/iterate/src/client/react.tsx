@@ -237,7 +237,7 @@ export function useIterateContext(
   const [failure, setFailure] = useState<{ itx: IterateContextHandle; message: string }>();
   const tableVersion = sorted.reduce(
     (last, event) =>
-      event.type.startsWith("events.iterate.com/stream/subscription-") ? event.offset : last,
+      event.type.startsWith("events.iterate.com/itx/subscription-") ? event.offset : last,
     0,
   );
   useEffect(() => {

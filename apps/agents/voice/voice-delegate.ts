@@ -2,7 +2,7 @@
  * The project's agent, as a small facet processor on the conversation context beside the voice
  * relay. The voice facet emits `delegation-requested` when the live model hands off a
  * request; this facet consumes it, runs one chat-model turn (delegation-turn.ts: a model over the
- * words so far, one script tool against `itx`), and emits the answer as `commentary` naming the
+ * words so far, one script tool against `itx`), and emits the answer as `commentary-added` naming the
  * same delegationId. The voice facet forwards that commentary to the live model to speak.
  *
  * Separate from the relay on purpose: the turn's answer is durable, so an eviction mid-turn is
@@ -52,7 +52,7 @@ const ContextMessage = z.object({
 });
 
 const VoiceDelegateState = z.object({
-  /** Raised by `delegation-requested`, removed by the `commentary` that answers it; newest first.
+  /** Raised by `delegation-requested`, removed by the `commentary-added` that answers it; newest first.
    * The recovery ground: a pending row still here after an eviction is re-run. */
   pending: z.array(PendingDelegation).max(MAX_PENDING_DELEGATIONS).default([]),
   /** Additional conversation context, supplied as ordinary Markdown messages. */

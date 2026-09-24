@@ -159,14 +159,14 @@ test.each([
   "woken",
   "subscription-delivery-halted",
   "subscription-delivery-resumed",
-  "trace/alarm",
+  "alarm-trace",
 ])("runtime control %s cannot be scheduled", (type) => {
   const input = scheduled();
   expect(() =>
     normalizeControlEvent(
       {
         ...input,
-        payload: { ...input.payload, events: [{ type: `events.iterate.com/stream/${type}` }] },
+        payload: { ...input.payload, events: [{ type: `events.iterate.com/itx/${type}` }] },
       },
       "/",
     ),

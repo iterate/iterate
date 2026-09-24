@@ -174,7 +174,11 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   const { projectId, projectSlug } = await itx.whoami();
   expect(projectSlug).toBe(slug);
   const projectFacts = async () =>
-    (await readAll(itx)).filter((e) => e.type.startsWith("events.iterate.com/project/"));
+    (await readAll(itx)).filter(
+      (e) =>
+        e.type.startsWith("events.iterate.com/project/") ||
+        e.type === "events.iterate.com/itx/ingress-configured",
+    );
   // the saga SETTLES on `created` or `create-failed`: a failed birth fails here with its own fact,
   // and a wait that runs out names the facts it had (which step the saga was on)
   const settled = await untilValue("project/created on /", projectFacts, (facts) =>
@@ -218,7 +222,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // own, not the create's, so they are left out)
   const rows = async () =>
     (await readAll(itx))
-      .filter((e) => !/\/stream\/(woken|trace\/)/.test(e.type))
+      .filter((e) => !/\/itx\/(woken|alarm-trace)$/.test(e.type))
       .map((e) => ({ offset: e.offset, type: e.type }));
   const before = await rows();
   using again = await api.projects.create({ project: slug });
@@ -381,7 +385,7 @@ test(
     // MCP ran on the project root, with the person and the key stamped on the request (the call on
     // the uncovered project was refused before any root)
     const runPair = (await readAll(openItx(projectId))).filter((e) =>
-      e.type.startsWith("events.iterate.com/context/run-"),
+      e.type.startsWith("events.iterate.com/itx/run-"),
     );
     expect(runPair.map((e) => e.type)).toEqual([
       "events.iterate.com/context/run-requested",

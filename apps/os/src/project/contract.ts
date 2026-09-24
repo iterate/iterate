@@ -15,6 +15,7 @@ import { defineProcessorContract, type ProcessorState } from "iterate/stream/pro
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
+import { CoreEventCatalog } from "../stream/core-events.ts";
 
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
@@ -102,7 +103,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
-        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-answered. Again for a hostname already added re-reads Cloudflare's status.",
+        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
       payloadSchema: z.object({ hostname: z.string().min(1) }),
     },
     "events.iterate.com/project/hostname-add-answered": {
@@ -128,14 +129,10 @@ export const ProjectContract = defineProcessorContract({
         requestOffset: z.number().int().positive(),
       }),
     },
-    "events.iterate.com/project/ingress-configured": {
-      description:
-        "Where the project's apex points: an itx expression, or null for nowhere. The core's control event: the append validates it and the core's reduce serves the apex from it (stream/core-processor.ts). The saga points it at the seed commit and the processor at every later commit of the config repo, each append keyed by its commit.",
-      payloadSchema: z.object({ target: z.array(z.unknown()).nullable() }),
-    },
   },
-  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them.
-  processorDeps: [RepoContract, WorkspaceContract, SecretContract],
+  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, and the
+  // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
+  processorDeps: [RepoContract, WorkspaceContract, SecretContract, CoreEventCatalog],
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",

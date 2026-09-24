@@ -1,6 +1,6 @@
 /**
  * The voice events both processors on a call's context declare: the relay (voice-agent.ts) raises
- * `delegation-requested` and speaks `thinking`/`commentary`; the delegate (voice-delegate.ts)
+ * `delegation-requested` and speaks `thinking-added`/`commentary-added`; the delegate (voice-delegate.ts)
  * answers the one with the others. Declared once so the two contracts cannot drift apart.
  */
 import { z } from "./processor.js";

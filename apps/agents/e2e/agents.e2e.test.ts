@@ -653,7 +653,7 @@ jailFlake(
       const depthRefusalIn = (log: { offset: number; type: string; payload?: any }[]) =>
         log.find(
           (e) =>
-            /\/(context\/run-settled|agent\/llm-request-settled)$/.test(e.type) &&
+            /\/(itx\/run-settled|agent\/llm-request-settled)$/.test(e.type) &&
             JSON.stringify(e.payload).includes("Subrequest depth limit exceeded"),
         );
       const log = await until(
@@ -819,7 +819,7 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
 function turnSummary(log: { offset: number; type: string; payload?: any }[]): string {
   return JSON.stringify(
     log
-      .filter((e) => /\/(agent\/(llm-request-settled|paused)|context\/run-settled)$/.test(e.type))
+      .filter((e) => /\/(agent\/(llm-request-settled|paused)|itx\/run-settled)$/.test(e.type))
       .map((e) => [
         e.offset,
         e.type.replace("events.iterate.com/", ""),

@@ -47,7 +47,7 @@ import {
   type Caller,
 } from "./caller.ts";
 import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
-import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
+import { normalizeControlEvent, ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   FETCH_UPGRADE_RESUMABLE_HEADER,
@@ -216,7 +216,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // report: a watcher re-seeds from list().
     onPresence: (kind, rpcStubKey) => {
       void this.append({
-        type: `events.iterate.com/rpc-stub/${kind}`,
+        type: `events.iterate.com/itx/rpc-stub-${kind}`,
         ephemeral: true,
         payload: { rpcStubKey },
       }).catch(() => undefined);
@@ -333,7 +333,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
-      const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
+      const events = freshEvents.filter((event) => event.type !== ALARM_TRACE_EVENT);
       if (events.length === 0) return;
       this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
@@ -359,7 +359,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#sibling(ancestorPath).append({
           type: "events.iterate.com/context/child-created",
           idempotencyKey: `context/child-created:${path}`,
-          payload: { childPath: path },
+          payload: { descendantPath: path },
         }),
       ),
     ).then(
@@ -865,7 +865,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // Straight onto the stream, not through `append` (a trace is not activity); a trace
     // must never fail an alarm pass.
     try {
-      this.#stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
+      this.#stream.append({ type: ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
     } catch (error) {
       reportIssue("iterate-context.alarm-trace", error, { reason });
     }

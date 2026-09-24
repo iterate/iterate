@@ -62,7 +62,7 @@ export async function startCall(input: {
       `${T}spk-frame`,
       `${T}conversation-accepted`,
       `${T}conversation-ended`,
-      `${T}provider-error`,
+      `${T}provider-error-reported`,
       `${T}provider-disconnected`,
     ],
     target: (events) => {

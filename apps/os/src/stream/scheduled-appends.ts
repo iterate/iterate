@@ -43,8 +43,7 @@ const EventBody = z.strictObject({
     .min(1)
     .refine(
       (value) =>
-        !value.startsWith("events.iterate.com/stream/append-schedule") &&
-        !operatorControlEvents.has(value),
+        !value.startsWith("events.iterate.com/itx/schedule-") && !operatorControlEvents.has(value),
       "scheduling and operator control events cannot be scheduled",
     ),
   payload: z.record(z.string(), z.json()).optional(),

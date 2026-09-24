@@ -708,7 +708,8 @@ export class ProcessorEngine<State> {
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
-  /** Convention: `events.iterate.com/<domain>/<fact>`. */
+  /** `events.iterate.com/<namespace>/<event>` for the platform's types, named by the rules in
+   *  packages/iterate/README.md#event-types; any other string is the appender's own. */
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;

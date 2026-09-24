@@ -97,9 +97,9 @@ async function main(): Promise<void> {
     name: `voice-board-${askedAt}`,
     consumes: [
       `${T}spk-frame`,
-      `${T}utterance-transcript`,
-      `${T}answer-transcript`,
-      `${T}provider-error`,
+      `${T}utterance-transcribed`,
+      `${T}answer-transcribed`,
+      `${T}provider-error-reported`,
       `${T}provider-disconnected`,
       `${T}conversation-ended`,
     ],
@@ -109,9 +109,9 @@ async function main(): Promise<void> {
         const kind = String(event.type).slice(T.length);
         const p = event.payload ?? {};
         if (kind === "spk-frame" && p.lastFrameOfAnswer) answers += 1;
-        else if (kind === "utterance-transcript") heardUs += ` ${p.text}`;
-        else if (kind === "answer-transcript") saidBack += ` ${p.text}`;
-        else if (kind === "provider-error" || kind === "provider-disconnected")
+        else if (kind === "utterance-transcribed") heardUs += ` ${p.text}`;
+        else if (kind === "answer-transcribed") saidBack += ` ${p.text}`;
+        else if (kind === "provider-error-reported" || kind === "provider-disconnected")
           errors.push(`${kind}: ${JSON.stringify(p).slice(0, 200)}`);
         else if (kind === "conversation-ended" && !ending)
           errors.push(`ended: ${String(p.reason)}`);

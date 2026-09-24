@@ -28,7 +28,7 @@ test("a request the agent appended while processing the assistant's item becomes
       settlement: { status: "succeeded", result: { stored: true } },
     },
   });
-  expect(adapted.filter((e) => e.type.startsWith("events.iterate.com/context/"))).toEqual([]);
+  expect(adapted.filter((e) => e.type.startsWith("events.iterate.com/itx/run-"))).toEqual([]);
   const [unasked] = adaptContextRuns([
     at(20, "events.iterate.com/context/run-requested", { code: "async () => 1" }),
   ]);

@@ -4,7 +4,7 @@
 // It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath, activation })` (the
 // project's root worker puts the voice facet and `call-started` on the fresh context in one append;
 // prepare the project at https://k.iterate.com), a live subscription for what the device would hear,
-// microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary` fact
+// microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary-added` fact
 // when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
 // timeline from the press.
 //
@@ -130,10 +130,10 @@ async function main(): Promise<void> {
       `${T}conversation-accepted`,
       `${T}conversation-ended`,
       `${T}spk-frame`,
-      `${T}utterance-transcript`,
-      `${T}answer-transcript`,
+      `${T}utterance-transcribed`,
+      `${T}answer-transcribed`,
       `${T}delegation-requested`,
-      `${T}provider-error`,
+      `${T}provider-error-reported`,
       `${T}provider-disconnected`,
     ],
     target: (events: any[]) => {
@@ -157,11 +157,11 @@ async function main(): Promise<void> {
             ended = String(p.reason);
             marks.ended = at();
             break;
-          case "utterance-transcript":
+          case "utterance-transcribed":
             transcript.push(`listener: ${p.text}`);
             console.log(`[${at()}ms] listener: ${p.text}`);
             break;
-          case "answer-transcript":
+          case "answer-transcribed":
             transcript.push(`assistant: ${p.text}`);
             console.log(`[${at()}ms] assistant: ${p.text}`);
             break;
@@ -172,7 +172,7 @@ async function main(): Promise<void> {
             break;
           default:
             marks[kind] ??= at();
-            if (kind === "provider-error" || kind === "provider-disconnected")
+            if (kind === "provider-error-reported" || kind === "provider-disconnected")
               console.log(`[${at()}ms] ${kind}: ${JSON.stringify(p).slice(0, 300)}`);
         }
       }
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
       // Nothing to say into the microphone: hand the model a fact to paraphrase once the call is live.
       void acceptedPromise.then(() =>
         itx.append({
-          type: `${T}commentary`,
+          type: `${T}commentary-added`,
           payload: { activation, delegationId: null, content: SAY },
         }),
       );

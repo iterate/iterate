@@ -1,5 +1,5 @@
 // Every wake of a context tells each ancestor up to `/` (src/context/paths.ts `ancestorPathsOf`)
-// that it exists: `context/child-created { childPath }`, keyed by the child, so the root's log
+// that it exists: `context/child-created { descendantPath }`, keyed by the child, so the root's log
 // names every context below it and a repeat lands nothing new.
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
@@ -11,12 +11,12 @@ test("a context born at /a/b/c is announced to /, /a and /a/b — each ancestor 
   const project = `prj_announce_${crypto.randomUUID().slice(0, 8)}`;
   await stub(`${project}.iterate/a/b/c`).read(0, 1);
   await until("the root names all three", async () => {
-    const paths = await childPathsIn(project);
+    const paths = await descendantPathsIn(project);
     return ["/a", "/a/b", "/a/b/c"].every((path) => paths.includes(path));
   });
-  expect((await childPathsIn(project)).sort()).toEqual(["/a", "/a/b", "/a/b/c"]);
-  expect((await childPathsIn(`${project}.iterate/a`)).sort()).toEqual(["/a/b", "/a/b/c"]);
-  expect(await childPathsIn(`${project}.iterate/a/b`)).toEqual(["/a/b/c"]);
+  expect((await descendantPathsIn(project)).sort()).toEqual(["/a", "/a/b", "/a/b/c"]);
+  expect((await descendantPathsIn(`${project}.iterate/a`)).sort()).toEqual(["/a/b", "/a/b/c"]);
+  expect(await descendantPathsIn(`${project}.iterate/a/b`)).toEqual(["/a/b/c"]);
   // a landed announcement is remembered, so a later wake sends nothing; one sent again (the flag
   // lost) lands nothing, the keys dedupe it
   await until("the child remembers it announced", () =>
@@ -34,7 +34,7 @@ test("a context born at /a/b/c is announced to /, /a and /a/b — each ancestor 
       state.storage.kv.get("ancestors-announced"),
     ),
   );
-  expect((await childPathsIn(project)).sort()).toEqual(["/a", "/a/b", "/a/b/c"]);
+  expect((await descendantPathsIn(project)).sort()).toEqual(["/a", "/a/b", "/a/b/c"]);
 });
 
 test("a paused ancestor still records a descendant's announcement", async () => {
@@ -45,17 +45,17 @@ test("a paused ancestor still records a descendant's announcement", async () => 
   });
   await stub(`${project}.iterate/paused-child`).read(0, 1);
   await until("the paused root names it", async () =>
-    (await childPathsIn(project)).includes("/paused-child"),
+    (await descendantPathsIn(project)).includes("/paused-child"),
   );
 });
 
 /** The descendants a context's log names, in the order they announced themselves. */
-async function childPathsIn(ctx: string): Promise<string[]> {
+async function descendantPathsIn(ctx: string): Promise<string[]> {
   const events = await runInDurableObject(
     stub(ctx),
     async (instance: IterateContextDurableObject) => (await instance.read(0, 500)).events,
   );
   return events
     .filter((event: StreamEvent) => event.type === "events.iterate.com/context/child-created")
-    .map((event: StreamEvent) => (event.payload as { childPath: string }).childPath);
+    .map((event: StreamEvent) => (event.payload as { descendantPath: string }).descendantPath);
 }

@@ -23,7 +23,7 @@ const invitation = (
   payload,
   source: platform,
 });
-const projectCreated = (projectId: string, slug: string) => ({
+const projectAdded = (projectId: string, slug: string) => ({
   type: "events.iterate.com/organization/project-created",
   payload: { projectId, slug },
   source: platform,
@@ -43,14 +43,14 @@ const rows: {
     name: "created sets the name, renamed replaces it; a project created in it is a row by id, stamped with the event's time; the same project again is ignored",
     events: [
       created("Booper"),
-      projectCreated("prj_1", "monkey"),
+      projectAdded("prj_1", "monkey"),
       {
         type: "events.iterate.com/organization/renamed",
         payload: { name: "Booper Inc" },
         source: platform,
       },
-      projectCreated("prj_1", "monkey"),
-      projectCreated("prj_2", "voice"),
+      projectAdded("prj_1", "monkey"),
+      projectAdded("prj_2", "voice"),
     ],
     state: {
       name: "Booper Inc",
