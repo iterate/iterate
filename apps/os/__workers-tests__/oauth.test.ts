@@ -158,30 +158,8 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
     grantTypes: ["authorization_code", "refresh_token"],
     responseTypes: ["code"],
   });
-  const verifier =
-    crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
-  );
-  const challenge = btoa(String.fromCharCode(...digest))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-  const query = new URLSearchParams({
-    response_type: "code",
-    client_id: client.clientId,
-    redirect_uri: "https://client.test/callback",
-    scope: "iterate",
-    state: "test-state",
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-  });
-  for (const resource of resources) query.append("resource", resource);
-  const issuerSession = appSession(
-    env.BROWSER_SESSION,
-    new Request(ORIGIN, { headers: { cookie } }),
-  )!;
-  const { root: approver } = await rpc((await issuerSession.bearer())!);
+  const { query, verifier } = await authorizationRequest(client.clientId, resources);
+  const approver = await issuerApprover(cookie);
   // a ticked box submits the project's id
   const approval = await approver.consent.approve({
     query: `?${query}`,
@@ -825,6 +803,51 @@ test("malformed and foreign resources are expected authorization refusals", asyn
     expect((await grant([resource])).error).toBe("invalid_target");
 });
 
+// THE ACCESS MEMO (control-plane/edge.ts): an isolate keeps a person's access five seconds, and a
+// creation drops it only on the isolate that served the create. `exports.default` is the built
+// worker with its own copy of edge.ts, so a create through this module's ControlPlane is a create
+// on ANOTHER isolate: the worker's memo still holds the person without it. Consent re-reads before
+// it refuses a ticked project and lists past the memo (e2e ingress-project-host: "Choose at least
+// one project you can access." in 12 of 124 deployed runs, 2026-09).
+test("consent lists and approves a project created on another isolate within the access memo's five seconds", async () => {
+  const email = "consent-fresh@example.com";
+  const login = await call("/login", {
+    method: "POST",
+    body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
+  });
+  const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  const user = await controlPlane().ensureUser(email);
+  const caller = { principal: { actor: user.id, email } };
+  await controlPlane().createProject(caller, { project: "consent-fresh-a" });
+  const client = await helpers().createClient({
+    clientName: "Consent freshness",
+    redirectUris: ["https://client.test/callback"],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
+  });
+  const approver = await issuerApprover(cookie);
+  const listed = async () => {
+    const view = await approver.consent.describe(
+      `?${(await authorizationRequest(client.clientId, [`${ORIGIN}/api`])).query}`,
+    );
+    if (view.kind !== "consent") throw new Error(JSON.stringify(view));
+    return view.projects.map((project) => project.slug).sort();
+  };
+  // the worker memoizes the person's access: one project
+  expect(await listed()).toEqual(["consent-fresh-a"]);
+  const second = await controlPlane().createProject(caller, { project: "consent-fresh-b" });
+  // ticked at once: the memoized set lacks it, so approve re-reads before refusing
+  const approval = await approver.consent.approve({
+    query: `?${(await authorizationRequest(client.clientId, [`${ORIGIN}/api`])).query}`,
+    projects: [second.id],
+  });
+  expect(approval).toEqual({ redirectTo: expect.stringContaining("code=") });
+  await controlPlane().createProject(caller, { project: "consent-fresh-c" });
+  // the page lists what the person holds now, whatever this isolate memoized
+  expect(await listed()).toEqual(["consent-fresh-a", "consent-fresh-b", "consent-fresh-c"]);
+});
+
 test("a first-level wildcard CIMD client is bound to its project at consent", async () => {
   const user = await controlPlane().createUser({ email: "wildcard-consent@example.com" });
   const caller = { principal: { actor: user.id, email: user.email } };
@@ -872,5 +895,38 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
 });
 
 const actingAs = (email?: string) => adminSession(sessions, email);
+
+/** A PKCE authorization request for `clientId`, as a client sends it to /oauth2/auth. */
+async function authorizationRequest(clientId: string, resources: string[] = []) {
+  const verifier =
+    crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+  );
+  const challenge = btoa(String.fromCharCode(...digest))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: "https://client.test/callback",
+    scope: "iterate",
+    state: "test-state",
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+  });
+  for (const resource of resources) query.append("resource", resource);
+  return { query, verifier };
+}
+
+/** The consent capability of the issuer session a browser's sign-in `cookie` holds. */
+async function issuerApprover(cookie: string) {
+  const issuerSession = appSession(
+    env.BROWSER_SESSION,
+    new Request(ORIGIN, { headers: { cookie } }),
+  )!;
+  return (await rpc((await issuerSession.bearer())!)).root;
+}
 
 const helpers = () => oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));

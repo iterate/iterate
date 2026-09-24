@@ -135,7 +135,7 @@ export async function rpcResponse(
       try {
         const [current, reachable] = await Promise.all([
           authorizationOf(env, grant),
-          held.length ? input.controlPlane.reachableProjects(authorization.reach) : [],
+          held.length ? input.controlPlane.reachableProjects(authorization.reach, held) : [],
         ]);
         const reachableIds = new Set(reachable.map((project) => project.id));
         if (!current || held.some((id) => !reachableIds.has(id))) {
