@@ -20,11 +20,22 @@ type FlashState =
       details: { error: string; details: unknown };
     };
 
+/** Asks for the board's serial port (Chrome's chooser; the wizard says which entry to pick). */
+export async function choosePort() {
+  return navigator.serial.requestPort().catch((error: unknown) => {
+    // the person closed the chooser, or it listed nothing to pick
+    if (error instanceof DOMException && error.name === "NotFoundError")
+      throw new Error("No port was picked. Plug the board in with a data cable, then try again.");
+    throw error;
+  });
+}
+
 /**
  * Asks for the board's serial port, then writes the release and this install's configuration with
  * esp-web-tools' `flash`: the step its install dialog runs, without the dialog, so Kit shows the
- * progress, the errors and what to do next itself. Resolves once the board has restarted into the
- * new firmware. Rejects with a message that says what to do; the raw error is its `cause`.
+ * progress, the errors and what to do next itself. Resolves with the port once the board has
+ * restarted into the new firmware, so its logs can be read from the same port. Rejects with a
+ * message that says what to do; the raw error is its `cause`.
  */
 export async function flashDevice(input: {
   manifest: FirmwareManifest;
@@ -33,12 +44,7 @@ export async function flashDevice(input: {
   erase: boolean;
   onProgress: (progress: FlashProgress) => void;
 }) {
-  const port = await navigator.serial.requestPort().catch((error: unknown) => {
-    // the person closed the chooser, or it listed nothing to pick
-    if (error instanceof DOMException && error.name === "NotFoundError")
-      throw new Error("No port was picked. Plug the board in with a data cable, then try again.");
-    throw error;
-  });
+  const port = await choosePort();
   const { flash } = await import("esp-web-tools/dist/flash.js");
   using install = prepareInstall(input.manifest, input.device, input.configuration);
   let failure: Error | undefined;
@@ -67,6 +73,21 @@ export async function flashDevice(input: {
     console.error("kit.flash_failed", failure, failure.cause);
     throw failure;
   }
+  return port;
+}
+
+/**
+ * Opens a board's serial port to read its logs, what esp-web-tools' "Logs & Console" did: the port
+ * it was just flashed through (`flash` closed it), or one the person picks. Loads esp-web-tools'
+ * console element (components/device-logs.tsx shows it).
+ */
+export async function openDeviceLogs(port: SerialPort | undefined) {
+  const chosen = port || (await choosePort());
+  await import("esp-web-tools/dist/components/ewt-console.js");
+  await chosen.open({ baudRate: 115200, bufferSize: 8192 }).catch((error: unknown) => {
+    throw portProblem(error);
+  });
+  return chosen;
 }
 
 function readableFailure(state: Extract<FlashState, { state: "error" }>, device: FirmwareDevice) {
@@ -74,13 +95,8 @@ function readableFailure(state: Extract<FlashState, { state: "error" }>, device:
   const message = messageOf(cause);
   switch (state.details.error) {
     case "failed_initialize":
-      // "The port is already open." (this page holds it) or "Failed to open serial port." (another
-      // page or program does): what the dogfood hit after an earlier tab's flash
-      return /already open|failed to open/i.test(message)
-        ? new Error(
-            "Something else is using the board's port: another Kit tab, a serial monitor or a terminal. Close it, unplug the board, plug it back in and try again.",
-            { cause },
-          )
+      return portBusy(message)
+        ? portProblem(cause)
         : new Error(
             `Couldn't talk to the board (${message}). Unplug it, plug it back in and try again. If it still fails, hold its BOOT button while you plug it in.`,
             { cause },
@@ -101,6 +117,25 @@ function readableFailure(state: Extract<FlashState, { state: "error" }>, device:
         { cause },
       );
   }
+}
+
+/** "The port is already open." (this page holds it) or "Failed to open serial port." (another page
+ *  or program does): what the dogfood hit after an earlier tab's flash. */
+function portBusy(message: string) {
+  return /already open|failed to open/i.test(message);
+}
+
+function portProblem(error: unknown) {
+  const message = messageOf(error);
+  return portBusy(message)
+    ? new Error(
+        "Something else is using the board's port: another Kit tab, a serial monitor or a terminal. Close it, unplug the board, plug it back in and try again.",
+        { cause: error },
+      )
+    : new Error(
+        `Couldn't open the board's port (${message}). Unplug it, plug it back in and try again.`,
+        { cause: error },
+      );
 }
 
 function messageOf(error: unknown) {
