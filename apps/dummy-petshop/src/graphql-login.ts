@@ -1,8 +1,7 @@
 /**
  * The GraphQL session-login door (the username/password → session-token
- * archetype): one more way to authenticate against petshop's
- * ONE pets API, alongside OAuth, the legacy JSON login, MCP, and the
- * WebSocket gateways. Some real-world vendors authenticate exactly like
+ * archetype): one more way to authenticate against petshop's ONE pets API,
+ * alongside OAuth, the legacy JSON login, MCP, and the WebSocket gateways. Some real-world vendors authenticate exactly like
  * this — a GraphQL `NewSession` mutation trading email+password for a
  * short-lived bearer with no refresh grant — and the OS side carries a named
  * refresh strategy speaking this wire shape; this door is what that strategy

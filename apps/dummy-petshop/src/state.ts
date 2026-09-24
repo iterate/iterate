@@ -16,7 +16,8 @@ export const DEFAULT_CLIENT_ID = "petshop-default";
 export const DEFAULT_CLIENT_SECRET = "petshop-default-secret";
 
 /**
- * The seeded GitHub-App installation every environment starts with. Well-known ids, like the OAuth client above — but the seed carries NO
+ * The seeded GitHub-App installation every environment starts with.
+ * Well-known ids, like the OAuth client above — but the seed carries NO
  * verifying key: petshop holds only PUBLIC keys, and the matching private key
  * lives on the OS side, so the App JWT verifier is dead until a public key is
  * registered via `POST /__backdoor/apps`. That is the point being proven, not a
@@ -43,8 +44,7 @@ export interface OauthClient {
  * One registered GitHub App installation. petshop stores ONLY the app's PUBLIC
  * key (RS256 SPKI PEM): the installation-token endpoint verifies a presented App
  * JWT's signature against it, and the matching private key never leaves the OS
- * side's secret. `webhookSecret` is the App-webhook
- * HMAC key, the GitHub analogue of `webhookSigningSecret` for OAuth webhooks.
+ * side's secret. `webhookSecret` is the App-webhook HMAC key, the GitHub analogue of `webhookSigningSecret` for OAuth webhooks.
  */
 export interface GithubApp {
   appId: string;
@@ -56,8 +56,7 @@ export interface GithubApp {
 
 /**
  * The whole service's mutable state — one JSON blob in one Durable Object.
- * Tokens are sealed AES-GCM
- * blobs (seal.ts), so only the things that genuinely must be shared and
+ * Tokens are sealed AES-GCM blobs (seal.ts), so only the things that genuinely must be shared and
  * mutable live here: the client registry, revocation facts, the webhook
  * signing secret, and backdoor toggles.
  */

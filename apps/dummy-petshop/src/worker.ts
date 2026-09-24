@@ -1,8 +1,9 @@
 /**
  * dummy-petshop — a deliberately fake third-party service ("the pet shop")
  * for exercising Iterate's integrations & secrets system end to end
- * (apps/os/e2e/support/petshop.ts is the OS side's client): ONE pets API behind many authentication doors — an OAuth 2.0 provider with
- * Basic client auth at the token endpoint and short-TTL sealed tokens, a
+ * (apps/os/e2e/support/petshop.ts is the OS side's client): ONE pets API
+ * behind many authentication doors — an OAuth 2.0 provider with Basic client
+ * auth at the token endpoint and short-TTL sealed tokens, a
  * legacy email+password login, a GraphQL session-login door, MCP, typed
  * RPC/OpenAPI surfaces, three WebSocket gateways — plus HMAC-signed outbound
  * webhooks and a test backdoor. GET / documents the whole surface.
@@ -53,8 +54,8 @@ export { PetshopStateDurableObject };
 /** Authorization codes only need to survive the redirect back to the callback. */
 const CODE_TTL_SECONDS = 120;
 
-/** GitHub-App installation tokens are deliberately short so re-minting gets
- * exercised: 60s, so an integration that caches one hits real re-mint. */
+/** GitHub-App installation tokens are deliberately short (60s) so an
+ * integration that caches one exercises real re-minting. */
 const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** Bindings the worker runs with (vite.config.ts). */
@@ -130,8 +131,8 @@ interface RefreshPayload {
 }
 
 /**
- * Sealed GitHub-App installation token: what petshop mints when a
- * valid App JWT is exchanged at `POST /app/installations/{id}/access_tokens`. It
+ * Sealed GitHub-App installation token: what petshop mints when a valid
+ * App JWT is exchanged at `POST /app/installations/{id}/access_tokens`. It
  * carries `sub`/`clientId`/`epoch`/`exp` so it flows through the SAME bearer API
  * and revocation model as an OAuth access token (see {@link Grant}), plus the
  * `installationId`/`appId` it was minted for so `/api/me` can name which

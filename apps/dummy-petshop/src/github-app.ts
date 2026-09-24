@@ -1,12 +1,12 @@
 /**
  * GitHub-App JWT verification for the pet shop — the third-party half of the
- * first-party GitHub proof. GitHub mints an installation token when a client presents a
- * short-lived JSON Web Token signed by the App's RSA private key; the App
- * registry (state.ts) holds ONLY the matching PUBLIC key, so this module can do
- * one thing and one thing only: VERIFY a presented App JWT. It never signs —
- * signing happens on the OS side inside a jailed worker via the secrets `sign()`
- * compute method, and the App private key
- * never leaves its secret. That asymmetry is the whole point being proven.
+ * first-party GitHub proof. GitHub mints an installation token when a client
+ * presents a short-lived JSON Web Token signed by the App's RSA private key;
+ * the App registry (state.ts) holds ONLY the matching PUBLIC key, so this
+ * module can do one thing and one thing only: VERIFY a presented App JWT. It
+ * never signs — signing happens on the OS side inside a jailed worker via the
+ * secrets `sign()` compute method, and the App private key never leaves its
+ * secret. That asymmetry is the whole point being proven.
  *
  * The JWT is the compact-serialization shape `sign()` produces: three base64url
  * segments `header.payload.signature`, where the RS256 signature is computed
