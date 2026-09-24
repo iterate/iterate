@@ -274,15 +274,24 @@ export class BrowserSession extends DurableObject {
     return stored;
   }
 
-  /** A dead code or refresh token (`invalid_grant`) ends the session; other failures are transient. */
+  /** A dead code or refresh token (`invalid_grant`) ends the session; other failures are transient.
+   *  A token endpoint that answered anything but its token — an OAuth error body, or a response
+   *  oauth4webapi could not read as one (an uncaught 500) — throws one message naming its status,
+   *  which reads the same on the far side of the Durable Object's RPC. */
   async #endOnDeadGrant(error: unknown): Promise<void> {
     if (error instanceof oauth.ResponseBodyError && error.error === "invalid_grant") {
       await this.#clear();
       return;
     }
-    throw error instanceof oauth.ResponseBodyError
-      ? new Error(`Iterate token exchange failed (${error.status}). Try again.`)
-      : error;
+    const status =
+      error instanceof oauth.ResponseBodyError
+        ? error.status
+        : error instanceof oauth.OperationProcessingError && error.cause instanceof Response
+          ? error.cause.status
+          : null;
+    throw status === null
+      ? error
+      : new Error(`Iterate token exchange failed (${status}). Try again.`);
   }
   /** An operation failure must not reset the DO or fail other tabs' requests. */
   #serial<T>(work: () => Promise<T>): Promise<T> {
