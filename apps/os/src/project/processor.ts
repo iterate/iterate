@@ -153,9 +153,7 @@ export class ProjectProcessor extends StreamProcessor<
     // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
     // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
     // ONE event, and an attempt lost with an incarnation is run again by the next for nothing. The
-    // target is the one the saga writes for the seed: the repo's whole tree at that exact commit as
-    // the worker's modules (`worker.ts` the main module, every `.js` file under its own path, so
-    // relative imports resolve as in the tree — the repo facet's `modules`), cached under the commit.
+    // target is `configRepoIngressTarget`, the same one the saga writes for the seed.
     if (state.configRepoTip) this.#newestTip = state.configRepoTip;
     if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
       this.#publishing = true;
@@ -225,23 +223,7 @@ export class ProjectProcessor extends StreamProcessor<
               payload: {
                 name: "config-worker",
                 consumes: manifest.events,
-                target: [
-                  "itx",
-                  "workers",
-                  [
-                    "get",
-                    {
-                      source: [
-                        "itx",
-                        "repos",
-                        ["get", "/repos/config"],
-                        ["modules", { commitOid }],
-                      ],
-                      cacheKey: commitOid,
-                    },
-                  ],
-                  "processEventBatch",
-                ],
+                target: [...configRepoIngressTarget(commitOid), "processEventBatch"],
               },
             }),
           );
