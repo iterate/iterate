@@ -45,7 +45,6 @@ const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
 
 type Range = { after: number; through: number };
-const row = async (itx: any, name: string): Promise<any> => itx.subscriptions.get(name);
 const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
   (await readAll(itx)).filter((e) => e.type === HALTED && e.payload?.name === name);
 
@@ -170,13 +169,13 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   for (let i = 0; i < 3; i++) marks.push((await itx.append({ type: "mark" }))[0]);
   await until("digest=3", async () => (await digested(itx)) === 3, 30_000);
   const row3 = await until("cursor past mark 3", async () => {
-    const r = await row(itx, "digest");
+    const r = await itx.subscriptions.get("digest");
     return r?.cursor && r.cursor.confirmedOffset >= marks[2].offset ? r : undefined;
   });
   expect(row3.cursor.attempt).toBe(0);
   expect(row3.halted).toBeUndefined();
   expect(row3.target).toBe("itx.digest.processEventBatch"); // stored as written — the loop classifies the target by what it EVALUATES to
-  expect((await row(itx, "tab")).cursor).toBeUndefined(); // push target: the client owns its offset
+  expect((await itx.subscriptions.get("tab")).cursor).toBeUndefined(); // push target: the client owns its offset
   expect((await subscriptions(itx)).map((r: { name: string }) => r.name).sort()).toEqual([
     "digest",
     "tab",
@@ -187,7 +186,11 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   //    halted FACT; a good mark stuck behind it waits. ONE policy, no skip, no pinning.
   const [poisoned] = await itx.append({ type: "mark", payload: { poison: true } });
   const [stuck] = await itx.append({ type: "mark" });
-  const halted = await until("row halted", async () => (await row(itx, "digest"))?.halted, 30_000);
+  const halted = await until(
+    "row halted",
+    async () => (await itx.subscriptions.get("digest"))?.halted,
+    30_000,
+  );
   expect(halted.attempts).toBe(1); // retryable: false → one attempt, not fifteen
   expect(halted.afterOffset).toBeGreaterThanOrEqual(marks[2].offset); // the cursor stood after the good marks…
   expect(halted.afterOffset).toBeLessThan(poisoned.offset); // …and before the poison
@@ -218,7 +221,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
     async () => (await digested(itx)) === 5,
     30_000,
   );
-  const rowAfter = await row(itx, "digest");
+  const rowAfter = await itx.subscriptions.get("digest");
   expect(rowAfter.halted).toBeUndefined();
   expect(rowAfter.cursor.attempt).toBe(0);
   expect(rowAfter.cursor.confirmedOffset).toBeGreaterThanOrEqual(fresh.offset);
@@ -235,7 +238,7 @@ test("a plain throw climbs the retry ladder on the DO's alarm — redelivered wi
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
   // delivery #1 throws (a plain Error — retryable) → attempt 1, the next try armed on the alarm
   const backingOff = await until("ladder step", async () => {
-    const r = await row(itx, "ledger");
+    const r = await itx.subscriptions.get("ledger");
     return r?.cursor && r.cursor.attempt >= 1 ? r : undefined;
   });
   expect(backingOff.cursor.nextAttemptAtMs).toBeGreaterThan(0);
@@ -253,7 +256,7 @@ test("a plain throw climbs the retry ladder on the DO's alarm — redelivered wi
   expect(log).toHaveLength(1); // the FAILED call ledgered nothing; exactly one successful delivery
   expect(await itx.kv.get("ledger:calls")).toBe("2");
   const settled = await until("ladder reset", async () => {
-    const r = await row(itx, "ledger");
+    const r = await itx.subscriptions.get("ledger");
     return r?.cursor && r.cursor.attempt === 0 && r.cursor.confirmedOffset >= m1.offset
       ? r
       : undefined;
@@ -288,7 +291,7 @@ test("a resumed event appended MID-DELIVERY wins — m1 redelivers from the seek
   await until("m2 delivered", async () =>
     (await ledgerLog(itx)).some((entry) => entry.offsets.includes(m2.offset)),
   );
-  const r = await row(itx, "ledger");
+  const r = await itx.subscriptions.get("ledger");
   expect(r.halted).toBeUndefined();
   expect(r.cursor.attempt).toBe(0);
   expect(r.cursor.confirmedOffset).toBeGreaterThanOrEqual(m2.offset);
@@ -315,7 +318,7 @@ test("a resumed { afterOffset } while HEALTHY redelivers exactly the events afte
   // exactly-from-afterOffset: m2 and m3 once more, then m4; m1 (== afterOffset) NEVER redelivered
   expect(redelivered).toEqual([m2.offset, m3.offset, m4.offset]);
   expect(c.invocations[before].range.after).toBe(m1.offset); // the range starts surgically at the cursor
-  const r = await row(itx, "replay");
+  const r = await itx.subscriptions.get("replay");
   expect(r.cursor.confirmedOffset).toBeGreaterThanOrEqual(m4.offset);
   expect(r.halted).toBeUndefined();
 });
@@ -354,7 +357,7 @@ test("the view: a push target's row has NO cursor; a resumed fact for an unknown
   expect(after.find((r: { name: string }) => r.name === "conny")).toEqual(
     before.find((r: { name: string }) => r.name === "conny"),
   );
-  expect(await row(itx, "never-was")).toBeNull();
+  expect(await itx.subscriptions.get("never-was")).toBeNull();
 });
 
 // ─────────────────────────────── what the cursor lane delivers ───────────────────────────────
@@ -380,7 +383,7 @@ test("consumes ['*'] delivers every durable event; the row carries a cursor at `
     const r = await until(
       `${name} row confirmed past the note`,
       async () => {
-        const r = await row(itx, name);
+        const r = await itx.subscriptions.get(name);
         return r?.cursor && r.cursor.confirmedOffset >= note.offset ? r : undefined;
       },
       8_000,
@@ -409,7 +412,9 @@ test("ephemerals DO reach a caught-up cursor target (read back from the stream's
   // ranges chain across the two deliveries exactly like a push subscriber's
   expect(c.invocations[1].range.after).toBe(c.invocations[0].range.through);
   // the cursor stands at the durable head (an ephemeral-only batch advances it in memory only)
-  expect((await row(itx, "ephcur")).cursor.confirmedOffset).toBe(durable.offset);
+  expect((await itx.subscriptions.get("ephcur")).cursor).toMatchObject({
+    confirmedOffset: durable.offset,
+  });
 });
 
 test("removing a row (subscribe { target: null }) during an in-flight delivery leaves no ghost halt and no resurrected cursor", async () => {
@@ -431,7 +436,7 @@ test("removing a row (subscribe { target: null }) during an in-flight delivery l
   await append(itx, { type: "mark" });
   await until("delivery in flight", () => invocations >= 1, 8_000);
   await itx.subscribe({ name: "ghost", target: null }); // reduced inline: on return the row is gone and its cursor forgotten
-  expect(await row(itx, "ghost")).toBeNull();
+  expect(await itx.subscriptions.get("ghost")).toBeNull();
   release();
   // the removed row goes quiet — poll generously for a spurious fact
   let haltEvent: any;
@@ -442,7 +447,7 @@ test("removing a row (subscribe { target: null }) during an in-flight delivery l
   }
   expect(invocations).toBe(1); // the callback itself was never re-offered (sanity)
   expect(haltEvent).toBeUndefined(); // no halt fact may exist for a removed row
-  expect(await row(itx, "ghost")).toBeNull(); // no resurrected row or cursor
+  expect(await itx.subscriptions.get("ghost")).toBeNull(); // no resurrected row or cursor
 });
 
 test("row isolation — one halted row never blocks its neighbor", async () => {
@@ -451,7 +456,7 @@ test("row isolation — one halted row never blocks its neighbor", async () => {
   await digestSubscribe(itx, "bad", ["mark"]); // halts NOW on the poison (retryable: false)
   await cursorSubscribe(itx, "good", good.fn, ["mark"]);
   const [m1] = await append(itx, { type: "mark", payload: { poison: true, n: 1 } });
-  await until("bad halted", async () => (await row(itx, "bad"))?.halted, 8_000);
+  await until("bad halted", async () => (await itx.subscriptions.get("bad"))?.halted, 8_000);
   await until("good got m1", () => good.offsets().includes(m1.offset), 8_000);
   const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
   await until(
@@ -459,8 +464,8 @@ test("row isolation — one halted row never blocks its neighbor", async () => {
     () => good.offsets().includes(m2.offset),
     8_000,
   );
-  expect((await row(itx, "bad")).halted.attempts).toBe(1);
-  expect((await row(itx, "good")).halted).toBeUndefined();
+  expect((await itx.subscriptions.get("bad")).halted).toMatchObject({ attempts: 1 });
+  expect((await itx.subscriptions.get("good")).halted).toBeUndefined();
   expect(await digested(itx)).toBe(0); // bad never digested anything: the poison was its first batch
   expect([...good.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]); // no dups
 });
@@ -507,7 +512,7 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
   expect(await sub.name).toBe("unusable"); // configure resolved — the receiver was not probed
   await append(itx, { type: "mark" }); // the first delivery fails inside the loop, never here
   await sleep(800);
-  const r = await row(itx, "unusable");
+  const r = await itx.subscriptions.get("unusable");
   expect(r).not.toBeNull(); // the row stands…
   expect(r.cursor).toMatchObject({ attempt: 0 }); // …its cursor at rest (no rung: a wait, not a failure)…
   expect(r.halted).toBeUndefined(); // …and no halt fact for an operator to find
@@ -570,7 +575,7 @@ test("reentrancy: a cursor delivery targeting this stream's own append neither d
   const events = await readAll(itx);
   expect(events.filter((e) => typeof e.type !== "string")).toHaveLength(0); // no junk committed
   expect(events.length).toBeLessThan(20); // bounded, whatever branch the platform takes
-  const r: any = await row(itx, "reenter");
+  const r: any = await itx.subscriptions.get("reenter");
   expect(r.cursor.attempt).toBeGreaterThanOrEqual(1); // the refused call climbed the ladder…
   expect(r.cursor.nextAttemptAtMs).toBeGreaterThan(0); // …with the next try armed on the alarm
   expect(r.halted).toBeUndefined(); // a plain throw is never a halt
@@ -580,7 +585,7 @@ test("reentrancy: a cursor delivery targeting this stream's own append neither d
   const [post] = await append(itx, { type: "afterparty" });
   expect(post.offset).toBeGreaterThan(seed.offset);
   await itx.subscribe({ name: "reenter", target: null });
-  expect(await row(itx, "reenter")).toBeNull();
+  expect(await itx.subscriptions.get("reenter")).toBeNull();
 });
 
 // ─────────────────────────────── history: `subscribe({ afterOffset })` ───────────────────────────────

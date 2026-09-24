@@ -28,7 +28,18 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { adminCredentials, append, freshCtx, openItx, readAll, rejection, ruleMatchAtRest, session, sleep, until } from "./support/client.ts";
+import {
+  adminCredentials,
+  append,
+  freshCtx,
+  openItx,
+  readAll,
+  rejection,
+  ruleMatchAtRest,
+  session,
+  sleep,
+  until,
+} from "./support/client.ts";
 
 // ── the reserved root ──
 

@@ -23,8 +23,6 @@ import { append, collector, freshCtx, openItx, sleep, until } from "./support/cl
 
 // ── ranges chain; the filter; removal; a throwing callback; anonymous names ──
 
-const row = async (itx: any, name: string): Promise<any> => itx.subscriptions.get(name);
-
 test("delivered ranges CHAIN across a consumes-filtered quiet gap", async () => {
   const itx = openItx(freshCtx("chain"));
   const c = collector();
@@ -76,7 +74,7 @@ test("subscribe({ name, target: null }) stops deliveries at the removal offset",
   await sleep(600);
   // nothing at or beyond the removal offset may arrive — the row died inside the removal commit
   expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
-  expect(await row(itx, "bye")).toBeNull();
+  expect(await itx.subscriptions.get("bye")).toBeNull();
 });
 
 test("a throwing subscriber callback never hurts the producer and is never retried", async () => {
@@ -99,7 +97,7 @@ test("a throwing subscriber callback never hurts the producer and is never retri
   await sleep(700); // a retry storm would keep incrementing
   expect(throws).toBe(2); // exactly one offer per batch — fire-and-forget means no ladder here
   expect([...witness.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
-  expect((await row(itx, "thrower")).cursor).toBeUndefined(); // no cursor, so nothing to halt
+  expect((await itx.subscriptions.get("thrower")).cursor).toBeUndefined(); // no cursor, so nothing to halt
 });
 
 test("concurrent anonymous subscribes get unique names and never shadow each other", async () => {

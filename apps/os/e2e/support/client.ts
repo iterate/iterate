@@ -66,7 +66,8 @@ export async function mcpCall(method: string, params: unknown, bearer: string): 
     body: JSON.stringify({ jsonrpc: "2.0", id: ++mcpRequestId, method, params }),
   });
   const body = await response.text();
-  if (response.status !== 200) throw new Error(`MCP ${method} answered ${response.status}: ${body}`);
+  if (response.status !== 200)
+    throw new Error(`MCP ${method} answered ${response.status}: ${body}`);
   const message = response.headers.get("content-type")?.includes("text/event-stream")
     ? JSON.parse(
         body
@@ -96,6 +97,13 @@ export const runId = (): string =>
 /** THIS vitest worker process, within the run. Files run in parallel in separate processes, each
  *  with its own `counter` starting at 0, so the slot is what keeps two processes' ids apart. */
 export const workerSlot = (): string => process.env.VITEST_WORKER_ID || "0";
+
+let repoCounter = 0;
+/** A repo path unique to this run — one segment under `/e2e`, inside Artifacts' name grammar
+ *  (`[a-zA-Z0-9._-]+`, never `--`). */
+export const freshRepoPath = (prefix: string): string =>
+  // Per run and per worker process, never random: a collision would delete a sibling's repo.
+  `/e2e/${prefix}-${runId()}-${workerSlot()}-${repoCounter++}`;
 
 let counter = 0;
 /** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own):
@@ -223,6 +231,25 @@ export const readAll = async (itx: any): Promise<any[]> => {
   }
 };
 
+/** A log as its repo facts' short type names, in order (`repo/created`, …; a processor row's
+ *  `stream/…` fact is not one). */
+export const repoFactTypes = (log: { type: string }[]): string[] =>
+  log
+    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
+    .map((e) => e.type.replace("events.iterate.com/", ""));
+
+/** What the `tally` fixture (support/sources.ts) has reduced so far. */
+export const tallySnapshot = (itx: any): Promise<any> =>
+  itx.invoke("itx.facets.get('tally').snapshot()");
+
+/** What a "*" processor reduces: every durable event, each incarnation's `stream/woken` included
+ *  (processor.ts `consumesEvent`). */
+export const durableCountsByType = (events: any[]): Record<string, number> => {
+  const counts: Record<string, number> = {};
+  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
+  return counts;
+};
+
 /** The DURABLE head — the last durable row's offset, NOT scannedThroughOffset (ephemerals such as
  *  live-state deltas consume offsets past it; a facet only ever needs to catch up to the durable
  *  head, which is what "has it reduced the log" means). */
@@ -288,6 +315,20 @@ export const until = async <T>(
     await sleep(50);
   }
 };
+
+/** How many idles `idleAcrossEvictions` waits out. */
+export const EVICTION_IDLES = 3;
+
+/** Wake the context EVICTION_IDLES times with an idle gap between, then read its log — one
+ *  `stream/woken` per incarnation. The platform evicts an idle actor in ~10 s (measured 2026-09-22:
+ *  0/6 at 10 s, 48/48 at 12 s+), so each 12 s gap should cost one eviction. */
+export async function idleAcrossEvictions(itx: any): Promise<any[]> {
+  for (let i = 0; i < EVICTION_IDLES; i++) {
+    await sleep(12_000);
+    await itx.whoami();
+  }
+  return readAll(itx);
+}
 
 /** Await a promise that MUST reject promptly; hands back the error for inspection (its `code` is
  *  the machine-readable channel, lib.ts). Throws if it fulfils, or is still pending at the

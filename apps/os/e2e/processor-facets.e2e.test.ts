@@ -29,7 +29,19 @@
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { append, freshCtx, openItx, processorNames, readAll, readHead, rejection, subscriptions, until } from "./support/client.ts";
+import {
+  append,
+  durableCountsByType,
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  readHead,
+  rejection,
+  subscriptions,
+  tallySnapshot,
+  until,
+} from "./support/client.ts";
 import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 // ── the spine: reduces and the facet address ──
@@ -131,18 +143,6 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
 });
 
 // ── enablement is a row: the doors, the lineage, the barrier ──
-
-const tallySnapshot = async (itx: any): Promise<any> =>
-  itx.invoke("itx.facets.get('tally').snapshot()");
-
-/** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
-/** What a "*" processor reduces: every durable event, each incarnation's `stream/woken` included
- *  (processor.ts `consumesEvent`). */
-const durableCountsByType = (events: any[]): Record<string, number> => {
-  const counts: Record<string, number> = {};
-  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
-  return counts;
-};
 
 // ── the door's refusals ──
 

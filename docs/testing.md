@@ -218,13 +218,13 @@ vanilla `vitest` / `playwright` CLIs keep working. Dimensions are expressed
 through file names, project selection, and environment presence — never a
 bespoke runner.
 
-| Dimension    | Values                                            | Controlled by                                                                                                                                                             | Status         |
-| ------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| Surface      | in-process / workerd / itx API / browser          | which lane you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)                                                   | works today    |
-| Speed        | fast / slow-by-contract                           | per-test `{ timeout }`; the long poles start first (`LONG_POLES` in `apps/os/vitest.config.ts`, hand-maintained from observed seconds)                                    | works today    |
-| Determinism  | deterministic / retry-absorbed                    | `retry: CI ? 1 : 0` + retry telemetry — a nondeterministic test that retries is visible, never silent                                                                     | works today    |
-| Cost         | free / pays for LLM turns                         | **gap** — no story pays for LLM turns today (every lane uses the fake model), and nothing would mark one that did                               | proposal below |
-| Remote reach | hermetic / hits a deployment / hits a third party | **partial** — `deployedOnly` / `localOnly` gate deployment reach; third-party reach is a deployed fixture (`PETSHOP_BASE_URL`) | proposal below |
+| Dimension    | Values                                            | Controlled by                                                                                                                          | Status         |
+| ------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| Surface      | in-process / workerd / itx API / browser          | which lane you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)                | works today    |
+| Speed        | fast / slow-by-contract                           | per-test `{ timeout }`; the long poles start first (`LONG_POLES` in `apps/os/vitest.config.ts`, hand-maintained from observed seconds) | works today    |
+| Determinism  | deterministic / retry-absorbed                    | `retry: CI ? 1 : 0` + retry telemetry — a nondeterministic test that retries is visible, never silent                                  | works today    |
+| Cost         | free / pays for LLM turns                         | **gap** — no story pays for LLM turns today (every lane uses the fake model), and nothing would mark one that did                      | proposal below |
+| Remote reach | hermetic / hits a deployment / hits a third party | **partial** — `deployedOnly` / `localOnly` gate deployment reach; third-party reach is a deployed fixture (`PETSHOP_BASE_URL`)         | proposal below |
 
 Draft proposal for the two gaps, keeping vanilla CLIs:
 

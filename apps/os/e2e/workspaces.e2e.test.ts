@@ -19,16 +19,17 @@
 // workspaces`).
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, processorNames, readAll, rejection } from "./support/client.ts";
+import {
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  rejection,
+  repoFactTypes,
+} from "./support/client.ts";
 import { FakeArtifacts, type FakeCommit } from "./support/fake-artifacts.ts";
 import { localOnly } from "./support/project-host.ts";
 
-/** A log as its repo facts' short type names, in order (the processor row, a `stream/…` fact, is
- *  not one). */
-const types = (log: { type: string }[]) =>
-  log
-    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
-    .map((e) => e.type.replace("events.iterate.com/", ""));
 /** The same for the workspace's own facts. */
 const workspaceTypes = (log: { type: string }[]) =>
   log
@@ -286,7 +287,7 @@ localOnly(
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "notes/log.md": "# log\n- one\n" });
     // The next load reads the committed file at the new tip; nothing more was appended by the loads.
     expect(await load()).toEqual({ note: "# log\n- one\n", tip: committed.commitOid });
-    expect(types(await readAll(itx.cd(REPO)))).toEqual([
+    expect(repoFactTypes(await readAll(itx.cd(REPO)))).toEqual([
       "repo/create-requested",
       "repo/created",
       "repo/commit-completed",

@@ -3,9 +3,22 @@
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
-import type { IterateRpcTarget } from "../src/session.ts";
 import { errorCode } from "iterate/next/lib";
-import { adminCredentials, freshCtx, mcpCall, publicSession, openItx, processorNames, readAll, rejection, session, sleep, until, workerUrl } from "./support/client.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
+import {
+  adminCredentials,
+  freshCtx,
+  mcpCall,
+  publicSession,
+  openItx,
+  processorNames,
+  readAll,
+  rejection,
+  session,
+  sleep,
+  until,
+  workerUrl,
+} from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectUrl,
@@ -75,9 +88,9 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   expect(errorCode(await rejection(bare.authenticate({ type: "from-server-cookie" })))).toBe(
     "UNAUTHENTICATED",
   );
-  expect(errorCode(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` })))).toBe(
-    "INVALID_CREDENTIALS",
-  );
+  expect(
+    errorCode(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` }))),
+  ).toBe("INVALID_CREDENTIALS");
   using api = bare.authenticate({ type: "bearer", token });
   const [whoami, projects] = await Promise.all([api.whoami(), api.projects.list()]); // pipelined
   expect(whoami).toEqual(principal);
@@ -103,9 +116,9 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   using bareWithCookie = newWebSocketRpcSession<IterateRpcTarget>(
     withCookie as unknown as WebSocket,
   );
-  expect(errorCode(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" })))).toBe(
-    "UNAUTHENTICATED",
-  );
+  expect(
+    errorCode(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" }))),
+  ).toBe("UNAUTHENTICATED");
   expect(await bareWithCookie.authenticate({ type: "bearer", token }).whoami()).toEqual(principal);
   // the HTTP form stays behind the gate: the console's sign-in probe reads this 401
   const probe = await fetch(workerUrl("/api"), { method: "POST", body: "" });

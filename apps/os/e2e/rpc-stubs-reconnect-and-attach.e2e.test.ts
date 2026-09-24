@@ -21,24 +21,25 @@
 //     resume the same calls land (the attach's atomicity at the DO's door — 409 + code, no socket, no
 //     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
 
-import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { append, collector, freshCtx, openItx, presence, readAll, rejection, rpcStubRewriteRuleMatches, ruleMatchAtRest, sleep, subscriptions, until } from "./support/client.ts";
+import {
+  append,
+  collector,
+  freshCtx,
+  openItx,
+  presence,
+  readAll,
+  rejection,
+  rpcStubRewriteRuleMatches,
+  ruleMatchAtRest,
+  sleep,
+  subscriptions,
+  until,
+} from "./support/client.ts";
 import { Tools } from "./support/targets.ts";
 
 // ── reconnect at the same spelling ──
-
-class EchoTools extends RpcTarget {
-  #tag: string;
-  constructor(tag: string) {
-    super();
-    this.#tag = tag;
-  }
-  echo(s: string): string {
-    return `echo-${this.#tag}:${s}`;
-  }
-}
 
 // The reconnect one layer up: a LIVE SUBSCRIBER is a stub lent under
 // `subscription:<name>` plus one subscription row naming it. Re-subscribing the same name
@@ -117,8 +118,8 @@ test("a live subscriber re-subscribes under the same name — the transport is r
 test("disposing a STALE provide handle leaves its replacement serving; only the live handle's dispose un-sets the match", async () => {
   const ctx = freshCtx("stale-lease");
   const itx = openItx(ctx);
-  const first = await itx.provide("itx.tool", new EchoTools("first"));
-  const second = await itx.provide("itx.tool", new EchoTools("second"));
+  const first = await itx.provide("itx.tool", new Tools("first"));
+  const second = await itx.provide("itx.tool", new Tools("second"));
   await until(
     "the reconnect serves",
     async () => (await itx.invoke("itx.tool.echo('x')")) === "echo-second:x" || undefined,
@@ -138,7 +139,7 @@ test("an EXPRESSION rule's handle disposed after a live provider took its match 
   const ctx = freshCtx("stale-expression-lease");
   const observer = openItx(ctx);
   const expressionHandle = await openItx(ctx).provide("itx.m", "itx.kv"); // session A: a pure-data rule
-  await openItx(ctx).provide("itx.m", new EchoTools("live")); // session B takes the match over (one rule per match)
+  await openItx(ctx).provide("itx.m", new Tools("live")); // session B takes the match over (one rule per match)
   await until(
     "the live stub serves",
     async () => (await observer.invoke("itx.m.echo('a')")) === "echo-live:a" || undefined,

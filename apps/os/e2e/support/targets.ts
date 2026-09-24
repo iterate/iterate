@@ -4,7 +4,7 @@
 
 import { RpcTarget } from "capnweb";
 
-/** The plainest live rpc stub: one method, tagged so a call proves WHICH provider answered. */
+/** The plainest live rpc stub, tagged so a call proves WHICH provider answered. */
 export class Tools extends RpcTarget {
   #tag: string;
   constructor(tag: string) {
@@ -13,6 +13,9 @@ export class Tools extends RpcTarget {
   }
   hello() {
     return `hello-from-${this.#tag}`;
+  }
+  echo(s: string) {
+    return `echo-${this.#tag}:${s}`;
   }
 }
 

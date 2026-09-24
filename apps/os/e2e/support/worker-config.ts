@@ -17,7 +17,10 @@ export const E2E_ADMIN_API_SECRET = "e2e-admin-api-secret";
 export const E2E_LOGIN_PASSWORD = "e2e-password";
 /** The local worker's ingress: project hosts hang under `localhost` (support/project-host.ts reaches
  *  them with a Host header). */
-export const E2E_INGRESS_ROUTING: NonNullable<IngressRouting> = { type: "subdomains", hostname: "localhost" };
+export const E2E_INGRESS_ROUTING: NonNullable<IngressRouting> = {
+  type: "subdomains",
+  hostname: "localhost",
+};
 
 /** Vite's local built config patched with absolute paths and test credentials. The control-plane
  *  Durable Object and OAuth KV remain local. `ingressRouting` chooses subdomains or paths for project requests. */

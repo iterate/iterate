@@ -23,15 +23,16 @@ import { expect, test } from "vitest";
 import {
   adminCredentials,
   disposeSessions,
+  EVICTION_IDLES,
   freshCtx,
+  freshRepoPath,
+  idleAcrossEvictions,
   openItx,
   readAll,
   rejection,
-  runId,
   session,
   sleep,
   until,
-  workerSlot,
 } from "./support/client.ts";
 import {
   deployedOnly,
@@ -41,19 +42,6 @@ import {
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
-
-const IDLES = 3;
-const IDLE_MS = 12_000; // the platform evicts an idle actor in ~10 s (measured 2026-09-22: 0/6 at 10 s, 48/48 at 12 s+)
-
-/** Wake the context IDLES times with an idle gap between, then count its incarnations. */
-async function wakesAcrossIdles(itx: any): Promise<number> {
-  for (let i = 0; i < IDLES; i++) {
-    await sleep(IDLE_MS);
-    await itx.whoami();
-  }
-  const events = await readAll(itx);
-  return events.filter((event: any) => event.type === "events.iterate.com/stream/woken").length;
-}
 
 /** The handle still answers after the actor was evicted underneath it — never a dead-stub error. */
 const stillAnswers = (call: () => Promise<unknown>) =>
@@ -65,14 +53,14 @@ const stillAnswers = (call: () => Promise<unknown>) =>
 test("control: a session holding only the context handle is evicted between idle reads", async () => {
   const itx = openItx(freshCtx("residency_control"));
   await itx.whoami();
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
 }, 90_000);
 
 test("a held repos.get(path) handle does not keep the context resident", async () => {
   const itx = openItx(freshCtx("residency_repo"));
   await itx.whoami();
   const repo = await itx.repos.get("/repos/residency");
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await stillAnswers(() => repo.tip())).not.toMatch(
     /Session|closed|RPC_STUB_OFFLINE|disposed/i,
   );
@@ -82,7 +70,7 @@ test("a held workspaces.get(path) handle does not keep the context resident", as
   const itx = openItx(freshCtx("residency_workspace"));
   await itx.whoami();
   const workspace = await itx.workspaces.get("/workspaces/residency");
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await stillAnswers(() => workspace.listFiles())).not.toMatch(
     /Session|closed|RPC_STUB_OFFLINE|disposed/i,
   );
@@ -94,7 +82,7 @@ test("a held cd(path) handle does not keep the context resident", async () => {
   const itx = openItx(freshCtx("residency_cd"));
   await itx.whoami();
   const child = await itx.cd("/residency");
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await stillAnswers(() => child.whoami())).not.toMatch(
     /Session|closed|RPC_STUB_OFFLINE|disposed/i,
   );
@@ -106,7 +94,7 @@ test("a held cd(path) handle does not keep the context resident", async () => {
 test("a run whose script returned a live value does not keep its context resident", async () => {
   const itx = openItx(freshCtx("residency_run_result"));
   expect(await itx.run("async () => ({ n: 1, f: () => 1 })")).toEqual({ n: 1 });
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
 }, 90_000);
 
 // A FACET reaches its own context the other way round: through the SDK's `withItx` on the loopback
@@ -116,13 +104,11 @@ test("a run whose script returned a live value does not keep its context residen
 // e2e run created stayed billed for hours, 2026-09-21/22); the context now ends that session with
 // the call. What `withItx` leaves undisposed keeps the FACET running instead, so it releases every
 // call (the rows at the bottom).
-let repoCounter = 0;
 /** A repo born through the collection and read through its facet, then the client's session closed:
  *  what stays behind is the platform's own doing, not a handle this test holds. */
 async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: string }> {
   const ctx = freshCtx(prefix);
-  // Per run and per worker process, inside Artifacts' name grammar (cfartifacts.e2e.test.ts).
-  const path = `/e2e/residency-${runId()}-${workerSlot()}-${repoCounter++}`;
+  const path = freshRepoPath("residency");
   const itx = openItx(ctx);
   expect(await itx.repos.create(path)).toEqual({ path });
   expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via withItx
@@ -134,7 +120,7 @@ test("a repo read through its facet does not keep its own context resident", asy
   const { ctx, path } = await repoBornAndRead("residency_facet");
   const itx = openItx(ctx);
   try {
-    expect(await wakesAcrossIdles(await itx.cd(path))).toBeGreaterThanOrEqual(IDLES);
+    expect(await wakesAcrossIdles(await itx.cd(path))).toBeGreaterThanOrEqual(EVICTION_IDLES);
   } finally {
     await itx.cfArtifacts.delete(path); // teardown — the repo, by its path
   }
@@ -148,7 +134,7 @@ test("creating a repo does not keep the project root resident", async () => {
   const { ctx, path } = await repoBornAndRead("residency_root");
   const itx = openItx(ctx);
   try {
-    expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+    expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   } finally {
     await itx.cfArtifacts.delete(path);
   }
@@ -158,7 +144,7 @@ test("listing repos does not keep the project root resident", async () => {
   const ctx = freshCtx("residency_list");
   expect(await openItx(ctx).repos.list()).toEqual(expect.any(Array));
   disposeSessions();
-  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(EVICTION_IDLES);
 }, 90_000);
 
 // ── CARELESS CALLERS: a context's inbound session ends with the call, whatever the caller keeps ──
@@ -233,7 +219,7 @@ test("a facet keeping a loaded worker's data answer its context handed through k
   const itx = openItx(freshCtx("residency_careless_data"));
   expect(await carelessHolder(itx, "keepData", DATA_WORKER_SOURCE)).toBe('{"a":1}');
   const started = await carelessHolder(itx, "started");
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
@@ -243,7 +229,7 @@ test("a facet keeping a loaded worker's live RpcTarget keeps neither the context
   // (the risk the rule accepts — identity per verb), so the ping answers from a fresh `Made`.
   expect(await carelessHolder(itx, "keepLiveAndPing", LIVE_WORKER_SOURCE)).toMatch(/^pong-\d+$/);
   const started = await carelessHolder(itx, "started");
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
@@ -259,7 +245,9 @@ test("a facet keeping a sibling's data answer, handed through the root's cd, kee
     wakesAcrossIdles(itx),
     wakesAcrossIdles(await itx.cd("/residency-sibling")),
   ]);
-  expect(Math.min(root, sibling), JSON.stringify({ root, sibling })).toBeGreaterThanOrEqual(IDLES);
+  expect(Math.min(root, sibling), JSON.stringify({ root, sibling })).toBeGreaterThanOrEqual(
+    EVICTION_IDLES,
+  );
   expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
@@ -277,7 +265,7 @@ test("the LiveState sink that never releases env.ITX keeps neither the context n
     ]);
   expect(await chatroom("post", "careless", "hi")).toEqual({ ok: true });
   const started = Math.floor((await chatroom("state")).rev / 4096);
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   const again = await chatroom("state");
   expect(Math.floor(again.rev / 4096)).toBeGreaterThan(started);
   expect(again.state).toEqual({ messages: [] }); // in memory, as it always was: gone with the instance
@@ -297,7 +285,7 @@ test("a facet calling through a stashed env.ITX does not outlive its context", a
   expect(await keeper("stash")).toEqual({ stashed: true });
   expect((await keeper("useStashed")).projectId).toEqual(expect.any(String));
   const started = await keeper("started");
-  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await keeper("started")).toBeGreaterThan(started);
 }, 90_000);
 
@@ -307,11 +295,11 @@ deployedOnly(
   "a client holding itx.cfArtifacts.get(path) does not keep the context resident",
   async () => {
     const itx = openItx(freshCtx("residency_cfartifacts"));
-    const path = `/e2e/residency-${runId()}-${workerSlot()}-${repoCounter++}`;
+    const path = freshRepoPath("residency");
     expect(await itx.cfArtifacts.create(path)).toEqual({ created: true });
     try {
       const repo = await itx.cfArtifacts.get(path);
-      expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+      expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
       expect(await stillAnswers(() => repo.remote())).toBe("answered");
     } finally {
       await itx.cfArtifacts.delete(path);
@@ -359,7 +347,7 @@ test("a website project's facets do not outlive their contexts after a page load
     wakesAcrossIdles(openItx(projectId)),
     wakesAcrossIdles(openItx(projectId).cd("/repos/config")),
   ]);
-  expect(Math.min(...wakes), JSON.stringify(wakes)).toBeGreaterThanOrEqual(IDLES);
+  expect(Math.min(...wakes), JSON.stringify(wakes)).toBeGreaterThanOrEqual(EVICTION_IDLES);
   const again = openItx(projectId);
   expect(await facetStartedAt(again.facets.get("project"))).toBeGreaterThan(started.project);
   expect(await facetStartedAt(again.repos.get("/repos/config"))).toBeGreaterThan(started.repo);
@@ -404,7 +392,7 @@ test("an SDK facet that reached its context through withItx does not outlive the
   await reacher(itx).reach("/child");
   const started = await facetStartedAt(reacher(itx));
   disposeSessions();
-  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await facetStartedAt(reacher(openItx(ctx)))).toBeGreaterThan(started);
 }, 90_000);
 
@@ -651,7 +639,7 @@ test("a deleted workspace's refusal keeps neither its context nor its facet resi
   expect((await rejection(itx.workspaces.get(path).mounts())).message).toMatch(/deleted/);
   const started = await facetStartedAt(itx.cd(path).facets.get("workspace"));
   disposeSessions();
-  expect(await wakesAcrossIdles(openItx(ctx).cd(path))).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(openItx(ctx).cd(path))).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await facetStartedAt(openItx(ctx).cd(path).facets.get("workspace"))).toBeGreaterThan(
     started,
   );
@@ -666,6 +654,12 @@ test("a collection's refusal keeps neither the project root nor its project face
   );
   const started = await facetStartedAt(itx.facets.get("project"));
   disposeSessions();
-  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
+  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(EVICTION_IDLES);
   expect(await facetStartedAt(openItx(ctx).facets.get("project"))).toBeGreaterThan(started);
 }, 90_000);
+
+/** The context's incarnations across EVICTION_IDLES idles (support/client.ts `idleAcrossEvictions`). */
+async function wakesAcrossIdles(itx: any): Promise<number> {
+  const events = await idleAcrossEvictions(itx);
+  return events.filter((event) => event.type === "events.iterate.com/stream/woken").length;
+}

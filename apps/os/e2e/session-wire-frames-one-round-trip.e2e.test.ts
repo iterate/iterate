@@ -13,7 +13,19 @@
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { adminCredentials, freshCtx, openItx, presence, rawSession, rejection, rpcStubRewriteRuleMatches, session, sleep, subscriptions, until } from "./support/client.ts";
+import {
+  adminCredentials,
+  freshCtx,
+  openItx,
+  presence,
+  rawSession,
+  rejection,
+  rpcStubRewriteRuleMatches,
+  session,
+  sleep,
+  subscriptions,
+  until,
+} from "./support/client.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
 // ─────────────────────────────── the wire instrument ───────────────────────────────

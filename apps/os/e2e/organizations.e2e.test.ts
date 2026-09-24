@@ -159,9 +159,9 @@ test("organizations.rename answers the new name and the record follows; delete i
   expect((await api.organizations.list()).map((row: { id: string }) => row.id)).toEqual([org.id]);
   await until("the membership off the account", async () => !(await memberships(api))[empty.id]);
   // the deleted organization's context is no longer the person's to hold
-  expect(errorCode(await rejection(api.organizations.get(empty.id).whoami(), "a deleted org"))).toBe(
-    "FORBIDDEN",
-  );
+  expect(
+    errorCode(await rejection(api.organizations.get(empty.id).whoami(), "a deleted org")),
+  ).toBe("FORBIDDEN");
 });
 
 test("organizations.addMember gives a second person the organization — their list, their account, the organization's projects — as a member, not an owner; removeMember takes it back; the last owner cannot be removed", async () => {

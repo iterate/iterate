@@ -14,6 +14,7 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import {
   append,
   collector,
+  durableCountsByType,
   freshCtx,
   presence,
   processorNames,
@@ -21,6 +22,7 @@ import {
   readHead,
   sleep,
   subscriptions,
+  tallySnapshot,
   until,
 } from "./support/client.ts";
 import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
@@ -42,16 +44,6 @@ const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length
 /** Every delivery-side error line the loop can emit: a dropped push, a dispatch issue. */
 const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.(deliver|cursor)|NO_FACET/g;
 const deliveryErrors = () => countMatches(worker.logs(), DELIVERY_ERRORS);
-const tallySnapshot = async (itx: any): Promise<any> =>
-  itx.invoke("itx.facets.get('tally').snapshot()");
-/** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
-/** What a "*" processor reduces: every durable event, each incarnation's `stream/woken` included
- *  (processor.ts `consumesEvent`). */
-const durableCountsByType = (events: any[]): Record<string, number> => {
-  const counts: Record<string, number> = {};
-  for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
-  return counts;
-};
 
 localSequential(
   "enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit",
