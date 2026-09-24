@@ -9,7 +9,8 @@
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
 // top), sweep (the stale previews and the resources that outlived theirs — the rules are
 // scripts/preview-sweep.ts), deploy-parents (the workers every preview branches from, from this
-// checkout: preview-parents.yml on every push to main). `--dry-run` prints the plan.
+// checkout: preview-parents.yml on every push to main), reset-parent (the `os` parent's own data
+// erased, then the parent deployed again: preview-sweep.yml, nightly). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,6 +49,7 @@ import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
 import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
 import deployOs from "./deploy.ts";
+import eraseData from "./erase-data.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   deleteArtifactsNamespace,
@@ -117,6 +119,7 @@ const Command = z.enum([
   "delete",
   "sweep",
   "deploy-parents",
+  "reset-parent",
 ]);
 type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
@@ -518,6 +521,20 @@ async function deployParents(ctx: EnvContext<OsEnv>) {
   console.log(
     `✅ parents deployed: ${[PREVIEW_PARENT, ...APPS.map((app) => app.envs.preview!)].map((env) => env.baseUrl).join(", ")}`,
   );
+}
+
+/** THE NIGHTLY RESET of the `os` parent's own data (preview-sweep.yml): what people and agents left
+ *  on os.iterate-dev-preview.workers.dev and the app parents signed in against it — its Durable
+ *  Objects (users, organizations, projects), KV, R2 and Artifacts repos — erased
+ *  (scripts/erase-data.ts), then the parent deployed again from this checkout. Its Worker Previews
+ *  keep their own data and keep serving throughout: the retirement tombstones the parent's own
+ *  namespaces only, and the parked parent keeps preview URLs on (scripts/lib/do-reset.ts; both
+ *  measured 2026-09-24 on a throwaway worker). The app parents hold nothing worth a reset: a
+ *  browser session each, which the next sign-in replaces. */
+async function resetParent(options: { dryRun: boolean }) {
+  await eraseData({ env: "preview", dryRun: options.dryRun });
+  if (options.dryRun) return;
+  await deployOs({ env: "preview" });
 }
 
 // ── the preview itself ─────────────────────────────────────────────────────────────────────────
@@ -1345,6 +1362,7 @@ async function main(argv: string[]) {
       jobUrl: process.env.DEPOT_JOB_URL,
     });
   if (parsed.command === "deploy-parents") return deployParents(await parentContext());
+  if (parsed.command === "reset-parent") return resetParent({ dryRun: parsed.dryRun });
   const previewName = resolvePreviewName({
     name: parsed.name || process.env.PREVIEW_NAME,
     prNumber: pr,

@@ -531,7 +531,9 @@ test.for([
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
   { file: ".depot/workflows/preview-os.yml", jobId: "specs" },
   { file: ".depot/workflows/preview-sweep.yml", jobId: "sweep" },
+  { file: ".depot/workflows/preview-sweep.yml", jobId: "reset-parent" },
   { file: ".depot/workflows/preview-delete.yml", jobId: "delete" },
+  { file: ".depot/workflows/preview-parents.yml", jobId: "deploy" },
 ])("$file $jobId starts from the baked workspace", ({ file, jobId }) => {
   const workflow = loadWorkflow(file);
   const job = workflow.jobs[jobId];
@@ -615,6 +617,21 @@ test("the nightly preview sweep runs alone, one at a time, never cancelled", () 
   expect(workflow.jobs.sweep?.steps?.at(-1)).toMatchObject({
     "working-directory": "apps/os",
     run: "doppler run -- pnpm preview sweep",
+  });
+});
+
+// People and agents use the parents (os.iterate-dev-preview.workers.dev, dash.…); what they leave
+// goes nightly, never while a push to main deploys the parent.
+test("the os parent's data is reset nightly, in the parents' deploy group", () => {
+  const workflow = loadWorkflow(".depot/workflows/preview-sweep.yml");
+  const parents = loadWorkflow(".depot/workflows/preview-parents.yml");
+
+  expect(workflow.jobs["reset-parent"]).toMatchObject({
+    concurrency: { ...parents.concurrency, "cancel-in-progress": false },
+  });
+  expect(workflow.jobs["reset-parent"]?.steps?.at(-1)).toMatchObject({
+    "working-directory": "apps/os",
+    run: "doppler run -- pnpm preview reset-parent",
   });
 });
 

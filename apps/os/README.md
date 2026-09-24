@@ -70,8 +70,9 @@ Cloudflare Worker Preview of a parent Worker named after its app (`os`, `dash`, 
 `<app>Envs.preview`). The parents are main on the dev/preview account: the Preview parents workflow
 deploys them from every push to main that a PR's preview would run for, and
 `https://dash.iterate-dev-preview.workers.dev` signs in against
-`https://os.iterate-dev-preview.workers.dev`. A platform preview has its own Durable Objects, KV, R2,
-and Artifacts namespace. Closing the PR deletes the preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
+`https://os.iterate-dev-preview.workers.dev`. What people leave there is erased nightly
+(`pnpm preview reset-parent`, in the Preview sweep workflow); PR previews keep their data and keep
+serving through it. A platform preview has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
 see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
 Main OS e2e, the latency guard and the real-model suite each keep one preview, `main`, `latency` and
 `real-model`, which every run redeploys in place, its readiness gate held 150 s (`--settle 150`)
