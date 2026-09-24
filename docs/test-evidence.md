@@ -30,7 +30,10 @@ marked _next_ are design only.
 
 A **test run** is one CI job attempt that runs tests: the Test job, and the
 `e2e` jobs of Preview OS and Main OS e2e. (A run on a laptop or an agent's
-machine is [next](#local-and-agent-runs).) Its folder is the repository's
+machine is [next](#local-and-agent-runs). So are the other workflows that run
+suites against a preview, such as the slow e2e rows every two hours,
+`os-slow-e2e.yml`, and the latency and real-model guards: each needs the
+same write, upload and report steps and a line in `testEvidenceJobs`.) Its folder is the repository's
 `test-results/`, the directory most producers already wrote to. The paths are
 `testEvidencePaths` in
 [`packages/shared/src/test-support/test-evidence.ts`](../packages/shared/src/test-support/test-evidence.ts),
