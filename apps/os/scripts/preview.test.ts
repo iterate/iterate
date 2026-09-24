@@ -21,9 +21,12 @@ import {
   resolvePreviewName,
   slugifyPreviewName,
   splicePreviewStatus,
+  splicePreviewSuite,
   splicePullRequestBody,
+  suiteLineMayBeOverwritten,
   templateQuickLaunches,
   type PreviewStatus,
+  type PreviewSuiteStatus,
 } from "./preview-config.ts";
 
 test.each([
@@ -189,7 +192,11 @@ test("the PR body's managed section: an empty body becomes just the section", ()
 
 // ── the status line, nested in the managed section ──
 
-test.for<{ name: string; status: Partial<PreviewStatus>; expected: string }>([
+test.for<{
+  name: string;
+  status: Partial<PreviewStatus> | Pick<PreviewSuiteStatus, "suite" | "state" | "error">;
+  expected: string;
+}>([
   {
     name: "deploying",
     status: { state: "deploying" },
@@ -201,14 +208,14 @@ test.for<{ name: string; status: Partial<PreviewStatus>; expected: string }>([
     expected: `Status: **deployed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
   },
   {
-    name: "e2e passed",
-    status: { state: "e2e passed" },
-    expected: `Status: **e2e passed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+    name: "a suite's line names the suite by its check",
+    status: { suite: "e2e", state: "passed" },
+    expected: `E2E tests: **passed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
   },
   {
-    name: "e2e failed names the suites",
-    status: { state: "e2e failed", failedSuites: ["vitest e2e", "pnpm spec"] },
-    expected: `Status: **e2e failed** on \`ccccccccc\` (vitest e2e, pnpm spec) · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+    name: "a failed suite",
+    status: { suite: "specs", state: "failed" },
+    expected: `Browser specs: **failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
   },
   {
     name: "from a laptop there is no CI job to link",
@@ -239,9 +246,9 @@ test.for<{ name: string; status: Partial<PreviewStatus>; expected: string }>([
   },
   {
     name: "a fence in the output gets a longer fence; a backtick in the summary cannot close its code span",
-    status: { state: "e2e failed", error: "`build` failed\n```\nsyntax error\n```" },
+    status: { suite: "specs", state: "failed", error: "`build` failed\n```\nsyntax error\n```" },
     expected: [
-      `Status: **e2e failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+      `Browser specs: **failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
       "",
       "`'build' failed`",
       "",
@@ -255,7 +262,8 @@ test.for<{ name: string; status: Partial<PreviewStatus>; expected: string }>([
     ].join("\n"),
   },
 ])("the status line: $name", ({ status, expected }) => {
-  expect(renderPreviewStatus({ ...deployed, ...status })).toBe(expected);
+  // The fixture's fields are one type's or the other's; the spread picks by `suite`.
+  expect(renderPreviewStatus({ ...deployed, ...status } as PreviewStatus)).toBe(expected);
 });
 
 test("the status splice rewrites the status line alone: the author's text and the rest of the section stay byte for byte", () => {
@@ -274,8 +282,8 @@ test("the status splice rewrites the status line alone: the author's text and th
 
 test("the status splice puts a status line at the top of a section written without one", () => {
   const before = "Intro.\n\n<!-- os-preview:begin -->\nold\n<!-- os-preview:end -->\n";
-  expect(splicePreviewStatus(before, { ...deployed, state: "e2e passed", runUrl: undefined })).toBe(
-    "Intro.\n\n<!-- os-preview:begin -->\n<!-- os-preview-status:begin -->\nStatus: **e2e passed** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-status:end -->\nold\n<!-- os-preview:end -->\n",
+  expect(splicePreviewStatus(before, { ...deployed, runUrl: undefined })).toBe(
+    "Intro.\n\n<!-- os-preview:begin -->\n<!-- os-preview-status:begin -->\nStatus: **deployed** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-status:end -->\nold\n<!-- os-preview:end -->\n",
   );
 });
 
@@ -288,6 +296,65 @@ test("the status splice makes a body without a section (the first deploy failed)
     }),
   ).toBe(
     "What this PR does.\n\n<!-- os-preview:begin -->\n<!-- os-preview-status:begin -->\nStatus: **deploying** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-status:end -->\n<!-- os-preview:end -->\n",
+  );
+});
+
+// ── each suite's line, under the status line ──
+
+test("the two suites' jobs write their own lines, in either order, under the status line: E2E tests first", () => {
+  const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
+  const write = (
+    text: string,
+    suite: PreviewSuiteStatus["suite"],
+    state: PreviewSuiteStatus["state"],
+  ) => splicePreviewSuite(text, { ...deployed, runUrl: undefined, suite, state });
+  const expected = body.replace(
+    "<!-- os-preview-status:end -->",
+    `<!-- os-preview-status:end -->\n${suiteLine("e2e", "passed")}\n${suiteLine("specs", "failed")}`,
+  );
+  expect(write(write(body, "e2e", "passed"), "specs", "failed")).toBe(expected);
+  expect(write(write(body, "specs", "failed"), "e2e", "passed")).toBe(expected);
+  // a suite's rerun rewrites its line alone
+  expect(write(expected, "specs", "passed")).toBe(
+    expected.replace(suiteLine("specs", "failed"), suiteLine("specs", "passed")),
+  );
+  // a new deploy drops both, which were the previous deploy's; its later writes keep that
+  const deploying = splicePreviewStatus(expected, { ...deployed, state: "deploying" });
+  expect(deploying).not.toContain("os-preview-e2e");
+  expect(deploying).not.toContain("os-preview-specs");
+  expect(splicePreviewStatus(deploying, deployed)).toBe(body);
+});
+
+// Both suites' jobs write at once. Only the first to finish, which finds no line of the other for
+// its commit, waits to look again; the second finds the first's and writes over nothing.
+test("a suite's line may be overwritten until the other suite's line names the same commit", () => {
+  const e2e = { ...deployed, runUrl: undefined, suite: "e2e" as const, state: "passed" as const };
+  const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
+  expect(suiteLineMayBeOverwritten(splicePreviewSuite(body, e2e), e2e)).toBe(true);
+  const withSpecs = splicePreviewSuite(body, { ...e2e, suite: "specs", state: "failed" });
+  expect(suiteLineMayBeOverwritten(splicePreviewSuite(withSpecs, e2e), e2e)).toBe(false);
+  // the other suite's line from an earlier commit is an earlier run's: its job may still write
+  const olderSpecs = splicePreviewSuite(body, {
+    ...e2e,
+    suite: "specs",
+    commit: "ddddddddd0123",
+  });
+  expect(suiteLineMayBeOverwritten(splicePreviewSuite(olderSpecs, e2e), e2e)).toBe(true);
+});
+
+test("a suite's line without a status line goes at the top of the section, or is the section", () => {
+  expect(
+    splicePreviewSuite("Intro.\n\n<!-- os-preview:begin -->\nold\n<!-- os-preview:end -->\n", {
+      ...deployed,
+      runUrl: undefined,
+      suite: "e2e",
+      state: "passed",
+    }),
+  ).toBe(
+    `Intro.\n\n<!-- os-preview:begin -->\n${suiteLine("e2e", "passed")}\nold\n<!-- os-preview:end -->\n`,
+  );
+  expect(suiteLine("specs", "passed")).toBe(
+    "<!-- os-preview-specs:begin -->\nBrowser specs: **passed** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-specs:end -->",
   );
 });
 
@@ -621,4 +688,11 @@ function recordedStatusWrites() {
     events.push(`landed ${state}`);
   };
   return { events, write, release };
+}
+
+/** A suite's line alone, as its block in the section. */
+function suiteLine(suite: PreviewSuiteStatus["suite"], state: PreviewSuiteStatus["state"]) {
+  return splicePreviewSuite("", { ...deployed, runUrl: undefined, suite, state })
+    .replace("<!-- os-preview:begin -->\n", "")
+    .replace("\n<!-- os-preview:end -->\n", "");
 }

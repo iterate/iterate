@@ -51,7 +51,7 @@ the smallest interaction, show progress, and fail in a way someone can see.
 
 ## Acceptance
 
-Before landing, run the repository's full pre-PR commands and let the preview's e2e job pass.
+Before landing, run the repository's full pre-PR commands and let the preview's E2E tests and Browser specs pass.
 Then repeat the captures on the preview. Query that window's Workers Logs for the app's worker
 and the platform's. Static assets can bypass the Worker, so browser captures are the evidence
 for caching. Explain every error outcome, even when the route eventually loaded.

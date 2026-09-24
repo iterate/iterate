@@ -3,8 +3,9 @@
 // that gets slow.
 //
 // A PUSH is a Depot run of a pull request that runs Test: its ref is `refs/pull/<n>/merge`. Its
-// CHECKS are the two the main ruleset requires, Lint and Typecheck and Test, and Preview OS when the
-// push touched the preview's paths. Each push is measured once it settled:
+// CHECKS are Lint and Typecheck, Test and Preview OS, whose E2E tests and Browser specs jobs the main
+// ruleset requires with the other two, and which runs on every push since 2026-09-24 (on those that
+// touched the preview's paths before). Each push is measured once it settled:
 //   • TIME TO FIRST VERDICT: from the run's creation (about the push, and where the CI trace's clock
 //     starts) to the end of the last check's first execution, the Preview OS trace job included, and
 //     a Preview OS that queued behind the PR's previous run. A red run, and one whose checks were
@@ -13,12 +14,13 @@
 // A push whose Test or Lint was cancelled because the PR's next push superseded it has no verdict and
 // is left out. Any other cancel, a job's timeout say, is red.
 //
-// Pushes are split by what their Preview OS e2e job ran, from its suite summary (`slowRows` in
+// Pushes are split by what their Preview OS E2E tests job ran, from its suite summary (`slowRows` in
 // packages/shared/src/test-support/flake-suite-summary.ts):
 //   slow rows skipped   the e2e rows tagged `slow` were left out, as they are for most PRs
 //   every row           they ran: the PR touched their code, or the summary predates the tag
 //   no summary          e2e wrote none (its deploy failed, say), so which rows would have run is unknown
-//   no Preview OS       the push ran Lint and Typecheck and Test alone
+//   no Preview OS       no preview: the push changed no preview path, so E2E tests skipped, or it
+//                       ran no Preview OS at all
 //
 // THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
 // and at least 20 of them, has a median over 165 s or a p90 over 200 s, #error-pulse is paged red,
@@ -122,7 +124,7 @@ export function measurePush(input: {
   return {
     ...base,
     outcome: checks.every((check) => check.status === "finished") ? "green" : "red",
-    e2e: !checks.some((check) => check.name === "Preview OS")
+    e2e: !previewTested(workflows)
       ? "no-preview"
       : !input.summary
         ? "no-summary"
@@ -131,6 +133,18 @@ export function measurePush(input: {
           : "every-row",
     seconds: Math.round((verdictAt - Date.parse(run.createdAt)) / 100) / 10,
   };
+}
+
+/** Whether the push's Preview OS tested a preview: it ran, and its E2E tests job was not skipped,
+ *  as it is for a push that changes no preview path (preview-os.yml). Pure. */
+function previewTested(workflows: RunMetrics["workflows"]) {
+  const preview = workflows.find(({ workflow }) => workflow.name === "Preview OS");
+  return (
+    !!preview &&
+    !preview.jobs.some(
+      ({ job }) => job?.jobKey === "preview-os.yml:e2e" && job.status === "skipped",
+    )
+  );
 }
 
 /** The pushes created in [from, to), by what their e2e ran and all together: each group's time to
@@ -472,7 +486,14 @@ const RunMetrics = z.object({
           status: z.string(),
           finishedAt: z.string().default(""),
         }),
-        jobs: z.array(z.object({ attempts: z.array(z.unknown()).default([]) })).default([]),
+        jobs: z
+          .array(
+            z.object({
+              job: z.object({ jobKey: z.string(), status: z.string() }).optional(),
+              attempts: z.array(z.unknown()).default([]),
+            }),
+          )
+          .default([]),
       }),
     )
     .default([]),

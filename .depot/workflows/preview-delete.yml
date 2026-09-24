@@ -3,9 +3,10 @@
 # Artifacts namespace, KV namespaces, R2 bucket) and the client previews.
 #
 # Its own workflow, triggered only when a PR closes, so no push to an open PR carries it as a skipped
-# job. It runs for the PRs that got a preview: its `paths` are Preview OS's
-# (scripts/ci/depot-workflows.test.ts keeps them equal). It shares Preview OS's per-PR concurrency
-# group, so a delete waits for that PR's in-flight deploy and e2e to settle instead of racing them.
+# job. It runs for the PRs that got a preview: its `paths` are the ones Preview OS's Deploy preview
+# job deploys for (scripts/ci/preview-paths.ts `previewPaths`; depot-workflows.test.ts keeps them
+# equal). It shares Preview OS's per-PR concurrency group, so a delete waits for that PR's in-flight
+# deploy and tests to settle instead of racing them.
 # A delete that never ran or failed is the nightly sweep's (preview-sweep.yml).
 #
 # Delete a PR's preview by hand:
@@ -25,7 +26,7 @@ on:
   pull_request:
     types:
       - closed
-    # Preview OS's pull_request paths, verbatim (preview-os.yml says why each is there).
+    # scripts/ci/preview-paths.ts `previewPaths`, verbatim (it says why each is there).
     paths:
       - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-dash.yml

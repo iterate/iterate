@@ -1,38 +1,51 @@
 # ONE PREVIEW PER PULL REQUEST of apps/os, on Cloudflare Worker Previews — the shape of
 # cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
-# The script is apps/os/scripts/preview.ts. One job per operation, named for when it runs:
-#   deploy              every push: deploys the PR merged into main (the run's own commit, the merge
-#                       commit Depot read this file from; the head alone on a dispatch whose PR
-#                       conflicts, scripts/ci/preview-tested-commit.ts)
-#                       as a preview named `pr<n>-<branch slug>` of the parent worker
-#                       os-preview, and writes the URL, the tested commit and the operations
-#                       into the PR body, under a status line: deploying, deployed or deploy failed
-#   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
-#                       the status line rewritten to e2e passed or e2e failed, then their test
-#                       telemetry and flake records as artifacts. The e2e rows tagged `slow` run
-#                       when the PR changes their code (SLOW_ROW_PATHS) or carries the `slow-e2e`
-#                       label, and are skipped otherwise (docs/testing.md#slow-rows)
-#   trace               after both, whatever their outcome: the CI trace (docs/ci-traces.md), an
-#                       artifact plus the "CI trace" and "Playwright report" commit statuses, which
-#                       open them in the ci-reports viewer
-# "e2e" skips only when deploy did not succeed. Closing the PR deletes the preview and everything it
-# owned (preview-delete.yml); the nightly sweep of previews whose PR closed without a delete, or
-# that went stale, is preview-sweep.yml.
+# The script is apps/os/scripts/preview.ts. Four jobs, each a check named for what it proves:
+#   Deploy preview   every push: first whether the PR changes a preview path
+#                    (scripts/ci/preview-paths.ts `previewPaths`); a PR that changes none deploys
+#                    nothing and passes. Otherwise it deploys the PR merged into main (the run's own
+#                    commit, the merge commit Depot read this file from; the head alone on a dispatch
+#                    whose PR conflicts, scripts/ci/preview-tested-commit.ts) as a preview named
+#                    `pr<n>-<branch slug>` of the parent worker os-preview, and writes the URL, the
+#                    tested commit and the operations into the PR body, under a status line:
+#                    deploying, deployed or deploy failed
+#   E2E tests        after Deploy preview: the vitest e2e suite against the preview, its line under
+#                    the status line (passed or failed), then its test telemetry and flake records.
+#                    The rows tagged `slow` run when the PR changes their code (SLOW_ROW_PATHS) or
+#                    carries the `slow-e2e` label, and are skipped otherwise (docs/testing.md#slow-rows)
+#   Browser specs    beside E2E tests: the Playwright specs, the same way, and the Playwright report
+#   CI trace         after all three, whatever their outcome, reporting only: the CI trace
+#                    (docs/ci-traces.md), an artifact plus the "CI trace" and "Playwright report"
+#                    commit statuses, which open them in the ci-reports viewer
 #
-# Depot registers automatic triggers when this file is on the default branch. Test a branch with:
+# E2E TESTS AND BROWSER SPECS ARE REQUIRED CHECKS (docs/pull-requests.md), so each reports on every
+# pull request, and the workflow has no `paths` filter: GitHub leaves a required check "Pending" when
+# a filter skips its workflow. A PR that changes no preview path skips both, which GitHub counts as
+# passing. One that does, whose Deploy preview did not succeed, gets both red, never skipped: their
+# `always()` starts them behind any deploy, and their first step fails without a deployed preview.
+# Closing the PR deletes the preview and everything it owned (preview-delete.yml); the nightly sweep
+# of previews whose PR closed without a delete, or that went stale, is preview-sweep.yml.
+#
+# Depot registers automatic triggers when this file is on the default branch. Every operation the PR
+# body lists is a dispatch (docs/depot-ci.md#dispatch-a-checked-in-workflow):
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-os.yml --ref <branch> \
 #     --input pull-request-number=<pr> --input action=deploy
-# Every operation the PR body lists is a dispatch: action = deploy | reset | e2e (a delete is a
-# dispatch of preview-delete.yml), apps = all | auto | none (the apps on top: dash, agents, notes,
-# voice, kit). Pull-request runs use all so every client is usable against the platform preview;
-# auto remains available for a faster targeted manual redeploy once the clients are already
-# present. action=deploy or reset runs the deploy job and then e2e, as a push does; action=e2e runs
-# e2e alone. slow-rows = run | skip overrides what the PR's paths and label say about the rows
-# tagged `slow`: `--input action=e2e --input slow-rows=run` runs them against the live preview.
+# action = deploy | reset | test | e2e | specs. deploy and reset (which deletes the preview first)
+# run Deploy preview and then both suites, as a push does. test runs both suites against the preview
+# as it is deployed, e2e the E2E tests alone, specs the Browser specs alone. A test-only action names
+# its preview by pull-request-number or, without one, by preview-name (`pr3035-ttg-deploy-overlap`,
+# or CI's own `main`), and runs the suite from the dispatched ref. A dispatch posts its checks on the
+# ref's head commit, replacing that commit's checks of the same name, and a job it skips counts as
+# passing there: dispatch e2e or specs alone with `--ref main`, never on a PR's branch.
+# slow-rows = run | skip overrides what the PR's paths and label say about the rows tagged `slow`:
+# `--input action=e2e --input slow-rows=run` runs them against the live preview.
+# apps = all | auto | none (the apps on top: dash, agents, notes, voice, kit). Pull-request runs use
+# all so every client is usable against the platform preview; auto remains available for a faster
+# targeted manual redeploy once the clients are already present.
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
-# preview-delete.yml takes the same group, so a PR's delete waits for its deploy and e2e to settle.
+# preview-delete.yml takes the same group, so a PR's delete waits for its deploy and tests to settle.
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
@@ -45,44 +58,12 @@ permissions:
   statuses: write
 
 on:
+  # Every pull request, without a `paths` filter: Deploy preview decides whether it gets a preview.
   pull_request:
     types:
       - opened
       - synchronize
       - reopened
-    # preview-delete.yml runs on `closed` with this same list.
-    paths:
-      # A production-workflow change must exercise this isolated deployment:
-      # production runs deploy's non-mutating readiness probes only.
-      - .depot/workflows/deploy-os.yml
-      - .depot/workflows/deploy-dash.yml
-      - .depot/workflows/deploy-agents.yml
-      - .depot/workflows/deploy-notes.yml
-      - .depot/workflows/deploy-voice.yml
-      - .depot/workflows/deploy-kit.yml
-      - .depot/workflows/preview-os.yml
-      - apps/os/**
-      - configs/**
-      - apps/dash/**
-      - apps/agents/**
-      - apps/notes/**
-      - apps/voice/**
-      - apps/kit/**
-      # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
-      - "!apps/kit/firmware/**"
-      - specs/**
-      - playwright.config.ts
-      # apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI
-      - packages/cli/**
-      - packages/iterate/**
-      - packages/shared/**
-      - packages/ui/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - envs.ts
-      - scripts/lib/**
-      - scripts/depot-ci/**
   workflow_dispatch:
     inputs:
       pull-request-number:
@@ -90,8 +71,13 @@ on:
         required: false
         type: string
         default: ""
+      preview-name:
+        description: "A deployed preview to test, by name, without a PR number: action test, e2e or specs"
+        required: false
+        type: string
+        default: ""
       action:
-        description: deploy | reset | e2e
+        description: deploy | reset | test | e2e | specs
         required: false
         type: string
         default: deploy
@@ -129,7 +115,7 @@ defaults:
 
 jobs:
   deploy:
-    name: deploy
+    name: Deploy preview
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
@@ -137,12 +123,13 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 40
-    # THE COMMIT THIS RUN TESTS, for the e2e job: the PR merged into main
-    # (scripts/ci/preview-tested-commit.ts), so e2e tests the very commit deployed here even after
-    # main moves on.
+    # THE COMMIT THIS RUN TESTS, for the test jobs: the PR merged into main
+    # (scripts/ci/preview-tested-commit.ts), so they test the very commit deployed here even after
+    # main moves on. `preview` is false for a PR that changes no preview path.
     outputs:
       tested-sha: ${{ steps.tested.outputs.sha }}
       head-sha: ${{ steps.tested.outputs.head-sha }}
+      preview: ${{ steps.changes.outputs.preview }}
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
@@ -159,9 +146,17 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: node scripts/ci/preview-tested-commit.ts
+      # A push that changes no preview path deploys nothing, and the steps after this skip; a
+      # dispatch deploys whatever it changes.
+      - name: Decide whether the PR changes a preview path
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: node scripts/ci/preview-paths.ts changes
       - name: Reconcile dependencies (baked)
+        if: steps.changes.outputs.preview != 'false'
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
+        if: steps.changes.outputs.preview != 'false'
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -169,6 +164,7 @@ jobs:
       # script ends by writing the URL and the operations into the PR body (GITHUB_TOKEN).
       - name: Deploy (or reset) the preview
         id: deploy
+        if: steps.changes.outputs.preview != 'false'
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -184,23 +180,23 @@ jobs:
 
   # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
   # e2e and browser suites. Production deployment runs only its deploy-script readiness probes.
-  # It runs after every deploy that succeeded, and alone against the live preview on a dispatch
-  # with action=e2e, where deploy is skipped: `always()` is what lets it start behind a skipped
-  # deploy, `needs.deploy.result` what keeps it off a failed or cancelled one.
+  # A REQUIRED CHECK: skipped only for a PR that changes no preview path, or a dispatch of the specs
+  # alone. `always()` starts it behind any deploy, and its first step fails it when there is no
+  # deployed preview to test: a failed or cancelled deploy, or a test-only dispatch that names none.
   e2e:
-    name: e2e
+    name: E2E tests
     needs: deploy
     if: >-
       always() &&
-      (needs.deploy.result == 'success' ||
-      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'e2e'))
+      ((github.event_name == 'pull_request' && needs.deploy.outputs.preview != 'false') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action != 'specs'))
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
-    # TEST TELEMETRY (docs/testing.md#flakes-and-pinned-failures): both runners write their canonical
-    # artifact here, each suite's flake lines go to its own directory (apps/os/scripts/preview.ts),
-    # and the always-running steps after the suite normalize, summarize and upload them.
+    # TEST TELEMETRY (docs/testing.md#flakes-and-pinned-failures): the runner writes its canonical
+    # artifact here, its flake lines go to its suite's directory (apps/os/scripts/preview.ts), and
+    # the steps after the suite normalize, summarize and upload them, whatever its outcome.
     env:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -216,20 +212,30 @@ jobs:
           id="${DEPOT_JOB_URL##*attempt=}"
           [[ "$id" =~ ^[a-z0-9]+$ ]] || { echo "DEPOT_JOB_URL names no job attempt: '${DEPOT_JOB_URL:-}'"; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
-      # The commit deploy deployed; alone on a dispatch with action=e2e, the head, then the PR
-      # merged into main as deploy would resolve it.
+      - name: Require a deployed preview
+        if: >-
+          needs.deploy.result != 'success' &&
+          !(github.event_name == 'workflow_dispatch' && (inputs.action == 'test' || inputs.action == 'e2e') && (inputs.pull-request-number != '' || inputs.preview-name != ''))
+        env:
+          DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          echo "Deploy preview ${DEPLOY}, so there is no preview of this commit to test."
+          echo "A dispatch of action test, e2e or specs names one: pull-request-number or preview-name."
+          exit 1
+      # The commit Deploy preview deployed; on a test-only dispatch, the PR's head, then the PR
+      # merged into main as a deploy would resolve it, or the dispatched ref for a preview by name.
       - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
       # Telemetry is labelled with the PR head, whatever merge commit was tested.
       - name: Record the PR head for test telemetry
         env:
           HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
         run: echo "TEST_TELEMETRY_HEAD_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
       - name: Check out the PR merged into main
-        if: needs.deploy.outputs.tested-sha == ''
+        if: needs.deploy.outputs.tested-sha == '' && inputs.pull-request-number != ''
         env:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
         run: node scripts/ci/preview-tested-commit.ts
@@ -247,27 +253,29 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
+          # the branch a PR's preview is named for, or a preview by name when there is no PR number
+          PREVIEW_NAME: ${{ github.head_ref || (inputs.pull-request-number == '' && inputs.preview-name || '') }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           E2E_SLOW_ROWS: ${{ inputs.slow-rows }}
         run: doppler run -- pnpm preview e2e
-      # Fails when either runner left no complete artifact, and writes the specs and preview-e2e
-      # suite summaries next to their flake lines. A cancelled run keeps its partial evidence without
-      # reporting it as failures.
-      - name: Check test telemetry and write the suite summaries
-        if: always()
+      # Fails when the runner left no complete artifact, and writes the suite summary next to its
+      # flake lines. A cancelled run keeps its partial evidence without reporting it as failures.
+      # After the suite started only: without a preview there is nothing to keep.
+      - name: Check test telemetry and write the suite summary
+        if: always() && steps.e2e.outcome != 'skipped'
         env:
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
-        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: os
+        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview-e2e ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
       # attempt's tests left, and target.json the deployment they ran against. This adds one row per
       # test (tables/tests.parquet), then manifest.json: the run's result (from the suites' step and
       # the finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
       # Neither this nor the upload decides the job; the tests did.
+      # After the suite started only: a job whose guard found no preview has no folder.
       - name: Write the test evidence manifest
         id: evidence-write
-        if: always()
+        if: always() && steps.e2e.outcome != 'skipped'
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -290,22 +298,142 @@ jobs:
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
       # One artifact per suite and job attempt, pulled by the flake dashboard's writer.
-      - name: Upload specs flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/flake-records/specs
-          if-no-files-found: ignore
       - name: Upload preview e2e flake records
-        if: always()
+        if: always() && steps.e2e.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: flake-records-preview-e2e-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/flake-records/preview-e2e
           if-no-files-found: ignore
       - name: Upload test telemetry artifacts
-        if: always()
+        if: always() && steps.e2e.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
+          path: test-results/ci-telemetry
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload results
+        if: always() && steps.e2e.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # THE BROWSER PROOF, beside E2E tests on a runner of its own: the root Playwright specs
+  # (specs/AGENTS.md) against the preview and its apps on top. A REQUIRED CHECK, started and failed
+  # exactly as E2E tests is, skipped on a dispatch of the e2e suite alone.
+  specs:
+    name: Browser specs
+    needs: deploy
+    if: >-
+      always() &&
+      ((github.event_name == 'pull_request' && needs.deploy.outputs.preview != 'false') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e'))
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    env:
+      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+      TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
+    steps:
+      - name: Name this attempt's artifacts
+        id: attempt
+        # The job URL's `attempt=` is the attempt's id (a retry gets a new one).
+        run: |
+          id="${DEPOT_JOB_URL##*attempt=}"
+          [[ "$id" =~ ^[a-z0-9]+$ ]] || { echo "DEPOT_JOB_URL names no job attempt: '${DEPOT_JOB_URL:-}'"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - name: Require a deployed preview
+        if: >-
+          needs.deploy.result != 'success' &&
+          !(github.event_name == 'workflow_dispatch' && (inputs.action == 'test' || inputs.action == 'specs') && (inputs.pull-request-number != '' || inputs.preview-name != ''))
+        env:
+          DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          echo "Deploy preview ${DEPLOY}, so there is no preview of this commit to test."
+          echo "A dispatch of action test, e2e or specs names one: pull-request-number or preview-name."
+          exit 1
+      - name: Checkout the tested commit
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
+      - name: Record the PR head for test telemetry
+        env:
+          HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
+        run: echo "TEST_TELEMETRY_HEAD_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
+      - name: Check out the PR merged into main
+        if: needs.deploy.outputs.tested-sha == '' && inputs.pull-request-number != ''
+        env:
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: node scripts/ci/preview-tested-commit.ts
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Run the browser specs against the preview
+        # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
+        id: specs
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref || (inputs.pull-request-number == '' && inputs.preview-name || '') }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: doppler run -- pnpm preview specs
+      - name: Check test telemetry and write the suite summary
+        if: always() && steps.specs.outcome != 'skipped'
+        env:
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: iterate-root
+        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites specs ${{ cancelled() && '--cancelled' || '' }}
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
+      # attempt's tests left, and target.json the deployment they ran against. This adds one row per
+      # test (tables/tests.parquet), then manifest.json: the run's result (from the suites' step and
+      # the finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
+      # Neither this nor the upload decides the job; the tests did.
+      # After the suite started only: a job whose guard found no preview has no folder.
+      - name: Write the test evidence manifest
+        id: evidence-write
+        if: always() && steps.specs.outcome != 'skipped'
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          TEST_EVIDENCE_STEPS: specs=${{ steps.specs.outcome }}
+        run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
+      # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys. A
+      # cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/ copy.
+      # A failure is a warning and a line of the job's summary, never the job's result.
+      - name: Upload the test evidence to R2
+        id: evidence-upload
+        if: ${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+      # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
+      # warning and summary line here; one that reported itself is left alone.
+      - name: Report a test evidence step that could not
+        if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
+        run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
+      - name: Upload specs flake records
+        if: always() && steps.specs.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+      - name: Upload test telemetry artifacts
+        if: always() && steps.specs.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: preview-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
@@ -320,7 +448,7 @@ jobs:
       # alone is named for the PR, not the attempt, and overwritten: it is the latest attempt's report,
       # and each attempt's own copy is in its test-results artifact.
       - name: Upload results
-        if: always()
+        if: always() && steps.specs.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: preview-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
@@ -337,17 +465,19 @@ jobs:
           retention-days: 30
           overwrite: true
 
-  # THE CI TRACE (docs/ci-traces.md): the Depot timings and `@@ci-trace` markers of the jobs it
-  # needs as trace.html and trace.json, this job's artifact, then two commit statuses opening the
-  # ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to green (the e2e
-  # job's success) or to red (the first failed job), and "Playwright report", the e2e job's HTML
-  # report. After both jobs settle, whatever their outcome; never when neither ran. Main OS e2e has
-  # the same job (scripts/ci/main-os-e2e-workflow.test.ts keeps them alike).
+  # THE CI TRACE (docs/ci-traces.md), reporting only: the Depot timings and `@@ci-trace` markers of
+  # the jobs it needs as trace.html and trace.json, this job's artifact, then two commit statuses
+  # opening the ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to
+  # green (the last test job's success) or to red (the first failed job), and "Playwright report",
+  # the Browser specs job's HTML report. After the three settle, whatever their outcome; never when
+  # none ran, nor for a PR that changes no preview path. Main OS e2e has the same job
+  # (scripts/ci/main-os-e2e-workflow.test.ts keeps them alike).
   trace:
-    name: trace
-    needs: [deploy, e2e]
+    name: CI trace
+    needs: [deploy, e2e, specs]
     if: >-
-      always() && (needs.deploy.result != 'skipped' || needs.e2e.result != 'skipped')
+      always() && needs.deploy.outputs.preview != 'false' &&
+      (needs.deploy.result != 'skipped' || needs.e2e.result != 'skipped' || needs.specs.result != 'skipped')
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -359,7 +489,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
       - name: Record the traced commit
         env:
           HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}

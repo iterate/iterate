@@ -58,9 +58,11 @@ The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` proj
 named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
-The Preview OS workflow deploys a platform preview and all five hosted clients (Dash,
-Agents, Notes, Voice, Kit); its separate `e2e` job then runs integration and browser checks against
-them, only once that deploy succeeded. The commands to run it from a checkout are below.
+The Preview OS workflow's Deploy preview job deploys a platform preview and all five hosted clients
+(Dash, Agents, Notes, Voice, Kit); then its E2E tests job runs the integration suite and its Browser
+specs job the browser specs against them, side by side, each a required check. A PR that changes no
+preview path deploys nothing and skips both. The commands to run them from a checkout or from CI are
+below.
 
 A platform preview is named `pr<n>-<branch slug>` under the `os-preview` parent Worker. It
 has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the
@@ -86,12 +88,27 @@ doppler run --project os --config preview -- \
 doppler run --project os --config preview -- \
   pnpm preview e2e --pr <number> --name <branch>
 doppler run --project os --config preview -- \
+  pnpm preview specs --name pr<number>-<branch slug>
+doppler run --project os --config preview -- \
   pnpm preview sweep
 ```
 
-Use `e2e` in place of `deploy` to test an existing preview. `reset` destroys that preview's state
-before redeploying; `delete` removes it. CI publishes URLs and operation links in the PR body,
-under a status line (deploying, deployed, deploy failed, e2e passed, e2e failed, with the CI job),
+Use `e2e` (the vitest e2e suite) or `specs` (the Playwright specs) in place of `deploy` to test a
+preview as it is deployed, named by PR number and branch or, without `--pr`, by its whole name
+(`--name main` is the one Main OS e2e keeps). CI does the same without redeploying:
+
+```sh
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref main \
+  --input pull-request-number=<number> --input action=test
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref main \
+  --input preview-name=main --input action=e2e
+```
+
+`action=test` runs both suites, `e2e` or `specs` one of them; dispatch one alone from `--ref main`
+([why](../../docs/depot-ci.md#run-the-suites-against-a-deployed-preview)). `reset` destroys that
+preview's state before redeploying; `delete` removes it. CI publishes URLs and operation links in
+the PR body, under a status line (deploying, deployed, deploy failed, with the CI job) and a line
+per suite (`E2E tests` and `Browser specs`: passed or failed, each with its CI job),
 with one-click `Sign in ↗` links as the PR's test person, `pr<N>@preview.iterate.test`, and
 one-click "New project from template" links into the Dash
 ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`).

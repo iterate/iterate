@@ -93,7 +93,7 @@ export function mainE2ePage(input: {
     .join("\n");
 }
 
-/** `${{ toJSON(needs) }}`: each job's result, and e2e's failing rows. */
+/** `${{ toJSON(needs) }}`: each job's result, and the test jobs' failing rows. */
 const Needs = z.record(
   z.string(),
   z.object({ result: z.string(), outputs: z.record(z.string(), z.string()).optional() }),
@@ -141,9 +141,9 @@ async function alert(dryRun: boolean): Promise<void> {
   const results = Object.fromEntries(
     Object.entries(needs).map(([job, need]) => [job, need.result]),
   );
-  const failingRows = z
-    .array(z.string())
-    .parse(JSON.parse(needs.e2e?.outputs?.["failing-rows"] || "[]"));
+  const failingRows = Object.values(needs).flatMap((need) =>
+    z.array(z.string()).parse(JSON.parse(need.outputs?.["failing-rows"] || "[]")),
+  );
   console.log(JSON.stringify({ results, failingRows }));
   await pageOnChangeOfState({
     suite: MAIN_E2E_SUITE,

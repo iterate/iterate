@@ -10,6 +10,7 @@ import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
 import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
+import { previewPaths } from "./preview-paths.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -218,21 +219,20 @@ test.each(
 });
 
 test("runs OS and Notes stateful proofs only against an isolated preview", () => {
-  const preview = loadWorkflow(".depot/workflows/preview-os.yml");
   const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
   for (const { file } of deploymentWorkflows) {
     const runs = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
       (job.steps || []).map((step) => step.run || ""),
     );
-    for (const suite of ["pnpm e2e", "pnpm spec", "pnpm preview e2e"]) {
+    for (const suite of ["pnpm e2e", "pnpm spec", "pnpm preview e2e", "pnpm preview specs"]) {
       expect(
         runs.filter((run) => run.includes(suite)),
         `${file} must not run ${suite}`,
       ).toEqual([]);
     }
   }
-  expect(preview.on?.pull_request?.paths).toEqual(
+  expect(previewPaths).toEqual(
     expect.arrayContaining([
       ".depot/workflows/deploy-os.yml",
       ".depot/workflows/deploy-notes.yml",
@@ -241,8 +241,8 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
       "playwright.config.ts",
     ]),
   );
-  // one `pnpm spec` in the e2e job runs every project, the notes one against the Notes preview
-  expect(previewScript).toContain('run("pnpm", ["spec"], {');
+  // one `pnpm spec` in the Browser specs job runs every project, the notes one against the Notes preview
+  expect(previewScript).toContain('runAsync("pnpm", ["spec"], {');
   expect(previewScript).toContain('NOTES_BASE_URL: appUrl("notes")');
   expect(previewScript).toContain('VOICE_BASE_URL: appUrl("voice")');
   expect(previewScript).toContain('DASH_BASE_URL: appUrl("dash")');
@@ -526,6 +526,7 @@ test("refreshes the baked workspace when dependency inputs land on main", () => 
 test.for([
   { file: ".depot/workflows/preview-os.yml", jobId: "deploy" },
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs" },
   { file: ".depot/workflows/preview-sweep.yml", jobId: "sweep" },
   { file: ".depot/workflows/preview-delete.yml", jobId: "delete" },
 ])("$file $jobId starts from the baked workspace", ({ file, jobId }) => {
@@ -623,7 +624,7 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
   expect(Object.keys(workflow.on || {}).sort()).toEqual(["pull_request", "workflow_dispatch"]);
   expect(workflow).toMatchObject({
     // every PR that got a preview, and no other
-    on: { pull_request: { types: ["closed"], paths: preview.on?.pull_request?.paths } },
+    on: { pull_request: { types: ["closed"], paths: previewPaths } },
     // a delete waits for the PR's in-flight deploy and e2e instead of racing them
     concurrency: preview.concurrency,
   });
@@ -809,14 +810,12 @@ test.each([
 });
 
 test.each([
-  { file: ".depot/workflows/test.yml", jobId: "test", group: "unit", suites: ["unit"] },
-  {
-    file: ".depot/workflows/preview-os.yml",
-    jobId: "e2e",
-    group: "preview",
-    suites: ["specs", "preview-e2e"],
-  },
-])("$file always finalizes and retains $group test telemetry", ({ file, jobId, group, suites }) => {
+  { file: ".depot/workflows/test.yml", jobId: "test", suite: "unit" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "e2e", suite: "preview-e2e" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs", suite: "specs" },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", suite: "preview-e2e" },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", suite: "specs" },
+])("$file $jobId always finalizes and retains $suite test telemetry", ({ file, jobId, suite }) => {
   const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
   const finalizer = steps.find((step) => step.run?.includes("scripts/ci/upload-test-telemetry.ts"));
   // Flake records have their own upload. Select the complete telemetry directory this
@@ -825,40 +824,45 @@ test.each([
     (step) =>
       step.uses === "actions/upload-artifact@v4" && step.with?.path === "test-results/ci-telemetry",
   );
+  // whatever the suite's outcome; a preview test job's once its suite started, since a job whose
+  // guard found no deployed preview has nothing to keep (preview-os-workflow.test.ts)
+  const always = expect.stringMatching(
+    /^always\(\)( && steps\.[a-z0-9-]+\.outcome != 'skipped')?$/u,
+  );
 
-  expect(finalizer, `${file} must normalize telemetry`).toMatchObject({ if: "always()" });
+  expect(finalizer, `${file} must normalize telemetry`).toMatchObject({ if: always });
   expect(finalizer?.run, `${file} must not send cancelled runs as test failures`).toContain(
     "cancelled() && '--cancelled'",
   );
-  expect(finalizer?.run, `${file} must write its suites' summaries`).toContain(
-    `--flake-suites ${group}`,
+  expect(finalizer?.run, `${file} must write its suite's summary`).toContain(
+    `--flake-suites ${suite}`,
   );
   expect(upload, `${file} must retain the raw telemetry and its manifest`).toMatchObject({
-    if: "always()",
+    if: always,
     with: expect.objectContaining({
       path: expect.stringContaining("test-results"),
       "if-no-files-found": "error",
     }),
   });
   expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
-  // Every suite's records (and the summary the finalizer wrote beside them) leave the job after
-  // the finalizer, whatever the suite's outcome.
-  for (const suite of suites) {
-    const records = steps.find(
-      (step) => step.with?.name === `flake-records-${suite}${attemptSuffix}`,
-    );
-    expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
-      if: "always()",
-      uses: "actions/upload-artifact@v4",
-    });
-    expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(records!));
-  }
+  // The suite's records (and the summary the finalizer wrote beside them) leave the job after the
+  // finalizer, whatever the suite's outcome.
+  const records = steps.find(
+    (step) => step.with?.name === `flake-records-${suite}${attemptSuffix}`,
+  );
+  expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
+    if: always,
+    uses: "actions/upload-artifact@v4",
+  });
+  expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(records!));
 });
 
 test.each([
   { file: ".depot/workflows/test.yml", jobId: "test" },
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs" },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e" },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs" },
 ])(
   "the $jobId job of $file names its evidence per job attempt and never overwrites it",
   ({ file, jobId }) => {
@@ -889,7 +893,9 @@ test.each([
 test.each([
   { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["e2e"] },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs", testSteps: ["specs"] },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["e2e"] },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", testSteps: ["specs"] },
 ])(
   "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2, deciding nothing and never failing unseen",
   ({ file, jobId, testSteps }) => {
@@ -902,10 +908,11 @@ test.each([
     const report = steps[index("scripts/ci/test-evidence-unreported.sh")];
 
     expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("r2");
-    // always, a cancelled job's folder saying so; bounded, so a hang cannot reach the job's timeout
+    // always, a cancelled job's folder saying so; bounded, so a hang cannot reach the job's timeout.
+    // A preview test job's once its suite started: one whose guard found no preview has no folder.
     expect(write).toMatchObject({
       id: "evidence-write",
-      if: "always()",
+      if: expect.stringMatching(/^always\(\)( && steps\.[a-z0-9-]+\.outcome != 'skipped')?$/u),
       "continue-on-error": true,
       "timeout-minutes": 2,
       run: "pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}",
@@ -1069,11 +1076,11 @@ test.for([
   },
   { file: ".depot/workflows/main-os-e2e.yml", results: `main-os-test-artifacts${attemptSuffix}` },
 ])(
-  "$file's e2e job keeps the browser evidence, whatever the suite's outcome",
+  "$file's Browser specs job keeps the browser evidence, whatever the suite's outcome",
   ({ file, results: name }) => {
-    const steps = loadWorkflow(file).jobs.e2e?.steps ?? [];
+    const steps = loadWorkflow(file).jobs.specs?.steps ?? [];
     const playwrightConfig = readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8");
-    const suite = steps.find((step) => step.run?.includes("pnpm preview e2e"));
+    const suite = steps.find((step) => step.run?.includes("pnpm preview specs"));
     const results = steps.find((step) => step.with?.name === name);
     const report = steps.find((step) => step.with?.name === "public-playwright-report");
 
@@ -1082,7 +1089,7 @@ test.for([
     expect(playwrightConfig).toContain("outputDir: testEvidencePaths.playwrightOutput");
     expect(playwrightConfig).toContain("outputFolder: testEvidencePaths.playwrightReport");
     expect(results).toMatchObject({
-      if: "always()",
+      if: expect.stringMatching(/^always\(\)/u),
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: testEvidencePaths.root }),
     });

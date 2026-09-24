@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { previewPaths } from "./preview-paths.ts";
 
 /** The parts of .depot/workflows/main-os-e2e.yml these tests read. */
 type MainWorkflow = {
@@ -12,6 +13,7 @@ type MainWorkflow = {
     string,
     {
       if?: string;
+      name?: string;
       needs?: string | string[];
       concurrency?: { group: string; "cancel-in-progress": boolean };
       steps?: Array<{
@@ -27,16 +29,12 @@ type MainWorkflow = {
 };
 
 const main = readWorkflow("main-os-e2e.yml") as MainWorkflow;
-const preview = readWorkflow("preview-os.yml") as MainWorkflow & {
-  on: { pull_request: { paths: string[] } };
-};
+const preview = readWorkflow("preview-os.yml") as MainWorkflow;
 
 test("runs on every main push a PR preview would run for, one run at a time, never cancelled", () => {
   expect(main.on.push?.branches).toEqual(["main"]);
   expect(main.on.push?.paths).toEqual(
-    expect.arrayContaining(
-      preview.on.pull_request.paths.filter((path) => !path.includes("preview-os.yml")),
-    ),
+    expect.arrayContaining(previewPaths.filter((path) => !path.includes("preview-os.yml"))),
   );
   // every started run reaches a verdict, and none redeploys the preview under another's e2e; Depot
   // keeps only the newest pending push
@@ -59,6 +57,7 @@ test("redeploys one preview, `main`, in place and tests it, never deleting it", 
   expect(main.env).toMatchObject({ PREVIEW_NAME: "main" });
   expect(runs("deploy")).toContain("doppler run -- pnpm preview deploy --settle 150");
   expect(runs("e2e")).toContain("doppler run -- pnpm preview e2e");
+  expect(runs("specs")).toContain("doppler run -- pnpm preview specs");
   const steps = Object.values(main.jobs).flatMap((job) => job.steps || []);
   // no step names another preview, and none deletes or resets it (a reset is a delete)
   expect(
@@ -87,14 +86,27 @@ test("first deletes the per-run `main-<sha>` previews the one preview replaced",
   );
 });
 
-test("pages on main's change of state, never for a run cancelled by hand", () => {
-  expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
-  expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e"]);
-  expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
+// The checks a main push shows are the ones a PR's preview shows: Deploy preview, E2E tests,
+// Browser specs, CI trace.
+test("names its deploy, test and trace jobs as Preview OS does, each suite in its own job after the deploy", () => {
+  for (const job of ["deploy", "e2e", "specs", "trace"])
+    expect(main.jobs[job]?.name).toBe(preview.jobs[job]?.name);
+  expect([main.jobs.e2e?.needs].flat()).toEqual(["deploy"]);
+  expect([main.jobs.specs?.needs].flat()).toEqual(["deploy"]);
 });
 
-// docs/ci-traces.md: main is traced as a PR preview is, and nothing that follows e2e waits for it.
-test("the CI trace covers the parent, deploy and e2e, beside alert", () => {
+test("pages on main's change of state, naming both suites' failing rows, never for a run cancelled by hand", () => {
+  expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
+  expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e", "specs"]);
+  expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
+  for (const job of ["e2e", "specs"])
+    expect(main.jobs[job]?.steps?.find((step) => step.id === "failing-rows")?.run).toBe(
+      "pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw",
+    );
+});
+
+// docs/ci-traces.md: main is traced as a PR preview is, and nothing that follows the suites waits for it.
+test("the CI trace covers the parent, deploy and both suites, beside alert", () => {
   expect(main.env).toMatchObject({
     BASH_ENV: "${{ github.workspace }}/scripts/ci/tracing/shell.sh",
     CI_TRACE_ENABLED: "1",
@@ -102,7 +114,13 @@ test("the CI trace covers the parent, deploy and e2e, beside alert", () => {
   expect(
     main.jobs.e2e?.steps?.find((step) => step.run === "doppler run -- pnpm preview e2e"),
   ).toMatchObject({ id: "e2e" });
-  expect(main.jobs.trace).toMatchObject({ needs: ["parent", "deploy", "e2e"], if: "always()" });
+  expect(
+    main.jobs.specs?.steps?.find((step) => step.run === "doppler run -- pnpm preview specs"),
+  ).toMatchObject({ id: "specs" });
+  expect(main.jobs.trace).toMatchObject({
+    needs: ["parent", "deploy", "e2e", "specs"],
+    if: "always()",
+  });
   const waitingForTrace = Object.entries(main.jobs).filter(([, job]) =>
     [job.needs].flat().includes("trace"),
   );

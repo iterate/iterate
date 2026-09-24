@@ -60,27 +60,27 @@ and the Playwright specs side by side in one step (`runE2eSuites` in
 
 ### When deploy, e2e and specs are separate jobs
 
-This PR does not split them; #3054 splits Preview OS into Deploy preview, E2E
-tests and Browser specs jobs. Once it lands, each test job is its own test
-run, with its own folder, `testRunId`, manifest, result and prefix in R2. The
-design stays; the workflows need:
+They are, since #3054: Preview OS and Main OS e2e run Deploy preview, then E2E
+tests and Browser specs as jobs of their own. Each test job is its own test
+run, with its own folder, `testRunId`, manifest, result and prefix in R2:
 
-- the finalizer's `TEST_TELEMETRY_EXPECTED_WORKSPACES`, today
-  `"iterate-root,os"` in one job, split: `os` for e2e, `iterate-root` for
-  specs;
-- the write and upload steps, and the flake-record uploads, in both jobs,
-  each with its own `TEST_EVIDENCE_STEPS`;
-- `runE2eSuites` run one suite at a time, each job calling it for its own,
-  and each writing `target.json` before it starts;
-- the step-order assertions in `scripts/ci/depot-workflows.test.ts` for both
-  jobs, and `public-playwright-report` moved to the specs job.
+- its finalizer expects its own workspace in
+  `TEST_TELEMETRY_EXPECTED_WORKSPACES`: `os` for E2E tests, `iterate-root`
+  for Browser specs;
+- the write and upload steps, and its flake-record upload, run in both jobs,
+  each with its own `TEST_EVIDENCE_STEPS` (`e2e=…`, `specs=…`); on a PR, only
+  once the suite started, since a job whose deploy failed has nothing to keep;
+- `runSuite` (`apps/os/scripts/preview.ts`) runs one suite per job, each
+  writing `target.json` before it starts, with the client apps for the specs;
+- `public-playwright-report` comes from the Browser specs job.
 
 Each job pays its own queue and setup (checkout, dependency reconcile,
 Doppler, and Chromium for the specs), in parallel with the other; the CI
 trace's Setup phase per job is where to measure what that costs.
 
-A run against a preview that is already deployed (Preview OS's `action=e2e`
-dispatch, from `depot ci run` or the dashboard) is a test run like any other.
+A run against a preview that is already deployed (Preview OS's `action=test`,
+`e2e` or `specs` dispatch, from `depot ci dispatch` or the dashboard) is a test
+run like any other.
 Its folder says both what it tested and with which tests: `target.json` names
 the preview and the deployment its `/version` answered with just before the
 suites started, and `source` names the tree the tests came from. They can
@@ -285,7 +285,7 @@ commit, and neither left the checkout dirty.
   which is why the workflow passes the steps' outcomes in.
 - `completeness` is the finalizer's own check (`ci-telemetry/manifest.json`,
   `scripts/ci/upload-test-telemetry.ts`), copied, not recomputed.
-- `target` is `target.json`, in the e2e jobs only
+- `target` is `target.json`, in the E2E tests and Browser specs jobs only
   ([above](#when-deploy-e2e-and-specs-are-separate-jobs)). Only the OS
   preview answers with its deployment (`/version`); the client apps answer
   `/healthz` with `ok`, so their deployments are _next_.

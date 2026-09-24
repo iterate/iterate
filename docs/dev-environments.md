@@ -443,18 +443,20 @@ worker (next story).
 
 ### Story 1: CI previews my PR
 
-Opening or pushing a PR that touches preview-relevant paths (the Preview OS
-workflow's `paths:` list; see [Depot CI](depot-ci.md)) runs the **Preview OS**
-workflow. **deploy** builds and deploys the platform preview and all five
-clients, then writes the URL and the operations into the PR body's managed
-section. **e2e** then runs as its own job against that deployment, and only
-once the deploy succeeded: the Vitest e2e suite and the Playwright specs side
-by side (`pnpm preview e2e`). Every push reruns both; a run with no successful
-deploy runs no e2e rather than reporting green. The section opens with a status
-line (`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job
-and when: `deploying`, then `deployed` or `deploy failed` (with the error's
-tail, and the links below marked as the last good deploy's), then `e2e passed`
-or `e2e failed` (with the failed suites). Each job rewrites only that line.
+Every push to a PR runs the **Preview OS** workflow. When the PR touches
+preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
+[Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** builds and
+deploys the platform preview and all five clients, then writes the URL and the
+operations into the PR body's managed section. **E2E tests** (the Vitest e2e
+suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
+`pnpm preview specs`) then run side by side against that deployment, each its
+own job and required check. A deploy that did not succeed turns both red rather
+than letting them report green. The section opens with a status line
+(`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job and
+when: `deploying`, then `deployed` or `deploy failed` (with the error's tail,
+and the links below marked as the last good deploy's). Under it each suite's
+job writes its own line, `E2E tests` or `Browser specs`, `passed` or `failed`;
+a new deploy clears them. Each job rewrites only its own line.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes the
 preview, its Artifacts namespace, KV namespaces and R2 bucket (and any D1 an
@@ -519,8 +521,10 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --input pull-request-number=1234 --input action=reset
 ```
 
-`action` is `deploy | reset | e2e`; `apps` (`all | auto |
-none`) chooses the clients deployed on top. Delete and the nightly sweep are
+`action` is `deploy | reset | test | e2e | specs` (`test`, `e2e` and `specs`
+run the suites against the preview as it is deployed:
+[Depot CI](depot-ci.md#run-the-suites-against-a-deployed-preview)); `apps`
+(`all | auto | none`) chooses the clients deployed on top. Delete and the nightly sweep are
 workflows of their own: dispatch `preview-delete.yml` with
 `--input pull-request-number=1234` to delete the preview, `preview-sweep.yml`
 to sweep now.

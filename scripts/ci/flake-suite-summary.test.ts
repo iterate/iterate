@@ -1,16 +1,16 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
-import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
+import { writeFlakeSuiteSummary } from "./flake-suite-summary.ts";
 
 test("a complete clean browser run publishes a summary even without flake records", async () => {
   using output = temporaryDirectory();
-  await writeFlakeSuiteSummaries({
+  await writeFlakeSuiteSummary({
     directory: output.path,
-    group: "preview",
+    suite: "specs",
     artifacts: [browserResult()],
     expectedWorkspaces: [],
     cancelled: false,
@@ -25,12 +25,7 @@ test("a complete clean browser run publishes a summary even without flake record
     failedCount: 0,
     diagnostics: [],
   });
-  expect(
-    JSON.parse(readFileSync(join(output.path, "preview-e2e/suite-summary.json"), "utf8")),
-  ).toMatchObject({
-    status: "incomplete",
-    testCount: 0,
-  });
+  expect(existsSync(join(output.path, "preview-e2e"))).toBe(false);
 });
 
 test("per-test evidence uses the retry record's identity and never counts retries or skips as clean", async () => {
@@ -44,9 +39,9 @@ test("per-test evidence uses the retry record's identity and never counts retrie
     { ...base, leafName: "skip", state: "skipped", expectedState: "skipped" },
     { ...base, leafName: "expected failure", expectedState: "failed" },
   ];
-  await writeFlakeSuiteSummaries({
+  await writeFlakeSuiteSummary({
     directory: output.path,
-    group: "preview",
+    suite: "specs",
     artifacts: [artifact],
     expectedWorkspaces: [],
     cancelled: false,
@@ -90,9 +85,9 @@ test("each row carries what the dashboard's Cost section reads", async () => {
       errors: [{ message: "x".repeat(400) }],
     },
   ];
-  await writeFlakeSuiteSummaries({
+  await writeFlakeSuiteSummary({
     directory: output.path,
-    group: "preview",
+    suite: "specs",
     artifacts: [artifact],
     expectedWorkspaces: [],
     cancelled: false,
@@ -123,9 +118,9 @@ test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"
     if (failure === "interrupted") artifact.run.status = "interrupted";
     if (failure === "wrong commit") artifact.ci.headSha = "old";
     if (failure === "unexecuted test") artifact.tests[0]!.state = "skipped";
-    await writeFlakeSuiteSummaries({
+    await writeFlakeSuiteSummary({
       directory: output.path,
-      group: "unit",
+      suite: "unit",
       artifacts: [artifact],
       expectedWorkspaces: failure === "missing workspace" ? ["another-package"] : [],
       cancelled: false,
@@ -140,9 +135,11 @@ test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"
   },
 );
 
-test.each(["specs", "preview-e2e"])(
-  "missing %s results leave the other suite complete",
-  async (missing) => {
+// Each of the two preview test jobs summarizes its own suite: the other suite's result, which a
+// job never has, cannot stand in for its own.
+test.each(["specs", "preview-e2e"] as const)(
+  "the %s summary counts only its own runner's result",
+  async (suite) => {
     using output = temporaryDirectory();
     const browser = browserResult();
     const backend = TestTelemetryArtifact.parse({
@@ -151,18 +148,21 @@ test.each(["specs", "preview-e2e"])(
       producer: "vitest-retry-telemetry-reporter",
       context: { ...browser.context, framework: "vitest", workspace: "os" },
     });
-    await writeFlakeSuiteSummaries({
-      directory: output.path,
-      group: "preview",
-      artifacts: [missing === "specs" ? backend : browser],
-      expectedWorkspaces: [],
-      cancelled: false,
-      headSha: "abc123",
-    });
-    for (const suite of ["specs", "preview-e2e"]) {
+    for (const artifacts of [[browser, backend], [suite === "specs" ? backend : browser]]) {
+      await writeFlakeSuiteSummary({
+        directory: output.path,
+        suite,
+        artifacts,
+        expectedWorkspaces: [],
+        cancelled: false,
+        headSha: "abc123",
+      });
       expect(
         JSON.parse(readFileSync(join(output.path, suite, "suite-summary.json"), "utf8")),
-      ).toMatchObject({ status: suite === missing ? "incomplete" : "complete" });
+      ).toMatchObject({
+        status: artifacts.length === 2 ? "complete" : "incomplete",
+        testCount: artifacts.length === 2 ? 1 : 0,
+      });
     }
   },
 );
@@ -188,9 +188,9 @@ test.each([
         tags: ["slow"],
       })),
     ];
-    await writeFlakeSuiteSummaries({
+    await writeFlakeSuiteSummary({
       directory: output.path,
-      group: "preview",
+      suite: "preview-e2e",
       artifacts: [artifact],
       expectedWorkspaces: [],
       cancelled: false,

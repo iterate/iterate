@@ -10,7 +10,7 @@ import {
   analyzeTestTelemetryCompleteness,
   unitTestWorkspaces,
 } from "./test-telemetry-completeness.ts";
-import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
+import { writeFlakeSuiteSummary, type FlakeSuite } from "./flake-suite-summary.ts";
 
 export async function loadTestTelemetryArtifacts(rawDirectory: string) {
   const files = (await filesBelow(rawDirectory)).filter((file) => file.endsWith(".json"));
@@ -28,17 +28,17 @@ export async function loadTestTelemetryArtifacts(rawDirectory: string) {
 }
 
 /**
- * The CI job's telemetry finalizer (`--flake-suites unit|preview`, an `if: always()` step after the
- * test runners). It checks that every expected runner left a complete artifact
- * (test-telemetry-completeness.ts), writes `manifest.json` beside the raw artifacts, and writes each
- * suite's `suite-summary.json` for the flake dashboard. It fails the job on missing, incomplete or
- * foreign evidence, after writing both, so the upload step that follows keeps what there is.
+ * The CI job's telemetry finalizer (`--flake-suites unit|specs|preview-e2e`, an `if: always()` step
+ * after the test runners). It checks that every expected runner left a complete artifact
+ * (test-telemetry-completeness.ts), writes `manifest.json` beside the raw artifacts, and writes the
+ * job's suite's `suite-summary.json` for the flake dashboard. It fails the job on missing, incomplete
+ * or foreign evidence, after writing both, so the upload step that follows keeps what there is.
  */
 export async function finalizeTestTelemetry(options: {
   artifactRoot: string;
   cancelled?: boolean;
   expectedWorkspaces?: readonly string[];
-  flakeSuites?: "unit" | "preview";
+  flakeSuites?: FlakeSuite;
   headSha?: string;
 }) {
   const artifactRoot = resolve(options.artifactRoot);
@@ -78,9 +78,9 @@ export async function finalizeTestTelemetry(options: {
     const { headSha } = options;
     if (!headSha)
       throw new Error("TEST_TELEMETRY_HEAD_SHA is required for full flake suite summaries");
-    await writeFlakeSuiteSummaries({
+    await writeFlakeSuiteSummary({
       directory: resolve(artifactRoot, "../flake-records"),
-      group: options.flakeSuites,
+      suite: options.flakeSuites,
       artifacts: loaded.map(({ artifact }) => artifact),
       expectedWorkspaces: [...expectedWorkspaces],
       cancelled: options.cancelled || false,
@@ -176,12 +176,12 @@ function duplicateValues(values: readonly string[]) {
 
 if (isMainModule(import.meta.url)) {
   const flakeSuitesIndex = process.argv.indexOf("--flake-suites");
-  let flakeSuites: "unit" | "preview" | undefined;
+  let flakeSuites: FlakeSuite | undefined;
   if (flakeSuitesIndex !== -1) {
-    const group = process.argv[flakeSuitesIndex + 1];
-    if (group !== "unit" && group !== "preview")
-      throw new Error("--flake-suites requires unit or preview");
-    flakeSuites = group;
+    const suite = process.argv[flakeSuitesIndex + 1];
+    if (suite !== "unit" && suite !== "specs" && suite !== "preview-e2e")
+      throw new Error("--flake-suites requires unit, specs or preview-e2e");
+    flakeSuites = suite;
   }
   const rootFlagIndex = process.argv.indexOf("--artifact-root");
   const artifactRoot =
@@ -190,7 +190,7 @@ if (isMainModule(import.meta.url)) {
     throw new Error("--artifact-root requires a path");
   }
   // `--expect-unit-workspaces`: the checked-out tree's test workspaces (the Test workflow);
-  // otherwise the list the workflow names (the preview jobs' `iterate-root,os`).
+  // otherwise the list the workflow names (a preview test job's `iterate-root` or `os`).
   const expectedWorkspaces = process.argv.includes("--expect-unit-workspaces")
     ? unitTestWorkspaces(process.cwd())
     : (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")

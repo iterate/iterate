@@ -3,12 +3,12 @@
 // changes none of its code skips it and finishes as soon as its slowest other row does. The rows
 // still run on a PR that changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, on every
 // main push (Main OS e2e) and every 2 hours against main (os-slow-e2e.yml). The pure half;
-// scripts/preview.ts `runE2e` reads the pull request and runs the suite.
+// scripts/preview.ts `runSuite` reads the pull request and runs the suite.
 import { SLOW_ROW_PATHS } from "@iterate-com/shared/test-support/e2e-policy";
 import { z } from "zod";
 
-/** run: every row. skip: every row but those tagged `slow`. only: those alone, without the
- *  Playwright specs. `--slow-rows` and E2E_SLOW_ROWS ask for one; unset, `chooseSlowRows` decides. */
+/** run: every row. skip: every row but those tagged `slow`. only: those alone. `--slow-rows` and
+ *  E2E_SLOW_ROWS ask for one; unset, `chooseSlowRows` decides. */
 export const SlowRows = z.enum(["run", "skip", "only"]);
 export type SlowRows = z.infer<typeof SlowRows>;
 
