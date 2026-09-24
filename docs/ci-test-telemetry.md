@@ -12,6 +12,10 @@ Two things, kept apart on purpose:
   [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds.
   Nothing from here goes to PostHog.
 
+A draft adds a third thing, off until its bucket exists:
+[test results as Parquet in R2](test-results-parquet.md), one file per job
+attempt, built from the same artifacts.
+
 Per-test events were over 70% of the PostHog project's ingestion (millions a
 month), which is why #2494 cut CI delivery to zero. The workflow and job events
 are a few thousand a day.

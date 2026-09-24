@@ -113,6 +113,9 @@ concurrency:
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # DRAFT, off (docs/test-results-parquet.md): `upload` turns on the step that writes each job
+  # attempt's per-test results as one Parquet file to R2. Needs the bucket and its keys first.
+  TEST_RESULTS_PARQUET: "off"
   PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull-request-number }}
   ACTION: ${{ inputs.action || 'deploy' }}
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
@@ -257,6 +260,15 @@ jobs:
         env:
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+      # DRAFT, off until TEST_RESULTS_PARQUET is `upload` (docs/test-results-parquet.md): this job
+      # attempt's per-test results as one Parquet file, beside the raw artifacts (so the telemetry
+      # upload keeps it) and in R2. It never decides the job: an R2 failure fails only this step.
+      - name: Write test results as Parquet
+        if: ${{ !cancelled() && env.TEST_RESULTS_PARQUET == 'upload' }}
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-results-parquet.ts --artifact-root test-results/ci-telemetry --flake-records test-results/flake-records --upload
       # One artifact per suite and job attempt, pulled by the flake dashboard's writer.
       - name: Upload specs flake records
         if: always()
