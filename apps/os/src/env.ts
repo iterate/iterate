@@ -14,8 +14,10 @@ export interface Env extends DurableObjectEnv {
    *  strongly-consistent index of users, identities, organizations, memberships and projects, and
    *  the OAuth provider's grants (control-plane/oauth-grants.ts). */
   CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject>;
-  /** The OAuth provider's tokens and DCR clients, and the sign-in challenges. Its grants live in the
-   *  control plane instead: the provider reads this binding through oauth-store.ts. */
+  /** The OAuth provider's tokens and DCR clients, the sign-in challenges, the personal access
+   *  tokens' index and the control plane's last-known copies (control-plane/last-known-project.ts).
+   *  The provider's grants live in the control plane instead: it reads this binding through
+   *  oauth-store.ts. */
   OAUTH_KV: KVNamespace;
   /** Static assets for the Start client and the consent page. The Worker handles platform requests
    *  first, then asks this binding for public files (issuer-pages.ts). */

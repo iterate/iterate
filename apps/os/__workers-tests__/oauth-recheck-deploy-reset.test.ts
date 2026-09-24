@@ -51,14 +51,15 @@ test("a live session rides out a deploy's Durable Object reset, and a control-pl
         }),
       ),
     )
-    // then what an outage does to it: the edge's bounded read gives up (control-plane/edge.ts),
-    // which no transport flag marks — the control plane is down, not the session
+    // then what an outage does to it: the read fails on the platform's side
+    // (control-plane/edge.ts), which no transport flag marks — the control plane is down, not the
+    // session
     .mockImplementationOnce(() =>
       Promise.reject(
         new ControlPlaneUnavailableError({
           method: "accessibleTo",
-          waitedMs: 3_000,
-          boundMs: 3_000,
+          waitedMs: 12_000,
+          cause: new Error("internal error; reference = workers-test"),
         }),
       ),
     );
@@ -90,7 +91,7 @@ test("a live session rides out a deploy's Durable Object reset, and a control-pl
     name: "live-authorization",
     grantId: flow.token!.access_token.split(":")[1],
     message:
-      "ControlPlaneUnavailableError: The control plane did not answer accessibleTo within 3000 ms",
+      "ControlPlaneUnavailableError: The control plane failed accessibleTo: internal error; reference = workers-test",
   });
   expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
   await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers

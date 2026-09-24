@@ -63,10 +63,10 @@ function withoutBasePath(request: Request, basePath: string): Request {
 
 /** A project host's answer when a control-plane read it needed failed on the platform's side
  *  (ControlPlaneUnavailableError, edge.ts): its admission's, with no last-known copy to stand in,
- *  or a signed-in visitor's access, which has none. 503 at once, logged as
+ *  or a signed-in visitor's access, which has none. A 503, logged as
  *  `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages on a burst,
- *  and on the 5xx); on 2026-09-24 each visitor instead waited 12–15 s for an exception. Any other
- *  error is rethrown. */
+ *  and on the 5xx), where on 2026-09-24 each visitor met an exception. Any other error is
+ *  rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
   if (!(error instanceof ControlPlaneUnavailableError)) throw error;
   console.warn({
@@ -205,14 +205,14 @@ export default {
     // else any label under the wildcard would mint durable storage from the public internet. The
     // host's address (a static rule, else a hostname a project added: one catalog read), then one
     // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
-    // host's label (a slug, an id would do too) to the project's id; an unknown label is 421. The
-    // reads are bounded (edge.ts); when one fails, this data center's last-known copy of its answer
-    // stands in (last-known-project.ts), and a host with none answers 503 at once.
+    // host's label (a slug, an id would do too) to the project's id; an unknown label is 421. When
+    // a read fails or has not answered in 3 s, the control plane's last-known copy of its answer
+    // stands in (last-known-project.ts); a host with none waits, and answers 503 if it fails.
     const admitted = await admitProjectHost(controlPlane, {
       config: appConfig,
       url,
       platformOrigin,
-      ctx,
+      kv: env.OAUTH_KV,
     }).catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
     if (admitted instanceof Response) return admitted;
     if (admitted) {
@@ -231,9 +231,9 @@ export default {
             event: "control-plane.platform-failure-stale-project",
             name: url.hostname,
             project: projectHost.project,
-            method: stale.error.method,
-            waitedMs: stale.error.waitedMs,
-            message: stale.error.message,
+            method: stale.method,
+            waitedMs: stale.waitedMs,
+            message: stale.message,
             copies: stale.copies,
           });
       };
@@ -272,9 +272,10 @@ export default {
           headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
         });
       // A person's access has no stand-in: a membership read the control plane fails is a 503, and
-      // once this request's admission found the control plane down, it is one at once — a second
-      // bounded wait would only end the same way.
-      if (authorization && stale) return controlPlaneUnavailable(stale.error, url.hostname);
+      // once one of this request's admission reads failed, it is one at once — a second wait would
+      // only end the same way. An admission read that was only slow is waited out here.
+      if (authorization && stale?.failure)
+        return controlPlaneUnavailable(stale.failure, url.hostname);
       const reachesProject = authorization
         ? await controlPlane
             .reachesProject(authorization.reach, projectId)

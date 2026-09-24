@@ -10,7 +10,7 @@ test.each([
     "oauth.deploy-reset-grant-store-retry",
     "Error: Durable Object reset because its code was updated.",
   ],
-  // any other cut is the platform's failure, which the edge's bounded read names (control-plane/edge.ts)
+  // any other cut is the platform's failure, which the edge's read names (control-plane/edge.ts)
   [
     "Network connection lost.",
     "oauth.platform-failure-grant-store-retry",
