@@ -1,11 +1,12 @@
 // src/control-plane/edge.ts — THE CONTROL PLANE AS THE EDGE HOLDS IT: every question the stateless
 // worker asks — which project is this slug, may this session reach it, who is this email — and every
 // command it relays, each ONE call on the `CONTROL_PLANE` singleton Durable Object (durable-object.ts),
-// reached by binding (`getByName("global")`). Two memos per isolate: a project's id, slug and
-// organization never change, so a hit is kept for the isolate's life (a miss never is); a person's
-// access is kept five seconds — dropped at once here for the person a command was made by or for —
-// and a refusal is never memoized: a project not in a memoized access set is re-read once before it
-// is refused, so a creation is reachable at once. A READ that fails on the platform's side throws
+// reached by binding (`getByName("global")`). Memos per isolate: a project's id, slug and
+// organization never change, so a hit is kept for the isolate's life, and a miss only by a project
+// host's admission, five seconds (`getProjectKeepingMisses`); a person's access is kept five
+// seconds — dropped at once here for the person a command was made by or for — and a refusal is
+// never memoized: a project not in a memoized access set is re-read once before it is refused, so
+// a creation is reachable at once. A READ that fails on the platform's side throws
 // ControlPlaneUnavailableError, which a project host's admission models (last-known-project.ts,
 // worker.ts).
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
@@ -62,10 +63,18 @@ export class ControlPlaneUnavailableError extends Error {
 }
 
 const projectMemo = new Map<string, ProjectRecord>();
-/** A project's row, kept under its id and its slug. */
+/** The refs a project host's admission found no project for, and when (`getProjectKeepingMisses`),
+ *  oldest first: each is deleted before it is set again, so a sweep from the front stops at the
+ *  first one still kept, and the map holds only what came in the last `MISS_KEPT_MS` — however many
+ *  labels a scanner makes up. */
+const missMemo = new Map<string, number>();
+const MISS_KEPT_MS = 5_000;
+/** A project's row, kept under its id and its slug; a miss kept under either is forgotten. */
 const memoize = (project: ProjectRecord) => {
-  projectMemo.set(project.id, project);
-  projectMemo.set(project.slug, project);
+  for (const ref of [project.id, project.slug]) {
+    projectMemo.set(ref, project);
+    missMemo.delete(ref);
+  }
 };
 /** A host's address under projects' own hostnames, hit or miss, kept thirty seconds: a removed
  *  hostname stops routing within that (Cloudflare stops sending it sooner, the custom hostname
@@ -134,6 +143,32 @@ export class ControlPlane {
     if (memoized) return memoized;
     const project = await this.#read<ProjectRecord | null>("project", ref);
     if (project) memoize(project);
+    return project;
+  }
+
+  /** `getProject` for a project host's admission (last-known-project.ts), whose ref is any label
+   *  under the wildcard, anyone's to ask for: a scanner sends a few hundred paths to one unknown
+   *  label within seconds. So here a MISS is kept too, five seconds per isolate: a burst reads once,
+   *  plus the reads already in flight when the first answers. A project created meanwhile is served
+   *  on the isolate that created it at once (`createProject` memoizes its row, even while a read
+   *  that missed it is in flight) and on any other within those five seconds. Every other caller
+   *  reads a miss again: its answer is a refusal, which a creation must lift at once. The answer is
+   *  kept, never the read in flight: a request awaiting another's read hangs when that request
+   *  ends first, its I/O cancelled with it
+   *  (https://developers.cloudflare.com/workers/observability/errors/). */
+  async getProjectKeepingMisses(ref: string): Promise<ProjectRecord | null> {
+    const now = Date.now();
+    for (const [missed, at] of missMemo) {
+      if (now - at < MISS_KEPT_MS) break;
+      missMemo.delete(missed);
+    }
+    const missedAt = missMemo.get(ref);
+    if (missedAt && now - missedAt < MISS_KEPT_MS) return null;
+    const project = await this.getProject(ref);
+    if (!project && !projectMemo.has(ref)) {
+      missMemo.delete(ref);
+      missMemo.set(ref, Date.now());
+    }
     return project;
   }
 

@@ -578,24 +578,36 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ),
   };
 
-  /** The control plane as this context reads it: its own project's row (slug, organization). */
+  /** The control plane as this context reads it: its own project's slug, once (`#projectSlug`). */
   readonly #controlPlane = new ControlPlane(this.env.CONTROL_PLANE);
+
+  /** This context's project's slug; null for a global context (a user's, an organization's). A
+   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates or
+   *  deletes one, and an erase retires this storage with the catalog — so the control plane's
+   *  answer is kept in this context's own storage: read once in its life, not once per isolate (a
+   *  config worker asks `whoami` on every request). */
+  async #projectSlug() {
+    const { projectId } = this.#durableObjectAddress;
+    if (projectId === GLOBAL_PROJECT_ID) return null;
+    const kept = this.ctx.storage.kv.get<string>("project-slug");
+    if (kept) return kept;
+    const project = await this.#controlPlane.getProject(projectId);
+    if (!project) return null;
+    this.ctx.storage.kv.put("project-slug", project.slug);
+    return project.slug;
+  }
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
     projectInfo: async () => {
-      if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID) return {};
-      // the control plane's row (control-plane/edge.ts, memoized per isolate: a project's slug never changes)
-      const project = await this.#controlPlane.getProject(this.#durableObjectAddress.projectId);
-      if (!project) return {};
+      const slug = await this.#projectSlug();
+      if (!slug) return {};
       // the apex URL, when the caller carries the platform origin to compose it with
       const platformOrigin = this.#platformOrigin;
       const url = platformOrigin
-        ? projectUrlOf(this.#appConfig.urls.ingressRouting, platformOrigin, {
-            project: project.slug,
-          })
+        ? projectUrlOf(this.#appConfig.urls.ingressRouting, platformOrigin, { project: slug })
         : null;
-      return { projectSlug: project.slug, ...(url && { projectUrl: url.href }) };
+      return { projectSlug: slug, ...(url && { projectUrl: url.href }) };
     },
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
@@ -613,12 +625,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         );
       // the URL carries the project's slug (the edge admits a project by it); the claim carries
       // the id — a global context (a user's, an organization's) has no URL
-      const project = await this.#controlPlane.getProject(input.project);
-      if (!project)
+      const slug =
+        input.project === this.#durableObjectAddress.projectId && (await this.#projectSlug());
+      if (!slug)
         throw new Error("files: only a project's context can sign a file URL — it has the host");
       return signedFileUrl({
         ...input,
-        host: project.slug,
+        host: slug,
         secret: await sessionSigningSecretOf(this.#appConfig),
         routing: this.#appConfig.urls.ingressRouting,
         platformOrigin,
