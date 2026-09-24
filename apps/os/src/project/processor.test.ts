@@ -1,11 +1,11 @@
 // src/project/processor.test.ts — the ProjectProcessor's executable spec: the reduce as declarative
-// `{ events → state }` rows (stream/test-support.ts `reduceProcessor`) — the project's own creation
+// `{ events → state }` rows (iterate/stream/test-support `reduceProcessor`) — the project's own creation
 // and the catalog folded from cross-posted birth certificates. The saga — `session.projects.create`
 // landing the request, the processor landing the certificate on `/` — is pinned end to end in
 // e2e/session.e2e.test.ts.
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { ProjectProcessor } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
 

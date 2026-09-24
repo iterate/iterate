@@ -1,10 +1,10 @@
 // src/client/presence/processor.test.ts — the PresenceProcessor's reduce, declarative `{ events →
-// state }` rows on the shared harness (stream/test-support.ts `reduceProcessor`). The reduce folds
+// state }` rows on the shared harness (iterate/stream/test-support `reduceProcessor`). The reduce folds
 // durable `tick`s into `ticks`; the ephemeral `poke` is deliberately NOT reduced (it drives a runtime
 // field, `#lastPokeMs`, that resets on eviction and never re-reduces).
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../../stream/test-support.ts";
+import { reduceProcessor } from "iterate/stream/test-support";
 import { PresenceProcessor } from "./processor.ts";
 
 const rows: { name: string; events: { type: string; payload?: unknown }[]; ticks: number }[] = [

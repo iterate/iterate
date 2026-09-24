@@ -20,7 +20,7 @@ export class AccountProcessor extends StreamProcessor<
     event,
     state,
   }: ReduceArgs<AccountState, ConsumedEvent<typeof AccountContract>>): AccountState | undefined {
-    // Every fact folded here is the platform's to write (`source.platform`, principal.ts
+    // Every fact folded here is the platform's to write (`source.platform`, caller.ts
     // `Caller.platform`): the person can append any type to their own context, and that one stays on
     // the log, attributed to them, and changes nothing.
     if (event.source?.platform !== true) return undefined;

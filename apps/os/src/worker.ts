@@ -6,7 +6,8 @@
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
-import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
+import { ITX_GRANT_HEADER } from "./caller.ts";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues } from "iterate/lib";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";

@@ -33,7 +33,7 @@
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
-import type { Caller } from "iterate/principal";
+import type { Caller } from "../caller.ts";
 import {
   codedError,
   errorCode,
@@ -42,11 +42,9 @@ import {
   resolveContextPath,
 } from "iterate/lib";
 import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/api";
+import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
 import {
-  callOn,
   InvokeHandle,
-  walkSteps,
-  awaitAnswerReleasedIfRejected,
   normalizedItxExpression,
   containsItxExpressionHole,
   isItxExpressionHole,

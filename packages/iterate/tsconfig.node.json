@@ -1,11 +1,13 @@
 {
-  "files": ["src/node.ts"],
+  // The Node entries' declarations: `iterate/node` and `iterate/stream/test-support` (node:sqlite).
+  // The Workers types ride along because test-support types a Durable Object's `sql` (SqlStorageValue).
+  "files": ["src/node.ts", "src/stream/test-support.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["node"],
+    "types": ["node", "@cloudflare/workers-types/experimental"],
     "strict": true,
     "declaration": true,
     "emitDeclarationOnly": true,

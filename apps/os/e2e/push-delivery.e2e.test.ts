@@ -1,7 +1,7 @@
 // push-delivery.e2e.test.ts — PUSH delivery: a live callback (`subscribe({ target: fn })`, a stub lent
 // to `itx.rpcStubs` under `subscription:<name>`) OWNS ITS PROGRESS, so the one delivery loop pushes it
 // `(events, { after, through })` fire-and-forget — no cursor row, no retry, no ack. (`consumes` is the
-// ONE filter rule, consumesEvent — src/stream/processor.test.ts; the pins that read the worker's
+// ONE filter rule, consumesEvent — packages/iterate/src/stream/processor.test.ts; the pins that read the worker's
 // console are push-delivery-no-dropped-warns.e2e, which owns a worker of its own.) Pins:
 //   • delivered ranges CHAIN across a consumes-filtered quiet gap: the misses produce no empty sends and
 //     the next range starts EXACTLY where the last ended (a client heals a real gap with `readEvents`)

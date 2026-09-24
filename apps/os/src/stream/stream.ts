@@ -22,7 +22,7 @@
 
 import { codedError, errorCode, reportIssue } from "iterate/lib";
 import type { ItxExpressionInput } from "iterate/expression";
-import type { Caller } from "iterate/principal";
+import type { Caller } from "../caller.ts";
 import type { StreamPage, WaitForEventFilter } from "iterate/api";
 import {
   idempotencyConflictMessage,
@@ -597,7 +597,7 @@ export class Stream {
 // ── stream storage ── THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
 // over the ONE platform handle — `ctx.storage.sql` and `transactionSync`. Workerd's kv
 // is itself a SQLite table, so the stream keeps none of its own: the whole interface is SQL, and a
-// node:sqlite stand-in satisfies it in a screen (test-support.ts `nodeSqliteDurableObjectStorage`).
+// node:sqlite stand-in satisfies it in a screen (iterate/stream/test-support `nodeSqliteDurableObjectStorage`).
 //
 //   events                offset · body · idempotency_key   one row per durable event
 //   event_chunks          offset · chunk_index · chunk      a body over EVENT_CHUNK_SIZE, sliced —

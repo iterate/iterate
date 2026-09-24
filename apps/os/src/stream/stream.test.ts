@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // stream.test.ts — the `Stream` class (stream/stream.ts) over node:sqlite storage
-// (test-support.ts's nodeSqliteDurableObjectStorage — the same SQL the DO's storage runs; nothing here needs
+// (iterate/stream/test-support's nodeSqliteDurableObjectStorage — the same SQL the DO's storage runs; nothing here needs
 // workerd): waitForEvent's wait/settle/timeout mechanics, what construction writes, the wake record
 // (`appendBirthRecord()` + `appendWakeRecord()` — explicit calls here; in production the DO's
 // first act), the pause check, the zero-write ephemeral contract and the step-2 refusals. Every
@@ -9,7 +9,7 @@
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import type { StreamEvent, SqlStorageHandle } from "iterate/stream/processor";
-import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
 const CONFIGURED = "events.iterate.com/stream/subscription-configured";

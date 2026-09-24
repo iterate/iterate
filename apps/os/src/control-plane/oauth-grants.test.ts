@@ -3,7 +3,7 @@
 // provider relies on them. The provider's own flows over it run on the worker
 // (__workers-tests__/oauth.test.ts).
 import { expect, test } from "vitest";
-import { nodeSqliteDurableObjectStorage } from "../stream/test-support.ts";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { OAuthGrantTable } from "./oauth-grants.ts";
 
 const NOW = 1_790_000_000;

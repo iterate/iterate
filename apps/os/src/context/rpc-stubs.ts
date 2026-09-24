@@ -10,9 +10,9 @@ import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
-  ITX_PRINCIPAL_HEADER,
   type Caller,
-} from "iterate/principal";
+} from "../caller.ts";
+import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";

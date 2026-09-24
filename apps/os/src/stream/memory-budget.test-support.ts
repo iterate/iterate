@@ -19,7 +19,7 @@
 
 import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
-import { FacetHandle } from "iterate/expression";
+import { FacetHandle } from "../context/dispatch.ts";
 import { errorCode } from "iterate/lib";
 import {
   type ScannedRange,
@@ -30,7 +30,7 @@ import {
   ReduceCheckpointTable,
 } from "iterate/stream/processor";
 import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
-import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
+import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 

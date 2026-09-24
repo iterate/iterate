@@ -1,7 +1,7 @@
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
-import { errorCode, sameOriginPath } from "iterate/lib";
-import { cookieValueOf, signClaims, verifyClaims } from "iterate/principal";
+import { cookieValueOf, errorCode, sameOriginPath } from "iterate/lib";
+import { signClaims, verifyClaims } from "./caller.ts";
 import type { Env } from "./env.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";

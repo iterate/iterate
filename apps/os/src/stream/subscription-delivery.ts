@@ -33,13 +33,8 @@
 // next delivered range. A cursor target receives ephemerals too: its reads merge in the stream's
 // recent-ephemerals ring (stream.ts), so it sees whatever the ring still holds when its loop reads.
 
-import {
-  type ItxExpression,
-  callOn,
-  walkSteps,
-  FacetHandle,
-  RpcStubHandle,
-} from "iterate/expression";
+import type { ItxExpression } from "iterate/expression";
+import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
 import { errorCode, reportIssue, withTimeout } from "iterate/lib";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
@@ -705,7 +700,7 @@ export class SubscriptionDelivery {
         ? (await walkSteps({ value: head, receiver: undefined }, [[method, events, range]])).value
         : await callOn(head, undefined, [events, range]);
       // A PIPELINED call answers with a branded promise the step walk hands back UNAWAITED
-      // (expression.ts): settle it HERE, before the dispose — otherwise a sibling hop's refusal
+      // (context/dispatch.ts): settle it HERE, before the dispose — otherwise a sibling hop's refusal
       // (FORBIDDEN from the target context) or a hang was disposed unseen and the batch acked as
       // delivered. The settled value is what pins the callee, so that is what is released.
       const result = await walked;

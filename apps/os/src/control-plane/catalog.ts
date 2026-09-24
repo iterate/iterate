@@ -10,7 +10,7 @@
 // it over node:sqlite (catalog.test.ts) — so the clock comes in as `now` (epoch ms) and an
 // invitation's token comes in already hashed (session.ts mints and hashes it).
 import { codedError } from "iterate/lib";
-import type { Caller as PrincipalCaller } from "iterate/principal";
+import type { Caller as PrincipalCaller } from "../caller.ts";
 import type { SqlStorageHandle } from "iterate/stream/processor";
 import type { OrganizationRole } from "../organization/contract.ts";
 import type { IdentityProvider } from "./contract.ts";

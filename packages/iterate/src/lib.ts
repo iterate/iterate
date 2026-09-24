@@ -6,6 +6,7 @@
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
 //   timeout — `withTimeout`: a promise raced against a deadline (code TIMEOUT)
 //   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries;
+//             `cookieValueOf`: one cookie out of a `Cookie` header;
 //             `sameOriginPath`, `isLocalOrigin`, `resolveContextPath`: origins and paths
 
 // ── errors ── THE machine-readable error channel, after cloudflare-os
@@ -313,6 +314,16 @@ export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "heade
   } catch {
     return false;
   }
+}
+
+/** The value of the cookie `name` in a `Cookie` header, or null. */
+export function cookieValueOf(cookieHeader: string | null, name: string): string | null {
+  for (const part of (cookieHeader || "").split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+  }
+  return null;
 }
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,

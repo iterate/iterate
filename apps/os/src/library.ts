@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
-import type { Caller } from "iterate/principal";
+import type { Caller } from "./caller.ts";
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
 import type { BuiltInScope } from "./context/built-ins.ts";

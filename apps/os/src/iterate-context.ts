@@ -25,16 +25,18 @@ import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
-  materializeItxHandleReference,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
+} from "iterate/expression";
+import {
+  materializeItxHandleReference,
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
-} from "iterate/expression";
+} from "./context/dispatch.ts";
 import type { IterateContextApi } from "iterate/api";
-import type { Caller } from "iterate/principal";
+import type { Caller } from "./caller.ts";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
@@ -135,7 +137,7 @@ export class IterateContextRpcTarget extends RpcTarget {
   }
 
   /** Dispatch on the DO under this context's caller — the one place the edge dispatches. A handle the
-   *  DO names by expression (expression.ts) becomes a handle of THIS edge object: every dotted call on
+   *  DO names by expression (context/dispatch.ts) becomes a handle of THIS edge object: every dotted call on
    *  it is one whole expression back through `invoke`, so what the client holds is an object of this
    *  stateless worker, and no session onto the actor outlives a call. */
   async #invokeOnDurableObject(
@@ -428,7 +430,7 @@ export class IterateContextRpcTarget extends RpcTarget {
 // and not a Proxy AROUND the instance), the declared methods above always winning.
 installPrototypeInvokeFallback(IterateContextRpcTarget, ["itx"]);
 
-// The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
+// The native workerd brands the step walk threads unawaited (context/dispatch.ts `PIPELINED_RPC_BRANDS` —
 // it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
 // one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
 // the runtime exports these and `RpcStub` (verified by probe) but the .d.ts doesn't.
@@ -442,7 +444,7 @@ const {
 >;
 registerPipelinedRpcBrand(NativeRpcPromise);
 registerPipelinedRpcBrand(NativeRpcProperty);
-// All three HOLD A SESSION until disposed (expression.ts `RPC_SESSION_BRANDS`): what a walk steps past
+// All three HOLD A SESSION until disposed (context/dispatch.ts `RPC_SESSION_BRANDS`): what a walk steps past
 // is released once its answer is in, and a stub never leaves a context's `invoke` live.
 registerRpcSessionBrand(NativeRpcStub);
 registerRpcSessionBrand(NativeRpcPromise);

@@ -406,7 +406,7 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
 
 const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();
 
-/** THE SESSION-SIGNING SECRET (principal.ts `signClaims`/`verifyClaims`: the login flow's cookie, a
+/** THE SESSION-SIGNING SECRET (caller.ts `signClaims`/`verifyClaims`: the login flow's cookie, a
  *  signed file URL): `secrets.key` under its own label, SHA-256, hex — so the one key a deployment
  *  holds serves two algorithms without being reused raw (secret-at-rest.ts hashes the key under the
  *  other). Rotating the key signs every session out; a mid-rotation `previousKey` opens no session.

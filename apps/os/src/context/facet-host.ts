@@ -19,10 +19,8 @@ import {
   print,
   type ItxExpression,
   type ItxExpressionInput,
-  walkSteps,
-  awaitAnswerReleasedIfRejected,
-  FacetHandle,
 } from "iterate/expression";
+import { walkSteps, awaitAnswerReleasedIfRejected, FacetHandle } from "./dispatch.ts";
 import {
   CoreContract,
   facetSpecFromHostingTarget,

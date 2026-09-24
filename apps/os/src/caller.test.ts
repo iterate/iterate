@@ -1,13 +1,7 @@
-// principal.test.ts — the signed-claims codec as a table: what verifies, what does not; the admin
-// secret's compare; and the cookie header — read back, refused.
+// caller.test.ts — the signed-claims codec as a table: what verifies, what does not; the admin
+// secret's compare; and `stampCaller`, the attribution an event is stored with.
 import { expect, test } from "vitest";
-import {
-  cookieValueOf,
-  signClaims,
-  stampCaller,
-  verifyAdminSecret,
-  verifyClaims,
-} from "./principal.ts";
+import { signClaims, stampCaller, verifyAdminSecret, verifyClaims } from "./caller.ts";
 
 const SECRET = "test-secret";
 const claims = { actor: "user_a", email: "a@example.com", next: "/" };
@@ -62,19 +56,6 @@ const adminRows: { candidate: string; secret: string; becomes: boolean }[] = [
 for (const { candidate, secret, becomes } of adminRows)
   test(`verifyAdminSecret(${JSON.stringify(candidate)}, ${JSON.stringify(secret)}) ⇒ ${becomes ? '{ actor: "admin" }' : "null"}`, async () => {
     expect(await verifyAdminSecret(candidate, secret)).toEqual(becomes ? { actor: "admin" } : null);
-  });
-
-const cookieRows: { header: string | null; name: string; becomes: string | null }[] = [
-  { header: null, name: "a", becomes: null },
-  { header: "a=1", name: "a", becomes: "1" },
-  { header: "b=2; a=x=y", name: "a", becomes: "x=y" }, // a value may hold `=`
-  { header: "a=", name: "a", becomes: "" },
-  { header: "ab=1", name: "a", becomes: null }, // the whole name
-  { header: "a", name: "a", becomes: null }, // no `=`: not a cookie
-];
-for (const { header, name, becomes } of cookieRows)
-  test(`cookieValueOf(${JSON.stringify(header)}, ${JSON.stringify(name)}) ⇒ ${JSON.stringify(becomes)}`, () => {
-    expect(cookieValueOf(header, name)).toBe(becomes);
   });
 
 // ── stampCaller — the platform's attribution on an event ──

@@ -16,7 +16,8 @@ import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-templat
 import type { IterateApi } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
-import { verifyAdminSecret, type Caller, type Principal } from "iterate/principal";
+import { verifyAdminSecret, type Caller } from "./caller.ts";
+import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";

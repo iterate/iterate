@@ -3,7 +3,7 @@
 // platform-signed `state` naming the secret's context; this admits the human by the secret's owner
 // and hands the code to the secret's facet, which runs the exchange. Called by worker.ts.
 
-import { verifyClaims } from "iterate/principal";
+import { verifyClaims } from "./caller.ts";
 import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "./context/paths.ts";
