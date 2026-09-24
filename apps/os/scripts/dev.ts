@@ -11,7 +11,7 @@ const port = portIndex >= 0 ? args[portIndex + 1] : "8788";
 await build();
 const dev = spawn("pnpm", ["exec", "vite", "dev", ...args], {
   cwd: root,
-  env: { ...process.env, CLOUDFLARE_ENV: "", OS_NEXT_ENV: "", OS_NEXT_DEV_PORT: port },
+  env: { ...process.env, CLOUDFLARE_ENV: "", OS_DEV_PORT: port },
   stdio: "inherit",
 });
 dev.on("exit", (code) => process.exit(code ?? 0));

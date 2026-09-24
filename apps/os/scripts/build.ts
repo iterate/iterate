@@ -92,9 +92,7 @@ export async function build() {
 /** Build an environment-specific Worker and its TanStack client into dist/. */
 export async function buildOs(env: string) {
   await build();
-  // vite.config.ts hands the plugin one flattened environment, picked by OS_NEXT_ENV, so the plugin's
-  // own CLOUDFLARE_ENV stays blank.
-  await viteBuild(root, "", { OS_NEXT_ENV: env });
+  await viteBuild(root, env);
 }
 
 if (process.argv[1]?.endsWith("build.ts")) await build();

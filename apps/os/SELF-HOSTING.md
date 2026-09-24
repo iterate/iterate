@@ -1,4 +1,4 @@
-# Self-hosting OS Next
+# Self-hosting Iterate
 
 One Cloudflare Worker is the whole platform: the sign-in and consent pages, the OAuth server,
 `/api`, `/mcp`, and the Durable Objects your projects live in. It deploys into your own Cloudflare
@@ -8,8 +8,8 @@ account with `wrangler deploy` and two secrets. No domain is needed; a **Workers
 ```bash
 git clone https://github.com/iterate/iterate && cd iterate
 pnpm install
-OS_NEXT_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
-npx wrangler login                          # opens the browser; pick the account to deploy into
+CLOUDFLARE_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
+npx wrangler login                             # opens the browser; pick the account to deploy into
 
 # The two secrets: APP_CONFIG holds the sign-in password (choose one), the key encrypts your
 # projects' secrets at rest. Keep the key somewhere safe: losing it loses that material.
@@ -70,7 +70,7 @@ npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .s
 ```bash
 git pull
 pnpm install
-OS_NEXT_ENV=self-host pnpm --filter os build
+CLOUDFLARE_ENV=self-host pnpm --filter os build
 npx wrangler deploy --config apps/os/dist/server/wrangler.json
 ```
 

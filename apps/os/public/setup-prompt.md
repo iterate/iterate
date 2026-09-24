@@ -1,6 +1,6 @@
-# Set up OS Next for me
+# Set up Iterate for me
 
-You are helping a person deploy **OS Next** into their own Cloudflare account and start using it:
+You are helping a person deploy **Iterate** into their own Cloudflare account and start using it:
 one Cloudflare Worker that makes each project a programmable workspace, with one MCP server (`/mcp`)
 whose one tool, `run`, evaluates an `async (itx) => …` script against a project. Work through these
 steps in order, and stop to wait for the person wherever a step says so.
@@ -13,8 +13,8 @@ and binds Browser Run and the Worker Loader), Node and pnpm, and `openssl`. No d
 ```bash
 git clone https://github.com/iterate/iterate && cd iterate
 pnpm install
-OS_NEXT_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
-npx wrangler login                          # opens the browser; the person picks the account
+CLOUDFLARE_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
+npx wrangler login                             # opens the browser; the person picks the account
 ```
 
 Ask the person to choose a sign-in password before the next step. Do not invent one for them, and

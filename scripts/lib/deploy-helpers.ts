@@ -53,15 +53,11 @@ export function runAsync(
  * plugin snapshots that environment's Worker config (CLOUDFLARE_ENV) into dist/, and that snapshot
  * is what deploys and what a per-PR preview starts from.
  */
-export function viteBuild(
-  appRoot: string,
-  cloudflareEnv: string,
-  extraEnv?: Record<string, string>,
-) {
+export function viteBuild(appRoot: string, cloudflareEnv: string) {
   rmSync(join(appRoot, "dist"), { recursive: true, force: true });
   return runAsync("pnpm", ["exec", "vite", "build"], {
     cwd: appRoot,
-    env: { CLOUDFLARE_ENV: cloudflareEnv, ...extraEnv },
+    env: { CLOUDFLARE_ENV: cloudflareEnv },
   });
 }
 

@@ -50,8 +50,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
   resources?: (env: E) => Record<string, string>;
   /** Secret names the deploy fails without; each ships with the code. */
   requiredSecrets?: readonly string[];
-  /** Extra env vars for the Vite build. */
-  buildEnv?: (ctx: EnvContext<E>) => Record<string, string>;
   /**
    * Runs after secret collection, before build/deploy: config preflights,
    * synced assets. May add deploy-time-computed secrets to `secretValues`.
@@ -89,11 +87,8 @@ export async function deployApp<E extends DeployableEnv>(input: {
     CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
   };
   const secretValues = collectSecrets(ctx, input.requiredSecrets || []);
-  // Resolved before `prepare`, so a missing build input fails the deploy before anything changes.
-  const buildEnv = input.buildEnv?.(ctx);
-
   await input.prepare?.(ctx, secretValues, credentials);
-  await viteBuild(input.appRoot, ctx.name, buildEnv);
+  await viteBuild(input.appRoot, ctx.name);
 
   await deployWithSecrets({
     cwd: input.appRoot,
