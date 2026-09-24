@@ -1,14 +1,15 @@
 import { createCli } from "trpc-cli";
-import { osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { ownZonesOf, routedHostnames } from "./generate-wrangler-config.ts";
+import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
 export default async function ensureResources(options: { env?: string } = {}) {
   const ctx = await resolveEnvContext({
     envs: osEnvs,
-    dopplerProject: "project-worker",
+    dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
     allowDopplerConfigFallback: true,
   });
@@ -38,6 +39,9 @@ export default async function ensureResources(options: { env?: string } = {}) {
     await ctx.cf("/r2/buckets", { method: "POST", body: JSON.stringify({ name: bucketName }) });
     console.log(`created R2 bucket ${bucketName}`);
   }
+  // The Artifacts namespace behind `itx.cfArtifacts`: the worker's repo create does not provision
+  // one ("Namespace is not active"), so a fresh deployment's must exist before its first project.
+  await ensureArtifactsNamespace(ctx.cf, ctx.env.artifactsNamespace);
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );
