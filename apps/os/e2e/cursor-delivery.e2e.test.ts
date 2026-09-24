@@ -40,12 +40,15 @@ import {
 } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 
-const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
 
 type Range = { after: number; through: number };
 const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
-  (await readAll(itx)).filter((e) => e.type === HALTED && e.payload?.name === name);
+  (await readAll(itx)).filter(
+    (e) =>
+      e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+      e.payload?.name === name,
+  );
 
 // ── the HOOKED rig: a stateless project worker whose deliveries land in this process ──
 

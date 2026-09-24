@@ -53,6 +53,7 @@ export default class MiniApp extends WorkerEntrypoint<{ ITX: { get(): Itx } }> {
   }
 }
 
+/** The one no-build page: Preact + htm + capnweb from an esm.sh importmap. */
 const PAGE = `<!doctype html>
 <html lang="en">
   <head>

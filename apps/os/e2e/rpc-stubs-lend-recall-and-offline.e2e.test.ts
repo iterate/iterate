@@ -36,13 +36,14 @@ import {
 } from "./support/client.ts";
 import { HangTools, Tools } from "./support/targets.ts";
 
-const RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
-
 /** The `itx/rewrite-rule-configured` events the durable log holds at `match` — the "a re-provide
  *  appends ONE rule event" instrument. */
 const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string | null }[]> =>
   (await readAll(itx))
-    .filter((e) => e.type === RULE_CONFIGURED && ruleMatchAtRest(e) === match)
+    .filter(
+      (e) =>
+        e.type === "events.iterate.com/itx/rewrite-rule-configured" && ruleMatchAtRest(e) === match,
+    )
     .map((e) => ({ target: e.payload.target as string | null }));
 
 // (A never-configured match is default-deny like any other unmatched call — NO_ITX_EXPRESSION_MATCH

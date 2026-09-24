@@ -1005,7 +1005,8 @@ const plugin: StrictPlugin = {
       },
     },
     "no-shouting-constants": grandfatherRule({
-      allowedUpTo: new Date("2026-11-10"),
+      // when the rule landed (#2620): every line committed since is checked
+      allowedUpTo: new Date("2026-09-10T10:04:56Z"),
       meta: {
         type: "suggestion",
         docs: {

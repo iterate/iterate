@@ -234,7 +234,6 @@ describe("an operator's resume wakes a halted FACET row now — the facet catche
 });
 
 const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
-const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
 /** Every halted fact in the log for `name` — the audit trail an operator reads. */
 const haltFactsFor = (stream: Stream, name: string): StreamEvent[] =>
   stream
@@ -290,7 +289,10 @@ describe("halt once, for the right row", () => {
     });
     expect(haltFactsFor(rig.stream, "poison")).toHaveLength(1);
     expect(facetMethods).toEqual(["catchUpFromLog"]); // the configure's own push found the row halted
-    rig.stream.append({ type: RESUMED, payload: { name: "poison" } });
+    rig.stream.append({
+      type: "events.iterate.com/stream/subscription-delivery-resumed",
+      payload: { name: "poison" },
+    });
     await drainDeliveries();
     expect(facetMethods.slice(1).sort()).toEqual(["catchUpFromLog", "processEventBatch"]); // both refused …
     expect(haltFactsFor(rig.stream, "poison")).toHaveLength(2); // … one fact between them
