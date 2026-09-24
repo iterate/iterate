@@ -11,7 +11,7 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { beforeAll, describe, expect, test } from "vitest";
-import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID } from "./state.ts";
 import { makeShop, type Shop } from "./test/shop.ts";
 

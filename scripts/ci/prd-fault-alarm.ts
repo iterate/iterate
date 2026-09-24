@@ -1,7 +1,8 @@
 // Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the last half hour of os-next-prd's
-// Workers Logs and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error. On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for
-// ~2.5 hours: ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and
-// garple.com — and our recovery kept most requests green, so only the logs knew.
+// Workers Logs and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
+// On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for ~2.5 hours:
+// ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and garple.com —
+// and our recovery kept most requests green, so only the logs knew.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
@@ -11,18 +12,28 @@
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay a window, post nothing
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { osEnvs, PRD_ACCOUNT_ID } from "../../envs.ts";
+import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
+
+const PRD_WORKER = osEnvs.prd!.workerName;
+
+/** The prd account's Workers Logs API access. */
+type CloudflareCredentials = { accountId: string; apiToken: string };
 
 /** One window's rows per signal: [label, count], biggest first. */
 export type FaultReading = Record<"serverErrors" | "heals" | "errors", [string, number][]>;
 
 /** Reads the last half hour of os-next-prd's Workers Logs and pages #error-pulse on a fault. */
 export async function run(options: { at?: string; dryRun?: boolean } = {}) {
+  const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
+  if (!accountId || !apiToken)
+    throw new Error("run under doppler --project project-worker --config prd");
   const now = new Date();
   return alarm({
     now,
     windowEnd: options.at ? new Date(options.at) : now,
+    cloudflare: { accountId, apiToken },
     // A dry run posts nothing, so it needs no Slack token.
     slack: options.dryRun ? null : getSlackClient,
   });
@@ -38,12 +49,13 @@ export async function run(options: { at?: string; dryRun?: boolean } = {}) {
 export async function alarm(input: {
   now: Date;
   windowEnd: Date;
+  cloudflare: CloudflareCredentials;
   slack: (() => WebClient) | null;
 }) {
-  const reading = await readWindow(input.windowEnd);
+  const reading = await readWindow(input.windowEnd, input.cloudflare);
   const page = renderFaultPage(reading, input.windowEnd);
   console.log(JSON.stringify({ windowEnd: input.windowEnd, reading }));
-  if (!page || !input.slack) return page || "os-next-prd is quiet";
+  if (!page || !input.slack) return page || `${PRD_WORKER} is quiet`;
   const slack = input.slack();
   const channel = slackChannelIds["#error-pulse"];
   const history = await slack.conversations.history({
@@ -70,8 +82,8 @@ export function renderFaultPage(reading: FaultReading, windowEnd: Date): string 
     return rows.length && `• ${total(rows)} ${what}: ${top.map((row) => row.join(" ")).join(", ")}`;
   };
   return [
-    // "prd fault page:" is how `alarm` finds the last page; the mention is Jonas (./slack.ts).
-    `🚨 prd fault page: os-next-prd, 30 min to ${windowEnd.toISOString().slice(11, 16)} UTC <@U067G4QRFK2>`,
+    // "prd fault page:" is how `alarm` finds the last page.
+    `🚨 prd fault page: ${PRD_WORKER}, 30 min to ${windowEnd.toISOString().slice(11, 16)} UTC ${onCallMention}`,
     line("5xx responses", reading.serverErrors, (url) =>
       url.replace(/^https?:\/\/([^/]+).*$/, "$1"),
     ),
@@ -79,24 +91,24 @@ export function renderFaultPage(reading: FaultReading, windowEnd: Date): string 
     line("errors", reading.errors, (m) =>
       m.replace(/reference = \w+/g, "reference = …").slice(0, 80),
     ),
-    "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>",
+    `<https://dash.cloudflare.com/${PRD_ACCOUNT_ID}/workers-and-pages/observability|Workers Logs>`,
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-async function readWindow(windowEnd: Date): Promise<FaultReading> {
-  const { CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: token } = process.env;
-  if (!account || !token)
-    throw new Error("run under doppler --project project-worker --config prd");
+async function readWindow(
+  windowEnd: Date,
+  { accountId, apiToken }: CloudflareCredentials,
+): Promise<FaultReading> {
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
   // or past 2,000 groups, drop out) — a burst still pages.
   const rows = async (filters: object[], groupBy: string): Promise<[string, number][]> => {
     const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${account}/workers/observability/telemetry/query`,
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
         body: JSON.stringify({
           queryId: "prd-fault-alarm",
           view: "calculations",
@@ -108,7 +120,7 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
             orderBy: { value: "count", order: "desc" },
             limit: 2000,
             filters: [
-              { key: "$metadata.service", operation: "eq", value: "os-next-prd", type: "string" },
+              { key: "$metadata.service", operation: "eq", value: PRD_WORKER, type: "string" },
               ...filters,
             ],
           },

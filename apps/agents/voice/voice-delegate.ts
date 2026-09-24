@@ -101,8 +101,11 @@ export class VoiceDelegateProcessor extends StreamProcessor<
 > {
   readonly contract = VoiceDelegateContract;
 
-  constructor(private readonly deps: VoiceDelegateDeps) {
+  private readonly deps: VoiceDelegateDeps;
+
+  constructor(deps: VoiceDelegateDeps) {
     super();
+    this.deps = deps;
   }
 
   /** Delegations this incarnation is answering right now, so a re-delivery or a mic-frame catch-up

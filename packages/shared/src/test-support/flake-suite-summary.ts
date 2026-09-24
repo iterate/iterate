@@ -9,7 +9,8 @@ export const FlakeSuiteSummary = z
     startedAt: z.iso.datetime(),
     finishedAt: z.iso.datetime(),
     testCount: z.number().int().nonnegative(),
-    // Older artifacts have only counts and cannot advance per-test pass streaks.
+    // Optional because the fold strips it from the snapshots it stores in mainRuns; per-test
+    // evidence is folded separately.
     tests: z
       .array(
         z.object({

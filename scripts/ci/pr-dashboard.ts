@@ -1,14 +1,13 @@
 import type { RestEndpointMethodTypes } from "@octokit/rest";
 
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import { getEventName, getOctokit, getRepo } from "./github.ts";
-import { getSlackClient, slackChannelIds, slackUsers } from "./slack.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { getOctokit, getRepo } from "./github.ts";
+import { getSlackClient, slackChannelIds, slackEscape, slackUsers } from "./slack.ts";
 
-export async function updatePrDashboard() {
+async function updatePrDashboard() {
   const github = getOctokit();
   const repo = getRepo();
-  const isTest = getEventName() !== "pull_request";
-  const channel = isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#ci"];
+  const channel = slackChannelIds["#ci"];
   const dryRun = !process.env.CI;
 
   const now = new Date();
@@ -44,7 +43,7 @@ export async function updatePrDashboard() {
   type PrSearchItem =
     RestEndpointMethodTypes["search"]["issuesAndPullRequests"]["response"]["data"]["items"][number];
   const link = (item: PrSearchItem) =>
-    `<${item.html_url}|#${item.number} ${item.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}>`;
+    `<${item.html_url}|#${item.number} ${slackEscape(item.title)}>`;
   const by = (login: string | undefined) => {
     const slackUser = slackUsers.find(
       (user) => user.github.toLowerCase() === (login || "").toLowerCase(),

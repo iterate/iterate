@@ -12,7 +12,7 @@
 // egress), so the whole wire runs locally; the real endpoint is pinned by e2e/cfartifacts.e2e.test.ts.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import {
   AUTHOR,
   DELIM,
@@ -74,7 +74,7 @@ export class FakeGitServer {
   #server: Server | undefined;
   #port = 0;
 
-  /** Listen on 127.0.0.1, an ephemeral port; unref'd, so a server a test forgets never holds vitest. */
+  /** Listen on 127.0.0.1, an ephemeral fetch-safe port; unref'd, so a server a test forgets never holds vitest. */
   async start(): Promise<void> {
     if (this.#server) return;
     const server = createServer((request, response) => {
@@ -85,13 +85,9 @@ export class FakeGitServer {
         response.end(`${message}\n`);
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
+    this.#port = await listenOnFetchSafePort(server);
     server.unref();
     this.#server = server;
-    this.#port = (server.address() as AddressInfo).port;
   }
 
   async close(): Promise<void> {

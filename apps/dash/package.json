@@ -8,7 +8,6 @@
     "typecheck": "pnpm routes:check && tsc --noEmit",
     "deploy": "tsx scripts/app.ts deploy",
     "ensure-resources": "tsx scripts/app.ts ensure-resources",
-    "erase-data": "tsx scripts/app.ts erase-data",
     "routes:generate": "tsx scripts/app.ts generate-route-tree",
     "routes:check": "tsx scripts/app.ts generate-route-tree --check"
   },

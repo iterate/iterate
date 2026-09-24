@@ -540,16 +540,17 @@ ${JSON.stringify(settlement.result, null, 2)}
 \`\`\``;
 }
 var AgentProcessor = class extends StreamProcessor {
+  contract = AgentContract;
+  deps;
+  #now;
+  /** The debounce window's wait — a test makes it instant. */
+  #sleep;
   constructor(deps) {
     super();
     this.deps = deps;
     this.#now = deps.now || (() => Date.now());
     this.#sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
-  contract = AgentContract;
-  #now;
-  /** The debounce window's wait — a test makes it instant. */
-  #sleep;
   /** This incarnation's birth attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
   #creating = false;
@@ -1343,6 +1344,10 @@ import { StreamProcessorDurableObject as StreamProcessorDurableObject2 } from ".
 // runtime/collection.ts
 import { RpcTarget as RpcTarget2 } from "cloudflare:workers";
 var AgentCollectionRpcTarget = class extends RpcTarget2 {
+  withItx;
+  catalog;
+  spec;
+  base;
   constructor(withItx, catalog, spec, base = "/") {
     super();
     this.withItx = withItx;
@@ -1486,6 +1491,9 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
   }
 };
 var AgentReference = class extends RpcTarget2 {
+  withItx;
+  path;
+  spec;
   constructor(withItx, path, spec) {
     super();
     this.withItx = withItx;

@@ -822,7 +822,7 @@ function truncateCloseReason(reason: string): string {
 /** Close codes a handler may pass to close(): 1000 or app codes; everything reserved/invalid
  *  (1004-1006, 1015, out-of-range — e.g. an abnormal-closure 1006 being FORWARDED) clamps to 1000. */
 function clampCloseCode(code: number | undefined): number {
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- a close code is a number where 0 is a distinct (if non-standard) value; only an ABSENT code — the socket closed without sending one — defaults to 1000
+  // a close code is a number where 0 is a distinct (if non-standard) value; only an ABSENT code — the socket closed without sending one — defaults to 1000
   if (code === undefined) return 1000;
   if (code === 1000 || (code >= 3000 && code <= 4999)) return code;
   if (code >= 1001 && code <= 1003) return code;

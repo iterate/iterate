@@ -453,8 +453,11 @@ type VoiceArgs = ProcessEventArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>
 class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<VoiceAgentContract>> {
   readonly contract = VoiceAgentContract;
 
-  constructor(private readonly deps: VoiceAgentDeps) {
+  private readonly deps: VoiceAgentDeps;
+
+  constructor(deps: VoiceAgentDeps) {
     super();
+    this.deps = deps;
   }
 
   /** The engine's `append` and fire-and-forget helper as handed over by the latest delivery.

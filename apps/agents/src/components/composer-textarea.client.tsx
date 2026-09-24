@@ -98,7 +98,7 @@ export function ComposerTextareaClient({
       viewRef.current = null;
     };
     // The editor is long-lived; controlled values synchronize below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial content and mount focus are captured once.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- initial content and mount focus are captured once.
   }, [placeholder]);
 
   useEffect(() => {

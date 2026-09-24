@@ -1,6 +1,6 @@
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { getSlackClient, slackChannelIds, slackEscape } from "./slack.ts";
 
 type DeployOptions = {
   app: string;
@@ -12,7 +12,7 @@ type DeployOptions = {
 
 type PullRequestPayload = NonNullable<GithubEventPayload["pull_request"]>;
 
-export async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
+async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
   const slack = getSlackClient();
   const shortSha = commitSha.slice(0, 7);
   const message =
@@ -36,7 +36,7 @@ export async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }
   });
 }
 
-export async function notifyWorkflowFailure() {
+async function notifyWorkflowFailure() {
   const needs = JSON.parse(readOption("NEEDS")) as Record<string, { result?: string }>;
   const failedJobs = Object.entries(needs)
     .filter(([, value]) => value.result === "failure")
@@ -55,7 +55,7 @@ export async function notifyWorkflowFailure() {
   });
 }
 
-export async function notifyPullRequestUpdate() {
+async function notifyPullRequestUpdate() {
   const payload = readEventPayload();
   const message = formatPullRequestUpdateMessage(payload);
   if (!message) {
@@ -131,10 +131,6 @@ function formatPullRequestLink(pullRequest: PullRequestPayload) {
   const title = pullRequest.title ? ` ${slackEscape(pullRequest.title)}` : "";
   const label = `#${pullRequest.number}${title}`;
   return pullRequest.html_url ? `<${pullRequest.html_url}|${label}>` : label;
-}
-
-function slackEscape(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function readOption(name: string) {

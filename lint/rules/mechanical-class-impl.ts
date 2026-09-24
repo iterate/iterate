@@ -1,9 +1,12 @@
 import { SignatureKind } from "@typescript/native-preview/unstable/sync";
 import type { Rule } from "eslint";
-import type { Node } from "estree";
 
-import { getTypeAwareLintService, type TypeAwareLintFileService } from "../oxlint-type-aware.ts";
+import {
+  getTypeAwareLintFileService,
+  type TypeAwareLintFileService,
+} from "../oxlint-type-aware.ts";
 import type { StrictRule } from "../types.ts";
+import { getPropertyName } from "./ast.ts";
 
 type TypeTextReference = {
   start: number;
@@ -23,12 +26,6 @@ export const mechanicalClassImplRule: StrictRule = {
   create(context) {
     const filename = context.filename || "";
     if (!filename.endsWith(".ts") && !filename.endsWith(".tsx")) return {};
-    // rpc-targets.ts is the SOURCE of the public itx contract, not a
-    // mechanical implementation of it: docstrings and explicit signatures on
-    // the RpcTarget classes are projected into src/itx-api.generated.ts (see
-    // apps/os/scripts/generate-itx-api.ts), so `Parameters<Contract[...]>`
-    // indirection there would erase the very text the generator publishes.
-    if (filename.replaceAll("\\", "/").endsWith("/apps/os/src/rpc-targets.ts")) return {};
 
     let fileService: TypeAwareLintFileService | undefined;
 
@@ -37,7 +34,7 @@ export const mechanicalClassImplRule: StrictRule = {
         const contracts = getMechanicalClassImplContracts(context, node);
         if (!contracts?.length) return;
 
-        fileService ||= getPreparedTypeAwareLintFileService(context);
+        fileService ||= getTypeAwareLintFileService(context);
         if (!fileService) return;
         const typedFileService = fileService;
         const classMethodNames = new Set(
@@ -400,19 +397,6 @@ function fixMethodReturnType(element: any, fixer: Rule.RuleFixer) {
   return fixer.removeRange(returnType.range);
 }
 
-function getPreparedTypeAwareLintFileService(context: Rule.RuleContext) {
-  const service = getTypeAwareLintService();
-  service.setFileText(context.filename, context.sourceCode.getText());
-  return service.getFileService(context.filename);
-}
-
 function compactTypeText(text: string) {
   return text.replace(/\s+/g, "");
-}
-
-function getPropertyName(node: Node | undefined) {
-  if (!node) return undefined;
-  if (node.type === "Identifier") return node.name;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  return undefined;
 }

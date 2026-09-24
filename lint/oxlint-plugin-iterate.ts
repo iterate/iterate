@@ -6,6 +6,7 @@ import unicorn from "eslint-plugin-unicorn";
 import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program, Node } from "estree";
 
+import { getPropertyName } from "./rules/ast.ts";
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
@@ -18,9 +19,7 @@ type ImportKindNode = {
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 /** What the server-side script isolate genuinely provides: the ES builtins
- * plus the workerd/web globals of the script runtime — kept in the same
- * spirit as the typechecker's RUNTIME_SHIMS list
- * (apps/os/src/domains/typecheck/virtual-project.ts). oxlint's scope manager
+ * plus the workerd/web globals of the script runtime. oxlint's scope manager
  * leaves ALL globals unresolved (`scope.through` contains `Promise` and
  * `console` alike), so the itx-script-fn-self-contained rule allowlists by
  * name instead of relying on env resolution. */
@@ -39,7 +38,7 @@ const SCRIPT_ISOLATE_GLOBALS = new Set([
   ...["BigInt64Array", "BigUint64Array", "Iterator", "AsyncIterator"],
   ...["parseInt", "parseFloat", "isNaN", "isFinite"],
   ...["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent"],
-  // workerd/web runtime globals (see RUNTIME_SHIMS in virtual-project.ts).
+  // workerd/web runtime globals.
   ...["console", "fetch", "crypto", "performance", "navigator", "caches", "scheduler"],
   ...["setTimeout", "clearTimeout", "setInterval", "clearInterval", "setImmediate"],
   ...["queueMicrotask", "structuredClone", "reportError", "atob", "btoa"],
@@ -74,12 +73,6 @@ const getCalleeName = (callee: any) => {
   }
   return null;
 };
-function getPropertyName(node: Node | undefined) {
-  if (!node) return undefined;
-  if (node.type === "Identifier") return node.name;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  return undefined;
-}
 function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   const path = filename.replaceAll("\\", "/");
 
@@ -88,7 +81,7 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   // iterate-context.ts is THE capability layer: the edge's context handle and
   // the ItxEntrypoint loaded code reaches its context through.
   if (path.endsWith("/apps/os/src/iterate-context.ts")) return true;
-  // The worker's edge doors dial a context only after authorizing the caller:
+  // The worker's edge entry points dial a context only after authorizing the caller:
   // project-host ingress (worker.ts), the MCP tool call (mcp.ts) and the OAuth
   // callback that lands a secret's tokens (secret-oauth-callback.ts).
   if (path.endsWith("/apps/os/src/worker.ts")) return true;
@@ -482,7 +475,6 @@ function reportMissingRelativeImportExtension(context: Rule.RuleContext, sourceN
   });
 }
 
-// custom iterate-internal rules
 const plugin: StrictPlugin = {
   meta: {
     name: "iterate",
@@ -492,25 +484,29 @@ const plugin: StrictPlugin = {
       meta: {
         docs: {
           description:
-            "Forbid capnweb's newHttpBatchRpcSession - always use a WebSocket session instead",
+            "Prefer a capnweb WebSocket session over newHttpBatchRpcSession; bounded one-shot batches need a reasoned disable.",
         },
         type: "problem",
       },
       create: (context) => {
+        const message =
+          "Prefer newWebSocketRpcSession and dispose it when the call completes; a bounded one-shot HTTP batch needs a disable comment giving its reason.";
+        // Calls and re-exports, not the import line: each batch is judged where it is made, and a
+        // re-export (the SDK's) hands the constructor to code this rule cannot see.
         return {
-          Identifier: (node) => {
-            if (node.name === "newHttpBatchRpcSession") {
-              context.report({
-                node,
-                message:
-                  "Never use newHttpBatchRpcSession. Stateless workers can hold a WebSocket session for the duration of a request - use newWebSocketRpcSession and dispose it when the call completes.",
-              });
-            }
+          CallExpression: (node) => {
+            if (node.callee.type === "Identifier" && node.callee.name === "newHttpBatchRpcSession")
+              context.report({ node, message });
+          },
+          ExportSpecifier: (node) => {
+            if (getPropertyName(node.local) === "newHttpBatchRpcSession")
+              context.report({ node, message });
           },
         };
       },
     },
-    // Dormant: registered, never armed; no retained code uses oRPC.
+    // Dormant: registered, never armed; no retained code uses publicProcedure (dummy-petshop's oRPC
+    // API has no procedure builders).
     "no-public-procedure": {
       meta: {
         docs: {
@@ -688,9 +684,7 @@ const plugin: StrictPlugin = {
         docs: {
           description: `Zod schemas should be pascal case, and should not end with "Schema"`,
         },
-        hasSuggestions: true,
         type: "suggestion",
-        fixable: "code",
       },
       create: (context) => {
         return {
@@ -706,8 +700,6 @@ const plugin: StrictPlugin = {
               context.report({
                 node: id,
                 message: `Rename zod schema ${actualName} to ${expectedName} or similar`,
-                // disabled suggestion because you really need to do a IDE refactor to change all references
-                // suggest: [{ desc: `Rename to ${expectedName}`, fix: fixer => fixer.replaceTextRange(id.range, expectedName) }]
               });
             }
           },
@@ -827,8 +819,8 @@ const plugin: StrictPlugin = {
       },
     },
     ...tseslintRules,
-    // Dormant: off in .oxlintrc.json. The legacy override named apps/os/src/rpc-targets.ts, which the
-    // rule itself skipped; the one retained `implements` class is apps/os/src/library/capnweb.ts.
+    // Dormant: off in .oxlintrc.json; the one retained `implements` class is
+    // apps/os/src/library/capnweb.ts.
     "mechanical-class-impl": mechanicalClassImplRule,
     "isolated-codemode": isolatedCodemodeRule,
     "relative-import-extensions": {
@@ -1166,8 +1158,7 @@ const plugin: StrictPlugin = {
         };
       },
     }),
-    "prefer-test-over-it": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    "prefer-test-over-it": {
       meta: {
         type: "suggestion",
         docs: {
@@ -1193,7 +1184,7 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
+    },
     // Dormant: registered, not armed; ItxScriptBuilder went with the legacy platform in #2837.
     "itx-script-fn-self-contained": {
       meta: {
@@ -1320,13 +1311,14 @@ const plugin: StrictPlugin = {
         };
       },
     },
-    // Dormant: registered, not armed since #1341. Its env.ts wrapper is gone; apps/os threads
-    // ctx.waitUntil as a WaitUntil argument (iterate-context.ts) and imports no waitUntil.
+    // Dormant: registered, not armed since #1341. apps/os threads ctx.waitUntil through
+    // iterate-context.ts; apps/os/src/posthog.ts imports waitUntil directly and catches the send's
+    // rejection itself, which this rule would flag.
     "no-direct-waituntil-import": {
       meta: {
         docs: {
           description:
-            "Disallow importing waitUntil directly from cloudflare:workers - use the wrapper from env.ts instead",
+            "Disallow importing waitUntil directly from cloudflare:workers - catch the promise's rejection before handing it to waitUntil",
         },
         type: "problem",
       },
@@ -1344,7 +1336,7 @@ const plugin: StrictPlugin = {
                 context.report({
                   node: waitUntilImport,
                   message:
-                    'Do not import waitUntil directly from "cloudflare:workers". Use the error-handling wrapper from "../env.ts" instead: import { waitUntil } from "../env.ts"',
+                    'Do not import waitUntil directly from "cloudflare:workers" without catching the promise\'s rejection first: an uncaught rejection in waitUntil becomes an uncaught error.',
                 });
               }
             }
@@ -1374,7 +1366,7 @@ const plugin: StrictPlugin = {
                 `Raw env.${bindingName}.getByName(...) access is privileged platform authority. ` +
                 `Untrusted ingress should go through the root capability/capability adapter instead. ` +
                 `Allowed locations are Durable Objects, entrypoints, capability files, ` +
-                `iterate-context.ts and the edge doors (worker.ts, mcp.ts, secret-oauth-callback.ts).`,
+                `iterate-context.ts and the edge entry points (worker.ts, mcp.ts, secret-oauth-callback.ts).`,
             });
           },
         };

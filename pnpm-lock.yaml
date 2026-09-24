@@ -18,8 +18,6 @@ overrides:
   '@codemirror/state': ^6.7.1
   '@codemirror/view': ^6.43.6
   '@material/web': 2.4.1
-  '@tanstack/query-core': 5.101.2
-  '@tanstack/react-query': 5.101.2
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
@@ -58,9 +56,6 @@ importers:
       capnweb:
         specifier: npm:@iterate-com/capnweb@^0.12.2
         version: '@iterate-com/capnweb@0.12.2'
-      dedent:
-        specifier: ^1.7.0
-        version: 1.7.2
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
@@ -76,9 +71,6 @@ importers:
       eslint-plugin-unicorn:
         specifier: ^64.0.0
         version: 64.0.0(eslint@9.39.3(jiti@2.7.0))
-      esquery:
-        specifier: 1.6.0
-        version: 1.6.0
       husky:
         specifier: 9.1.7
         version: 9.1.7
@@ -88,9 +80,6 @@ importers:
       iterate:
         specifier: workspace:*
         version: link:packages/iterate
-      json5:
-        specifier: ^2.2.3
-        version: 2.2.3
       knip:
         specifier: ^6.0.5
         version: 6.0.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.3)
@@ -307,6 +296,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260922.1
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -656,12 +648,12 @@ importers:
       '@types/estree':
         specifier: 1.0.9
         version: 1.0.9
-      '@typescript-eslint/types':
-        specifier: 8.56.1
-        version: 8.56.1
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260624.1
         version: 7.0.0-dev.20260624.1
+      esquery:
+        specifier: 1.6.0
+        version: 1.6.0
       vitest:
         specifier: ^4.1.8
         version: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
@@ -867,9 +859,18 @@ importers:
       '@jridgewell/sourcemap-codec':
         specifier: ^1.5.5
         version: 1.5.5
+      '@playwright/test':
+        specifier: 1.60.0
+        version: 1.60.0
+      '@tanstack/router-generator':
+        specifier: 1.166.17
+        version: 1.166.17
       '@types/node':
         specifier: ^25.0.10
         version: 25.6.0
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded logout request, no live capabilities.
 import { newHttpBatchRpcSession } from "capnweb";
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
@@ -178,7 +177,7 @@ export class BrowserSession extends DurableObject {
         if (probe.status !== 401) {
           if (!probe.ok)
             throw new Error(`Sign-out could not reach Iterate (${probe.status}). Try again.`);
-          // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded logout command returns no live capabilities.
+          // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A bounded logout command returns no live capabilities.
           using api = newHttpBatchRpcSession<IterateApi>(
             new Request(data.resource, {
               headers: { Authorization: `Bearer ${token}` },

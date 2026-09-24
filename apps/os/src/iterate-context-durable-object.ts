@@ -789,7 +789,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         configuredAtOffset: s.configuredAtOffset,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
+        // an absent facet stays ABSENT on the wire, like the fields around it
         ...(s.hostedFacet && {
           hostedFacet: { ...s.hostedFacet, restarts: this.#facetHost.restarts(s.hostedFacet.name) },
         }),

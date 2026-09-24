@@ -1,7 +1,7 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { defineConfig } from "vite";
 import { dummyPetshopEnvs } from "../../envs.ts";
-import { OBSERVABILITY } from "../../scripts/lib/wrangler-config.ts";
+import { COMPATIBILITY_DATE, OBSERVABILITY } from "../../scripts/lib/wrangler-config.ts";
 
 // The Worker config comes from envs.ts: the top level is local dev, CLOUDFLARE_ENV (scripts/deploy.ts
 // sets it) one deployed environment. `vite build` snapshots it into dist/, what deploy ships.
@@ -17,7 +17,7 @@ export default defineConfig({
       config: {
         name: env?.workerName ?? "dummy-petshop",
         main: "src/worker.ts",
-        compatibility_date: "2026-09-01",
+        compatibility_date: COMPATIBILITY_DATE,
         // Declarative Durable Object lifecycle: Cloudflare reconciles this against the live
         // namespaces on every deploy, so there are no migration tags.
         exports: { PetshopStateDurableObject: { type: "durable-object", storage: "sqlite" } },

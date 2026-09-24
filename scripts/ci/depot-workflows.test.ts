@@ -20,6 +20,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  env?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on": {
     image?: string;
@@ -229,7 +230,7 @@ describe("Depot deployment safety", () => {
     });
   });
 
-  test("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
+  test("runs OS and Notes stateful proofs only against an isolated preview", () => {
     const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
     const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
@@ -487,6 +488,50 @@ describe("Depot validation capacity", () => {
     expect(job.steps?.filter((step) => installSteps.includes(step.name || ""))).toEqual([]);
   });
 
+  // Reuse of the baked node_modules hangs on all three: the image's preinstalled workspace, the
+  // store it was baked with (dependencies.mjs fingerprints every pnpm_config_*), and the reconcile
+  // command itself. A job missing one pays a full install on every run.
+  test("every job that reconciles the baked workspace has the image, the store and the checkout it needs", () => {
+    const reconcilers = readdirSync(resolve(repoRoot, ".depot/workflows"))
+      .filter((file) => file.endsWith(".yml"))
+      .flatMap((file) => {
+        const workflow = loadWorkflow(`.depot/workflows/${file}`);
+        return Object.entries(workflow.jobs).flatMap(([jobId, job]) =>
+          job.steps?.some((step) => step.run === "node scripts/depot-ci/dependencies.mjs install")
+            ? [{ file, jobId, workflow, job }]
+            : [],
+        );
+      });
+    expect(reconcilers.length).toBeGreaterThan(0);
+    for (const { file, jobId, workflow, job } of reconcilers) {
+      expect({ file, jobId, image: job["runs-on"] }).toMatchObject({
+        image: expect.objectContaining({ image: bakedImage }),
+      });
+      expect({ file, jobId, env: { ...workflow.env, ...job.env } }).toMatchObject({
+        env: expect.objectContaining({ PNPM_CONFIG_STORE_DIR: "/home/runner/.pnpm-store" }),
+      });
+      const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
+      expect({ file, jobId, checkout: checkout?.with }).toMatchObject({
+        checkout: expect.objectContaining({ clean: false }),
+      });
+    }
+  });
+
+  test("a step named for the baked reconcile runs it", () => {
+    const misnamed = readdirSync(resolve(repoRoot, ".depot/workflows"))
+      .filter((file) => file.endsWith(".yml"))
+      .flatMap((file) =>
+        Object.values(loadWorkflow(`.depot/workflows/${file}`).jobs).flatMap((job) =>
+          (job.steps || []).filter(
+            (step) =>
+              step.name === "Reconcile dependencies (baked)" &&
+              step.run !== "node scripts/depot-ci/dependencies.mjs install",
+          ),
+        ),
+      );
+    expect(misnamed).toEqual([]);
+  });
+
   // Each runs the baked image's pnpm install, which the 2x8 client deploys run too (Deploy Dash's
   // whole job takes under a minute), then calls APIs or runs one git command at a time: a larger
   // runner only costs more.
@@ -575,7 +620,9 @@ describe("Depot validation capacity", () => {
     const scripts = readPackageJson(".").scripts;
 
     expect(lint?.run).toBe("pnpm lint");
-    expect(scripts?.lint).toBe("oxlint . --threads 1 --deny-warnings");
+    expect(scripts?.lint).toBe(
+      "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
+    );
     // One thread for fixes too: at the default one per core, every JS worker starts its own
     // type-aware service and grandfather-rule git spawns, and a 16-core machine hits spawn ENOMEM.
     // Measured at 1, 4, 8 and 12 threads, more threads were no faster.

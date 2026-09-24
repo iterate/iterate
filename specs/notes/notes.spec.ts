@@ -6,12 +6,7 @@ test("a note saved on the Notes app reads back after reload", async ({
   baseURL,
   helpers,
 }) => {
-  // Locally, no Notes app is a skip; in CI it is a failure (the preview's e2e job always has one).
-  test.skip(
-    !process.env.CI && !process.env.NOTES_BASE_URL,
-    "The Notes specs need the Notes app deployed against the platform under test",
-  );
-  expect(process.env.NOTES_BASE_URL, "NOTES_BASE_URL: the preview's Notes app").toBeTruthy();
+  helpers.appOrigin("notes");
   // signed in to the Notes app, on the new project's page
   await using fixture = await helpers.createFixture("notes", { app: baseURL });
   const text = `Notes deployment proof ${fixture.project.slug}`;

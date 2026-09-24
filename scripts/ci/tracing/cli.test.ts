@@ -34,7 +34,7 @@ test.for([
   });
 });
 
-test("the trace job collects deploy and e2e without a finish job's verdict", async () => {
+test("the trace job collects the deploy and e2e jobs", async () => {
   await using depot = await previewOsDepot();
 
   await new CiTrace().current(depot.directory);

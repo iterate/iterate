@@ -45,6 +45,10 @@ export const test = base.extend<{
     ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
     /** A browser signed in as a fresh person with no project, without driving the sign-in page. */
     createSession: (slugPrefix: string) => ReturnType<typeof createSessionFixture>;
+    /** The origin of a client app deployed against the platform under test, from its
+     *  `<APP>_BASE_URL`. Locally a missing app skips the spec; in CI it fails, because the
+     *  preview's e2e job always sets the variable. */
+    appOrigin: (app: "notes" | "voice" | "dash") => string;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
@@ -60,6 +64,17 @@ export const test = base.extend<{
         }),
       createSession: (slugPrefix) =>
         base.step("create signed-in session", () => createSessionFixture(slugPrefix, { page })),
+      appOrigin: (app) => {
+        const variable = `${app.toUpperCase()}_BASE_URL`;
+        const name = `${app[0]!.toUpperCase()}${app.slice(1)}`;
+        const url = process.env[variable];
+        base.skip(
+          !process.env.CI && !url,
+          `The ${name} specs need the ${name} app deployed against the platform under test`,
+        );
+        if (!url) throw new Error(`${variable}: the preview's ${name} app is not set`);
+        return new URL(url).origin;
+      },
     });
     expect(appPageErrors, "uncaught errors on the app's pages").toEqual([]);
   },
@@ -67,11 +82,9 @@ export const test = base.extend<{
     // A spec that opens a second tab does so via `context.newPage()`, which
     // returns a RAW page without our middlewright plugins — so its `waitFor()`s
     // fall back to the config's deliberately-tight actionTimeout, far too
-    // short to establish a second live stream subscription (this is exactly how
-    // reactivity.spec.ts "delivers an appended event to another open tab"
-    // flaked: the first tab reached "live" because the spinner-waiter extends
-    // its waits while the "connecting…" spinner shows, the second tab had no
-    // such safety net). Give every extra page the same plugins as the primary.
+    // short to establish a second live stream subscription (the spinner-waiter
+    // extends waits while a "connecting…" spinner shows; a raw page has no such
+    // safety net). Give every extra page the same plugins as the primary.
     // `basePage` already exists here (Playwright's built-in `page` fixture
     // created it via `context.newPage()` before this fixture ran), so patching
     // `newPage` now only wraps pages the spec opens LATER — the primary page is

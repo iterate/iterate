@@ -29,7 +29,7 @@ jobs:
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Backfill GitHub, Depot, and review-bot telemetry
         run: |-

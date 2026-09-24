@@ -4,7 +4,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
 import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
 import type { IterateApi } from "iterate/next/api";
@@ -19,7 +18,7 @@ test("the Notes app keeps a note on its own origin, and ending its session in th
   page,
   helpers,
 }) => {
-  const { notes, dash } = appClients();
+  const { notes, dash } = appClients(helpers.appOrigin);
   await using fixture = await helpers.createFixture("notes");
   const note = `Written on the Notes app: ${fixture.project.slug}`;
   await page.goto(notes.origin);
@@ -51,12 +50,12 @@ test("the Notes app works through a project config worker, and its session there
   const { adminApiSecret, ingressRouting, osBaseUrl: origin } = readOsPlaywrightAuthConfig();
   // parked: under `paths` routing (every preview) Notes cannot be proxied at /projects/<p>/notes/:
   // it ignores ITERATE_BASE_PATH_HEADER, its links and assets are root-absolute — #2908, pending the
-  // path-routed hosting decision. No CI lane runs this until then. — revisit by 2026-10-21
+  // path-routed hosting decision. No CI job runs this until then. — revisit by 2026-10-21
   test.skip(
     ingressRouting?.type !== "subdomains",
     "Notes is not base-path aware under a proxied project path (#2908)",
   );
-  const { notes, dash } = appClients();
+  const { notes, dash } = appClients(helpers.appOrigin);
   await using fixture = await helpers.createFixture("notes-proxy");
   const { project } = fixture;
   const note = `Written on the independent app: ${project.slug}`;
@@ -78,7 +77,7 @@ test("the Notes app works through a project config worker, and its session there
       `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,
     );
   expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
   using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
   );
@@ -134,23 +133,15 @@ test("the Notes app works through a project config worker, and its session there
 /** An OAuth client as the issuer's consent page names it: the app's name, its domain beneath. */
 type Client = { origin: string; name: string; host: string };
 
-/** The Notes and Dash apps deployed against the platform under test: a local run without them
- *  skips; in CI (the preview's e2e job sets both) a missing one fails. */
-function appClients(): { notes: Client; dash: Client } {
-  test.skip(
-    !process.env.CI && !(process.env.NOTES_BASE_URL && process.env.DASH_BASE_URL),
-    "The Notes session specs need the Notes and Dash apps deployed against the platform under test",
-  );
-  expect(process.env.NOTES_BASE_URL, "NOTES_BASE_URL: the preview's Notes app").toBeTruthy();
-  expect(process.env.DASH_BASE_URL, "DASH_BASE_URL: the preview's Dash app").toBeTruthy();
-  const client = (url: string, name: string) => ({
-    origin: new URL(url).origin,
-    name,
-    host: new URL(url).host,
-  });
+/** The Notes and Dash apps deployed against the platform under test. */
+function appClients(appOrigin: (app: "notes" | "dash") => string): {
+  notes: Client;
+  dash: Client;
+} {
+  const client = (origin: string, name: string) => ({ origin, name, host: new URL(origin).host });
   return {
-    notes: client(process.env.NOTES_BASE_URL!, "iterate Notes"),
-    dash: client(process.env.DASH_BASE_URL!, "iterate Dash"),
+    notes: client(appOrigin("notes"), "iterate Notes"),
+    dash: client(appOrigin("dash"), "iterate Dash"),
   };
 }
 

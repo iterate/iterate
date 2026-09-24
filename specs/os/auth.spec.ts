@@ -2,9 +2,8 @@
 // the sign-in page's password step (`login.password`, src/app-config.ts — the local worker's is
 // scripts/dev.ts's, a deployment's is handed to the run as LOGIN_PASSWORD) is how these sign in.
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture setup; browser actions use the app's real WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateApi } from "iterate/next/api";
@@ -53,8 +52,8 @@ test("first Claude consent creates the organization and project on the consent p
       .end("<h1>Claude authorization completed</h1>");
     receiveCallback(url);
   });
-  await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
-  const redirectUri = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/callback`;
+  // Chromium refuses the same bad ports fetch does (ERR_UNSAFE_PORT) when it follows the redirect.
+  const redirectUri = `http://127.0.0.1:${await listenOnFetchSafePort(listener)}/callback`;
   const flow = await authorizationCodeRequest({
     issuer: origin,
     clientId: claudeClient,
@@ -71,7 +70,7 @@ test("first Claude consent creates the organization and project on the consent p
   page.on("pageerror", (error) => errors.push(error.message));
   // a slug the deployment's own organization holds — the onboarding step's refused first try below
   const takenSlug = `taken-${stamp()}`;
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
   using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
   );
@@ -108,7 +107,7 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
     // where the project will live, in the deployment's own routing: a subdomain under the
     // hostname, or a path on this origin — a local worker routes by subdomain under localhost; a
-    // deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does (specs/setup.ts)
+    // deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e suite does (specs/setup.ts)
     if (ingressRouting?.type === "subdomains")
       await page
         .getByText(
@@ -254,7 +253,7 @@ test("first Claude consent creates the organization and project on the consent p
     // refused first try made ONE organization, not one per try; and the projects' minted ids, by
     // which alone a project is addressed (the page showed their slugs).
     const headers = await cookieHeaders(context, origin);
-    // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
     using api = newHttpBatchRpcSession<IterateApi>(new Request(`${origin}/api`, { headers }));
     const session = api.authenticate({ type: "from-server-cookie" });
     const [inventory, orgs, listed] = await Promise.all([

@@ -11,10 +11,6 @@ on:
       - ready_for_review
       - converted_to_draft
       - closed
-  push:
-    branches:
-      - "**/*pr-dashboard*"
-      - "*pr-dashboard*"
 concurrency:
   group: pr-dashboard
   cancel-in-progress: false
@@ -32,10 +28,9 @@ jobs:
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Notify PR update
-        if: github.event_name == 'pull_request'
         run: pnpm tsx scripts/ci/notify.ts pr-update
       - name: Update PR dashboard
         run: pnpm tsx scripts/ci/pr-dashboard.ts

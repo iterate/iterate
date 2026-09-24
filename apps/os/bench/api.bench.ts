@@ -9,7 +9,6 @@
 //   delivery  — append → a lent callback's push (the push lane) and → a processor's reduce (the facet lane)
 //   facet     — a processor's COLD materialization on a fresh context (loader + class + first call)
 
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- a bench of the one-shot shape (a cron's), on purpose
 import { newHttpBatchRpcSession } from "capnweb";
 import { bench, describe } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -23,7 +22,7 @@ const invoke = (itx: any, expression: unknown) => itx.invoke(expression);
 /** One HTTP request per call: a fresh one-shot batch session — authenticate, get, invoke, all in
  *  the ONE POST (a cron's shape). */
 const httpBatch = (ctx: string, itxExpression: string): Promise<unknown> =>
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- see above
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- a bench of the one-shot shape (a cron's), on purpose
   newHttpBatchRpcSession<IterateRpcTarget>(workerUrl("/api"))
     .authenticate(adminCredentials())
     .projects.get(ctx)

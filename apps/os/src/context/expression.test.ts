@@ -170,10 +170,12 @@ test("the resolver releases a walk's answer that REJECTS — its caller gets the
   // the project facet's collection refusing `delete` held the project's root resident (2026-09-23).
   const released: string[] = [];
   class FakeCallPromise {
-    constructor(
-      readonly chain: string,
-      readonly outcome: { error: Error } | { value: unknown },
-    ) {}
+    readonly chain: string;
+    readonly outcome: { error: Error } | { value: unknown };
+    constructor(chain: string, outcome: { error: Error } | { value: unknown }) {
+      this.chain = chain;
+      this.outcome = outcome;
+    }
     then(resolve: (value: unknown) => void, reject: (error: unknown) => void): void {
       if ("error" in this.outcome) reject(this.outcome.error);
       else resolve(this.outcome.value);

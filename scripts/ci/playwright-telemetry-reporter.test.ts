@@ -8,7 +8,7 @@ import type {
   TestCase,
   TestResult,
 } from "@playwright/test/reporter";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import PlaywrightTelemetryReporter from "./playwright-telemetry-reporter.ts";
 
@@ -31,7 +31,7 @@ afterEach(() => {
   restoreEnv("TEST_TELEMETRY_LANE", originalTelemetryLane);
 });
 
-it("records every Playwright attempt and nested step without uploading", async () => {
+test("records every Playwright attempt and nested step without uploading", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
@@ -134,7 +134,7 @@ it("records every Playwright attempt and nested step without uploading", async (
   ]);
 });
 
-it("keeps Playwright's raw result status separate from its expected outcome", async () => {
+test("keeps Playwright's raw result status separate from its expected outcome", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-expected-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const failedAsExpected = {
@@ -172,7 +172,7 @@ it("keeps Playwright's raw result status separate from its expected outcome", as
   rmSync(artifactDirectory, { recursive: true });
 });
 
-it("preserves timed-out runs and run-level Playwright errors", async () => {
+test("preserves timed-out runs and run-level Playwright errors", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-timeout-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const reporter = new PlaywrightTelemetryReporter();
@@ -201,7 +201,7 @@ it("preserves timed-out runs and run-level Playwright errors", async () => {
   rmSync(artifactDirectory, { recursive: true });
 });
 
-it("preserves interrupted attempts whose unfinished Playwright steps use negative durations", async () => {
+test("preserves interrupted attempts whose unfinished Playwright steps use negative durations", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-interrupted-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const interruptedResult = {

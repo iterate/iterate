@@ -3,16 +3,11 @@
 // reader has to chase — the literal belongs inline at its use site. Each test
 // runs the real oxlint binary against a temp project with the plugin armed.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
-import assert from "node:assert/strict";
-
-import { test } from "vitest";
+import { expect, test } from "vitest";
+import { createOxlintFixture } from "./oxlint-fixture.ts";
 
 test("flags single-use number, string, template and negative-number consts", () => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/no-shouting-constants": "error" } });
   fixture.write(
     "shouting.ts",
     [
@@ -25,14 +20,15 @@ test("flags single-use number, string, template and negative-number consts", () 
     ].join("\n"),
   );
 
-  const output = fixture.runOxlint(["shouting.ts"], { expectFailure: true });
-  assert.match(output, /MAX_BYTES is a SCREAMING_SNAKE constant holding a plain literal/);
-  assert.match(output, /Write the literal inline at its use site/);
-  assert.deepEqual(reportedNames(output), ["MAX_BYTES", "GREETING", "LABEL", "FLOOR"]);
+  const result = fixture.run(["shouting.ts"], { expectFailure: true });
+  const output = result.stdout + result.stderr;
+  expect(output).toMatch(/MAX_BYTES is a SCREAMING_SNAKE constant holding a plain literal/);
+  expect(output).toMatch(/Write the literal inline at its use site/);
+  expect(reportedNames(output)).toEqual(["MAX_BYTES", "GREETING", "LABEL", "FLOOR"]);
 });
 
 test("leaves exported consts alone", () => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/no-shouting-constants": "error" } });
   fixture.write(
     "exported.ts",
     [
@@ -46,11 +42,11 @@ test("leaves exported consts alone", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["exported.ts"]);
+  fixture.run(["exported.ts"]);
 });
 
 test("leaves non-literal initializers alone", () => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/no-shouting-constants": "error" } });
   fixture.write(
     "non-literal.ts",
     [
@@ -68,11 +64,11 @@ test("leaves non-literal initializers alone", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["non-literal.ts"]);
+  fixture.run(["non-literal.ts"]);
 });
 
 test("leaves consts read more than once alone, counting typeof as a read", () => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/no-shouting-constants": "error" } });
   fixture.write(
     "multi-use.ts",
     [
@@ -86,11 +82,11 @@ test("leaves consts read more than once alone, counting typeof as a read", () =>
     ].join("\n"),
   );
 
-  fixture.runOxlint(["multi-use.ts"]);
+  fixture.run(["multi-use.ts"]);
 });
 
 test("a JSDoc block above the const is an escape hatch; a line comment is not", () => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/no-shouting-constants": "error" } });
   fixture.write(
     "commented.ts",
     [
@@ -103,12 +99,13 @@ test("a JSDoc block above the const is an escape hatch; a line comment is not", 
     ].join("\n"),
   );
 
-  const output = fixture.runOxlint(["commented.ts"], { expectFailure: true });
-  assert.deepEqual(reportedNames(output), ["MAX_SCRIPT_BYTES"]);
+  const result = fixture.run(["commented.ts"], { expectFailure: true });
+  const output = result.stdout + result.stderr;
+  expect(reportedNames(output)).toEqual(["MAX_SCRIPT_BYTES"]);
 });
 
 test("only module-scope SCREAMING_SNAKE names are in scope", () => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/no-shouting-constants": "error" } });
   fixture.write(
     "scope.ts",
     [
@@ -122,71 +119,10 @@ test("only module-scope SCREAMING_SNAKE names are in scope", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["scope.ts"]);
+  fixture.run(["scope.ts"]);
 });
-
-const repoRoot = resolve(import.meta.dirname, "..");
-const pluginPath = join(repoRoot, "lint", "oxlint-plugin-iterate.ts");
-const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
 
 /** Names the rule reported, in source order, pulled from oxlint's stylish output. */
 function reportedNames(output: string) {
   return [...output.matchAll(/(\w+) is a SCREAMING_SNAKE constant/g)].map((match) => match[1]);
-}
-
-/** Same fixture shape as oxlint-plugin-logical-and-spread.test.ts: a temp
- * project with the real plugin armed, linted by the real oxlint binary. */
-function createOxlintFixture() {
-  const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-no-shouting-constants-"));
-  const configPath = join(root, ".oxlintrc.json");
-
-  writeFileSync(
-    configPath,
-    JSON.stringify(
-      {
-        categories: {
-          correctness: "off",
-          nursery: "off",
-          pedantic: "off",
-          perf: "off",
-          restriction: "off",
-          style: "off",
-          suspicious: "off",
-        },
-        env: {
-          builtin: true,
-          node: true,
-        },
-        jsPlugins: [pluginPath],
-        rules: { "iterate/no-shouting-constants": "error" },
-      },
-      null,
-      2,
-    ),
-  );
-
-  return {
-    root,
-    [Symbol.dispose]() {
-      rmSync(root, { force: true, recursive: true });
-    },
-    runOxlint(args: string[], options: { expectFailure?: boolean } = {}) {
-      const result = spawnSync(
-        oxlintBin,
-        [...args, "--config", configPath, "--threads", "1", "--format", "stylish"],
-        { cwd: root, encoding: "utf8" },
-      );
-      const output = result.stdout + result.stderr;
-      if (options.expectFailure) {
-        assert.notEqual(result.status, 0, output);
-      } else {
-        assert.equal(result.status, 0, output);
-      }
-      return output;
-    },
-    write(path: string, contents: string) {
-      mkdirSync(dirname(join(root, path)), { recursive: true });
-      writeFileSync(join(root, path), contents);
-    },
-  };
 }

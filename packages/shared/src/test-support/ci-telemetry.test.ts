@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, test } from "vitest";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -11,7 +11,7 @@ import {
   type TestTelemetryArtifact,
 } from "./ci-telemetry.ts";
 
-it("normalizes arbitrary runner errors into one JSON-safe model", () => {
+test("normalizes arbitrary runner errors into one JSON-safe model", () => {
   expect(normalizeTestTelemetryError(new TypeError("boom"))).toMatchObject({
     name: "TypeError",
     message: "boom",
@@ -23,7 +23,7 @@ it("normalizes arbitrary runner errors into one JSON-safe model", () => {
   expect(normalizeTestTelemetryError("process exited")).toEqual({ message: "process exited" });
 });
 
-it("writes an immediate file and a durable CI-directory copy from one artifact", () => {
+test("writes an immediate file and a durable CI-directory copy from one artifact", () => {
   const repositoryRoot = mkdtempSync(join(tmpdir(), "ci-telemetry-contract-"));
   const artifact: TestTelemetryArtifact = {
     artifactSchemaVersion: 1,
@@ -66,7 +66,7 @@ it("writes an immediate file and a durable CI-directory copy from one artifact",
   rmSync(repositoryRoot, { recursive: true });
 });
 
-it("leaves an explicit failure artifact when a runner never reaches its end hook", () => {
+test("leaves an explicit failure artifact when a runner never reaches its end hook", () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "ci-telemetry-sentinel-"));
   writeTestTelemetryFailureSentinel(
     {
@@ -115,7 +115,7 @@ it("leaves an explicit failure artifact when a runner never reaches its end hook
   rmSync(artifactDirectory, { recursive: true });
 });
 
-it("uses explicit preview identity and collision-resistant artifact filenames", () => {
+test("uses explicit preview identity and collision-resistant artifact filenames", () => {
   expect(
     ciTelemetrySourceFromEnvironment({
       GITHUB_RUN_ID: "123",

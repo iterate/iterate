@@ -1,3 +1,7 @@
+/** The workerd compatibility date every Iterate Worker deploys with. apps/os's wrangler*.jsonc
+ *  repeat it (JSON cannot import) and wrangler-config.test.ts pins them to it. */
+export const COMPATIBILITY_DATE = "2026-09-01";
+
 /**
  * The one observability posture every Iterate worker deploys with: full
  * sampling, persistent logs and traces. Shared by every app's Worker config.
@@ -11,7 +15,7 @@ export const OBSERVABILITY = {
 
 /** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
  *  a workers.dev origin ⇒ `<subdomain>.workers.dev`, the account's own). The zone a hostname routes
- *  on: the start apps' routes and os-next's wrangler generator and ensure-resources. */
+ *  on: the start apps' routes and the OS platform's wrangler config and ensure-resources. */
 export function registrableDomainOf(urlOrHostname: string) {
   const hostname = urlOrHostname.includes("://") ? new URL(urlOrHostname).hostname : urlOrHostname;
   const labels = hostname.split(".");

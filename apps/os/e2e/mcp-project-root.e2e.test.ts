@@ -1,5 +1,4 @@
 // The public MCP endpoint, real OAuth grant, real repo and worker publication. No capability fakes.
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded account token mints; MCP itself uses its public HTTP protocol.
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -22,7 +21,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     (await readAll(root)).find((e) => e.type === "events.iterate.com/project/created"),
   );
   const { issuerHeaders, principal } = await oauthSession(projectId, member);
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded token mint through the account API.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded token mint through the account API.
   using minter = newHttpBatchRpcSession<IterateRpcTarget>(
     new Request(workerUrl("/api"), { headers: issuerHeaders }),
   );
@@ -131,7 +130,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   ).toBe(true);
 
   // Two grants execute on the same root; attribution distinguishes their requests.
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint for a separate MCP connection.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint for a separate MCP connection.
   using secondMinter = newHttpBatchRpcSession<IterateRpcTarget>(
     new Request(workerUrl("/api"), { headers: issuerHeaders }),
   );

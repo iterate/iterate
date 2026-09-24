@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "../ci-telemetry.ts";
 import { RetryTelemetryReporter } from "./retry-telemetry-reporter.ts";
 
@@ -24,7 +24,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("records module timing when Vitest omits the queued callback", () => {
+test("records module timing when Vitest omits the queued callback", () => {
   delete process.env.TEST_TELEMETRY_ARTIFACT_FILE;
   delete process.env.TEST_TELEMETRY_ARTIFACT_DIR;
   const reporter = new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" });
@@ -39,7 +39,7 @@ it("records module timing when Vitest omits the queued callback", () => {
   }).not.toThrow();
 });
 
-it("writes its pessimistic sentinel only when the Vitest run starts", () => {
+test("writes its pessimistic sentinel only when the Vitest run starts", () => {
   delete process.env.TEST_TELEMETRY_ARTIFACT_FILE;
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-start-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = directory;
@@ -52,7 +52,7 @@ it("writes its pessimistic sentinel only when the Vitest run starts", () => {
   rmSync(directory, { recursive: true });
 });
 
-it("preserves an interrupted Vitest run instead of reporting a test failure", async () => {
+test("preserves an interrupted Vitest run instead of reporting a test failure", async () => {
   delete process.env.TEST_TELEMETRY_ARTIFACT_FILE;
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-interrupted-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = directory;
@@ -67,7 +67,7 @@ it("preserves an interrupted Vitest run instead of reporting a test failure", as
   rmSync(directory, { recursive: true });
 });
 
-it("records the first failed attempt when a retry passes", async () => {
+test("records the first failed attempt when a retry passes", async () => {
   const file = join(tmpdir(), `retry-telemetry-${process.pid}-${Date.now()}.json`);
   // Scoped: the flaky fixture below writes an unknown-flake record, which
   // must land here and never in the CI run's real FLAKE_RECORD_DIR.
@@ -91,9 +91,7 @@ it("records the first failed attempt when a retry passes", async () => {
       state: "passed",
       errors: [{ message: "Network connection\n lost" }],
     }),
-    annotations: () => [
-      { type: "e2e-phase", message: '{"name":"probe eviction","durationMs":20000}' },
-    ],
+    annotations: () => [{ type: "note", message: "probe eviction" }],
   };
   const testModule = {
     moduleId: "/repo/network.e2e.test.ts",
@@ -146,13 +144,8 @@ it("records the first failed attempt when a retry passes", async () => {
       expectedState: "passed",
       configuredTimeoutMs: 30_000,
       tags: ["network"],
-      annotations: [
-        {
-          type: "e2e-phase",
-          description: '{"name":"probe eviction","durationMs":20000}',
-        },
-      ],
-      phases: [{ name: "probe eviction", durationMs: 20000 }],
+      annotations: [{ type: "note", description: "probe eviction" }],
+      phases: [],
       firstFailure: "Network connection lost",
     }),
   ]);
@@ -179,7 +172,7 @@ it("records the first failed attempt when a retry passes", async () => {
   rmSync(file);
 });
 
-it("writes unit tests without performing network I/O", async () => {
+test("writes unit tests without performing network I/O", async () => {
   delete process.env.TEST_TELEMETRY_ARTIFACT_FILE;
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-artifacts-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = directory;

@@ -295,32 +295,34 @@ export function renderScriptSettlement(settlement: RunSettlement): string | null
   return `Your script returned:\n\`\`\`json\n${JSON.stringify(settlement.result, null, 2)}\n\`\`\``;
 }
 
+type AgentProcessorDeps = {
+  /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
+   *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
+  withItx: WithItx<ItxEntrypointScope>;
+  /** The host bridges raw provider bodies through awaited byte RPC. */
+  runModel(
+    path: string,
+    model: string,
+    input: unknown,
+    options: unknown,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+  /** The clock and the wait, injected only so a unit test can make the debounce instant. */
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+};
+
 export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   readonly contract = AgentContract;
 
+  private readonly deps: AgentProcessorDeps;
   readonly #now: () => number;
   /** The debounce window's wait — a test makes it instant. */
   readonly #sleep: (ms: number) => Promise<void>;
 
-  constructor(
-    private readonly deps: {
-      /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
-       *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
-      withItx: WithItx<ItxEntrypointScope>;
-      /** The host bridges raw provider bodies through awaited byte RPC. */
-      runModel(
-        path: string,
-        model: string,
-        input: unknown,
-        options: unknown,
-        signal: AbortSignal,
-      ): Promise<unknown>;
-      /** The clock and the wait, injected only so a unit test can make the debounce instant. */
-      now?: () => number;
-      sleep?: (ms: number) => Promise<void>;
-    },
-  ) {
+  constructor(deps: AgentProcessorDeps) {
     super();
+    this.deps = deps;
     this.#now = deps.now || (() => Date.now());
     this.#sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }

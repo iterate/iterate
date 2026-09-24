@@ -77,9 +77,9 @@ async function cfGraphql<T>(input: {
   return body.data;
 }
 
-export type ActiveTimeRow = { hour: string; doHours: number };
-export type NamespaceActiveTimeRow = { namespace: string; doHours: number };
-export type PinnedInvocationRow = {
+type ActiveTimeRow = { hour: string; doHours: number };
+type NamespaceActiveTimeRow = { namespace: string; doHours: number };
+type PinnedInvocationRow = {
   date: string;
   script: string;
   wallTimeP99Hours: number;
@@ -302,12 +302,7 @@ async function main(): Promise<void> {
       }
     }`;
 
-  const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables: { accountTag, start, end } }),
-  });
-  const body = (await response.json()) as CfGraphqlResponse<{
+  const data = await cfGraphql<{
     viewer: {
       accounts: Array<{
         durableObjectsInvocationsAdaptiveGroups: Array<{
@@ -317,13 +312,9 @@ async function main(): Promise<void> {
         }>;
       }>;
     };
-  }>;
+  }>({ apiToken, query, variables: { accountTag, start, end } });
 
-  if (body.errors?.length) {
-    throw new Error(`Cloudflare GraphQL errors: ${body.errors.map((e) => e.message).join("; ")}`);
-  }
-
-  const rows = body.data?.viewer.accounts[0]?.durableObjectsInvocationsAdaptiveGroups ?? [];
+  const rows = data.viewer.accounts[0]?.durableObjectsInvocationsAdaptiveGroups ?? [];
   const flagged = rows
     .filter((r) => r.dimensions.scriptName.startsWith(prefix))
     .filter((r) => r.quantiles.wallTimeP99 > thresholdMicros)

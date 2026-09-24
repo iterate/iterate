@@ -3,11 +3,8 @@
 // assertions that fail unhelpfully (toBe(true/false)), waitForURL, and baseURL spelled into goto.
 // Each case runs the real oxlint binary against a temp project with the plugin armed.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { expect, test } from "vitest";
+import { createOxlintFixture } from "./oxlint-fixture.ts";
 
 test.for([
   {
@@ -64,7 +61,7 @@ test.for([
     reported: [],
   },
 ])("$name", ({ source, reported }) => {
-  using fixture = createOxlintFixture();
+  using fixture = createOxlintFixture({ rules: { "iterate/spec-restricted-syntax": "error" } });
   fixture.write(
     "example.spec.ts",
     [
@@ -77,67 +74,10 @@ test.for([
     ].join("\n"),
   );
 
-  expect(fixture.reportedMessages("example.spec.ts")).toEqual(
-    reported.map((opening) => expect.stringContaining(opening)),
-  );
+  const messages = fixture
+    .diagnostics(["example.spec.ts"])
+    .filter((diagnostic) => diagnostic.code === "iterate(spec-restricted-syntax)")
+    .sort((a, b) => a.labels[0]!.span.offset - b.labels[0]!.span.offset)
+    .map((diagnostic) => diagnostic.message);
+  expect(messages).toEqual(reported.map((opening) => expect.stringContaining(opening)));
 });
-
-const repoRoot = resolve(import.meta.dirname, "..");
-const pluginPath = join(repoRoot, "lint", "oxlint-plugin-iterate.ts");
-const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
-
-/** Same fixture shape as oxlint-plugin-no-shouting-constants.test.ts: a temp project with the real
- * plugin armed, linted by the real oxlint binary. */
-function createOxlintFixture() {
-  const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-spec-restricted-syntax-"));
-  const configPath = join(root, ".oxlintrc.json");
-
-  writeFileSync(
-    configPath,
-    JSON.stringify(
-      {
-        categories: {
-          correctness: "off",
-          nursery: "off",
-          pedantic: "off",
-          perf: "off",
-          restriction: "off",
-          style: "off",
-          suspicious: "off",
-        },
-        env: {
-          builtin: true,
-          node: true,
-        },
-        jsPlugins: [pluginPath],
-        rules: { "iterate/spec-restricted-syntax": "error" },
-      },
-      null,
-      2,
-    ),
-  );
-
-  return {
-    root,
-    [Symbol.dispose]() {
-      rmSync(root, { force: true, recursive: true });
-    },
-    /** The rule's messages in source order (oxlint's unix format: `file:line:col: message [rule]`). */
-    reportedMessages(path: string) {
-      const result = spawnSync(
-        oxlintBin,
-        [path, "--config", configPath, "--threads", "1", "--format", "unix"],
-        { cwd: root, encoding: "utf8" },
-      );
-      return [
-        ...result.stdout.matchAll(
-          /^\S+:\d+:\d+: (.+) \[Error\/iterate\(spec-restricted-syntax\)\]$/gm,
-        ),
-      ].map((match) => match[1]);
-    },
-    write(path: string, contents: string) {
-      mkdirSync(dirname(join(root, path)), { recursive: true });
-      writeFileSync(join(root, path), contents);
-    },
-  };
-}

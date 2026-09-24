@@ -9,13 +9,22 @@ import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 
 export class AgentCollectionRpcTarget extends RpcTarget {
+  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly catalog: () => Promise<AgentCatalogState>;
+  private readonly spec: () => Promise<FacetSpec>;
+  private readonly base: string;
+
   constructor(
-    private readonly withItx: WithItx<ItxEntrypointScope>,
-    private readonly catalog: () => Promise<AgentCatalogState>,
-    private readonly spec: () => Promise<FacetSpec>,
-    private readonly base = "/",
+    withItx: WithItx<ItxEntrypointScope>,
+    catalog: () => Promise<AgentCatalogState>,
+    spec: () => Promise<FacetSpec>,
+    base = "/",
   ) {
     super();
+    this.withItx = withItx;
+    this.catalog = catalog;
+    this.spec = spec;
+    this.base = base;
   }
 
   announce(input: unknown) {
@@ -179,12 +188,15 @@ export class AgentCollectionRpcTarget extends RpcTarget {
 }
 
 class AgentReference extends RpcTarget {
-  constructor(
-    private readonly withItx: WithItx<ItxEntrypointScope>,
-    private readonly path: string,
-    private readonly spec: () => Promise<FacetSpec>,
-  ) {
+  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly path: string;
+  private readonly spec: () => Promise<FacetSpec>;
+
+  constructor(withItx: WithItx<ItxEntrypointScope>, path: string, spec: () => Promise<FacetSpec>) {
     super();
+    this.withItx = withItx;
+    this.path = path;
+    this.spec = spec;
   }
 
   async message(

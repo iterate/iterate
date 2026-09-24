@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   buildReviewEvents,
   reviewProviderKey,
@@ -17,7 +17,7 @@ const iterateReview: PullReview = {
 };
 
 describe("review telemetry", () => {
-  it("retains Iterate Review when the pull request has no review check-run", () => {
+  test("retains Iterate Review when the pull request has no review check-run", () => {
     const sources = selectReviewSources([], [iterateReview], headSha);
     const events = buildReviewEvents({
       repository: "iterate/iterate",
@@ -53,7 +53,7 @@ describe("review telemetry", () => {
     expect(events[1]?.timestamp).toBe("2026-07-21T12:01:30Z");
   });
 
-  it("does not mistake a human login containing iterate for Iterate Review", () => {
+  test("does not mistake a human login containing iterate for Iterate Review", () => {
     const sources = selectReviewSources(
       [],
       [{ ...iterateReview, id: 102, user: { login: "iterate-maintainer" } }],
@@ -65,7 +65,7 @@ describe("review telemetry", () => {
     expect(reviewProviderKey("cursor-bugbot-maintainer")).toBe("cursor-bugbot-maintainer");
   });
 
-  it("attributes findings to normalized reviewer identities instead of all threads", () => {
+  test("attributes findings to normalized reviewer identities instead of all threads", () => {
     expect(reviewProviderKey("iterate[bot]")).toBe("iterate");
     expect(reviewProviderKey("cursor", "Cursor Bugbot")).toBe("cursor");
     const sources = selectReviewSources(

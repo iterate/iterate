@@ -16,7 +16,10 @@
   },
   "devDependencies": {
     "@jridgewell/sourcemap-codec": "^1.5.5",
+    "@playwright/test": "1.60.0",
+    "@tanstack/router-generator": "1.166.17",
     "@types/node": "^25.0.10",
+    "trpc-cli": "0.15.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.7"
   }

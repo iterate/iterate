@@ -43,7 +43,7 @@ export function useContextStub<S extends Disposable>(
       disposed = true;
       held?.[Symbol.dispose]();
     };
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `open` is a fresh closure every render; the caller's `deps` are what it closes over
+    // `open` is a fresh closure every render; the caller's `deps` are what it closes over
   }, deps);
   return state;
 }

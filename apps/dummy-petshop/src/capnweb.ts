@@ -23,7 +23,7 @@ import type { Pet } from "./pets.ts";
 import type { PetsContext } from "./rpc.ts";
 
 /** The remote main object a capnweb client holds: the pets API for one authenticated owner. */
-export class PetshopCapnwebApi extends RpcTarget {
+class PetshopCapnwebApi extends RpcTarget {
   readonly #owner: string;
   readonly #pets: Pet[];
 

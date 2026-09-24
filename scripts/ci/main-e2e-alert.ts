@@ -12,10 +12,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
+import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 
-export type MainE2eState = "green" | "red";
+type MainE2eState = "green" | "red";
 
 /** A page's first words: how the next run finds the last one. */
 const RED = "🔴 main e2e red";
@@ -39,16 +40,11 @@ export function mainE2eFailedJobs(results: Record<string, string>): string[] {
   );
 }
 
-/** The failed rows of a run's telemetry artifacts: a test whose outcome was unexpected (Playwright),
- *  or whose final state failed or timed out (vitest), the flake summary's own rule. Pure. */
+/** The failed rows of a run's telemetry artifacts (testTelemetryFailed). Pure. */
 export function mainE2eFailingRows(artifacts: TestTelemetryArtifact[]): string[] {
   const rows = artifacts.flatMap((artifact) =>
     artifact.tests
-      .filter((test) =>
-        test.outcome
-          ? test.outcome === "unexpected"
-          : ["failed", "timedout"].includes(test.state.toLowerCase()),
-      )
+      .filter(testTelemetryFailed)
       .map((test) => `${path.basename(test.moduleId)}: ${test.leafName || test.fullName}`),
   );
   return [...new Set(rows)];
@@ -80,8 +76,7 @@ export function mainE2ePage(input: {
   if (input.verdict === "green") return [`${GREEN} at ${commit}`, link].filter(Boolean).join("\n");
   const shown = input.failingRows.slice(0, 8);
   return [
-    // the mention is Jonas (./slack.ts)
-    `${RED} at ${commit} <@U067G4QRFK2>`,
+    `${RED} at ${commit} ${onCallMention}`,
     `• failed: ${input.failedJobs.join(", ") || "a job"}`,
     shown.length > 0 &&
       `• failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,

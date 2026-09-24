@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       # The Depot organization token CI telemetry already uses (Doppler _shared/preview) lists and
       # downloads the artifacts. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd,

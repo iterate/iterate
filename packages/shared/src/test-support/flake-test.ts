@@ -164,3 +164,26 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
   // unchanged except the trailing body.
   return register as TestFn;
 }
+
+/** The end of the month the flake sentinels flake through: roll it forward monthly. */
+const SENTINEL_MONTH_END = new Date("2026-11-01");
+
+/**
+ * A suite's monthly flake sentinel, a deliberately flaky test that proves the flake pipeline
+ * (recorder, artifact, ingestion, dashboard) end to end. Until SENTINEL_MONTH_END it throws the
+ * allowed error about 10% of runs, so the dashboard should read a flake rate near 10%: 0%, or a red
+ * run, means the pipeline itself is broken. After the month ends it passes every run until the date
+ * is rolled forward. The dashboard's lifecycle proposals skip sentinels (scripts/ci/flake-dashboard
+ * fold.ts), so no unwrap is ever proposed. `title` is the dashboard row, so each suite keeps its own.
+ */
+export function flakeSentinel<TestFn extends (...args: any[]) => any>(test: TestFn, title: string) {
+  // The date is UTC midnight; the month it closes is named in UTC too, whatever the runner's zone.
+  const month = new Date(SENTINEL_MONTH_END.getTime() - 1).toLocaleString("en-US", {
+    month: "long",
+    timeZone: "UTC",
+  });
+  createFlake(test, /monthly flake sentinel/)(title, () => {
+    if (new Date() < SENTINEL_MONTH_END && Math.random() < 0.1)
+      throw new Error(`hello I am ${month}'s monthly flake sentinel (${title})`);
+  });
+}

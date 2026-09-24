@@ -1,20 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
-import assert from "node:assert/strict";
+import { join } from "node:path";
 
 import { SignatureKind } from "@typescript/native-preview/unstable/sync";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
+import { createOxlintFixture } from "./oxlint-fixture.ts";
 import { TypeAwareLintService } from "./oxlint-type-aware.ts";
-
-const repoRoot = resolve(import.meta.dirname, "..");
-const pluginPath = join(repoRoot, "lint", "oxlint-plugin-iterate.ts");
-const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
 
 test("mechanical-class-impl fixes implementation signatures from the TypeScript checker", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -48,10 +42,9 @@ test("mechanical-class-impl fixes implementation signatures from the TypeScript 
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { Greeter, Mechanical } from "./types.ts";',
       "",
@@ -70,6 +63,7 @@ test("mechanical-class-impl fixes implementation signatures from the TypeScript 
 
 test("mechanical-class-impl reads methods from mapped helper implementations", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -101,10 +95,9 @@ test("mechanical-class-impl reads methods from mapped helper implementations", (
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { Greeter, MechanicalMap } from "./types.ts";',
       "",
@@ -120,6 +113,7 @@ test("mechanical-class-impl reads methods from mapped helper implementations", (
 
 test("mechanical-class-impl supports direct interface implementations", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -148,10 +142,9 @@ test("mechanical-class-impl supports direct interface implementations", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { Greeter } from "./types.ts";',
       "",
@@ -167,6 +160,7 @@ test("mechanical-class-impl supports direct interface implementations", () => {
 
 test("mechanical-class-impl allows omitted implementation params", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -199,10 +193,9 @@ test("mechanical-class-impl allows omitted implementation params", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { IPerson } from "./types.ts";',
       "",
@@ -221,6 +214,7 @@ test("mechanical-class-impl allows omitted implementation params", () => {
 
 test("mechanical-class-impl allows simple implementation param types", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -254,10 +248,9 @@ test("mechanical-class-impl allows simple implementation param types", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { Greeter } from "./types.ts";',
       "",
@@ -276,6 +269,7 @@ test("mechanical-class-impl allows simple implementation param types", () => {
 
 test("mechanical-class-impl fixes class field arrow implementations", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -304,10 +298,9 @@ test("mechanical-class-impl fixes class field arrow implementations", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { IPerson } from "./types.ts";',
       "",
@@ -323,6 +316,7 @@ test("mechanical-class-impl fixes class field arrow implementations", () => {
 
 test("type-aware lint service refreshes changed files without restarting the process", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -349,7 +343,7 @@ test("type-aware lint service refreshes changed files without restarting the pro
     firstSource.indexOf("Foo {"),
   );
 
-  assert.deepEqual(firstProperties, []);
+  expect(firstProperties).toEqual([]);
 
   const secondSource = [
     "interface Foo {",
@@ -372,11 +366,12 @@ test("type-aware lint service refreshes changed files without restarting the pro
     secondSource.indexOf("Foo {"),
   );
 
-  assert.deepEqual(secondProperties, ["f"]);
+  expect(secondProperties).toEqual(["f"]);
 });
 
 test("type-aware lint service keeps all open files in snapshot updates", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "off",
       "iterate/typed-no-floating-promises": "off",
@@ -396,18 +391,13 @@ test("type-aware lint service keeps all open files in snapshot updates", () => {
   service.openFile(firstFile);
   service.openFile(secondFile);
 
-  assert.deepEqual(
-    updates.map((update) => update.openFiles),
-    [[firstFile], [firstFile, secondFile]],
-  );
-  assert.deepEqual(
-    updates.map((update) => update.openProjects),
-    [[tsconfigFile], [tsconfigFile]],
-  );
+  expect(updates.map((update) => update.openFiles)).toEqual([[firstFile], [firstFile, secondFile]]);
+  expect(updates.map((update) => update.openProjects)).toEqual([[tsconfigFile], [tsconfigFile]]);
 });
 
 test("type-aware lint service can read unsaved text overlays", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -435,7 +425,7 @@ test("type-aware lint service can read unsaved text overlays", () => {
     savedSource.indexOf("Foo {"),
   );
 
-  assert.deepEqual(firstProperties, []);
+  expect(firstProperties).toEqual([]);
 
   const unsavedSource = [
     "interface Foo {",
@@ -458,12 +448,13 @@ test("type-aware lint service can read unsaved text overlays", () => {
     unsavedSource.indexOf("Foo {"),
   );
 
-  assert.deepEqual(secondProperties, ["f"]);
-  assert.equal(fixture.read("implementation.ts"), savedSource);
+  expect(secondProperties).toEqual(["f"]);
+  expect(fixture.read("implementation.ts")).toBe(savedSource);
 });
 
 test("mechanical-class-impl reports only the method params when params are not mechanical", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -490,7 +481,7 @@ test("mechanical-class-impl reports only the method params when params are not m
   ].join("\n");
   fixture.write("implementation.ts", implementation);
 
-  const result = fixture.runOxlint(["implementation.ts"], {
+  const result = fixture.run(["implementation.ts"], {
     expectFailure: true,
     format: "json",
   });
@@ -498,11 +489,12 @@ test("mechanical-class-impl reports only the method params when params are not m
   const span = output.diagnostics[0].labels[0].span;
   const reportedText = implementation.slice(span.offset, span.offset + span.length);
 
-  assert.equal(reportedText, "input: { enthusiasm: number }");
+  expect(reportedText).toBe("input: { enthusiasm: number }");
 });
 
 test("mechanical-class-impl reports only the return type when return type is disallowed", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -529,7 +521,7 @@ test("mechanical-class-impl reports only the return type when return type is dis
   ].join("\n");
   fixture.write("implementation.ts", implementation);
 
-  const result = fixture.runOxlint(["implementation.ts"], {
+  const result = fixture.run(["implementation.ts"], {
     expectFailure: true,
     format: "json",
   });
@@ -537,11 +529,12 @@ test("mechanical-class-impl reports only the return type when return type is dis
   const span = output.diagnostics[0].labels[0].span;
   const reportedText = implementation.slice(span.offset, span.offset + span.length);
 
-  assert.equal(reportedText, ": string");
+  expect(reportedText).toBe(": string");
 });
 
 test("mechanical-class-impl follows arbitrary helper wrappers", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -573,10 +566,9 @@ test("mechanical-class-impl follows arbitrary helper wrappers", () => {
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { Greeter, MechanicalMap } from "./types.ts";',
       "",
@@ -592,6 +584,7 @@ test("mechanical-class-impl follows arbitrary helper wrappers", () => {
 
 test("mechanical-class-impl preserves defaults in nested helper implementations", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
@@ -623,10 +616,9 @@ test("mechanical-class-impl preserves defaults in nested helper implementations"
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts", "--fix"]);
+  fixture.run(["implementation.ts", "--fix"]);
 
-  assert.equal(
-    fixture.read("implementation.ts"),
+  expect(fixture.read("implementation.ts")).toBe(
     [
       'import type { Greeter, Mechanical } from "./types.ts";',
       "",
@@ -644,6 +636,7 @@ test("mechanical-class-impl preserves defaults in nested helper implementations"
 
 test("typed-no-floating-promises reports only unhandled promise-like expression statements", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "off",
       "iterate/typed-no-floating-promises": "error",
@@ -663,19 +656,20 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
     ].join("\n"),
   );
 
-  const result = fixture.runOxlint(["promises.ts"], { expectFailure: true });
+  const result = fixture.run(["promises.ts"], { expectFailure: true });
   const output = result.stdout + result.stderr;
 
-  assert.match(output, /Promise-like expression/);
-  assert.match(output, /promises\.ts/);
-  assert.match(output, /3:1/);
-  assert.doesNotMatch(output, /4:1/);
-  assert.doesNotMatch(output, /5:1/);
-  assert.doesNotMatch(output, /6:1/);
+  expect(output).toMatch(/Promise-like expression/);
+  expect(output).toMatch(/promises\.ts/);
+  expect(output).toMatch(/3:1/);
+  expect(output).not.toMatch(/4:1/);
+  expect(output).not.toMatch(/5:1/);
+  expect(output).not.toMatch(/6:1/);
 });
 
 test("contract-package-imports permits Cloudflare only in the worker-only contract module", () => {
   using fixture = createOxlintFixture({
+    tsconfig: true,
     rules: {
       "iterate/contract-package-imports": "error",
       "iterate/mechanical-class-impl": "off",
@@ -687,9 +681,9 @@ test("contract-package-imports permits Cloudflare only in the worker-only contra
   fixture.write("src/worker.ts", source);
   fixture.write("src/index.ts", source);
 
-  fixture.runOxlint(["src/worker.ts"]);
-  const result = fixture.runOxlint(["src/index.ts"], { expectFailure: true });
-  assert.match(result.stdout + result.stderr, /Forbidden runtime import "cloudflare:workers"/);
+  fixture.run(["src/worker.ts"]);
+  const result = fixture.run(["src/index.ts"], { expectFailure: true });
+  expect(result.stdout + result.stderr).toMatch(/Forbidden runtime import "cloudflare:workers"/);
 });
 
 function getCallablePropertyNames(
@@ -712,90 +706,4 @@ function getCallablePropertyNames(
       );
     })
     .map((property) => property.name);
-}
-
-function createOxlintFixture(input: { rules: Record<string, unknown> }) {
-  const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-type-aware-"));
-  const configPath = join(root, ".oxlintrc.json");
-
-  writeFileSync(
-    configPath,
-    JSON.stringify(
-      {
-        categories: {
-          correctness: "off",
-          nursery: "off",
-          pedantic: "off",
-          perf: "off",
-          restriction: "off",
-          style: "off",
-          suspicious: "off",
-        },
-        env: {
-          builtin: true,
-          node: true,
-        },
-        jsPlugins: [pluginPath],
-        rules: input.rules,
-      },
-      null,
-      2,
-    ),
-  );
-  writeFileSync(
-    join(root, "tsconfig.json"),
-    JSON.stringify(
-      {
-        compilerOptions: {
-          lib: ["ES2022"],
-          module: "ESNext",
-          moduleResolution: "Bundler",
-          noEmit: true,
-          strict: true,
-          target: "ES2022",
-        },
-        include: ["*.ts"],
-      },
-      null,
-      2,
-    ),
-  );
-
-  return {
-    root,
-    [Symbol.dispose]() {
-      rmSync(root, { force: true, recursive: true });
-    },
-    read(path: string) {
-      return readFileSync(join(root, path), "utf8");
-    },
-    runOxlint(args: string[], options: { expectFailure?: boolean; format?: string } = {}) {
-      const result = spawnSync(
-        oxlintBin,
-        [
-          ...args,
-          "--config",
-          configPath,
-          "--threads",
-          "1",
-          "--format",
-          options.format || "stylish",
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-        },
-      );
-      if (options.expectFailure) {
-        assert.notEqual(result.status, 0, result.stderr || result.stdout);
-      } else {
-        assert.equal(result.status, 0, result.stderr || result.stdout);
-      }
-      return result;
-    },
-    write(path: string, contents: string) {
-      mkdirSync(dirname(join(root, path)), { recursive: true });
-      writeFileSync(join(root, path), contents);
-    },
-  };
 }

@@ -1,21 +1,16 @@
 import { durationMs, systemEvent, type PostHogEvent } from "./posthog-events.ts";
 
-export type TelemetrySource = {
+type TelemetrySource = {
   name: string;
   dataSource: string;
   collect: () => Promise<PostHogEvent[]>;
-};
-
-export type TelemetrySourceFailure = {
-  source: string;
-  error: unknown;
 };
 
 type TelemetrySourceResult = {
   source: TelemetrySource;
   events: PostHogEvent[];
   health: PostHogEvent;
-  failure?: TelemetrySourceFailure;
+  failure?: { source: string; error: unknown };
 };
 
 /**

@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { findDashboardState } from "./pr-dashboard.ts";
 
 describe("findDashboardState", () => {
-  it("paginates today's Slack history and finds the dashboard detail reply", async () => {
+  test("paginates today's Slack history and finds the dashboard detail reply", async () => {
     const history = vi
       .fn()
       .mockResolvedValueOnce({
@@ -52,7 +52,7 @@ describe("findDashboardState", () => {
     expect(replies).toHaveBeenCalledWith({ channel: "ci-channel", limit: 100, ts: "dashboard" });
   });
 
-  it("returns null when today's Slack history contains no dashboard", async () => {
+  test("returns null when today's Slack history contains no dashboard", async () => {
     const replies = vi.fn();
     const slack = {
       conversations: {

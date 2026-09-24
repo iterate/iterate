@@ -94,26 +94,23 @@ export class OpenApiConnectionRpcTarget extends RpcTarget {
     const url = new URL(this.#requestBaseUrl);
     const headers = new Headers(this.#headers);
     const cookieParameters: string[] = [];
+    // A parameter value of 0, false or "" is a legal value to send; only null/undefined means the
+    // caller did not provide it.
     for (const parameter of operation.parameters) {
       const value = fields[parameter.name];
       if (parameter.in === "path") {
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- an OpenAPI parameter value of 0, false or "" is a legal value to send; only null/undefined means the caller did not provide it
         if (value == null) throw new Error(`${operationId} needs "${parameter.name}"`);
         resolvedPath = resolvedPath.replaceAll(
           `{${parameter.name}}`,
           encodeURIComponent(String(value)),
         );
       } else if (parameter.in === "query") {
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- an OpenAPI parameter value of 0, false or "" is a legal value to send; only null/undefined means the caller did not provide it
         if (value == null && parameter.required)
           throw new Error(`${operationId} needs query parameter "${parameter.name}"`);
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- an OpenAPI parameter value of 0, false or "" is a legal value to send; only null/undefined means the caller did not provide it
         if (value != null) url.searchParams.set(parameter.name, String(value));
       } else if (parameter.in === "header") {
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- an OpenAPI parameter value of 0, false or "" is a legal value to send; only null/undefined means the caller did not provide it
         if (value != null) headers.set(parameter.name, String(value));
       } else if (parameter.in === "cookie") {
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- an OpenAPI parameter value of 0, false or "" is a legal value to send; only null/undefined means the caller did not provide it
         if (value != null)
           cookieParameters.push(`${parameter.name}=${encodeURIComponent(String(value))}`);
       } else continue;

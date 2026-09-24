@@ -328,7 +328,7 @@ export class FacetHost {
     this.#deps.ctx.storage.kv.delete(`facet-claim-failures:${name}`);
   }
   #claimFacetAlarm(name: string, at: number | null): void {
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- null releases a claim; epoch 0 is a valid due alarm
+    // null releases a claim; epoch 0 is a valid due alarm
     if (at === null) {
       this.#facetClaims.delete(name);
       this.#deps.ctx.storage.kv.delete(`facet-claim:${name}`);
@@ -781,7 +781,7 @@ export class FacetHost {
     // `snapshot()` result left behind, and this actor could not be evicted (pinned, billed). So
     // copy the DATA out and release the result at once; an answer that cannot be cloned (a stub,
     // a stream, a Response) is handed through as is and is the caller's to dispose.
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- `in` requires an object operand: a facet call may return any value, and this typeof/object guard is what makes `Symbol.dispose in result` safe to evaluate
+    // `in` requires an object operand: a facet call may return any value, and this typeof/object guard is what makes `Symbol.dispose in result` safe to evaluate
     if (typeof result === "object" && result && Symbol.dispose in result) {
       let copy: unknown;
       try {

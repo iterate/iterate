@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { test } from "../test-support/test.ts";
 
 test("a new project installs its voice agent from the page, then has a Call button", async ({
@@ -6,12 +5,7 @@ test("a new project installs its voice agent from the page, then has a Call butt
   baseURL,
   helpers,
 }) => {
-  // Locally, no Voice app is a skip; in CI it is a failure (the preview's e2e job always has one).
-  test.skip(
-    !process.env.CI && !process.env.VOICE_BASE_URL,
-    "The Voice specs need the Voice app deployed against the platform under test",
-  );
-  expect(process.env.VOICE_BASE_URL, "VOICE_BASE_URL: the preview's Voice app").toBeTruthy();
+  helpers.appOrigin("voice");
   // signed in to the Voice app, on the new project's page
   await using _fixture = await helpers.createFixture("voice", { app: baseURL });
 

@@ -59,7 +59,10 @@ export type MemberRecord = { userId: string; email: string; role: OrganizationRo
 export type AccessibleRecord = { organizations: OrganizationRecord[]; projects: ProjectRecord[] };
 
 export class ControlPlaneDatabase {
-  constructor(private readonly sql: SqlStorageHandle) {
+  private readonly sql: SqlStorageHandle;
+
+  constructor(sql: SqlStorageHandle) {
+    this.sql = sql;
     for (const statement of [
       "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE)",
       "CREATE TABLE IF NOT EXISTS identities (provider TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (provider, subject), UNIQUE (provider, user_id))",

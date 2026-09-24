@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spaEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { smokeResponse } from "../../../scripts/lib/deploy-helpers.ts";
+import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 
 const selected = process.argv.indexOf("--env");
 const ctx = await resolveEnvContext({
@@ -17,7 +18,7 @@ writeFileSync(
   JSON.stringify({
     name: ctx.env.workerName,
     account_id: ctx.env.cloudflareAccountId,
-    compatibility_date: "2026-09-01",
+    compatibility_date: COMPATIBILITY_DATE,
     assets: { directory: "./assets", not_found_handling: "single-page-application" },
     workers_dev: true,
   }),

@@ -1,6 +1,6 @@
 import type { WebClient } from "@slack/web-api";
 import { expect, test, vi } from "vitest";
-import { alarm, type FaultReading, renderFaultPage } from "./prd-fault-alarm.ts";
+import { alarm, type FaultReading, renderFaultPage, run } from "./prd-fault-alarm.ts";
 import { slackChannelIds } from "./slack.ts";
 
 const quiet: FaultReading = {
@@ -9,6 +9,7 @@ const quiet: FaultReading = {
   errors: [],
 };
 const now = new Date("2026-09-23T07:30:00Z");
+const credentials = { accountId: "account", apiToken: "token" };
 
 test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed references", () => {
   // A sample of 07:00–07:30Z that day (`run --at 2026-09-23T07:30:00Z --dry-run`).
@@ -53,30 +54,27 @@ test.each([
 );
 
 // A run that could not read prd must fail, never pass as a quiet prd.
-test.for([
-  {
-    name: "a failed Workers Logs query",
-    token: "token",
-    queries: 4,
-    error: 'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
-  },
-  {
-    name: "no Cloudflare credentials",
-    token: "",
-    queries: 0,
-    error: "run under doppler --project project-worker --config prd",
-  },
-])("a run that cannot read prd fails: $name", async (row) => {
-  await using cloudflare = workersLogs(row.token, () => ({
+test("a run that cannot read prd fails: a failed Workers Logs query", async () => {
+  await using cloudflare = workersLogs(() => ({
     success: false,
     errors: [{ code: 10000, message: "Authentication error" }],
   }));
   const slack = fakeSlack([]);
-  await expect(alarm({ now, windowEnd: now, slack: () => slack.client })).rejects.toThrow(
-    row.error,
-  );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(row.queries);
+  await expect(
+    alarm({ now, windowEnd: now, cloudflare: credentials, slack: () => slack.client }),
+  ).rejects.toThrow('Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]');
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(4);
   expect(slack).toMatchObject({ posts: [] });
+});
+
+test("a run that cannot read prd fails: no Cloudflare credentials", async () => {
+  await using cloudflare = workersLogs(() => ({ success: true }));
+  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+  vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+  await expect(run({ dryRun: true })).rejects.toThrow(
+    "run under doppler --project project-worker --config prd",
+  );
+  expect(cloudflare.fetch).not.toHaveBeenCalled();
 });
 
 // A page is the alarm and the run ends green; the page repeats at most hourly.
@@ -102,7 +100,7 @@ test.for([
     posted: true,
   },
 ])("a run that reads prd resolves: $name", async (row) => {
-  await using _cloudflare = workersLogs("token", serverErrorsOnly(row.serverErrors));
+  await using _cloudflare = workersLogs(serverErrorsOnly(row.serverErrors));
   const slack = fakeSlack(
     row.history.map((message) => ({
       ts: String(Date.parse(message.at) / 1000),
@@ -113,15 +111,17 @@ test.for([
   const expected = row.serverErrors
     ? page({ serverErrors: [["https://lispwoso.com/", row.serverErrors]] })
     : "os-next-prd is quiet";
-  await expect(alarm({ now, windowEnd: now, slack: () => slack.client })).resolves.toBe(expected);
+  await expect(
+    alarm({ now, windowEnd: now, cloudflare: credentials, slack: () => slack.client }),
+  ).resolves.toBe(expected);
   expect(slack).toMatchObject({
     posts: row.posted ? [{ channel: slackChannelIds["#error-pulse"], text: expected }] : [],
   });
 });
 
 test("a dry run (no Slack client) resolves to the page it would post", async () => {
-  await using _cloudflare = workersLogs("token", serverErrorsOnly(1));
-  await expect(alarm({ now, windowEnd: now, slack: null })).resolves.toBe(
+  await using _cloudflare = workersLogs(serverErrorsOnly(1));
+  await expect(alarm({ now, windowEnd: now, cloudflare: credentials, slack: null })).resolves.toBe(
     page({ serverErrors: [["https://lispwoso.com/", 1]] }),
   );
 });
@@ -131,11 +131,8 @@ function page(reading: Partial<FaultReading>) {
   return renderFaultPage({ ...quiet, ...reading }, now);
 }
 
-/** Cloudflare credentials (none when `token` is empty) and a Workers Logs API that answers each
- *  query with `answer(the field it groups by)`. */
-function workersLogs(token: string, answer: (groupBy: string) => unknown) {
-  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", token && "account");
-  vi.stubEnv("CLOUDFLARE_API_TOKEN", token);
+/** A Workers Logs API that answers each query with `answer(the field it groups by)`. */
+function workersLogs(answer: (groupBy: string) => unknown) {
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
     const query = JSON.parse(init.body) as { parameters: { groupBys: { value: string }[] } };
     return new Response(JSON.stringify(answer(query.parameters.groupBys[0]!.value)));

@@ -22,7 +22,13 @@ const WHATWG_FETCH_BLOCKED_PORTS = new Set([
  */
 export async function listenOnFetchSafePort(server: Server): Promise<number> {
   for (let attempt = 1; attempt <= 16; attempt += 1) {
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
     const { port } = server.address() as AddressInfo;
     if (!WHATWG_FETCH_BLOCKED_PORTS.has(port)) return port;
     await new Promise((resolve) => server.close(resolve));

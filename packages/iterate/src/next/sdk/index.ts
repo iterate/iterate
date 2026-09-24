@@ -46,7 +46,7 @@ export { z } from "zod";
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
 // WebSocket session: a stateless entrypoint answering one method with one remote call has no session
 // to hold across calls, and a one-shot POST is the honest shape (the lint rule targets long-lived workers).
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
+// oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { applyPatch, diff, type PatchOp } from "../lib.ts";
 export { LiveState, type LiveStateSink } from "../stream/processor.ts";

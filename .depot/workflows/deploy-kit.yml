@@ -41,7 +41,7 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.ref || github.sha }}
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config prd --project kit

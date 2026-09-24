@@ -1,5 +1,5 @@
 {
-  "name": "@iterate/lint",
+  "name": "@iterate-com/lint",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "@types/eslint": "8.56.12",
     "@types/esquery": "^1.5.4",
     "@types/estree": "1.0.9",
-    "@typescript-eslint/types": "8.56.1",
+    "esquery": "1.6.0",
     "vitest": "^4.1.8",
     "@typescript/native-preview": "7.0.0-dev.20260624.1"
   }

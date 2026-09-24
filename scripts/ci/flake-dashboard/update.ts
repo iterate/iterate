@@ -23,6 +23,7 @@ import { promisify } from "node:util";
 import { Octokit } from "@octokit/rest";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
+import { DEPOT_ORG, mapConcurrent } from "../depot.ts";
 import { FlakeDashboardState } from "./contract.ts";
 import {
   ARTIFACT_PREFIX,
@@ -399,7 +400,7 @@ function signature(workflow: DepotWorkflow) {
 
 async function depot(args: string[]) {
   // CI passes the organization token as DEPOT_TOKEN; a laptop uses the CLI's own login.
-  return execFile("depot", [...args, "--org", "0p91s0lz49"], { maxBuffer: 50 * 1024 * 1024 });
+  return execFile("depot", [...args, "--org", DEPOT_ORG], { maxBuffer: 50 * 1024 * 1024 });
 }
 
 async function depotJson<T>(args: string[]): Promise<T> {
@@ -418,25 +419,6 @@ function flagValue(flag: string) {
   const value = process.argv[index + 1];
   if (!value || value.startsWith("--")) throw new Error(`${flag} requires a path`);
   return value;
-}
-
-async function mapConcurrent<Input, Output>(
-  inputs: Input[],
-  concurrency: number,
-  operation: (input: Input) => Promise<Output>,
-) {
-  const outputs = new Array<Output>(inputs.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, inputs.length) }, async () => {
-      for (;;) {
-        const index = next++;
-        if (index >= inputs.length) return;
-        outputs[index] = await operation(inputs[index]!);
-      }
-    }),
-  );
-  return outputs;
 }
 
 if (isMainModule(import.meta.url)) await main();

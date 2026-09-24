@@ -31,6 +31,7 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
+import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { buildOsNext } from "./build.ts";
 import {
   APPS,
@@ -641,18 +642,27 @@ async function deployPreview(
   assertFreshInstall();
   // The apps' vite builds run beside os-next's build, their rejection handlers attached at once: OS
   // Next's build and deployment can take minutes, and an app build may fail before its result is
-  // consumed.
-  const appBuilds = Promise.allSettled(apps.map((app) => buildStartApp(app, "preview")));
-  await buildOsNext("preview");
+  // consumed. Each step is a span in the CI trace (docs/ci-traces.md), so the deploy step shows
+  // where its time went.
+  const appBuilds = Promise.allSettled(
+    apps.map((app) => traceOperation(`Build ${app.name}`, () => buildStartApp(app, "preview"))),
+  );
+  await traceOperation("Build OS", () => buildOsNext("preview"));
   const appBuildResults = await appBuilds;
   const failedBuilds = appBuildResults.flatMap((result, index) =>
     result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
   );
   if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
-  const { wrangler, url, deploymentId, slug } = await deployOsPreview(ctx, previewName, apps);
+  const { wrangler, url, deploymentId, slug } = await traceOperation("Deploy OS preview", () =>
+    deployOsPreview(ctx, previewName, apps),
+  );
   try {
     const appPreviews = await Promise.all(
-      apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
+      apps.map((app) =>
+        traceOperation(`Deploy ${app.name}`, () =>
+          deployAppPreview(app, previewName, url, wrangler.command),
+        ),
+      ),
     );
     const summary = {
       previewName,

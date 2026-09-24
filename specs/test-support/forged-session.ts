@@ -1,7 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { VideoModePageExtension } from "middlewright";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup; specs drive the product through the browser.
 import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateApi } from "iterate/next/api";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
@@ -59,7 +58,7 @@ export async function createProjectFixture(
 
 /**
  * The fixture's person signed in to a client app and on its page for `project`: the app's own
- * sign-in door (`/.auth/login`), which the issuer answers with consent because the person is signed
+ * sign-in route (`/.auth/login`), which the issuer answers with consent because the person is signed
  * in there already, then Authorize. A demo video (VIDEO_MODE=1) starts on the app's page, not on
  * consent. Signing in to an app is itself the subject of specs/notes/sessions.spec.ts, and consent
  * of specs/os/auth.spec.ts.
@@ -137,7 +136,7 @@ async function createAdminProject(input: { baseUrl: string; email: string; slug:
   // create() resolves only after the project-creation saga commits, so no separate lifecycle
   // poll is needed.
   return test.step("create project fixture over /api", async () => {
-    // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
     using session = newHttpBatchRpcSession<IterateApi>(
       new Request(`${new URL(input.baseUrl).origin}/api`, {
         headers: { authorization: `Bearer ${config.adminApiSecret}` },

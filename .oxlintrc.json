@@ -16,27 +16,17 @@
   },
   "ignorePatterns": [
     "**/.cache/",
-    "**/.corepack/",
-    "**/.turbo/",
     "**/.claude/",
     "**/.cursor/",
     "**/.husky/",
-    "**/components/ui/",
     "**/components/ai-elements/",
-    "**/logs.json",
-    "**/worker-configuration.d.ts",
     "**/routeTree.gen.ts",
-    "**/db/migrations/",
     "**/*.d.ts",
     "**/node_modules/",
     "**/dist/",
     "**/build/",
     "pnpm-lock.yaml",
-    "opensrc/**",
     "test-results/**",
-    "**/evalite-export/**",
-    ".tmp-ci-build*",
-    "**/*ignoreme*",
     "apps/browser-extension/capnweb.js",
     "configs-next/with-agents/agents.js"
   ],
@@ -73,7 +63,6 @@
     "no-dupe-else-if": "error",
     "no-dupe-keys": "error",
     "no-duplicate-case": "error",
-    "no-empty": "error",
     "no-empty-character-class": "error",
     "no-empty-pattern": "error",
     "no-empty-static-block": "error",
@@ -91,7 +80,6 @@
     "no-nonoctal-decimal-escape": "error",
     "no-obj-calls": "error",
     "no-prototype-builtins": "error",
-    "no-redeclare": "error",
     "no-regex-spaces": "error",
     "no-self-assign": "error",
     "no-setter-return": "error",
@@ -172,30 +160,18 @@
             "ignoreRestSiblings": true
           }
         ],
-        "no-console": "off",
-        "no-empty": "off",
         "no-var": "error",
-        "no-redeclare": "off",
-        "no-param-reassign": "off",
-        "@typescript-eslint/no-non-null-assertion": "off",
         "@typescript-eslint/prefer-literal-enum-member": "error",
         "@typescript-eslint/prefer-as-const": "error",
         "@typescript-eslint/prefer-enum-initializers": "error",
         "@typescript-eslint/no-inferrable-types": "error",
-        "@typescript-eslint/consistent-type-imports": "off",
-        "@typescript-eslint/no-explicit-any": "off",
-        "@typescript-eslint/ban-types": "off",
         "default-param-last": "error",
-        "no-else-return": "off",
-        "curly": "off",
         "import/extensions": ["error", "ignorePackages"],
         "import-js/order": "warn",
         "eslint-comments/require-description": "error",
         "no-sequences": "error",
-        "radix": "off",
         "prefer-numeric-literals": "error",
         "no-new-func": "error",
-        "jsx-a11y/click-events-have-key-events": "off",
         "codegen/codegen": "error",
         "react/only-export-components": [
           "warn",
@@ -215,13 +191,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["**/test/**", "**/*.test.ts"],
-      "rules": {
-        "no-console": "off"
-      }
-    },
-    {
-      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "specs/**/*.ts"],
       "rules": {
         "iterate/helpers-after-tests": "error",
         "iterate/no-describe": "error",
@@ -249,11 +219,6 @@
       "files": ["specs/**/*.ts"],
       "rules": {
         "iterate/spec-restricted-syntax": "error",
-        "iterate/helpers-after-tests": "error",
-        "iterate/no-lifecycle-hooks": "error",
-        "iterate/no-vi-mock": "error",
-        "iterate/prefer-object-property-match": "error",
-        "iterate/prefer-test-over-it": "error",
         "middlewright/prefer-locator-waits": "error",
         "middlewright/prefer-positive-waits": "error",
         "middlewright/require-timeout-comment": "error",
@@ -262,7 +227,7 @@
           {
             "name": "@playwright/test",
             "importNames": ["test"],
-            "message": "Use import { test } from './test-support/test.ts' instead. It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
+            "message": "Import test from the harness at specs/test-support/test.ts ('../test-support/test.ts' from an app folder such as specs/os/, './test-support/test.ts' from specs/ itself). It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
           }
         ]
       }

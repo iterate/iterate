@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 
 function response(status: number, headers: Record<string, string> = {}) {
@@ -6,7 +6,7 @@ function response(status: number, headers: Record<string, string> = {}) {
 }
 
 describe("fetchCloudflareWith429Retry", () => {
-  it("returns a non-429 response immediately without sleeping", async () => {
+  test("returns a non-429 response immediately without sleeping", async () => {
     const sleep = vi.fn(async () => {});
     const doFetch = vi.fn(async () => response(200));
 
@@ -17,7 +17,7 @@ describe("fetchCloudflareWith429Retry", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("does NOT retry non-429 errors — a 500 surfaces to the caller at once", async () => {
+  test("does NOT retry non-429 errors — a 500 surfaces to the caller at once", async () => {
     const sleep = vi.fn(async () => {});
     const doFetch = vi.fn(async () => response(500));
 
@@ -28,7 +28,7 @@ describe("fetchCloudflareWith429Retry", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("retries 429s on the fallback schedule until a success", async () => {
+  test("retries 429s on the fallback schedule until a success", async () => {
     const sleeps: number[] = [];
     const doFetch = vi
       .fn(async () => response(200))
@@ -46,7 +46,7 @@ describe("fetchCloudflareWith429Retry", () => {
     expect(sleeps).toEqual([5_000, 15_000]);
   });
 
-  it("honors Retry-After (delta-seconds) over the fallback delay, capped", async () => {
+  test("honors Retry-After (delta-seconds) over the fallback delay, capped", async () => {
     const sleeps: number[] = [];
     const doFetch = vi
       .fn(async () => response(200))
@@ -64,7 +64,7 @@ describe("fetchCloudflareWith429Retry", () => {
     expect(sleeps).toEqual([9_000, 120_000]);
   });
 
-  it("gives up after the configured attempts, returning the final 429 for the caller's normal error path", async () => {
+  test("gives up after the configured attempts, returning the final 429 for the caller's normal error path", async () => {
     const sleep = vi.fn(async () => {});
     const doFetch = vi.fn(async () => response(429));
 
@@ -78,7 +78,7 @@ describe("fetchCloudflareWith429Retry", () => {
     expect(sleep).toHaveBeenCalledTimes(4);
   });
 
-  it("propagates thrown fetch errors without retrying", async () => {
+  test("propagates thrown fetch errors without retrying", async () => {
     const sleep = vi.fn(async () => {});
     const doFetch = vi.fn(async () => {
       throw new Error("ECONNRESET");

@@ -95,7 +95,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
   if (fragment?.startsWith("path:") === true) {
     path = fragment.slice("path:".length);
     // An explicit empty fragment is invalid; absence selects the default branch.
-    // eslint-disable-next-line iterate/simple-truthiness-check -- Reject an explicit empty fragment below.
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- Reject an explicit empty fragment below.
   } else if (fragment !== undefined) {
     const pathSeparator = fragment.indexOf("&path:");
     if (pathSeparator === -1) ref = fragment;
@@ -105,7 +105,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
-  // eslint-disable-next-line iterate/simple-truthiness-check -- An explicit empty ref must be rejected.
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- An explicit empty ref must be rejected.
   if (ref !== undefined) {
     if (
       ref.length === 0 ||
@@ -124,7 +124,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
-  // eslint-disable-next-line iterate/simple-truthiness-check -- An explicit empty path must be rejected.
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- An explicit empty path must be rejected.
   if (path !== undefined) {
     if (!isSafeConfigRepoTemplatePath(path)) {
       throw new Error(`Invalid path in config template reference: ${JSON.stringify(path)}.`);

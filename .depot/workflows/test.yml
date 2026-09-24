@@ -10,10 +10,7 @@ concurrency:
   group: test-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 env:
-  # THE STORE THE IMAGE WAS BAKED WITH. scripts/depot-ci/dependencies.mjs hashes every pnpm_config_*
-  # variable into its fingerprint (the store dir decides where node_modules links point), and the bake
-  # job sets this one — so a workflow without it computes a different fingerprint on identical sources
-  # and never reuses the baked node_modules (every os-next job, 2026-09-22, ~55 s of paging each).
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
@@ -67,7 +64,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/dummy-petshop,@iterate-com/kit,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/lint,iterate,@iterate-com/shared,@iterate-com/scripts,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os"
         # A superseded run still normalizes and uploads its raw evidence, but
         # GitHub's job telemetry owns the cancelled outcome; do not turn killed
         # runner sentinels into test failures.

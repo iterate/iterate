@@ -3,13 +3,15 @@ import { join } from "node:path";
 import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
-import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.ts";
+import {
+  analyzeTestTelemetryCompleteness,
+  testTelemetryFailed,
+} from "./test-telemetry-completeness.ts";
 
 /** Called only by full-suite CI finalizers, never by focused test invocations. */
 export async function writeFlakeSuiteSummaries(input: {
   directory: string;
   group: "unit" | "preview";
-  scope: "job" | "workflow";
   artifacts: TestTelemetryArtifact[];
   expectedWorkspaces: string[];
   cancelled: boolean;
@@ -41,16 +43,13 @@ export async function writeFlakeSuiteSummaries(input: {
     const completeness = analyzeTestTelemetryCompleteness(
       evidence,
       suite === "unit" ? input.expectedWorkspaces : [],
-      input.scope,
     );
-    const expectedCount =
-      input.scope === "workflow" ? completeness.expectedArtifactSources.length : 1;
     const diagnostics = [
       ...(!branch ? ["Missing source branch"] : []),
       ...(input.cancelled ? ["CI run cancelled"] : []),
       ...(artifacts.length === 0 ? ["No test runner result received"] : []),
-      ...(suite !== "unit" && (!expectedCount || artifacts.length !== expectedCount)
-        ? [`Expected ${expectedCount} full-suite runner results, received ${artifacts.length}`]
+      ...(suite !== "unit" && artifacts.length !== 1
+        ? [`Expected 1 full-suite runner results, received ${artifacts.length}`]
         : []),
       ...completeness.missingArtifactSources.map(
         ({ source }) => `Missing runner: ${source.producer}@${source.workspace}`,
@@ -113,11 +112,7 @@ export async function writeFlakeSuiteSummaries(input: {
       })),
       unknownFlakeCount: tests.filter((test) => unknownFlakeRecordFromTelemetry(test) !== null)
         .length,
-      failedCount: tests.filter((test) =>
-        test.outcome
-          ? test.outcome === "unexpected"
-          : ["failed", "timedout"].includes(test.state.toLowerCase()),
-      ).length,
+      failedCount: tests.filter(testTelemetryFailed).length,
       diagnostics: [...new Set(diagnostics)],
       runUrl:
         source.ci.depotJobUrl ||

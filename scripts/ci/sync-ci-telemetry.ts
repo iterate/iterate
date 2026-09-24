@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { Octokit } from "@octokit/rest";
+import { DEPOT_ORG, mapConcurrent } from "./depot.ts";
 import { durationMs, sendPostHogEvents, systemEvent, type PostHogEvent } from "./posthog-events.ts";
 import { buildReviewEvents, reviewProviderKey, selectReviewSources } from "./review-telemetry.ts";
 import { collectTelemetrySources } from "./telemetry-source-sync.ts";
@@ -330,7 +331,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
       "workflow",
       "list",
       "--org",
-      "0p91s0lz49",
+      DEPOT_ORG,
       "--repo",
       repository,
       "--output",
@@ -348,7 +349,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
     .slice(0, limit);
   const details = await mapConcurrent(recent, 12, (item) =>
     depotJson<DepotDetail>(
-      ["ci", "workflow", "show", item.workflow_id, "--org", "0p91s0lz49", "--output", "json"],
+      ["ci", "workflow", "show", item.workflow_id, "--org", DEPOT_ORG, "--output", "json"],
       environment,
     ),
   );
@@ -360,7 +361,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
       [
         runId,
         await depotJson<DepotMetrics>(
-          ["ci", "metrics", "--run", runId, "--org", "0p91s0lz49", "--output", "json"],
+          ["ci", "metrics", "--run", runId, "--org", DEPOT_ORG, "--output", "json"],
           environment,
         ),
       ] as const,
@@ -381,7 +382,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
       workflow_path: detail.workflow.workflow_path,
       workflow_id: detail.workflow.workflow_id,
       workflow_run_id: detail.run.run_id,
-      workflow_run_url: `https://depot.dev/orgs/0p91s0lz49/workflows/${detail.workflow.workflow_id}`,
+      workflow_run_url: `https://depot.dev/orgs/${DEPOT_ORG}/workflows/${detail.workflow.workflow_id}`,
       trigger: detail.run.trigger,
       head_sha: detail.run.head_sha,
     };
@@ -474,25 +475,6 @@ async function depotJson<T>(args: string[], environment: NodeJS.ProcessEnv): Pro
     maxBuffer: 20 * 1024 * 1024,
   });
   return JSON.parse(stdout) as T;
-}
-
-async function mapConcurrent<Input, Output>(
-  inputs: Input[],
-  concurrency: number,
-  operation: (input: Input) => Promise<Output>,
-) {
-  const outputs = new Array<Output>(inputs.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, inputs.length) }, async () => {
-      for (;;) {
-        const index = next++;
-        if (index >= inputs.length) return;
-        outputs[index] = await operation(inputs[index]!);
-      }
-    }),
-  );
-  return outputs;
 }
 
 function summarize(events: PostHogEvent[]) {

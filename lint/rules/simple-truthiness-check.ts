@@ -1,7 +1,6 @@
 // Reimplements the design from iterate/iterate#2491 (simple-truthiness-check).
 // Adds direct-property checks and a dated rollout; uses types to leave numeric,
 // boolean and unknown-input checks alone, and deliberately offers no autofix.
-import { existsSync, readFileSync } from "node:fs";
 import {
   ObjectFlags,
   SignatureKind,
@@ -11,7 +10,10 @@ import {
   type UnionType,
 } from "@typescript/native-preview/unstable/sync";
 import type { Expression, Node } from "estree";
-import { getTypeAwareLintService, type TypeAwareLintFileService } from "../oxlint-type-aware.ts";
+import {
+  getTypeAwareLintFileService,
+  type TypeAwareLintFileService,
+} from "../oxlint-type-aware.ts";
 import { grandfatherRule } from "../grandfather-rule.ts";
 
 /**
@@ -74,19 +76,7 @@ export const simpleTruthinessCheckRule = grandfatherRule({
     let file: TypeAwareLintFileService | undefined;
     function typeOf(node: Node) {
       if (!node.range) return undefined;
-      if (!file) {
-        const service = getTypeAwareLintService({ cwd: context.cwd });
-        // Disk-backed files need no overlay: registering every file as changed
-        // rebuilds TypeScript snapshots as oxlint walks the repository.
-        if (
-          service.textByFile.has(context.filename) ||
-          !existsSync(context.filename) ||
-          readFileSync(context.filename, "utf8") !== context.sourceCode.text
-        ) {
-          service.setFileText(context.filename, context.sourceCode.text);
-        }
-        file = service.getFileService(context.filename);
-      }
+      file ||= getTypeAwareLintFileService(context);
       // The member's start points at its receiver (input), not its value (input.foo).
       const position = node.type === "MemberExpression" ? node.property.range?.[0] : node.range[0];
       if (typeof position !== "number") return undefined;

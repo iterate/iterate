@@ -20,10 +20,10 @@
 import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { ProbeSummary } from "./do-duration-probe.ts";
 import { getRunUrl } from "./github.ts";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
+import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** $12.50 per million GB-seconds at 128 MB: one DO-hour is 450 GB-s. */
 const USD_PER_DO_HOUR = 0.005625;
@@ -285,10 +285,9 @@ export function renderDailyThread(input: {
       pages.push({
         label: reading.label,
         text: [
-          // "DO cost page for <label>:" is how postPageUnlessRecent finds it.
-          // The mention is Jonas (slackUsers in ./slack.ts); a test run
-          // mentions nobody.
-          `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling.${input.testRun ? "" : " <@U067G4QRFK2>"}`,
+          // "DO cost page for <label>:" is how postPageUnlessRecent finds it; a test run mentions
+          // nobody.
+          `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling.${input.testRun ? "" : ` ${onCallMention}`}`,
           "Top spenders, trailing hour:",
           ...activeTime.topNamespaces.map((row) => `• ${row.namespace}  ~${usd(row.doHours)}/h`),
           `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread.`,
