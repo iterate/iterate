@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import esquery from "esquery";
 import unicorn from "eslint-plugin-unicorn";
 import type { Rule, Scope, SourceCode } from "eslint";
-import type { Program, Node } from "estree";
+import type { Program } from "estree";
 
 import { getPropertyName } from "./rules/ast.ts";
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
