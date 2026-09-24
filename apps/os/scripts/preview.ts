@@ -39,6 +39,7 @@ import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
+import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   deleteArtifactsNamespace,
   ensureArtifactsNamespace,
@@ -153,7 +154,7 @@ function run(
 
 /** The wrangler a run uses: the pinned draft build (WRANGLER_PACKAGE) installed into a tmpdir the
  *  way cloudflare-os does it (pnpm, exotic subdeps allowed for the pkg.pr.new workspace packages). */
-function preparePreviewWrangler() {
+export function preparePreviewWrangler() {
   const installDir = mkdtempSync(path.join(tmpdir(), "os-preview-wrangler-"));
   writeFileSync(
     path.join(installDir, "package.json"),
@@ -572,6 +573,19 @@ async function deployOsPreview(
         response.status === 200 && (await response.text()).startsWith(deploymentId),
       "version names the deployment",
     );
+    // `/version` answering is not the preview answering: a brand-new preview's Durable Objects
+    // answer `internal error; reference = …` for seconds after it (preview-readiness.ts; 19 of 20
+    // brand-new previews on 2026-09-24, for 6–27 s). Nothing is handed on — the apps on top, the
+    // PR body's links, main's e2e job — until five rounds of eight in a row answer in full; a
+    // preview that does not within a minute fails the deploy, naming what it answered.
+    await awaitPreviewReady(url, {
+      adminSecret: parseAppConfig(
+        collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
+      ).secrets.adminBearer.exposeSecret(),
+      width: 8,
+      consecutive: 5,
+      deadlineMs: 60_000,
+    });
     return { wrangler, url, deploymentId, slug: data.preview?.slug || previewName };
   } catch (error) {
     wrangler.cleanup();

@@ -1,7 +1,15 @@
 /** Open a WebSocket, trying again for a while when the connection fails: a phone waking up, a
  *  tunnel flapping, a cold edge — the things a first attempt trips over. Resolves with the socket
  *  once it is OPEN; rejects with the last failure after the last attempt. The delays are the
- *  waits BETWEEN attempts (the first is immediate). */
+ *  waits BETWEEN attempts (the first is immediate).
+ *
+ *  Every failed attempt is explained, never swallowed (docs/engineering-invariants.md): the error
+ *  names the close code and reason the socket closed with before it opened, and each attempt that
+ *  is tried again logs a `client.platform-failure-socket-open` warn first. The upgrade's HTTP status
+ *  is not among them: the WebSocket API never exposes the handshake's response (a refused upgrade
+ *  is a close 1006, by design — https://websockets.spec.whatwg.org/#feedback-from-the-protocol),
+ *  so a non-standard `ErrorEvent.error` (Node's undici names "non-101 status code" there) is added
+ *  when the runtime gives one. */
 const RETRY_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 8_000];
 
 export function openSocketWithRetry(
@@ -19,26 +27,45 @@ export function openSocketWithRetry(
   const once = () =>
     new Promise<WebSocket>((resolve, reject) => {
       const socket = new Socket(url);
+      let cause = "";
+      const errored = (event: Event) => {
+        const error = (event as Partial<ErrorEvent>).error;
+        if (error instanceof Error) cause = ` (${error.message})`;
+      };
       const opened = () => {
         socket.removeEventListener("close", failed);
+        socket.removeEventListener("error", errored);
         resolve(socket);
       };
-      const failed = () => {
+      const failed = (event: CloseEvent) => {
         socket.removeEventListener("open", opened);
-        reject(new Error("WebSocket connection failed."));
+        socket.removeEventListener("error", errored);
+        reject(
+          new Error(
+            `WebSocket connection failed: closed ${event.code}${event.reason ? ` "${event.reason}"` : ""} before it opened${cause}`,
+          ),
+        );
       };
       socket.addEventListener("open", opened, { once: true });
+      socket.addEventListener("error", errored);
       socket.addEventListener("close", failed, { once: true });
     });
   return (async () => {
-    let attempt = 0;
-    for (;;) {
+    for (let attempt = 1; ; attempt++) {
       try {
         return await once();
       } catch (error) {
-        if (attempt >= delays.length) throw error;
-        await sleep(delays[attempt]!);
-        attempt += 1;
+        const delay = delays[attempt - 1];
+        if (delay === undefined) throw error;
+        console.warn({
+          event: "client.platform-failure-socket-open",
+          url: String(url),
+          attempt,
+          attempts: delays.length + 1,
+          retryInMs: delay,
+          message: (error as Error).message,
+        });
+        await sleep(delay);
       }
     }
   })();
