@@ -106,6 +106,13 @@ iterate_kit_add_test(
   INCLUDES ../platforms/iterate_esp_idf/include
   LINK iterate-kit-core iterate-kit-host-esp-idf)
 
+# Which upgrade answers are a refused key, and how long one waits: the two
+# pure decisions under the ESP network task's credential backoff.
+iterate_kit_add_test(
+  iterate-kit-credential-refusal-test credential_refusal_test.c
+  INCLUDES ../platforms/iterate_esp_idf/include
+  LINK iterate-kit-core iterate-kit-host-esp-idf)
+
 # The platform half a loop test needs: a scriptable transport and a
 # provisioned board (tests/fakes/esp_idf), ESP-shaped like the loop it links.
 add_library(iterate-kit-esp-idf-fakes STATIC fakes/esp_idf/fake_esp_idf_platform.c)
@@ -130,6 +137,11 @@ iterate_kit_add_test(
 # delivering a spk-frame batch, which is why the bug in it was in no host build.
 iterate_kit_add_test(
   iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
+
+# A board that never connects, because the server refuses its key.
+iterate_kit_add_test(
+  iterate-kit-voice-loop-credential-test voice_loop_credential_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
 iterate_kit_add_test(iterate-kit-audio-interfaces-test audio_interfaces_test.c

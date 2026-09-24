@@ -2825,6 +2825,24 @@ void iterate_kit_voice_loop_step(void) {
         last_probe_answer_count = probe_answers;
       }
       /*
+       * A REFUSED KEY IS NOT A NETWORK FAULT. "Connecting" would promise what
+       * no retry delivers: the OS refuses this device's key until someone
+       * sets the device up again, so the screen asks for that instead.
+       */
+      {
+        static bool credential_refused;
+        if (liveness.credential_refused != credential_refused) {
+          credential_refused = liveness.credential_refused;
+          if (credential_refused) {
+            ESP_LOGE(tag, "iterate refused this device's key — set it up again");
+          }
+          if (runtime.view.screen == ITERATE_KIT_VOICE_SCREEN_CONNECTING) {
+            runtime.view.status =
+                credential_refused ? "key refused — set up again" : "connecting to iterate";
+          }
+        }
+      }
+      /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
        *
        * Holding the liveness clock while the transport is down is right — you

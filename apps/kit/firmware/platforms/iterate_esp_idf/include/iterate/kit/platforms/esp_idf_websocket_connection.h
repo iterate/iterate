@@ -147,6 +147,8 @@ struct iterate_kit_esp_idf_websocket_connection_metrics {
   int32_t last_esp_tls_error;
   int32_t last_tls_stack_error;
   int32_t last_tls_cert_flags;
+  /** HTTP status of the latest upgrade answer; see the connection's field. */
+  int32_t last_upgrade_status;
   struct iterate_kit_websocket_tx_metrics tx;
 };
 
@@ -208,6 +210,12 @@ struct iterate_kit_esp_idf_websocket_connection {
   int32_t last_esp_tls_error;
   int32_t last_tls_stack_error;
   int32_t last_tls_cert_flags;
+  /*
+   * The HTTP status the peer answered the latest upgrade with: 101 once
+   * upgraded, 0 when no answer arrived (DNS, TCP or TLS failed first), -1 when
+   * the answer's status line did not parse.
+   */
+  int32_t last_upgrade_status;
   int port;
   int last_error;
   bool secure;
@@ -242,6 +250,18 @@ static inline bool iterate_kit_esp_idf_websocket_queue_keepalive(
   }
   connection->last_probe_us = now_us;
   return true;
+}
+
+/*
+ * A 401 or 403 answer to the upgrade is the OS refusing the key the upgrade
+ * carried, before any session exists: unknown, expired, ended, or without the
+ * scope `/api` needs. The same key gets the same answer however soon it is
+ * asked again. A network failure or a 5xx is different: a prompt retry can
+ * outlast it.
+ */
+static inline bool iterate_kit_esp_idf_websocket_refused_credential(
+    int32_t upgrade_status) {
+  return upgrade_status == 401 || upgrade_status == 403;
 }
 
 /**
