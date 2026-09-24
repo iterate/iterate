@@ -168,8 +168,20 @@ export class ControlPlane {
     url: URL,
     platformOrigin: string,
   ): Promise<ProjectAddress | null> {
-    const routed = projectHostOf(config, url, platformOrigin);
-    if (routed || !config.customHostnames) return routed;
+    return (
+      projectHostOf(config, url, platformOrigin) ?? this.customHostOf(config, url, platformOrigin)
+    );
+  }
+
+  /** The table half of `projectHostOf`: the project that added `url`'s hostname itself, or null —
+   *  one catalog read, memoized thirty seconds per isolate, hit or miss. Also last-known-project.ts's,
+   *  which keeps a copy of each hit for when the read fails. */
+  async customHostOf(
+    config: AppConfig,
+    url: URL,
+    platformOrigin: string,
+  ): Promise<ProjectAddress | null> {
+    if (!config.customHostnames) return null;
     if (url.origin === platformOrigin || url.origin === config.urls.mcp) return null;
     const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
     if (
@@ -181,7 +193,7 @@ export class ControlPlane {
     const memoized = hostnameMemo.get(hostname);
     if (memoized && Date.now() - memoized.at < 30_000) return memoized.value;
     const candidates = customHostnameCandidatesOf(hostname);
-    const value = this.#call<{ hostname: string; project: ProjectRecord } | null>(
+    const value = this.#read<{ hostname: string; project: ProjectRecord } | null>(
       "projectByHostname",
       candidates.map((candidate) => candidate.hostname),
     ).then(

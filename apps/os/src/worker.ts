@@ -15,7 +15,7 @@ import { identityResponse } from "./identity.ts";
 import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
-import { projectForHost } from "./control-plane/last-known-project.ts";
+import { admitProjectHost } from "./control-plane/last-known-project.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import { testLinkResponse } from "./issuer-session.ts";
@@ -61,19 +61,19 @@ function withoutBasePath(request: Request, basePath: string): Request {
 /** A project host's answer when its admission needed a control-plane read that failed on the
  *  platform's side (ControlPlaneUnavailableError, edge.ts) and no last-known copy stood in: 503 at
  *  once, logged as `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages
- *  on a burst, and on the 5xx), where on 2026-09-24 each visitor waited 12–15 s for an exception.
+ *  on a burst, and on the 5xx); on 2026-09-24 each visitor instead waited 12–15 s for an exception.
  *  Any other error is rethrown. */
-function controlPlaneUnavailable(error: unknown, project: string): Response {
+function controlPlaneUnavailable(error: unknown, hostname: string): Response {
   if (!(error instanceof ControlPlaneUnavailableError)) throw error;
   console.warn({
     event: "control-plane.platform-failure-unavailable",
-    name: project,
+    name: hostname,
     method: error.method,
     waitedMs: error.waitedMs,
     message: error.message,
   });
   return new Response(
-    `503: the platform could not look up ${JSON.stringify(project)} just now; try again in a minute\n`,
+    `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
     { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
   );
 }
@@ -192,20 +192,23 @@ export default {
     // the app's own cookies and a WebSocket upgrade intact. The browser adapter's `/api` and
     // `/.auth/*` are the app's own on a host of its own (subdomains) and the issuer's under paths,
     // where the app shares the platform's origin.
-    const projectHost = await controlPlane.projectHostOf(appConfig, url, platformOrigin);
-    if (projectHost) {
-      // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
-      // touch, so a hostname whose project the control plane does not know must never reach one —
-      // else any label under the wildcard would mint durable storage from the public internet. One
-      // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
-      // host's label (a slug, an id would do too) to the project's id; an unknown label is 421.
-      // The read is bounded (edge.ts); when it fails, this data center's last-known copy of the
-      // answer stands in (last-known-project.ts), and a host with none answers 503 at once.
-      const project = await projectForHost(controlPlane, projectHost.project, {
-        origin: url.origin,
-        ctx,
-      }).catch((error: unknown) => controlPlaneUnavailable(error, projectHost.project));
-      if (project instanceof Response) return project;
+    // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
+    // touch, so a hostname whose project the control plane does not know must never reach one —
+    // else any label under the wildcard would mint durable storage from the public internet. The
+    // host's address (a static rule, else a hostname a project added: one catalog read), then one
+    // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
+    // host's label (a slug, an id would do too) to the project's id; an unknown label is 421. The
+    // reads are bounded (edge.ts); when one fails, this data center's last-known copy of its answer
+    // stands in (last-known-project.ts), and a host with none answers 503 at once.
+    const admitted = await admitProjectHost(controlPlane, {
+      config: appConfig,
+      url,
+      platformOrigin,
+      ctx,
+    }).catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
+    if (admitted instanceof Response) return admitted;
+    if (admitted) {
+      const { address: projectHost, project } = admitted;
       if (!project)
         return new Response(
           `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
@@ -246,7 +249,7 @@ export default {
         // A person's access has no stand-in: a membership read the control plane fails is a 503.
         const reaches = await controlPlane
           .reachesProject(authorization.reach, projectId)
-          .catch((error: unknown) => controlPlaneUnavailable(error, projectHost.project));
+          .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
         if (reaches instanceof Response) return reaches;
         if (!reaches)
           return new Response("This session cannot access this project", { status: 403 });
