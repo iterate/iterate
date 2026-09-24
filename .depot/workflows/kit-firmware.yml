@@ -117,10 +117,10 @@ jobs:
           name: kit-firmware-${{ matrix.device }}
           path: ${{ runner.temp }}/kit-firmware/release
           if-no-files-found: error
-      # TEMPORARY diagnostics (PR #2934): Depot's GitHub checks carry no log, so a failed leg's log
-      # goes to diagnose-firmware, which posts its tail as a check run.
-      - name: Keep the failed leg's log
-        if: failure()
+      # TEMPORARY diagnostics (PR #2934): Depot's GitHub checks carry no log, so each leg's log goes
+      # to diagnose-firmware, which posts its tail as a check run.
+      - name: Keep the leg's log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-log-${{ matrix.device }}
@@ -152,6 +152,7 @@ jobs:
           VERSION: ${{ needs.plan-firmware.outputs.version }}
         run: |-
           set -euo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/publish.log") 2>&1 # TEMPORARY diagnostics (PR #2934)
           shopt -s nullglob
           for release in dist/kit-firmware-*/; do
             tag=$(jq -r .tag "$release/release.json")
@@ -166,13 +167,20 @@ jobs:
               --title "$(jq -r .title "$release/release.json")" \
               --notes-file "$release/notes.md" "$release"/assets/*
           done
+      - name: Keep the publish log # TEMPORARY diagnostics (PR #2934)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-log-publish
+          path: ${{ runner.temp }}/publish.log
 
   # TEMPORARY diagnostics (PR #2934), removed before merge.
   diagnose-firmware:
     name: Diagnose
     needs:
       - build-firmware
-    if: always() && needs.build-firmware.result == 'failure'
+      - publish-firmware
+    if: always() && needs.build-firmware.result != 'skipped'
     permissions:
       checks: write
     runs-on:
@@ -180,7 +188,7 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 10
     steps:
-      - name: Download the failed legs' logs
+      - name: Download the legs' and the publish log
         uses: actions/download-artifact@v4
         with:
           pattern: firmware-log-*
@@ -193,7 +201,7 @@ jobs:
         run: |-
           set -euo pipefail
           shopt -s nullglob
-          for log in logs/*/leg.log; do
+          for log in logs/*/*.log; do
             device=$(basename "$(dirname "$log")")
             tail -c 60000 "$log" > tail.txt
             jq -n --arg name "Kit Firmware log / ${device#firmware-log-}" --arg sha "$HEAD_SHA" --rawfile text tail.txt \
