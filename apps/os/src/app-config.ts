@@ -9,7 +9,7 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {}, projectWildcard: { hostname, project } },
-//     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret } },
+//     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -27,6 +27,7 @@ import {
   type IngressRouting,
   type ProjectAddress,
 } from "iterate/next/project-ingress";
+import { TEST_LINK_EMAIL_DOMAIN } from "./test-link.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
  *  only "REDACTED", so a config dump can never leak it. */
@@ -145,6 +146,13 @@ export const AppConfig = z.object({
           clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
         })
         .optional(),
+      /** A PREVIEW'S ONE-CLICK SIGN-IN (test-link.ts): `GET /.auth/test-link?t=` signs a browser in
+       *  as the address a link signed with this deployment's key names, under `emailDomain`. Not a
+       *  sign-in mechanism a person chooses, and refused (`parseAppConfig`) unless `urls.os` is a
+       *  workers.dev or localhost origin. Set in code, never in Doppler: the per-PR preview's config
+       *  (scripts/preview-config.ts `previewWranglerConfig`) and local dev's
+       *  (scripts/generate-wrangler-config.ts), as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
+      testLink: z.object({ emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN) }).optional(),
     })
     .prefault({}),
   /** The deployment's own keys. */
@@ -352,6 +360,13 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
       );
     ingressRouting = { type: "paths" };
   }
+  // A second guard behind "set in code": even a Doppler value cannot turn test links on at a
+  // deployment on its own domain (prd, os.iterate.com) — only on a preview's workers.dev origin or
+  // a laptop's.
+  if (login.testLink && !isTestLinkOrigin(urls.os))
+    throw new Error(
+      `${fieldNameOf(["login", "testLink"])}: only for a preview or local dev — urls.os must be a workers.dev or localhost origin, not ${JSON.stringify(urls.os)}`,
+    );
   if (!login.password.exposeSecret() && !login.emailCode && !login.google && !login.cloudflare)
     throw new Error(
       `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, login.google or login.cloudflare`,
@@ -361,6 +376,17 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     urls: { ...urls, ingressRouting },
     deployId,
   };
+}
+
+/** An origin test links may be honoured on (`login.testLink`): an https workers.dev one (a per-PR
+ *  preview's) or localhost's. A blank `urls.os` is neither: it must be named. */
+function isTestLinkOrigin(origin: string) {
+  if (!origin) return false;
+  const { protocol, hostname } = new URL(origin);
+  return (
+    (protocol === "https:" && hostname.endsWith(".workers.dev")) ||
+    ["localhost", "127.0.0.1"].includes(hostname)
+  );
 }
 
 const appConfigByEnv = new WeakMap<object, AppConfig>();

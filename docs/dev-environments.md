@@ -118,12 +118,25 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- One-click login: every hosted client (Dash, Agents, Notes, Voice, Kit) is
-  deployed next to the platform preview and wired to it, so a reviewer opens a
-  client from the PR body and signs in with any email and the preview's password
-  (Doppler `project-worker/preview`, `APP_CONFIG.login.password`; every preview
-  inherits its parent's). That grants nothing the password doesn't already
-  grant.
+- One-click sign-in: every hosted client (Dash, Agents, Notes, Voice, Kit) is
+  deployed next to the platform preview and wired to it, and the PR body's
+  preview section carries `Sign in ↗` links: one in the heading (into the
+  Dash's project, or the issuer's own page when the Dash wasn't previewed) and
+  one per app. A click signs a logged-out browser in as the PR's test person,
+  `pr<N>@preview.iterate.test`, and lands inside project `pr<N>`, with no
+  password and no Allow page. CI seeds that person and project on every deploy
+  (`apps/os/scripts/preview.ts` `previewSignIn`). The link is
+  `/.auth/test-link?t=<token>` (`apps/os/src/test-link.ts`), signed with the
+  preview's `secrets.key` and bound to that preview's origin, so a pr123 link
+  is refused on pr124 even though every preview inherits the same key. It is
+  also bound to that one address, expires in 14 days (every push mints a fresh
+  one) and is deleted with the preview. The route exists only where
+  `login.testLink` is set. The preview config and local dev set it in code,
+  never in Doppler, and `parseAppConfig` refuses it unless `urls.os` is a
+  workers.dev or localhost origin, so prd answers 404. Locally, mint one with
+  the dev key (`specs/os/test-link.spec.ts` shows how). Anyone can still sign
+  in with any email and the preview's password (Doppler
+  `project-worker/preview`, `APP_CONFIG.login.password`).
 
 - Template-carrying projects: a project can be born from a config template
   still in flight on a PR. `projects.create({ project, configRepoTemplate })`

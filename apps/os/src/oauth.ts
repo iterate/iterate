@@ -27,6 +27,10 @@ export const GrantProps = z.object({
    *  organization name */
   picture: z.string().optional(),
   name: z.string().optional(),
+  /** An issuer session a preview's test link started (test-link.ts, issuer-session.ts
+   *  `testLinkResponse`): the sibling app previews' origins the link signed, and the test person's
+   *  project — consent.ts approves such a client for that project without the Allow page. */
+  testLink: z.object({ clients: z.array(z.string()), project: z.string() }).optional(),
   projects: z.array(z.string()).nullable(),
   deadline: z.number().int().positive(),
 });

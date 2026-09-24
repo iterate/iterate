@@ -16,6 +16,7 @@ import { notes } from "../../notes/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
+import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 /** Beside Vite's built Worker config, so `main` and `assets.directory` resolve identically. */
@@ -173,8 +174,10 @@ export function splicePullRequestBody(body: string, section: string) {
   return `${kept ? `${kept}\n\n` : ""}${block}\n`;
 }
 
-/** The URL, the deployment, the apps on top previewed this run; the operations (reset, e2e, delete,
- *  the laptop commands) are the README's, linked, not spelled here a second time. */
+/** The URL, the deployment, the apps on top previewed this run and, on a PR, the one-click
+ *  `Sign in ↗` links (src/test-link.ts) — the heading's into the Dash (or the issuer's own page),
+ *  each app's into that app; the operations (reset, e2e, delete, the laptop commands) are the
+ *  README's, linked, not spelled here a second time. */
 export function renderPullRequestSection(input: {
   previewName: string;
   url: string;
@@ -183,21 +186,47 @@ export function renderPullRequestSection(input: {
   apps: { name: string; url: string }[];
   /** Which commit the run deployed and tested (scripts/ci/preview-tested-commit.ts). */
   testedCommit?: string;
+  /** The test person's links (scripts/preview.ts `previewSignIn`): only with a PR number. */
+  signIn?: {
+    heading: string;
+    /** app name → its link */
+    apps: Record<string, string>;
+    email: string;
+    project: string;
+    /** whether CI's `projects.create` of `project` succeeded this run */
+    seeded: boolean;
+  };
 }) {
+  const { signIn } = input;
   return [
     `### OS preview: \`${input.previewName}\``,
     "",
-    `**${input.url}** · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
+    `**${input.url}**${signIn ? ` · [Sign in ↗](${signIn.heading})` : ""} · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
     "",
     ...(input.testedCommit ? [`Built and tested from ${input.testedCommit}.`, ""] : []),
     ...(input.apps.length > 0
-      ? [
-          "| App on top, signed in against this preview | |",
-          "| --- | --- |",
-          ...input.apps.map((app) => `| ${app.name} | ${app.url} |`),
-        ]
+      ? signIn
+        ? [
+            "| App on top, signed in against this preview | | |",
+            "| --- | --- | --- |",
+            ...input.apps.map(
+              (app) =>
+                `| ${app.name} | ${app.url} | ${signIn.apps[app.name] ? `[Sign in ↗](${signIn.apps[app.name]})` : ""} |`,
+            ),
+          ]
+        : [
+            "| App on top, signed in against this preview | |",
+            "| --- | --- |",
+            ...input.apps.map((app) => `| ${app.name} | ${app.url} |`),
+          ]
       : ["No app preview was deployed in this run."]),
     "",
+    ...(signIn
+      ? [
+          `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,
+          "",
+        ]
+      : []),
     "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md).",
   ].join("\n");
 }
@@ -217,9 +246,9 @@ const bindingOnly = (resources: { binding: string }[] | undefined) =>
  *  deployment provisions its own namespaces from that entry. The `previews` block is the ONE
  *  preview's bindings — a preview inherits nothing from the top level, so every binding the worker
  *  reads is here: KV and R2 binding-only (auto-provisioned) and the
- *  Artifacts namespace by name. Its `urls` name the preview's own origin, projects as paths,
- *  and its Dash when deployed; the secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`) are the parent's Previews
- *  settings, inherited. */
+ *  Artifacts namespace by name. Its vars name the preview's own origin, projects as paths and its
+ *  Dash when deployed, and turn the one-click sign-in links on; the secrets (`APP_CONFIG`,
+ *  `APP_CONFIG_SECRETS__KEY`) are the parent's Previews settings, inherited. */
 export function previewWranglerConfig(input: {
   template: Record<string, any>;
   previewName: string;
@@ -265,6 +294,10 @@ export function previewWranglerConfig(input: {
         APP_CONFIG_URLS__OS: previewUrl(previewName),
         APP_CONFIG_URLS__DASH: input.dashOrigin,
         APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
+        // THE ONE-CLICK SIGN-IN (src/test-link.ts), on for a per-PR preview only: this config is
+        // only ever what `wrangler preview` reads (deploy.ts never does), and app-config.ts refuses
+        // the block off a workers.dev origin besides. The PR body's `Sign in ↗` links redeem here.
+        APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
       },
     },
   };

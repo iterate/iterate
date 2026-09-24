@@ -95,6 +95,49 @@ describe("the PR body's managed section", () => {
     );
   });
 
+  test("on a PR the heading and every app carry a one-click `Sign in ↗`, and the section says as whom", () => {
+    const dash = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
+    const notes = "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev";
+    const os = "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev";
+    const signIn = {
+      heading: `${os}/.auth/test-link?t=heading`,
+      apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
+      email: "pr123@preview.iterate.test",
+      project: "pr123",
+      seeded: true,
+    };
+    const render = (seeded: boolean) =>
+      renderPullRequestSection({
+        previewName: "pr123-feature-foo",
+        url: os,
+        deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+        dashboardUrl: "https://dash.cloudflare.com/x",
+        apps: [
+          { name: "dash", url: dash },
+          { name: "notes", url: notes },
+        ],
+        signIn: { ...signIn, seeded },
+      });
+    expect(render(true)).toMatchInlineSnapshot(`
+      "### OS preview: \`pr123-feature-foo\`
+
+      **https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
+
+      | App on top, signed in against this preview | | |
+      | --- | --- | --- |
+      | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
+      | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+
+      \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
+
+      Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md)."
+    `);
+    expect(render(false)).toContain(
+      "Seeding `pr123` failed this run (the deploy log says why), so the apps ask for consent.",
+    );
+    expect(section).not.toContain("Sign in");
+  });
+
   test("appends to a body without one, keeping the author's text", () => {
     const body = splicePullRequestBody("What this PR does.\n", section);
     expect(body.startsWith("What this PR does.\n\n<!-- os-next-preview:begin -->\n")).toBe(true);
@@ -169,11 +212,12 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
     ]);
   });
 
-  test("vars are the preview's own origin and projects as paths; the secrets are the parent's Previews settings", () => {
+  test("vars are the preview's own origin, projects as paths and the one-click sign-in links on; the secrets are the parent's Previews settings", () => {
     expect(config.previews.vars).toEqual({
       APP_CONFIG_URLS__OS:
         "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
+      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
     });
     expect(previewResourceName("pr123-feature-foo", "db")).toBe(
       "os-next-preview-pr123-feature-foo-db",
