@@ -19,12 +19,12 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { Octokit } from "@octokit/rest";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
 import { DEPOT_ORG, depotCiApi, mapConcurrent } from "./depot.ts";
+import { createOctokit } from "./github.ts";
 import { durationMs, sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 
 const repository = "iterate/iterate";
@@ -79,7 +79,7 @@ async function main() {
   );
 
   const [owner, repo] = repository.split("/") as [string, string];
-  const octokit = new Octokit({ auth: githubToken });
+  const octokit = createOctokit(githubToken);
   const github = {
     pullRequest: async (number: number) =>
       (await octokit.rest.pulls.get({ owner, repo, pull_number: number })).data,
