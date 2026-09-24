@@ -1,4 +1,3 @@
-import { errorCode } from "iterate/next/lib";
 // context/itx-expression-rewriting.ts — HOW A CALL FINDS ITS TARGET, pure and total. An itx-expression
 // REWRITE RULE is `{ match, target }`: a call that starts with `match` runs as the same call with
 // `match` replaced by `target`. Rewriting repeats until the call is rooted at THE RESERVED ROOT,
@@ -35,7 +34,7 @@ import { errorCode } from "iterate/next/lib";
 // reduce parses the match once and takes the target as it is.
 
 import type { Caller } from "iterate/next/principal";
-import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
+import { codedError, errorCode, jsonEqual, resolveContextPath } from "iterate/next/lib";
 import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/next/api";
 import {
   callOn,

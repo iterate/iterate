@@ -4,8 +4,8 @@
 import { expect, test } from "vitest";
 import {
   RESIDENCY_WATCHDOG_WINDOW_MS as W,
-  decideResidencyWatchdog,
-  type ResidencyWatchdogDecision,
+  decideQuietDeadline,
+  type QuietDeadlineDecision,
 } from "./residency-watchdog.ts";
 
 const T = Date.parse("2030-01-01T00:00:00Z");
@@ -16,7 +16,7 @@ test.each<{
   now: number;
   lastCallEndedAt: number | null;
   workInFlight: number;
-  expected: ResidencyWatchdogDecision;
+  expected: QuietDeadlineDecision;
 }>([
   {
     row: "a fresh incarnation armed nothing: its armer was evicted, the wake does nothing",
@@ -72,7 +72,7 @@ test.each<{
     now: T + W,
     lastCallEndedAt: T,
     workInFlight: 0,
-    expected: { action: "record", idleSince: T },
+    expected: { action: "due", idleSince: T },
   },
   {
     row: "a late alarm (retries, a busy machine): recorded from the last call's end",
@@ -80,7 +80,7 @@ test.each<{
     now: T + 3 * W,
     lastCallEndedAt: T + 60_000,
     workInFlight: 0,
-    expected: { action: "record", idleSince: T + 60_000 },
+    expected: { action: "due", idleSince: T + 60_000 },
   },
   {
     row: "no call has ended and none is in flight: the arming instant is the quiet window's start",
@@ -88,8 +88,8 @@ test.each<{
     now: T + W,
     lastCallEndedAt: null,
     workInFlight: 0,
-    expected: { action: "record", idleSince: T },
+    expected: { action: "due", idleSince: T },
   },
 ])("$row", ({ expected, ...input }) => {
-  expect(decideResidencyWatchdog({ ...input, windowMs: W })).toEqual(expected);
+  expect(decideQuietDeadline({ ...input, windowMs: W })).toEqual(expected);
 });

@@ -22,7 +22,7 @@ import {
 } from "iterate/next/expression";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import { BUILT_IN_ROOTS, ItxExpressionResolver } from "./itx-expression-rewriting.ts";
-import { ScopedArtifactRepoRpcTarget, type ArtifactsNamespace } from "./repos.ts";
+import { ScopedArtifactRepoRpcTarget, type ArtifactsNamespace } from "./cf-artifacts.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,
 // unquoted identifier keys, no spaces). Each row is checked BOTH directions.

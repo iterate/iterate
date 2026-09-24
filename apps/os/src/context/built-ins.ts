@@ -80,7 +80,7 @@ import {
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
-import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";
+import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./cf-artifacts.ts";
 
 /** One row of `itx.subscriptions.list()`. */
 export type SubscriptionListEntry = {
@@ -125,9 +125,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
-  whoami():
-    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
-    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
+  whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   /** THE PUBLIC URL of this project over HTTP — the apex (the config worker's `fetch`) or `app`'s
    *  (`itx.apps.<app>`), at `path` (default "/") — composed from the deployment's ingress routing
    *  (iterate/next/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
@@ -248,7 +246,7 @@ export interface BuiltInScope extends LibraryRoots {
   /** Cloudflare Browser Run: `.quickAction(action, options)` returns the
    *  action's RESULT; `.fetch(input, init)` is the raw CDP door. */
   browser: ReturnType<typeof cfBrowser>;
-  /** THE ARTIFACTS PROXY (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
+  /** THE ARTIFACTS PROXY (cf-artifacts.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
    *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
    *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
    *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
@@ -437,7 +435,7 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
 
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
-  projectInfo?: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
+  projectInfo: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
@@ -612,10 +610,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
-    whoami: () =>
-      deps.projectInfo
-        ? deps.projectInfo().then((project) => ({ projectId, path, ...project }))
-        : { projectId, path },
+    whoami: () => deps.projectInfo().then((project) => ({ projectId, path, ...project })),
     url: async (target: { app?: string; path?: string } = {}) => {
       const platformOrigin = deps.platformOrigin();
       if (!platformOrigin)
@@ -623,7 +618,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           "INVALID_INPUT",
           "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
         );
-      const slug = (await deps.projectInfo?.())?.projectSlug;
+      const slug = (await deps.projectInfo()).projectSlug;
       if (!slug)
         throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
       const url = projectUrlOf(deps.ingressRouting, platformOrigin, {
@@ -836,8 +831,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           throw new Error(
             "itx.secrets.collectFromUser: this platform has no public origin yet — call it after a person has reached this instance",
           );
-        const project = await deps.projectInfo?.();
-        if (!project?.projectSlug)
+        const project = await deps.projectInfo();
+        if (!project.projectSlug)
           throw new Error(
             "itx.secrets.collectFromUser: only a project's context can collect a secret",
           );

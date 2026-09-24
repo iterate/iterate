@@ -1,13 +1,13 @@
 // cfartifacts.e2e.test.ts — `itx.cfArtifacts`, THE BINDING PROXY, against the REAL Cloudflare
 // Artifacts binding on the DEPLOYED worker (env.ARTIFACTS → the `project-worker-repos` namespace),
 // and the repo facet's git wire (src/repo/git-wire.ts) against the real remote that proxy names: what
-// the unit tests over fakes (src/context/repos.test.ts, src/repo/git-wire.test.ts) and the local
+// the unit tests over fakes (src/context/cf-artifacts.test.ts, src/repo/git-wire.test.ts) and the local
 // e2e run's fake remote (support/fake-git-server.ts) cannot prove — the binding is wired, the remote URL
 // and the token the proxy hands out open the real git-over-HTTPS endpoint, and the project scoping
 // holds end to end across /api. DEPLOYED-TARGET ONLY: every row skips against a local worker (plain
 // `pnpm e2e`) — run them with `WORKER_BASE_URL=https://os.iterate.com pnpm e2e cfartifacts`. A repo is
 // addressed by its context PATH (`/e2e/<suffix>`, unique per run; the Artifacts NAME behind it is
-// src/context/repos.ts's own detail — the remote URL ends with it); every repo created here is
+// src/context/cf-artifacts.ts's own detail — the remote URL ends with it); every repo created here is
 // deleted in a `finally`, so prd is never littered. Pins:
 //   • the proxy: create (idempotent: created true, then false) / get(path).createToken and
 //     get(path).remote() (an RpcTarget's methods, pipelined server-side in ONE expression) / list /
@@ -21,7 +21,7 @@
 //     newest-first with parents
 
 import { expect, test } from "vitest";
-import { repoArtifactName } from "../src/context/repos.ts";
+import { repoArtifactName } from "../src/context/cf-artifacts.ts";
 import type { RepoLogEntry } from "../src/repo/git-wire.ts";
 import { freshCtx, openItx, runId, workerSlot } from "./support/client.ts";
 

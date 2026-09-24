@@ -348,10 +348,7 @@ export class FacetHost {
   refreshFacetStartupMemosFromHostingConfigurations(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
-      const { name, target } = event.payload as {
-        name: string;
-        target: ItxExpressionInput | null;
-      };
+      const { name, target } = event.payload as SubscriptionConfiguredPayload;
       if (!target || !this.#deps.stream.coreReducedState.subscriptions[name]?.hostedFacet) continue;
       try {
         const spec = facetSpecFromHostingTarget(
@@ -381,7 +378,7 @@ export class FacetHost {
   ): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
-      const { name, target } = event.payload as { name: string; target: string | null };
+      const { name, target } = event.payload as SubscriptionConfiguredPayload;
       const removedRow = !target ? subscriptionsBeforeCommit[name] : undefined;
       // M1: the marker, not the (source-less) target, says which facet a row hosts.
       const facetName = removedRow?.hostedFacet?.name;
@@ -825,7 +822,7 @@ export class FacetHost {
       if (row?.hostedFacet) {
         const [configuredEvent] = this.#deps.stream.read(row.configuredAtOffset - 1, 1).events;
         const configuredTarget = (
-          configuredEvent?.payload as { target?: ItxExpressionInput } | undefined
+          configuredEvent?.payload as SubscriptionConfiguredPayload | undefined
         )?.target;
         // RESOLVED before reading the spec off it, as the reduce did when it marked the row.
         const recoveredSpec = configuredTarget
@@ -891,3 +888,8 @@ export class FacetHost {
     this.#liveFacetNames.delete(name);
   }
 }
+
+/** A `subscription-configured` payload as the log holds it: `normalizeControlEvent`
+ *  (stream/core-processor.ts `normalizeSubscriptionConfigured`) parses the target to its
+ *  `ItxExpression` at the append boundary, so every committed event, fresh or read back, has it. */
+type SubscriptionConfiguredPayload = { name: string; target: ItxExpression | null };

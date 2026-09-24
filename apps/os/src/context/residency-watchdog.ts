@@ -21,14 +21,16 @@
  *  and a context used more often than this never gets the no-op wake at all. */
 export const RESIDENCY_WATCHDOG_WINDOW_MS = 15 * 60_000;
 
-/** What the alarm does about the watchdog: nothing (none armed, or not yet due), move the deadline, or
- *  record the incarnation as held resident since `idleSince`. */
-export type ResidencyWatchdogDecision =
+/** What the alarm does about a quiet deadline: nothing (none armed, or not yet due), move it, or it
+ *  is due, quiet since `idleSince`. */
+export type QuietDeadlineDecision =
   | { action: "none" }
   | { action: "rearm"; at: number }
-  | { action: "record"; idleSince: number };
+  | { action: "due"; idleSince: number };
 
-export function decideResidencyWatchdog(input: {
+/** Shared by the residency watchdog (due: record) and the unclaimed-facet sweep (due: reset), each
+ *  with its own window and clock. */
+export function decideQuietDeadline(input: {
   /** The deadline this incarnation armed, epoch ms, or null — a fresh incarnation armed nothing. */
   armedFor: number | null;
   now: number;
@@ -37,12 +39,12 @@ export function decideResidencyWatchdog(input: {
   /** Inbound calls, facet calls, script runs and pin calls in flight right now. */
   workInFlight: number;
   windowMs: number;
-}): ResidencyWatchdogDecision {
+}): QuietDeadlineDecision {
   const { armedFor, now, lastCallEndedAt, workInFlight, windowMs } = input;
   if (armedFor === null || now < armedFor) return { action: "none" };
   if (workInFlight > 0) return { action: "rearm", at: now + windowMs };
   // Nothing in flight means the call that armed it has ended; the arming instant is the fallback.
   const idleSince = lastCallEndedAt ?? armedFor - windowMs;
   if (now - idleSince < windowMs) return { action: "rearm", at: idleSince + windowMs };
-  return { action: "record", idleSince };
+  return { action: "due", idleSince };
 }

@@ -1,4 +1,4 @@
-// context/repos.test.ts — `itx.cfArtifacts`'s unit pins: the binding proxy (project-scoped, BY PATH,
+// context/cf-artifacts.test.ts — `itx.cfArtifacts`'s unit pins: the binding proxy (project-scoped, BY PATH,
 // pure over an injected namespace) and the path → Artifacts-name mapping. Git itself is the repo
 // facet's (src/repo/git-wire.test.ts pins its codecs).
 
@@ -10,7 +10,7 @@ import {
   ScopedArtifactRepoRpcTarget,
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
-} from "./repos.ts";
+} from "./cf-artifacts.ts";
 
 // ── the mapping ── every itx surface speaks a repo's PATH; the Artifacts NAME is derived here alone.
 describe("repoArtifactName — the Artifacts repo a path is backed by", () => {

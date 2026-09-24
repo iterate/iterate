@@ -77,10 +77,10 @@ import { ControlPlane } from "./control-plane/edge.ts";
 import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { FacetHost, UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "./context/facet-host.ts";
-import type { ArtifactsNamespace } from "./context/repos.ts";
+import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import {
   RESIDENCY_WATCHDOG_WINDOW_MS,
-  decideResidencyWatchdog,
+  decideQuietDeadline,
 } from "./context/residency-watchdog.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
@@ -1002,21 +1002,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#inboundCallEnded();
   }
 
+  /** Inbound calls, facet work, script runs and pin calls in flight right now — what keeps both quiet
+   *  deadlines (the watchdog's and the unclaimed-facet sweep's) from coming due. */
+  #workInFlight(facetWorkInFlight: number): number {
+    return (
+      this.#inboundCallsInFlight +
+      facetWorkInFlight +
+      this.#scriptRunsInFlight.size +
+      this.#pinCallsInFlight
+    );
+  }
+
   /** The watchdog's decision, applied at the start of every alarm pass: nothing, a later deadline,
    *  or THE RECORD — one appended fact and one structured `console.warn` (the line Workers Logs
    *  alerts on; `durableObjectId` finds the held session's still-open invocation there). Never an
    *  abort, and never a failed pass. */
   #checkResidencyWatchdog(now: number): void {
     const facets = this.#facetHost.snapshot();
-    const decision = decideResidencyWatchdog({
+    const decision = decideQuietDeadline({
       armedFor: this.#residencyWatchdogArmedFor,
       now,
       lastCallEndedAt: this.#lastInboundCallEndedAt,
-      workInFlight:
-        this.#inboundCallsInFlight +
-        facets.facetWorkInFlight +
-        this.#scriptRunsInFlight.size +
-        this.#pinCallsInFlight,
+      workInFlight: this.#workInFlight(facets.facetWorkInFlight),
       windowMs: RESIDENCY_WATCHDOG_WINDOW_MS,
     });
     if (decision.action === "none") return;
@@ -1071,19 +1078,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** The sweep's decision, applied in every alarm pass beside the watchdog's and by the same rule
-   *  (`decideResidencyWatchdog`, its own window, its own clock `#lastOutsideActivityEndedAt`): nothing,
+   *  (`decideQuietDeadline`, its own window, its own clock `#lastOutsideActivityEndedAt`): nothing,
    *  a later deadline while a call or facet work is in flight or the quiet period is young, or THE
    *  SWEEP — this still-resident incarnation's unclaimed loaded facets reset in place. An incarnation
    *  that evicted on time never gets here: the alarm wakes a fresh one, whose birth reset them. */
   #checkUnclaimedFacetSweep(now: number): void {
-    const decision = decideResidencyWatchdog({
+    const decision = decideQuietDeadline({
       armedFor: this.#unclaimedFacetSweepArmedFor,
       now,
-      workInFlight:
-        this.#inboundCallsInFlight +
-        this.#facetHost.snapshot().facetWorkInFlight +
-        this.#scriptRunsInFlight.size +
-        this.#pinCallsInFlight,
+      workInFlight: this.#workInFlight(this.#facetHost.snapshot().facetWorkInFlight),
       lastCallEndedAt: this.#lastOutsideActivityEndedAt,
       windowMs: UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS,
     });

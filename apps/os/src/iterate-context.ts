@@ -122,7 +122,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
-    caller: Caller = { principal: null },
+    caller: Caller,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -364,7 +364,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
-    const consumes = {
+    const delivery = {
       consumes: input.consumes,
       afterOffset: input.afterOffset,
     };
@@ -376,7 +376,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         payload: {
           name,
           target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
-          ...consumes,
+          ...delivery,
         },
       };
       if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
@@ -397,7 +397,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     const target = input.target as ItxExpressionInput | null;
     const [committed] = (await this.#append({
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { name, target, ...consumes },
+      payload: { name, target, ...delivery },
     })) as StreamEvent[];
     this.#sessionTeardown.dispose(sessionTeardownKey);
     return new SubscriptionHandleRpcTarget(name, () => {
