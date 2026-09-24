@@ -80,7 +80,7 @@ does not support, belongs there too.
 | `do-duration-probe.yml`      | Hourly, dispatch                                    | Durable Object cost alarm for both Cloudflare accounts                               |
 | `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                          | Reads production's Workers Logs and pages #error-pulse on faults                     |
 | `os-crash-hunt.yml`          | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                   |
-| `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker                                    |
+| `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker, each run then the perf budgets    |
 | `flake-dashboard.yml`        | Hourly, dispatch                                    | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580) |
 | `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                             |
 | `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                |

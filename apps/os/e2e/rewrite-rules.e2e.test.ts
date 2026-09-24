@@ -22,8 +22,8 @@
 //   • a match may PIN literal args on a call step: `itx.llm.run('special')` beats `itx.llm.run`, the
 //     pinned args are consumed, a client's stub can sit behind a pinned match, un-set by that spelling
 //   • the table under concurrency: 5 re-sets of ONE match leave one row, the last committed; a
-//     NON-CANONICAL match is stored CANONICAL; 300 rules keep the newest rule and a built-in root under
-//     150 ms; malformed rule events are refused at the append boundary
+//     NON-CANONICAL match is stored CANONICAL; the newest of 300 rules still rewrites (how fast is
+//     perf/rewrite-rules.perf.test.ts); malformed rule events are refused at the append boundary
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
@@ -395,7 +395,7 @@ test("a NON-CANONICAL match spelling through the provide door is stored CANONICA
   expect(err.message).toContain("no rewrite rule matches");
 });
 
-test("300 rules: invoking the NEWEST rule and a built-in root both stay under 150ms", async () => {
+test("300 rules: the NEWEST rule still rewrites", async () => {
   const ctx = freshCtx("rules300");
   const itx = openItx(ctx);
   // Rules are event-sourced — append all 300 rewrite-rule-configured events in ONE commit.
@@ -403,32 +403,9 @@ test("300 rules: invoking the NEWEST rule and a built-in root both stay under 15
     type: REWRITE_RULE_CONFIGURED,
     payload: { match: `itx.m${i}`, target: ["itx", "whoami"] },
   }));
-  const committed = await itx.append(...rules);
-  expect(committed).toHaveLength(300);
-
-  const time = async (fn: () => Promise<unknown>, iters = 12): Promise<number> => {
-    const samples: number[] = [];
-    for (let i = 0; i < iters; i++) {
-      const t0 = performance.now();
-      await fn();
-      samples.push(performance.now() - t0);
-    }
-    return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]; // median
-  };
-
-  // Warm both lanes once (table rehydration / DO wake are not what we are measuring).
-  const viaNewest = await itx.invoke(["itx", ["m299"]]);
-  expect(viaNewest).toMatchObject({ projectId: ctx, path: "/" }); // it really reaches whoami
-  await itx.invoke(["itx", ["whoami"]]);
-
-  const newestMs = await time(() => itx.invoke(["itx", ["m299"]]));
-  const rootMs = await time(() => itx.invoke(["itx", ["whoami"]]));
-  console.log(
-    `[300 rules] newest-rule median ${newestMs.toFixed(1)}ms, built-in root median ${rootMs.toFixed(1)}ms`,
-  );
-  expect(newestMs, `newest rule (m299) median ${newestMs.toFixed(1)}ms`).toBeLessThan(150);
-  expect(rootMs, `built-in root (whoami) median ${rootMs.toFixed(1)}ms`).toBeLessThan(150);
-}, 90_000);
+  expect(await itx.append(...rules)).toHaveLength(300);
+  expect(await itx.invoke(["itx", ["m299"]])).toMatchObject({ projectId: ctx, path: "/" });
+});
 
 test("malformed rewrite-rule events are REFUSED at the append boundary — no dead-weight row ever enters the log", async () => {
   const ctx = freshCtx("badrule");

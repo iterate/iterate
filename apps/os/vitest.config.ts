@@ -1,6 +1,6 @@
-// THE vitest config; pick a lane with `--project` (`pnpm test` runs unit + workers, `pnpm e2e` and
-// `pnpm bench` the other two). Four PROJECTS (vitest's own word), each a genuinely different
-// execution context:
+// THE vitest config; pick a lane with `--project` (`pnpm test` runs unit + workers, `pnpm e2e`,
+// `pnpm perf` and `pnpm bench` the other three). Five PROJECTS (vitest's own word), each a genuinely
+// different execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
@@ -13,6 +13,9 @@
 //               on the `e2e:run` script: a ROOT-ONLY option, see below) — every test mints its own project,
 //               and what a test measures it measures on its own contexts; the run's floor is its slowest
 //               TEST. A file whose rows genuinely need an order says so itself (`test.sequential` rows)
+//   • perf    — the latency and throughput BUDGETS (perf/**/*.perf.test.ts) over the same client and
+//               worker as e2e, measured ALONE: files one at a time, rows in order, never beside the
+//               e2e run (in it, 16 files share the worker and a latency measures their contention)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
@@ -134,6 +137,22 @@ export default defineConfig({
           // 2026-09-21), so the `e2e:run` script passes `--sequence.concurrent`. `maxConcurrency` IS per
           // project: the default 5 would run a 21-row file in five waves.
           maxConcurrency: 32,
+        },
+      },
+      {
+        test: {
+          name: "perf",
+          environment: "node",
+          include: ["perf/**/*.perf.test.ts"],
+          globalSetup: ["./e2e/support/global-setup.ts"],
+          setupFiles: ["./e2e/support/setup.ts"],
+          testTimeout: 240_000,
+          hookTimeout: 120_000,
+          // ALONE ON THE WIRE: one file at a time, and `perf:run` passes no `--sequence.concurrent`,
+          // so its rows run in order. No retry: each budget already holds for the median of its
+          // rounds, and a miss is a number to read (the soak tallies it), not one to re-roll.
+          fileParallelism: false,
+          retry: 0,
         },
       },
       {

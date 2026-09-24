@@ -7,9 +7,11 @@
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
 // e2e/support/global-setup.ts reads them out of it.
 //
-// Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json; the tally is
-// output/soak/summary.json plus the table below. Runs are sequential — the point is to see the suite
-// as CI sees it, not to load the worker a hundredfold.
+// Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json, then
+// the perf project (the latency and throughput budgets, perf/**) to output/soak/perf-<n>.json — after
+// the suite, never beside it, since beside it a budget measures the suite's contention. The tally is
+// output/soak/summary.json plus the table below, both projects' rows together. Runs are sequential —
+// the point is to see the suite as CI sees it, not to load the worker a hundredfold.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -30,6 +32,15 @@ function parseArgs(argv: string[]) {
   return { runs, filter };
 }
 
+const { runs, filter } = parseArgs(process.argv.slice(2));
+if (!process.env.WORKER_BASE_URL)
+  throw new Error("WORKER_BASE_URL is required: the soak runs against a deployment");
+mkdirSync(OUT, { recursive: true });
+
+const tally = new Map<
+  string,
+  { file: string; passed: number; failed: number; skipped: number; ms: number[] }
+>();
 type VitestJson = {
   testResults: {
     name: string;
@@ -41,27 +52,16 @@ type VitestJson = {
     }[];
   }[];
 };
-
-const { runs, filter } = parseArgs(process.argv.slice(2));
-if (!process.env.WORKER_BASE_URL)
-  throw new Error("WORKER_BASE_URL is required: the soak runs against a deployment");
-mkdirSync(OUT, { recursive: true });
-
-const tally = new Map<
-  string,
-  { file: string; passed: number; failed: number; skipped: number; ms: number[] }
->();
-const wall: number[] = [];
-for (let n = 1; n <= runs; n++) {
-  const file = path.join(OUT, `run-${n}.json`);
-  const started = Date.now();
+/** One Vitest run of `project` with its JSON report at `file`, every row folded into the tally;
+ *  how many rows failed, or undefined when Vitest wrote no report. --retry=0: the e2e project retries
+ *  once in CI, which is right for a gate and wrong for a soak — a row that failed its first attempt
+ *  and passed its second is exactly what the soak exists to count (soak qx2jhwrrlk, 2026-09-22: the
+ *  tally said 1/100 for a row that had failed 3 first attempts). Otherwise the `e2e:run` and
+ *  `perf:run` scripts' argv, minus the reporters: vitest adds repeated `--reporter` flags together,
+ *  and the retry-telemetry one would record flakes on every run. */
+function soakRun(project: "e2e" | "perf", file: string): number | undefined {
   const result = spawnSync(
     "pnpm",
-    // --retry=0: the e2e project retries once in CI, which is right for a gate and wrong for a soak —
-    // a row that failed its first attempt and passed its second is exactly what the soak exists to
-    // count (soak qx2jhwrrlk, 2026-09-22: the tally said 1/100 for a row that had failed 3 first attempts).
-    // Otherwise the `e2e:run` script's argv, minus its reporters: vitest adds repeated `--reporter`
-    // flags together, and the retry-telemetry one would record flakes on every run.
     [
       "exec",
       "vitest",
@@ -69,19 +69,19 @@ for (let n = 1; n <= runs; n++) {
       "--configLoader",
       "runner",
       "--project",
-      "e2e",
-      "--sequence.concurrent",
+      project,
+      ...(project === "e2e" ? ["--sequence.concurrent"] : []),
       "--reporter=json",
       `--outputFile=${file}`,
       "--retry=0",
-      ...(filter ? [filter] : []),
+      // a filter that names only e2e files leaves the perf project nothing to run
+      ...(filter ? [filter, "--passWithNoTests"] : []),
     ],
     { cwd: ROOT, env: process.env, stdio: ["ignore", "ignore", "inherit"] },
   );
-  wall.push(Date.now() - started);
   if (!existsSync(file)) {
-    console.error(`run ${n}: vitest wrote no report (exit ${result.status})`);
-    continue;
+    console.error(`${path.basename(file)}: vitest wrote no report (exit ${result.status})`);
+    return undefined;
   }
   const report = JSON.parse(readFileSync(file, "utf8")) as VitestJson;
   for (const suite of report.testResults) {
@@ -103,10 +103,25 @@ for (let n = 1; n <= runs; n++) {
       tally.set(row.fullName, entry);
     }
   }
-  const failedNow = report.testResults
+  return report.testResults
     .flatMap((s) => s.assertionResults)
     .filter((r) => r.status === "failed" || (r.failureMessages?.length ?? 0) > 0).length;
-  console.log(`run ${n}/${runs}: ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow} failed`);
+}
+
+// Each lane's wall time on its own: `wall` stays the e2e suite's, comparable with a CI e2e job's.
+const wall: number[] = [];
+const perfWall: number[] = [];
+for (let n = 1; n <= runs; n++) {
+  let started = Date.now();
+  const failedNow = soakRun("e2e", path.join(OUT, `run-${n}.json`));
+  wall.push(Date.now() - started);
+  started = Date.now();
+  const perfFailed = soakRun("perf", path.join(OUT, `perf-${n}.json`));
+  perfWall.push(Date.now() - started);
+  console.log(
+    `run ${n}/${runs}: e2e ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow ?? "?"} failed; ` +
+      `perf ${(perfWall.at(-1)! / 1000).toFixed(0)} s, ${perfFailed ?? "?"} failed`,
+  );
 }
 
 const rows = [...tally.entries()].map(([title, e]) => ({
@@ -120,11 +135,12 @@ const rows = [...tally.entries()].map(([title, e]) => ({
 }));
 writeFileSync(
   path.join(OUT, "summary.json"),
-  JSON.stringify({ runs, wallMs: wall, rows }, null, 2),
+  JSON.stringify({ runs, wallMs: wall, perfWallMs: perfWall, rows }, null, 2),
 );
 const flaky = rows.filter((r) => r.failed > 0).sort((a, b) => b.failed - a.failed);
 console.log(
-  `\n${runs} run(s); wall p50 ${(wall.sort((a, b) => a - b)[Math.floor(wall.length / 2)]! / 1000).toFixed(0)} s`,
+  `\n${runs} run(s); e2e wall p50 ${(wall.sort((a, b) => a - b)[Math.floor(wall.length / 2)]! / 1000).toFixed(0)} s, ` +
+    `perf wall p50 ${(perfWall.sort((a, b) => a - b)[Math.floor(perfWall.length / 2)]! / 1000).toFixed(0)} s`,
 );
 console.log(
   flaky.length ? `${flaky.length} row(s) failed at least once:` : "every row passed every time",

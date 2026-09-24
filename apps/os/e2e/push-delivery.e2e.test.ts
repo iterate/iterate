@@ -11,15 +11,17 @@
 //   • a throwing callback never hurts the producer and is never retried; anonymous subscribes get
 //     unique names and never shadow each other
 //   • under volume: 2000 voice-chunk-shaped ephemerals (256 B payloads, batched appends) delivered
-//     exactly once, batched, within latency and throughput budgets — producer and subscriber run in
-//     THIS process, so sentAtMs/arrival share one clock and the measured latency is the FULL path;
-//     one append fans out to 200 live subscribers in under 2 s and to 50 userspace processor facets in
-//     under 5 s while an unrelated call is never head-of-line blocked; a 900-event commit arrives as
-//     ONE callback invocation. Perf floors are generous (local workerd ≠ production); the printed line
-//     is what you compare
+//     exactly once, contiguous and batched; one append fans out to 200 live subscribers exactly once
+//     each and reaches 50 userspace processor facets; a 900-event commit arrives as ONE callback
+//     invocation. NO WALL-CLOCK BUDGETS HERE: this file runs beside every other e2e file (16 at a
+//     time, their rows concurrent) against one shared worker, so a latency it measures is the
+//     suite's contention as much as the platform's (a 1.6 s whoami against a 1.5 s budget, main
+//     f5fdb3cf; a 582 ms p50 against 500, #2962). The latency and throughput budgets are
+//     perf/push-delivery.perf.test.ts, which runs alone; the lines printed here are for comparison
 
 import { expect, test } from "vitest";
 import { collector, freshCtx, openItx, sleep, until } from "./support/client.ts";
+import { ephemeralFlood, fanProbes, pushSubscribers } from "./support/push-load.ts";
 
 // ── ranges chain; the filter; removal; a throwing callback; anonymous names ──
 
@@ -117,192 +119,42 @@ test("concurrent anonymous subscribes get unique names and never shadow each oth
 
 // ── under volume ──
 
-type FloodEvent = { payload: { seq: number; sentAtMs: number; pad: string } };
-
-const TOTAL = 2000;
-const APPEND_BATCH = 50;
-
-test("ephemeral flood: all chunks delivered exactly once, batched, under latency/throughput budgets", async () => {
-  const itx = openItx(freshCtx("flood"));
-
-  // ── the subscriber: a live callback, named-type opt-in (ephemerals need naming) ──
-  const received: { seq: number; latencyMs: number }[] = [];
-  let callbackInvocations = 0;
-  let contiguityBroken = false;
-  let lastThrough: number | undefined; // the client-held offset: delivered ranges must CHAIN
-  await itx.subscribe({
-    name: "flood-ear",
-    consumes: ["chunk"],
-    target: (events: FloodEvent[], range: { after: number; through: number }) => {
-      const arrivedAtMs = Date.now();
-      callbackInvocations++;
-      // a gap would be heal-by-pull in a real client; here it must not happen
-      if (lastThrough !== undefined && range.after !== lastThrough) contiguityBroken = true;
-      lastThrough = range.through;
-      for (const e of events)
-        received.push({ seq: e.payload.seq, latencyMs: arrivedAtMs - e.payload.sentAtMs });
-    },
-  });
-
-  // ── the flood: TOTAL ephemeral chunks in batches of APPEND_BATCH, appends PIPELINED ──
-  // (fire-and-forget-then-settle: awaiting each append would serialize the producer on its own RTT
-  //  and measure the client's politeness, not the platform — the wire needs no acks per batch)
-  const pad = "x".repeat(256);
-  const floodStartedAtMs = Date.now();
-  const appendCalls: Promise<unknown>[] = [];
-  for (let seq = 0; seq < TOTAL; seq += APPEND_BATCH) {
-    const batch = Array.from({ length: Math.min(APPEND_BATCH, TOTAL - seq) }, (_, i) => ({
-      type: "chunk",
-      ephemeral: true,
-      payload: { seq: seq + i, sentAtMs: Date.now(), pad },
-    }));
-    appendCalls.push(itx.append(...batch));
-  }
-  await Promise.all(appendCalls);
-  const appendsDoneAtMs = Date.now();
-
-  // wait for the tail to arrive (one-directional — nothing to ack, just watch the counter)
-  const deadline = Date.now() + 30000;
-  while (received.length < TOTAL && Date.now() < deadline) await sleep(100);
-  const lastArrivalAtMs = Date.now();
-
-  // ── the numbers ──
-  const latencies = received.map((r) => r.latencyMs).sort((a, b) => a - b);
-  const pct = (p: number): number =>
-    latencies[Math.min(latencies.length - 1, Math.floor((p / 100) * latencies.length))];
-  const wallMs = lastArrivalAtMs - floodStartedAtMs;
-  const eventsPerSecond = Math.round((received.length / wallMs) * 1000);
-  const appendEventsPerSecond = Math.round((TOTAL / (appendsDoneAtMs - floodStartedAtMs)) * 1000);
-  console.log(
-    `flood(ephemeral): ${received.length}/${TOTAL} chunks | append ${appendEventsPerSecond} ev/s | ` +
-      `end-to-end ${eventsPerSecond} ev/s | latency p50 ${pct(50)}ms p95 ${pct(95)}ms ` +
-      `max ${latencies.at(-1)}ms | ${callbackInvocations} callback invocations ` +
-      `(batching ${(TOTAL / callbackInvocations).toFixed(1)}×)`,
+test("ephemeral flood: all chunks delivered exactly once, contiguous and batched", async () => {
+  const flood = await ephemeralFlood(openItx(freshCtx("flood")));
+  console.log(flood.line);
+  // every seq exactly once: no loss at this volume, no duplicate
+  expect(flood.seqs.toSorted((a, b) => a - b)).toEqual(
+    Array.from({ length: flood.total }, (_, i) => i),
   );
-
-  expect(received.length).toBe(TOTAL); // no loss at this volume
-  expect(new Set(received.map((r) => r.seq)).size).toBe(TOTAL); // every seq exactly once
-  expect(contiguityBroken).toBe(false); // delivered ranges CHAIN (client contiguity holds, zero pulls)
-  expect(callbackInvocations).toBeLessThan(TOTAL); // BATCH-FIRST: far fewer callbacks than events
-  expect(pct(50)).toBeLessThan(500); // p50 end-to-end latency (append→commit→deliver, full path)
-  expect(pct(95)).toBeLessThan(1500);
-  expect(eventsPerSecond).toBeGreaterThan(1000); // sustained end-to-end throughput
+  expect(flood).toMatchObject({ contiguityBroken: false }); // delivered ranges CHAIN, zero pulls
+  expect(flood.callbackInvocations).toBeLessThan(flood.total); // BATCH-FIRST: far fewer callbacks
 }, 60_000);
 
-test("200 push subscribers — one append fans out to all 200 in under 2s, exactly once each", async () => {
-  const itx = openItx(freshCtx("fan200"));
-  const counts = new Array(200).fill(0);
-  let received = 0;
-  // consumes:["ping"] keeps the 200 setup subscribes from fanning out N² deliveries
-  for (let base = 0; base < 200; base += 25) {
-    await Promise.all(
-      Array.from({ length: Math.min(25, 200 - base) }, (_, j) => {
-        const i = base + j;
-        return itx.subscribe({
-          name: `fan-${i}`,
-          consumes: ["ping"],
-          target: () => {
-            counts[i]++;
-            received++;
-          },
-        });
-      }),
-    );
-  }
-  // warm ping: pages all 200 stubs in (cold materialization is not the fan-out cost)
-  const tWarm = Date.now();
-  await itx.append({ type: "ping", payload: { round: 1 } });
-  // setup, not the claim: paging 200 lent stubs in took over 30 s once in a hundred soak runs
-  // (2026-09-22, run 55) — the measured rounds below keep their own budgets
-  await until("warm round complete", () => received >= 200, 60_000);
-  const coldWallMs = Date.now() - tWarm;
-  // the measured round: steady-state fan-out of ONE append across 200 subscribers
+test("200 push subscribers — one append fans out to all 200, exactly once each", async () => {
+  const fan = await pushSubscribers(openItx(freshCtx("fan200")), 200);
   const t0 = Date.now();
-  await itx.append({ type: "ping", payload: { round: 2 } });
-  // An UNRELATED call during the fan-out: 200 pushes never head-of-line-block the stream.
-  const whoT0 = Date.now();
-  await itx.whoami();
-  const whoMs = Date.now() - whoT0;
-  await until("all 200 received round 2", () => received >= 400, 10_000);
-  const wallMs = Date.now() - t0;
+  await fan.ping(2);
+  await fan.delivered(2);
   console.log(
-    `fan-out: cold(first-page) ${coldWallMs}ms, warm ${wallMs}ms for 200 subscribers, whoami mid-fan-out ${whoMs}ms`,
+    `fan-out: cold(first-page) ${fan.coldWallMs}ms, warm ${Date.now() - t0}ms for 200 subscribers`,
   );
-  expect(wallMs).toBeLessThan(2_000);
-  expect(whoMs).toBeLessThan(1_500);
   await sleep(300);
-  expect(counts.every((c) => c === 2)).toBe(true); // exactly once per round, no dup fan-out
+  expect(fan.counts.every((c) => c === 2)).toBe(true); // exactly once per round, no dup fan-out
 }, 120_000);
 
-// A userspace processor: the pure `FanProbeProcessor extends StreamProcessor` plus its one-line host
-// `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `./processor.js`),
-// hosted as a facet through `itx.facets.get(name, { source, className: 'FanProbeDurableObject' })`
-// — what `processors.enable(name, { source, className })` subscribes.
-const FAN_PROCESSOR_SOURCE = {
-  "cap.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
-class FanProbeProcessor extends StreamProcessor {
-  contract = {
-    slug: "fan-probe",
-    version: "1",
-    description: "counts every durable event — the fan-out probe",
-    consumes: ["*"],
-    emits: [],
-    initialState: () => ({ n: 0 }),
-  };
-  reduce({ state }) {
-    return { n: state.n + 1 };
-  }
-}
-export class FanProbeDurableObject extends StreamProcessorDurableObject {
-  processor = new FanProbeProcessor();
-}
-`,
-};
-
-test("50 userspace processors: one append fans out to all 50 in <5s while the stream stays responsive", async () => {
+test("50 userspace processors: one append reaches all 50", async () => {
   const itx = openItx(freshCtx("fan50"));
-
-  const enableT0 = performance.now();
-  for (let i = 0; i < 50; i++) {
-    await itx.processors.enable(`fan${i}`, {
-      source: FAN_PROCESSOR_SOURCE,
-      className: "FanProbeDurableObject",
-    });
-  }
-  console.log(
-    `[fan-out] enabled 50 userspace processors in ${(performance.now() - enableT0).toFixed(0)}ms`,
-  );
-
-  // ONE append → the delivery loop pushes all 50 facets.
+  const probes = await fanProbes(itx, 50);
   const t0 = performance.now();
-  const [marker] = await itx.append({ type: "fanout-marker" });
-
-  // Responsiveness DURING the fan-out: an unrelated call must not be head-of-line blocked.
-  const whoT0 = performance.now();
-  await itx.invoke(["itx", ["whoami"]]);
-  const whoMs = performance.now() - whoT0;
-
-  // The barrier: every one of the 50 processors reaches the marker offset.
-  await Promise.all(
-    Array.from({ length: 50 }, (_, i) =>
-      itx.invoke(
-        `itx.facets.get('fan${i}').waitUntilProcessed({offset: ${marker.offset}, timeoutMs: 30000})`,
-      ),
-    ),
-  );
-  const fanoutMs = performance.now() - t0;
+  const offset = await probes.mark();
+  await probes.reached(offset);
   console.log(
-    `[fan-out] all 50 processors reached offset ${marker.offset} in ${fanoutMs.toFixed(0)}ms; whoami during fan-out ${whoMs.toFixed(1)}ms`,
+    `[fan-out] all 50 processors reached offset ${offset} in ${(performance.now() - t0).toFixed(0)}ms`,
   );
-
-  // Sanity: a mid-pack processor really reduced the log (each enable event + the marker).
+  // a mid-pack processor really reduced the log (each enable event + the marker)
   const snap = await itx.invoke(`itx.facets.get('fan7').snapshot()`);
-  expect(snap.offset).toBeGreaterThanOrEqual(marker.offset);
+  expect(snap.offset).toBeGreaterThanOrEqual(offset);
   expect((snap.state as { n: number }).n).toBeGreaterThan(0);
-
-  expect(fanoutMs, `fan-out wall time ${fanoutMs.toFixed(0)}ms`).toBeLessThan(5000);
-  expect(whoMs, `whoami during fan-out ${whoMs.toFixed(1)}ms`).toBeLessThan(1500);
 }, 240_000);
 
 test("an append of 900 events in one batch arrives as ONE callback invocation (batch preserved)", async () => {
