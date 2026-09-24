@@ -5,7 +5,6 @@
 // ONE accumulated `invoke(expression)` dispatch. Pins:
 //   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
 //     and answers 421 (never the control plane); the codec's own charset gate is the unit lane's
-//   • `kv.list` returns EVERY key, not the first KV page
 //   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
 //   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
 //     end (lib.ts: classify by code, never by message — own props survive DO → relay → client)
@@ -15,6 +14,8 @@
 //   • then-safety (an awaited chain node settles into a live handle; a settled stub is not a thenable),
 //     stringify-safety (toJSON never dispatches), and the reserved transport words (then / dup /
 //     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
+// `kv.list` paging past 1000 keys is __workers-tests__/kv-list-pagination.test.ts: deployed KV's list is
+// eventually consistent, so a row here would measure KV propagation, not the pagination.
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
@@ -40,35 +41,6 @@ subdomainsOnly(
     expect(answer.text).toContain("not a project host");
   },
 );
-
-test("kv list returns EVERY key, not silently the first 1000", async () => {
-  // Cloudflare KV caps a list page at 1000 keys; `kv.list()` paginates on the cursor until
-  // `list_complete`, so key 1001+ is never a permanent orphan for a sweep/GC/inventory caller.
-  // The writes go through a session PER BATCH: one WebSocket is one worker request, and the
-  // runtime caps a request's subrequests (every RPC hop to the context, every KV put) at 1000 —
-  // 1001 puts over one socket is the socket dying ("Network connection lost"), deployed, which
-  // says nothing about `kv.list()`.
-  const ctx = freshCtx("kvlist");
-  const total = 1001;
-  const names = Array.from({ length: total }, (_, i) => `k${String(i).padStart(4, "0")}`);
-  for (let i = 0; i < names.length; i += 100) {
-    const writer = openItx(ctx);
-    await Promise.all(names.slice(i, i + 100).map((n) => writer.kv.put(n, "1")));
-  }
-  // KV's list is eventually consistent: in two 100-run soaks (2026-09-21/22) one run in each saw 1000
-  // of the 1001 keys just written. The row proves pagination past the 1000-key page, not immediacy,
-  // so it waits — bounded — for the list to catch up with the writes.
-  const reader = openItx(ctx);
-  const listed = await until(
-    "kv.list sees every key",
-    async () => {
-      const page = await reader.invoke(["itx", "kv", ["list"]]);
-      return page.keys.length === total ? page : undefined;
-    },
-    15_000,
-  );
-  expect(listed.keys).toHaveLength(total);
-}, 60_000);
 
 test("cd('') resolves to THIS context (self) and answers rather than wedging", async () => {
   // `resolveContextPath("/", "")` is "/" — the root's own path — and the DO's `context(p)` hands
