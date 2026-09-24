@@ -11,14 +11,13 @@ import { DurableObjectNameCodec, resourceScope } from "./paths.ts";
 test("every projectId shape the codebase actually uses parses cleanly", () => {
   for (const id of ["prj_demo", "prj_x", "me", "prj_fd_lsbad", "prj_am-forge", "PRJ_UP", "a1"]) {
     expect(() => DurableObjectNameCodec.parse(id)).not.toThrow();
-    expect(DurableObjectNameCodec.parse(id).projectId).toBe(id);
+    expect(DurableObjectNameCodec.parse(id)).toMatchObject({ projectId: id });
   }
 });
 
 test("a full context name (projectId + dotted .iterate path) still parses; the path is unpoliced", () => {
   const n = "prj_demo.iterate/agents/support-bot";
-  expect(DurableObjectNameCodec.parse(n).name).toBe(n);
-  expect(DurableObjectNameCodec.parse(n).projectId).toBe("prj_demo");
+  expect(DurableObjectNameCodec.parse(n)).toMatchObject({ name: n, projectId: "prj_demo" });
   const withColonPath = DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" });
   expect(() => DurableObjectNameCodec.parse(withColonPath)).not.toThrow();
 });
@@ -57,7 +56,7 @@ test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicaliz
     "prj_t.iterate/./",
     "prj_t.iterate/..",
   ])
-    expect(DurableObjectNameCodec.parse(name).name).toBe("prj_t.iterate/");
+    expect(DurableObjectNameCodec.parse(name)).toMatchObject({ name: "prj_t.iterate/" });
 });
 
 // ── the resource owner ── `resourceScope(projectId, path)`: the ONE derivation behind every

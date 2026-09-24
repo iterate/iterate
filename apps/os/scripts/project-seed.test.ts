@@ -3,32 +3,6 @@ import { encryptSecretMaterial } from "../src/secret-at-rest.ts";
 import { configTree, openProjectSeed } from "./project-seed-format.ts";
 
 const keys = { current: "seed-encryption-key" };
-async function archive() {
-  const files = [
-    { path: "worker.ts", content: "export default {fetch(){return new Response('restored')}}" },
-  ];
-  const binding = {
-    context: "prj_old.iterate/secrets/stripe",
-    urls: ["https://api.stripe.com"],
-    revision: 7,
-  };
-  return {
-    version: 1,
-    capturedAt: "2026-09-22T12:00:00.000Z",
-    source: { platform: "https://os.example.com", projectId: "prj_old" },
-    project: "garple",
-    organization: { name: "garple", members: [{ email: "jonas@nustom.com", role: "owner" }] },
-    config: { files, commit: "a".repeat(40), tree: await configTree(files) },
-    secrets: [
-      {
-        path: "/secrets/stripe",
-        ...binding,
-        refresh: null,
-        material: await encryptSecretMaterial({ apiKey: "sensitive-key" }, binding, keys),
-      },
-    ],
-  };
-}
 test("current encrypted cells open with the deployment key without plaintext in the archive", async () => {
   const seed = await archive();
   expect(JSON.stringify(seed)).not.toContain("sensitive-key");
@@ -72,3 +46,30 @@ test("duplicate file or secret paths cannot silently shadow an archived entry", 
   seed.secrets.push(seed.secrets[0]!);
   await expect(openProjectSeed(seed, keys)).rejects.toThrow("Duplicate secret");
 });
+
+async function archive() {
+  const files = [
+    { path: "worker.ts", content: "export default {fetch(){return new Response('restored')}}" },
+  ];
+  const binding = {
+    context: "prj_old.iterate/secrets/stripe",
+    urls: ["https://api.stripe.com"],
+    revision: 7,
+  };
+  return {
+    version: 1,
+    capturedAt: "2026-09-22T12:00:00.000Z",
+    source: { platform: "https://os.example.com", projectId: "prj_old" },
+    project: "garple",
+    organization: { name: "garple", members: [{ email: "jonas@nustom.com", role: "owner" }] },
+    config: { files, commit: "a".repeat(40), tree: await configTree(files) },
+    secrets: [
+      {
+        path: "/secrets/stripe",
+        ...binding,
+        refresh: null,
+        material: await encryptSecretMaterial({ apiKey: "sensitive-key" }, binding, keys),
+      },
+    ],
+  };
+}

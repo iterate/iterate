@@ -83,22 +83,6 @@ const LOADED_WORKER_PLACEMENT_ROWS = [
   { context: "global:/", allowed: false },
 ];
 
-/** The refusal's code, or undefined when `assert` passed. */
-function refusalOf(assert: () => void): string | undefined {
-  try {
-    assert();
-    return undefined;
-  } catch (error) {
-    return errorCode(error) ?? String(error);
-  }
-}
-
-/** `<projectId>:<path>` as the address the rules read. */
-function contextAddress(context: string) {
-  const separator = context.indexOf(":");
-  return { projectId: context.slice(0, separator), path: context.slice(separator + 1) };
-}
-
 test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   "facet $facet on $context: allowed $allowed",
   ({ facet, context, allowed }) => {
@@ -136,3 +120,19 @@ test("each refusal names what was refused, where it belongs, and the context", (
     `facet "tally": loaded code runs only in a project — never in the global namespace (global:/users/user_1)`,
   );
 });
+
+/** The refusal's code, or undefined when `assert` passed. */
+function refusalOf(assert: () => void): string | undefined {
+  try {
+    assert();
+    return undefined;
+  } catch (error) {
+    return errorCode(error) ?? String(error);
+  }
+}
+
+/** `<projectId>:<path>` as the address the rules read. */
+function contextAddress(context: string) {
+  const separator = context.indexOf(":");
+  return { projectId: context.slice(0, separator), path: context.slice(separator + 1) };
+}

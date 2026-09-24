@@ -3,8 +3,6 @@
 import { expect, test } from "vitest";
 import { SessionTeardown } from "./session-teardown.ts";
 
-const undo = (log: string[], label: string) => ({ dispose: () => void log.push(label) });
-
 test("re-adding a key replaces (the incumbent is disposed once); a STALE lease's dispose is inert; the current lease's disposes", () => {
   const log: string[] = [];
   const teardown = new SessionTeardown();
@@ -31,3 +29,5 @@ test("the session's own dispose(key) takes whatever is current; disposeAll takes
   b.dispose();
   expect(log).toEqual(["a", "b"]);
 });
+
+const undo = (log: string[], label: string) => ({ dispose: () => void log.push(label) });
