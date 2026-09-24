@@ -2,7 +2,7 @@
 // directory) and the relay's one-registration rule. Node: the pager layer is never entered (no sockets).
 
 import type { ItxExpression } from "iterate/next/expression";
-import { describe, expect, test, afterEach, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import {
   type RpcStubFetchServer,
   RpcStubDirectory,
@@ -61,85 +61,62 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
 // return, while its pager could lend a live one. A client's own throw, or a coded refusal, is not a
 // broken transport and keeps the stub warm. Node: the pager layer is never entered (no sockets).
 
-/** A lent stub whose `invoke` answers from `answer` — a value, or a rejection. Counts its calls
- *  and its disposal. */
-function fakeBorrowedRpcStub(answer: () => Promise<unknown>) {
-  const stub = {
-    calls: 0,
-    disposed: false,
-    invoke: async () => {
-      stub.calls += 1;
-      return await answer();
-    },
-    fetch: async () => undefined,
-    [Symbol.dispose]: () => void (stub.disposed = true),
-  };
-  return stub as typeof stub & BorrowedRpcStub;
-}
-
-const directory = () =>
-  new RpcStubDirectory({
-    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [] },
-    onPresence: () => {},
-    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
-    appendEvents: () => {},
-  });
-
-describe("a borrowed stub after a rejected call", () => {
-  test.each([
-    {
-      rejects: "a transport failure (workerd's `retryable: true` stamp)",
-      error: Object.assign(new Error("Network connection lost."), { retryable: true }),
-      becomes:
-        "DROPPED and disposed — the next call finds nothing borrowed (RPC_STUB_OFFLINE, no pager)",
-      dropped: true,
-    },
-    {
-      rejects: "the client's own throw",
-      error: new Error("bad input"),
-      becomes: "KEPT warm — the next call rides the same stub",
-      dropped: false,
-    },
-    {
-      rejects: "the relay's coded RPC_STUB_OFFLINE (the client's session broke behind a live leg)",
-      error: Object.assign(new Error("the lent rpc stub went offline mid-invoke"), {
-        code: "RPC_STUB_OFFLINE",
-      }),
-      becomes: "KEPT — its pager's close is what returns it",
-      dropped: false,
-    },
-  ])("rejecting with $rejects → $becomes", async ({ error, dropped }) => {
+test.each([
+  {
+    rejects: "a transport failure (workerd's `retryable: true` stamp)",
+    error: Object.assign(new Error("Network connection lost."), { retryable: true }),
+    becomes:
+      "DROPPED and disposed — the next call finds nothing borrowed (RPC_STUB_OFFLINE, no pager)",
+    dropped: true,
+  },
+  {
+    rejects: "the client's own throw",
+    error: new Error("bad input"),
+    becomes: "KEPT warm — the next call rides the same stub",
+    dropped: false,
+  },
+  {
+    rejects: "the relay's coded RPC_STUB_OFFLINE (the client's session broke behind a live leg)",
+    error: Object.assign(new Error("the lent rpc stub went offline mid-invoke"), {
+      code: "RPC_STUB_OFFLINE",
+    }),
+    becomes: "KEPT — its pager's close is what returns it",
+    dropped: false,
+  },
+])(
+  "a borrowed stub after a rejected call: rejecting with $rejects → $becomes",
+  async ({ error, dropped }) => {
     const rpcStubDirectory = directory();
     const stub = fakeBorrowedRpcStub(() => Promise.reject(error));
     rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub });
     await expect(rpcStubDirectory.invokeRpcStub("k", [["", 1]])).rejects.toBe(error);
-    expect(stub.disposed).toBe(dropped);
+    expect(stub).toMatchObject({ disposed: dropped });
     expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(!dropped);
     if (dropped) {
       await expect(rpcStubDirectory.invokeRpcStub("k", [["", 2]])).rejects.toMatchObject({
         code: "RPC_STUB_OFFLINE",
       });
-      expect(stub.calls).toBe(1); // never called again
+      expect(stub).toMatchObject({ calls: 1 }); // never called again
     } else {
       await expect(rpcStubDirectory.invokeRpcStub("k", [["", 2]])).rejects.toBe(error);
-      expect(stub.calls).toBe(2);
+      expect(stub).toMatchObject({ calls: 2 });
     }
-  });
+  },
+);
 
-  test("a late transport failure of a stub RE-LENT meanwhile drops nothing: the live replacement stays borrowed", async () => {
-    const rpcStubDirectory = directory();
-    let failOld!: (error: unknown) => void;
-    const old = fakeBorrowedRpcStub(() => new Promise((_, reject) => (failOld = reject)));
-    const replacement = fakeBorrowedRpcStub(async () => "ok");
-    rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub: old });
-    const inFlight = rpcStubDirectory.invokeRpcStub("k", [["", 1]]);
-    rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub: replacement }); // a re-lend REPLACES (and returns the old)
-    failOld(Object.assign(new Error("Network connection lost."), { retryable: true }));
-    await expect(inFlight).rejects.toMatchObject({ retryable: true });
-    expect(await rpcStubDirectory.invokeRpcStub("k", [["", 2]])).toBe("ok");
-    expect(replacement.disposed).toBe(false);
-    expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(true);
-  });
+test("a borrowed stub after a rejected call: a late transport failure of a stub RE-LENT meanwhile drops nothing: the live replacement stays borrowed", async () => {
+  const rpcStubDirectory = directory();
+  let failOld!: (error: unknown) => void;
+  const old = fakeBorrowedRpcStub(() => new Promise((_, reject) => (failOld = reject)));
+  const replacement = fakeBorrowedRpcStub(async () => "ok");
+  rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub: old });
+  const inFlight = rpcStubDirectory.invokeRpcStub("k", [["", 1]]);
+  rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub: replacement }); // a re-lend REPLACES (and returns the old)
+  failOld(Object.assign(new Error("Network connection lost."), { retryable: true }));
+  await expect(inFlight).rejects.toMatchObject({ retryable: true });
+  expect(await rpcStubDirectory.invokeRpcStub("k", [["", 2]])).toBe("ok");
+  expect(replacement).toMatchObject({ disposed: false });
+  expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(true);
 });
 
 // ── rpc stub relay ── a regression pin on the relay: it registers `onRpcBroken` on
@@ -150,36 +127,10 @@ describe("a borrowed stub after a rejected call", () => {
 // life — worst on the longest-lived, most active devices. The ONE registration lives in
 // `lendRpcStubOverPager`; the lent stubs share its `{ reason }` lend-ended holder.
 
-/** A fake stub-pager WebSocket: records listeners and lets the test fire the `{type:"page"}`
- *  message the DO sends down this socket to make the edge re-mint and lend the stub. */
-class FakePagerWebSocket {
-  readonly #listeners = new Map<string, Set<(e: unknown) => void>>();
-  accept(): void {}
-  send(_data: string): void {}
-  /** Close with `code` — 1000 is a deliberate close (this side's dispose, the DO's "replaced");
-   *  anything else is the leg dropping under a live lend. */
-  close(code = 1000): void {
-    this.#emit("close", { code, reason: "" });
-  }
-  addEventListener(type: string, cb: (e: unknown) => void): void {
-    let set = this.#listeners.get(type);
-    if (!set) this.#listeners.set(type, (set = new Set()));
-    set.add(cb);
-  }
-  #emit(type: string, event: unknown): void {
-    for (const cb of this.#listeners.get(type) ?? []) cb(event);
-  }
-  /** One page: the DO says "send me the stub" — the relay answers by lending a fresh stub. */
-  page(): void {
-    this.#emit("message", { data: JSON.stringify({ type: "page" }) });
-  }
-}
-
-afterEach(() => vi.useRealTimers());
-
 test("a relay registers onRpcBroken on the session's stub ONCE per session, not once per page", async () => {
   // Fake timers neutralize the pager's 30s keepalive interval (no real timer leaks).
   vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
 
   // The session's stub — what `provider.dup()` yields, held for the whole session. It counts every
   // onRpcBroken registration landed on it.
@@ -225,62 +176,24 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 // and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: three
 // tries) while the session's dup stays lent.
 
-/** A relay over a DO whose `fetch` answers each dial from `answerDial`: every pager it hands out is
- *  kept (a test drops one, pages the next), every lend and the dup's disposal are counted, and the
- *  relay's `waitUntil` promises are kept so a test awaits the re-dial it fired. */
-async function relayOverFakeDurableObject(
-  answerDial: (dial: number) => FakePagerWebSocket | Error,
-) {
-  const fake = {
-    pagers: [] as FakePagerWebSocket[],
-    lends: 0,
-    disposed: 0,
-    waitedUntil: [] as Promise<unknown>[],
-    dials: 0,
-  };
-  const lent = {
-    onRpcBroken() {},
-    [Symbol.dispose]() {
-      fake.disposed += 1;
-    },
-  };
-  const context = {
-    fetch: async () => {
-      const answer = answerDial(++fake.dials);
-      if (answer instanceof Error) throw answer;
-      fake.pagers.push(answer);
-      return { status: 101, webSocket: answer };
-    },
-    lendRpcStub: async () => {
-      fake.lends += 1;
-    },
-  };
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    { dup: () => lent } as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "key-4",
-    [],
-    (p) => void fake.waitedUntil.push(p),
-  );
-  return Object.assign(fake, { relay });
-}
-
-describe("a pager that closes under a live session", () => {
-  test.each([
-    {
-      closes: "with 1006 (the leg dropped: the DO reset, the hop failed)",
-      code: 1006,
-      becomes: "RE-DIALED — a second pager attaches, its page lends, the session's dup stays",
-      redialed: true,
-    },
-    {
-      closes: "with 1000 (a deliberate close: the DO replaced it with a newer pager)",
-      code: 1000,
-      becomes: "the lend ENDS — no re-dial, the session's dup released",
-      redialed: false,
-    },
-  ])("closing $closes → $becomes", async ({ code, redialed }) => {
+test.each([
+  {
+    closes: "with 1006 (the leg dropped: the DO reset, the hop failed)",
+    code: 1006,
+    becomes: "RE-DIALED — a second pager attaches, its page lends, the session's dup stays",
+    redialed: true,
+  },
+  {
+    closes: "with 1000 (a deliberate close: the DO replaced it with a newer pager)",
+    code: 1000,
+    becomes: "the lend ENDS — no re-dial, the session's dup released",
+    redialed: false,
+  },
+])(
+  "a pager that closes under a live session: closing $closes → $becomes",
+  async ({ code, redialed }) => {
     vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const fake = await relayOverFakeDurableObject(() => new FakePagerWebSocket());
     expect(fake.pagers).toHaveLength(1);
@@ -288,29 +201,29 @@ describe("a pager that closes under a live session", () => {
     fake.pagers[0].close(code);
     await Promise.all(fake.waitedUntil); // the re-dial, if one was fired
     expect(fake.pagers).toHaveLength(redialed ? 2 : 1);
-    expect(fake.disposed).toBe(redialed ? 0 : 1);
+    expect(fake).toMatchObject({ disposed: redialed ? 0 : 1 });
     if (redialed) {
       fake.pagers[1].page(); // the DO pages down the NEW pager, and the relay still lends
       await Promise.all(fake.waitedUntil);
-      expect(fake.lends).toBe(1);
+      expect(fake).toMatchObject({ lends: 1 });
     }
-  });
+  },
+);
 
-  test("a re-dial the DO never answers is given up after three tries, two seconds apart: the dup is released, the lend ends", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fake = await relayOverFakeDurableObject((dial) =>
-      dial === 1 ? new FakePagerWebSocket() : new Error("Durable Object reset"),
-    );
+test("a pager that closes under a live session: a re-dial the DO never answers is given up after three tries, two seconds apart: the dup is released, the lend ends", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const fake = await relayOverFakeDurableObject((dial) =>
+    dial === 1 ? new FakePagerWebSocket() : new Error("Durable Object reset"),
+  );
 
-    fake.pagers[0].close(1006);
-    const redial = fake.waitedUntil[0]!; // try 1 is immediate; tries 2 and 3 wait two seconds each
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await redial;
-    expect(fake.dials).toBe(4); // the first dial and three re-dials
-    expect(fake.disposed).toBe(1);
-  });
+  fake.pagers[0].close(1006);
+  const redial = fake.waitedUntil[0]!; // try 1 is immediate; tries 2 and 3 wait two seconds each
+  await vi.advanceTimersByTimeAsync(2_000);
+  await vi.advanceTimersByTimeAsync(2_000);
+  await redial;
+  expect(fake).toMatchObject({ dials: 4, disposed: 1 }); // the first dial and three re-dials
 });
 
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
@@ -319,6 +232,7 @@ describe("a pager that closes under a live session", () => {
 // re-throw the same CODED error the append would have (lib.ts: classify by code).
 test("a refused pager upgrade (the DO would not append what names the key) lends nothing and re-throws the refusal's code", async () => {
   vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
   let disposed = 0;
   let onRpcBrokenRegistrations = 0;
   const lent = {
@@ -391,3 +305,92 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
   ).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
   expect(disposed).toBe(1);
 });
+
+/** A lent stub whose `invoke` answers from `answer` — a value, or a rejection. Counts its calls
+ *  and its disposal. */
+function fakeBorrowedRpcStub(answer: () => Promise<unknown>) {
+  const stub = {
+    calls: 0,
+    disposed: false,
+    invoke: async () => {
+      stub.calls += 1;
+      return await answer();
+    },
+    fetch: async () => undefined,
+    [Symbol.dispose]: () => void (stub.disposed = true),
+  };
+  return stub as typeof stub & BorrowedRpcStub;
+}
+
+const directory = () =>
+  new RpcStubDirectory({
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [] },
+    onPresence: () => {},
+    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
+    appendEvents: () => {},
+  });
+
+/** A fake stub-pager WebSocket: records listeners and lets the test fire the `{type:"page"}`
+ *  message the DO sends down this socket to make the edge re-mint and lend the stub. */
+class FakePagerWebSocket {
+  readonly #listeners = new Map<string, Set<(e: unknown) => void>>();
+  accept(): void {}
+  send(_data: string): void {}
+  /** Close with `code` — 1000 is a deliberate close (this side's dispose, the DO's "replaced");
+   *  anything else is the leg dropping under a live lend. */
+  close(code = 1000): void {
+    this.#emit("close", { code, reason: "" });
+  }
+  addEventListener(type: string, cb: (e: unknown) => void): void {
+    let set = this.#listeners.get(type);
+    if (!set) this.#listeners.set(type, (set = new Set()));
+    set.add(cb);
+  }
+  #emit(type: string, event: unknown): void {
+    for (const cb of this.#listeners.get(type) ?? []) cb(event);
+  }
+  /** One page: the DO says "send me the stub" — the relay answers by lending a fresh stub. */
+  page(): void {
+    this.#emit("message", { data: JSON.stringify({ type: "page" }) });
+  }
+}
+
+/** A relay over a DO whose `fetch` answers each dial from `answerDial`: every pager it hands out is
+ *  kept (a test drops one, pages the next), every lend and the dup's disposal are counted, and the
+ *  relay's `waitUntil` promises are kept so a test awaits the re-dial it fired. */
+async function relayOverFakeDurableObject(
+  answerDial: (dial: number) => FakePagerWebSocket | Error,
+) {
+  const fake = {
+    pagers: [] as FakePagerWebSocket[],
+    lends: 0,
+    disposed: 0,
+    waitedUntil: [] as Promise<unknown>[],
+    dials: 0,
+  };
+  const lent = {
+    onRpcBroken() {},
+    [Symbol.dispose]() {
+      fake.disposed += 1;
+    },
+  };
+  const context = {
+    fetch: async () => {
+      const answer = answerDial(++fake.dials);
+      if (answer instanceof Error) throw answer;
+      fake.pagers.push(answer);
+      return { status: 101, webSocket: answer };
+    },
+    lendRpcStub: async () => {
+      fake.lends += 1;
+    },
+  };
+  const relay = await lendRpcStubOverPager(
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    { dup: () => lent } as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    "key-4",
+    [],
+    (p) => void fake.waitedUntil.push(p),
+  );
+  return Object.assign(fake, { relay });
+}

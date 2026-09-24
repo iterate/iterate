@@ -18,36 +18,6 @@ import {
   prepareConfinedWorker,
 } from "./worker-loader.ts";
 
-/** A fake `env.LOADER` that records every key and — like workerd — runs `getCode` once per NEW key
- *  and keeps whatever came of it under the key, a rejection included (a handler is attached so a
- *  rejection kept in `warm` is not an unhandled one). */
-const fakeLoaderEnv = () => {
-  const keys: string[] = [];
-  const warm = new Map<string, Promise<unknown>>();
-  const env = {
-    LOADER: {
-      get: (key: string, getCode: () => Promise<unknown>) => {
-        keys.push(key);
-        if (!warm.has(key)) {
-          const code = getCode();
-          code.catch(() => undefined);
-          warm.set(key, code);
-        }
-        return {};
-      },
-    },
-  } as unknown as Parameters<typeof prepareConfinedWorker>[0]["env"];
-  return { env, keys, warm };
-};
-
-/** Prepare AND load at once — the shape `itx.workers.get` takes; the rows below count what reached
- *  `env.LOADER`, and only `load()` reaches it. */
-const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) => {
-  const prepared = await prepareConfinedWorker(opts);
-  prepared.load();
-  return prepared;
-};
-
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
   const { env, keys } = fakeLoaderEnv();
@@ -65,7 +35,7 @@ test("two literal sources whose djb2 hashes collide never share one Worker Loade
     });
   await load("Aa");
   await load("B@");
-  expect(new Set(keys).size).toBe(2);
+  expect(new Set(keys)).toMatchObject({ size: 2 });
 });
 
 test("an owner and a caller's cacheKey that concatenate alike never share one Worker Loader cacheKey", async () => {
@@ -86,7 +56,7 @@ test("an owner and a caller's cacheKey that concatenate alike never share one Wo
     });
   await load("prj_u.iterate/x", "y:z");
   await load("prj_u.iterate/x:y", "z");
-  expect(new Set(keys).size).toBe(2);
+  expect(new Set(keys)).toMatchObject({ size: 2 });
 });
 
 test("two DIFFERENT facet identities never share one Worker Loader cacheKey", async () => {
@@ -141,9 +111,9 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   expect(produced).toBe(0);
   // with a key: the producer runs when the key is cold …
   const first = await load("todo@3f2a1c");
-  expect(first.loaderId).toBe(
-    JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@3f2a1c"]),
-  );
+  expect(first).toMatchObject({
+    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@3f2a1c"]),
+  });
   expect(keys.at(-1)).toBe(first.loaderId);
   await Promise.resolve(); // let getCode's async body run
   expect(produced).toBe(1);
@@ -171,13 +141,15 @@ test("literal modules: the key is their content hash unless the caller names a c
   };
   const a = await loadConfined({ ...base, source: { "cap.js": "export default 1" } });
   const b = await loadConfined({ ...base, source: { "cap.js": "export default 2" } });
-  expect(a.loaderId).not.toBe(b.loaderId); // content decides
+  expect(a).not.toMatchObject({ loaderId: b.loaderId }); // content decides
   const named = await loadConfined({
     ...base,
     source: { "cap.js": "export default 1" },
     cacheKey: "v7",
   });
-  expect(named.loaderId).toBe(JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "v7"]));
+  expect(named).toMatchObject({
+    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "v7"]),
+  });
   expect(keys.at(-1)).toBe(named.loaderId);
   await expect(
     loadConfined({ ...base, source: { "index.js": "export default 1" } }),
@@ -208,9 +180,9 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
     });
   // 1. the producer throws INSIDE getCode — workerd keeps that rejection under the id forever
   const first = await load();
-  expect(first.loaderId).toBe(
-    JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"]),
-  );
+  expect(first).toMatchObject({
+    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"]),
+  });
   await expect(warm.get(first.loaderId)).rejects.toThrow(/not landed/);
   expect(produced).toBe(1);
   // 2. still failing: the producer now runs OUTSIDE the loader — the failure reaches no map entry
@@ -222,9 +194,9 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   // 3. the artifact lands: produced outside once more, loaded LITERALLY under the next generation
   artifactLanded = true;
   const recovered = await load();
-  expect(recovered.loaderId).toBe(
-    `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"])}#1`,
-  );
+  expect(recovered).toMatchObject({
+    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"])}#1`,
+  });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
     modules: { "cap.js": "export default class Built {}" },
   });
@@ -232,7 +204,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   // 4. …and from here the generation is warm: no producer run, no new id
   await load();
   expect(produced).toBe(4);
-  expect(new Set(keys).size).toBe(2); // the dead id and its one recovered generation
+  expect(new Set(keys)).toMatchObject({ size: 2 }); // the dead id and its one recovered generation
 });
 
 test("prepare resolves the identity without asking the loader; load() is the one call that does, and a repeat is the loader's cache to answer", async () => {
@@ -261,7 +233,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
   expect(keys).toEqual([prepared.loaderId]);
   prepared.load();
   expect(keys).toEqual([prepared.loaderId, prepared.loaderId]);
-  expect(warm.size).toBe(1); // one isolate under the id, however often it is asked for
+  expect(warm).toMatchObject({ size: 1 }); // one isolate under the id, however often it is asked for
 });
 
 test("a facet's literal source over the ceiling is refused, coded; a producer expression is never measured", () => {
@@ -295,6 +267,36 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
   const before = await prepareConfinedWorker({ ...opts, platformOrigin: null });
   const after = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
   const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
-  expect(before.loaderId).not.toBe(after.loaderId);
-  expect(again.loaderId).toBe(after.loaderId);
+  expect(before).not.toMatchObject({ loaderId: after.loaderId });
+  expect(again).toMatchObject({ loaderId: after.loaderId });
 });
+
+/** A fake `env.LOADER` that records every key and — like workerd — runs `getCode` once per NEW key
+ *  and keeps whatever came of it under the key, a rejection included (a handler is attached so a
+ *  rejection kept in `warm` is not an unhandled one). */
+const fakeLoaderEnv = () => {
+  const keys: string[] = [];
+  const warm = new Map<string, Promise<unknown>>();
+  const env = {
+    LOADER: {
+      get: (key: string, getCode: () => Promise<unknown>) => {
+        keys.push(key);
+        if (!warm.has(key)) {
+          const code = getCode();
+          code.catch(() => undefined);
+          warm.set(key, code);
+        }
+        return {};
+      },
+    },
+  } as unknown as Parameters<typeof prepareConfinedWorker>[0]["env"];
+  return { env, keys, warm };
+};
+
+/** Prepare AND load at once — the shape `itx.workers.get` takes; the rows above count what reached
+ *  `env.LOADER`, and only `load()` reaches it. */
+const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) => {
+  const prepared = await prepareConfinedWorker(opts);
+  prepared.load();
+  return prepared;
+};

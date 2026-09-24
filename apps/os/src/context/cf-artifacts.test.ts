@@ -2,7 +2,7 @@
 // pure over an injected namespace) and the path → Artifacts-name mapping. Git itself is the repo
 // facet's (src/repo/git-wire.test.ts pins its codecs).
 
-import { describe, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   projectScopedArtifacts,
   repoArtifactName,
@@ -13,22 +13,20 @@ import {
 } from "./cf-artifacts.ts";
 
 // ── the mapping ── every itx surface speaks a repo's PATH; the Artifacts NAME is derived here alone.
-describe("repoArtifactName — the Artifacts repo a path is backed by", () => {
-  test("segments joined with `--`; the convention and any other path alike", () => {
-    expect(repoArtifactName("/repos/config")).toBe("repos--config");
-    expect(repoArtifactName("/vendor/lib")).toBe("vendor--lib");
-    expect(repoArtifactName("/a/b.c/d_e-f")).toBe("a--b.c--d_e-f");
-  });
-  test("injective: a segment may not contain `--`; the grammar and the root are refused", () => {
-    expect(() => repoArtifactName("/repos/a--b")).toThrow(/without "--"/);
-    expect(() => repoArtifactName("/repos/with space")).toThrow(/a path segment is/);
-    expect(() => repoArtifactName("/")).toThrow(/root context is not a repo/);
-    expect(() => repoArtifactName("/.hidden")).toThrow(/start with a letter or digit/);
-  });
-  test("repoPathOf inverts it", () => {
-    for (const path of ["/repos/config", "/vendor/lib", "/a/b.c/d_e-f", "/site"])
-      expect(repoPathOf(repoArtifactName(path))).toBe(path);
-  });
+test("repoArtifactName — the Artifacts repo a path is backed by: segments joined with `--`; the convention and any other path alike", () => {
+  expect(repoArtifactName("/repos/config")).toBe("repos--config");
+  expect(repoArtifactName("/vendor/lib")).toBe("vendor--lib");
+  expect(repoArtifactName("/a/b.c/d_e-f")).toBe("a--b.c--d_e-f");
+});
+test("repoArtifactName — the Artifacts repo a path is backed by: injective: a segment may not contain `--`; the grammar and the root are refused", () => {
+  expect(() => repoArtifactName("/repos/a--b")).toThrow(/without "--"/);
+  expect(() => repoArtifactName("/repos/with space")).toThrow(/a path segment is/);
+  expect(() => repoArtifactName("/")).toThrow(/root context is not a repo/);
+  expect(() => repoArtifactName("/.hidden")).toThrow(/start with a letter or digit/);
+});
+test("repoArtifactName — the Artifacts repo a path is backed by: repoPathOf inverts it", () => {
+  for (const path of ["/repos/config", "/vendor/lib", "/a/b.c/d_e-f", "/site"])
+    expect(repoPathOf(repoArtifactName(path))).toBe(path);
 });
 
 // ── cfArtifacts ── `itx.cfArtifacts`, Cloudflare Artifacts project-scoped and addressed by PATH. Two
@@ -40,52 +38,6 @@ describe("repoArtifactName — the Artifacts repo a path is backed by", () => {
 //   2. `get` returns the real handle's shape MINUS `fork` — whose runtime `fork(name)` (walked by the
 //      itx dispatcher regardless of the narrowed type) takes an unprefixed name and escapes the wall.
 // Pure over an injected namespace: no DO, no bindings, no network.
-
-function recordingNamespace(existing: string[] = []) {
-  const calls: { method: string; name: string }[] = [];
-  const repos = new Set(existing);
-  let forkCalled = false;
-  const namespace: ArtifactsNamespace = {
-    create: async (name) => {
-      calls.push({ method: "create", name });
-      repos.add(name);
-      return { token: `tok-${name}` };
-    },
-    get: async (name) => {
-      calls.push({ method: "get", name });
-      // The binding's "no such repo" (API error 10200) — the one signal a read maps to "no files".
-      if (!repos.has(name)) throw new Error("Repository not found (10200)");
-      // A real-shaped handle that ALSO carries the UNSAFE `fork(dest)` — `get` must re-expose
-      // `createToken` but NEVER this method.
-      return {
-        // the binding names the remote itself (account and namespace baked in) — `info()`, a method:
-        // the real handle is an RPC stub
-        info: async () => ({ remote: `https://acct.artifacts.cloudflare.net/git/ns/${name}.git` }),
-        createToken: async (scope: "read" | "write", ttlSeconds: number) => ({
-          plaintext: `${scope}-${name}-${ttlSeconds}`,
-        }),
-        fork: async (dest: string) => {
-          forkCalled = true;
-          return { token: `stolen-${dest}` };
-        },
-      } as unknown as ArtifactRepoHandle;
-    },
-    list: async () => {
-      calls.push({ method: "list", name: "*" });
-      return { repos: [...repos].map((name) => ({ name })) };
-    },
-    delete: async (name) => {
-      calls.push({ method: "delete", name });
-      // The binding's delete of a missing repo throws the same "not found" (API error 10200).
-      if (!repos.delete(name)) throw new Error("Repository not found (10200)");
-      return true;
-    },
-  };
-  return { namespace, calls, forkCalled: () => forkCalled };
-}
-
-const scoped = (namespace: ArtifactsNamespace, projectId: string) =>
-  projectScopedArtifacts({ namespace, projectId });
 
 test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, and re-exposes the handle WITH remote() and WITHOUT fork", async () => {
   const { namespace, calls, forkCalled } = recordingNamespace();
@@ -102,7 +54,9 @@ test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, 
   // The handle is an RpcTarget wrapper (so `get(path).createToken(...)` pipelines across /api), and it
   // re-exposes ONLY createToken, acting on the already-prefixed repo…
   expect(repo).toBeInstanceOf(ScopedArtifactRepoRpcTarget);
-  expect((await repo.createToken("read", 60)).plaintext).toBe("read-prj_a.repos--config-60");
+  expect(await repo.createToken("read", 60)).toMatchObject({
+    plaintext: "read-prj_a.repos--config-60",
+  });
   // …names the remote the facet's git client POSTs under (the platform knows account + namespace)…
   expect(repo.remote()).toBe(
     "https://acct.artifacts.cloudflare.net/git/ns/prj_a.repos--config.git",
@@ -167,7 +121,9 @@ test("every binding handle is released: create, get and createToken leave none l
   await a.create("/repos/config"); // the probe: not found, then create
   await a.create("/repos/config"); // the probe: found
   const repo = await a.get("/repos/config");
-  expect((await repo.createToken("write", 60)).plaintext).toBe("write-prj_a.repos--config-60");
+  expect(await repo.createToken("write", 60)).toMatchObject({
+    plaintext: "write-prj_a.repos--config-60",
+  });
   expect({ opened, released }).toEqual({ opened: 3, released: 3 }); // probe (found), get, createToken
 });
 
@@ -323,3 +279,49 @@ async function settle<T>(run: () => Promise<T>) {
     vi.useRealTimers();
   }
 }
+
+function recordingNamespace(existing: string[] = []) {
+  const calls: { method: string; name: string }[] = [];
+  const repos = new Set(existing);
+  let forkCalled = false;
+  const namespace: ArtifactsNamespace = {
+    create: async (name) => {
+      calls.push({ method: "create", name });
+      repos.add(name);
+      return { token: `tok-${name}` };
+    },
+    get: async (name) => {
+      calls.push({ method: "get", name });
+      // The binding's "no such repo" (API error 10200) — the one signal a read maps to "no files".
+      if (!repos.has(name)) throw new Error("Repository not found (10200)");
+      // A real-shaped handle that ALSO carries the UNSAFE `fork(dest)` — `get` must re-expose
+      // `createToken` but NEVER this method.
+      return {
+        // the binding names the remote itself (account and namespace baked in) — `info()`, a method:
+        // the real handle is an RPC stub
+        info: async () => ({ remote: `https://acct.artifacts.cloudflare.net/git/ns/${name}.git` }),
+        createToken: async (scope: "read" | "write", ttlSeconds: number) => ({
+          plaintext: `${scope}-${name}-${ttlSeconds}`,
+        }),
+        fork: async (dest: string) => {
+          forkCalled = true;
+          return { token: `stolen-${dest}` };
+        },
+      } as unknown as ArtifactRepoHandle;
+    },
+    list: async () => {
+      calls.push({ method: "list", name: "*" });
+      return { repos: [...repos].map((name) => ({ name })) };
+    },
+    delete: async (name) => {
+      calls.push({ method: "delete", name });
+      // The binding's delete of a missing repo throws the same "not found" (API error 10200).
+      if (!repos.delete(name)) throw new Error("Repository not found (10200)");
+      return true;
+    },
+  };
+  return { namespace, calls, forkCalled: () => forkCalled };
+}
+
+const scoped = (namespace: ArtifactsNamespace, projectId: string) =>
+  projectScopedArtifacts({ namespace, projectId });

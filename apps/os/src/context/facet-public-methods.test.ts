@@ -11,23 +11,6 @@ import { ProjectDurableObject } from "../project/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";
 import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 
-/** A person's own processor with a verb of its own, as an author spells its list. */
-abstract class SendingProcessorDurableObject extends StreamProcessorDurableObject {
-  static override publicMethods = [...super.publicMethods, "send"];
-}
-/** A person's own facet that is no processor — a mini-app with its own state. */
-abstract class ChatroomDurableObject extends FacetDurableObject {
-  static override publicMethods = [...super.publicMethods, "post", "state"];
-}
-
-const FACET_CLASSES = {
-  account: AccountDurableObject,
-  project: ProjectDurableObject,
-  secret: SecretDurableObject,
-  "a loaded processor": SendingProcessorDurableObject,
-  "a loaded mini-app": ChatroomDurableObject,
-};
-
 const FACET_PUBLIC_METHOD_ROWS: {
   facet: keyof typeof FACET_CLASSES;
   walk: string;
@@ -91,3 +74,22 @@ test("the refusal names the facet, the step and the list", () => {
     `facet "plain": "hello" is not one of its public methods (it lists none)`,
   );
 });
+
+/** A person's own processor with a verb of its own, as an author spells its list. */
+abstract class SendingProcessorDurableObject extends StreamProcessorDurableObject {
+  static override publicMethods = [...super.publicMethods, "send"];
+}
+
+/** A person's own facet that is no processor — a mini-app with its own state. */
+abstract class ChatroomDurableObject extends FacetDurableObject {
+  static override publicMethods = [...super.publicMethods, "post", "state"];
+}
+
+/** The class each row's facet names; below the classes it lists, read only when a test runs. */
+const FACET_CLASSES = {
+  account: AccountDurableObject,
+  project: ProjectDurableObject,
+  secret: SecretDurableObject,
+  "a loaded processor": SendingProcessorDurableObject,
+  "a loaded mini-app": ChatroomDurableObject,
+};
