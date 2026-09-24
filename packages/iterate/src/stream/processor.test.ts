@@ -341,7 +341,9 @@ test("fed by pushes: reads interleaved with appends never miss or skip an event 
     [];
   const counted: number[] = [];
   for (let i = 1; i <= 24; i++) {
-    const [event] = mem.stream.append({ type: i % 3 === 0 ? "noise" : "counted" });
+    const [event] = mem.stream.append({
+      type: i % 3 === 0 ? "noise" : "counted",
+    }) as StreamEvent[];
     if (event!.type === "counted") counted.push(event!.offset);
     if (i % 2 === 0) reads.push({ appendedBefore: [...counted], answered: engine.snapshot() });
     if (i % 5 === 0) await settle(1);
