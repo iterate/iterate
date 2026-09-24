@@ -889,8 +889,8 @@ CI trace, which only reports:
 - **Time to green**: the pushes whose checks all passed on their first
   execution.
 - **Time to first verdict**: every push, red ones and re-run ones at their
-  first execution's end, so flakes count. A push whose Test or Lint was
-  cancelled because the PR's next push superseded it is left out.
+  first execution's end, so flakes count. A push whose Test, Lint or Preview
+  OS was cancelled because the PR's next push superseded it is left out.
 
 Pushes are split by what their Preview OS E2E tests job ran, which its suite
 summary names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow

@@ -200,19 +200,39 @@ test.each([
   },
 );
 
-test("a cancelled Preview OS is red even when the PR's next run came first: it never cancels for a newer push", () => {
-  expect(
-    measurePush({
-      metrics: withWorkflow("nsbcf2f8mt", {
-        status: "cancelled",
-        finishedAt: "2026-09-24T12:30:00.000Z",
+// Preview OS cancels its run in progress when the PR's next push starts (preview-os.yml
+// `concurrency:`), even in the CI trace, after its suites passed.
+test.each([
+  { nextRunAt: "2026-09-24T11:55:00Z", ended: "2026-09-24T12:30:00.000Z", outcome: "superseded" },
+  { nextRunAt: "2026-09-24T11:54:20Z", ended: "2026-09-24T11:54:25.587Z", outcome: "superseded" },
+  // cancelled before the next push: a timeout or a person
+  { nextRunAt: "2026-09-24T11:55:00Z", ended: "2026-09-24T11:54:25.587Z", outcome: "red" },
+  { nextRunAt: undefined, ended: "2026-09-24T11:54:25.587Z", outcome: "red" },
+])(
+  "a Preview OS cancelled in its trace at $ended, the next run created at $nextRunAt → $outcome",
+  ({ nextRunAt, ended, outcome }) => {
+    expect(
+      measurePush({
+        metrics: {
+          ...pxt90nlfvh,
+          workflows: pxt90nlfvh.workflows.map((entry) =>
+            entry.workflow.name === "Preview OS"
+              ? previewOs("nsbcf2f8mt", "cancelled", ended, {
+                  deploy: ["2026-09-24T11:50:40.000Z"],
+                  e2e: ["2026-09-24T11:53:59.000Z"],
+                  specs: ["2026-09-24T11:52:10.000Z"],
+                  trace: [ended],
+                })
+              : entry,
+          ),
+        },
+        firstExecutions: {},
+        nextRunAt,
+        summary: { slowRows: "skipped" },
       }),
-      firstExecutions: {},
-      nextRunAt: "2026-09-24T11:55:00Z",
-      summary: undefined,
-    }),
-  ).toMatchObject({ outcome: "red", e2e: "no-summary" });
-});
+    ).toMatchObject({ outcome });
+  },
+);
 
 test("a PR run without Test is not a push; one with a check still unfinished is not measured yet", () => {
   expect(
