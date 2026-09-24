@@ -39,8 +39,7 @@ export async function mapConcurrent<Input, Output>(
  * connection fails, is asked again after each of `delaysMs`, with a `depot.platform-failure-retry`
  * warn per repeat (platform-retry.ts). A 4xx is an answer about the request and fails at once, as
  * does any other method (Connect sends every call as a POST, so only the name says it changes
- * nothing). One 500 on GetJobAttemptLogs failed PR #2970's Preview OS trace job (attempt 144gszhm0r,
- * 2026-09-24).
+ * nothing). A single 500 on GetJobAttemptLogs is enough to fail a trace job without the repeat.
  */
 export async function depotCiApi(
   method: string,

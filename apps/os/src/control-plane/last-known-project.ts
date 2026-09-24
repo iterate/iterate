@@ -3,8 +3,8 @@
 // (edge.ts: a project's own hostname is one read, memoized thirty seconds; the row is one read,
 // memoized for the isolate's life) and, ONLY when a read fails on the platform's side
 // (ControlPlaneUnavailableError) or has not answered in 3 s, as the control plane last wrote it
-// down. On 2026-09-24 the `CONTROL_PLANE` singleton was unreachable for 188 s; a deploy landed
-// inside the outage, its fresh isolates had no memo, and every project host failed.
+// down. A deploy's fresh isolates have no memo, so without a copy a control-plane outage fails
+// every project host until it ends (188 s on 2026-09-24).
 //
 // THE COPIES are `OAUTH_KV` entries the control plane's Durable Object writes when what they copy
 // changes (durable-object.ts): a project's row under `last-known:project:<slug>` and `…:<id>` when
@@ -31,10 +31,10 @@ const ProjectRow = z.object({ id: z.string(), slug: z.string(), orgId: z.string(
  * The project host `url` is and its project's row, or null when `url` is no project host: the
  * static rules (app-config.ts `projectHostOf`, no read), else a hostname a project added itself,
  * then the row its label names (null: no such project, the 421). A copy stands in for a read that
- * fails on the platform's side or has not answered in 3 s — in prd the singleton answers in 23–30
- * ms at the median, 266 ms at p99, and its slowest of 14,622 calls on 2026-09-23/24 took 1.25 s.
- * With no copy the read is waited for: a slow answer is still the answer, and a failure is the
- * platform's own (12–15 s in that outage), thrown for worker.ts to answer 503. Once a read has
+ * fails on the platform's side or has not answered in 3 s (in prd the singleton answers in 23–30
+ * ms at the median, 266 ms at p99 and 1.25 s at its slowest, measured 2026-09-24). With no copy
+ * the read is waited for: a slow answer is still the answer, and a failure is the platform's own
+ * (after 12–15 s in the 2026-09-24 outage), thrown for worker.ts to answer 503. Once a read has
  * stood a copy in, the request's later reads try their copies first. `stale` says why and which
  * copies stood in, for worker.ts to log once; `stale.failure` is set when a read failed.
  */
