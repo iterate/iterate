@@ -55,6 +55,7 @@ const rows: {
       grantUses: {},
       consents: [],
       memberships: {},
+      endedMemberships: {},
       secrets: {},
     },
   },
@@ -68,6 +69,7 @@ const rows: {
       grantUses: {},
       consents: [],
       memberships: {},
+      endedMemberships: {},
       secrets: {},
     },
   },
@@ -120,6 +122,7 @@ const rows: {
       endedGrants: { pat_b: { at: expect.any(String) }, pat_a: { at: expect.any(String) } },
       grantUses: {},
       memberships: {},
+      endedMemberships: {},
       consents: [
         {
           clientId: "c1",
@@ -172,6 +175,65 @@ const rows: {
       grantUses: { grant_a: { at: 5 } },
       consents: [],
       memberships: { org_1: { role: "owner", since: new Date(1000).toISOString() } },
+      endedMemberships: { org_2: { at: expect.any(String) } },
+      secrets: {},
+    },
+  },
+  {
+    name: "a MINT — an organization's first membership, landed in the background after the creation that minted it answered — never overrides a membership the account holds, nor revives one that ended, however late it lands; a removal's end is kept even for a membership never held, and joining again clears it",
+    events: [
+      // a demotion that landed before the mint: the mint is older, the account keeps the demotion
+      {
+        type: "events.iterate.com/organization/member-added",
+        payload: { orgId: "org_1", userId: "user_me", role: "member" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/organization/member-added",
+        payload: { orgId: "org_1", userId: "user_me", role: "owner", mint: true },
+        source: platform,
+      },
+      // a removal that landed before the mint: the membership stays ended
+      {
+        type: "events.iterate.com/organization/member-removed",
+        payload: { orgId: "org_2", userId: "user_me" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/organization/member-added",
+        payload: { orgId: "org_2", userId: "user_me", role: "owner", mint: true },
+        source: platform,
+      },
+      // a mint first, as it lands almost always
+      {
+        type: "events.iterate.com/organization/member-added",
+        payload: { orgId: "org_3", userId: "user_me", role: "owner", mint: true },
+        source: platform,
+      },
+      // joining the ended one again, by invitation
+      {
+        type: "events.iterate.com/organization/member-removed",
+        payload: { orgId: "org_4", userId: "user_me" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/organization/member-added",
+        payload: { orgId: "org_4", userId: "user_me", role: "member" },
+        source: platform,
+      },
+    ],
+    state: {
+      authentications: [],
+      personalAccessTokens: {},
+      endedGrants: {},
+      grantUses: {},
+      consents: [],
+      memberships: {
+        org_1: { role: "member", since: expect.any(String) },
+        org_3: { role: "owner", since: expect.any(String) },
+        org_4: { role: "member", since: expect.any(String) },
+      },
+      endedMemberships: { org_2: { at: expect.any(String) } },
       secrets: {},
     },
   },
@@ -192,6 +254,7 @@ const rows: {
       grantUses: {},
       consents: [],
       memberships: {},
+      endedMemberships: {},
       secrets: {},
     },
   },
@@ -212,6 +275,7 @@ const rows: {
       grantUses: {},
       consents: [],
       memberships: {},
+      endedMemberships: {},
       secrets: {},
     },
   },
@@ -244,6 +308,7 @@ const rows: {
       grantUses: {},
       consents: [],
       memberships: {},
+      endedMemberships: {},
       secrets: {},
     },
   },

@@ -28,6 +28,10 @@ const MemberAdded = z.object({
   orgId: z.string().min(1),
   userId: z.string().min(1),
   role: OrganizationRole,
+  /** The organization's FIRST membership, landed by the project creation that minted the
+   *  organization (session.ts `landProjectOnOrganization`). The account folds it by its own rule
+   *  (account/processor.ts). */
+  mint: z.literal(true).optional(),
 });
 /** `organization/member-removed` — the mirror, on both logs. */
 const MemberRemoved = z.object({ orgId: z.string().min(1), userId: z.string().min(1) });
