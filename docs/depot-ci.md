@@ -738,5 +738,4 @@ Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
 `unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`; its
-[test evidence](test-evidence.md) manifest goes only to R2, once the upload
-is on.
+[test evidence](test-evidence.md) manifest goes only to R2.

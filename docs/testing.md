@@ -384,8 +384,8 @@ for it. The Playwright config additionally honors the Playwright-conventional
   test (`tables/tests.parquet`) and `manifest.json` (the run's result, the
   tested commit and tree, the job attempt, the deployed target in the e2e
   jobs, and every file's sha256). Kit's CTest writes its JUnit XML there too.
-  The upload to R2 is off until its bucket exists.
-  [Test evidence](test-evidence.md).
+  Then `upload` puts the folder in the `iterate-ci` R2 bucket; the step's
+  log and the job's summary give its prefix. [Test evidence](test-evidence.md).
 - **The Vitest e2e suite** streams to the job log; the soak writes one JSON
   report per run under `apps/os/output/soak/` plus `summary.json`.
 - **Playwright** writes the repo-level `test-results/`:

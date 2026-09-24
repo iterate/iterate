@@ -882,14 +882,14 @@ test.each([
   },
 );
 
-// docs/test-evidence.md: each test job attempt's test-results/ folder, its manifest and, once
-// switched on, its upload to R2.
+// docs/test-evidence.md: each test job attempt's test-results/ folder, its manifest and its upload
+// to R2.
 test.each([
   { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["e2e"] },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["e2e"] },
 ])(
-  "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2 only when switched on, deciding nothing",
+  "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2, deciding nothing",
   ({ file, jobId, testSteps }) => {
     const workflow = loadWorkflow(file);
     const job = workflow.jobs[jobId]!;
@@ -898,7 +898,7 @@ test.each([
     const write = steps[index("scripts/ci/test-evidence.ts write")];
     const upload = steps[index("scripts/ci/test-evidence.ts upload")];
 
-    expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("off");
+    expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("r2");
     // always, a cancelled job's folder saying so
     expect(write).toMatchObject({
       if: "always()",

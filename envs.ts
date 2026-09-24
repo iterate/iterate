@@ -308,15 +308,15 @@ export const ciReportsEnvs: Record<
   },
 };
 
-/** The test evidence bucket (docs/test-evidence.md): each CI job attempt's `test-results/` folder,
- *  put there by `scripts/ci/test-evidence.ts upload` once a workflow sets TEST_EVIDENCE_UPLOAD to
- *  `r2`. CI tooling, so it lives on the dev/preview account; CI's credentials are a bucket-scoped R2
- *  API token's S3 keys in Doppler `_shared/preview` (`TEST_EVIDENCE_R2_ACCESS_KEY_ID`,
- *  `TEST_EVIDENCE_R2_SECRET_ACCESS_KEY`). Created by hand, not by ensure-resources:
- *  docs/test-evidence.md#owner-steps. */
-export const testEvidenceEnvs = {
+/** The CI bucket, `iterate-ci` (docs/test-evidence.md#one-bucket): each CI job attempt's test
+ *  evidence folder under `evidence/`, the per-test tables' copies under `tables/`, and later the
+ *  alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
+ *  writes it with the Cloudflare API token it already holds (Doppler `_shared/preview`'s
+ *  CLOUDFLARE_API_TOKEN, used as S3 keys by `scripts/ci/test-evidence.ts upload`). Created by hand
+ *  with that token, with lifecycle rules on `evidence/` only: docs/test-evidence.md#setup. */
+export const ciBucketEnvs = {
   ci: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
-    bucketName: "ci-test-evidence",
+    bucketName: "iterate-ci",
   },
 };

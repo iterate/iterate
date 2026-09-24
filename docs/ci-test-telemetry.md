@@ -14,7 +14,7 @@ Two things, kept apart on purpose:
 
 Both feed a third: the [test evidence folder](test-evidence.md), each job
 attempt's `test-results/` with a manifest and one Parquet row per test, which
-goes to R2 once its bucket exists.
+CI puts in the `iterate-ci` R2 bucket.
 
 Per-test events were over 70% of the PostHog project's ingestion (millions a
 month), which is why #2494 cut CI delivery to zero. The workflow and job events

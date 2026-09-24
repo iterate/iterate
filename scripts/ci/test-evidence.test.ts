@@ -9,7 +9,8 @@ import {
   TestEvidenceManifest,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { expect, test } from "vitest";
+import { AwsClient } from "aws4fetch";
+import { expect, test, vi } from "vitest";
 import {
   testEvidencePrefix,
   testEvidenceSource,
@@ -230,7 +231,7 @@ test("keys a run's folder by trust, the day its manifest was written and its Dep
   const late = new Date("2026-09-24T00:06:00.000Z");
   const pullRequest = await write(folder.path, { createdAt: late });
   expect(testEvidencePrefix(pullRequest)).toBe(
-    "ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/",
+    "evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/",
   );
   expect(testEvidenceTableKey(pullRequest)).toBe(
     "tables/tests/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh.parquet",
@@ -239,7 +240,7 @@ test("keys a run's folder by trust, the day its manifest was written and its Dep
   const mainPush = await write(folder.path, {
     environment: { ...environment, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" },
   });
-  expect(testEvidencePrefix(mainPush)).toMatch(/^ci\/trust=main\//u);
+  expect(testEvidencePrefix(mainPush)).toMatch(/^evidence\/ci\/trust=main\//u);
   // a dispatch on main can be told to test anything (Preview OS's pull-request-number)
   const dispatch = await write(folder.path, {
     environment: {
@@ -248,7 +249,7 @@ test("keys a run's folder by trust, the day its manifest was written and its Dep
       GITHUB_REF: "refs/heads/main",
     },
   });
-  expect(testEvidencePrefix(dispatch)).toMatch(/^ci\/trust=pr\//u);
+  expect(testEvidencePrefix(dispatch)).toMatch(/^evidence\/ci\/trust=pr\//u);
 });
 
 test("a job with no Depot job attempt has no test run to file evidence under", async () => {
@@ -259,30 +260,23 @@ test("a job with no Depot job attempt has no test run to file evidence under", a
   expect(existsSync(join(folder.path, testEvidencePaths.manifest))).toBe(false);
 });
 
-const credentials = {
-  accountId: "376ef7ed81b0573f93524de763666c15",
-  bucketName: "ci-test-evidence",
-  accessKeyId: "key-id",
-  secretAccessKey: "secret",
-};
+const bucket = { accountId: "376ef7ed81b0573f93524de763666c15", bucketName: "iterate-ci" };
+/** Doppler _shared/preview's CLOUDFLARE_API_TOKEN, and the id Cloudflare's token check answers for it. */
+const apiToken = "cf-api-token";
+const apiTokenId = "0123456789abcdef0123456789abcdef";
 
-test("PUTs every listed file write-once with its manifest sha256 as the signed payload hash, then the manifest, then the table's copy for the loader", async () => {
+test("PUTs every listed file write-once with its manifest sha256 as the signed payload hash, then the manifest, then the table's copy for the loader, with the API token as S3 keys", async () => {
   using folder = evidenceFolder({
     artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
     check: completeCheck,
   });
   const manifest = await write(folder.path);
-  const requests: Request[] = [];
+  const api = cloudflare();
 
-  const { prefix, tableKey } = await uploadTestEvidence({
-    repoRoot: folder.path,
-    ...credentials,
-    fetch: async (request) => {
-      requests.push(request as Request);
-      return new Response(null, { status: 200 });
-    },
-  });
+  const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
 
+  const { prefix, tableKey } = uploaded;
+  const requests = api.r2Requests();
   const urls = requests.map((request) => new URL(request.url));
   expect(new Set(urls.map((url) => url.host))).toEqual(
     new Set(["376ef7ed81b0573f93524de763666c15.r2.cloudflarestorage.com"]),
@@ -290,14 +284,12 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
   const keys = urls.map((url) => decodeURIComponent(url.pathname));
   // the files in parallel, in any order; the manifest alone; the table's copy last
   expect(keys.slice(0, -2).sort()).toEqual(
-    manifest.files.map((file) => `/ci-test-evidence/${prefix}${file.path}`),
+    manifest.files.map((file) => `/iterate-ci/${prefix}${file.path}`),
   );
-  expect(keys.slice(-2)).toEqual([
-    `/ci-test-evidence/${prefix}manifest.json`,
-    `/ci-test-evidence/${tableKey}`,
-  ]);
-  expect(prefix).toBe("ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/");
-  // `=` is sent percent-encoded, as S3 clients sign it; R2 decodes it back into the key
+  expect(keys.slice(-2)).toEqual([`/iterate-ci/${prefix}manifest.json`, `/iterate-ci/${tableKey}`]);
+  expect(prefix).toBe("evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/");
+  expect(uploaded).toMatchObject({ files: manifest.files.length + 1, retries: 0 });
+  // `=` is sent percent-encoded, as S3 clients sign it; R2 stores it decoded (measured 2026-09-24)
   expect(urls[0]!.pathname).toContain("/trust%3Dpr/date%3D2026-09-24/");
   const trace = requests.find((request) => request.url.endsWith("trace.zip"))!;
   expect(trace).toMatchObject({ method: "PUT" });
@@ -306,12 +298,136 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
     "if-none-match": "*",
     "x-amz-content-sha256": createHash("sha256").update("trace").digest("hex"),
   });
-  expect(trace.headers.get("authorization")).toMatch(
-    /^AWS4-HMAC-SHA256 Credential=key-id\/\d{8}\/auto\/s3\/aws4_request, SignedHeaders=[^,]*if-none-match[^,]*x-amz-content-sha256/,
-  );
   expect(new TextDecoder().decode(await trace.arrayBuffer())).toBe("trace");
+  // the access key is the token's id and the secret the token's SHA-256: signed again with those,
+  // at the same instant, the request carries the same signature
+  const resigned = await new AwsClient({
+    accessKeyId: apiTokenId,
+    secretAccessKey: createHash("sha256").update(apiToken).digest("hex"),
+    service: "s3",
+    region: "auto",
+  }).sign(trace.url, {
+    method: "PUT",
+    body: "trace",
+    headers: {
+      "content-type": "application/zip",
+      "if-none-match": "*",
+      "x-amz-content-sha256": trace.headers.get("x-amz-content-sha256")!,
+    },
+    aws: { datetime: trace.headers.get("x-amz-date")! },
+  });
+  expect(trace.headers.get("authorization")).toBe(resigned.headers.get("authorization"));
+  expect(trace.headers.get("authorization")).toMatch(
+    new RegExp(`^AWS4-HMAC-SHA256 Credential=${apiTokenId}/\\d{8}/auto/s3/aws4_request, `),
+  );
   expect(requests.at(-2)!.headers.get("content-type")).toBe("application/json");
   expect(requests.at(-1)!.headers.get("content-type")).toBe("application/vnd.apache.parquet");
+});
+
+test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platform-failure warn, and the upload completes", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  await write(folder.path);
+  const failures = [
+    new Response("<Error><Code>InternalError</Code></Error>", { status: 503 }),
+    new Response("slow down", { status: 429, headers: { "retry-after": "5" } }),
+    new TypeError("fetch failed", { cause: new Error("ECONNRESET") }),
+  ];
+  const api = cloudflare((request) => {
+    if (!request.url.endsWith("trace.zip") || failures.length === 0) return ok();
+    const failure = failures.shift()!;
+    if (failure instanceof Error) throw failure;
+    return failure;
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
+
+  expect(uploaded).toMatchObject({ retries: 3 });
+  expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
+  expect(api).toMatchObject({ waits: [1000, 5000, 4000] });
+  expect(warn.mock.calls.map(([entry]) => entry)).toEqual([
+    expect.objectContaining({
+      event: "test-evidence.platform-failure-retry",
+      request: expect.stringMatching(/^PUT evidence\/ci\/.*\/trace\.zip$/u),
+      attempt: 1,
+      status: 503,
+    }),
+    expect.objectContaining({ attempt: 2, status: 429, waitMs: 5000 }),
+    expect.objectContaining({ attempt: 3, answer: "fetch failed: ECONNRESET" }),
+  ]);
+  warn.mockRestore();
+});
+
+test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, and the manifest never lands", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  await write(folder.path);
+  const api = cloudflare((request) =>
+    request.url.endsWith("trace.zip") ? new Response("down", { status: 500 }) : ok(),
+  );
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  await expect(
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api }),
+  ).rejects.toThrow(/trace\.zip: 500 down \(after 3 retries\)$/u);
+  expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
+  expect(warn).toHaveBeenCalledTimes(3);
+  expect(
+    api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
+  ).toBe(false);
+  warn.mockRestore();
+});
+
+test("a key that exists (412) is this upload's own when it holds the same bytes, and a refusal otherwise; a 4xx is never retried", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  await write(folder.path);
+  const existing = (etag: string) =>
+    cloudflare((request) => {
+      if (!request.url.endsWith("trace.zip")) return ok();
+      if (request.method === "HEAD") return new Response(null, { status: 200, headers: { etag } });
+      return new Response("<Error><Code>PreconditionFailed</Code></Error>", { status: 412 });
+    });
+
+  // as R2 answered a HEAD of a JSON object on 2026-09-24: weak, since its edge gzips JSON
+  const same = existing(`W/"${md5("trace")}"`);
+  await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...same });
+  expect(
+    same.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
+  ).toBe(true);
+
+  const other = existing(`"${md5("another run's trace")}"`);
+  await expect(
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...other }),
+  ).rejects.toThrow(/trace\.zip: 412 <Error><Code>PreconditionFailed<\/Code><\/Error>$/u);
+  expect(
+    other.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
+  ).toBe(false);
+
+  const forbidden = cloudflare((request) =>
+    request.url.endsWith("trace.zip") ? new Response("AccessDenied", { status: 403 }) : ok(),
+  );
+  await expect(
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...forbidden }),
+  ).rejects.toThrow(/trace\.zip: 403 AccessDenied$/u);
+  expect(
+    forbidden.r2Requests().filter((request) => request.url.endsWith("trace.zip")),
+  ).toHaveLength(1);
+  expect(forbidden).toMatchObject({ waits: [] });
+});
+
+test("a token Cloudflare does not verify sends nothing to R2", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  await write(folder.path);
+  const api = cloudflare();
+
+  await expect(
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken: "revoked", ...api }),
+  ).rejects.toThrow(
+    "CLOUDFLARE_API_TOKEN did not verify (/user/tokens/verify: 401, /accounts/376ef7ed81b0573f93524de763666c15/tokens/verify: 401)",
+  );
+  expect(api.requests.map((request) => new URL(request.url).host)).toEqual([
+    "api.cloudflare.com",
+    "api.cloudflare.com",
+  ]);
 });
 
 test("a file that changed after the manifest listed it is never sent, and the manifest never lands", async () => {
@@ -321,41 +437,15 @@ test("a file that changed after the manifest listed it is never sent, and the ma
     join(folder.path, testEvidencePaths.playwrightOutput, "os-sign-in/trace.zip"),
     "later",
   );
-  const urls: string[] = [];
+  const api = cloudflare();
 
   await expect(
-    uploadTestEvidence({
-      repoRoot: folder.path,
-      ...credentials,
-      fetch: async (request) => {
-        urls.push((request as Request).url);
-        return new Response(null, { status: 200 });
-      },
-    }),
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api }),
   ).rejects.toThrow("playwright-output/os-sign-in/trace.zip changed after the manifest listed it");
-  expect(urls.some((url) => url.endsWith("trace.zip"))).toBe(false);
-  expect(urls.some((url) => url.endsWith("/testrun_1nxc464grh/manifest.json"))).toBe(false);
-});
-
-test("a refused PUT fails the upload with R2's answer, one request each, and the manifest never lands", async () => {
-  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
-  await write(folder.path);
-  const urls: string[] = [];
-
-  await expect(
-    uploadTestEvidence({
-      repoRoot: folder.path,
-      ...credentials,
-      fetch: async (request) => {
-        urls.push((request as Request).url);
-        return (request as Request).url.endsWith("trace.zip")
-          ? new Response("<Error><Code>PreconditionFailed</Code></Error>", { status: 412 })
-          : new Response(null, { status: 200 });
-      },
-    }),
-  ).rejects.toThrow(/trace\.zip: 412 <Error><Code>PreconditionFailed<\/Code><\/Error>$/);
-  expect(urls.filter((url) => url.endsWith("trace.zip"))).toHaveLength(1);
-  expect(urls.some((url) => url.endsWith("/testrun_1nxc464grh/manifest.json"))).toBe(false);
+  expect(api.requests.some((request) => request.url.endsWith("trace.zip"))).toBe(false);
+  expect(
+    api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
+  ).toBe(false);
 });
 
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {
@@ -410,6 +500,38 @@ test("the source's tree is the files on disk, changes and new files included, an
   expect(git("diff", "--cached", "--name-only")).toBe("");
   expect(git("ls-files", "--others", "--exclude-standard")).toBe("b.ts");
 });
+
+/**
+ * Cloudflare as the upload meets it: the API's token check, then R2's S3 endpoint, whose answers
+ * `r2` gives (200 by default). Every request is recorded, the token check included.
+ */
+function cloudflare(r2: (request: Request) => Response | Promise<Response> = () => ok()) {
+  const requests: Request[] = [];
+  const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    // a user token, as CI's is: its account's check does not know it
+    if (request.url === "https://api.cloudflare.com/client/v4/user/tokens/verify")
+      return request.headers.get("authorization") === `Bearer ${apiToken}`
+        ? Response.json({ success: true, result: { id: apiTokenId, status: "active" } })
+        : new Response(null, { status: 401 });
+    if (new URL(request.url).host === "api.cloudflare.com")
+      return new Response(null, { status: 401 });
+    return r2(request);
+  };
+  const waits: number[] = [];
+  return {
+    fetch,
+    wait: async (ms: number) => {
+      waits.push(ms);
+    },
+    waits,
+    requests,
+    r2Requests: () => requests.slice(1),
+  };
+}
+const ok = () => new Response(null, { status: 200 });
+const md5 = (text: string) => createHash("md5").update(text).digest("hex");
 
 /** The write step, as the Preview OS e2e job runs it, with the parts a test varies. */
 function write(repoRoot: string, overrides: Partial<Parameters<typeof writeTestEvidence>[0]> = {}) {
