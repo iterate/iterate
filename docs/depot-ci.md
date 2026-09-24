@@ -465,7 +465,7 @@ find the exact job/attempt id.
 
 The Preview OS workflow (`.depot/workflows/preview-os.yml`, cribbed from
 cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
-`configs-next`, the five hosted clients (`apps/dash`, `apps/agents`,
+`configs`, the five hosted clients (`apps/dash`, `apps/agents`,
 `apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `specs` and
 `playwright.config.ts`, `packages/iterate`, `packages/shared`, `packages/ui`,
 the root manifests and lockfile, `envs.ts`, `scripts/lib`, `scripts/depot-ci`,
@@ -494,7 +494,7 @@ pins the exceptions:
   `apps/os/bench`, the preview and soak scripts, and `scripts/depot-ci` (it
   reconciles installs from the frozen lockfile and never changes the bundle).
   Markdown that ships still deploys: `apps/os/public/setup-prompt.md` (prd
-  serves it) and everything in `configs-next` (the build bakes the default
+  serves it) and everything in `configs` (the build bakes the default
   template's files in). Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it ships static files
   and the zipped extension, with no npm dependency inside.

@@ -35,7 +35,7 @@ on:
       - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
       - apps/os/**
-      - configs-next/**
+      - configs/**
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**

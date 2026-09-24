@@ -260,9 +260,9 @@ export function splicePreviewStatus(body: string, status: PreviewStatus) {
 
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
-/** The config templates a project can be born from: the directories of configs-next. */
+/** The config templates a project can be born from: the directories of configs/. */
 export function configTemplateNames(repoRoot: string) {
-  return readdirSync(path.join(repoRoot, "configs-next"), { withFileTypes: true })
+  return readdirSync(path.join(repoRoot, "configs"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
@@ -270,7 +270,7 @@ export function configTemplateNames(repoRoot: string) {
 
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
- *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs-next/<name>`,
+ *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
  *  the custom field prefilled), so the project is born from the unmerged template. */
 export function templateQuickLaunches(input: {
   dashUrl: string;
@@ -279,9 +279,9 @@ export function templateQuickLaunches(input: {
   headSha: string;
 }) {
   return input.templates.map((name) => {
-    const changed = input.changedPaths.some((file) => file.startsWith(`configs-next/${name}/`));
+    const changed = input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
     const template = changed
-      ? `github:iterate/iterate#${input.headSha}&path:configs-next/${name}`
+      ? `github:iterate/iterate#${input.headSha}&path:configs/${name}`
       : name;
     return {
       name,

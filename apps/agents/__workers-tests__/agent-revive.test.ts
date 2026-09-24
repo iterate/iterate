@@ -12,7 +12,7 @@ import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import { installAgents } from "../runtime/install.ts";
-import agentRuntime from "../../../configs-next/with-agents/agents.js?raw";
+import agentRuntime from "../../../configs/with-agents/agents.js?raw";
 import {
   adminCredentials,
   openSession,

@@ -21,7 +21,7 @@ test("pins a branch without downloading its tree and leaves exact commits alone"
     owner: "iterate",
     repo: "iterate",
     ref: "main",
-    path: "configs-next/with-agents",
+    path: "configs/with-agents",
   };
   const githubFetch = vi
     .fn()

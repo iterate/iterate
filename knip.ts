@@ -22,15 +22,15 @@ export default {
   ],
   ignoreIssues: {
     // apps/agents' runtime:build output: the platform injects ./processor.js when it loads it.
-    "configs-next/with-agents/agents.js": ["unresolved"],
+    "configs/with-agents/agents.js": ["unresolved"],
     // The types it names resolve from each extending app's own dependencies.
     "tsconfig.base.json": ["unlisted", "unresolved"],
   },
   workspaces: {
     ".": {
       // The config-repo templates: the platform loads worker.ts as a project's config worker.
-      entry: ["configs-next/*/worker.ts"],
-      project: ["*.ts", "specs/**/*.ts", "configs-next/**/*.{ts,js}"],
+      entry: ["configs/*/worker.ts"],
+      project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // .oxlintrc.json loads these as jsPlugins, which knip's oxlint plugin does not read.
         "@tanstack/eslint-plugin-router",

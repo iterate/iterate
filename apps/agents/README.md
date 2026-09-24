@@ -21,7 +21,7 @@ denied capability introspection advertises no tools to the model. To allow scrip
 explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
 Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
 
-`pnpm runtime:build` rebuilds the committed runtime in `configs-next/with-agents/agents.js`.
+`pnpm runtime:build` rebuilds the committed runtime in `configs/with-agents/agents.js`.
 After changing runtime code, rebuild before testing the template or web installer. Installation also rebinds existing normal agents to the current runtime; their grants and
 history are retained. Reinstalling is safe. Existing projects are not silently migrated by a platform deployment.
 

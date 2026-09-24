@@ -56,7 +56,7 @@ async function presenceProcessorSource() {
 /** Everything above, written. */
 export async function build() {
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
-  const templatesRoot = path.resolve(root, "../../configs-next");
+  const templatesRoot = path.resolve(root, "../../configs");
   const sourceRef = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -66,7 +66,7 @@ export async function build() {
     .filter((entry) => entry.isDirectory() && entry.name !== "default")
     .map((entry) => ({
       label: entry.name.charAt(0).toUpperCase() + entry.name.slice(1).replaceAll("-", " "),
-      reference: `github:iterate/iterate#${sourceRef}&path:configs-next/${entry.name}`,
+      reference: `github:iterate/iterate#${sourceRef}&path:configs/${entry.name}`,
     }));
   const defaultFiles = readdirSync(path.join(templatesRoot, "default")).map((file) => ({
     path: file,
