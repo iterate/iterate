@@ -10,12 +10,14 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
+import { errorCode } from "iterate/lib";
 import {
   disposeSessions,
   freshCtx,
   openItx,
   processorNames,
   readAll,
+  rejection,
   sleep,
   until,
   untilValue,
@@ -691,26 +693,22 @@ test("itx.agents.delete(path) lands the request and the death certificate on the
   expect(short(await readAll(itx))).toEqual(["agent/created", "agent/deleted"]); // both certificates cross to /
   expect(await processorNames(itx.cd("/agents/gone"))).toEqual([]); // the row went
 
-  // A person's words refuse — nothing lands, nothing is triggered.
+  // A person's words refuse — nothing lands, nothing is triggered, and no facet is hosted for the
+  // dead agent: its facet went with its storage, and a refusal answers from the catalog on `/`
+  // (runtime/collection.ts says why it must never host it again).
   await expect(agent.message("anyone there?")).rejects.toThrow(/agent \/agents\/gone: deleted/);
   expect(await readAll(itx.cd("/agents/gone"))).toHaveLength(own.length);
+  const noAgentFacet = async () =>
+    expect(errorCode(await rejection(itx.cd("/agents/gone").facets.get("agent").snapshot()))).toBe(
+      "NO_FACET",
+    );
+  await noAgentFacet();
   // Words appended PAST the verb (the handle's typed append lands under the caller's principal, no
-  // guard) reach the fold — a read hosts the facet anew and it folds the whole log, these words'
-  // trigger included — and still raise no turn: the loop is gated on the deletion, so no request is
-  // recorded long after the debounce window (250 ms) would have closed.
+  // guard) raise no turn: no row, no facet, nothing folds them — no request is recorded long after
+  // the debounce window (250 ms) would have closed.
   await agent.append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "user", content: "anyone there?", actor: { type: "user" } },
-  });
-  expect(await itx.cd("/agents/gone").facets.get("agent").snapshot()).toMatchObject({
-    state: {
-      creation: { status: "created" },
-      deletion: {
-        status: "deleted",
-        offset: own.find((e) => e.type === "events.iterate.com/agent/deleted").offset,
-      },
-      pendingLlmRequestTrigger: { source: "external" },
-    },
   });
   await sleep(1_000);
   expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
@@ -718,7 +716,8 @@ test("itx.agents.delete(path) lands the request and the death certificate on the
     "agent/context-added",
   ]);
 
-  // Dies once: a second delete answers at once and appends nothing; not re-creatable.
+  // Dies once: a second delete answers at once and appends nothing; not re-creatable — neither
+  // hosting the facet again.
   expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
   expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
     ...short(own),
@@ -727,12 +726,18 @@ test("itx.agents.delete(path) lands the request and the death certificate on the
   await expect(itx.agents.create("/agents/gone")).rejects.toThrow(
     /agent \/agents\/gone: deleted — not re-creatable/,
   );
+  await noAgentFacet();
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual([]);
 });
 
 // A REFUSAL DOES NOT HOLD THE CONTEXT (apps/os e2e/context-residency.e2e.test.ts says why): the deleted
-// agent's facet refusing `message`, the collection on `/` refusing `create` — each held its context
+// agent refusing `message`, the collection on `/` refusing `create` — each held its context
 // on its first incarnation, billed, long after the call (2026-09-23: 20 minutes after the suite). An
 // idle context is evicted in ~10 s, so one woken after each of three 12 s idles shows three wakes.
+// NOR DOES A REFUSAL HOST THE DEAD AGENT'S FACET AGAIN: when it did, the next incarnation's birth
+// aborted that facet and Cloudflare reset the whole object — its first call failed "Internal error in
+// Durable Object storage caused object to be reset" in about one CI run in fourteen
+// (runtime/collection.ts). So no incarnation of the dead agent's context resets a facet at birth.
 test("a deleted agent's refusals keep neither the root nor the agent's context resident", async () => {
   const ctx = freshCtx("agent-delete-residency");
   const itx = await openAgentItx(ctx);
@@ -741,18 +746,22 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
   await expect(itx.agents.get("/agents/gone").message("anyone there?")).rejects.toThrow(/deleted/);
   await expect(itx.agents.create("/agents/gone")).rejects.toThrow(/not re-creatable/);
   disposeSessions();
-  const wakesAcrossIdles = async (context: any): Promise<number> => {
+  const wakesAcrossIdles = async (context: any) => {
     for (let i = 0; i < 3; i++) {
       await sleep(12_000);
       await context.whoami();
     }
     return (await readAll(context)).filter(
       (event: { type: string }) => event.type === "events.iterate.com/stream/woken",
-    ).length;
+    );
   };
-  const wakes = await Promise.all([
+  const [rootWakes, agentWakes] = await Promise.all([
     wakesAcrossIdles(openItx(ctx)),
     wakesAcrossIdles(openItx(ctx).cd("/agents/gone")),
   ]);
+  const wakes = [rootWakes.length, agentWakes.length];
   expect(Math.min(...wakes), JSON.stringify(wakes)).toBeGreaterThanOrEqual(3);
+  expect(agentWakes.map((event) => event.payload.facetsReset ?? [])).toEqual(
+    agentWakes.map(() => []),
+  );
 }, 120_000);

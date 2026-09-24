@@ -5,8 +5,8 @@
 // creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell plus
 // `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`, and the handle
 // `itx.agents.get(path)`). Deletion is the creation's mirror: `delete-requested` opens it, the
-// processor lands `deleted` — cross-posted to `/` so the catalog drops the entry — and a deleted
-// agent runs no more turns. Every type is derived here, never hand-kept:
+// processor lands `deleted` — cross-posted to `/` so the catalog drops the entry and keeps the death —
+// and a deleted agent runs no more turns. Every type is derived here, never hand-kept:
 //   AgentState                        = ProcessorState<typeof AgentContract>  the reduced state below
 //   ConsumedEvent<typeof AgentContract>                                        what reduce and processEvent see
 //   EventInput<typeof AgentContract>                                           what `itx.agents.get(path).append(…)` takes
@@ -194,7 +194,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/deleted": {
       description:
-        "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry — hence it names the path. Terminal: a deleted agent is not re-creatable.",
+        "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry and keeps the death — hence it names the path. Terminal: a deleted agent is not re-creatable, and its facet is never hosted again.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
     "events.iterate.com/agent/configured": {
