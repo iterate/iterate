@@ -5,14 +5,16 @@
 // Local workerd enforces no memory limit, so that child is the only local instrument; the deployed
 // twin is e2e/isolate-ceilings-deployed.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
 //
-// `test.fails` is the house convention for a known-red proof: the suite stays green, and flipping a
-// row back to `test` is how a fix is proven — every row here was born red and flipped as its fix
-// landed. The CONTROL rows are the same workload
-// at a small size, so a red pin is the size and nothing else.
+// A known-red row is a `createFailing` pin (docs/testing.md, "Pinned bugs") whose pattern is the
+// failure it dies of, so the suite stays green only while that exact failure holds; unwrapping a row
+// back to `test` is how a fix is proven — every plain row here was born red and flipped as its fix
+// landed. The CONTROL rows are the same workload at a small size, so a red pin is the size and
+// nothing else.
 
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import type { ScenarioFacts, ScenarioName } from "./memory-budget-scenarios.ts";
 
 const SCENARIOS = fileURLToPath(new URL("./memory-budget-scenarios.ts", import.meta.url).href);
@@ -86,7 +88,7 @@ test(
 // client-behaviour limit (a client only resets its OWN DO; the durable log survives; it
 // reconnects) — deliberately not defended, to keep `read()` synchronous. The reproduction and
 // the full rationale (why okay, how it would be fixed) live in the deployed e2e:
-// e2e/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS (test.fails).
+// e2e/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS.
 // ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
 
 test("control: a facet catches up over a 12 × 64 KiB log", { timeout: 60_000 }, () => {
@@ -143,8 +145,8 @@ test(
   },
 );
 
-// ═══ A `test.fails` row's comment says what it dies of — `oom` (the child hit the heap limit) or a
-// named fact — so flipping it to `test` is the proof of its fix. The CONTROL rows beside them bound
+// ═══ A pinned row's comment says what it dies of — `oom` (the child hit the heap limit) or a
+// named fact — so unwrapping it to `test` is the proof of its fix. The CONTROL rows beside them bound
 // the same path at a size that survives. ═══
 
 // ── appends: the idempotent retry, and the echo ──
@@ -168,9 +170,8 @@ test(
 // commit lands (durableOffset = 40,000); the reply — the same events plus offset, createdAt and
 // path each — serializes to 33.3 MiB, over the 32 MiB RPC result cap: the caller gets an RPC error
 // for a batch that is in the log, and a keyless retry doubles it.
-test.fails(
+createFailing(test, /the echo should fit the 32 MiB RPC result cap/, { timeoutMs: 60_000 })(
   "append echo: a legal 32 MiB batch (40,000 × 780 chars) commits, then its echo serializes past the 32 MiB RPC result cap — a committed-but-errored append",
-  { timeout: 60_000 },
   () => {
     const run = runScenario("append-echo-over-rpc-cap", {
       eventCount: 40_000,
@@ -178,7 +179,10 @@ test.fails(
     });
     expectSurvived(run, "append-echo-over-rpc-cap");
     expect(Number(run.facts.committed)).toBe(40_000);
-    expect(Number(run.facts.echoBytes), run.tail).toBeLessThanOrEqual(32 * MiB);
+    expect(
+      Number(run.facts.echoBytes),
+      `the echo should fit the 32 MiB RPC result cap\n${run.tail}`,
+    ).toBeLessThanOrEqual(32 * MiB);
   },
 );
 
@@ -414,9 +418,8 @@ const DENSE_4_MIB_ITEMS = 838_820;
 // even reclaimed the first's garbage); the one 8 MiB page that carries both did not. Every replay
 // loop pages the same way — a facet's catch-up, and the core re-reduce in the constructor: a
 // reboot loop for any context holding two such events.
-test.fails(
+createFailing(test, /read-object-dense-page: child oom at 128 MiB/, { timeoutMs: 60_000 })(
   "read: two 4 MiB object-dense events (each append fit) share one 8 MiB page that parses to ~150 MiB — the byte budget cannot see parsed cost",
-  { timeout: 60_000 },
   () => {
     const run = runScenario("read-object-dense-page", {
       eventCount: 2,
@@ -430,9 +433,8 @@ test.fails(
 // Dies of: oom — before any Stream code runs. One 8 MiB body of nested empty arrays (1,677,640 ×
 // `[[]]`, 8,388,273 chars: under the ceiling, under the RPC cap) needs ~150 MiB to deserialize;
 // the append size check never gets to measure it. The stand-in for the DO deserializing the RPC args.
-test.fails(
+createFailing(test, /read-object-dense-page: child oom at 128 MiB/, { timeoutMs: 60_000 })(
   "append: one legal 8 MiB object-dense event needs ~150 MiB to deserialize — the append size check never runs",
-  { timeout: 60_000 },
   () => {
     const run = runScenario("read-object-dense-page", {
       eventCount: 1,
