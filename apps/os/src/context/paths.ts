@@ -13,9 +13,13 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
  *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
  *  NAVIGABLE: `cd` is refused for every caller, on a global edge handle (IterateContextRpcTarget.cd)
- *  and inside a global DO (built-ins.ts `cd`). A project's id is minted (`prj_<hex>`), so the word is never one;
- *  `projects.get` refuses it all the same. */
+ *  and inside a global DO (built-ins.ts `cd`). A catalog project's id is minted (`prj_<hex>`), but
+ *  the admin secret addresses a project the catalog never heard of by any id, so `projects.get` and
+ *  the MCP `project` refuse the word, and `DurableObjectNameCodec.address` refuses every
+ *  `global--…` id (`GLOBAL_OWNER_ID_PREFIX`). */
 export const GLOBAL_PROJECT_ID = "global";
+/** What every global owner subtree's resource id starts with (`resourceScope`). */
+const GLOBAL_OWNER_ID_PREFIX = `${GLOBAL_PROJECT_ID}--`;
 
 /** THE RESOURCE OWNER of a context: `id` is the half every project-scoped resource key is prefixed
  *  with (`itx.kv`'s `${id}:`, a secret cell's `${id}:${name}` Durable Object, the Artifacts `${id}.`
@@ -37,7 +41,7 @@ export type ResourceScope = {
  *  path) is `{ id: "global", rootPath: "/" }`, the kernel's own. The `--` join is the project-host
  *  label convention (`<app>--<project>`); the owner id is held to the projectId charset, so the
  *  joined id stays inside `[A-Za-z0-9_-]` and the `:` and `.` delimiters still cannot collide, and
- *  no project can spell it (a project id is minted, `prj_<hex>`). User
+ *  no project can spell it (`DurableObjectNameCodec.address` refuses the prefix). User
  *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own
  *  secrets root. */
 export function resourceScope(projectId: string, path: string): ResourceScope {
@@ -52,7 +56,7 @@ export function resourceScope(projectId: string, path: string): ResourceScope {
       `invalid ${kind} id ${JSON.stringify(ownerId)}: only [A-Za-z0-9_-] (it is half of every resource key)`,
     );
   return {
-    id: `${GLOBAL_PROJECT_ID}--${kind}--${ownerId}`,
+    id: `${GLOBAL_OWNER_ID_PREFIX}${kind}--${ownerId}`,
     rootPath: `/${kind}/${ownerId}`,
     kind,
     ownerId,
@@ -100,6 +104,13 @@ export const DurableObjectNameCodec = {
       throw codedError(
         "INVALID_CONTEXT",
         `invalid projectId ${JSON.stringify(projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
+      );
+    // A project spelled like a global owner subtree's resource id (`global--users--<id>`) would
+    // share that user's or organization's kv, secrets and files.
+    if (projectId.startsWith(GLOBAL_OWNER_ID_PREFIX))
+      throw codedError(
+        "INVALID_CONTEXT",
+        `invalid projectId ${JSON.stringify(projectId)}: "${GLOBAL_OWNER_ID_PREFIX}" is the global namespace's resource prefix`,
       );
     const parts = { projectId, path: resolveContextPath("/", path) };
     return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
