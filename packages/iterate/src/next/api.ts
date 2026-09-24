@@ -84,8 +84,8 @@ export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
 /** A secret's material: one string (`getSecret("/secrets/<name>")` is the whole value) or a JSON
  *  object whose string fields `getSecret("/secrets/<name>", { field: "a.b" })` picks — the
  *  multidimensional shape a credential exchange needs (`{ username, password, accessToken }`,
- *  `{ clientId, clientSecret, refreshToken, accessToken }`). A JSON STRING still works as an object
- *  (`set(name, JSON.stringify({...}))`). */
+ *  `{ clientId, clientSecret, refreshToken, accessToken }`). A string is always the one value: it has
+ *  no fields, whether or not it parses as JSON. */
 export type SecretMaterial = string | Record<string, unknown>;
 
 /** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`

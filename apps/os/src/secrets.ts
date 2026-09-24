@@ -146,24 +146,19 @@ export class SecretRefused extends Error {
   }
 }
 
-/** The string `field` (a dotted path) selects in `material`; refused when the material is not JSON
- *  or the path does not land on a string. */
+/** The string `field` (a dotted path) selects in `material`; refused when the material is one
+ *  string (it has no fields) or the path does not land on a string. */
 function secretFieldOf(
   material: SecretMaterial,
   field: string,
   placeholder: string,
   where: string,
 ): string {
+  if (typeof material === "string")
+    throw new SecretRefused(
+      `itx.fetch: ${placeholder} in ${where} names a field, but the secret is one string, not an object`,
+    );
   let value: unknown = material;
-  if (typeof material === "string") {
-    try {
-      value = JSON.parse(material);
-    } catch {
-      throw new SecretRefused(
-        `itx.fetch: ${placeholder} in ${where} names a field, but the secret is not a JSON value`,
-      );
-    }
-  }
   for (const segment of field.split(".")) value = isRecord(value) ? value[segment] : undefined;
   if (typeof value !== "string")
     throw new SecretRefused(
@@ -265,18 +260,11 @@ export type SecretHmacVerification = {
 };
 
 /** The material as an HMAC key: the whole value when it is a string and no field is named, else the
- *  string at `field` of a JSON material (an object, or a string that parses as one). Anything else —
- *  an object with no field named, a field with no string at it — is null: no key, so nothing verifies. */
+ *  string at `field` of an object material. Anything else — an object with no field named, a field
+ *  on a string, a field with no string at it — is null: no key, so nothing verifies. */
 export function secretMaterialStringOf(material: SecretMaterial, field?: string): string | null {
   if (!field) return typeof material === "string" ? material : null;
   let value: unknown = material;
-  if (typeof material === "string") {
-    try {
-      value = JSON.parse(material);
-    } catch {
-      return null;
-    }
-  }
   for (const segment of field.split(".")) value = isRecord(value) ? value[segment] : undefined;
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -345,16 +333,9 @@ export function pinRefusal(path: string, url: string, urls: string[]): SecretRef
 // material, POST within the pin, return the NEXT material. The host (secret/durable-object.ts) runs
 // ONE at a time per secret and stores the answer. A credential never appears in an error message.
 
-/** The material as a record — a JSON string parses, a plain string has no fields. */
+/** The material as a record — a string has no fields. */
 function materialRecordOf(material: SecretMaterial | null): Record<string, unknown> {
-  if (!material) return {};
-  if (typeof material !== "string") return material;
-  try {
-    const parsed: unknown = JSON.parse(material);
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  return typeof material === "object" && material ? material : {};
 }
 
 function stringField(record: Record<string, unknown>, field: string, kind: string): string {
