@@ -11,7 +11,7 @@
  *   fixture password as /api/legacy-login) → a sealed session token that
  *   lives {@link GRAPHQL_SESSION_TTL_SECONDS}s. A wrong password answers HTTP
  *   200 with a GraphQL-style `failures` array (type `AUTHENTICATION_FAILED`).
- * - Revocation is per door AND per account: `POST /__backdoor/expire-tokens`
+ * - Revocation is per endpoint AND per account: `POST /__backdoor/expire-tokens`
  *   with `{ clientId: "graphql-session-login" }` kills every session, with
  *   `{ clientId: graphqlSessionAccountClientId(username) }` only that
  *   account's — what a test that forces a 401 wants, since this ONE shop
