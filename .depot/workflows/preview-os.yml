@@ -192,7 +192,8 @@ jobs:
   # deployed preview to test: a failed or cancelled deploy, or a test-only dispatch that names none.
   #
   # 2x8 RUNNERS: both suites wait on a remote preview. On 4x16 they peaked at 2.1 vCPUs and 3.2 GB,
-  # and on 2x8 they take as long (measured 2026-09-24; docs/depot-ci.md#reliability-defaults).
+  # and on 2x8 their p50 is within 6 s of 4x16's (measured 2026-09-24;
+  # docs/depot-ci.md#reliability-defaults).
   e2e:
     name: E2E tests
     needs: deploy

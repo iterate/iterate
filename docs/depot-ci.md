@@ -531,9 +531,9 @@ freshness:
   the trace jobs, Main OS e2e's delete and alert jobs, and the jobs that only call APIs (LOC report, PR
   dashboard, Release) use `2x8`. So do the E2E tests and Browser specs jobs of Preview OS and
   Main OS e2e, which wait on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at
-  1.7 vCPUs and 2.9 GB (E2E tests) and 2.1 vCPUs and 3.2 GB (Browser specs), and on `2x8` nine
-  runs of each took as long at the p50 (67 s and 70 s, against 67 s and 76 s on `4x16`) for half
-  the price. Re-check with `depot ci metrics --run <run-id>` before increasing a size.
+  1.7 vCPUs and 2.9 GB (E2E tests) and 2.1 vCPUs and 3.2 GB (Browser specs). On `2x8`, ten runs
+  of each against one preview took 68 s and 70 s at the p50, against 62 s and 70 s for nine on
+  `4x16`, for half the price. Re-check with `depot ci metrics --run <run-id>` before increasing a size.
 
 These defaults keep a normal all-app main push to 42 requested vCPUs (lint 8,
 test 8, Deploy OS 4, 2 for each of the seven client deploys, 4 for the preview
