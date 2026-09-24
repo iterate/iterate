@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { ORIGIN, SRC_ECHO_APP } from "./support.ts";
 const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
@@ -96,6 +96,118 @@ test("under the base, only a project host: a hostname that fails the grammar is 
   }
   expect(await call(`${ORIGIN}/version`)).toMatchObject({ status: 200 });
 });
+
+test("a project's own hostname: added, the processor claims it and creates its wildcard Cloudflare custom hostname (faked); the edge serves the project's apex there and `<app>.<hostname>` its apps; no other project can take it or a name under it; removed, the custom hostname is deleted and the claim released", async () => {
+  const cloudflare = fakeCloudflareCustomHostnames();
+  using session = await api();
+  const admin = session.authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "own-hostname" });
+  await itx.append({
+    type: "events.iterate.com/project/ingress-configured",
+    payload: {
+      target: ["itx", "workers", ["get", { source: SRC_HOSTNAME_SITE, cacheKey: "own-hostname" }]],
+    },
+  });
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const add = async (project: typeof itx, hostname: string) => {
+    const [asked] = await project.append({
+      type: "events.iterate.com/project/hostname-add-requested",
+      payload: { hostname },
+    });
+    return project.waitForEvent({
+      type: "events.iterate.com/project/hostname-add-answered",
+      afterOffset: asked!.offset,
+      timeoutMs: 10_000,
+    });
+  };
+  expect(await add(itx, "iterate.somedomain.test")).toMatchObject({
+    payload: {
+      hostname: "iterate.somedomain.test",
+      error: null,
+      cloudflare: {
+        status: "pending",
+        records: [
+          { name: "iterate.somedomain.test", value: "cname.saas.test" },
+          { name: "*.iterate.somedomain.test", value: "cname.saas.test" },
+          {
+            name: "_acme-challenge.iterate.somedomain.test",
+            value: "iterate.somedomain.test.dcv-uuid.dcv.cloudflare.com",
+          },
+        ],
+      },
+    },
+  });
+  expect(cloudflare).toMatchObject({ hostnames: ["iterate.somedomain.test"] });
+  // the apex: the project's config worker, no app label
+  const apex = await call("https://iterate.somedomain.test/");
+  expect(apex, await apex.clone().text()).toMatchObject({ status: 200 });
+  expect(await apex.json()).toEqual({ host: "iterate.somedomain.test", app: null });
+  // one label under it: that app, as `echo--own-hostname.projects.test` is
+  const app = await call("https://echo.iterate.somedomain.test/");
+  expect(app, await app.clone().text()).toMatchObject({ status: 200 });
+  expect(await app.json()).toMatchObject({ app: "echo" });
+  // another project cannot take it or a name under it; the deployment's own zones are refused
+  const other = await admin.projects.create({ project: "own-hostname-other" });
+  for (const hostname of [
+    "iterate.somedomain.test",
+    "echo.iterate.somedomain.test",
+    "x.projects.test",
+  ])
+    expect(await add(other, hostname)).toMatchObject({
+      payload: { hostname, cloudflare: null, error: expect.any(String) },
+    });
+  const [removal] = await itx.append({
+    type: "events.iterate.com/project/hostname-remove-requested",
+    payload: { hostname: "iterate.somedomain.test" },
+  });
+  await itx.waitForEvent({
+    type: "events.iterate.com/project/hostname-removed",
+    afterOffset: removal!.offset,
+    timeoutMs: 10_000,
+  });
+  expect(cloudflare).toMatchObject({ hostnames: [] });
+  expect(
+    await env.CONTROL_PLANE.getByName("global").projectByHostname(["iterate.somedomain.test"]),
+  ).toBeNull();
+});
+
+/** A config worker that says which host it answered, and the app label it saw. */
+const SRC_HOSTNAME_SITE = {
+  "cap.js": `import { ConfigWorker } from "./processor.js";
+export default class extends ConfigWorker {
+  fetch(request) {
+    return Response.json({ host: new URL(request.url).hostname, app: request.headers.get("x-iterate-app") });
+  }
+}`,
+};
+
+/** Cloudflare's custom-hostname API on the SaaS zone (wrangler.test.jsonc `saas.test`), faked in
+ *  this isolate's `fetch`; every other request goes through. */
+function fakeCloudflareCustomHostnames() {
+  const hostnames: string[] = [];
+  const through = globalThis.fetch;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.hostname !== "api.cloudflare.com") return through(request);
+    const ok = (result: unknown) => Response.json({ success: true, result });
+    const entry = (hostname: string) => ({ id: `ch-${hostname}`, hostname, status: "pending" });
+    if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-saas" }]);
+    if (request.method === "POST") {
+      const { hostname } = (await request.json()) as { hostname: string };
+      hostnames.push(hostname);
+      return ok(entry(hostname));
+    }
+    if (request.method === "DELETE") {
+      hostnames.splice(hostnames.indexOf(url.pathname.split("/ch-")[1]!), 1);
+      return ok({});
+    }
+    const asked = url.searchParams.get("hostname");
+    return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
+  });
+  onTestFinished(() => spy.mockRestore());
+  return { hostnames };
+}
 
 function call(url: string, init?: RequestInit) {
   return exports.default.fetch(new Request(url, { redirect: "manual", ...init }));

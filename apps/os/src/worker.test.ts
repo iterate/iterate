@@ -35,8 +35,9 @@ const MINIMAL_BLOB = {
 };
 /** What MINIMAL becomes: every optional field blank, the ingress unset, the deploy id defaulted. */
 const MINIMAL_CONFIG = {
-  urls: { os: "", mcp: "", dash: "", ingressRouting: null, temporaryCustomHostnames: {} },
+  urls: { os: "", mcp: "", dash: "", ingressRouting: null },
   login: { password: "password" },
+  cloudflareApiToken: "",
   secrets: { key: "secrets-key", previousKey: "", adminBearer: "" },
   deployId: "unversioned",
 };
@@ -86,8 +87,10 @@ const appConfigRows: {
       APP_CONFIG_URLS__MCP: "https://mcp.iterate.com",
       APP_CONFIG_URLS__DASH: "https://dash.iterate.com",
       APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"Iterate.app"}',
-      APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES: '{"iterate.com":"iterate"}',
       APP_CONFIG_URLS__PROJECT_WILDCARD: '{"hostname":"Iterate.com","project":"iterate"}',
+      APP_CONFIG_CUSTOM_HOSTNAMES:
+        '{"zone":"iterate.app","zoneId":"zone-1","dcvDelegationUuid":"dcv-1","reservedZones":["iterate.app","iterate.com"]}',
+      APP_CONFIG_CLOUDFLARE_API_TOKEN: "cloudflare-token",
       APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
       APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id",
       APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET: "google-secret",
@@ -102,9 +105,15 @@ const appConfigRows: {
         mcp: "https://mcp.iterate.com",
         dash: "https://dash.iterate.com",
         ingressRouting: { type: "subdomains", hostname: "iterate.app" },
-        temporaryCustomHostnames: { "iterate.com": "iterate" },
         projectWildcard: { hostname: "iterate.com", project: "iterate" },
       },
+      customHostnames: {
+        zone: "iterate.app",
+        zoneId: "zone-1",
+        dcvDelegationUuid: "dcv-1",
+        reservedZones: ["iterate.app", "iterate.com"],
+      },
+      cloudflareApiToken: "cloudflare-token",
       login: {
         password: "password",
         emailCode: { from: "iterate <login@iterate.com>" },
@@ -239,14 +248,6 @@ const appConfigRows: {
   },
   // an override merges INTO the object's block rather than replacing it; a JSON-looking value
   // (object, array, boolean) is parsed, anything else is the string itself
-  // a record's keys are the deployment's own, never warned about
-  {
-    vars: { ...MINIMAL, APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES__EXAMPLE: "example" },
-    becomes: {
-      ...MINIMAL_CONFIG,
-      urls: { ...MINIMAL_CONFIG.urls, temporaryCustomHostnames: { example: "example" } },
-    },
-  },
   {
     vars: {
       APP_CONFIG: JSON.stringify({
@@ -256,7 +257,6 @@ const appConfigRows: {
       }),
       APP_CONFIG_URLS__PROJECT_WILDCARD:
         '{"hostname":"iterate.com","project":"iterate","excludedHostnames":["www.iterate.com"]}',
-      APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES: '{"iterate.com":"iterate"}',
     },
     becomes: {
       ...MINIMAL_CONFIG,
@@ -264,7 +264,6 @@ const appConfigRows: {
         ...MINIMAL_CONFIG.urls,
         os: "https://os.test",
         mcp: "https://mcp.test",
-        temporaryCustomHostnames: { "iterate.com": "iterate" },
         projectWildcard: {
           hostname: "iterate.com",
           project: "iterate",
@@ -525,6 +524,8 @@ const request = (url: string, env: Record<string, unknown> = origins) =>
  *  strings above. */
 const expose = (config: AppConfig) => ({
   urls: config.urls,
+  customHostnames: config.customHostnames,
+  cloudflareApiToken: config.cloudflareApiToken.exposeSecret(),
   login: {
     ...config.login,
     password: config.login.password.exposeSecret(),

@@ -9,7 +9,7 @@
  * - `pr<N>-<branch>-<worker>.<subdomain>.workers.dev`: a per-PR Worker Preview
  *   (apps/os/scripts/preview.ts)
  * - `localhost`, `*.localhost`, `127.0.0.1`: `pnpm dev`
- * - anything else: production (os.iterate.com, dash.iterate.com, agents.iterate.workers.dev, …)
+ * - anything else: production (os.iterate.com, dash.iterate.com, agents.iterate.com, …)
  *
  * Rendered by components/environment-head-content.tsx in every client's root, and by the OS's
  * `/favicon.svg` (apps/os/src/issuer-pages.ts), which the SDK's gate pages link.

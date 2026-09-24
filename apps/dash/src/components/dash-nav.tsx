@@ -8,6 +8,7 @@ import {
   Building2,
   ExternalLink,
   FolderKanban,
+  Globe,
   KeyRound,
   LayoutDashboard,
   LockKeyhole,
@@ -35,6 +36,7 @@ const PROJECT_PAGES = [
   { to: "/projects/$slug/activity/$", label: "Activity", icon: Activity },
   { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
   { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
+  { to: "/projects/$slug/hostnames", label: "Hostnames", icon: Globe },
 ] as const;
 
 const ACCOUNT_PAGES = [

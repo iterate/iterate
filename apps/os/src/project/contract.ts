@@ -16,13 +16,24 @@ import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 
+/** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
+export const CustomHostnameObservation = z.object({
+  /** Cloudflare's hostname status: `pending` until the CNAME is seen, then `active`. */
+  status: z.string(),
+  /** The certificate's status: `pending_validation` … `active`. */
+  sslStatus: z.string(),
+  /** The CNAMEs the owner adds (custom-hostnames.ts `customHostnameRecords`). */
+  records: z.array(z.object({ name: z.string(), value: z.string() })),
+});
+export type CustomHostnameObservation = z.infer<typeof CustomHostnameObservation>;
+
 export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "8",
+  version: "9",
   description:
-    "The project: where its own creation stands, and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
+    "The project: where its own creation stands, its custom hostnames, and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -49,6 +60,21 @@ export const ProjectContract = defineProcessorContract({
       .object({ commitOid: z.string().min(1), offset: z.number().int().positive() })
       .nullable()
       .default(null),
+    /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
+     *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
+     *  observation (null until provisioned), and the last failure's words. */
+    hostnames: z
+      .record(
+        z.string(),
+        z.object({
+          requested: z
+            .object({ verb: z.enum(["add", "remove"]), offset: z.number().int().positive() })
+            .nullable(),
+          cloudflare: CustomHostnameObservation.nullable(),
+          error: z.string().nullable(),
+        }),
+      )
+      .default({}),
   }),
   events: {
     "events.iterate.com/project/create-requested": {
@@ -69,6 +95,34 @@ export const ProjectContract = defineProcessorContract({
       description: "What provisioning reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
     },
+    "events.iterate.com/project/hostname-add-requested": {
+      description:
+        "Serve this project on `hostname` — its apex there, and `<app>.<hostname>` its apps. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-answered. Again for a hostname already added re-reads Cloudflare's status.",
+      payloadSchema: z.object({ hostname: z.string().min(1) }),
+    },
+    "events.iterate.com/project/hostname-add-answered": {
+      description:
+        "The answer to the add at `requestOffset`: Cloudflare's status and the DNS records the owner adds, or why it failed (taken, reserved, malformed, Cloudflare's refusal). A failed first add releases the claim.",
+      payloadSchema: z.object({
+        hostname: z.string().min(1),
+        requestOffset: z.number().int().positive(),
+        cloudflare: CustomHostnameObservation.nullable(),
+        error: z.string().nullable(),
+      }),
+    },
+    "events.iterate.com/project/hostname-remove-requested": {
+      description:
+        "Stop serving the project on `hostname`: the processor deletes the custom hostname and releases the claim.",
+      payloadSchema: z.object({ hostname: z.string().min(1) }),
+    },
+    "events.iterate.com/project/hostname-removed": {
+      description:
+        "The answer to the remove at `requestOffset`: the hostname is no longer the project's.",
+      payloadSchema: z.object({
+        hostname: z.string().min(1),
+        requestOffset: z.number().int().positive(),
+      }),
+    },
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them.
   processorDeps: [RepoContract, WorkspaceContract, SecretContract],
@@ -76,6 +130,10 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/hostname-add-requested",
+    "events.iterate.com/project/hostname-add-answered",
+    "events.iterate.com/project/hostname-remove-requested",
+    "events.iterate.com/project/hostname-removed",
     "events.iterate.com/repo/created",
     "events.iterate.com/workspace/created",
     "events.iterate.com/repo/deleted",
@@ -87,6 +145,8 @@ export const ProjectContract = defineProcessorContract({
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/hostname-add-answered",
+    "events.iterate.com/project/hostname-removed",
     // the core's: the saga points the project's apex at the seeded config repo's commit, and the
     // processor re-points it at every later commit of the config repo (a commit IS its publication)
     "events.iterate.com/project/ingress-configured",

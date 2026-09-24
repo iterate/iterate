@@ -37,11 +37,9 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
   // a worker anyone deploys to these accounts (a self-host tried out on one) is not under any of them
   expect(zones.filter((zone) => zone.endsWith(".workers.dev"))).toEqual([
     "agents-preview.iterate-dev-preview.workers.dev",
-    "agents.iterate.workers.dev",
     "dash-preview.iterate-dev-preview.workers.dev",
     "kit-preview.iterate-dev-preview.workers.dev",
     "notes-preview.iterate-dev-preview.workers.dev",
-    "notes.iterate.workers.dev",
     "os-preview.iterate-dev-preview.workers.dev",
     "voice-preview.iterate-dev-preview.workers.dev",
   ]);
@@ -57,8 +55,8 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
   expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate.com" });
   expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
     dash: "https://dash.iterate.com",
-    agents: "https://agents.iterate.workers.dev",
-    notes: "https://notes.iterate.workers.dev",
+    agents: "https://agents.iterate.com",
+    notes: "https://notes.iterate.com",
     voice: "https://voice.iterate.com",
     kit: "https://k.iterate.com",
   });

@@ -2,8 +2,7 @@ import { createCli } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
-import { registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
-import { ownZonesOf, routedHostnames } from "./generate-wrangler-config.ts";
+import { routedHostnames } from "./generate-wrangler-config.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
 export default async function ensureResources(options: { env?: string } = {}) {
@@ -45,79 +44,10 @@ export default async function ensureResources(options: { env?: string } = {}) {
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );
-  // every routed hostname, this account's own custom apexes among them; the SaaS ones are custom
-  // hostnames, below
+  // every routed hostname; a project's own custom hostnames are the worker's, at runtime
+  // (src/project/custom-hostnames.ts)
   for (const { hostname } of routedHostnames(ctx.env))
     await ensureProxiedDnsRecord(ctx, zones, hostname, "Clean-room OAuth deployment");
-  // CLOUDFLARE FOR SAAS: a custom apex whose zone lives in another account is a custom hostname on
-  // the first SaaS zone (the zone's fallback origin, `cname.<zone>`, is ours) — created here with an
-  // HTTP DV certificate; it turns active once the owner CNAMEs their apex to that fallback origin.
-  const [saasZoneName] = ctx.env.cloudflareForSaasProjectHostnameBases || [];
-  const saasHostnames = Object.keys(ctx.env.temporaryCustomHostnames || {}).filter(
-    (hostname) => !ownZonesOf(ctx.env).has(registrableDomainOf(hostname)),
-  );
-  if (saasHostnames.length && !saasZoneName)
-    throw new Error(
-      `${saasHostnames.join(", ")}: custom apexes outside this account's zones need cloudflareForSaasProjectHostnameBases`,
-    );
-  const saasZone = zones.find((zone) => zone.name === saasZoneName);
-  if (saasHostnames.length && !saasZone)
-    throw new Error(`${saasZoneName}: the SaaS zone is not in this account`);
-  for (const hostname of saasHostnames) {
-    const existing = await ctx.cfV4<
-      {
-        id: string;
-        hostname: string;
-        status: string;
-        ssl?: {
-          status?: string;
-          method?: string;
-          type?: string;
-          wildcard?: boolean;
-          settings?: { min_tls_version?: string };
-        };
-      }[]
-    >(`/zones/${saasZone!.id}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`);
-    const current = existing.find(
-      (entry) => entry.hostname === hostname && entry.status !== "deleted",
-    );
-    const ssl = { method: "http", type: "dv", settings: { min_tls_version: "1.2" } };
-    if (current?.status === "moved" || current?.ssl?.status === "deleted") {
-      // A hostname can still exist here after traffic moved to another SaaS zone. Refreshing the
-      // same SSL configuration requests DCV again; a mere existence check would leave it moved.
-      if (!current.ssl?.method || !current.ssl.type)
-        throw new Error(`${hostname}: existing custom hostname has no SSL method or type`);
-      await ctx.cfV4(`/zones/${saasZone!.id}/custom_hostnames/${current.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ssl: {
-            method: current.ssl.method,
-            type: current.ssl.type,
-            wildcard: current.ssl.wildcard,
-            settings: current.ssl.settings || ssl.settings,
-          },
-        }),
-      });
-      console.log(`requested reactivation of custom hostname ${hostname} on ${saasZoneName}`);
-      continue;
-    }
-    if (current) {
-      console.log(
-        `custom hostname ${hostname} exists on ${saasZoneName} (hostname ${current.status}, SSL ${current.ssl?.status || "unknown"})`,
-      );
-      continue;
-    }
-    await ctx.cfV4(`/zones/${saasZone!.id}/custom_hostnames`, {
-      method: "POST",
-      body: JSON.stringify({
-        hostname,
-        ssl,
-      }),
-    });
-    console.log(
-      `created custom hostname ${hostname} on ${saasZoneName} — its owner CNAMEs the apex to cname.${saasZoneName}`,
-    );
-  }
   // IDs live in git, so bring-up always ends in a reviewed commit: on a mismatch with envs.ts, print
   // the entry to paste and fail.
   if (

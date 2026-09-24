@@ -61,5 +61,5 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: Agents
-          PUBLIC_URL: https://agents.iterate.workers.dev
+          PUBLIC_URL: https://agents.iterate.com
         run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

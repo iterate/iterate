@@ -328,6 +328,48 @@ test.for([
   expect(projectSlug(name)).toBe(slug);
 });
 
+test("hostnames: a claim routes the hostname and the names under it to its project; again for the same project is a no-op; another project's hostname, or a name under it, is refused; a release drops only the releasing project's claim", () => {
+  const { c } = catalog();
+  const shop = c.createProject(admin, { project: "shop" });
+  const blog = c.createProject(admin, { project: "blog" });
+  const lookup = (host: string) => c.projectByHostname([host, host.split(".").slice(1).join(".")]);
+  expect(lookup("iterate.shop.test")).toBeNull();
+  c.claimHostname(shop.id, "iterate.shop.test");
+  c.claimHostname(shop.id, "iterate.shop.test");
+  // the most specific name the lookup was handed wins: the apex, then `<app>.` under it
+  expect(lookup("iterate.shop.test")).toEqual({ hostname: "iterate.shop.test", project: shop });
+  expect(lookup("notes.iterate.shop.test")).toEqual({
+    hostname: "iterate.shop.test",
+    project: shop,
+  });
+  expect(refusal(() => c.claimHostname(blog.id, "iterate.shop.test"))).toMatchObject({
+    code: "INVALID_INPUT",
+    message: "The hostname 'iterate.shop.test' belongs to another project.",
+  });
+  // `*.iterate.shop.test` points at us: a name under it is shop's, never another project's
+  expect(refusal(() => c.claimHostname(blog.id, "notes.iterate.shop.test"))).toMatchObject({
+    code: "INVALID_INPUT",
+    message:
+      "'notes.iterate.shop.test' is under 'iterate.shop.test', which belongs to another project.",
+  });
+  c.claimHostname(shop.id, "www.iterate.shop.test"); // the holder may name one of its own
+  c.claimHostname(blog.id, "shop.test"); // a name ABOVE another's is no conflict: the most specific routes
+  expect(lookup("www.iterate.shop.test")).toEqual({
+    hostname: "www.iterate.shop.test",
+    project: shop,
+  });
+  expect(refusal(() => c.claimHostname("prj_nobody", "x.test"))).toMatchObject({
+    code: "INVALID_INPUT",
+  });
+  c.releaseHostname(blog.id, "iterate.shop.test");
+  expect(lookup("iterate.shop.test")).toMatchObject({ project: shop });
+  c.releaseHostname(shop.id, "iterate.shop.test");
+  c.releaseHostname(shop.id, "www.iterate.shop.test");
+  expect(lookup("notes.iterate.shop.test")).toBeNull();
+  c.claimHostname(blog.id, "iterate.shop.test");
+  expect(lookup("iterate.shop.test")).toMatchObject({ project: blog });
+});
+
 const as = (user: { id: string; email: string }): Caller => ({
   principal: { actor: user.id, email: user.email },
 });

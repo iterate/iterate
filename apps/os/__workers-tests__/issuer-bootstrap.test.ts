@@ -227,6 +227,9 @@ test("a client on a project's custom apex is bound to that project at consent, l
   using apexProject = await theirs.projects.create({ project: "custom-apex-project" });
   using _other = await theirs.projects.create({ project: "custom-apex-other" });
   const apexProjectId = (await apexProject.whoami()).projectId;
+  // the project's own hostname, claimed as its processor claims one (project-host-routing.test.ts
+  // proves the whole add)
+  await env.CONTROL_PLANE.getByName("global").claimHostname(apexProjectId, "custom-apex.test");
   const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
@@ -238,7 +241,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
   const view = await issuer.consent.describe(flow.url.search);
   if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
   expect(view).toMatchObject({ projectBound: true });
-  // the apex map names the project by slug; the view's row carries the id a ticked box submits
+  // the hostname table names the project by id; the view's row carries the id a ticked box submits
   expect(view.projects.map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: apexProjectId, slug: "custom-apex-project" },
   ]);

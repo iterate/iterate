@@ -4,7 +4,8 @@ import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
-/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts, as the
+/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — and the zones
+ *  of its projects' custom hostnames (`customHostnames`) — as the
  *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
  *  travels as a JSON STRING — the parser reads string vars only. A blank var is unset. */
 function urlVars(env: OsEnv) {
@@ -14,33 +15,36 @@ function urlVars(env: OsEnv) {
   if (env.dashBaseUrl) vars.APP_CONFIG_URLS__DASH = env.dashBaseUrl;
   if (env.ingressRouting)
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
-  if (env.temporaryCustomHostnames)
-    vars.APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES = JSON.stringify(env.temporaryCustomHostnames);
   if (env.projectWildcard)
     vars.APP_CONFIG_URLS__PROJECT_WILDCARD = JSON.stringify(env.projectWildcard);
+  // a project's own custom hostnames go on the first SaaS zone; the token is Doppler's
+  // (APP_CONFIG_CLOUDFLARE_API_TOKEN)
+  if (env.cloudflareForSaas)
+    vars.APP_CONFIG_CUSTOM_HOSTNAMES = JSON.stringify({
+      ...env.cloudflareForSaas,
+      reservedZones: [...ownZonesOf(env)].sort(),
+    });
   return vars;
 }
 
-/** The zones a deployment owns: those of its own hostnames, project-owned custom apexes, and SaaS
- *  project-host zones. A custom hostname under one of these routes on that zone (and gets a DNS record); any other is a Cloudflare
- *  for SaaS custom hostname (ensure-resources creates it on the first SaaS zone). */
-export function ownZonesOf(env: OsEnv) {
+/** The zones a deployment owns: those of its own hostnames, its project wildcard, and its SaaS
+ *  project-host zones. No project may add a custom hostname equal to or under one of these
+ *  (`customHostnames.reservedZones`). */
+function ownZonesOf(env: OsEnv) {
   return new Set([
     registrableDomainOf(new URL(env.baseUrl).hostname),
     registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
     ...(env.ingressRouting?.type === "subdomains" ? [env.ingressRouting.hostname] : []),
-    ...(env.ownedProjectCustomApexes || []),
     ...(env.projectWildcard ? [env.projectWildcard.hostname] : []),
-    ...(env.cloudflareForSaasProjectHostnameBases || []),
+    ...(env.cloudflareForSaas ? [env.cloudflareForSaas.zone] : []),
   ]);
 }
 
 /** The hostnames a deployment's Worker routes, each with the zone its route binds to — and so the
- *  hostnames ensure-resources gives a proxied DNS record. A custom hostname is a project's apex: one
- *  whose zone is this account's (iterate.com) gets its own route on that zone; one whose zone lives
- *  in ANOTHER account is a Cloudflare for SaaS custom hostname on a SaaS zone, reached through that
- *  zone's one `*\/*` route (wranglerConfig) and created by ensure-resources. A workers.dev host is
- *  served by `workers_dev` itself. */
+ *  hostnames ensure-resources gives a proxied DNS record: its origins, the ingress wildcard, and the
+ *  project wildcard's apex and wildcard. A project's own custom hostname is a Cloudflare for SaaS
+ *  custom hostname, reached through the SaaS zone's one `*\/*` route (wranglerConfig). A workers.dev
+ *  host is served by `workers_dev` itself. */
 export function routedHostnames(env: OsEnv) {
   const ownHost = (hostname: string) => ({ hostname, zone: registrableDomainOf(hostname) });
   const wildcard = (hostname: string) => ({ hostname: `*.${hostname}`, zone: hostname });
@@ -48,10 +52,9 @@ export function routedHostnames(env: OsEnv) {
     ownHost(new URL(env.baseUrl).hostname),
     ownHost(new URL(env.mcpBaseUrl).hostname),
     ...(env.ingressRouting?.type === "subdomains" ? [wildcard(env.ingressRouting.hostname)] : []),
-    ...(env.projectWildcard ? [wildcard(env.projectWildcard.hostname)] : []),
-    ...Object.keys(env.temporaryCustomHostnames || {})
-      .filter((hostname) => ownZonesOf(env).has(registrableDomainOf(hostname)))
-      .map(ownHost),
+    ...(env.projectWildcard
+      ? [ownHost(env.projectWildcard.hostname), wildcard(env.projectWildcard.hostname)]
+      : []),
   ].filter(({ hostname }) => !hostname.endsWith(".workers.dev"));
 }
 
@@ -104,10 +107,9 @@ function wranglerConfig() {
               pattern: `${hostname}/*`,
               zone_name: zone,
             })),
-            ...(env.cloudflareForSaasProjectHostnameBases || []).map((zone) => ({
-              pattern: "*/*",
-              zone_name: zone,
-            })),
+            ...(env.cloudflareForSaas
+              ? [{ pattern: "*/*", zone_name: env.cloudflareForSaas.zone }]
+              : []),
           ],
           ...bindings,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],

@@ -23,6 +23,7 @@ const empty: ProjectState = {
   workspaces: {},
   secrets: {},
   configRepoTip: null,
+  hostnames: {},
 };
 
 const reduceRows: {
@@ -69,6 +70,7 @@ const reduceRows: {
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       secrets: {},
       configRepoTip: null,
+      hostnames: {},
     },
   },
   {
@@ -117,6 +119,77 @@ const reduceRows: {
     },
   },
   {
+    name: "a hostname's add is owed at its offset; the answer settles it; a re-add (the re-check) is owed again and keeps what Cloudflare said",
+    events: [hostname("add-requested"), answered(1, "pending"), hostname("add-requested")],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: { verb: "add", offset: 3 },
+          cloudflare: observation("pending"),
+          error: null,
+        },
+      },
+    },
+  },
+  {
+    name: "a failed add keeps its words; a failed re-check keeps the last observation",
+    events: [
+      hostname("add-requested"),
+      answered(1, "active"),
+      hostname("add-requested"),
+      answered(3, null, "boom"),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: null, cloudflare: observation("active"), error: "boom" },
+      },
+    },
+  },
+  {
+    name: "a remove is owed at its offset; an add's late answer does not undo it; the removal drops the entry; an answer or a remove for an unknown hostname is ignored",
+    events: [
+      hostname("add-requested"),
+      hostname("remove-requested"),
+      answered(1, "active"),
+      removed(2),
+      answered(1, "active"),
+      hostname("remove-requested"),
+    ],
+    state: empty,
+  },
+  {
+    name: "an answer settles only its own request: an add asked while another ran stays owed, with the older answer's observation",
+    events: [hostname("add-requested"), hostname("add-requested"), answered(1, "pending")],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: { verb: "add", offset: 2 },
+          cloudflare: observation("pending"),
+          error: null,
+        },
+      },
+    },
+  },
+  {
+    name: "an add asked while a remove ran survives the removal, owed from nothing",
+    events: [
+      hostname("add-requested"),
+      answered(1, "active"),
+      hostname("remove-requested"),
+      hostname("add-requested"),
+      removed(3),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: { verb: "add", offset: 4 }, cloudflare: null, error: null },
+      },
+    },
+  },
+  {
     name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
     events: [
       { type: "events.iterate.com/repo/created", payload: { path: 1 } },
@@ -128,7 +201,7 @@ const reduceRows: {
 ];
 for (const { name, events, state } of reduceRows)
   test(`ProjectProcessor — the reduce: ${name}`, () =>
-    expect(reduceProcessor(processor(), events)).toEqual(state));
+    expect(reduceProcessor(processorWithoutHostnames(), events)).toEqual(state));
 
 // THE APEX FOLLOWS THE CONFIG REPO — the effect, driven by hand: `processEvent` with the kernel's
 // arguments faked (an `append` that records and can be held open; `runInBackground` runs the work at
@@ -169,10 +242,157 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   expect(appended).toHaveLength(2);
 });
 
+// THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
+test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases; a deployment that cannot provision refuses", async () => {
+  const calls: string[] = [];
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: ["iterate.app"],
+      claim: async (name) => void calls.push(`claim ${name}`),
+      release: async (name) => void calls.push(`release ${name}`),
+      provider: {
+        provision: async (name) => {
+          calls.push(`provision ${name}`);
+          if (name.startsWith("new.")) throw new Error("Cloudflare says no");
+          return observation("pending");
+        },
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+  );
+  const appended: { idempotencyKey?: string; payload: { error?: string | null } }[] = [];
+  const owe = async (
+    name: string,
+    verb: "add" | "remove",
+    offset: number,
+    { on = processor, serving = false } = {},
+  ) => {
+    const cloudflare = serving ? observation("active") : null;
+    const hostnames = { [name]: { requested: { verb, offset }, cloudflare, error: null } };
+    deliver(on, { ...empty, hostnames }, async (...events) => {
+      appended.push(...(events as typeof appended));
+    });
+    await settle();
+  };
+  await owe("www.acme.test", "add", 4);
+  await owe("new.acme.test", "add", 5);
+  await owe("new.acme.test", "add", 6, { serving: true }); // a failed re-check keeps a serving claim
+  await owe("docs.iterate.app", "add", 7);
+  await owe("www.acme.test", "remove", 8);
+  await owe("www.acme.test", "add", 9, { on: processorWithoutHostnames() });
+  expect(calls).toEqual([
+    "claim www.acme.test",
+    "provision www.acme.test",
+    "claim new.acme.test",
+    "provision new.acme.test",
+    "release new.acme.test",
+    "claim new.acme.test",
+    "provision new.acme.test",
+    "remove www.acme.test",
+    "release www.acme.test",
+  ]);
+  expect(appended.map((event) => [event.idempotencyKey, event.payload.error || null])).toEqual([
+    ["project/hostname-add:www.acme.test:4", null],
+    ["project/hostname-add:new.acme.test:5", "Cloudflare says no"],
+    ["project/hostname-add:new.acme.test:6", "Cloudflare says no"],
+    [
+      "project/hostname-add:docs.iterate.app:7",
+      "'docs.iterate.app' is under iterate.app, which this deployment serves itself.",
+    ],
+    ["project/hostname-remove:www.acme.test:8", null],
+    ["project/hostname-add:www.acme.test:9", "This deployment cannot add custom hostnames."],
+  ]);
+});
+
+test("ProjectProcessor — one request per hostname at a time: a remove asked while an add runs waits for it, and the same worker runs it once the add is answered — no further delivery needed", async () => {
+  const calls: string[] = [];
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => (finish = resolve));
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async (name) => void calls.push(`claim ${name}`),
+      release: async (name) => void calls.push(`release ${name}`),
+      provider: {
+        provision: async () => {
+          await held;
+          return observation("pending");
+        },
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+  );
+  const owe = (verb: "add" | "remove", offset: number) =>
+    deliver(
+      processor,
+      {
+        ...empty,
+        hostnames: {
+          "www.acme.test": { requested: { verb, offset }, cloudflare: null, error: null },
+        },
+      },
+      async () => [],
+    );
+  owe("add", 1);
+  await settle();
+  owe("remove", 2); // the add is still running: nothing starts
+  await settle();
+  expect(calls).toEqual(["claim www.acme.test"]);
+  finish(); // the add is answered; the worker drains the remove it saw asked meanwhile
+  await settle();
+  expect(calls).toEqual(["claim www.acme.test", "remove www.acme.test", "release www.acme.test"]);
+});
+
+test("ProjectProcessor — a drained re-check knows the add it just answered provisioned: its failure keeps the claim", async () => {
+  const calls: string[] = [];
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => (finish = resolve));
+  let provisions = 0;
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async (name) => void calls.push(`claim ${name}`),
+      release: async (name) => void calls.push(`release ${name}`),
+      provider: {
+        provision: async () => {
+          provisions += 1;
+          if (provisions > 1) throw new Error("Cloudflare is down");
+          await held;
+          return observation("pending");
+        },
+        remove: async () => {},
+      },
+    }),
+  );
+  const owe = (offset: number) =>
+    deliver(
+      processor,
+      {
+        ...empty,
+        hostnames: {
+          "www.acme.test": { requested: { verb: "add", offset }, cloudflare: null, error: null },
+        },
+      },
+      async () => [],
+    );
+  owe(1);
+  await settle();
+  owe(2); // a re-check asked while the first add runs; the state has no observation yet
+  finish();
+  await settle();
+  expect(calls).toEqual(["claim www.acme.test", "claim www.acme.test"]);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(
-    reduceProcessor(processor(), [
+    reduceProcessor(processorWithoutHostnames(), [
       { ...requested, payload: { ...requested.payload, configRepoTemplate } },
     ]),
   ).toMatchObject({ creation: { status: "requested", offset: 1, configRepoTemplate } });
@@ -182,7 +402,7 @@ test("template provenance survives replay of the project creation request", () =
 // loads, before these lines run.
 
 /** The reduce never reaches the context or a template; the saga is the e2e's. */
-function processor() {
+function processorWithoutHostnames() {
   return new ProjectProcessor(
     () => Promise.reject(new Error("the reduce reaches no itx")),
     () => Promise.reject(new Error("the reduce downloads no template")),
@@ -213,6 +433,45 @@ function secretDeleted(path: string) {
 }
 
 const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
+
+function hostname(verb: "add-requested" | "remove-requested") {
+  return {
+    type: `events.iterate.com/project/hostname-${verb}`,
+    payload: { hostname: "www.acme.test" },
+  };
+}
+
+function answered(requestOffset: number, status: string | null, error: string | null = null) {
+  return {
+    type: "events.iterate.com/project/hostname-add-answered",
+    payload: {
+      hostname: "www.acme.test",
+      requestOffset,
+      cloudflare: status && observation(status),
+      error,
+    },
+  };
+}
+
+function removed(requestOffset: number) {
+  return {
+    type: "events.iterate.com/project/hostname-removed",
+    payload: { hostname: "www.acme.test", requestOffset },
+  };
+}
+
+function observation(status: string) {
+  return {
+    status,
+    sslStatus: status,
+    records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
+  };
+}
+
+/** Two turns: a background effect's awaits, then its append. */
+const settle = async () => {
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((r) => setTimeout(r, 0));
+};
 
 const deliver = (
   processor: ProjectProcessor,

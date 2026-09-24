@@ -6,7 +6,9 @@
 // access is kept five seconds — dropped at once here for the person a command was made by or for —
 // and a refusal is never memoized: a project not in a memoized access set is re-read once before it
 // is refused, so a creation is reachable at once.
+import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
 import type { Caller } from "../caller.ts";
+import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
 import { isRetryableTransportError } from "../retryable-error.ts";
 import type { ControlPlaneDurableObject } from "./durable-object.ts";
@@ -35,6 +37,10 @@ export const describeReach = (reach: Reach): string =>
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
 const projectMemo = new Map<string, ProjectRecord>();
+/** A host's address under projects' own hostnames, hit or miss, kept thirty seconds: a removed
+ *  hostname stops routing within that (Cloudflare stops sending it sooner, the custom hostname
+ *  deleted first). */
+const hostnameMemo = new Map<string, { at: number; value: Promise<ProjectAddress | null> }>();
 const accessMemo = new Map<string, { at: number; value: Promise<AccessibleRecord> }>();
 
 /** Who asked, as the control plane records it: the caller's principal and its connection. */
@@ -81,6 +87,47 @@ export class ControlPlane {
       projectMemo.set(project.slug, project);
     }
     return project;
+  }
+
+  /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (app-config.ts
+   *  `projectHostOf`: the ingress routing and the project wildcard), then a hostname a project added
+   *  itself (project/custom-hostnames.ts): its apex, or one label under it an app
+   *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read.
+   *  A deployment that serves no custom hostnames, the platform's own origins and anything under its
+   *  reserved zones never reach the table. What worker.ts admits a project host with, and what
+   *  consent.ts binds a project's CIMD client to. */
+  async projectHostOf(
+    config: AppConfig,
+    url: URL,
+    platformOrigin: string,
+  ): Promise<ProjectAddress | null> {
+    const routed = projectHostOf(config, url, platformOrigin);
+    if (routed || !config.customHostnames) return routed;
+    if (url.origin === platformOrigin || url.origin === config.urls.mcp) return null;
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+    if (
+      config.customHostnames.reservedZones.some(
+        (zone) => hostname === zone || hostname.endsWith(`.${zone}`),
+      )
+    )
+      return null;
+    const memoized = hostnameMemo.get(hostname);
+    if (memoized && Date.now() - memoized.at < 30_000) return memoized.value;
+    const candidates = customHostnameCandidatesOf(hostname);
+    const value = this.#call<{ hostname: string; project: ProjectRecord } | null>(
+      "projectByHostname",
+      candidates.map((candidate) => candidate.hostname),
+    ).then(
+      (found) =>
+        found && {
+          app: candidates.find((candidate) => candidate.hostname === found.hostname)!.app,
+          project: found.project.id,
+          basePath: "",
+        },
+    );
+    value.catch(() => hostnameMemo.delete(hostname));
+    hostnameMemo.set(hostname, { at: Date.now(), value });
+    return value;
   }
 
   /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a

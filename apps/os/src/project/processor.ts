@@ -34,6 +34,7 @@ import { defaultFiles } from "../generated/config-templates.js";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
+import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 
 /** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
  *  commit as the worker's modules (`worker.ts` the main module, every `.js` file under its own path,
@@ -60,6 +61,16 @@ type TemplateDownload = (
   reference: ConfigRepoTemplateReference,
 ) => Promise<Array<{ content: string; path: string }>>;
 
+/** What the custom-hostname effect reaches, for THIS project (durable-object.ts builds it): the
+ *  deployment's reserved zones, the control plane's hostname table, and Cloudflare — null when the
+ *  deployment cannot provision one (no `customHostnames` block, or no token). */
+export type ProjectHostnames = {
+  reservedZones: readonly string[];
+  claim(hostname: string): Promise<void>;
+  release(hostname: string): Promise<void>;
+  provider: CustomHostnameProvider | null;
+};
+
 export class ProjectProcessor extends StreamProcessor<
   ProjectState,
   ConsumedEvent<typeof ProjectContract>
@@ -68,12 +79,25 @@ export class ProjectProcessor extends StreamProcessor<
 
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly downloadTemplate: TemplateDownload;
+  private readonly hostnames: () => ProjectHostnames | null;
 
-  constructor(withItx: WithItx<ItxEntrypointScope>, downloadTemplate: TemplateDownload) {
+  constructor(
+    withItx: WithItx<ItxEntrypointScope>,
+    downloadTemplate: TemplateDownload,
+    hostnames: () => ProjectHostnames | null = () => null,
+  ) {
     super();
     this.withItx = withItx;
     this.downloadTemplate = downloadTemplate;
+    this.hostnames = hostnames;
   }
+
+  /** The hostnames this incarnation is working on — ONE worker per hostname, so an add and a remove
+   *  (or two adds) never race each other's claim — and the newest state any delivery has shown. A
+   *  worker DRAINS: a request that arrives while it runs is run by the same worker once its answer
+   *  lands, without waiting for another delivery. The durable ground is `state.hostnames[…].requested`. */
+  #hostnameWork = new Set<string>();
+  #newestHostnames: ProjectState["hostnames"] = {};
 
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
@@ -113,6 +137,62 @@ export class ProjectProcessor extends StreamProcessor<
         return state.creation?.status === "created"
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
+      case "events.iterate.com/project/hostname-add-requested": {
+        const known = state.hostnames[event.payload.hostname];
+        return {
+          ...state,
+          hostnames: {
+            ...state.hostnames,
+            [event.payload.hostname]: {
+              requested: { verb: "add", offset: event.offset },
+              cloudflare: known?.cloudflare ?? null,
+              error: null,
+            },
+          },
+        };
+      }
+      case "events.iterate.com/project/hostname-add-answered": {
+        // it settles only its own request — one asked since stays owed; one that lands after a
+        // remove was asked changes nothing; a failure keeps what Cloudflare last said
+        const { hostname, requestOffset, cloudflare, error } = event.payload;
+        const known = state.hostnames[hostname];
+        if (!known || known.requested?.verb === "remove") return undefined;
+        const requested = known.requested?.offset === requestOffset ? null : known.requested;
+        return {
+          ...state,
+          hostnames: {
+            ...state.hostnames,
+            [hostname]: { requested, cloudflare: cloudflare || known.cloudflare, error },
+          },
+        };
+      }
+      case "events.iterate.com/project/hostname-remove-requested": {
+        const known = state.hostnames[event.payload.hostname];
+        if (!known) return undefined;
+        return {
+          ...state,
+          hostnames: {
+            ...state.hostnames,
+            [event.payload.hostname]: {
+              ...known,
+              requested: { verb: "remove", offset: event.offset },
+            },
+          },
+        };
+      }
+      case "events.iterate.com/project/hostname-removed": {
+        const { hostname, requestOffset } = event.payload;
+        const known = state.hostnames[hostname];
+        if (!known) return undefined;
+        // an add asked since the remove stays owed, from nothing
+        if (known.requested && known.requested.offset !== requestOffset)
+          return {
+            ...state,
+            hostnames: { ...state.hostnames, [hostname]: { ...known, cloudflare: null } },
+          };
+        const { [hostname]: _gone, ...hostnames } = state.hostnames;
+        return { ...state, hostnames };
+      }
       case "events.iterate.com/repo/created":
         if (state.repos[event.payload.path]) return undefined;
         return {
@@ -163,6 +243,41 @@ export class ProjectProcessor extends StreamProcessor<
     EmittedEventInput<typeof ProjectContract>
   >): undefined {
     if (!delivery.caughtUp) return;
+    // THE CUSTOM HOSTNAMES — state-derived, at head, in the background: the request each hostname
+    // still owes, one hostname at a time, and any later delivery runs it again after an eviction.
+    // Every step is idempotent: the claim for the same project, Cloudflare's find-or-create and
+    // delete, the answer keyed by the request's offset.
+    this.#newestHostnames = state.hostnames;
+    for (const [hostname, entry] of Object.entries(state.hostnames)) {
+      if (!entry.requested || this.#hostnameWork.has(hostname)) continue;
+      this.#hostnameWork.add(hostname);
+      runInBackground(async () => {
+        try {
+          // Drain: the newest request as of each pass, never the one just answered again. Whether
+          // the hostname is serving is the worker's own to carry: the state it drains from may not
+          // have reduced its last answer yet.
+          let answered = 0;
+          let serving = Boolean(entry.cloudflare);
+          for (
+            let owed = entry;
+            owed?.requested && owed.requested.offset !== answered;
+            owed = this.#newestHostnames[hostname]
+          ) {
+            const { verb, offset } = owed.requested;
+            const answer =
+              verb === "add"
+                ? await this.#addHostname(hostname, offset, serving)
+                : await this.#removeHostname(hostname, offset);
+            await append(answer);
+            serving =
+              "cloudflare" in answer.payload ? serving || !!answer.payload.cloudflare : false;
+            answered = offset;
+          }
+        } finally {
+          this.#hostnameWork.delete(hostname);
+        }
+      });
+    }
     // THE APEX FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the latest commit
     // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
     // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
@@ -263,5 +378,42 @@ export class ProjectProcessor extends StreamProcessor<
         this.#creating = false;
       }
     });
+  }
+
+  /** Claim the hostname, then find-or-create its custom hostname: the answer to an add. A refusal
+   *  after the claim releases it unless the hostname was already serving (a failed re-check keeps it). */
+  async #addHostname(hostname: string, offset: number, provisioned: boolean) {
+    const hostnames = this.hostnames();
+    let cloudflare = null;
+    let error = null;
+    let claimed = false;
+    try {
+      if (!hostnames?.provider) throw new Error("This deployment cannot add custom hostnames.");
+      const problem = customHostnameProblem(hostname, hostnames.reservedZones);
+      if (problem) throw new Error(problem);
+      await hostnames.claim(hostname);
+      claimed = true;
+      cloudflare = await hostnames.provider.provision(hostname);
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+      if (claimed && !provisioned) await hostnames!.release(hostname);
+    }
+    return {
+      type: "events.iterate.com/project/hostname-add-answered" as const,
+      idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
+      payload: { hostname, requestOffset: offset, cloudflare, error },
+    };
+  }
+
+  /** Delete the custom hostname, then release the claim: the answer to a remove. */
+  async #removeHostname(hostname: string, offset: number) {
+    const hostnames = this.hostnames();
+    await hostnames?.provider?.remove(hostname);
+    await hostnames?.release(hostname);
+    return {
+      idempotencyKey: `project/hostname-remove:${hostname}:${offset}`,
+      type: "events.iterate.com/project/hostname-removed" as const,
+      payload: { hostname, requestOffset: offset },
+    };
   }
 }

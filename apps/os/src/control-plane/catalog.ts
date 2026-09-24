@@ -98,6 +98,10 @@ export class ControlPlaneDatabase {
       // the id the owners' handle. Single use: `accepted_by` is set once. Times are epoch ms.
       "CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, org_id TEXT NOT NULL, role TEXT NOT NULL, email_hint TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER, accepted_by TEXT, accepted_at INTEGER)",
       "CREATE INDEX IF NOT EXISTS invitations_org ON invitations (org_id)",
+      // THE CUSTOM HOSTNAMES — the edge's ingress routing table for hostnames a project added
+      // (project/processor.ts claims and releases them): a hostname is ONE project's apex.
+      "CREATE TABLE IF NOT EXISTS project_hostnames (hostname TEXT PRIMARY KEY, project_id TEXT NOT NULL)",
+      "CREATE INDEX IF NOT EXISTS project_hostnames_project ON project_hostnames (project_id)",
     ])
       sql.exec(statement);
   }
@@ -163,6 +167,20 @@ export class ControlPlaneDatabase {
     return this.#rows<ProjectRecord>(
       "SELECT id, slug, org_id AS orgId FROM projects ORDER BY slug",
     );
+  }
+  /** The first of `hostnames` a project holds, and that project — the edge's lookup for a host no
+   *  static rule names, over iterate/project-ingress `customHostnameCandidatesOf` in its order. */
+  projectByHostname(
+    hostnames: readonly string[],
+  ): { hostname: string; project: ProjectRecord } | null {
+    for (const hostname of hostnames) {
+      const project = this.#rows<ProjectRecord>(
+        "SELECT p.id, p.slug, p.org_id AS orgId FROM project_hostnames h JOIN projects p ON p.id = h.project_id WHERE h.hostname = ?",
+        hostname,
+      )[0];
+      if (project) return { hostname, project };
+    }
+    return null;
   }
   /** What a person can access: the organizations they belong to — the first by name is where a
    *  project goes when none is named — and every project of those, with their role. */
@@ -508,6 +526,43 @@ export class ControlPlaneDatabase {
       organizationId,
     );
     return { id: projectId, slug, orgId: organizationId };
+  }
+
+  /** Claim `hostname` for a project: again for the same project is a no-op. Refused when another
+   *  project holds it or any name above it — a project's hostname is a wildcard (its apps are the
+   *  names under it, and `*.<hostname>` points at us), so a name under it is that project's.
+   *  The project processor claims before it provisions (project/processor.ts). */
+  claimHostname(projectId: string, hostname: string): void {
+    if (!this.project(projectId))
+      throw codedError("INVALID_INPUT", `No project ${JSON.stringify(projectId)}.`);
+    const labels = hostname.split(".");
+    const selfAndAbove = labels.slice(0, -1).map((_, index) => labels.slice(index).join("."));
+    const holders = this.#rows<{ hostname: string; projectId: string }>(
+      `SELECT hostname, project_id AS projectId FROM project_hostnames WHERE hostname IN (${selfAndAbove.map(() => "?").join(", ")})`,
+      ...selfAndAbove,
+    );
+    const foreign = holders.find((holder) => holder.projectId !== projectId);
+    if (foreign)
+      throw codedError(
+        "INVALID_INPUT",
+        foreign.hostname === hostname
+          ? `The hostname '${hostname}' belongs to another project.`
+          : `'${hostname}' is under '${foreign.hostname}', which belongs to another project.`,
+      );
+    if (!holders.some((holder) => holder.hostname === hostname))
+      this.sql.exec(
+        "INSERT INTO project_hostnames (hostname, project_id) VALUES (?, ?)",
+        hostname,
+        projectId,
+      );
+  }
+  /** Release a project's claim on `hostname`; another project's claim, or none, is left alone. */
+  releaseHostname(projectId: string, hostname: string): void {
+    this.sql.exec(
+      "DELETE FROM project_hostnames WHERE hostname = ? AND project_id = ?",
+      hostname,
+      projectId,
+    );
   }
 
   #role(organizationId: string, userId: string): OrganizationRole | undefined {

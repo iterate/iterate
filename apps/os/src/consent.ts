@@ -19,7 +19,7 @@ import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { appConfigOf, projectHostOf, type PlatformAddresses } from "./app-config.ts";
+import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
   grantIsLive,
   oauthHelpers,
@@ -61,7 +61,7 @@ export type ConsentView =
   | { kind: "invalid"; description: string };
 
 /** A platform-served project CIMD client can receive only that project's authority — its
- *  client.json on a project host (app-config.ts `projectHostOf`, as the edge admits one).
+ *  client.json on a project host (control-plane/edge.ts `projectHostOf`, as the edge admits one).
  *  `expected` are the ids the caller refuses without — approve's ticked projects, re-read past
  *  the isolate's access memo before one is left out (edge.ts `reachableProjects`). */
 export async function projectsForClient(
@@ -76,7 +76,7 @@ export async function projectsForClient(
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const host =
     url?.pathname === "/.auth/client.json"
-      ? projectHostOf(appConfigOf(env), url, platformOrigin)
+      ? await controlPlane.projectHostOf(appConfigOf(env), url, platformOrigin)
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await controlPlane.getProject(host.project);

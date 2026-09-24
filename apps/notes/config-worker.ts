@@ -11,11 +11,11 @@ export default class extends ConfigWorker {
     if (denied) return denied;
     // Route by the app slug, exactly like apps/os's config repo: the `notes` app fetches through to
     // the independently-deployed Notes worker (its own origin), so notes--<project>.<base> serves the
-    // same app as notes.iterate.workers.dev.
+    // same app as notes.iterate.com.
     if (request.headers.get("x-iterate-app") === "notes") {
       const url = new URL(request.url);
       url.protocol = "https:";
-      url.host = "notes.iterate.workers.dev";
+      url.host = "notes.iterate.com";
       return fetch(new Request(url, new Request(request, { redirect: "manual" })));
     }
     return new Response("Not found\n", { status: 404 });
