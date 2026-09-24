@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
-import { buildAgentRuntime } from "./build-runtime.ts";
+import { buildAgentRuntime, injectedSdk } from "./build-runtime.ts";
 
 /** The three voice bundles as the installer ships them; the deployed voice e2e test loads the same. */
 export async function bundleVoiceSources(): Promise<{
@@ -22,6 +22,7 @@ export async function bundleVoiceSources(): Promise<{
         target: "es2022",
         loader: { ".md": "text" },
         external: ["./processor.js", "cloudflare:workers"],
+        plugins: [injectedSdk],
         logLevel: "silent",
       });
       const code = result.outputFiles[0]?.text;
