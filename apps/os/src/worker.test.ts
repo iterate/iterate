@@ -189,6 +189,30 @@ const appConfigRows: {
     vars: { ...MINIMAL, APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id" },
     throws: /login\.cloudflare\.clientSecret .*required, but unset or blank/,
   },
+  // who may sign in: a JSON array, or a comma-separated list as the var; lowercased; an entry
+  // without an @ or an empty list is refused rather than silently admitting nobody or everybody
+  {
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: '["*@Iterate.com", "a@b.dev"]' },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      login: { password: "password", allowedEmails: ["*@iterate.com", "a@b.dev"] },
+    },
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: " *@iterate.com, *@nustom.com ," },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      login: { password: "password", allowedEmails: ["*@iterate.com", "*@nustom.com"] },
+    },
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "iterate.com" },
+    throws: /login\.allowedEmails\.0 .*expected email patterns/,
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "[]" },
+    throws: /login\.allowedEmails .*nobody could sign in/,
+  },
   // Google is both halves or neither
   {
     vars: { ...MINIMAL, APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id" },

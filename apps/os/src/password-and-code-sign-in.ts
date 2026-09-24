@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { codedError, cookieValueOf, reportIssue } from "iterate/lib";
 import type { Env } from "./env.ts";
+import { EMAIL_NOT_ALLOWED_MESSAGE, emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf } from "./app-config.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -54,10 +55,13 @@ async function secretsEqual(candidate: string, secret: string): Promise<boolean>
   return difference === 0;
 }
 
-/** The address as the control plane keys it: trimmed, lowercased, and an email at all. */
-function addressOf(email: string): string {
+/** The address as the control plane keys it: trimmed, lowercased, an email at all, and one the
+ *  deployment's `login.allowedEmails` admits. */
+function addressOf(env: Env, email: string): string {
   const address = email.trim().toLowerCase();
   if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
+  if (!emailAllowed(appConfigOf(env).login.allowedEmails, address))
+    throw codedError("INVALID_INPUT", EMAIL_NOT_ALLOWED_MESSAGE);
   return address;
 }
 
@@ -91,7 +95,7 @@ export async function signInWithPassword(
 ): Promise<{ user: UserRecord } | { error: string }> {
   const secret = appConfigOf(env).login.password.exposeSecret();
   if (!secret) throw codedError("UNAUTHENTICATED", "Password sign-in is not offered here.");
-  const address = addressOf(email);
+  const address = addressOf(env, email);
   const keys = [
     `login-password-rate:address:${address}`,
     `login-password-rate:client:${client || "unknown"}`,
@@ -159,7 +163,7 @@ export async function startLoginCode(
   const config = appConfigOf(env);
   if (!(env.EMAIL && config.login.emailCode))
     throw codedError("UNAUTHENTICATED", "Email sign-in is not offered here.");
-  const address = addressOf(email);
+  const address = addressOf(env, email);
   if (reservedDomain.test(address))
     throw codedError("INVALID_INPUT", "Enter an email that can receive mail.");
   if (!(await mailAllowed(env, address, client)))
@@ -222,6 +226,9 @@ export async function finishLoginCode(
     return { error: "That code is not right. Try again." };
   }
   await env.OAUTH_KV.delete(key(id));
+  // the list may have changed since the code went out
+  if (!emailAllowed(appConfigOf(env).login.allowedEmails, challenge.email))
+    return { error: EMAIL_NOT_ALLOWED_MESSAGE, restart: true };
   return { user: await new ControlPlane(env.CONTROL_PLANE).ensureUser(challenge.email) };
 }
 

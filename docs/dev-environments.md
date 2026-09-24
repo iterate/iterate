@@ -31,7 +31,11 @@ Google, or Cloudflare. Two deployment secrets let you act as anyone, instantly:
 the **password** (`login.password`) signs in as whatever email you type, and
 the **operator bearer** (`secrets.adminBearer`) opens an operator session that
 reaches every project, optionally as a named user (see
-[Acting as users](#acting-as-users-and-admins)).
+[Acting as users](#acting-as-users-and-admins)). `login.allowedEmails` limits
+who may sign in by any of them (`["*@iterate.com"]`, or the var
+`APP_CONFIG_LOGIN__ALLOWED_EMAILS=*@iterate.com,*@nustom.com`); a live grant for
+an address it stops naming is refused at its next use. The operator bearer is
+not limited by it.
 
 ## Local dev
 

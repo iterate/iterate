@@ -1,6 +1,7 @@
 // The sign-ins without an identity provider (src/password-and-code-sign-in.ts): the password's wrong-try
 // caps, and the email code with a fake mailbox, so the test can read the code it mailed: the message,
-// the right code, the wrong ones, the spent challenge, the reserved domains.
+// the right code, the wrong ones, the spent challenge, the reserved domains; and login.allowedEmails
+// refusing an address it does not name.
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { Env } from "../src/env.ts";
@@ -92,6 +93,36 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
   expect(
     await finishLoginCode(mailbox, new Request(`${ORIGIN}/login`, { method: "POST" }), code),
   ).toMatchObject({ restart: true });
+});
+
+test("login.allowedEmails: an address it does not name is refused before any password is checked or code mailed, and a code already out for one is refused at the finish", async () => {
+  const send = vi.fn<(mail: Mail) => Promise<{ messageId: string }>>(async () => ({
+    messageId: "message-1",
+  }));
+  const mailbox = {
+    ...env,
+    EMAIL: { send } as unknown as Env["EMAIL"],
+    APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@control.test>",
+  } as Env;
+  const listed = { ...mailbox, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "*@listed.dev" } as Env;
+  const client = `client-${crypto.randomUUID()}`;
+  await expect(
+    signInWithPassword(listed, `stranger-${client}@elsewhere.dev`, loginPassword(), client),
+  ).rejects.toThrow("That email can't sign in here.");
+  expect(
+    await signInWithPassword(listed, `member-${client}@Listed.dev`, loginPassword(), client),
+  ).toMatchObject({ user: { email: `member-${client}@listed.dev` } });
+  await expect(startLoginCode(listed, `stranger-${client}@elsewhere.dev`, null)).rejects.toThrow(
+    "That email can't sign in here.",
+  );
+  expect(send).not.toHaveBeenCalled();
+  // a code mailed while the address was admitted, finished after the list dropped it
+  const started = await startLoginCode(mailbox, `dropped-${client}@elsewhere.dev`, null);
+  const code = /^(\d{6}) /.exec(send.mock.calls[0]![0].subject)![1]!;
+  expect(await finishLoginCode(listed, withCookie(started.setCookie), code)).toEqual({
+    error: "That email can't sign in here.",
+    restart: true,
+  });
 });
 
 function withCookie(setCookie: string) {
