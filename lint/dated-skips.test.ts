@@ -44,22 +44,6 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "email-code sign-in is not configured",
     note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",
   },
-  {
-    file: "specs/notes/notes.spec.ts",
-    match: "The Notes specs need the Notes app deployed against the platform under test",
-    note: "env-gated, local runs only: the notes project's baseURL is NOTES_BASE_URL; in CI (the preview's e2e job sets it) a missing Notes app fails",
-  },
-  {
-    file: "specs/voice/voice.spec.ts",
-    match: "The Voice specs need the Voice app deployed against the platform under test",
-    note: "env-gated, local runs only: the voice project's baseURL is VOICE_BASE_URL; in CI (the preview's e2e job sets it) a missing Voice app fails",
-  },
-  {
-    file: "specs/notes/sessions.spec.ts",
-    match:
-      "The Notes session specs need the Notes and Dash apps deployed against the platform under test",
-    note: "env-gated, local runs only: NOTES_BASE_URL and DASH_BASE_URL; in CI (the preview's e2e job sets both) a missing one fails",
-  },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {
     file: "scripts/ci/tracing/vitest.test.ts",
