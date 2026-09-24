@@ -121,8 +121,14 @@ read secrets.
 - One-click sign-in: every hosted client (Dash, Agents, Notes, Voice, Kit) is
   deployed next to the platform preview and wired to it, and the PR body's
   preview section carries `Sign in ↗` links: one in the heading (into the
-  Dash's project, or the issuer's own page when the Dash wasn't previewed) and
-  one per app. A click signs a logged-out browser in as the PR's test person,
+  Dash's project, or the issuer's own page when the Dash wasn't previewed),
+  one per app, and with the Dash one per `configs-next` template ("New project
+  from template"), which lands in the Dash's New project sheet with that
+  template chosen (`/projects?new=1&template=<name>`). A template the PR
+  changes is linked at the PR head instead
+  (`template=github:iterate/iterate#<head>&path:configs-next/<name>`, the
+  custom field prefilled), so the project is born from the unmerged template.
+  A click signs a logged-out browser in as the PR's test person,
   `pr<N>@preview.iterate.test`, and lands inside project `pr<N>`, with no
   password and no Allow page. CI seeds that person and project on every deploy
   (`apps/os/scripts/preview.ts` `previewSignIn`). The link is
@@ -392,7 +398,11 @@ clients, then writes the URL and the operations into the PR body's managed
 section. **e2e** then runs as its own job against that deployment, and only
 once the deploy succeeded: the Vitest e2e suite and the Playwright specs side
 by side (`pnpm preview e2e`). Every push reruns both; a run with no successful
-deploy runs no e2e rather than reporting green.
+deploy runs no e2e rather than reporting green. The section opens with a status
+line (`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job
+and when: `deploying`, then `deployed` or `deploy failed` (with the error's
+tail, and the links below marked as the last good deploy's), then `e2e passed`
+or `e2e failed` (with the failed suites). Each job rewrites only that line.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes the
 preview, its Artifacts namespace, KV namespaces and R2 bucket (and any D1 an

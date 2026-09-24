@@ -1,11 +1,12 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
 // preview's name (`pr<n>-<branch slug>`, cloudflare-os's), the parent it branches from (envs.ts
 // `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
-// change touches, the PR body's managed section, the config `wrangler preview` reads — a
+// change touches, the PR body's managed section and its status line, the template quick-launch
+// links, the config `wrangler preview` reads — a
 // transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs` —
 // and whether node_modules was installed from the checkout's lockfile.
 import { createHash } from "node:crypto";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { osEnvs } from "../../../envs.ts";
@@ -174,23 +175,147 @@ export function splicePullRequestBody(body: string, section: string) {
   return `${kept ? `${kept}\n\n` : ""}${block}\n`;
 }
 
-/** The URL, the deployment, the apps on top previewed this run and, on a PR, the one-click
- *  `Sign in ↗` links (src/test-link.ts) — the heading's into the Dash (or the issuer's own page),
- *  each app's into that app; the operations (reset, e2e, delete, the laptop commands) are the
- *  README's, linked, not spelled here a second time. */
+// ── the status line, nested in the managed section ─────────────────────────────────────────────
+
+const STATUS_BEGIN = "<!-- os-preview-status:begin -->";
+const STATUS_END = "<!-- os-preview-status:end -->";
+
+/** Where a PR's preview stands, as its body's status line says: the deploy job writes `deploying`,
+ *  then `deployed` with the whole section or `deploy failed`; the e2e job rewrites the line alone
+ *  with `e2e passed` or `e2e failed`. */
+export type PreviewStatus = {
+  state: "deploying" | "deployed" | "deploy failed" | "e2e passed" | "e2e failed";
+  /** the commit the job checked out: the PR merged into main, or the head alone */
+  commit: string;
+  /** the CI job that wrote it (Depot's `DEPOT_JOB_URL`); absent from a laptop */
+  runUrl?: string;
+  at: Date;
+  /** e2e failed: which of the two suites */
+  failedSuites?: string[];
+  /** a failure's error: its first line is the summary, the rest's tail goes under `<details>` */
+  error?: string;
+};
+
+/** The last `count` lines of a command's output, colour codes stripped: what a failure keeps. */
+export function lastLines(text: string, count: number) {
+  // eslint-disable-next-line no-control-regex -- the ANSI escape is the point
+  const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trimEnd();
+  return plain.split("\n").slice(-count).join("\n");
+}
+
+/** The status line, and on a failure its one-line summary and the error's tail, folded. After a
+ *  failed deploy the rest of the section is the last good deploy's, and the line says so. */
+export function renderPreviewStatus(status: PreviewStatus) {
+  const line = [
+    `Status: **${status.state}** on \`${status.commit.slice(0, 9)}\`${status.failedSuites?.length ? ` (${status.failedSuites.join(", ")})` : ""}`,
+    ...(status.runUrl ? [`[CI job ↗](${status.runUrl})`] : []),
+    `updated ${status.at.toISOString().slice(0, 16).replace("T", " ")} UTC`,
+  ].join(" · ");
+  const [summary = "", ...rest] = (status.error || "").trim().split("\n");
+  const detail = lastLines(rest.join("\n"), 40).slice(-4000).trim();
+  // a fence longer than any backtick run in the output
+  const fence = "`".repeat(
+    Math.max(3, ...(detail.match(/`+/g) || []).map((run) => run.length + 1)),
+  );
+  return [
+    line,
+    ...(status.state === "deploy failed"
+      ? ["", "The links below, if any, are the last successful deploy's."]
+      : []),
+    ...(summary ? ["", `\`${summary.replaceAll("`", "'")}\``] : []),
+    ...(detail
+      ? [
+          "",
+          "<details><summary>Error output (tail)</summary>",
+          "",
+          fence,
+          detail,
+          fence,
+          "",
+          "</details>",
+        ]
+      : []),
+  ].join("\n");
+}
+
+const statusBlock = (status: PreviewStatus) =>
+  `${STATUS_BEGIN}\n${renderPreviewStatus(status)}\n${STATUS_END}`;
+
+/** Rewrite the status line alone, leaving the rest of the managed section as it is: in place, at
+ *  the top of a section that has none, or as the whole section of a body that has none. */
+export function splicePreviewStatus(body: string, status: PreviewStatus) {
+  const block = statusBlock(status);
+  const begin = body.indexOf(SECTION_BEGIN);
+  const end = body.indexOf(SECTION_END, begin);
+  if (begin < 0 || end < begin) return splicePullRequestBody(body, block);
+  const inner = body.slice(begin + SECTION_BEGIN.length, end);
+  const statusBegin = inner.indexOf(STATUS_BEGIN);
+  const statusEnd = inner.indexOf(STATUS_END, statusBegin);
+  const spliced =
+    statusBegin >= 0 && statusEnd > statusBegin
+      ? inner.slice(0, statusBegin) + block + inner.slice(statusEnd + STATUS_END.length)
+      : `\n${block}\n${inner.replace(/^\n/, "")}`;
+  return body.slice(0, begin + SECTION_BEGIN.length) + spliced + body.slice(end);
+}
+
+// ── template quick-launch links ────────────────────────────────────────────────────────────────
+
+/** The config templates a project can be born from: the directories of configs-next. */
+export function configTemplateNames(repoRoot: string) {
+  return readdirSync(path.join(repoRoot, "configs-next"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
+ *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
+ *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs-next/<name>`,
+ *  the custom field prefilled), so the project is born from the unmerged template. */
+export function templateQuickLaunches(input: {
+  dashUrl: string;
+  templates: string[];
+  changedPaths: string[];
+  headSha: string;
+}) {
+  return input.templates.map((name) => {
+    const changed = input.changedPaths.some((file) => file.startsWith(`configs-next/${name}/`));
+    const template = changed
+      ? `github:iterate/iterate#${input.headSha}&path:configs-next/${name}`
+      : name;
+    return {
+      name,
+      ...(changed && { fromHead: input.headSha }),
+      next: `${input.dashUrl}/projects?${new URLSearchParams({ new: "1", template })}`,
+    };
+  });
+}
+
+/** The status line, the URL, the deployment, the apps on top previewed this run and, on a PR, the
+ *  one-click `Sign in ↗` links (src/test-link.ts) — the heading's into the Dash (or the issuer's own
+ *  page), each app's into that app, and with the Dash one per config template into its New project
+ *  sheet; the operations (reset, e2e, delete, the laptop commands) are the README's, linked, not
+ *  spelled here a second time. */
 export function renderPullRequestSection(input: {
   previewName: string;
+  status: PreviewStatus;
   url: string;
   deploymentId: string;
   dashboardUrl: string;
   apps: { name: string; url: string }[];
-  /** Which commit the run deployed and tested (scripts/ci/preview-tested-commit.ts). */
+  /** Which commit the run deployed (scripts/ci/preview-tested-commit.ts). */
   testedCommit?: string;
   /** The test person's links (scripts/preview.ts `previewSignIn`): only with a PR number. */
   signIn?: {
     heading: string;
     /** app name → its link */
     apps: Record<string, string>;
+    /** one per config template, into the Dash's New project sheet: only when the Dash was previewed */
+    templates: {
+      name: string;
+      link: string;
+      /** the PR head the link's template is read at */ fromHead?: string;
+    }[];
     email: string;
     project: string;
     /** whether CI's `projects.create` of `project` succeeded this run */
@@ -201,9 +326,11 @@ export function renderPullRequestSection(input: {
   return [
     `### OS preview: \`${input.previewName}\``,
     "",
+    statusBlock(input.status),
+    "",
     `**${input.url}**${signIn ? ` · [Sign in ↗](${signIn.heading})` : ""} · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
     "",
-    ...(input.testedCommit ? [`Built and tested from ${input.testedCommit}.`, ""] : []),
+    ...(input.testedCommit ? [`Deployed from ${input.testedCommit}.`, ""] : []),
     ...(input.apps.length > 0
       ? signIn
         ? [
@@ -221,6 +348,17 @@ export function renderPullRequestSection(input: {
           ]
       : ["No app preview was deployed in this run."]),
     "",
+    ...(signIn?.templates.length
+      ? [
+          `New project from template: ${signIn.templates
+            .map(
+              (template) =>
+                `[${template.name}${template.fromHead ? ` at this PR's \`${template.fromHead.slice(0, 9)}\`` : ""} ↗](${template.link})`,
+            )
+            .join(" · ")}`,
+          "",
+        ]
+      : []),
     ...(signIn
       ? [
           `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,

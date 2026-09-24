@@ -1,7 +1,8 @@
 // /projects — every project in the tree (components/organization-tree.tsx, live), a table (the
 // slug → its overview, the id, its organization → its settings, its site) in the organizations
 // page's layout, and the one way to make one: the "New project" sheet (`?new=1`, so the switcher
-// and a shared link open it too) — "New organization…" inside it when the grant holds
+// and a shared link open it too; `&template=` opens it with a template chosen, which is what a PR
+// preview's quick-launch links are) — "New organization…" inside it when the grant holds
 // `organizations:write`, a step-up link in its place otherwise. A created project's page is where
 // the sheet leads: `projects.create` returns once the control plane answered, the organization's
 // record lists the project the moment its fact lands, and that page renders the creation's progress live.
@@ -9,6 +10,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
+import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Identifier } from "@iterate-com/ui/components/identifier";
@@ -43,7 +45,11 @@ import { projectHostOf } from "../../../lib/origins.ts";
 const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/projects/")({
-  validateSearch: z.object({ new: z.literal(1).optional().catch(undefined) }),
+  validateSearch: z.object({
+    new: z.literal(1).optional().catch(undefined),
+    // a configs-next template by name (`with-agents`), or a `github:` reference for the custom field
+    template: z.string().optional().catch(undefined),
+  }),
   loader: async ({ context }) => ({ templateOptions: await context.api.projects.templates() }),
   head: () => ({ meta: [{ title: "Projects · Dash" }] }),
   component: ProjectsPage,
@@ -146,6 +152,7 @@ function ProjectsPage() {
           className="overflow-y-auto data-[side=right]:sm:max-w-md"
         >
           <NewProjectForm
+            initialTemplate={search.template}
             orgs={tree.organizations}
             canCreateOrg={info.scopes.includes("organizations:write")}
             pending={pending}
@@ -159,14 +166,18 @@ function ProjectsPage() {
   );
 }
 
-/** The sheet's body — mounted with the sheet, so every opening starts blank. */
+/** The sheet's body — mounted with the sheet, so every opening starts blank, but for the template
+ *  the URL names. */
 function NewProjectForm({
+  initialTemplate,
   orgs,
   canCreateOrg,
   pending,
   setPending,
   onCreated,
 }: {
+  /** `?template=`: a configs-next template's name, or a `github:` reference */
+  initialTemplate: string | undefined;
   /** the tree's organizations — the first is the default; may still be filling in */
   orgs: { id: string; name: string }[];
   canCreateOrg: boolean;
@@ -187,8 +198,9 @@ function NewProjectForm({
   const [picked, setPicked] = useState<string | null>(null);
   const orgId = picked || orgs[0]?.id || "";
   const [orgName, setOrgName] = useState("");
-  const [template, setTemplate] = useState("");
-  const [customTemplate, setCustomTemplate] = useState("");
+  const initial = templateFields(initialTemplate, templateOptions);
+  const [template, setTemplate] = useState(initial.template);
+  const [customTemplate, setCustomTemplate] = useState(initial.customTemplate);
   const [error, setError] = useState<string | null>(null);
   const creatingOrg = orgId === "new";
   async function create(event: FormEvent<HTMLFormElement>) {
@@ -313,7 +325,15 @@ function NewProjectForm({
             />
           </Field>
         ) : null}
-        {canCreateOrg ? null : <AllowOrganizations next="/projects?new=1" />}
+        {canCreateOrg ? null : (
+          <AllowOrganizations
+            next={
+              initialTemplate
+                ? `/projects?new=1&template=${encodeURIComponent(initialTemplate)}`
+                : "/projects?new=1"
+            }
+          />
+        )}
         {error ? (
           <p role="alert" data-type="error" className="text-sm text-destructive">
             {error}
@@ -334,4 +354,19 @@ function NewProjectForm({
       </SheetFooter>
     </form>
   );
+}
+
+/** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
+ *  a name is the built-in whose path is `configs-next/<name>` — `default`, and a name that is none,
+ *  is Minimal (the default files). */
+function templateFields(
+  template: string | undefined,
+  options: { reference: string }[],
+): { template: string; customTemplate: string } {
+  if (template?.startsWith("github:")) return { template: "custom", customTemplate: template };
+  const builtIn = options.find(
+    (option) =>
+      parseConfigRepoTemplateReference(option.reference).path === `configs-next/${template}`,
+  );
+  return { template: builtIn?.reference || "", customTemplate: "" };
 }
