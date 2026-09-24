@@ -90,6 +90,21 @@ test("asks a commit status again after GitHub's 503: the latest status per conte
   );
 });
 
+test("asks a PATCH once when the caller says so: a PR body written from a read seconds earlier", async () => {
+  using fixture = githubAnswering(unexpectedError());
+
+  await expect(
+    fixture.github.rest.pulls.update({
+      ...repo,
+      pull_number: 2899,
+      body: "spliced",
+      request: { askOnce: true },
+    }),
+  ).rejects.toMatchObject({ status: 500 });
+  expect(fixture.fetch).toHaveBeenCalledOnce();
+  expect(fixture.warn).not.toHaveBeenCalled();
+});
+
 test("never asks again after a 4xx: it is GitHub's answer about the request", async () => {
   using fixture = githubAnswering(json(404, { message: "Not Found" }));
 

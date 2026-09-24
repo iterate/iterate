@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { PLATFORM_FAILURE_DELAYS_MS, retryPlatformFailures } from "./platform-retry.ts";
+
 /** Iterate's Depot organization, which runs every workflow in .depot/workflows (docs/depot-ci.md). */
 export const DEPOT_ORG = "0p91s0lz49";
 
@@ -35,10 +37,10 @@ export async function mapConcurrent<Input, Output>(
  *
  * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx, or whose
  * connection fails, is asked again after each of `delaysMs`, with a `depot.platform-failure-retry`
- * warn per repeat; then the last failure is thrown, so a lasting outage still fails the job, about
- * 17 s later. A 4xx is an answer about the request and fails at once, as does any other method
- * (Connect sends every call as a POST, so only the name says it changes nothing). One 500 on
- * GetJobAttemptLogs failed PR #2970's Preview OS trace job (attempt 144gszhm0r, 2026-09-24).
+ * warn per repeat (platform-retry.ts). A 4xx is an answer about the request and fails at once, as
+ * does any other method (Connect sends every call as a POST, so only the name says it changes
+ * nothing). One 500 on GetJobAttemptLogs failed PR #2970's Preview OS trace job (attempt 144gszhm0r,
+ * 2026-09-24).
  */
 export async function depotCiApi(
   method: string,
@@ -46,11 +48,9 @@ export async function depotCiApi(
   token: string,
   options: { fetch?: typeof fetch; delaysMs?: readonly number[] } = {},
 ): Promise<unknown> {
-  const { fetch: fetchImpl = fetch, delaysMs = [2_000, 5_000, 10_000] } = options;
-  for (let attempt = 1; ; attempt++) {
-    const delayMs = /^(Get|List)[A-Z]/.test(method) ? delaysMs[attempt - 1] : undefined;
-    let failure: { status: number | "network"; error: Error };
-    try {
+  const { fetch: fetchImpl = fetch, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = options;
+  return retryPlatformFailures(
+    async () => {
       const response = await fetchImpl(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
         method: "POST",
         headers: {
@@ -63,25 +63,23 @@ export async function depotCiApi(
       });
       if (response.ok) return await response.json();
       await response.body?.cancel();
-      const error = new Error(`Depot ${method} returned HTTP ${response.status}`);
-      if (response.status < 500 || delayMs === undefined) throw error;
-      failure = { status: response.status, error };
-    } catch (error) {
-      // fetch rejects with a TypeError when the connection fails; a timeout or an abort is not
-      // Depot's answer and is thrown as it is.
-      if (!(error instanceof TypeError) || delayMs === undefined) throw error;
-      failure = { status: "network", error };
-    }
-    console.warn({
+      throw Object.assign(new Error(`Depot ${method} returned HTTP ${response.status}`), {
+        status: response.status,
+      });
+    },
+    {
       event: "depot.platform-failure-retry",
-      method,
-      status: failure.status,
-      message: failure.error.message,
-      attempt,
-      retryInMs: delayMs,
-    });
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
+      delaysMs: /^(Get|List)[A-Z]/.test(method) ? delaysMs : [],
+      platformFailure: (error) => {
+        // fetch rejects with a TypeError when the connection fails; a timeout or an abort is not
+        // Depot's answer and is thrown as it is.
+        if (error instanceof TypeError)
+          return { method, status: "network", message: error.message };
+        const { status = 0, message } = error as { status?: number; message?: string };
+        return status >= 500 ? { method, status, message } : undefined;
+      },
+    },
+  );
 }
 
 /** The Depot CLI (`depot <args> --org <iterate>`). CI passes the organization token as DEPOT_TOKEN
