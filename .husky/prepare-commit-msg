@@ -16,6 +16,30 @@ committer=$(node --input-type=module -e 'import { isCodingAgent } from "./packag
 # `--amend -m` passes "message" and no commit, so for it read the arguments of the git process that
 # runs this hook: the nearest ancestor that is git, past husky's `sh` wrappers. Only that one, since
 # a shell further up may mention `--amend` in text that is not the commit.
+#
+# ps joins git's arguments with spaces, so a message given to -m is indistinguishable from options
+# after it: scan the options after `commit` only up to the first one that takes a value (short
+# clusters with m/F/c/C/t, like `-am`, and the long forms). `git commit -m msg --amend` therefore
+# gets through; `--amend -m msg`, the usual order, does not. Git accepts unambiguous abbreviations,
+# so `--am` through `--amend` all count (https://git-scm.com/docs/gitcli#_abbreviating_long_options).
+amend_before_message() {
+  set -f
+  after_commit=""
+  for arg in $1; do
+    if [ -z "$after_commit" ]; then
+      [ "$arg" = "commit" ] && after_commit="yes"
+      continue
+    fi
+    case "$arg" in
+      --am | --ame | --amen | --amend) return 0 ;;
+      -- | --message* | --file* | --reuse-message* | --reedit-message* | --template* | --fixup* | --squash*) return 1 ;;
+      --*) ;;
+      -*[mFcCt]*) return 1 ;;
+    esac
+  done
+  return 1
+}
+
 is_amend=""
 if [ "$2" = "commit" ] && [ "$3" = "HEAD" ]; then
   is_amend="yes"
@@ -25,7 +49,7 @@ while [ -z "$is_amend" ] && [ -n "$pid" ] && [ "$pid" != "1" ]; do
   args=$(ps -o args= -p "$pid")
   case "$args" in
     git\ * | */git\ *)
-      case " $args " in *" --amend "*) is_amend="yes" ;; esac
+      amend_before_message "$args" && is_amend="yes"
       break
       ;;
   esac

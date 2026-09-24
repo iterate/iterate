@@ -57,6 +57,37 @@ test("an agent's commit is not blocked by --amend in its shell's command line", 
   expect(repo.git("log", "--format=%s")).toMatchObject({ stdout: "second\nfirst\n" });
 });
 
+// ps prints git's arguments joined by spaces, so the message given to -m is indistinguishable from
+// options after it; only options before the first message-taking option count.
+test("an agent's commit message may mention --amend", () => {
+  using repo = scratchRepo({ CLAUDE_CODE_CHILD_SESSION: "1" });
+  repo.write("file.txt", "one\n");
+  repo.git("add", "file.txt");
+  expect(repo.git("commit", "-m", "the hook blocks only --amend now")).toMatchObject({ status: 0 });
+  repo.write("file.txt", "two\n");
+  expect(repo.git("commit", "-am", "no --amend here")).toMatchObject({ status: 0 });
+  expect(
+    repo.git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "--message=a --amend b"),
+  ).toMatchObject({ status: 0 });
+  expect(repo.git("log", "--format=%s")).toMatchObject({
+    stdout: "a --amend b\nno --amend here\nthe hook blocks only --amend now\nfirst\n",
+  });
+});
+
+test("an agent cannot amend through global options or an abbreviated --amend", () => {
+  using repo = scratchRepo({ AGENT: "1" });
+  for (const args of [
+    ["-c", "commit.gpgsign=false", "commit", "--amend", "-m", "rewritten"],
+    ["commit", "-a", "--amen", "-m", "rewritten"],
+  ]) {
+    expect(repo.git(...args), args.join(" ")).toMatchObject({
+      status: 1,
+      stdout: expect.stringContaining(amendBlocked),
+    });
+  }
+  expect(repo.git("log", "--format=%s")).toMatchObject({ stdout: "first\n" });
+});
+
 // CLAUDECODE alone is what Claude Code's IDE extensions leave in the integrated terminal a person
 // types into (https://code.claude.com/docs/en/env-vars), so it does not mark an agent.
 test("a person can amend, including in an IDE terminal that carries CLAUDECODE", () => {
