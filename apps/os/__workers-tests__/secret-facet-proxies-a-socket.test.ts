@@ -7,19 +7,24 @@
 // inside workerd (the workers lane): the 101 crosses every hop (facet → parent → the caller's DO →
 // the eyeball), the frames round-trip, the use is a fact on the secret's path; and the socket lives
 // exactly as long as the facet's dial — `ctx.facets.abort` on the secret's context closes it, 1006,
-// as an intermediary Durable Object's eviction would have. Against the deployed dummy-petshop
-// (apps/dummy-petshop), the fixture every secrets proof connects to, over the real network.
+// as an intermediary Durable Object's eviction would have.
+//
+// THE UPSTREAM IS IN-PROCESS: the facet's terminal `fetch` is the isolate's global fetch, and each
+// test answers the pinned origin (`UPSTREAM`) with a fake shop of its own (`serveShop`, below) —
+// a real capnweb server over a real WebSocketPair that accepts exactly the bearer the test stored,
+// so a 101 is the credential swapped in. This lane dials no deployed service. What it cannot prove
+// is the dial over the real network to a real third party; the DEPLOYED row of
+// e2e/secrets.e2e.test.ts does that against apps/dummy-petshop.
 
 import { runInDurableObject } from "cloudflare:test";
-import { newWebSocketRpcSession } from "capnweb";
-import { expect, test } from "vitest";
-import { petshopBaseUrl, petshopLegacyBearer } from "../e2e/support/petshop.ts";
+import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { stub, until } from "./support.ts";
 
-const SHOP = petshopBaseUrl();
+const SHOP = "https://petshop.test";
 
-test("a WebSocket 101 through a secret: the caller's context forwards to /secrets/shop, whose facet dials the petshop's capnweb door with the bearer substituted and hands the 101 back; frames round-trip; the use is a fact with status 101; aborting the facet closes the socket 1006", async () => {
-  const accessToken = await petshopLegacyBearer("secret-facet-ws@example.com");
+test("a WebSocket 101 through a secret: the caller's context forwards to /secrets/shop, whose facet dials the shop's capnweb door with the bearer substituted and hands the 101 back; frames round-trip; the use is a fact with status 101; aborting the facet closes the socket 1006", async () => {
+  const accessToken = serveShop();
 
   const project = "prj_secret_facet_socket";
   const secret = stub(`${project}.iterate/secrets/shop`);
@@ -67,11 +72,10 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
 });
 
 // A browser cannot set Authorization on a WebSocket, so browser-shaped APIs carry the credential as
-// one of the offered subprotocols. The petshop's /gateway-subprotocol reads it from
-// `petshop.access-token.<token>` and selects `petshop.v1` (apps/dummy-petshop/src/gateway.ts).
-test("a WebSocket whose credential rides in Sec-WebSocket-Protocol: egress substitutes the placeholder there, the petshop's /gateway-subprotocol accepts the upgrade and selects its real subprotocol, and the frames round-trip", async () => {
-  const email = "secret-facet-subprotocol@example.com";
-  const accessToken = await petshopLegacyBearer(email);
+// one of the offered subprotocols. The shop's /gateway-subprotocol reads it from
+// `petshop.access-token.<token>` and selects `petshop.v1`, as apps/dummy-petshop/src/gateway.ts does.
+test("a WebSocket whose credential rides in Sec-WebSocket-Protocol: egress substitutes the placeholder there, the shop's /gateway-subprotocol accepts the upgrade and selects its real subprotocol, and the frames round-trip", async () => {
+  const accessToken = serveShop();
 
   const project = "prj_secret_facet_subprotocol";
   await stub(project).invoke(
@@ -115,21 +119,13 @@ test("a WebSocket whose credential rides in Sec-WebSocket-Protocol: egress subst
     ]);
   socket.accept();
 
-  // The gateway authenticates at the upgrade: `ready` names the account the substituted token was
-  // minted for; a placeholder that reached it unsubstituted would be `invalid` and a 4001 close.
-  await received(3);
-  expect(frames).toEqual([
-    { op: "hello", heartbeatIntervalMs: 30_000 },
-    { op: "ready", user: { sub: email, clientId: "legacy-login" } },
-    {
-      op: "dispatch",
-      type: "pet.created",
-      data: { id: "pet-3", name: "Rex", species: "terrier" },
-    },
-  ]);
+  // The gateway authenticates at the upgrade: a placeholder that reached it unsubstituted is no
+  // 101 at all (the fake answers 401), so `ready` is the substituted token accepted.
+  await received(2);
+  expect(frames).toEqual([{ op: "hello", heartbeatIntervalMs: 30_000 }, { op: "ready" }]);
   socket.send("ping");
-  await received(4);
-  expect(frames[3]).toEqual({ op: "echo", received: "ping" });
+  await received(3);
+  expect(frames[2]).toEqual({ op: "echo", received: "ping" });
   socket.close();
 });
 
@@ -149,7 +145,7 @@ test("an app's fetch expression inherits WebSocket egress through its parent con
       },
     ],
   ]);
-  const accessToken = await petshopLegacyBearer("voice-parent-ws@example.com");
+  const accessToken = serveShop();
   await root.invoke(["itx", "secrets", ["set", "/secrets/shop", accessToken, { urls: [SHOP] }]]);
   const response = await child.fetch(
     new Request(`${SHOP}/capnweb`, {
@@ -167,3 +163,61 @@ test("an app's fetch expression inherits WebSocket egress through its parent con
   response.webSocket!.accept();
   response.webSocket!.close();
 });
+
+/** The shop at `SHOP` for the rest of the test: the isolate's `fetch` — which the secret facet's
+ *  terminal dial is — answers that origin in-process and leaves every other one alone. Its doors
+ *  accept one freshly minted bearer, returned: `/capnweb` in `Authorization` (a capnweb session
+ *  over the socket), `/gateway-subprotocol` as the offered `petshop.access-token.<token>`. Anything
+ *  else — an unsubstituted placeholder included — is a 401 and no socket. */
+function serveShop(): string {
+  const accessToken = `shop-token-${crypto.randomUUID()}`;
+  const network = globalThis.fetch;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).origin !== SHOP) return network(request);
+    return shopFetch(request, accessToken);
+  });
+  onTestFinished(() => {
+    spy.mockRestore();
+  });
+  return accessToken;
+}
+
+async function shopFetch(request: Request, accessToken: string): Promise<Response> {
+  const { pathname } = new URL(request.url);
+  if (request.headers.get("upgrade") !== "websocket")
+    return new Response("a websocket door", { status: 426 });
+  if (pathname === "/capnweb") {
+    if (request.headers.get("authorization") !== `Bearer ${accessToken}`)
+      return new Response("invalid_token", { status: 401 });
+    return newWorkersRpcResponse(request, new Shop());
+  }
+  if (pathname === "/gateway-subprotocol") {
+    const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+      .split(",")
+      .map((protocol) => protocol.trim());
+    if (!offered.includes(`petshop.access-token.${accessToken}`))
+      return new Response("invalid_token", { status: 401 });
+    const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+    server.accept();
+    server.send(JSON.stringify({ op: "hello", heartbeatIntervalMs: 30_000 }));
+    server.send(JSON.stringify({ op: "ready" }));
+    server.addEventListener("message", (event) => {
+      server.send(JSON.stringify({ op: "echo", received: event.data }));
+    });
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { "sec-websocket-protocol": "petshop.v1" },
+    });
+  }
+  return new Response("not found", { status: 404 });
+}
+
+/** The shop's capnweb API, as far as these rows call it. */
+class Shop extends RpcTarget {
+  getPet(id: string) {
+    if (id !== "pet-1") throw new Error(`No pet with id ${id}`);
+    return { id: "pet-1", name: "Biscuit", species: "beagle" };
+  }
+}

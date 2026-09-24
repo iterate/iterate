@@ -9,7 +9,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "iterate/expression";
-import { releasePins, stub } from "./support.ts";
+import { releasePins, stub, until } from "./support.ts";
 
 const COUNTER_MODULES = {
   "cap.js": /* js */ `
@@ -52,14 +52,11 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
       consumes: ["mark"],
     },
   });
-  await s.append({ type: "mark" });
-  await sleep(400);
-  expect(
-    JSON.parse(((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]"),
-  ).toHaveLength(1);
-  const row0 = (await s.invoke("itx.subscriptions.get('dig')")) as {
-    cursor?: { confirmedOffset: number };
-  };
+  const mark = offsetOf(await s.append({ type: "mark" }));
+  // The delivery is a worker call and its ack comes after it returns: wait for the cursor to reach
+  // the mark, which is the call settled — never a guess at how long a call takes.
+  const row0 = await cursorReaches(s, "dig", mark);
+  expect(await digested(s)).toHaveLength(1);
   const p0 = await page(ctx);
   const highestDurableOffset = p0.events.at(-1)!.offset;
   expect(row0).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset } }); // acked on durable ground ✓
@@ -85,15 +82,15 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   // durable commit `dig` does not consume, so the cursor moved along past it without a call.
   expect(rowKv).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset + 1 } });
 
-  await s.append({ type: "mark" }); // woken@mark+1 (the constructor's), mark@mark+2 — durable
-  await sleep(600);
+  const secondMark = offsetOf(await s.append({ type: "mark" })); // woken@mark+1 (the constructor's), mark@mark+2 — durable
+  // The cursor passing the second mark is the delivery settled. Had kv held a cursor past the durable
+  // mark, it would already stand beyond this mark and the call would never have been made — the
+  // assertion below, not this wait, is what fails then.
+  await cursorReaches(s, "dig", secondMark);
   const p1 = await page(ctx);
   expect(p1.events.at(-1)).toMatchObject({ offset: highestDurableOffset + 2 });
-  const digested = JSON.parse(
-    ((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]",
-  ) as string[];
   // at-least-once: the second mark, minted where a dead ephemeral sat, reaches the worker.
-  expect(digested).toContain(`mark@${highestDurableOffset + 2}`);
+  expect(await digested(s)).toContain(`mark@${highestDurableOffset + 2}`);
 });
 
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
@@ -107,7 +104,8 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
       consumes: ["tick"],
     },
   });
-  await sleep(300); // onCommit's void #resolve(sub.target) has long finished
+  // No wait: the name alone answers — a hosting row recovers its facet's spec from the log that
+  // configured it, whether or not onCommit's resolve of the target has run yet.
   const snap = (await s.invoke(["itx", "facets", ["get", "c2"], ["snapshot"]])) as {
     state: { n: number };
   };
@@ -117,26 +115,27 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
 test("processor: a read-driven catch-up (snapshot after the release) with ephemerals at head checkpoints the durable mark; after the release + evict the durable re-minted at an ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
-  await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      name: "counter",
-      target: [
-        ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
-        "processEventBatch",
-      ],
-      consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
-    },
-  });
-  await sleep(300); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)
-  await s.append({ type: "tick" }); // pushed → reduced, cursor = tick offset (durable)
-  await sleep(300);
+  const configured = offsetOf(
+    await s.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "counter",
+        target: [
+          ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
+          "processEventBatch",
+        ],
+        consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
+      },
+    }),
+  );
+  await processedThrough(s, "counter", configured); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)
+  const tick = offsetOf(await s.append({ type: "tick" })); // pushed → reduced, cursor = tick offset (durable)
+  await processedThrough(s, "counter", tick);
   await s.append({ type: "note" }); // NOT consumed by the subscription → not pushed → the facet now lags by one durable
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // ephemeral tail of 2
   const p0 = await page(ctx);
   const highestDurableOffset = p0.events.at(-1)!.offset;
   expect(p0.events.at(-1)).toMatchObject({ type: "note" });
-  await sleep(300);
   await releasePins(ctx); // abort the idle facet (checkpoint = tick offset, durable)
   // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → catchUpFromLog() → read(cursor) → [note], scannedThroughOffset = head
   const mid = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
@@ -148,11 +147,10 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   // read() proves the durable log only, so the checkpoint the wake persisted is the mark, not the head.
   expect(mid).toMatchObject({ state: { n: 5 }, offset: highestDurableOffset });
   expect(p0).toMatchObject({ scannedThroughOffset: highestDurableOffset });
-  await sleep(400);
   await releasePins(ctx);
   await evictDurableObject(s);
-  await s.append({ type: "tick" }); // woken@mark+1 (the constructor's), tick@mark+2 — durable, at the dead ephemerals' offsets
-  await sleep(500);
+  const secondTick = offsetOf(await s.append({ type: "tick" })); // woken@mark+1 (the constructor's), tick@mark+2 — durable, at the dead ephemerals' offsets
+  await processedThrough(s, "counter", secondTick);
   const p1 = await page(ctx);
   expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([
     highestDurableOffset + 1,
@@ -172,8 +170,35 @@ async function page(ctx: string): Promise<Page> {
   return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+/** The stream-kept cursor of subscription `name` once it stands at or past `offset` — the ack of
+ *  the call that delivered it, which lands only after the call returned. */
+async function cursorReaches(
+  s: ReturnType<typeof stub>,
+  name: string,
+  offset: number,
+): Promise<{ cursor?: { confirmedOffset: number } }> {
+  return until(`subscription ${name} acked through ${offset}`, async () => {
+    const row = (await s.invoke(`itx.subscriptions.get('${name}')`)) as {
+      cursor?: { confirmedOffset: number };
+    };
+    return (row.cursor?.confirmedOffset ?? -1) >= offset && row;
+  });
+}
+
+/** What the digest worker has recorded, `type@offset` per delivered event. */
+async function digested(s: ReturnType<typeof stub>): Promise<string[]> {
+  return JSON.parse(((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]");
+}
+
+/** The offset the one event `append` was handed committed at (the stub's RPC typing drops the
+ *  return's shape). */
+function offsetOf(appended: unknown): number {
+  return (appended as { offset: number }[])[0]!.offset;
+}
+
+/** The processor facet's own barrier: resolves once it has reduced through `offset`. */
+async function processedThrough(s: ReturnType<typeof stub>, facet: string, offset: number) {
+  await s.invoke(["itx", "facets", ["get", facet], ["waitUntilProcessed", { offset }]]);
 }
 
 /** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
