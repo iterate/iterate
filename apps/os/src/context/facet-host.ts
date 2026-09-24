@@ -78,8 +78,14 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  outlasts 30 s resets the object); a start that fails is logged, never thrown, and its row stays
  *  for the next birth or sweep. Remove when the repro stops reproducing. */
 const FACET_START_WATCHDOG_MS = 10_000;
-/** Every call but a platform start: the call watchdog, and a facet that timed out started again. */
-const FACET_CALL_WATCHDOG = { watchdogMs: FACET_CALL_WATCHDOG_MS, restartOnTimeout: true };
+/** What a call's watchdog does to a facet that never answered: every call but a platform start
+ *  restarts it; a platform start leaves it alone — the start gave up under its own bound and
+ *  logged, and an abort then would stop the facet outside the start's `blockConcurrencyWhile`. */
+type FacetCallWatchdog = { watchdogMs: number; onTimeout: "restart" | "leave" };
+const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
+  watchdogMs: FACET_CALL_WATCHDOG_MS,
+  onTimeout: "restart",
+};
 /** How long a context that materialized a loaded facet must go without activity from OUTSIDE the
  *  project's loaded code — an edge session, HTTP, MCP, a sibling's hop, a claim, an alarm pass that
  *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
@@ -419,8 +425,7 @@ export class FacetHost {
    *  its `facet-ran` row stays for the next birth or sweep to start it. Never throws. */
   async #start(name: string, owed: (() => void)[]): Promise<boolean> {
     const steps: ItxExpression = [["listPublicMethods"]];
-    // A start's call never restarts the facet it starts: a timeout ends it, as a failure does.
-    const watchdog = { watchdogMs: FACET_START_WATCHDOG_MS, restartOnTimeout: false };
+    const watchdog: FacetCallWatchdog = { watchdogMs: FACET_START_WATCHDOG_MS, onTimeout: "leave" };
     const startedIfRefused = (error: unknown) => {
       if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
         throw error;
@@ -747,7 +752,7 @@ export class FacetHost {
     facetStartupMemo: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
     failure: { failedOn: MaterializedFacet; error: unknown },
-    watchdog: { watchdogMs: number; restartOnTimeout: boolean },
+    watchdog: FacetCallWatchdog,
     owed: (() => void)[],
   ): Promise<unknown> {
     let { failedOn, error } = failure;
@@ -946,15 +951,15 @@ export class FacetHost {
    *  `.fetch(request)` included (plain HTTP by expression, the upgrade refused in `handle`; a
    *  WebSocket upgrade from the DO's egress to the `secret` facet, whose 101 rides the fetch
    *  channel back) — then the answer copied out. A facet that never answers (FACET_CALL_WATCHDOG_MS)
-   *  or whose startup threw is aborted: its pending call rejects, the counter drains. One that timed
-   *  out is started again (`#restart`) unless the call was a platform start itself; one whose
-   *  startup threw starts on its next call. A call on an instance `abort` reset rejects
-   *  FACET_ABORTED; one on an instance `#deleteFacet` deleted, NO_FACET. */
+   *  is restarted (`#restart`) — unless the call was a platform start, which leaves it — and one
+   *  whose startup threw is aborted and starts on its next call: its pending call rejects, the
+   *  counter drains. A call on an instance `abort` reset rejects FACET_ABORTED; one on an instance
+   *  `#deleteFacet` deleted, NO_FACET. */
   async #call(
     { facet, startupFailed, generation }: MaterializedFacet,
     name: string,
     itxExpressionSteps: ItxExpression,
-    { watchdogMs, restartOnTimeout }: { watchdogMs: number; restartOnTimeout: boolean },
+    { watchdogMs, onTimeout }: FacetCallWatchdog,
   ): Promise<unknown> {
     // Every step the walk went PAST (`repos()` in `repos().create(path)`, when one call walks several
     // steps on the facet — a subscription target's, a handle's own `invoke`) holds a session onto the
@@ -980,14 +985,17 @@ export class FacetHost {
       );
     } catch (error) {
       if (errorCode(error) === "TIMEOUT") {
-        if (this.#facetGeneration(name) === generation) {
-          const abort = () => this.#abortFacetIfRunning(name, "call timed out", generation);
-          if (restartOnTimeout) await this.#restart(name, abort);
-          else {
-            abort();
-            this.#liveFacetNames.delete(name);
-          }
-        }
+        if (onTimeout === "leave")
+          // Left to answer: a late answer is a Workers-RPC result whose disposer references the facet
+          // (the copy-out below says why), so it is disposed when it comes.
+          void call.then(
+            (answer) => (answer as Partial<Disposable> | undefined)?.[Symbol.dispose]?.(),
+            () => {},
+          );
+        else if (this.#facetGeneration(name) === generation)
+          await this.#restart(name, () =>
+            this.#abortFacetIfRunning(name, "call timed out", generation),
+          );
       } else if (startupFailed()) {
         if (this.#facetGeneration(name) === generation) {
           this.#abortFacetIfRunning(name, "startup failed", generation);
