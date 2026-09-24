@@ -134,7 +134,7 @@ Fetch logs and diagnostics:
 depot ci logs <attempt-id> --org 0p91s0lz49
 depot ci logs <job-id> --org 0p91s0lz49 --follow
 depot ci metrics --run <run-id> --org 0p91s0lz49
-depot ci diagnose <run-id> --org 0p91s0lz49
+depot ci diagnose --run <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
 
@@ -243,16 +243,129 @@ Agents babysitting a PR: the wait-loop rules (gate on the head commit's
 check-runs, Bugbot's check-run and unresolved threads, a push obsoletes every
 monitor) are in [Pull requests](pull-requests.md#agent-wait-loops-gate-on-the-head-commits-check-runs).
 
-## Run A Workflow From Your Checkout
+## Run CI without a PR
 
-`depot ci run` runs a workflow through Depot using your local checkout. If you
-have local changes, Depot uploads them as a patch and applies them in the CI
-sandbox.
+Never open a pull request only to run CI, and never run CI on main's commit.
+Push a scratch branch and run against its head. `depot ci run` runs any
+workflow file, whatever its `on:` (Test has no `workflow_dispatch`).
+`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Every
+check lands on the scratch commit, and no PR body changes unless a Preview OS
+dispatch names a PR.
+
+Auth: `depot login`, or the organization token from Doppler:
 
 ```bash
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml --job test
+export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
 ```
+
+The scratch branch is main plus an empty commit (or the commit to soak), pushed
+under its local name:
+
+```bash
+git fetch origin main
+git worktree add -b ci-soak/<name> ../ci-soak-<name> origin/main
+cd ../ci-soak-<name>
+git commit --allow-empty -m "ci soak <name>"
+git push -u origin HEAD        # also creates the local origin/ci-soak/<name>
+
+depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml
+depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
+  --ref ci-soak/<name> --input runs=20 --input preview=soak-<name>
+```
+
+When done: `git push origin --delete ci-soak/<name>`, remove the worktree, and
+delete any preview the soak named (`pnpm --dir apps/os preview delete --name soak-<name>`).
+
+### The commit a run reports on
+
+`depot ci run` diffs the working tree against a base: the local
+`origin/<branch>` when it exists, else the merge base with `origin/main`
+([depot/cli `findMergeBase`](https://github.com/depot/cli/blob/v2.102.13/pkg/cmd/ci/run.go)).
+With no difference the run is `HEAD`; with one, the run is the base commit and
+the job applies the difference as a patch. Every check lands on that commit:
+
+- Nothing unpushed or uncommitted on a branch pushed under its own name:
+  `HEAD`, and the command prints no `Base:` line.
+- Changes on such a branch: `Base: origin/<branch>`, and the pushed commit gets
+  the checks. Use this to try a workflow edit without pushing it.
+- A branch with no local `origin/<branch>` (unpushed, pushed under another
+  name, or a detached `HEAD`): `Base: origin/main`, and the checks land on
+  main's commit. Stop and push the branch under its own name. On 2026-09-24
+  such a run posted a red Lint and Typecheck on main's head, `a8e6c6525`.
+- A clean `main`: main's head, and the job gets `GITHUB_REF=refs/heads/main`
+  (run `40b7c4vnsn`). It then shares main's concurrency groups, `test-main`
+  and `lint-typecheck-main`, whose `cancel-in-progress` can cancel main's own
+  run.
+
+`depot ci dispatch --ref <branch>` runs and reports on the branch's head. With
+`--ref main`, that is main's head.
+
+Before a second run, see where the first one's checks went:
+
+```bash
+gh api "repos/iterate/iterate/commits/$(git rev-parse HEAD)/check-runs" --jq '.check_runs[].name'
+```
+
+GitHub shows the scratch commit's latest check per job name, not one per run,
+so count a soak in Depot.
+
+### What the jobs see
+
+Probed on 2026-09-24 from a scratch branch with CLI 2.102.12 and 2.102.13
+(runs `xdhdqwvpzg`, `n1vsn3klvq` and `8q19nfxf4n`):
+
+|                                                     | `depot ci run`                      | `depot ci dispatch --ref ci-soak/<name>`                                         |
+| --------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
+| `github.event_name`                                 | `api`                               | `workflow_dispatch`                                                              |
+| `github.ref` / `ref_name`                           | empty                               | `refs/heads/ci-soak/<name>` / `ci-soak/<name>`                                   |
+| `github.sha`                                        | the commit above                    | the branch's head                                                                |
+| `github.event`                                      | `repository` only                   | `inputs`, `ref`, `repository`, `workflow`                                        |
+| `inputs.*`                                          | empty: defaults are not applied     | as given, else the defaults                                                      |
+| Which workflows                                     | any file, local or committed        | `workflow_dispatch` ones, read from the branch (one only the branch has too)     |
+| `if: github.event_name == 'pull_request'` jobs      | skipped                             | skipped                                                                          |
+| Group `x-${{ head_ref \|\| ref_name \|\| run_id }}` | the run id: N runs run side by side | `x-ci-soak/<name>`: with `cancel-in-progress`, a dispatch cancels the one before |
+
+A dispatch of `test.yml` fails with `Workflow 'test.yml' not found or does not
+have workflow_dispatch trigger`. Preview OS under `ci run` skips every job,
+since its jobs need a pull request or a dispatch's inputs: dispatch it. LOC
+report under `ci run` prints its table (`No pull request context`) and writes
+no body. Downstream a scratch run is an ordinary one: the flake dashboard folds
+a Test run's flake records (it lists workflows by name), the hourly telemetry
+sync sends the run to PostHog with trigger `api` or `workflow_dispatch`, and
+test evidence goes to R2 under `trust=pr`. PR time to green reads pull requests
+only.
+
+### Soak: N runs, then read them
+
+Test or Lint and Typecheck: N `depot ci run`s side by side. Three Test runs of
+one scratch commit (`wxfblqgbr8`, `mdkbdk6tzb`, `whmht81htk`) ran side by side
+and each finished in 2 to 2.5 minutes. The e2e suite: `os-e2e-soak.yml`'s `runs` input, not N
+dispatches. Preview OS dispatches that name no PR share one concurrency group,
+`preview-os-none`, where a newer pending run replaces an older one.
+
+```bash
+for i in $(seq 10); do
+  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml | awk '/^Run:/ {print $2}'
+done | tee soak-runs.txt
+
+# the tally; --name takes the workflow's name: ("Lint and Typecheck"). Rerun until none is queued or running.
+depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name Test \
+  --sha "$(git rev-parse HEAD)" -n 200 --output json \
+  --status queued --status running --status finished --status failed --status cancelled |
+  jq -r 'group_by(.status)[] | "\(.[0].status) \(length)"'
+
+# one run: its failure groups, its attempts, then an attempt's log and more
+depot ci diagnose --run <run-id> --org 0p91s0lz49
+depot ci status <run-id> --org 0p91s0lz49
+depot ci logs <attempt-id> --org 0p91s0lz49
+depot ci summary <attempt-id> --org 0p91s0lz49      # Test: where its R2 evidence went
+depot ci metrics --run <run-id> --org 0p91s0lz49
+depot ci artifacts list <run-id> --org 0p91s0lz49   # flake records, telemetry
+```
+
+These commands read a `ci run` run as they read any other. The one difference
+is that `status` and `artifacts list` name its jobs `_inline_0.yaml:<job>`.
 
 Use SSH for interactive debugging of a single job:
 
@@ -293,13 +406,13 @@ without redeploying it; `e2e` and `specs` run one of them. Name the preview by
 one Main OS e2e keeps), and they run the dispatched ref's suite:
 
 ```bash
-# both suites against PR 1234's preview
+# both suites against PR 1234's preview, from a scratch branch cut from main
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow preview-os.yml --ref main \
+  --workflow preview-os.yml --ref ci-soak/<name> \
   --input pull-request-number=1234 --input action=test
 # E2E tests alone, main's suite against main's preview
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow preview-os.yml --ref main \
+  --workflow preview-os.yml --ref ci-soak/<name> \
   --input preview-name=main --input action=e2e
 # Browser specs alone, a branch's specs against a preview by name
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
@@ -310,8 +423,13 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 A dispatch posts its checks on its ref's head commit, replacing that commit's
 checks of the same name, and GitHub counts a job it skips as passing. So a
 dispatch of one suite from a PR's branch marks the PR's other suite skipped,
-green, on the PR's head: dispatch a PR's suite alone with `--ref main`, which
-tests that PR's tree all the same, and from a branch run `test` or `deploy`.
+green, on the PR's head: dispatch a PR's suite alone from a scratch branch cut
+from main ([Run CI without a PR](#run-ci-without-a-pr)), which tests that PR's
+tree all the same, and from the PR's branch run `test` or `deploy`. Not from
+`--ref main`: that posts the suite's result on main's head. Such a dispatch
+(`f6qx3gjvlq`, PR #3090's specs) put its checks on the scratch commit and none
+on the PR's head. It still updated the suite's line in the PR body and posted
+the CI trace and Playwright report statuses on the PR's head.
 A preview by name may be redeployed under the dispatch by its own workflow
 (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview
 specs` do the same ([apps/os/README.md](../apps/os/README.md)).
@@ -340,7 +458,8 @@ fails its `Check the project hosts` step. Check the hosts from `main` by hand:
 
 1. Edit `.depot/workflows/<name>.yml`.
 2. If a step needs real logic, add or update a script under `scripts/ci`.
-3. Validate the workflow locally with `depot ci run`.
+3. Validate the workflow with `depot ci run` from a scratch branch
+   ([Run CI without a PR](#run-ci-without-a-pr)).
 4. Watch the PR checks in GitHub or with the `watch` commands above.
 
 Prefer small YAML wrappers around scripts. For example:
