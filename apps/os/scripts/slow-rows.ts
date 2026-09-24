@@ -1,9 +1,9 @@
 // scripts/slow-rows.ts — WHICH E2E ROWS A RUN AGAINST A PREVIEW INCLUDES (docs/testing.md#slow-rows).
-// A row tagged `slow` waits out real platform time (a quiet minute, a sweep, an alarm), so a PR that
-// changes none of its code skips it and finishes as soon as its slowest other row does. The rows
-// still run on a PR that changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, and on
-// every main push (Main OS e2e, which pages them on their own change of state). The pure half;
-// scripts/preview.ts `runSuite` reads the pull request and runs the suite.
+// A row tagged `slow` waits out real platform time (a quiet minute, a sweep, an alarm), so a PR skips
+// it and finishes as soon as its slowest other row does. A PR runs the slow rows only when it turns
+// them on (the `slow-e2e` label, Preview OS's `slow-rows` input) or edits one (`SLOW_ROW_PATHS`, their
+// own files); every main push runs them (Main OS e2e, which pages them on their own change of state).
+// The pure half; scripts/preview.ts `runSuite` reads the pull request and runs the suite.
 import { SLOW_ROW_PATHS } from "@iterate-com/shared/test-support/e2e-policy";
 import { z } from "zod";
 
@@ -12,12 +12,12 @@ import { z } from "zod";
 export const SlowRows = z.enum(["run", "skip", "only"]);
 export type SlowRows = z.infer<typeof SlowRows>;
 
-/** The pull-request label that runs the slow rows on a PR whose paths alone would skip them. */
+/** The pull-request label that turns the slow rows on for a PR. */
 export const SLOW_ROWS_LABEL = "slow-e2e";
 
 /** What was asked for, else every row without a pull request (main, the scheduled run, a laptop),
  *  else by the PR's label and changed paths. A PR whose label or paths cannot be read runs every
- *  row: a missed slow row would reach main unproven. */
+ *  row, so a PR that turned them on never loses them. */
 export async function chooseSlowRows(input: {
   requested: SlowRows | undefined;
   prNumber: string | undefined;
@@ -39,7 +39,7 @@ export async function chooseSlowRows(input: {
   if (touched.length > 0) return { slowRows: "run", reason: `${pr} changes ${touched.join(", ")}` };
   return {
     slowRows: "skip",
-    reason: `${pr} changes none of SLOW_ROW_PATHS and carries no ${SLOW_ROWS_LABEL} label`,
+    reason: `${pr} carries no ${SLOW_ROWS_LABEL} label and changes no slow row's file`,
   };
 }
 

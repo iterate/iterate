@@ -78,21 +78,11 @@ export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
 }
 
 /**
- * Changing one of these files runs the `slow` e2e rows on the PR: the code whose residency and
- * alarm behaviour those rows prove, and the rows themselves (apps/os/scripts/slow-rows.ts).
+ * The files with e2e rows tagged `slow` (scripts/ci/e2e-policy.test.ts keeps the list exact). A PR
+ * that changes one runs the slow rows, as does one that turns them on (apps/os/scripts/slow-rows.ts).
  */
 export const SLOW_ROW_PATHS = [
-  "apps/os/src/context/facet-host.ts",
-  "apps/os/src/context/residency.ts",
-  "apps/os/src/context/rpc-stubs.ts",
-  "apps/os/src/context/built-ins.ts",
-  "apps/os/src/iterate-context-durable-object.ts",
-  "apps/os/src/alarm-coordinator.ts",
-  "apps/os/src/project/processor.ts",
-  "packages/iterate/src/stream/processor.ts",
-  "apps/os/wrangler.base.jsonc",
   "apps/os/e2e/context-residency.e2e.test.ts",
-  "apps/os/e2e/support/residency-facets.ts",
   "apps/os/e2e/facet-abort-storage-reset.e2e.test.ts",
 ];
 

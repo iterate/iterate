@@ -4,16 +4,13 @@ import { chooseSlowRows, SLOW_ROWS_LABEL, slowRowsTagsFilter } from "./slow-rows
 
 test.each([
   {
-    case: "a PR that changes none of the slow rows' code skips them",
-    pullRequest: pullRequest(["infra"], ["apps/os/src/app.ts", "docs/testing.md"]),
+    case: "a PR that changes the code the slow rows prove, but neither turns them on nor edits one, skips them",
+    pullRequest: pullRequest(
+      ["infra"],
+      ["apps/os/src/context/facet-host.ts", "apps/os/src/iterate-context-durable-object.ts"],
+    ),
     slowRows: "skip",
-    reason: "PR #7 changes none of SLOW_ROW_PATHS and carries no slow-e2e label",
-  },
-  {
-    case: "a PR that changes the facet host runs them",
-    pullRequest: pullRequest([], ["apps/os/src/app.ts", "apps/os/src/context/facet-host.ts"]),
-    slowRows: "run",
-    reason: "PR #7 changes apps/os/src/context/facet-host.ts",
+    reason: "PR #7 carries no slow-e2e label and changes no slow row's file",
   },
   {
     case: "a PR that changes the rows themselves runs them",

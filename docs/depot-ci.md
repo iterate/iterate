@@ -817,8 +817,8 @@ Preview OS runs four jobs, each a check named for what it proves:
   job definition: Browser specs aliases E2E tests' runner and steps (YAML
   anchors, [Editing Workflows](#editing-workflows)), and each job's env names
   its suite (`SUITE`, `FLAKE_SUITE`, the workspace its telemetry names). The
-  Vitest rows tagged `slow` run only when the PR changes their code or carries
-  the `slow-e2e` label ([slow rows](testing.md#slow-rows)).
+  Vitest rows tagged `slow` run only when the PR carries the `slow-e2e` label
+  or edits one of them ([slow rows](testing.md#slow-rows)).
 - **CI trace** runs after the three, whatever their outcome, and reports only
   ([Interactive trace reports](#interactive-trace-reports)).
 

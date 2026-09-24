@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { E2E_SLEEP_CEILING_MS, SLOW_ROW_PATHS } from "@iterate-com/shared/test-support/e2e-policy";
 import { expect, test } from "vitest";
@@ -68,16 +68,11 @@ test("E2E_CI_RETRIES is the one retry setting an e2e row has", () => {
   ).toEqual([]);
 });
 
-// A PR runs the rows tagged slow when it changes a file of SLOW_ROW_PATHS (apps/os/scripts/slow-rows.ts),
-// so a slow row's own file is one: a PR that edits the row runs it.
-test("every file with a row tagged slow is in SLOW_ROW_PATHS", () => {
+// A PR that edits a slow row runs it, and changes to other files do not (apps/os/scripts/slow-rows.ts).
+test("SLOW_ROW_PATHS is exactly the files with a row tagged slow", () => {
   const slow = files.filter(({ text }) => /\btags:\s*\[[^\]]*["']slow["']/u.test(text));
   expect(slow.length).toBeGreaterThan(0);
-  expect(slow.map(({ file }) => file).filter((file) => !SLOW_ROW_PATHS.includes(file))).toEqual([]);
-});
-
-test("every SLOW_ROW_PATHS entry is a file in the repository", () => {
-  expect(SLOW_ROW_PATHS.filter((path) => !existsSync(join(repoRoot, path)))).toEqual([]);
+  expect(slow.map(({ file }) => file).toSorted()).toEqual(SLOW_ROW_PATHS.toSorted());
 });
 
 test("the guard reads each way a row writes a fixed wait", () => {
