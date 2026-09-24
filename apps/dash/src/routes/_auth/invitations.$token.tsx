@@ -23,7 +23,9 @@ import { reloadOrganizationTree } from "../../components/organization-tree.tsx";
 
 export const Route = createFileRoute("/_auth/invitations/$token")({
   staticData: { page: "Invitation" },
-  loader: ({ context, params }) => context.api.organizations.invitation(params.token),
+  // awaited here: the call is a capnweb RpcPromise, sent but only pulled once something awaits it —
+  // returned bare, the router never did (seen on a preview: no pull, the page read "not valid")
+  loader: async ({ context, params }) => await context.api.organizations.invitation(params.token),
   head: () => ({ meta: [{ title: "Invitation · Dash" }] }),
   component: InvitationPage,
 });
