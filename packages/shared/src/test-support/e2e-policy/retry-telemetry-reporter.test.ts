@@ -172,6 +172,56 @@ test("records the first failed attempt when a retry passes", async () => {
   rmSync(file);
 });
 
+test("a plain test that failed every attempt leaves an unexpected-error flake record", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "vitest-hard-failure-"));
+  const flakeRecordDir = join(directory, "flake-records");
+  process.env.FLAKE_RECORD_DIR = flakeRecordDir;
+  process.env.TEST_TELEMETRY_ARTIFACT_FILE = join(directory, "telemetry.json");
+  delete process.env.TEST_TELEMETRY_ARTIFACT_DIR;
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const testCase = (name: string, state: string, options?: { fails: boolean }) => ({
+    fullName: `socket > ${name}`,
+    name,
+    ...(options && { options: { ...options, mode: "run" as const } }),
+    diagnostic: () => ({ retryCount: 1, flaky: false, duration: 61_000, startTime: 2_000 }),
+    result: () => ({ state, errors: [{ message: "socket closed before the stream opened" }] }),
+  });
+  const testModule = {
+    moduleId: "/repo/socket.e2e.test.ts",
+    children: {
+      allTests: () => [
+        testCase("opens", "failed"),
+        // A createFailing pin that held: the runner's expected-fail mode, never an unknown flake.
+        testCase("pinned", "passed", { fails: true }),
+      ],
+    },
+  };
+
+  await new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" }).onTestRunEnd(
+    [testModule],
+    [],
+    "failed",
+  );
+
+  const records = readdirSync(flakeRecordDir).flatMap((file) =>
+    readFileSync(join(flakeRecordDir, file), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  );
+  expect(records).toEqual([
+    {
+      name: "opens",
+      kind: "unknown",
+      outcome: "unexpected-error",
+      durationMs: 61_000,
+      at: new Date(2_000).toISOString(),
+      error: "socket closed before the stream opened",
+    },
+  ]);
+  rmSync(directory, { recursive: true });
+});
+
 test("writes unit tests without performing network I/O", async () => {
   delete process.env.TEST_TELEMETRY_ARTIFACT_FILE;
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-artifacts-"));

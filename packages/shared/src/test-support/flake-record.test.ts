@@ -24,17 +24,46 @@ test("a plain test that passed after retry maps to an unknown-flake record", () 
   });
 });
 
-test("never-retried, still-failing, and expected-fail tests map to nothing", () => {
+test("a plain test that failed every attempt maps to an unexpected-error record", () => {
+  const failed = {
+    fullName: "e2e › socket › opens",
+    leafName: "opens",
+    passedAfterRetry: false,
+    durationMs: 61_000,
+    startedAt: "2026-09-04T09:00:00Z",
+    firstFailure: "socket closed before the stream opened",
+  };
+  // vitest: the final state; Playwright: its verdict against the expected status.
+  for (const verdict of [{ state: "failed" }, { state: "timedOut", outcome: "unexpected" }])
+    expect(unknownFlakeRecordFromTelemetry({ ...failed, ...verdict })).toEqual({
+      name: "opens",
+      kind: "unknown",
+      outcome: "unexpected-error",
+      durationMs: 61_000,
+      at: "2026-09-04T09:00:00Z",
+      error: "socket closed before the stream opened",
+    });
+});
+
+test("passing, unfinished and expected-fail tests map to nothing", () => {
   const base = {
     fullName: "some test",
     passedAfterRetry: true,
     durationMs: 10,
   };
-  // No retry rescue happened — either it never failed or it never recovered.
-  expect(unknownFlakeRecordFromTelemetry({ ...base, passedAfterRetry: false })).toBeNull();
+  const firstTime = { ...base, passedAfterRetry: false };
+  expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "passed" })).toBeNull();
+  expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "skipped" })).toBeNull();
+  expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "interrupted" })).toBeNull();
+  expect(
+    unknownFlakeRecordFromTelemetry({ ...firstTime, state: "failed", outcome: "expected" }),
+  ).toBeNull();
   // createFlake / createFailing register in the runner's expected-fail mode:
-  // their retried outcomes must never masquerade as unknown flakes.
+  // their outcomes, retried or failed, must never masquerade as unknown flakes.
   expect(unknownFlakeRecordFromTelemetry({ ...base, expectedState: "failed" })).toBeNull();
+  expect(
+    unknownFlakeRecordFromTelemetry({ ...firstTime, expectedState: "failed", state: "failed" }),
+  ).toBeNull();
   expect(unknownFlakeRecordFromTelemetry({ ...base, expectedState: "skip" })).toBeNull();
   // vitest only reports options for tests that set any — a missing
   // expectedState means a plain test.

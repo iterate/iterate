@@ -2,6 +2,7 @@ import { deflateRawSync } from "node:zlib";
 import { expect, test } from "vitest";
 import { FlakeDashboardState, flakeEventTypes, type FlakeDashboardEvent } from "./contract.ts";
 import {
+  flakeRecordsSuite,
   foldFlakeRuns,
   proposeFlakeTransitions,
   reduceFlakeDashboard,
@@ -268,6 +269,23 @@ test("an unknown flake stays until it passes 20 main runs in a row", async () =>
   await h.append(runRecorded(24, [flake]));
   expect(renderBody(h.state())).toContain("chat upload |");
   expect(renderBody(h.state())).toContain("0/20 consecutive passes");
+});
+
+test("a plain test's hard failure on main opens an unknown row with its error; on a PR it does not", async () => {
+  const h = makeHarness();
+  const failure = record("socket opens", "unexpected-error", {
+    kind: "unknown",
+    error: "socket closed before the stream opened",
+  });
+  const failed = { tests: [{ name: "socket opens", outcome: "fail" as const }] };
+  await h.append(birth(), runRecorded(1, [failure], { ...failed, branch: "some-pr" }));
+  expect(renderBody(h.state())).not.toContain("socket opens |");
+  await h.append(runRecorded(2, [failure], failed));
+  const body = renderBody(h.state());
+  expect(body).toContain("socket opens |");
+  expect(body).toContain("`socket closed before the stream opened`");
+  expect(body).toContain("[❌](https://github.com/iterate/iterate/commit/commit-2)<br>0/20");
+  expect(h.state().tests["socket opens"]!.counts).toMatchObject({ "unexpected-error": 2 });
 });
 
 test("unknown streaks count only that test's complete main results in its suite", async () => {
@@ -611,6 +629,14 @@ test.each(["clean", "torn record", "missing retry record", "missing test result"
     });
   },
 );
+
+test("a flake-records artifact names its suite, with or without its job attempt", () => {
+  expect(flakeRecordsSuite("flake-records-unit-attempt-qn5lblb3j7")).toBe("unit");
+  expect(flakeRecordsSuite("flake-records-preview-e2e-attempt-hcsc54slqf")).toBe("preview-e2e");
+  // Uploaded before artifacts were named per attempt.
+  expect(flakeRecordsSuite("flake-records-preview-e2e")).toBe("preview-e2e");
+  expect(flakeRecordsSuite("preview-test-telemetry-attempt-hcsc54slqf")).toBeUndefined();
+});
 
 test("an artifact's own summary names its branch and commit", async () => {
   const summary = {

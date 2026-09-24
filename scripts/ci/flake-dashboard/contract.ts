@@ -26,8 +26,9 @@ const FlakeOutcome = z.enum([
 
 /**
  * Which wrapper (or reporter) produced a record: createFlake, createFailing,
- * or the telemetry reporters' retried-pass records for tests nobody has
- * classified yet.
+ * or the telemetry reporters' records for plain tests nobody has classified
+ * yet (retried-pass when a retry rescued one, unexpected-error when it failed
+ * every attempt).
  */
 const FlakeKind = z.enum(["flake", "failing", "unknown"]);
 

@@ -19,6 +19,8 @@ export const FlakeSuiteSummary = z
         }),
       )
       .optional(),
+    // The kind "unknown" records the suite wrote (retried passes and hard failures of plain tests):
+    // the dashboard downgrades an artifact whose record lines do not add up to it.
     unknownFlakeCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
     diagnostics: z.array(z.string()),

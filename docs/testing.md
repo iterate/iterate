@@ -341,8 +341,9 @@ for it. The Playwright config additionally honors the Playwright-conventional
 - **Every instrumented runner** atomically writes schema-validated JSON under
   `test-results/ci-telemetry/raw`. The finalizer
   (`scripts/ci/upload-test-telemetry.ts`) writes `manifest.json` beside them.
-  Both remain in the uploaded workflow artifact (`unit-test-telemetry`) even
-  when a test fails, next to `flake-records-unit`. See
+  Both remain in the uploaded workflow artifact (`unit-test-telemetry-attempt-<id>`,
+  one per job attempt) even when a test fails, next to
+  `flake-records-unit-attempt-<id>`. See
   [CI and test telemetry](ci-test-telemetry.md) for downloading and checking one.
 - **The Vitest e2e suite** streams to the job log; the soak writes one JSON
   report per run under `apps/os/output/soak/` plus `summary.json`.
@@ -357,7 +358,9 @@ for it. The Playwright config additionally honors the Playwright-conventional
   the `flake-records-specs` and `flake-records-preview-e2e` artifacts, the
   Playwright HTML report (`public-playwright-report`) and all of
   `test-results/` (`preview-os-test-artifacts`: failed specs' traces,
-  screenshots and error context), even when a suite fails. Fetch them with
+  screenshots and error context), even when a suite fails. All but the HTML
+  report end in `-attempt-<id>`, so a retried job keeps the failed attempt's
+  ([per job attempt](depot-ci.md#artifacts-per-job-attempt)). Fetch them with
   `depot ci artifacts` ([Depot CI](depot-ci.md#browser-reports-from-artifacts)).
 
 ## Where test helpers live
@@ -535,10 +538,13 @@ be diagnosed, even though the same test outcome remains green in normal CI.
   passes. Grep any run log for `retry-telemetry`. Playwright's `list` reporter
   marks retried specs.
 - **CI**: the Test workflow's runners write canonical telemetry to the
-  durable directory, and the finalizer keeps it as the `unit-test-telemetry`
-  artifact. A plain test that failed and then passed on its CI retry also gets
-  a `kind: "unknown"` flake record (below). Preview jobs upload their
-  telemetry as the `preview-test-telemetry` artifact. Nothing folds preview
+  durable directory, and the finalizer keeps it as the
+  `unit-test-telemetry-attempt-<id>` artifact. A plain test that failed and
+  then passed on its CI retry also gets a `kind: "unknown"` flake record
+  (below), and so does one that failed every attempt. Preview jobs upload their
+  telemetry as the `preview-test-telemetry-attempt-<id>` artifact. Every
+  artifact carries its job attempt's id, so a retried job keeps the failed
+  attempt's evidence ([per job attempt](depot-ci.md#artifacts-per-job-attempt)). Nothing folds preview
   retries into the PR body or annotates a run with four or more retries (which
   may indicate a deployment-wide incident rather than independent flakes).
 - **Volume**: probabilistic regressions need run volume to detect — that is
@@ -599,7 +605,7 @@ Two wrappers in `packages/shared/src/test-support` register through the runner's
 - `createFlake(test, /pattern/)` ([flake-test.ts](../packages/shared/src/test-support/flake-test.ts)) marks a known flake. The body asserts real behavior. A pass or a failure matching the pattern is green, any other failure or a hang is red, and the test is never retried: one sample per run.
 - `createFailing(test, /pattern/)` ([failing-test.ts](../packages/shared/src/test-support/failing-test.ts)) pins a known bug. The body asserts the desired behavior and must fail with the pattern. A pass (the bug looks fixed) or a different failure is red.
 
-Every outcome of either wrapper, and every plain test that failed and then passed on its CI retry (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|preview>`) adds each suite's `suite-summary.json`, and the job uploads `flake-records-<suite>` artifacts. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
+Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|preview>`) adds each suite's `suite-summary.json`, and the job uploads `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
 
 Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. The three have distinct names, so each gets its own dashboard row: `flake sentinel` (`packages/shared/src/test-support/flake-sentinel.test.ts`), `flake sentinel (specs)` (`specs/flake-sentinel.spec.ts`) and `flake sentinel (e2e)` (`apps/os/e2e/flake-sentinel.e2e.test.ts`). A sentinel that reads 0% or goes red means the recording or ingestion pipeline is broken; distrust the dashboard, not the sentinel. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
 
@@ -658,15 +664,18 @@ flaky moves to `createFlake`; if it stops passing entirely, switch it to
 `createFailing`; once it passes consistently, unwrap it back to a plain test.
 
 The dashboard also surfaces flakes nobody has classified: a PLAIN test that
-failed and then passed on a CI retry gets a `kind: "unknown"` record from the
-telemetry reporters (see `packages/shared/src/test-support/flake-record.ts`),
-error text included. Those rows are the adoption funnel — the "Unknown
+failed gets a `kind: "unknown"` record from the telemetry reporters (see
+`packages/shared/src/test-support/flake-record.ts`), error text included:
+`retried-pass` when its CI retry passed, `unexpected-error` when every attempt
+failed. On main either one opens or resets the test's "Unknown flakes" row, so
+a test that fails outright once and passes on the next push is still counted. Those rows are the adoption funnel — the "Unknown
 flakes" section of the dashboard shows the error samples to turn into a
 `createFlake` pattern, and once wrapped, the same test name migrates into the
 Flakes section. `createFailing` pins record too (`pinned-fail` /
 `unexpected-pass`), so the Failures section shows how long each pin has stood
 and proposes deleting wrappers whose bugs look fixed. CI uploads the records
-as `flake-records-unit`, `flake-records-specs` and `flake-records-preview-e2e`;
+as `flake-records-unit`, `flake-records-specs` and `flake-records-preview-e2e`,
+each suffixed `-attempt-<id>` so a retried job keeps both attempts' records;
 `.depot/workflows/flake-dashboard.yml` folds them into
 [#2580](https://github.com/iterate/iterate/issues/2580).
 

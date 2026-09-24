@@ -142,6 +142,27 @@ The `actions/upload-artifact` log may print a GitHub-looking actions URL, but
 Depot owns the run and artifact; `gh run download` and the GitHub Actions
 artifact API can return 404 for that URL.
 
+### Artifacts per job attempt
+
+The Test job and the preview and main e2e jobs name every evidence artifact
+after the job attempt that uploaded it: `unit-test-telemetry-attempt-<id>`,
+`flake-records-<suite>-attempt-<id>`, `preview-os-test-artifacts-attempt-<id>`
+and so on. The job's first step reads `<id>` from `DEPOT_JOB_URL`
+(`…?job=<job>&attempt=<id>`), and `depot ci artifacts list` shows the same id
+as each artifact's `attempt_id`. A retried job therefore keeps the failed
+attempt's telemetry, flake records and Playwright traces beside the retry's.
+
+Never give evidence a fixed name with `overwrite: true`: the retry's upload
+deletes every same-named artifact in the run, the failed attempt's included. On 2026-09-24 each of the three retried e2e jobs in the last 431
+Test, Preview OS and Main OS e2e runs had lost every artifact from its failed
+attempt, and the retried Test job had lost its attempt-1 `flake-records-unit`
+(its `unit-test-telemetry`, uploaded without `overwrite`, survived). Without
+`overwrite`, a retry of the job alone can collide with the earlier upload and
+fail. `scripts/ci/depot-workflows.test.ts` enforces the naming. The one
+exception is `public-playwright-report`: its fixed name gives a link to the
+latest attempt's report, and every attempt's own copy is in its
+`preview-os-test-artifacts-attempt-<id>`.
+
 Control runs:
 
 ```bash
@@ -516,7 +537,8 @@ Vitest's, and uploads two artifacts even when the suite fails:
 
 - `public-playwright-report`: Playwright's HTML report
   (`test-results/playwright-html`), kept 30 days.
-- `preview-os-test-artifacts`: all of `test-results/`. Each failed spec's
+- `preview-os-test-artifacts-attempt-<id>`: all of `test-results/`, one per
+  job attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
   `trace.zip`, screenshot and `error-context.md` are under
   `playwright-output/<test>/`, next to `playwright-results.json` and the
   telemetry.
@@ -524,4 +546,4 @@ Vitest's, and uploads two artifacts even when the suite fails:
 Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
-`unit-test-telemetry` and `flake-records-unit`.
+`unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`.

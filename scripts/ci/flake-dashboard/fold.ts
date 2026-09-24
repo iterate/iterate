@@ -15,8 +15,15 @@ import {
   type FlakeTransitionProposed,
 } from "./contract.ts";
 
-/** Artifacts named `flake-records-<suite>` carry one suite's records and summary. */
-export const ARTIFACT_PREFIX = "flake-records-";
+/**
+ * Artifacts named `flake-records-<suite>-attempt-<job attempt id>` carry one suite's records and
+ * summary from one job attempt, so a retried job keeps both attempts' (docs/depot-ci.md#artifacts-per-job-attempt).
+ * Artifacts uploaded before that are named `flake-records-<suite>`. This is the suite a
+ * flake-records artifact carries, from its name; undefined for any other artifact.
+ */
+export function flakeRecordsSuite(artifactName: string): string | undefined {
+  return /^flake-records-(?<suite>.+?)(?:-attempt-[a-z0-9]+)?$/u.exec(artifactName)?.groups?.suite;
+}
 
 /** The first line of the issue body: the marker, not the title, is authority. */
 export const DASHBOARD_MARKER = "<!-- iterate-flake-dashboard -->";
@@ -406,7 +413,7 @@ export async function runRecordedFromArtifact(input: {
       // Its provenance and test inventory cannot be trusted. Keep the
       // previous suite state and continue ingesting independent artifacts.
       console.error(
-        `[flake-ingest] invalid suite-summary.json in ${ARTIFACT_PREFIX}${suite}; skipping artifact`,
+        `[flake-ingest] invalid suite-summary.json in flake-records-${suite}; skipping artifact`,
       );
       return undefined;
     }
@@ -567,7 +574,7 @@ export function renderBody(state: FlakeDashboardState): string {
 
   return [
     DASHBOARD_MARKER,
-    "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and unclassified flaky tests caught by CI retries. Maintained automatically — edits to this body will be overwritten. Squares show the last 10 outcomes, oldest→newest, and link to their commits. Wrapped tests show all branches; unknown flakes show main only. Lifecycle streak counts use main only.",
+    "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and plain tests that needed a CI retry or failed. Maintained automatically — edits to this body will be overwritten. Squares show the last 10 outcomes, oldest→newest, and link to their commits. Wrapped tests show all branches; unknown flakes show main only. Lifecycle streak counts use main only.",
     ...sections.filter((section) => section.title !== "Sentinels").flatMap(renderSection),
     ...renderUnknownFlakes(state),
     ...sections.filter((section) => section.title === "Sentinels").flatMap(renderSection),
@@ -639,7 +646,7 @@ function renderUnknownFlakes(state: FlakeDashboardState): string[] {
     "",
     "## Unknown flakes",
     "",
-    `_Any main retry adds a test here. Remove it after ${flakeTransitionThresholds.unwrap.runs} consecutive main passes, wrapper adoption, or absence from a complete main run's full test list. Failures reset the streak. Skips and incomplete results cannot advance it or prove deletion. 🟩 passed · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
+    `_A plain test that needed a retry or failed outright on main is added here. Remove it after ${flakeTransitionThresholds.unwrap.runs} consecutive main passes, wrapper adoption, or absence from a complete main run's full test list. Failures reset the streak. Skips and incomplete results cannot advance it or prove deletion. 🟩 passed · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
     "",
     ...suites.map((suite) => {
       const result = state.mainRuns[suite];

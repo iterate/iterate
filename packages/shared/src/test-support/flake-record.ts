@@ -11,10 +11,12 @@
  * - `createFailing` (./failing-test.ts): kind "failing" — pinned-fail (the
  *   pin held) / unexpected-pass (the bug looks fixed) / unexpected-error.
  * - The telemetry reporters (vitest's RetryTelemetryReporter, the
- *   Playwright telemetry reporter): kind "unknown" — retried-pass for a PLAIN test
- *   that failed and then passed on retry, carrying the failed attempt's
- *   error text. That record is the adoption funnel: the dashboard shows the
- *   error samples a person or agent turns into a createFlake pattern.
+ *   Playwright telemetry reporter): kind "unknown" for a PLAIN test —
+ *   retried-pass when it failed and then passed on retry, unexpected-error
+ *   when it failed every attempt — carrying the first failed attempt's error
+ *   text. That record is the adoption funnel: the dashboard shows the error
+ *   samples a person or agent turns into a createFlake pattern, and a CI
+ *   retry can no longer be the only place a failure was ever written down.
  */
 export interface FlakeRecord {
   name: string;
@@ -52,30 +54,49 @@ export interface RetriedTestTelemetry {
   leafName?: string;
   expectedState?: string;
   passedAfterRetry: boolean;
+  /** The final attempt's state: vitest's `failed`, Playwright's `failed` / `timedOut`, … */
+  state?: string;
+  /** Playwright's verdict against `expectedState`; vitest has none. */
+  outcome?: string;
   durationMs: number;
   startedAt?: string;
   firstFailure?: string;
 }
 
 /**
- * A plain test that failed and then passed on retry is a certified flake
- * nobody has classified yet — worth a `kind: "unknown"` record. Returns null
- * for everything else: never-retried tests, tests that failed all retries
- * (that is just red CI, already visible), and expected-fail registrations.
+ * A plain test that failed is worth a `kind: "unknown"` record: retried-pass
+ * when a retry rescued it (a certified flake nobody has classified yet),
+ * unexpected-error when every attempt failed. The hard failure needs its own
+ * record because only a record opens a dashboard row and carries the error:
+ * without it a test that failed every attempt on one main push and passed on
+ * the next left no trace on #2580. Returns null for tests that passed first
+ * time, did not finish (skipped, interrupted), and expected-fail registrations.
  */
 export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): FlakeRecord | null {
-  if (!test.passedAfterRetry) return null;
   // Missing expectedState means a plain test: vitest only reports options for
   // tests that set any, and both wrappers always do (fails mode).
   if (test.expectedState !== undefined && test.expectedState !== "passed") return null;
+  const outcome = test.passedAfterRetry
+    ? "retried-pass"
+    : test.state && testTelemetryFailed({ state: test.state, outcome: test.outcome })
+      ? "unexpected-error"
+      : null;
+  if (!outcome) return null;
   return {
     name: test.leafName || test.fullName,
     kind: "unknown",
-    outcome: "retried-pass",
+    outcome,
     durationMs: test.durationMs,
     at: test.startedAt || new Date().toISOString(),
     ...(test.firstFailure === undefined ? {} : { error: test.firstFailure }),
   };
+}
+
+/** Whether a test failed: Playwright's unexpected outcome when it has one, otherwise vitest's final
+ *  failed or timed-out state. The CI finalizer's failed count uses the same verdict. */
+export function testTelemetryFailed(test: { state: string; outcome?: string }): boolean {
+  if (test.outcome) return test.outcome === "unexpected";
+  return ["failed", "timedout"].includes(test.state.toLowerCase());
 }
 
 /**
