@@ -311,7 +311,7 @@ export function proposeFlakeTransitions(
 }
 
 /** A fold and the offset its next fact takes: what the writer keeps between runs. */
-export type FlakeDashboardFold = { state: FlakeDashboardState; nextOffset: number };
+type FlakeDashboardFold = { state: FlakeDashboardState; nextOffset: number };
 
 /** A new dashboard: the legacy app's birth certificate, folded at offset 0. */
 export function startFlakeDashboard(repository: {

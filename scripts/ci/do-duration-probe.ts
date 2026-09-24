@@ -77,9 +77,9 @@ async function cfGraphql<T>(input: {
   return body.data;
 }
 
-export type ActiveTimeRow = { hour: string; doHours: number };
-export type NamespaceActiveTimeRow = { namespace: string; doHours: number };
-export type PinnedInvocationRow = {
+type ActiveTimeRow = { hour: string; doHours: number };
+type NamespaceActiveTimeRow = { namespace: string; doHours: number };
+type PinnedInvocationRow = {
   date: string;
   script: string;
   wallTimeP99Hours: number;

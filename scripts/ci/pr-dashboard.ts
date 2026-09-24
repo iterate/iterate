@@ -4,7 +4,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getOctokit, getRepo } from "./github.ts";
 import { getSlackClient, slackChannelIds, slackEscape, slackUsers } from "./slack.ts";
 
-export async function updatePrDashboard() {
+async function updatePrDashboard() {
   const github = getOctokit();
   const repo = getRepo();
   const channel = slackChannelIds["#ci"];

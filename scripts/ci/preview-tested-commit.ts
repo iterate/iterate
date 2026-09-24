@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import process from "node:process";
 
-export type PreviewTestedCommit = {
+type PreviewTestedCommit = {
   sha: string;
   kind: "merge" | "head";
   headSha: string;

@@ -96,7 +96,7 @@ export function testTelemetryArtifactIncomplete(artifact: TestTelemetryArtifact)
   return artifact.run.error?.name === TEST_TELEMETRY_INCOMPLETE_ERROR_NAME;
 }
 
-export function testTelemetryArtifactSource(
+function testTelemetryArtifactSource(
   artifact: TestTelemetryArtifact,
 ): TestTelemetryArtifactSource | null {
   const { workspace } = artifact.context;
@@ -110,7 +110,7 @@ export function testTelemetryArtifactSource(
   };
 }
 
-export function testTelemetryArtifactSourceKey(source: TestTelemetryArtifactSource) {
+function testTelemetryArtifactSourceKey(source: TestTelemetryArtifactSource) {
   return [source.producer, source.framework, source.testKind, source.lane, source.workspace].join(
     "\0",
   );

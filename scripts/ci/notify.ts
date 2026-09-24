@@ -12,7 +12,7 @@ type DeployOptions = {
 
 type PullRequestPayload = NonNullable<GithubEventPayload["pull_request"]>;
 
-export async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
+async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
   const slack = getSlackClient();
   const shortSha = commitSha.slice(0, 7);
   const message =
@@ -36,7 +36,7 @@ export async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }
   });
 }
 
-export async function notifyWorkflowFailure() {
+async function notifyWorkflowFailure() {
   const needs = JSON.parse(readOption("NEEDS")) as Record<string, { result?: string }>;
   const failedJobs = Object.entries(needs)
     .filter(([, value]) => value.result === "failure")
@@ -55,7 +55,7 @@ export async function notifyWorkflowFailure() {
   });
 }
 
-export async function notifyPullRequestUpdate() {
+async function notifyPullRequestUpdate() {
   const payload = readEventPayload();
   const message = formatPullRequestUpdateMessage(payload);
   if (!message) {

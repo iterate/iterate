@@ -1,6 +1,6 @@
 import { durationMs, systemEvent, type PostHogEvent } from "./posthog-events.ts";
 
-export type ReviewCheck = {
+type ReviewCheck = {
   id: number;
   name: string;
   status: string;
@@ -18,20 +18,6 @@ export type PullReview = {
   submitted_at?: string | null;
   html_url: string;
   user?: { login: string } | null;
-};
-
-export type ReviewPull = {
-  number: number;
-  html_url: string;
-  updated_at: string;
-  head: { sha: string };
-};
-
-export type ReviewThreadCounts = {
-  total: number;
-  unresolved: number;
-  byProvider: Map<string, number>;
-  unresolvedByProvider: Map<string, number>;
 };
 
 /** Maps GitHub App slugs, check names, and bot logins onto one reviewer dimension. */
@@ -85,9 +71,16 @@ export function selectReviewSources(
   };
 }
 
+type ReviewThreadCounts = {
+  total: number;
+  unresolved: number;
+  byProvider: Map<string, number>;
+  unresolvedByProvider: Map<string, number>;
+};
+
 export function buildReviewEvents(input: {
   repository: string;
-  pull: ReviewPull;
+  pull: { number: number; html_url: string; updated_at: string; head: { sha: string } };
   checks: readonly ReviewCheck[];
   reviews: readonly PullReview[];
   threadCounts: ReviewThreadCounts;

@@ -16,7 +16,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 
-export type MainE2eState = "green" | "red";
+type MainE2eState = "green" | "red";
 
 /** A page's first words: how the next run finds the last one. */
 const RED = "🔴 main e2e red";

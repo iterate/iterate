@@ -15,7 +15,7 @@ const StreamOffset = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
  * telemetry reporters write these lines to `FLAKE_RECORD_DIR` and CI ships
  * them here verbatim.
  */
-export const FlakeOutcome = z.enum([
+const FlakeOutcome = z.enum([
   "pass",
   "flake-fail",
   "unexpected-error",
@@ -29,7 +29,7 @@ export const FlakeOutcome = z.enum([
  * or the telemetry reporters' retried-pass records for tests nobody has
  * classified yet.
  */
-export const FlakeKind = z.enum(["flake", "failing", "unknown"]);
+const FlakeKind = z.enum(["flake", "failing", "unknown"]);
 
 export const FlakeRecord = z.object({
   name: z.string().min(1).max(1_000),
@@ -42,7 +42,7 @@ export const FlakeRecord = z.object({
   error: z.string().max(4_000).optional(),
 });
 
-export const FlakeDashboardConfig = z.object({
+const FlakeDashboardConfig = z.object({
   repository: z.object({
     owner: z.string().min(1),
     repo: z.string().min(1),
@@ -68,7 +68,7 @@ const MainSuiteRun = z.object({
   summary: FlakeSuiteSummary,
 });
 
-export const FlakeTransition = z.enum(["unwrap", "switch-to-failing", "unwrap-failing"]);
+const FlakeTransition = z.enum(["unwrap", "switch-to-failing", "unwrap-failing"]);
 
 export const FlakeTransitionProposed = z.object({
   testName: z.string().min(1),

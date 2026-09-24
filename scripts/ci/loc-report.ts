@@ -41,7 +41,7 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
 /** markdownAnnotator label for the managed PR-body section. */
 const bodySectionLabel = "loc-report";
 
-export type ChangedFile = {
+type ChangedFile = {
   path: string;
   previousPath: string;
   /** Raw diff counts, straight from `git diff --numstat`. */
@@ -55,7 +55,7 @@ export type ChangedFile = {
 };
 
 /** Parses `git diff --numstat -z -M` output (NUL-separated, rename-aware). */
-export function parseNumstat(raw: string): ChangedFile[] {
+function parseNumstat(raw: string): ChangedFile[] {
   const tokens = raw.split("\0");
   const files: ChangedFile[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -225,7 +225,7 @@ function slocDiffCounts(before: string, after: string) {
  * rest of its line (or until a block-comment closer) - rare enough to ignore for now.
  * Newlines inside block comments are preserved so line structure survives.
  */
-export function stripJsComments(source: string): string {
+function stripJsComments(source: string): string {
   let result = "";
   let state: "code" | "single" | "double" | "template" = "code";
   for (let i = 0; i < source.length; i++) {
@@ -268,7 +268,7 @@ export function stripJsComments(source: string): string {
   return result;
 }
 
-export type GroupRow = {
+type GroupRow = {
   name: string;
   priority: number;
   files: number;
@@ -322,7 +322,7 @@ export function computeReport(files: ChangedFile[]) {
  * share of the largest group's significant churn, split green/red by its
  * add/remove ratio.
  */
-export function renderTable(report: ReturnType<typeof computeReport>) {
+function renderTable(report: ReturnType<typeof computeReport>) {
   // Always signed, even +0/-0, matching GitHub's own diffstat.
   const count = (n: number, sign: "+" | "-") => `${sign}${Math.abs(n).toLocaleString("en-US")}`;
   const maxChurn = Math.max(
@@ -371,7 +371,7 @@ function ensureCommitAvailable(sha: string) {
   }
 }
 
-export async function postLocReport() {
+async function postLocReport() {
   const payload = process.env.GITHUB_EVENT_PATH ? readEventPayload() : undefined;
   const pullRequest = payload?.pull_request;
 
