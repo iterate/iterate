@@ -4,7 +4,13 @@
 // whose connector dials the worker's own address and port whatever the URL says — the URL, the
 // Host header, cookies, bearers and a WebSocket upgrade all intact; against a deployed worker the
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
-import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
+import {
+  Agent,
+  buildConnector,
+  fetch as undiciFetch,
+  request as undiciRequest,
+  WebSocket as UndiciWebSocket,
+} from "undici";
 import { test } from "vitest";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
@@ -171,6 +177,23 @@ export async function fetchProjectUrl(
     dispatcher: projectHostDispatcher(),
   });
   return { status: res.status, headers: Object.fromEntries(res.headers), text: await res.text() };
+}
+
+/** A GET of `url` with `headers` sent exactly as given — as a browser's page load sends them: fetch
+ *  overwrites `Sec-Fetch-Mode` with its own request's mode (`cors`), so a navigation is a plain
+ *  HTTP request here — through `projectHostDispatcher`, redirects not followed. */
+export async function navigateProjectUrl(
+  url: string | URL,
+  headers: Record<string, string>,
+): Promise<{ status: number; headers: Record<string, string>; text: string }> {
+  const res = await undiciRequest(String(url), { headers, dispatcher: projectHostDispatcher() });
+  return {
+    status: res.statusCode,
+    headers: Object.fromEntries(
+      Object.entries(res.headers).map(([name, value]) => [name, String(value)]),
+    ),
+    text: await res.body.text(),
+  };
 }
 
 /** `path` on `host` — a GET, or `init`'s method and body — through `projectHostDispatcher`. For a

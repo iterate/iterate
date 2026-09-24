@@ -13,10 +13,17 @@ test.each<{ headers: Record<string, string>; status: number }>([
   expect(auth.require(workerRequest("POST", headers))?.status).toBe(status);
 });
 
-test("a GET with an empty Origin and no principal still redirects to sign in", () => {
-  const response = auth.require(workerRequest("GET", { origin: "" }));
-  expect(response?.status).toBe(302);
-  expect(response?.headers.get("Location")).toBe("/.auth/login?next=%2Fx");
+// Signed out, every method answers the platform's sign-in challenge; the edge turns it into the
+// sign-in redirect for a page load (apps/os project-host-sign-in.ts), under any base path.
+test.for<{ method: string; headers: Record<string, string> }>([
+  { method: "GET", headers: { origin: "" } },
+  { method: "HEAD", headers: {} },
+  { method: "OPTIONS", headers: {} },
+  { method: "POST", headers: { origin: "https://worker.example" } },
+])("a $method with no principal → 401 with the sign-in challenge", ({ method, headers }) => {
+  const response = auth.require(workerRequest(method, headers));
+  expect(response).toMatchObject({ status: 401 });
+  expect(response!.headers.get("WWW-Authenticate")).toBe('Bearer realm="iterate"');
 });
 
 // A WebSocket handshake is a GET, but it is checked like a write: every `<routingSlug>--<project>.iterate.app`

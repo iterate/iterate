@@ -259,7 +259,15 @@ export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: It
 export abstract class ConfigWorker<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
-  /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;` */
+  /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;`
+   *  `x-itx-principal` is on a request only when a project member (or the operator) sent it, safe
+   *  to act on. A private route written by hand answers the platform's sign-in challenge, which
+   *  the edge turns into the sign-in for a page load (`auth.require` does the same):
+   *
+   *  ```js
+   *  if (!request.headers.get("x-itx-principal"))
+   *    return new Response("Sign in\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
+   *  ``` */
   protected readonly auth = auth;
   /** Process an explicitly subscribed batch with this worker's context scope. */
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
