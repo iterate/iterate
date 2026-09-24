@@ -13,8 +13,7 @@ import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oaut
 import { rpcResponse } from "../src/rpc.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { loginPassword, stub } from "./support.ts";
-const ORIGIN = "https://control.test";
+import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const sessions: Disposable[] = [];
 const call = (path: string, init?: RequestInit) => {
@@ -24,9 +23,6 @@ const call = (path: string, init?: RequestInit) => {
     new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }),
   );
 };
-const helpers = () => oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));
-/** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows. */
-const controlPlane = () => new ControlPlane(env.CONTROL_PLANE);
 
 beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
@@ -62,23 +58,6 @@ async function rpc(
   const boundAt = Date.now();
   const root = transport.authenticate({ type: credential });
   return { root, closed, boundAt };
-}
-
-/** A bare `/api` socket authenticated in-band with the admin secret — the operator, or `as` a
- *  person (src/session.ts): how the fixture makes a person's projects and changes a membership. */
-async function actingAs(email?: string) {
-  const response = await call("/api", { headers: { Upgrade: "websocket" } });
-  expect(response.status).toBe(101);
-  response.webSocket!.accept();
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  sessions.push(transport);
-  return transport.authenticate({
-    type: "admin-secret",
-    secret: adminSecret,
-    ...(email && { as: { email } }),
-  });
 }
 
 /** THE REVOCATION TRUTH, landed by hand: `account/grant-ended` on the person's account — the fact
@@ -416,7 +395,7 @@ test("issuer login uses the same revocable API session and has no independent id
   expect(fresh.headers.has("set-cookie")).toBe(false);
 });
 
-test.each(["revoked", "membership"])(
+test.for(["revoked", "membership"])(
   "a live session loses held capabilities after %s within 60 seconds",
   async (reason) => {
     const flow = await grant([`${ORIGIN}/api`]);
@@ -884,3 +863,7 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
     expect(firstParty).toMatchObject({ projectBound: false });
   }
 });
+
+const actingAs = (email?: string) => adminSession(sessions, email);
+
+const helpers = () => oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));

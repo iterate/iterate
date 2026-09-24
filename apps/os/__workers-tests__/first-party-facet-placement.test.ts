@@ -9,15 +9,14 @@
 // code makes still answers, and a secret path that resolves onto its owner's root (`/secrets/..`) is
 // refused before `itx.secrets.set` can steer the `secret` facet there.
 
-import { env, exports } from "cloudflare:workers";
+import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, expect, test, vi } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import type { ItxExpressionInput } from "iterate/next/expression";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { loginPassword } from "./support.ts";
+import { loginPassword, ORIGIN } from "./support.ts";
 
-const origin = "https://control.test";
 const transports: Disposable[] = [];
 afterAll(() => {
   for (const transport of transports.splice(0)) transport[Symbol.dispose]();
@@ -31,10 +30,10 @@ async function signedInSession(email: string) {
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  const login = await exports.default.fetch(`${origin}/login`, {
+  const login = await exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: { Origin: origin },
+    headers: { Origin: ORIGIN },
     body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
   });
   issuerFetch.mockRestore();
@@ -42,8 +41,8 @@ async function signedInSession(email: string) {
     .getSetCookie()
     .find((cookie) => cookie.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
-  const response = await exports.default.fetch(`${origin}/api`, {
-    headers: { Upgrade: "websocket", Origin: origin, Cookie: sessionCookie },
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: sessionCookie },
   });
   response.webSocket!.accept();
   const transport = newWebSocketRpcSession<IterateRpcTarget>(

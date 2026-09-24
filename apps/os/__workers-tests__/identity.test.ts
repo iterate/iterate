@@ -4,13 +4,9 @@ import { afterEach, expect, test, vi } from "vitest";
 import { appSession } from "iterate/next/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
-import { ControlPlane } from "../src/control-plane/edge.ts";
-const origin = "https://control.test";
+import { controlPlane, ORIGIN } from "./support.ts";
 const encode = (value: unknown) =>
   btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-/** The control plane as the edge holds it (src/control-plane/edge.ts) — the same reads identity.ts
- *  links a Google sign-in through, and the catalog the links are read back from. */
-const controlPlane = () => new ControlPlane(env.CONTROL_PLANE);
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -60,11 +56,11 @@ async function identityLogin(
     if (url.href === `${issuer}/.well-known/openid-configuration`) return Response.json(metadata);
     if (url.href === jwksEndpoint) return Response.json({ keys: [jwk] });
     if (url.href === tokenEndpoint && tokenResponse) return Response.json(tokenResponse);
-    if (url.origin === origin) return exports.default.fetch(new Request(input, init));
+    if (url.origin === ORIGIN) return exports.default.fetch(new Request(input, init));
     throw new Error(`Unexpected identity fixture fetch: ${url}`);
   });
   const begin = await exports.default.fetch(
-    `${origin}${path}?next=%2Foauth2%2Fauth%3Fclient%3Dtest`,
+    `${ORIGIN}${path}?next=%2Foauth2%2Fauth%3Fclient%3Dtest`,
     {
       redirect: "manual",
     },
@@ -75,7 +71,7 @@ async function identityLogin(
     provider === "google" ? "openid email profile" : "openid user-details.read",
   );
   expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
-  expect(authorization.searchParams.get("redirect_uri")).toBe(`${origin}${path}/callback`);
+  expect(authorization.searchParams.get("redirect_uri")).toBe(`${ORIGIN}${path}/callback`);
   const cookie = begin.headers.get("set-cookie")!.split(";")[0]!;
   const claims = {
     iss: issuer,
@@ -108,7 +104,7 @@ async function identityLogin(
     id_token: `${signingInput}.${encodedSignature}`,
   };
   return exports.default.fetch(
-    `${origin}${path}/callback?code=test-code&state=${wrongState ? "foreign-state" : authorization.searchParams.get("state")}`,
+    `${ORIGIN}${path}/callback?code=test-code&state=${wrongState ? "foreign-state" : authorization.searchParams.get("state")}`,
     {
       headers: { cookie },
       redirect: "manual",
@@ -126,13 +122,13 @@ test("Google proves issuer identity; upstream credentials never become app token
   const ctx = createExecutionContext();
   const session = appSession(
     env.BROWSER_SESSION,
-    new Request(origin, { headers: { cookie: sessionCookie } }),
+    new Request(ORIGIN, { headers: { cookie: sessionCookie } }),
   )!;
   const auth = await authorizationForToken(
     env,
     ctx,
     (await session.bearer())!,
-    platformAddressesOf(env, new Request(`${origin}/`)),
+    platformAddressesOf(env, new Request(`${ORIGIN}/`)),
   );
   await waitOnExecutionContext(ctx);
   // the person's id is minted by the control plane; Google's subject names them from now on
@@ -145,10 +141,10 @@ test("Google proves issuer identity; upstream credentials never become app token
     email: "verified@example.com",
   });
   expect(auth?.grant?.kind).toBe("issuer");
-  const api = await exports.default.fetch(`${origin}/api`, {
+  const api = await exports.default.fetch(`${ORIGIN}/api`, {
     method: "POST",
     body: "",
-    headers: { cookie: sessionCookie, origin },
+    headers: { cookie: sessionCookie, origin: ORIGIN },
   });
   expect(api.status).toBe(200);
   expect(cookies).toHaveLength(2); // Cleared Google flow plus the sole app-session cookie.
@@ -187,7 +183,7 @@ test("wrong nonce, signature and unverified email cannot establish issuer identi
 });
 
 test("an email alone never makes a session: a code follows it; only the administrator credential signs a fixture straight in", async () => {
-  const response = await exports.default.fetch(`${origin}/login`, {
+  const response = await exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
     redirect: "manual",
     body: new URLSearchParams({ email: "unverified@example.com" }),
@@ -197,8 +193,8 @@ test("an email alone never makes a session: a code follows it; only the administ
     response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
   ).toBe(false);
   expect(
-    (await exports.default.fetch("https://unknown.projects.test/.auth/identity/callback")).status,
-  ).toBe(421);
+    await exports.default.fetch("https://unknown.projects.test/.auth/identity/callback"),
+  ).toMatchObject({ status: 421 });
 });
 
 test("verified Google identity adopts a fixture account once and cannot take another linked identity", async () => {
@@ -240,13 +236,13 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
   const ctx = createExecutionContext();
   const session = appSession(
     env.BROWSER_SESSION,
-    new Request(origin, { headers: { cookie: sessionCookie } }),
+    new Request(ORIGIN, { headers: { cookie: sessionCookie } }),
   )!;
   const auth = await authorizationForToken(
     env,
     ctx,
     (await session.bearer())!,
-    platformAddressesOf(env, new Request(origin)),
+    platformAddressesOf(env, new Request(ORIGIN)),
   );
   await waitOnExecutionContext(ctx);
   expect(auth?.principal).toEqual({
@@ -315,10 +311,10 @@ test.for(["provider mismatch", "declined consent"])(
           subject_types_supported: ["public"],
           id_token_signing_alg_values_supported: ["RS256"],
         });
-      if (url.origin === origin) return exports.default.fetch(new Request(input, init));
+      if (url.origin === ORIGIN) return exports.default.fetch(new Request(input, init));
       throw new Error(`Unexpected token exchange for ${failure}`);
     });
-    const begin = await exports.default.fetch(`${origin}/.auth/identity/cloudflare`, {
+    const begin = await exports.default.fetch(`${ORIGIN}/.auth/identity/cloudflare`, {
       redirect: "manual",
     });
     const authorization = new URL(begin.headers.get("location")!);
@@ -335,7 +331,7 @@ test.for(["provider mismatch", "declined consent"])(
     } else {
       params.set("error", "access_denied");
     }
-    const response = await exports.default.fetch(`${origin}${path}?${params}`, {
+    const response = await exports.default.fetch(`${ORIGIN}${path}?${params}`, {
       headers: { cookie },
       redirect: "manual",
     });

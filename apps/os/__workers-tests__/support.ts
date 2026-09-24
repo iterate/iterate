@@ -6,12 +6,15 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
-import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
+import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
+
+/** This lane's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
+export const ORIGIN = "https://control.test";
 
 /** The context DO for a ctx name (a project id or a full codec name), through the ITERATE_CONTEXT
  *  binding — the raw Workers-RPC stub, which is this lane's whole point: the DO's verbs with no
@@ -37,6 +40,9 @@ export class Echo extends RpcTarget {
  *  Workers-RPC stub, so a test calls its methods directly (`controlPlaneStub().project(ref)`) with no
  *  edge or session between. Fresh per test. */
 export const controlPlaneStub = () => env.CONTROL_PLANE.getByName("global");
+
+/** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows. */
+export const controlPlane = () => new ControlPlane(env.CONTROL_PLANE);
 
 /** This lane's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
 const adminApiSecret = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
@@ -74,7 +80,7 @@ const sessions: unknown[] = [];
 // RpcTarget instance. A READ caller that wants the real surface names it locally
 // (`const root: RpcStub<IterateRpcTarget> = await openSession()`), the way userSession does.
 export async function openSession(): Promise<any> {
-  const res = await exports.default.fetch(`https://control.test/api`, {
+  const res = await exports.default.fetch(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -97,19 +103,53 @@ afterAll(async () => {
   }
 });
 
+/** A bare `/api` socket authenticated in-band with the admin secret — every project, or `as` the
+ *  person `email` names (src/session.ts): how a fixture makes a user, or acts as one before they
+ *  have signed in. Its transport joins `sessions`, which the calling file disposes. */
+export async function adminSession(sessions: Disposable[], email?: string) {
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket" },
+  });
+  expect(response.status).toBe(101);
+  response.webSocket!.accept();
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  return transport.authenticate({ ...adminCredentials(), ...(email && { as: { email } }) });
+}
+
+/** `thunk` is REFUSED with `code`: an entity's refusal crosses its own log as
+ *  `request-failed { code }` and is rethrown coded at the edge; the edge's own refusal is coded
+ *  before anything lands. A broken pipeline or a typo never passes as a refusal. */
+export async function refused(
+  thunk: () => Promise<unknown>,
+  code: string,
+  message?: RegExp,
+): Promise<void> {
+  let refusal: unknown;
+  try {
+    await thunk();
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal, `expected a ${code} refusal, but it was allowed`).toBeDefined();
+  expect((refusal as { code?: string }).code).toBe(code);
+  if (message) expect((refusal as Error).message).toMatch(message);
+}
+
 /** A person signed in through the login form (email + the deployment's password), then on `/api`
  *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. The
  *  issuer fetches its own client metadata while it signs someone in; `fetch` reaches this worker for
  *  that one request (as control-plane.test.ts does), the network being out of reach here. */
 export async function signedInSession(email: string): Promise<any> {
-  const origin = "https://control.test";
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  const login = await exports.default.fetch(`${origin}/login`, {
+  const login = await exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: { Origin: origin },
+    headers: { Origin: ORIGIN },
     body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
   });
   issuerFetch.mockRestore();
@@ -117,8 +157,8 @@ export async function signedInSession(email: string): Promise<any> {
     .getSetCookie()
     .find((cookie) => cookie.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
-  const response = await exports.default.fetch(`${origin}/api`, {
-    headers: { Upgrade: "websocket", Origin: origin, Cookie: sessionCookie },
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: sessionCookie },
   });
   response.webSocket!.accept();
   const transport = newWebSocketRpcSession<IterateRpcTarget>(

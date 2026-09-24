@@ -4,10 +4,10 @@ import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { Env } from "../src/env.ts";
 import { finishLoginCode, startLoginCode } from "../src/password-and-code-sign-in.ts";
+import { ORIGIN } from "./support.ts";
 
-const origin = "https://control.test";
 const withCookie = (setCookie: string) =>
-  new Request(`${origin}/login`, {
+  new Request(`${ORIGIN}/login`, {
     method: "POST",
     headers: { cookie: setCookie.split(";")[0]! },
   });
@@ -70,6 +70,6 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
   expect(send).not.toHaveBeenCalled();
   // no cookie at all: nothing to finish
   expect(
-    await finishLoginCode(mailbox, new Request(`${origin}/login`, { method: "POST" }), code),
+    await finishLoginCode(mailbox, new Request(`${ORIGIN}/login`, { method: "POST" }), code),
   ).toMatchObject({ restart: true });
 });

@@ -8,8 +8,7 @@ import { platformAddressesOf } from "../src/app-config.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers, parseAuthorization } from "../src/oauth.ts";
-import { controlPlaneStub } from "./support.ts";
-const origin = "https://control.test";
+import { adminSession, controlPlaneStub, ORIGIN } from "./support.ts";
 const sessions: Disposable[] = [];
 beforeEach(() => {
   // DNS transport only. Provider metadata, PKCE, exchange, storage and API are real.
@@ -22,7 +21,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 async function connect(headers: Record<string, string>) {
-  const response = await exports.default.fetch(`${origin}/api`, {
+  const response = await exports.default.fetch(`${ORIGIN}/api`, {
     headers: { ...headers, Upgrade: "websocket" },
   });
   expect(response.status, response.status === 101 ? "" : await response.text()).toBe(101);
@@ -32,24 +31,6 @@ async function connect(headers: Record<string, string>) {
   );
   sessions.push(transport);
   return transport.authenticate({ type: "from-server-cookie" });
-}
-/** A bare `/api` socket authenticated in-band with the admin secret â€” the operator, or `as` a
- *  person (src/session.ts): how a fixture makes a user, or acts as one before they have signed in. */
-async function operator(email?: string) {
-  const response = await exports.default.fetch(`${origin}/api`, {
-    headers: { Upgrade: "websocket" },
-  });
-  expect(response.status).toBe(101);
-  response.webSocket!.accept();
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  sessions.push(transport);
-  return transport.authenticate({
-    type: "admin-secret",
-    secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER!,
-    ...(email && { as: { email } }),
-  });
 }
 /** The person `email` names, found or created by the control plane â€” what an issuer session is
  *  started for (the sign-in's own find-or-create). */
@@ -63,7 +44,7 @@ test("first consent creates organization and project through the ordinary sessio
     subject: "1357924680",
     email: "bootstrap@example.com",
   });
-  const helpers = oauthHelpers(env, platformAddressesOf(env, new Request(`${origin}/`)));
+  const helpers = oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));
   const client = await helpers.createClient({
     clientName: "Claude fixture",
     clientUri: "https://studio.example/about",
@@ -74,18 +55,18 @@ test("first consent creates organization and project through the ordinary sessio
     responseTypes: ["code"],
   });
   const flow = await authorizationCodeRequest({
-    issuer: origin,
+    issuer: ORIGIN,
     clientId: client.clientId,
     redirectUri: "http://127.0.0.1:12345/callback",
-    resources: [`${origin}/mcp`],
+    resources: [`${ORIGIN}/mcp`],
   });
   const next = flow.url.pathname + flow.url.search;
   // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
   const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
-  const login = await startIssuerSession(env, new Request(origin), user, next, { picture });
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, next, { picture });
   expect(login.location).toBe(next);
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
-  const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
+  const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
   const api = await connect(headers);
   expect((await api.info()).principal).toEqual({ actor: user.id, email: user.email });
   expect(await api.organizations.list()).toEqual([]);
@@ -134,8 +115,8 @@ test("first consent creates organization and project through the ordinary sessio
   if ("error" in approval) throw new Error(approval.error);
   const callback = new URL(approval.redirectTo);
   expect(callback.searchParams.get("state")).toBe(flow.state);
-  expect(callback.searchParams.get("iss")).toBe(origin);
-  const exchange = await exports.default.fetch(`${origin}/oauth2/token`, {
+  expect(callback.searchParams.get("iss")).toBe(ORIGIN);
+  const exchange = await exports.default.fetch(`${ORIGIN}/oauth2/token`, {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -143,7 +124,7 @@ test("first consent creates organization and project through the ordinary sessio
       client_id: client.clientId,
       redirect_uri: "http://127.0.0.1:12345/callback",
       code_verifier: flow.verifier,
-      resource: `${origin}/mcp`,
+      resource: `${ORIGIN}/mcp`,
     }),
   });
   expect(exchange.status, await exchange.clone().text()).toBe(200);
@@ -153,7 +134,7 @@ test("first consent creates organization and project through the ordinary sessio
   // tool: a run in `first-consent-project` succeeds (itx.whoami() names its id); a run in the
   // project the consent did NOT select is refused before it evaluates ("outside this token's grant").
   const runTool = (project: string) =>
-    exports.default.fetch(`${origin}/mcp`, {
+    exports.default.fetch(`${ORIGIN}/mcp`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${tokens.access_token}`,
@@ -190,36 +171,36 @@ test("first consent creates organization and project through the ordinary sessio
     /session has ended/,
   );
   expect(
-    (await exports.default.fetch(`${origin}/api`, { method: "POST", body: "", headers })).status,
+    (await exports.default.fetch(`${ORIGIN}/api`, { method: "POST", body: "", headers })).status,
   ).toBe(401);
   expect(
-    await appSession(env.BROWSER_SESSION, new Request(origin, { headers }))!.bearer(),
+    await appSession(env.BROWSER_SESSION, new Request(ORIGIN, { headers }))!.bearer(),
   ).toBeNull();
 });
 
 test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
   const user = await person("copied-client@example.com");
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
-  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
-    issuer: origin,
-    clientId: `${origin}/.auth/client.json`,
-    redirectUri: `${origin}/.auth/callback`,
-    resources: [`${origin}/api`],
+    issuer: ORIGIN,
+    clientId: `${ORIGIN}/.auth/client.json`,
+    redirectUri: `${ORIGIN}/.auth/callback`,
+    resources: [`${ORIGIN}/api`],
     scopes: ["iterate", "account", "organizations:write"],
   });
   const approved = await issuer.consent.approve({ query: flow.url.search, projects: ["*"] });
   if ("error" in approved) throw new Error(approved.error);
   const callback = new URL(approved.redirectTo);
-  const exchange = await exports.default.fetch(`${origin}/oauth2/token`, {
+  const exchange = await exports.default.fetch(`${ORIGIN}/oauth2/token`, {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code: callback.searchParams.get("code")!,
-      client_id: `${origin}/.auth/client.json`,
-      redirect_uri: `${origin}/.auth/callback`,
+      client_id: `${ORIGIN}/.auth/client.json`,
+      redirect_uri: `${ORIGIN}/.auth/callback`,
       code_verifier: flow.verifier,
-      resource: `${origin}/api`,
+      resource: `${ORIGIN}/api`,
     }),
   });
   expect(exchange.status, await exchange.clone().text()).toBe(200);
@@ -240,7 +221,7 @@ test("an issuer session minted before a scope existed still holds every scope â€
   const user = await person("old-issuer-cookie@example.com");
   const { platformOrigin: issuerOrigin, api: apiResource } = platformAddressesOf(
     env,
-    new Request("https://control.test/"),
+    new Request(`${ORIGIN}/`),
   );
   const flow = await startAppSession(
     env.BROWSER_SESSION,
@@ -255,7 +236,7 @@ test("an issuer session minted before a scope existed still holds every scope â€
   const request = await parseAuthorization(env, new Request(flow.location));
   const approved = await oauthHelpers(
     env,
-    platformAddressesOf(env, new Request(`${origin}/`)),
+    platformAddressesOf(env, new Request(`${ORIGIN}/`)),
   ).completeAuthorization({
     request,
     userId: user.id,
@@ -273,15 +254,15 @@ test("an issuer session minted before a scope existed still holds every scope â€
   });
   const result = await flow.session.complete(new URL(approved.redirectTo).search);
   expect(result.error).toBeUndefined();
-  const old = await connect({ Cookie: flow.setCookie.split(";")[0]!, Origin: origin });
+  const old = await connect({ Cookie: flow.setCookie.split(";")[0]!, Origin: ORIGIN });
   expect((await old.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
   const org = await old.organizations.create({ name: "Made with an old cookie" });
   expect((await old.organizations.list()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
-test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
+test("a browser landing on the platform ORIGIN is told it is headless and where the dash is", async () => {
   // rendered from the configuration (wrangler.test.jsonc), never a file's hostnames
-  const page = await exports.default.fetch(`${origin}/`);
+  const page = await exports.default.fetch(`${ORIGIN}/`);
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toContain("text/html");
   expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
@@ -295,7 +276,7 @@ test("a browser landing on the platform origin is told it is headless and where 
 });
 
 test("the setup prompt an agent follows is served beside the pages, and the landing page points at it", async () => {
-  const prompt = await exports.default.fetch(`${origin}/setup-prompt.md`);
+  const prompt = await exports.default.fetch(`${ORIGIN}/setup-prompt.md`);
   expect(prompt.status).toBe(200);
   expect(prompt.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
   const text = await prompt.text();
@@ -303,7 +284,7 @@ test("the setup prompt an agent follows is served beside the pages, and the land
   expect(text).toContain("wrangler deploy --config apps/os/dist/server/wrangler.json");
   expect(text).toContain("/mcp");
   expect(text).toContain("dash.iterate.com/.auth/connect?issuer=");
-  const page = await (await exports.default.fetch(`${origin}/`)).text();
+  const page = await (await exports.default.fetch(`${ORIGIN}/`)).text();
   expect(page).toContain('href="/setup-prompt.md"');
 });
 
@@ -313,13 +294,13 @@ test("a client on a project's custom apex is bound to that project at consent, l
   using apexProject = await theirs.projects.create({ project: "custom-apex-project" });
   using _other = await theirs.projects.create({ project: "custom-apex-other" });
   const apexProjectId = (await apexProject.whoami()).projectId;
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
-  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
-    issuer: origin,
+    issuer: ORIGIN,
     clientId: "https://custom-apex.test/.auth/client.json",
     redirectUri: "https://custom-apex.test/.auth/callback",
-    resources: [`${origin}/api`],
+    resources: [`${ORIGIN}/api`],
   });
   const view = await issuer.consent.describe(flow.url.search);
   if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
@@ -332,18 +313,18 @@ test("a client on a project's custom apex is bound to that project at consent, l
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
   const user = await person("ticked-scopes@example.com");
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
-  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const org = await issuer.organizations.create({ name: "Ticked scopes organization" });
   using project = await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
   const projectId = (await project.whoami()).projectId;
   // the same request three scopes wide, approved for ONE project with the scopes given
   async function grant(scopes: string[]) {
     const flow = await authorizationCodeRequest({
-      issuer: origin,
-      clientId: `${origin}/.auth/client.json`,
-      redirectUri: `${origin}/.auth/callback`,
-      resources: [`${origin}/api`],
+      issuer: ORIGIN,
+      clientId: `${ORIGIN}/.auth/client.json`,
+      redirectUri: `${ORIGIN}/.auth/callback`,
+      resources: [`${ORIGIN}/api`],
       scopes: ["iterate", "account", "organizations:write"],
     });
     const approved = await issuer.consent.approve({
@@ -353,15 +334,15 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
     });
     if ("error" in approved) throw new Error(approved.error);
     const callback = new URL(approved.redirectTo);
-    const exchange = await exports.default.fetch(`${origin}/oauth2/token`, {
+    const exchange = await exports.default.fetch(`${ORIGIN}/oauth2/token`, {
       method: "POST",
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code: callback.searchParams.get("code")!,
-        client_id: `${origin}/.auth/client.json`,
-        redirect_uri: `${origin}/.auth/callback`,
+        client_id: `${ORIGIN}/.auth/client.json`,
+        redirect_uri: `${ORIGIN}/.auth/callback`,
         code_verifier: flow.verifier,
-        resource: `${origin}/api`,
+        resource: `${ORIGIN}/api`,
       }),
     });
     expect(exchange.status, await exchange.clone().text()).toBe(200);
@@ -402,14 +383,14 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
   const user = await person("consent-checks@example.com");
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
-  const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
   const api = await connect(headers);
   const flow = await authorizationCodeRequest({
-    issuer: origin,
-    clientId: `${origin}/.auth/client.json`,
-    redirectUri: `${origin}/.auth/callback`,
-    resources: [`${origin}/api`],
+    issuer: ORIGIN,
+    clientId: `${ORIGIN}/.auth/client.json`,
+    redirectUri: `${ORIGIN}/.auth/callback`,
+    resources: [`${ORIGIN}/api`],
   });
   flow.url.searchParams.delete("scope");
   const view = await api.consent.describe(flow.url.search);
@@ -420,7 +401,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   const cancel = new URL(view.denyLocation);
   expect(cancel.searchParams.get("error")).toBe("access_denied");
   expect(cancel.searchParams.get("state")).toBe(flow.state);
-  expect(cancel.searchParams.get("iss")).toBe(origin);
+  expect(cancel.searchParams.get("iss")).toBe(ORIGIN);
   expect(await api.consent.approve({ query: flow.url.search, projects: [] })).toEqual({
     error: "Choose at least one project you can access.",
   });
@@ -433,28 +414,28 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(new URL(invalid.location).searchParams.get("error_description")).toMatch(/must use PKCE/);
   // Without the issuer's session, the page and its Authorize form both send the browser to sign
   // in and back to this very request. The page is rendered on the server: there is no browser
-  // bundle beside it and no JSON sibling (a non-page path on the platform origin is a 404).
+  // bundle beside it and no JSON sibling (a non-page path on the platform ORIGIN is a 404).
   const signIn = `/login?${new URLSearchParams({ next: `/oauth2/auth${flow.url.search}` })}`;
-  const page = await exports.default.fetch(`${origin}/oauth2/auth${flow.url.search}`, {
+  const page = await exports.default.fetch(`${ORIGIN}/oauth2/auth${flow.url.search}`, {
     redirect: "manual",
   });
   expect(page.status).toBe(307);
   expect(page.headers.get("location")).toBe(signIn);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
-  expect((await exports.default.fetch(`${origin}/capnweb.js`)).status).toBe(404);
-  const sibling = await exports.default.fetch(`${origin}/authorize.json`, { redirect: "manual" });
+  expect(await exports.default.fetch(`${ORIGIN}/capnweb.js`)).toMatchObject({ status: 404 });
+  const sibling = await exports.default.fetch(`${ORIGIN}/authorize.json`, { redirect: "manual" });
   expect(sibling.status).toBe(404);
-  const post = await exports.default.fetch(`${origin}/oauth2/auth${flow.url.search}`, {
+  const post = await exports.default.fetch(`${ORIGIN}/oauth2/auth${flow.url.search}`, {
     method: "POST",
-    headers: { Origin: origin },
+    headers: { Origin: ORIGIN },
     body: new FormData(),
     redirect: "manual",
   });
   expect(post.status).toBe(303);
   expect(post.headers.get("location")).toBe(signIn);
   // Force the client to refresh through the real public token endpoint.
-  const session = appSession(env.BROWSER_SESSION, new Request(origin, { headers }))!;
+  const session = appSession(env.BROWSER_SESSION, new Request(ORIGIN, { headers }))!;
   const before = await session.bearer();
   await runInDurableObject(session, async (_instance, state) => {
     const stored = await state.storage.get<Record<string, unknown>>("session");
@@ -471,8 +452,8 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
 
 test("consent omits missing, insecure and credential-bearing branding URLs", async () => {
   const user = await (await operator()).users.create({ email: "branding-urls@example.com" });
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
-  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   for (const url of [
     undefined,
     "not a URL",
@@ -483,7 +464,7 @@ test("consent omits missing, insecure and credential-bearing branding URLs", asy
   ]) {
     const client = await oauthHelpers(
       env,
-      platformAddressesOf(env, new Request(origin)),
+      platformAddressesOf(env, new Request(ORIGIN)),
     ).createClient({
       clientName: "Example App",
       clientUri: url,
@@ -492,10 +473,10 @@ test("consent omits missing, insecure and credential-bearing branding URLs", asy
       tokenEndpointAuthMethod: "none",
     });
     const flow = await authorizationCodeRequest({
-      issuer: origin,
+      issuer: ORIGIN,
       clientId: client.clientId,
       redirectUri: "https://app.example/callback",
-      resources: [`${origin}/api`],
+      resources: [`${ORIGIN}/api`],
     });
     const view = await issuer.consent.describe(flow.url.search);
     expect(view.kind).toBe("consent");
@@ -522,13 +503,13 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
     return exports.default.fetch(request);
   });
   const user = await (await operator()).users.create({ email: "branding-cimd@example.com" });
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
-  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
-    issuer: origin,
+    issuer: ORIGIN,
     clientId,
     redirectUri: "https://app.example/callback",
-    resources: [`${origin}/api`],
+    resources: [`${ORIGIN}/api`],
   });
   expect(await issuer.consent.describe(flow.url.search)).toMatchObject({
     kind: "consent",
@@ -548,13 +529,13 @@ test("the consent page renders on the server, and Authorize posts the choice to 
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },
   );
-  const login = await startIssuerSession(env, new Request(origin), user, "/");
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
   const cookie = login.setCookie.split(";")[0]!;
   const flow = await authorizationCodeRequest({
-    issuer: origin,
-    clientId: `${origin}/.auth/client.json`,
-    redirectUri: `${origin}/.auth/callback`,
-    resources: [`${origin}/api`, `${origin}/mcp`],
+    issuer: ORIGIN,
+    clientId: `${ORIGIN}/.auth/client.json`,
+    redirectUri: `${ORIGIN}/.auth/callback`,
+    resources: [`${ORIGIN}/api`, `${ORIGIN}/mcp`],
     scopes: ["iterate", "account"],
   });
   // Repeated resource keys and a `+` in the state: the router must not canonicalize the query.
@@ -583,26 +564,26 @@ test("the consent page renders on the server, and Authorize posts the choice to 
   expect(crossSite.status).toBe(403);
   const approved = await exports.default.fetch(flow.url.href, {
     method: "POST",
-    headers: { Cookie: cookie, Origin: origin },
+    headers: { Cookie: cookie, Origin: ORIGIN },
     body: approval,
     redirect: "manual",
   });
   expect(approved.status).toBe(303);
   const callback = new URL(approved.headers.get("location")!);
-  expect(callback.origin + callback.pathname).toBe(`${origin}/.auth/callback`);
+  expect(callback.origin + callback.pathname).toBe(`${ORIGIN}/.auth/callback`);
   expect(callback.searchParams.get("state")).toBe(state);
-  expect(callback.searchParams.get("iss")).toBe(origin);
+  expect(callback.searchParams.get("iss")).toBe(ORIGIN);
   expect(callback.searchParams.get("code")).toBeTruthy();
   // the grant is the posted choice: the one project, and `iterate` without the declined `account`
-  const exchange = await exports.default.fetch(`${origin}/oauth2/token`, {
+  const exchange = await exports.default.fetch(`${ORIGIN}/oauth2/token`, {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code: callback.searchParams.get("code")!,
-      client_id: `${origin}/.auth/client.json`,
-      redirect_uri: `${origin}/.auth/callback`,
+      client_id: `${ORIGIN}/.auth/client.json`,
+      redirect_uri: `${ORIGIN}/.auth/callback`,
       code_verifier: flow.verifier,
-      resource: `${origin}/api`,
+      resource: `${ORIGIN}/api`,
     }),
   });
   expect(exchange.status, await exchange.clone().text()).toBe(200);
@@ -611,3 +592,5 @@ test("the consent page renders on the server, and Authorize posts the choice to 
   expect((await app.info()).scopes).toEqual(["iterate"]);
   expect((await app.projects.list()).map((listed) => listed.id)).toEqual([project.id]);
 });
+
+const operator = (email?: string) => adminSession(sessions, email);
