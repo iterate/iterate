@@ -65,7 +65,7 @@ a single saved config, then built-in `prd`.
 iterate config set --name next --os-base-url https://os.iterate.com \
   --default-project my-project --set-default
 iterate --config next login
-iterate config set --name local --os-base-url http://localhost:8787 --set-workspace
+iterate config set --name local --os-base-url http://localhost:8788 --set-workspace
 iterate config list
 iterate config get
 ```

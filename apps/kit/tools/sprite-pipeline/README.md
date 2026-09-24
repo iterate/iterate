@@ -66,12 +66,3 @@ files it did not produce; it warns about them instead.
 
 New characters also need their atlas `.c` added to the avatar component's
 `CMakeLists.txt` `SRCS`; publish does not edit that file.
-
-## Rebuild gate
-
-`apps/kit/src/firmware/sprite-pipeline-atlases.test.ts` (part of the normal
-`pnpm test` lane in `apps/kit`) runs `publish --check`: every character is
-rebuilt from tracked sources and the resulting atlas pairs and catalogue must
-byte-match the committed firmware files. If you change any `avatar.json` or
-source PNG, run `publish` and commit the regenerated firmware files together
-with the source change, or the gate fails.
