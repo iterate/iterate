@@ -64,8 +64,6 @@ enum {
   ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS = 10000,
   ITERATE_KIT_VOICE_CONTROL_POLL_MS = 25,
 
-  /* Poll reduced face state only while answer audio is queued. */
-  ITERATE_KIT_VOICE_FACE_POLL_MS = 100,
   ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS = 120000,
 
   /* Only count silence while call acceptance or answer audio is owed. */

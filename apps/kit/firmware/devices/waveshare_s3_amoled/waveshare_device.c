@@ -424,6 +424,11 @@ static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
   waveshare_display_present(view);
+  /* Capture stays open while GPT-Live speaks. The face's listening lock is
+   * only the user-facing listening screen; applying it during SPEAKING would
+   * close the mouth over playout-driven animation. */
+  waveshare_avatar_set_listening(
+      view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING);
   /*
    * Let the face's delay line drain on this task, which is the only one that
    * writes to the analyzer. Without it the last 90ms of every answer would
@@ -432,12 +437,6 @@ static void present(
    * already makes, and a second op for "tick me" would have said nothing the
    * first one does not.
    */
-  waveshare_avatar_set_call_active(view->call_active);
-  /* Capture stays open while GPT-Live speaks. The face's listening lock is
-   * only the user-facing listening screen; applying it during SPEAKING would
-   * close the mouth over playout-driven animation. */
-  waveshare_avatar_set_listening(
-      view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING);
   waveshare_avatar_tick();
 }
 
@@ -462,34 +461,8 @@ static void observe_playout(
 static void observe_answer(
     void *context, const struct iterate_kit_voice_answer_note *note) {
   (void)context;
-  switch (note->kind) {
-    case ITERATE_KIT_VOICE_ANSWER_ADMITTED:
-      /* Counted only for frames the playout admitted: the viseme ledger must
-       * see exactly the samples the analyzer will eventually be fed. */
-      waveshare_avatar_note_accepted(note->answer, note->sample_count);
-      break;
-    case ITERATE_KIT_VOICE_ANSWER_ABANDONED:
-      waveshare_avatar_note_abandoned();
-      /*
-       * The mouth track dies with the audio it was scheduled against: a mouth
-       * saying words nobody will hear is the exact lie this lane exists to
-       * avoid. Its intake was unfed for a while — the `viseme` event was
-       * deleted before the state that replaced it was wired — and the queue
-       * and this reset are the half that survived that gap.
-       */
-      waveshare_avatar_viseme_reset();
-      break;
-    case ITERATE_KIT_VOICE_ANSWER_VISEME:
-      /*
-       * From the processor's runtime bag rather than an event, and in the
-       * same coordinates the event used: a 0-14 shape at a sample offset
-       * inside `answer`. The queue schedules it against audio the DAC has
-       * actually accepted, so a shape whose answer was abandoned above is
-       * already gone by the time it would have played.
-       */
-      waveshare_avatar_note_viseme(
-          note->answer, note->offset_samples, note->viseme, note->confidence);
-      break;
+  if (note->kind == ITERATE_KIT_VOICE_ANSWER_ABANDONED) {
+    waveshare_avatar_note_abandoned();
   }
 }
 

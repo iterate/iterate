@@ -56,35 +56,12 @@ struct fixture {
   struct iterate_kit_stream_subscription replacement_subscription;
 };
 
-struct observed_face {
-  uint32_t answer;
-  uint32_t offset_samples;
-  uint8_t viseme;
-  uint8_t confidence;
-  size_t count;
-};
-
-static struct observed_face observed_face;
 static void record_speaker(void *context, const uint8_t *pcm, size_t pcm_length);
 static void record_control(void *context, enum iterate_kit_voice_stream_control control);
 static void accept_call(
     struct fixture *fixture, int callback, int release, int64_t offset);
 static void release_server_callback(struct fixture *fixture, int callback);
 
-
-static void record_face(
-    void *context,
-    uint32_t answer,
-    uint32_t offset_samples,
-    uint8_t viseme,
-    uint8_t confidence) {
-  (void)context;
-  observed_face.answer = answer;
-  observed_face.offset_samples = offset_samples;
-  observed_face.viseme = viseme;
-  observed_face.confidence = confidence;
-  ++observed_face.count;
-}
 
 static enum capnweb_status capture_fragment(
     void *context,
@@ -183,7 +160,6 @@ static void start_and_mount(struct fixture *fixture) {
     .activation = TEST_ACTIVATION,
     .now_ms = fixture_now_ms,
     .clock_context = fixture,
-    .on_face = record_face,
     .on_speaker = record_speaker,
     .on_control = record_control,
   };
@@ -363,8 +339,9 @@ static void downlink_flow(void) {
      *
      * FOUR, down from six. `pong` went with the ping that earned it;
      * `grok-event` carried two facts that now ride `spk-frame` as `drop` and
-     * `last`; `viseme` is deleted from the contract because the face is
-     * reduced processor runtime state read by a direct RPC poll.
+     * `last`; `viseme` is deleted from the contract because nothing on the
+     * platform produces mouth shapes — the face animates from the PCM the
+     * speaker actually played.
      */
     assert(
         strstr(
@@ -567,57 +544,6 @@ static void downlink_flow(void) {
     assert(occupied == 0U);
   }
 
-  assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
-}
-
-static void face_runtime_state_is_polled_and_deduped(void) {
-  static struct fixture fixture;
-  size_t before;
-
-  fixture_init(&fixture);
-  memset(&observed_face, 0, sizeof(observed_face));
-  start_and_mount(&fixture);
-
-  before = fixture.captured_count;
-  assert(iterate_kit_voice_stream_poll_face(&fixture.voice_stream) == CAPNWEB_OK);
-  assert(strstr(fixture.captured[before], "getProcessorRuntimeState") != NULL);
-  assert(strstr(fixture.captured[before], "watch-v3") == NULL);
-  assert(fixture.voice_stream.face_poll_pending);
-  receive(
-      &fixture,
-      "[\"resolve\",3,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
-  assert(!fixture.voice_stream.face_poll_pending);
-  assert(observed_face.count == 1U);
-  assert(observed_face.answer == 7U);
-  assert(observed_face.offset_samples == 1600U);
-  assert(observed_face.viseme == 9U);
-  assert(observed_face.confidence == 200U);
-
-  /* A reduced value is returned again until it changes; `at` makes it one fact. */
-  assert(iterate_kit_voice_stream_poll_face(&fixture.voice_stream) == CAPNWEB_OK);
-  receive(
-      &fixture,
-      "[\"resolve\",4,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1600,\"viseme\":9,\"confidence\":200,\"at\":100}}}]");
-  assert(observed_face.count == 1U);
-
-  /* A malformed shape is harmless and does not poison the next valid value. */
-  assert(iterate_kit_voice_stream_poll_face(&fixture.voice_stream) == CAPNWEB_OK);
-  receive(
-      &fixture,
-      "[\"resolve\",5,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":99,\"at\":101}}}]");
-  assert(observed_face.count == 1U);
-
-  assert(iterate_kit_voice_stream_poll_face(&fixture.voice_stream) == CAPNWEB_OK);
-  receive(
-      &fixture,
-      "[\"resolve\",6,{\"runtime\":{\"face\":{\"answer\":7,\"playoutSamples\":1700,\"viseme\":14,\"at\":101}}}]");
-  assert(observed_face.count == 2U);
-  assert(observed_face.offset_samples == 1700U);
-  assert(observed_face.viseme == 14U);
-  assert(observed_face.confidence == 0U);
-  assert(fixture.voice_stream.face_polls == 4U);
-  assert(fixture.voice_stream.face_updates == 2U);
-  assert(fixture.voice_stream.last_face_at_ms == 101U);
   assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
 }
 
@@ -997,24 +923,6 @@ static void close_waits_for_server_callback_before_slot_reuse(void) {
   }
 }
 
-static void face_poll_blocks_rebind_until_its_completion(void) {
-  struct fixture fixture;
-  fixture_init(&fixture);
-  start_and_mount(&fixture);
-  assert(iterate_kit_voice_stream_poll_face(&fixture.voice_stream) == CAPNWEB_OK);
-  assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
-  assert(iterate_kit_voice_stream_bind(&fixture.voice_stream,
-      &(const struct iterate_kit_voice_stream_options){
-        .stream_path = "/voice-agent/dev-test", .activation = TEST_ACTIVATION,
-        .now_ms = fixture_now_ms, .clock_context = &fixture,
-      }, &fixture.stream, &fixture.replacement_subscription) == CAPNWEB_E_STATE);
-  resolve_latest_pull(&fixture, "{\"runtime\":{}}");
-  assert(!fixture.voice_stream.face_poll_pending);
-  assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
-  release_server_callback(&fixture, latest_callback_id(&fixture));
-  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription));
-}
-
 static void append_frames_keeps_one_padded_base64_body(void) {
   struct fixture fixture;
   const uint8_t pcm[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'};
@@ -1099,7 +1007,6 @@ static void a_discontinuous_delivery_range_is_counted(void) {
 int main(void) {
   downlink_flow();
   a_discontinuous_delivery_range_is_counted();
-  face_runtime_state_is_polled_and_deduped();
   speaker_flags_ride_numbered_or_bare_frames();
   recycle_keeps_call_epoch_and_fences_closed_predecessor();
   failed_renewal_requires_a_fresh_incumbent_batch();
@@ -1108,7 +1015,6 @@ int main(void) {
   opening_voice_stream_accepts_current_callback();
   terminal_fence_stops_later_events_in_its_batch();
   close_waits_for_server_callback_before_slot_reuse();
-  face_poll_blocks_rebind_until_its_completion();
   append_frames_keeps_one_padded_base64_body();
   keepalive_is_quiet_for_twenty_seconds_after_success();
   terminal_rejects_unsafe_reason_without_an_ephemeral_append();

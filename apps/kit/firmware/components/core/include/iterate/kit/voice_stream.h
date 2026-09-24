@@ -91,21 +91,6 @@ enum iterate_kit_voice_stream_failure {
   ITERATE_KIT_VOICE_STREAM_FAILURE_SESSION_ENDED,
 };
 
-/**
- * The mouth, as the processor's own reduced state describes it.
- *
- * `offset_samples` positions the shape inside `answer`, in 16 kHz samples from
- * that answer's first — the same coordinates the deleted `viseme` EVENT used,
- * so the avatar's queue takes it unchanged. `viseme` is the 0-14 firmware id
- * and 14 is silence.
- */
-typedef void (*iterate_kit_voice_stream_face_fn)(
-    void *context,
-    uint32_t answer,
-    uint32_t offset_samples,
-    uint8_t viseme,
-    uint8_t confidence);
-
 struct iterate_kit_voice_stream_options {
   /** Stream path for the call, e.g. "/agents/voice/v23/waveshare". */
   const char *stream_path;
@@ -122,8 +107,6 @@ struct iterate_kit_voice_stream_options {
   iterate_kit_voice_stream_control_fn on_control;
   /** Optional: every event type seen on the downlink, for logging. */
   iterate_kit_voice_stream_seen_fn on_event_seen;
-  /** Optional: the mouth, when the poll below finds it has moved. */
-  iterate_kit_voice_stream_face_fn on_face;
   void *downlink_context;
 };
 
@@ -161,16 +144,6 @@ struct iterate_kit_voice_stream {
   /* Last successful microphone or presence append on this device clock. */
   uint64_t last_presence_at_ms;
   bool call_active;
-  /** One face poll in flight at a time; see iterate_kit_voice_stream_poll_face. */
-  bool face_poll_pending;
-  struct iterate_kit_voice_stream_face_request {
-    struct iterate_kit_voice_stream *voice_stream;
-    uint32_t subscription_epoch;
-  } face_request;
-  uint32_t face_polls;
-  uint32_t face_updates;
-  /** Last forwarded face timestamp; unchanged poll results are ignored. */
-  uint64_t last_face_at_ms;
   /** Last bridge event time for health telemetry; it is not a call deadline. */
   uint64_t last_bridge_ms;
   /** Last delivery batch time; the voice loop uses it for downlink recovery. */
@@ -275,14 +248,6 @@ enum capnweb_status iterate_kit_voice_stream_keepalive_if_due(
  */
 bool iterate_kit_voice_stream_downlink_expected(
     const struct iterate_kit_voice_stream *voice_stream);
-
-/**
- * Ask the voice-agent processor what its face is doing, once.
- * The caller polls only while queued speaker audio can animate an avatar.
- * At most one poll is in flight; a second returns CAPNWEB_E_STATE.
- */
-enum capnweb_status iterate_kit_voice_stream_poll_face(
-    struct iterate_kit_voice_stream *voice_stream);
 
 enum capnweb_status iterate_kit_voice_stream_close(
     struct iterate_kit_voice_stream *voice_stream);

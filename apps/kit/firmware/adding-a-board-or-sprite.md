@@ -48,8 +48,8 @@ pnpm --dir apps/kit firmware:configure
 ```
 
 It generates ignored atlas C sources and the catalogue include. Do not edit
-those outputs. Keep local playout energy as the baseline animation signal;
-remote visemes are an existing optional Waveshare overlay.
+those outputs. Every mouth animates from the playout energy of the audio the
+speaker actually played; the platform sends no mouth shapes.
 
 ## Bench proof
 

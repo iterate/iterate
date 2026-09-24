@@ -172,9 +172,6 @@ iterate_kit_add_avatar_test(
 iterate_kit_add_avatar_test(
   iterate-kit-face-stage-test
   ../components/avatar/tests/face_stage_test.c)
-iterate_kit_add_avatar_test(
-  iterate-kit-face-viseme-queue-test
-  ../components/avatar/tests/face_viseme_queue_test.c)
 
 if(APPLE)
   iterate_kit_add_test(

@@ -567,8 +567,8 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
         &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
     return;
   }
-  /* Counted only for frames actually admitted: the viseme ledger must see
-   * exactly the samples the analyzer will eventually be fed. */
+  /* Counted only for frames actually admitted, so the answer's timeline says
+   * what the listener can hear. */
   {
     const struct iterate_kit_voice_answer_note note = {
       .kind = ITERATE_KIT_VOICE_ANSWER_ADMITTED,
@@ -654,11 +654,9 @@ static uint32_t abandon_speaker_audio(void) {
    * the front of the next answer, it is a click once per barge-in. */
   speaker_partial_length = 0U;
   /*
-   * The face was animating this audio and must forget what nobody will hear,
-   * and the mouth track scheduled against it dies with it. One note for both,
-   * because they have to be serialized against the ADMITTED notes above — all
-   * abandon sites run on the app task, which is what the viseme ledger
-   * requires.
+   * The face was animating this audio and must forget what nobody will hear.
+   * It rides the same op as ADMITTED so the board sees both in the order the
+   * audio did.
    */
   {
     const struct iterate_kit_voice_answer_note note = {
@@ -714,42 +712,15 @@ static void on_control(
     runtime.view.call_active = (true);
     runtime.opening_started_at_ms = 0U;
     runtime.opening_outcome = OPENING_ACCEPTED;
-    /* The viseme lane owns the mouth for the duration of the call. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
     runtime.view.status = "ready";
   } else if (control == ITERATE_KIT_VOICE_STREAM_CONTROL_CALL_ENDED) {
     /* An authoritative end abandons queued audio and its accounting. */
     (void)abandon_speaker_audio();
     end_authoritative_activation("call ended");
-    /* Envelope mouth returns for whatever local life the face has next. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
     runtime.view.status = ("call ended");
   }
-}
-
-/*
- * THE MOUTH, FROM THE PROCESSOR'S OWN REDUCED STATE.
- *
- * Runs on the app task, which is where the voice_stream completions land, so it is
- * serialized against ADMITTED and ABANDONED exactly as the viseme ledger
- * requires. The dedupe by `at` lives in the stream, so anything reaching here
- * is a shape the mouth actually moved to.
- */
-static void on_face(
-    void *context,
-    uint32_t answer,
-    uint32_t offset_samples,
-    uint8_t viseme,
-    uint8_t confidence) {
-  const struct iterate_kit_voice_answer_note note = {
-    .kind = ITERATE_KIT_VOICE_ANSWER_VISEME,
-    .answer = answer,
-    .offset_samples = offset_samples,
-    .viseme = viseme,
-    .confidence = confidence,
-  };
-  (void)context;
-  board_answer(&note);
 }
 
 static bool playback_apply_reprime(
@@ -1210,7 +1181,6 @@ static void begin_activation(uint64_t now) {
       }
     }
     if (!ticket->pending && callbacks_released &&
-        !runtime.voice_streams[index].face_poll_pending &&
         iterate_kit_stream_reclaimable(&runtime.streams[index])) {
       char clock[20];
       const char *const name = clock_slug(clock, sizeof(clock)) ? clock : "unclocked";
@@ -1337,8 +1307,7 @@ static void bind_voice_if_ready(struct voice_setup_ticket *ticket) {
   struct iterate_kit_stream *const stream = &runtime.streams[index];
   struct iterate_kit_stream_subscription *subscription = NULL;
   if (!runtime.activation_live || strcmp(ticket->activation, runtime.activation) != 0 ||
-      runtime.voice_stream_generation == runtime.connection.generation ||
-      runtime.voice_streams[index].face_poll_pending) return;
+      runtime.voice_stream_generation == runtime.connection.generation) return;
   if (stream->state == ITERATE_KIT_STREAM_FAILED) {
     ESP_LOGE(tag, "voice_stream get failed: %d", stream->status);
     end_local_activation("opening-failed", "voice_stream failed");
@@ -1359,7 +1328,6 @@ static void bind_voice_if_ready(struct voice_setup_ticket *ticket) {
     .stream_path = ticket->stream_path,
     .activation = ticket->activation, .now_ms = now_ms, .clock_context = NULL,
     .on_speaker = on_speaker_pcm, .on_control = on_control,
-    .on_face = runtime.board->observe_answer != NULL ? on_face : NULL,
   };
   if (iterate_kit_voice_stream_bind(runtime.voice_stream, &options, stream, subscription) != CAPNWEB_OK) {
     end_local_activation("opening-failed", "voice_stream failed");
@@ -2057,17 +2025,6 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkLastDropUptimeMs", runtime.last_drop_uptime_ms},
     {"spkWaitPriming", runtime.playout.stats.waits_priming},
     {"spkAnswerDrains", runtime.playout.stats.waits_dry},
-    /*
-     * THE FACE LANE, AND WHICH HALF OF IT IS DARK.
-     *
-     * Two numbers because they fail apart: `facePolls` standing still means
-     * the gate never opened (no audio, or no mouth on this board), and
-     * `facePolls` climbing while `faceUpdates` does not means the processor is
-     * being asked and has no face to report. A frozen mouth was diagnosed from
-     * source once because there was no counter to look at.
-     */
-    {"facePolls", runtime.voice_stream->face_polls},
-    {"faceUpdates", runtime.voice_stream->face_updates},
     {"batches", runtime.voice_stream->batches_on_connection},
     {"connGeneration", runtime.voice_stream->connection_generation},
     /* Deliveries that never arrived: the times a range did not continue the
@@ -3253,15 +3210,6 @@ void iterate_kit_voice_loop_step(void) {
                 "microphone-append-failed", "microphone append failed");
             ESP_LOGE(tag, "microphone append failed");
           }
-        }
-      }
-      /* Poll face state only while queued audio can animate it. */
-      if (runtime.board->observe_answer != NULL && outbox_free >= 4U &&
-          speaker_queued_bytes() > 0U) {
-        static uint64_t next_face_poll_at;
-        if (now >= next_face_poll_at) {
-          next_face_poll_at = now + ITERATE_KIT_VOICE_FACE_POLL_MS;
-          (void)iterate_kit_voice_stream_poll_face(runtime.voice_stream);
         }
       }
       /* Emit live playout counters while a call is active and briefly after. */
