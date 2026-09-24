@@ -9,7 +9,15 @@ import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { adminSession, controlPlaneStub, ORIGIN, refused, SRC_ECHO_APP, stub } from "./support.ts";
+import {
+  adminSession,
+  controlPlaneStub,
+  ORIGIN,
+  publishConfigWorker,
+  refused,
+  SRC_ECHO_APP,
+  stub,
+} from "./support.ts";
 
 const secret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const password = env.APP_CONFIG_LOGIN__PASSWORD!;
@@ -560,7 +568,7 @@ test("a control plane holder replaces the stub a deploy's reset broke; a refusal
 test("project ingress strips forged internal authority and never exposes platform credentials", async () => {
   const admin = await operator();
   using target = await admin.projects.create({ project: "directory-ingress" });
-  await target.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  await publishConfigWorker(target, ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const host = "https://echo--directory-ingress.projects.test/";
   const response = await exports.default.fetch(host, {
     headers: {
@@ -576,7 +584,7 @@ test("project ingress strips forged internal authority and never exposes platfor
     principal: null,
     authorization: null,
     cookie: "theme=dark",
-    app: "echo",
+    routingSlug: "echo",
   });
   expect((await target.readEvents(0, 100)).events.some((event) => event.type === "forged")).toBe(
     false,
@@ -589,7 +597,7 @@ test("project ingress strips forged internal authority and never exposes platfor
     principal: { actor: "admin" },
     authorization: null,
     cookie: null,
-    app: "echo",
+    routingSlug: "echo",
   });
   expect(
     await exports.default.fetch(host, { headers: { Authorization: "Bearer unrecognized" } }),

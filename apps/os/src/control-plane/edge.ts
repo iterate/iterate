@@ -179,7 +179,7 @@ export class ControlPlane {
 
   /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (app-config.ts
    *  `projectHostOf`: the ingress routing and the project wildcard), then a hostname a project added
-   *  itself (project/custom-hostnames.ts): its apex, or one label under it an app
+   *  itself (project/custom-hostnames.ts): its apex, or one label under it a routing slug
    *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read.
    *  A deployment that serves no custom hostnames, the platform's own origins and anything under its
    *  reserved zones never reach the table. What consent.ts binds a project's CIMD client to; a
@@ -221,7 +221,8 @@ export class ControlPlane {
     ).then(
       (found) =>
         found && {
-          app: candidates.find((candidate) => candidate.hostname === found.hostname)!.app,
+          routingSlug: candidates.find((candidate) => candidate.hostname === found.hostname)!
+            .routingSlug,
           project: found.project.id,
           basePath: "",
         },

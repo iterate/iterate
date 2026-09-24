@@ -1,33 +1,37 @@
 // path-ingress.e2e.test.ts — PATH ROUTING (src/app-config.ts `urls.ingressRouting: { type: "paths" }`):
 // a deployment with one hostname and no wildcard (workers.dev) reaches its projects as
-// `<os>/projects/<project>/<app>/…` and the apex `<os>/projects/<project>/…`. The worker strips the prefix before the
-// app sees the URL and hands the app its base path; every response back through this route is served
-// SANDBOXED (a `Content-Security-Policy: sandbox …` header the edge adds — an app runs in an opaque
+// `<os>/projects/<project>/<routingSlug>/…` and the apex `<os>/projects/<project>/…`, both the
+// project's config worker. The worker strips the prefix before the config worker sees the URL and
+// hands it its base path; every response back through this route is served
+// SANDBOXED (a `Content-Security-Policy: sandbox …` header the edge adds — a site runs in an opaque
 // origin, so its script cannot spend the issuer's cookie); and the platform's own first segments
 // (`api`, `mcp`, `login`, …) are never a project. LOCAL ONLY: every row boots its own worker with the
 // paths configuration (support/worker-config.ts; `await using paths = await pathsWorker()`, stopped
 // when the row ends) — the shared worker routes by subdomain.
 import { expect } from "vitest";
 import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
-import { freshDnsSafeProjectSlug, localOnly } from "./support/project-host.ts";
+import { freshDnsSafeProjectSlug, localOnly, publishConfigWorker } from "./support/project-host.ts";
 
-/** An app that answers with what it was handed: the URL it saw, its base path, its app label. */
-const SRC_ECHO_URL_APP = {
+/** A config worker that answers a routing slug with what it was handed: the URL it saw, its base
+ *  path, its routing slug; the apex is its own 404. */
+const SRC_ECHO_URL_CONFIG_WORKER = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) {
     const url = new URL(request.url);
+    const routingSlug = request.headers.get("x-iterate-routing-slug");
+    if (routingSlug === null) return new Response("Not found\\n", { status: 404 });
     return Response.json({
       path: url.pathname + url.search,
       basePath: request.headers.get("x-iterate-base-path"),
-      app: request.headers.get("x-iterate-app"),
+      routingSlug,
     }, { headers: { "x-app-header": "kept" } });
   }
 }`,
 };
 
 localOnly(
-  "an app is reached at /projects/<project>/<app>/…: the prefix stripped, the base path handed over, the answer sandboxed",
+  "a routing slug is reached at /projects/<project>/<routingSlug>/…: the prefix stripped, the base path handed over, the answer sandboxed",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
@@ -37,12 +41,12 @@ localOnly(
     expect(await answer.json()).toEqual({
       path: "/hello?x=1",
       basePath: `/projects/${slug}/echo`,
-      app: "echo",
+      routingSlug: "echo",
     });
-    // the sandbox: added by the edge on the way out, the app's own headers kept
+    // the sandbox: added by the edge on the way out, the config worker's own headers kept
     expect(answer.headers.get("content-security-policy")).toMatch(/\bsandbox\b/);
     expect(answer.headers.get("x-app-header")).toBe("kept");
-    // the app's root, with and without a trailing slash
+    // the routing slug's root, with and without a trailing slash
     expect(await (await fetch(`${origin}/projects/${slug}/echo/`)).json()).toMatchObject({
       path: "/",
     });
@@ -53,7 +57,7 @@ localOnly(
 );
 
 localOnly(
-  "the apex /<project>/… is the config worker's (nothing configured ⇒ 404, never a 500); an unknown project is 404",
+  "the apex /projects/<project>/… is the config worker's too (its 404, sandboxed); an unknown project is 4xx",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
@@ -110,8 +114,8 @@ localOnly(
   },
 );
 
-/** A worker booted for one row with PATH routing, project `slug` created on it and the echo app
- *  provided at `itx.apps.echo`; disposing it stops the worker (and the sessions it minted). */
+/** A worker booted for one row with PATH routing, project `slug` created on it and the echo config
+ *  worker published; disposing it stops the worker (and the sessions it minted). */
 async function pathsWorker(): Promise<
   AsyncDisposable & { worker: OwnWorker; origin: string; slug: string }
 > {
@@ -120,7 +124,11 @@ async function pathsWorker(): Promise<
   stack.defer(() => worker.stop());
   const slug = freshDnsSafeProjectSlug("paths");
   const itx = await worker.createProject(slug);
-  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_URL_APP }]]);
+  await publishConfigWorker(itx, [
+    "itx",
+    "workers",
+    ["get", { source: SRC_ECHO_URL_CONFIG_WORKER }],
+  ]);
   const owned = stack.move();
   return {
     worker,

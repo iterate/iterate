@@ -1,35 +1,39 @@
 // __workers-tests__/expression-fetch-unread-body.test.ts — the expression fetch streams a visitor's body to the
-// app through a pipe the context DO owns (iterate-context-durable-object.ts `#expressionFetchBody`), so an
-// app that never reads its body leaves no read pending on the DO's request stream
+// config worker through a pipe the context DO owns (iterate-context-durable-object.ts `#expressionFetchBody`), so a
+// route that never reads its body leaves no read pending on the DO's request stream
 // (https://github.com/cloudflare/workerd/issues/918). Local workerd does not surface that error, so
 // these rows pin what the pipe must preserve; the error itself is proven on a deployed worker.
 
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { adminCredentials, openSession, SRC_ECHO_APP } from "./support.ts";
+import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
 
-const SRC_BODY_ECHO_APP = {
+/** A config worker whose `body` routing slug streams the body back, and every other host ignores it. */
+const SRC_BODY_ROUTER = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class BodyEcho extends WorkerEntrypoint {
-  fetch(request) { return new Response(request.body); }
+export default class BodyRouter extends WorkerEntrypoint {
+  fetch(request) {
+    const routingSlug = request.headers.get("x-iterate-routing-slug");
+    if (routingSlug === "body") return new Response(request.body);
+    return Response.json({ routingSlug });
+  }
 }`,
 };
 
-test("a project host POST reaches an app that ignores its body (200) and one that streams it back (every byte)", async () => {
+test("a project host POST reaches a route that ignores its body (200) and one that streams it back (every byte)", async () => {
   const itx = await (
     await openSession()
   )
     .authenticate(adminCredentials())
     .projects.create({ project: "unread-body" });
-  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
-  await itx.provide("itx.apps.body", ["itx", "workers", ["get", { source: SRC_BODY_ECHO_APP }]]);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_BODY_ROUTER }]]);
 
   const ignored = await exports.default.fetch(
     "https://echo--unread-body.projects.test/wp-json/batch/v1",
     streamed('{"requests":[]}'),
   );
   expect(ignored).toMatchObject({ status: 200 });
-  expect(await ignored.json()).toMatchObject({ app: "echo" });
+  expect(await ignored.json()).toMatchObject({ routingSlug: "echo" });
 
   const payload = "x".repeat(256 * 1024);
   const echoed = await exports.default.fetch(

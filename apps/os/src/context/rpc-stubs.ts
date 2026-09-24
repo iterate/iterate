@@ -704,7 +704,7 @@ export async function lendRpcStubOverPager(
 
 // ── THE ITX-EXPRESSION FETCH (the `x-itx-expression` header) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — the
-// edge sets it for a project host (`itx.apps.<app>` or the configured ingress target), a session's terminal fetch and a
+// edge sets it for a project host (empty: the configured ingress target), a session's terminal fetch and a
 // loaded worker's `env.ITX.fetch` set it themselves. The DO rewrites the expression through its
 // rules and the provider's Response — 101s included — flows back out natively.
 

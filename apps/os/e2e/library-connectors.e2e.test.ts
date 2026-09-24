@@ -32,6 +32,7 @@ import {
   deployedSubdomainsOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -41,14 +42,10 @@ deployedSubdomainsOnly(
   async () => {
     const slug = freshDnsSafeProjectSlug("capnweb-host");
     const itx = openItx(await registerProject(slug));
-    await itx.provide("itx.apps.rpc", [
-      "itx",
-      "workers",
-      ["get", { source: SOURCES.capnwebServer }],
-    ]);
+    await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SOURCES.capnwebServer }]]);
     // the context dials its own project's host from inside — no credential: the app is public
     const connection = await itx.connectToCapnweb(
-      projectUrl({ project: slug, app: "rpc", path: "/rpc/v1" }).href,
+      projectUrl({ project: slug, routingSlug: "rpc", path: "/rpc/v1" }).href,
       { transport: "batch" },
     );
     expect(await connection.hello("host")).toBe("hello host");

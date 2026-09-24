@@ -159,7 +159,7 @@ test("a script's hop to a sibling context carries the platform origin: `itx.cd(p
   // the run's own caller carries no origin (loaded code speaks for the project); the context fills
   // in the one the edge stamped when this session reached it, and the hop to `/child` hands it on
   const urls = (await itx.run(
-    "async (itx) => ({ here: await itx.url(), sibling: await itx.cd('/child').url({ app: 'site' }) })",
+    "async (itx) => ({ here: await itx.url(), sibling: await itx.cd('/child').url({ routingSlug: 'site' }) })",
   )) as { here: string; sibling: string };
   expect(urls.here).toMatch(/^https:\/\/[a-z0-9-]+\.projects\.test\/$/);
   expect(urls.sibling).toMatch(/^https:\/\/site--[a-z0-9-]+\.projects\.test\/$/);

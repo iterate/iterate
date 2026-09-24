@@ -68,7 +68,7 @@ import { GLOBAL_PROJECT_ID } from "./paths.ts";
 // at the type level, that these keys and `keyof BuiltInScope` are the same set.
 export const BUILT_IN_ROOT_DESCRIPTIONS = {
   whoami: "who this context is: `itx.whoami()` → { projectId, path }",
-  url: "this project's public URL over HTTP — the apex or an app's, at a path: `url({ app?, path? })`; only from a session that reached the platform on an origin",
+  url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
     'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',

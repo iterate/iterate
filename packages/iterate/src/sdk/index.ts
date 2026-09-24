@@ -280,9 +280,10 @@ export abstract class ConfigWorker<
    *  make them idempotent (a redelivery must be a no-op). Default: ignore the event. */
   processEvent(_args: ConfigEventArgs): void | Promise<void> {}
 
-  /** THE WEB ROOT — the Request a project host with no app label rode in on (`x-iterate-app` absent;
-   *  the project's configured ingress target). Route by hostname to `this.env.ITX.get().apps.<x>.fetch(request)`
-   *  or answer it here. Default: not found. */
+  /** THE WEB ROOT — every Request on a host of the project (the project's configured ingress
+   *  target). The host's routing slug is in `x-iterate-routing-slug` (`notes` for
+   *  `notes--<project>.<hostname>`; absent on the apex), written only by the platform: route on it
+   *  in plain code, answering here or forwarding the Request. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });
   }

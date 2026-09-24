@@ -13,6 +13,7 @@ import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
 
@@ -25,8 +26,12 @@ deployedOnly(
     const user = { email: `voice-${runId()}@example.com` };
     const projectId = await registerProject(slug, user);
     const root = openItx(projectId);
-    const providerUrl = projectUrl({ project: slug, app: "provider" }).href;
-    const { token } = await oauthSession(projectId, user);
+    // The provider fixture is ANOTHER project's config worker: this project's own config worker is
+    // the website the agent rewrites below, and every host of a project reaches it.
+    const providerSlug = freshDnsSafeProjectSlug("voice-provider");
+    const providerProjectId = await registerProject(providerSlug, user);
+    const providerUrl = projectUrl({ project: providerSlug }).href;
+    const { token } = await oauthSession(providerProjectId, user);
     const websiteUrl = projectUrl({ project: slug }).href;
     const candidateSource =
       'export default {fetch() { return new Response("Because it had bad stable manners!"); }};';
@@ -48,7 +53,7 @@ deployedOnly(
     // The fixture uses a real project OAuth bearer as its provider credential. Ingress verifies
     // it before the fixture sees the principal; the loaded voice code only sees getSecret(...).
     await root.secrets.set("/secrets/openai", token, { urls: [providerUrl] });
-    await root.provide("itx.apps.provider", [
+    await publishConfigWorker(openItx(providerProjectId), [
       "itx",
       "builtins",
       ["cd", "/provider"],
@@ -62,7 +67,7 @@ deployedOnly(
 export default class extends WorkerEntrypoint {
   async fetch(request) {
     if (!request.headers.get("x-itx-principal") || !request.headers.get("x-itx-grant")) return new Response("missing provider credential", {status: 401});
-    // Unicode source in a rule expanded after cd must survive the native fetch header.
+    // Unicode source in a target expanded after cd must survive the native fetch header.
     if ("東京 🌍".length !== 5) throw new Error("corrupted worker source");
     if (request.method === "POST") {
       const {input} = await request.json();

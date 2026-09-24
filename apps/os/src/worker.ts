@@ -1,5 +1,5 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
-// (the app it names, the files host, the config worker), the MCP origin, then the platform origin's
+// (the files host, else the project's config worker), the MCP origin, then the platform origin's
 // own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, Google
 // identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
@@ -8,6 +8,7 @@
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues } from "iterate/lib";
+import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
@@ -22,7 +23,7 @@ import { testLinkResponse } from "./issuer-session.ts";
 import { TEST_LINK_PATH } from "./test-link.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
-import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
+import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
@@ -34,11 +35,11 @@ import { authorizationForToken, recordGrantUse } from "./oauth.ts";
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 
-/** THE BASE PATH an app is served under (paths ingress: `/projects/<project>/<app>`), alongside
- *  `x-iterate-app`: the edge strips it from the URL the app sees and says it here, so
- *  the app's own links and its browser adapter can compose absolute paths. Set or deleted by the
- *  edge on every project request, so a visitor's spelling never reaches an app. Empty under
- *  subdomains (the app owns its origin). */
+/** THE BASE PATH a project host is served under (paths ingress: `/projects/<project>[/<routingSlug>]`),
+ *  alongside `x-iterate-routing-slug`: the edge strips it from the URL the config worker sees and
+ *  says it here, so the site's own links and its browser adapter can compose absolute paths. Set or
+ *  deleted by the edge on every project request, so a visitor's spelling never reaches the project.
+ *  Empty under subdomains (each routing slug owns its origin). */
 const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
 
 /** THE SANDBOX every document served through paths ingress runs in: an opaque origin — no cookies,
@@ -97,16 +98,16 @@ type ProjectHostIdentity = { principal: Principal | null; grant?: string; platfo
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
- *  (an OAuth access token, the admin secret) removed (an app's own bearer scheme passes through
- *  untouched), then the expression the host names — `itx.apps.<app>`, or the
- *  configured explicit ingress target for a host with no app label (an empty expression
- *  header selects the target stored on the root context) — the hop count and the principal's stamp.
- *  The app label the app sees (`x-iterate-app`) is not written here: the DO's `fetch` derives it from
- *  the expression, on every `x-itx-expression` Request (iterate-context-durable-object.ts). */
+ *  (an OAuth access token, the admin secret) removed (a site's own bearer scheme passes through
+ *  untouched), then THE PROJECT'S INGRESS TARGET — the empty expression, which the DO resolves to
+ *  the config worker stored on the root context, for every host of the project — the routing slug
+ *  the host names in `x-iterate-routing-slug` (deleted for the apex, so a visitor's copy never
+ *  survives), the hop count and the principal's stamp. The edge picks the project only; the config
+ *  worker's `fetch` routes on the routing slug in plain code. */
 function projectHostRequestTo(
   request: Request,
   routing: {
-    app: string | null;
+    routingSlug: string | null;
     hops: number;
     appCookies: string | null;
     identity: ProjectHostIdentity;
@@ -121,7 +122,9 @@ function projectHostRequestTo(
   if (routing.appCookies) headers.set("cookie", routing.appCookies);
   else headers.delete("cookie");
   if (routing.identity.platformBearer) headers.delete("authorization");
-  headers.set(ITX_EXPRESSION_FETCH_HEADER, routing.app ? `itx.apps.${routing.app}` : "");
+  headers.set(ITX_EXPRESSION_FETCH_HEADER, "");
+  if (routing.routingSlug) headers.set(ITERATE_ROUTING_SLUG_HEADER, routing.routingSlug);
+  else headers.delete(ITERATE_ROUTING_SLUG_HEADER);
   headers.set(PROJECT_HOST_HOPS_HEADER, String(routing.hops));
   headers.set(ITX_PLATFORM_ORIGIN_HEADER, routing.platformOrigin);
   if (routing.basePath) headers.set(ITERATE_BASE_PATH_HEADER, routing.basePath);
@@ -188,11 +191,11 @@ export default {
     const { platformOrigin } = addresses;
     const controlPlane = new ControlPlane(env.CONTROL_PLANE);
     const routing = appConfig.urls.ingressRouting;
-    // PROJECT-HOST INGRESS: a request on a project host IS the app it names — or, with no app label,
-    // the project's config worker — the Request riding into the context DO's `fetch` with its URL,
-    // the app's own cookies and a WebSocket upgrade intact. The browser adapter's `/api` and
-    // `/.auth/*` are the app's own on a host of its own (subdomains) and the issuer's under paths,
-    // where the app shares the platform's origin.
+    // PROJECT-HOST INGRESS: a request on any host of a project reaches the project's config worker —
+    // the Request riding into the context DO's `fetch` with its URL, the visitor's own cookies and a
+    // WebSocket upgrade intact, the routing slug the host names said in `x-iterate-routing-slug`. The
+    // browser adapter's `/api` and `/.auth/*` are the site's own on a host of its own (subdomains)
+    // and the issuer's under paths, where the site shares the platform's origin.
     // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
     // touch, so a hostname whose project the control plane does not know must never reach one —
     // else any label under the wildcard would mint durable storage from the public internet. The
@@ -232,7 +235,7 @@ export default {
       };
       // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
       // from the bucket, before any session or DO — the token in the URL is the authorization.
-      if (projectHost.app === FILES_APP_LABEL) {
+      if (projectHost.routingSlug === FILES_ROUTING_SLUG) {
         const file = await serveProjectFileRequest({
           bucket: env.FILES,
           secret: await sessionSigningSecretOf(appConfig),
@@ -283,7 +286,7 @@ export default {
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
       ).fetch(
         projectHostRequestTo(request, {
-          app: projectHost.app,
+          routingSlug: projectHost.routingSlug,
           hops,
           appCookies: appCookies(request.headers.get("cookie")) || null,
           identity: {

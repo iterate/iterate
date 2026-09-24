@@ -97,7 +97,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
-        "Serve this project on `hostname` — its apex there, and `<app>.<hostname>` its apps. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-answered. Again for a hostname already added re-reads Cloudflare's status.",
+        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-answered. Again for a hostname already added re-reads Cloudflare's status.",
       payloadSchema: z.object({ hostname: z.string().min(1) }),
     },
     "events.iterate.com/project/hostname-add-answered": {

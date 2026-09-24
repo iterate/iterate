@@ -18,7 +18,7 @@ The rest of this page is what the recipe leaves out.
 
 ## Project apps
 
-`https://iterate.<your-subdomain>.workers.dev/projects/<project>/<app>/`, and `/projects/<project>/`
+`https://iterate.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and `/projects/<project>/`
 for the project's own config worker (`urls.ingressRouting: { type: "paths" }`). Every document
 served there runs sandboxed in the browser (an opaque origin: no cookies, no storage), so an app
 that needs the person's identity authenticates in-band rather than by cookie.
@@ -42,5 +42,5 @@ Add your zone to the same Cloudflare account, then set `urls.os` to `https://os.
 `urls.ingressRouting` to `{"type":"subdomains","hostname":"<your-domain>"}` in `APP_CONFIG`, and add
 a route for `os.<your-domain>/*` and a wildcard route `*.<your-domain>/*` in
 `selfHostWranglerConfig` in `apps/os/scripts/generate-wrangler-config.ts` (with a proxied wildcard
-DNS record) to the config. Projects then answer at `<app>--<project>.<your-domain>` and
+DNS record) to the config. Projects then answer at `<routingSlug>--<project>.<your-domain>` and
 `<project>.<your-domain>`.

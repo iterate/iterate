@@ -57,8 +57,8 @@ test("a session's terminal fetch cannot smuggle a pager attach: its stamp (stamp
   )
     .authenticate(adminCredentials())
     .projects.get("prj_pager_smuggle");
-  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
-  const response: Response = await itx.apps.echo.fetch(
+  await itx.provide("itx.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const response: Response = await itx.echo.fetch(
     new Request("https://echo.internal/", {
       headers: {
         [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
@@ -69,7 +69,7 @@ test("a session's terminal fetch cannot smuggle a pager attach: its stamp (stamp
     }),
   );
   expect(response).toMatchObject({ status: 200 });
-  expect(await response.json()).toMatchObject({ app: "echo" });
+  expect(await response.json()).toMatchObject({ routingSlug: null });
   expect(await itx.rpcStubs.list()).not.toContain("itx.smuggled");
   const { events } = (await itx.invoke("itx.readEvents(0)")) as { events: { type: string }[] };
   expect(events.map((event) => event.type)).not.toContain("smuggled");
@@ -78,7 +78,7 @@ test("a session's terminal fetch cannot smuggle a pager attach: its stamp (stamp
 test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach either: ItxEntrypoint.fetch stamps the same way, though no app header closes the DO's pager gate for it", async () => {
   const ctx = "prj_pager_smuggle_platform";
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
-  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  await itx.provide("itx.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const response = await runInDurableObject(stub(ctx), async (_instance, state) => {
     const { exports } = state as unknown as {
       exports: {
@@ -97,7 +97,7 @@ test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach 
     const answer = await loaded.fetch(
       new Request("https://echo.internal/", {
         headers: {
-          [ITX_EXPRESSION_FETCH_HEADER]: "itx.apps.echo",
+          [ITX_EXPRESSION_FETCH_HEADER]: "itx.echo",
           [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
             rpcStubKey: "itx.smuggled",
             appendEvents: [{ type: "smuggled" }],
@@ -107,7 +107,7 @@ test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach 
     );
     return { status: answer.status, body: await answer.json() };
   });
-  expect(response).toMatchObject({ status: 200, body: { app: "echo" } });
+  expect(response).toMatchObject({ status: 200, body: { routingSlug: null } });
   expect(await itx.rpcStubs.list()).not.toContain("itx.smuggled");
   const { events } = (await itx.invoke("itx.readEvents(0)")) as { events: { type: string }[] };
   expect(events.map((event) => event.type)).not.toContain("smuggled");

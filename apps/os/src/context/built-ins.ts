@@ -121,13 +121,14 @@ export interface BuiltInScope extends LibraryRoots {
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
   whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
-  /** THE PUBLIC URL of this project over HTTP — the apex (the config worker's `fetch`) or `app`'s
-   *  (`itx.apps.<app>`), at `path` (default "/") — composed from the deployment's ingress routing
-   *  (iterate/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
-   *  `<origin>/<slug>/<app>/…` under paths). Refused on a deployment with no project ingress, and on
-   *  a call carrying no platform origin (a processor's own turn, a loaded worker: hold the URL a
-   *  session handed you instead). Only a project's context has one. */
-  url(target?: { app?: string; path?: string }): Promise<string>;
+  /** THE PUBLIC URL of this project over HTTP — the apex or a `routingSlug`'s host (both reach the
+   *  config worker's `fetch`, which reads the slug from `x-iterate-routing-slug`), at `path`
+   *  (default "/") — composed from the deployment's ingress routing (iterate/project-ingress:
+   *  `<routingSlug>--<slug>.<hostname>/…` under subdomains, `<origin>/projects/<slug>/<routingSlug>/…`
+   *  under paths). Refused on a deployment with no project ingress, and on a call carrying no
+   *  platform origin (a processor's own turn, a loaded worker: hold the URL a session handed you
+   *  instead). Only a project's context has one. */
+  url(target?: { routingSlug?: string; path?: string }): Promise<string>;
   /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
    *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
    *  isolation. */
@@ -608,7 +609,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // comments here add only the WHY of a code branch.
   return {
     whoami: () => deps.projectInfo().then((project) => ({ projectId, path, ...project })),
-    url: async (target: { app?: string; path?: string } = {}) => {
+    url: async (target: { routingSlug?: string; path?: string } = {}) => {
       const platformOrigin = deps.platformOrigin();
       if (!platformOrigin)
         throw codedError(
@@ -620,14 +621,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
       const url = projectUrlOf(deps.ingressRouting, platformOrigin, {
         project: slug,
-        app: target.app || null,
+        routingSlug: target.routingSlug || null,
         path: target.path,
       });
       if (!url)
         throw codedError(
           "INVALID_INPUT",
           deps.ingressRouting
-            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (an app label is [a-z][a-z0-9-]*; a path starts with "/")`
+            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (a routing slug is [a-z][a-z0-9-]*; a path starts with "/")`
             : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
         );
       return url.href;

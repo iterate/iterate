@@ -52,8 +52,9 @@ export const adminCredentials = () => ({ type: "admin-secret" as const, secret: 
  *  session is minted with through `POST /login` (email + password). */
 export const loginPassword = (): string => env.APP_CONFIG_LOGIN__PASSWORD!;
 
-/** An app that answers with what the platform handed it: the principal stamp, the bearer, the
- *  cookies and the trusted app label — provided as `itx.apps.<label>` and fetched on a project host. */
+/** A site that answers with what the platform handed it: the principal stamp, the bearer, the
+ *  cookies and the trusted routing slug — published as a project's config worker
+ *  (`publishConfigWorker`) and fetched on a project host. */
 export const SRC_ECHO_APP = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
@@ -62,11 +63,23 @@ export default class Echo extends WorkerEntrypoint {
       principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
       authorization: request.headers.get("authorization"),
       cookie: request.headers.get("cookie"),
-      app: request.headers.get("x-iterate-app"),
+      routingSlug: request.headers.get("x-iterate-routing-slug"),
     });
   }
 }`,
 };
+
+/** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
+ *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
+ *  saga publishes the seeded config repo, and an append before it lands would be overwritten. */
+export async function publishConfigWorker(itx: any, target: unknown): Promise<void> {
+  await itx.waitForEvent({
+    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+    afterOffset: 0,
+    timeoutMs: 30_000,
+  });
+  await itx.append({ type: "events.iterate.com/project/ingress-configured", payload: { target } });
+}
 
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).
@@ -75,7 +88,7 @@ const sessions: unknown[] = [];
  *  credential: the socket authenticates in-band) — newWebSocketRpcSession accepts the existing
  *  (accepted) socket per its typings. */
 // The RETURN is deliberately `any`: this is the shared LENDING entry point — callers reach through it to
-// `.provide(key, new Echo(i))`, `.provide("itx.apps.x", new LiveSite())` and other live RpcTargets,
+// `.provide(key, new Echo(i))`, `.provide("itx.site", new LiveSite())` and other live RpcTargets,
 // which capnweb's typed `provide` param (`ClientRpcStub`, a `dup()`-bearing shape) rejects for a raw
 // RpcTarget instance. A READ caller that wants the real surface names it locally
 // (`const root: RpcStub<IterateRpcTarget> = await openSession()`), the way userSession does.

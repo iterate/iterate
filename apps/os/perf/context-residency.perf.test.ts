@@ -31,6 +31,7 @@ import {
   freshDnsSafeProjectSlug,
   projectHostsAreLocal,
   projectUrl,
+  publishConfigWorker,
   registerProject,
 } from "../e2e/support/project-host.ts";
 import {
@@ -126,8 +127,7 @@ timedDeployed.concurrent(
   async () => {
     const slug = freshDnsSafeProjectSlug("residency-site-timed");
     const projectId = await registerProject(slug);
-    // The session stays open: what `provide` sets is un-done when its session ends.
-    await openItx(projectId).provide("itx.apps.site", [
+    await publishConfigWorker(openItx(projectId), [
       "itx",
       "facets",
       ["get", "site", { source: SITE_SOURCE, className: "SiteDurableObject" }],
@@ -136,7 +136,7 @@ timedDeployed.concurrent(
     const t0 = Date.now();
     while (Date.now() - t0 < 150_000) {
       const sentAt = Date.now();
-      const page = await fetchProjectUrl(projectUrl({ project: slug, app: "site" }));
+      const page = await fetchProjectUrl(projectUrl({ project: slug, routingSlug: "site" }));
       expect(page).toMatchObject({ status: 200 });
       answers.push({ at: sentAt - t0, ms: Date.now() - sentAt, instance: page.text });
       await sleep(5_000);
