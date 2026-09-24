@@ -737,6 +737,6 @@ after Vitest's, and upload two artifacts even when the suite fails:
 Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
-`unit-test-telemetry-attempt-<id>`, `flake-records-unit-attempt-<id>` and
-`unit-test-evidence-attempt-<id>` (all of `test-results/`, with its
-[test evidence](test-evidence.md) manifest).
+`unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`; its
+[test evidence](test-evidence.md) manifest goes only to R2, once the upload
+is on.

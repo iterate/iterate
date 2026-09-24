@@ -60,6 +60,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run Tests
+        id: tests
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           FLAKE_RECORD_DIR: test-results/flake-records
@@ -72,10 +73,14 @@ jobs:
         run: doppler run -- pnpm test
       # Kit's firmware compiled for the host (ASan/UBSan) and run under CTest. Its own step, not
       # part of Kit's `test`, so `pnpm test` runs where cmake is missing; the image has cmake.
-      # `!cancelled()`, so a unit-test failure does not hide the firmware result.
+      # `!cancelled()`, so a unit-test failure does not hide the firmware result. CTest's JUnit XML
+      # goes into the test evidence folder (docs/test-evidence.md).
       - name: Run Kit firmware host tests
+        id: kit-host-tests
         if: ${{ !cancelled() }}
-        run: pnpm --dir apps/kit firmware:test:host
+        run: |
+          mkdir -p test-results/ctest
+          pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/test-results/ctest/junit.xml"
       # Fails when a test workspace left no complete artifact, and writes the unit suite summary next
       # to its flake lines. A superseded run still keeps its raw evidence, but the job's own
       # cancelled outcome is the record; killed runner sentinels are not test failures.
@@ -88,12 +93,18 @@ jobs:
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
       # attempt's tests left. This adds one row per test (tables/tests.parquet), then manifest.json:
-      # the tested commit and tree, the job attempt, the runners' timings and every file's sha256.
-      # Neither this nor the upload decides the job; the tests did.
+      # the run's result (from the steps below and the finalizer's check), the tested commit and
+      # tree, the job attempt and every file's sha256. Neither this nor the upload decides the job;
+      # the tests did.
       - name: Write the test evidence manifest
-        if: ${{ !cancelled() }}
+        if: always()
         continue-on-error: true
-        run: pnpm tsx scripts/ci/test-evidence.ts write
+        env:
+          TEST_EVIDENCE_STEPS: tests=${{ steps.tests.outcome }} kit-host-tests=${{ steps.kit-host-tests.outcome }}
+          TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
       - name: Upload the test evidence to R2
         if: ${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
         continue-on-error: true
@@ -118,14 +129,5 @@ jobs:
         with:
           name: unit-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/ci-telemetry
-          include-hidden-files: true
-          if-no-files-found: error
-      # The whole folder, manifest and tables included, as R2 would hold it.
-      - name: Upload the test evidence folder
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-evidence-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results
           include-hidden-files: true
           if-no-files-found: error

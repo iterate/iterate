@@ -8,6 +8,23 @@ import type {
 import { expect, test } from "vitest";
 import { ciJobAttempt, testResultsParquet, testResultsTable } from "./test-results-parquet.ts";
 
+const depotJobUrl =
+  "https://depot.dev/orgs/0p91s0lz49/workflows/ntb262kdvq?job=jcc9z1d62z&attempt=1nxc464grh";
+/** The job attempt's environment, as Depot and the workflow set it. */
+const environment = {
+  DEPOT_JOB_URL: depotJobUrl,
+  GITHUB_REPOSITORY: "iterate/iterate",
+  GITHUB_WORKFLOW: "Preview OS",
+  GITHUB_RUN_ID: "151191957946117",
+  GITHUB_RUN_ATTEMPT: "1",
+  GITHUB_JOB: "e2e",
+  GITHUB_WORKSPACE: "/home/runner/work/iterate/iterate",
+  TEST_TELEMETRY_BRANCH: "feature",
+  TEST_TELEMETRY_HEAD_SHA: "0a17015917f0",
+  TEST_TELEMETRY_PULL_REQUEST_NUMBER: "2981",
+};
+const job = ciJobAttempt(environment);
+
 const plainTest: TestTelemetryRecord = {
   fullName: "stream › appends round-trip",
   leafName: "appends round-trip",
@@ -59,8 +76,8 @@ const pinnedRecord = {
 } as const;
 
 test("one row per test, each carrying its test run and job attempt", () => {
-  const rows = testResultsTable({
-    job: ciJobAttempt([artifact()]),
+  const { rows, problems } = testResultsTable({
+    job,
     artifacts: [artifact()],
     flakeRecords: [
       pinnedRecord,
@@ -99,36 +116,46 @@ test("one row per test, each carrying its test run and job attempt", () => {
       flake_outcomes: ["pinned-fail", "unexpected-error"],
     },
   ]);
+  expect(problems).toEqual([]);
 });
 
-test("a flake record that names no expected-fail test fails the writer instead of vanishing", () => {
+test("a flake record that names no expected-fail test is a problem to report, and on no row", () => {
+  const { rows, problems } = testResultsTable({
+    job,
+    artifacts: [artifact()],
+    flakeRecords: [{ ...pinnedRecord, name: "appends round-trip" }],
+  });
+  expect(problems).toEqual([
+    'The failing record "appends round-trip" names 0 expected-fail tests in this job attempt, not 1; it is on no row',
+  ]);
+  expect(rows.map((row) => row.flake_kind)).toEqual([null, null]);
+});
+
+test("the job attempt comes from the environment: Depot's job and attempt ids, and the test run named for the attempt", () => {
+  expect(job).toMatchObject({
+    testRunId: "testrun_1nxc464grh",
+    jobId: "jcc9z1d62z",
+    jobAttemptId: "1nxc464grh",
+    workflowName: "Preview OS",
+    jobName: "e2e",
+    headSha: "0a17015917f0",
+    pullRequestNumber: 2981,
+  });
+});
+
+test("a laptop, with no Depot job, is not a CI job attempt", () => {
+  expect(() => ciJobAttempt({ ...environment, DEPOT_JOB_URL: undefined })).toThrow("depotJobUrl");
   expect(() =>
-    testResultsTable({
-      job: ciJobAttempt([artifact()]),
-      artifacts: [artifact()],
-      flakeRecords: [{ ...pinnedRecord, name: "appends round-trip" }],
+    ciJobAttempt({
+      ...environment,
+      DEPOT_JOB_URL: "https://depot.dev/orgs/0p91s0lz49/workflows/x",
     }),
-  ).toThrow('The failing record "appends round-trip" names 0 expected-fail tests');
-});
-
-test("an artifact from another job attempt is refused", () => {
-  const retried = artifact({ artifactId: "vitest:os:2" });
-  retried.ci = {
-    ...retried.ci,
-    depotJobUrl: retried.ci.depotJobUrl!.replace("1nxc464grh", "2abc"),
-  };
-  expect(() => ciJobAttempt([artifact(), retried])).toThrow("vitest:os:2 belongs to");
-});
-
-test("local telemetry, with no Depot job, is not a CI job attempt", () => {
-  const local = artifact();
-  local.ci = { ...local.ci, depotJobUrl: undefined, executionContext: "local" };
-  expect(() => ciJobAttempt([local])).toThrow("depotJobUrl");
+  ).toThrow("DEPOT_JOB_URL names no job and attempt");
 });
 
 test("round-trips typed values, with JSON columns as values rather than strings", async () => {
-  const rows = testResultsTable({
-    job: ciJobAttempt([artifact()]),
+  const { rows } = testResultsTable({
+    job,
     artifacts: [artifact()],
     flakeRecords: [pinnedRecord],
   });
@@ -148,11 +175,7 @@ test("round-trips typed values, with JSON columns as values rather than strings"
 test("a job attempt whose runners reported no tests still writes every column", () => {
   const empty = testResultsParquet([]);
   const withRows = testResultsParquet(
-    testResultsTable({
-      job: ciJobAttempt([artifact()]),
-      artifacts: [artifact()],
-      flakeRecords: [],
-    }),
+    testResultsTable({ job, artifacts: [artifact()], flakeRecords: [] }).rows,
   );
   const columns = (bytes: Uint8Array) =>
     parquetSchema(parquetMetadata(bytes.buffer as ArrayBuffer)).children.map(({ element }) => [
@@ -190,8 +213,7 @@ function artifact(overrides: Partial<TestTelemetryArtifact> = {}): TestTelemetry
       jobName: "e2e",
       workspaceRoot: "/home/runner/work/iterate/iterate",
       runnerProvider: "depot",
-      depotJobUrl:
-        "https://depot.dev/orgs/0p91s0lz49/workflows/ntb262kdvq?job=jcc9z1d62z&attempt=1nxc464grh",
+      depotJobUrl,
       executionContext: "ci",
     },
     context: { framework: "vitest", testKind: "e2e", suite: "vitest", workspace: "os" },

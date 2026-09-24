@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, matchesGlob, relative, resolve } from "node:path";
+import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
@@ -717,7 +717,7 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
   const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps ?? [];
   const runTests = steps.findIndex((step) => step.name === "Run Tests");
   const firmwareHostTests = steps.findIndex(
-    (step) => step.run === "pnpm --dir apps/kit firmware:test:host",
+    (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
   );
 
   expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
@@ -885,12 +885,12 @@ test.each([
 // docs/test-evidence.md: each test job attempt's test-results/ folder, its manifest and, once
 // switched on, its upload to R2.
 test.each([
-  { file: ".depot/workflows/test.yml", jobId: "test" },
-  { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
-  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e" },
+  { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
+  { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["e2e"] },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["e2e"] },
 ])(
   "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2 only when switched on, deciding nothing",
-  ({ file, jobId }) => {
+  ({ file, jobId, testSteps }) => {
     const workflow = loadWorkflow(file);
     const job = workflow.jobs[jobId]!;
     const steps = job.steps || [];
@@ -899,7 +899,22 @@ test.each([
     const upload = steps[index("scripts/ci/test-evidence.ts upload")];
 
     expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("off");
-    expect(write).toMatchObject({ if: "${{ !cancelled() }}", "continue-on-error": true });
+    // always, a cancelled job's folder saying so
+    expect(write).toMatchObject({
+      if: "always()",
+      "continue-on-error": true,
+      run: "pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}",
+    });
+    // the outcome of every step that runs tests, each one before the write, so a failure the
+    // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
+    expect(write?.env?.TEST_EVIDENCE_STEPS).toBe(
+      testSteps.map((id) => `${id}=\${{ steps.${id}.outcome }}`).join(" "),
+    );
+    for (const id of testSteps) {
+      const step = steps.findIndex((candidate) => candidate.id === id);
+      expect(step, id).toBeGreaterThan(-1);
+      expect(step).toBeLessThan(steps.indexOf(write!));
+    }
     expect(upload).toMatchObject({
       if: "${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}",
       "continue-on-error": true,
@@ -917,15 +932,18 @@ test.each([
       ...steps.map((step) => step.env?.TEST_TELEMETRY_ARTIFACT_DIR),
     ].filter(Boolean);
     expect(telemetryDirectories).toEqual([testEvidencePaths.telemetry]);
-    // and the whole folder is kept as a Depot artifact too
-    expect(
-      steps.find(
-        (step) =>
-          step.uses === "actions/upload-artifact@v4" && step.with?.path === testEvidencePaths.root,
-      ),
-    ).toMatchObject({ if: "always()" });
   },
 );
+
+test("Kit's host tests write CTest's JUnit XML into the test evidence folder", () => {
+  const kit = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
+    (step) => step.id === "kit-host-tests",
+  );
+  expect(kit?.run).toContain(
+    `pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/${testEvidencePaths.ctestJunit}"`,
+  );
+  expect(kit?.run).toContain(`mkdir -p ${dirname(testEvidencePaths.ctestJunit)}`);
+});
 
 test("the test jobs' flake records go into the test evidence folder", () => {
   const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find(

@@ -1,15 +1,18 @@
 import { relative } from "node:path";
 import { parquetWriteBuffer, type BasicType } from "hyparquet-writer";
 import { z } from "zod";
-import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import {
+  ciTelemetrySourceFromEnvironment,
+  type TestTelemetryArtifact,
+} from "@iterate-com/shared/test-support/ci-telemetry";
 import type { FlakeRecord } from "./flake-dashboard/contract.ts";
 
 /**
  * One row per test, for the test evidence folder's `tables/tests.parquet`
  * (docs/test-evidence.md#tables). `scripts/ci/test-evidence.ts write` builds it from what the job
- * already keeps: the runners' raw telemetry artifacts (the finalizer, upload-test-telemetry.ts, has
- * checked them) and the createFlake/createFailing record lines. A test's own flake records ride on
- * its row.
+ * already keeps: this job attempt's raw telemetry artifacts and the createFlake/createFailing record
+ * lines. A test's own flake records ride on its row. A record that names no test, or a test with
+ * both kinds, is a problem the manifest lists, never a missing table.
  */
 export function testResultsTable(input: {
   job: ReturnType<typeof ciJobAttempt>;
@@ -17,6 +20,7 @@ export function testResultsTable(input: {
   flakeRecords: readonly FlakeRecord[];
 }) {
   const { job } = input;
+  const problems: string[] = [];
   const tests = input.artifacts.flatMap((artifact) =>
     artifact.tests.map((test) => {
       const flakeRecords: FlakeRecord[] = [];
@@ -33,16 +37,21 @@ export function testResultsTable(input: {
         test.expectedState === "failed" && (test.leafName || test.fullName) === record.name,
     );
     if (matches.length !== 1) {
-      throw new Error(
-        `The ${record.kind} record "${record.name}" names ${matches.length} expected-fail tests in this job attempt, not 1`,
+      problems.push(
+        `The ${record.kind} record "${record.name}" names ${matches.length} expected-fail tests in this job attempt, not 1; it is on no row`,
       );
+      continue;
     }
     matches[0]!.flakeRecords.push(record);
   }
+  for (const { test, flakeRecords } of tests) {
+    if (new Set(flakeRecords.map((record) => record.kind)).size > 1)
+      problems.push(
+        `"${test.fullName}" has both flake and failing records; its row says ${flakeRecords[0]!.kind}`,
+      );
+  }
 
   const rows = tests.map(({ artifact, test, flakeRecords }) => {
-    const kinds = new Set(flakeRecords.map((record) => record.kind));
-    if (kinds.size > 1) throw new Error(`"${test.fullName}" has both flake and failing records`);
     return {
       test_run_id: job.testRunId,
       repository: job.repository,
@@ -52,8 +61,8 @@ export function testResultsTable(input: {
       job_name: job.jobName,
       job_attempt_id: job.jobAttemptId,
       depot_job_url: job.depotJobUrl,
-      head_sha: job.headSha,
-      branch: job.branch,
+      head_sha: job.headSha || null,
+      branch: job.branch || null,
       pull_request_number: job.pullRequestNumber ?? null,
       producer: artifact.producer,
       framework: artifact.context.framework,
@@ -92,10 +101,10 @@ export function testResultsTable(input: {
       flake_outcomes: flakeRecords.length > 0 ? flakeRecords.map((record) => record.outcome) : null,
     };
   });
-  return rows;
+  return { rows, problems };
 }
 
-type TestResultRow = ReturnType<typeof testResultsTable>[number];
+type TestResultRow = ReturnType<typeof testResultsTable>["rows"][number];
 
 /**
  * Every column's Parquet type, in file order. A `JSON` column takes the value itself; the writer
@@ -155,29 +164,23 @@ export function testResultsParquet(rows: readonly TestResultRow[]) {
 }
 
 /**
- * The CI job attempt every artifact belongs to: the rows' and the manifest's identity. A test run is
- * one job attempt, so an artifact from another attempt (a stale file, a retry's leftovers) or
- * telemetry with no Depot job (a local run) is refused rather than mislabelled.
+ * The CI job attempt this process runs in: the rows' and the manifest's identity. It comes from the
+ * job's environment (DEPOT_JOB_URL, GITHUB_*, TEST_TELEMETRY_*), read the way the reporters read it
+ * (`ciTelemetrySourceFromEnvironment`), not from the telemetry, so a job whose runners crashed or
+ * never started still has one. Without a Depot job attempt (a laptop) there is none yet.
  */
-export function ciJobAttempt(artifacts: readonly TestTelemetryArtifact[]) {
-  const [first] = artifacts;
-  if (!first)
-    throw new Error("No test telemetry artifacts: a job attempt with no runner has no rows");
-  const job = CiJob.parse(first.ci);
-  for (const artifact of artifacts) {
-    const other = CiJob.parse(artifact.ci);
-    if (other.workflowRunId !== job.workflowRunId || other.depotJobUrl !== job.depotJobUrl) {
-      throw new Error(
-        `${artifact.artifactId} belongs to ${other.depotJobUrl}, not this job attempt (${job.depotJobUrl})`,
-      );
-    }
-  }
-  const jobAttemptId = new URL(job.depotJobUrl).searchParams.get("attempt");
-  if (!jobAttemptId) throw new Error(`DEPOT_JOB_URL names no job attempt: ${job.depotJobUrl}`);
-  return { ...job, jobAttemptId, testRunId: `testrun_${jobAttemptId}` };
+export function ciJobAttempt(environment: NodeJS.ProcessEnv) {
+  const ci = ciTelemetrySourceFromEnvironment(environment);
+  const job = CiJob.parse(ci);
+  const url = new URL(job.depotJobUrl);
+  const jobId = url.searchParams.get("job");
+  const jobAttemptId = url.searchParams.get("attempt");
+  if (!jobId || !jobAttemptId)
+    throw new Error(`DEPOT_JOB_URL names no job and attempt: ${job.depotJobUrl}`);
+  return { ...job, jobId, jobAttemptId, testRunId: `testrun_${jobAttemptId}` };
 }
 
-/** The fields a row and the manifest need, which a local run's telemetry may not have. */
+/** The fields a row and the manifest need, which a laptop's environment does not have. */
 const CiJob = z.object({
   repository: z.string(),
   workflowName: z.string().min(1),
@@ -186,7 +189,7 @@ const CiJob = z.object({
   jobName: z.string().min(1),
   depotJobUrl: z.url(),
   workspaceRoot: z.string().min(1),
-  headSha: z.string().min(1),
-  branch: z.string().min(1),
+  headSha: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
   pullRequestNumber: z.number().int().optional(),
 });

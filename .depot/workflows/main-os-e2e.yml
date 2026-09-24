@@ -216,13 +216,16 @@ jobs:
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
-      # attempt's tests left. This adds one row per test (tables/tests.parquet), then manifest.json:
-      # the tested commit and tree, the job attempt, the runners' timings and every file's sha256.
+      # attempt's tests left, and target.json the deployment they ran against. This adds one row per
+      # test (tables/tests.parquet), then manifest.json: the run's result (from the suites' step and
+      # the finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
       # Neither this nor the upload decides the job; the tests did.
       - name: Write the test evidence manifest
-        if: ${{ !cancelled() }}
+        if: always()
         continue-on-error: true
-        run: pnpm tsx scripts/ci/test-evidence.ts write
+        env:
+          TEST_EVIDENCE_STEPS: e2e=${{ steps.e2e.outcome }}
+        run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
       - name: Upload the test evidence to R2
         if: ${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
         continue-on-error: true
