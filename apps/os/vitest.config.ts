@@ -21,6 +21,7 @@
 
 import { fileURLToPath } from "node:url";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 
@@ -115,7 +116,7 @@ export default defineConfig({
           hookTimeout: 120_000,
           // One retry in CI only (docs/testing.md: retries are measured, never silent — a local flake
           // should be SEEN, not absorbed). Each test is self-contained (fresh ctx).
-          retry: process.env.CI ? 1 : 0,
+          retry: process.env.CI ? E2E_CI_RETRIES : 0,
           // FILES IN PARALLEL: every test mints its own project (client.ts `freshCtx` carries the run's
           // id and the worker process's slot), so nothing two files touch is shared but the worker
           // itself — which is the thing under test. The cap is an I/O one: these are round trips to a
