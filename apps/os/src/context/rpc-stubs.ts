@@ -670,6 +670,7 @@ export async function lendRpcStubOverPager(
       await redialed.body?.cancel();
       if (redialed.status < 500) break; // refused (a paused stream): the DO's answer, not a fault to retry
     }
+    if (lendEnded.reason) return; // recalled meanwhile: the lend ended on purpose, nothing failed
     console.error({
       event: "rpc-stub-pager-redial-failed",
       namespace: "rpc-stubs",

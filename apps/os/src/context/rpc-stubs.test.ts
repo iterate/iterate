@@ -287,6 +287,32 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
   expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
 });
 
+test("a lend recalled while a re-dial hangs ends quietly at the deadline: no error, the late pager closed", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  error.mockClear(); // an earlier test's spy on console.error carries its calls
+  let answerLate: (pager: FakePagerWebSocket) => void = () => {};
+  const late = new FakePagerWebSocket();
+  const closed = vi.spyOn(late, "close");
+  const fake = await relayOverFakeDurableObject((dial) =>
+    dial === 2
+      ? new Promise<FakePagerWebSocket>((resolve) => (answerLate = resolve))
+      : new FakePagerWebSocket(),
+  );
+
+  fake.pagers[0].close(1006);
+  await vi.advanceTimersByTimeAsync(1_000);
+  fake.relay.dispose(); // the lender recalls it mid-dial
+  await vi.advanceTimersByTimeAsync(60_000);
+  await fake.waitedUntil[0];
+  expect(error).not.toHaveBeenCalled();
+  answerLate(late);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
+});
+
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
 // pager: a REFUSED append (a paused stream) is the upgrade's answer — a non-101 whose JSON body carries
 // the code. The relay must then lend NOTHING: release the session's dup, register no listener, and
