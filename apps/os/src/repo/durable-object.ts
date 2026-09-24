@@ -12,21 +12,13 @@
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
 // memory under the tip it was read at. A commit is compare-and-swapped on the tip (a concurrent push
 // refuses it — no merge; the caller reads again and retries).
-// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, git-wire.ts and pako
+// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, the git codec and pako
 // with it, reached as `itx.facets.get("repo")` (library.ts).
 
 import { z } from "zod";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
-import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
-  assertCreated,
-  EntityLifecycleProcessor,
-  type EntityCreationAndDeletionState,
-} from "../project/entity-lifecycle.ts";
-import {
-  AUTHOR,
-  REF,
   ZERO_OID,
   buildPack,
   createGitWireTransport,
@@ -38,12 +30,20 @@ import {
   treeObjectsOf,
   type GitObjectType,
   type RawGitObject,
-  type RepoFileChange,
-  type RepoLogEntry,
   type RepoManifest,
-} from "./git-wire.ts";
+} from "@iterate-com/shared/git-wire";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
+import {
+  assertCreated,
+  EntityLifecycleProcessor,
+  type EntityCreationAndDeletionState,
+} from "../project/entity-lifecycle.ts";
 import { RepoContract, type CommitCompleted } from "./contract.ts";
 
+/** The one branch every repo operation addresses. */
+const REF = "refs/heads/main";
+/** The author of a commit whose caller named none. */
+const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
 const TOKEN_TTL_SECONDS = 300;
 /** Reuse a token only while this much of its life remains — an operation must not outlive it. */
@@ -51,6 +51,15 @@ const TOKEN_REUSE_MARGIN_MS = 60_000;
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
+export type RepoFileChange = { path: string; content: string } | { path: string; delete: true };
+/** One commit as `log` lists it, newest first (`timestamp` is epoch milliseconds). */
+export type RepoLogEntry = {
+  oid: string;
+  message: string;
+  author: { name: string; email: string };
+  timestamp: number;
+  parents: string[];
+};
 type Transport = ReturnType<typeof createGitWireTransport>;
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
 

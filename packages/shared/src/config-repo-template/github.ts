@@ -1,14 +1,16 @@
-import { isSafeConfigRepoTemplatePath, type ConfigRepoTemplateReference } from "./reference.ts";
 import {
   demuxFetchResponse,
   encodeFetchRequest,
   encodeLsRefsRequest,
+  manifestOf,
   parseCommit,
   parseLsRefs,
   parsePack,
   parseTree,
   type RawGitObject,
-} from "./git-wire.ts";
+} from "../git-wire.ts";
+import { isSafeConfigRepoTemplatePath, type ConfigRepoTemplateReference } from "./reference.ts";
+
 export class RetryableRepoCreationError extends Error {
   override readonly name = "RetryableRepoCreationError";
 }
@@ -74,31 +76,21 @@ export async function downloadPublicGithubTemplate(
     selectedTree = requireTree(objectsByOid, entry.oid);
   }
 
-  const files: Array<{ oid: string; path: string }> = [];
-  const pending = [{ path: "", tree: selectedTree }];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) break;
-    for (const entry of parseTree(current.tree.payload)) {
-      const path = current.path === "" ? entry.name : `${current.path}/${entry.name}`;
-      if (entry.mode === "40000") {
-        pending.push({ path, tree: requireTree(objectsByOid, entry.oid) });
-        continue;
-      }
-      if (entry.mode !== "100644" && entry.mode !== "100755") {
-        throw new Error(`Config templates cannot contain submodules or symbolic links (${path}).`);
-      }
-      if (!isSafeConfigRepoTemplatePath(path)) {
-        throw new Error(
-          `The selected config template contains an unsafe path: ${JSON.stringify(path)}.`,
-        );
-      }
-      files.push({ oid: entry.oid, path });
-      if (files.length > MAX_FILE_COUNT) {
-        throw new Error(`The selected config template contains more than ${MAX_FILE_COUNT} files.`);
-      }
-    }
+  const manifest = manifestOf(parseTree(selectedTree.payload), objectsByOid);
+  if (manifest.size > MAX_FILE_COUNT) {
+    throw new Error(`The selected config template contains more than ${MAX_FILE_COUNT} files.`);
   }
+  const files = [...manifest].map(([path, entry]) => {
+    if (entry.mode !== "100644" && entry.mode !== "100755") {
+      throw new Error(`Config templates cannot contain submodules or symbolic links (${path}).`);
+    }
+    if (!isSafeConfigRepoTemplatePath(path)) {
+      throw new Error(
+        `The selected config template contains an unsafe path: ${JSON.stringify(path)}.`,
+      );
+    }
+    return { oid: entry.oid, path };
+  });
   files.sort((left, right) => left.path.localeCompare(right.path));
   if (files.length === 0) throw new Error("The selected config template contains no files.");
 
@@ -136,8 +128,7 @@ async function resolveGithubRef(
     : requestedRef === "HEAD"
       ? ["HEAD"]
       : [`refs/heads/${requestedRef}`, `refs/tags/${requestedRef}`, `refs/${requestedRef}`];
-  const body = await fetchGithub(githubFetch, endpoint, encodeLsRefsRequest({ prefixes }));
-  const refs = parseLsRefs(body);
+  const refs = parseLsRefs(await fetchGithub(githubFetch, endpoint, encodeLsRefsRequest(prefixes)));
   const match = prefixes.map((prefix) => refs.find((entry) => entry.name === prefix)).find(Boolean);
   if (!match) throw new Error(`GitHub ref ${JSON.stringify(requestedRef)} was not found.`);
   return match.peeledOid || match.oid;
@@ -158,7 +149,7 @@ async function fetchGithubObjects(
   limits: { maxObjectBytes: number; maxTotalObjectBytes: number },
 ): Promise<RawGitObject[]> {
   const response = await fetchGithub(githubFetch, endpoint, request);
-  return parsePack(demuxFetchResponse(response).pack, limits);
+  return parsePack(demuxFetchResponse(response), limits);
 }
 
 async function fetchGithub(

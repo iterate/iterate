@@ -1,41 +1,23 @@
-// src/repo/git-wire.ts — GIT, for the repo facet (durable-object.ts): the object codecs (blob / tree /
-// commit ids exactly as git computes them, a tip's tree flattened to a manifest, a manifest re-encoded
-// to tree objects), the pack codec (parse a fetch's pack — zlib entries, ref/ofs deltas resolved —
-// and build a push's), the protocol-v2 framing (pkt-line, ls-refs, fetch, receive-pack report-status)
-// and the one HTTP transport against an Artifacts remote (`createGitWireTransport`). The repo facet is
-// the ONLY thing that speaks git; `itx.cfArtifacts` is the binding proxy that mints the token and
-// names the remote. This module runs INSIDE the repo facet (this worker's own class,
-// pako included) and in Node for the local e2e run's fake remote (e2e/support/fake-git-server.ts),
-// which reuses the same codecs — so a pack the fake serves is a pack the client parses.
-//
-// The endpoint's load-bearing behaviors (probed against Artifacts, "gitty/1.0"): see the transport
-// section. Branch `main` only (REF); text content only; a submodule pointer (mode 160000) is carried
-// through a manifest but has no blob.
+// git-wire.ts — the one git protocol implementation: the object codecs (blob / tree / commit ids
+// exactly as git computes them, a tree flattened to a manifest, a manifest re-encoded to tree
+// objects), the pack codec (parse a fetch's pack — zlib entries, ref/ofs deltas resolved — and build a
+// push's), the protocol-v2 framing (pkt-line, ls-refs, fetch, receive-pack report-status) and the one
+// HTTP transport against an Artifacts remote (`createGitWireTransport`). Its callers: the platform's
+// repo facet (apps/os/src/repo/durable-object.ts), the anonymous GitHub config-template reader
+// (config-repo-template/github.ts, which brings its own fetch) and, in Node, the local e2e run's fake
+// remote (apps/os/e2e/support/fake-git-server.ts) — so a pack the fake serves is a pack the client
+// parses. Text content only; a submodule pointer (mode 160000) is carried through a manifest but has
+// no blob.
 
 import { deflate, Inflate } from "pako";
 
-/** The one branch every repo operation addresses. */
-export const REF = "refs/heads/main";
 /** The "no such object" oid a first push names as the old value of an unborn ref. */
 export const ZERO_OID = "0".repeat(40);
-/** The author of a commit whose caller named none. */
-export const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
-export type RepoFileChange = { path: string; content: string } | { path: string; delete: true };
-
-/** One commit as `log` lists it, newest first (`timestamp` is epoch milliseconds). */
-export type RepoLogEntry = {
-  oid: string;
-  message: string;
-  author: { name: string; email: string };
-  timestamp: number;
-  parents: string[];
-};
-
-/** A tip's tree FLATTENED: repo-relative path → its entry (blob oid + mode). Every tree object is in
- *  the snapshot pack (`deepen 1` carries everything reachable from the tip), so the walk fetches
+/** A tree FLATTENED: tree-relative path → its entry (blob oid + mode). Every tree object must be in
+ *  `objects` (a `deepen 1` pack carries everything reachable from the tip), so the walk fetches
  *  nothing. A submodule pointer (mode 160000) is kept — a re-encoded tree must not drop it — and has
  *  no blob. */
 export type RepoManifest = Map<string, { oid: string; mode: string }>;
@@ -51,7 +33,7 @@ export function manifestOf(
     if (entry.mode === "40000") {
       const tree = objects.get(entry.oid);
       if (tree?.type !== "tree")
-        throw new Error(`itx.cfArtifacts: the pack omitted the tree ${entry.oid} (${path}/)`);
+        throw new Error(`the pack omitted the tree ${entry.oid} (${path}/)`);
       for (const [nested, nestedEntry] of manifestOf(parseTree(tree.payload), objects, `${path}/`))
         manifest.set(nested, nestedEntry);
     } else manifest.set(path, { oid: entry.oid, mode: entry.mode });
@@ -131,30 +113,25 @@ export function parseCommit(payload: Uint8Array): {
       }
     }
   }
-  if (!tree) throw new Error("itx.cfArtifacts: a commit without a tree header");
+  if (!tree) throw new Error("a commit without a tree header");
   return { tree, parents, author, timestamp, message };
 }
 
 /**
- * A minimal git protocol-v2 wire client for the Artifacts git endpoint —
- * what the repo facet's reads and commits (repo/durable-object.ts) need,
- * nothing more: `ls-refs` for ONE branch tip (`tipOf`), a shallow `fetch` of
- * the tip's snapshot (`fetchObjects`), `receive-pack` for one commit (`push`),
- * and the object/pack codecs between.
- *
- * The endpoint ("gitty/1.0") was probed empirically; the load-bearing
- * behaviors this module relies on:
+ * The Artifacts endpoint ("gitty/1.0") was probed empirically; the load-bearing
+ * behaviors the repo facet relies on:
  *
  * - `ls-refs` resolves HEAD and branch tips.
  * - `deepen 1` bounds the commit walk to the wanted tip; the snapshot carries
  *   every blob reachable from it.
- * - `filter` is advertised nowhere and silently ignored — never rely on it.
+ * - `filter` is advertised nowhere and silently ignored — never rely on it
+ *   (GitHub honours `filter blob:none`, which github.ts uses).
  * - Wants for missing oids are silently dropped: callers must verify receipt.
  * - Packs are self-contained (no thin-pack requested) but interleave types
  *   and may contain ofs- and ref-deltas against in-pack bases.
  */
 
-/** The object kinds the two verbs read and write — a shallow branch-tip fetch carries no tag. */
+/** The object kinds read and written — a fetch that wants commits, trees or blobs carries no tag. */
 export type GitObjectType = "blob" | "commit" | "tree";
 
 export interface RawGitObject {
@@ -182,7 +159,7 @@ export function pktLine(line: string): Uint8Array {
 export const FLUSH = textEncoder.encode("0000");
 export const DELIM = textEncoder.encode("0001");
 
-export function concat(parts: Uint8Array[]): Uint8Array {
+export function concat(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
   let cursor = 0;
   for (const part of parts) {
@@ -234,7 +211,7 @@ export function pktText(payload: Uint8Array): string {
 
 export async function hashObject(type: GitObjectType, payload: Uint8Array): Promise<string> {
   const framed = concat([textEncoder.encode(`${type} ${payload.length}\0`), payload]);
-  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-1", framed as BufferSource)));
+  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-1", framed)));
 }
 
 function toHex(bytes: Uint8Array): string {
@@ -335,7 +312,7 @@ function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: U
   return { consumed: pushed - strm.avail_in, out: concat(chunks) };
 }
 
-function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
+function applyDelta(base: Uint8Array, program: Uint8Array, maxBytes?: number): Uint8Array {
   let cursor = 0;
   const varint = () => {
     let value = 0;
@@ -356,6 +333,8 @@ function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
     );
   }
   const resultSize = varint();
+  if (maxBytes !== undefined && resultSize > maxBytes)
+    throw new Error(`pack object exceeds ${maxBytes} bytes`);
   const out = new Uint8Array(resultSize);
   let written = 0;
   while (cursor < program.length) {
@@ -401,14 +380,22 @@ function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
 /**
  * Parse a self-contained pack into verified objects, resolving ofs- and
  * ref-deltas against in-pack bases. Every returned oid is recomputed from
- * the payload, and the trailing SHA-1 is checked first.
+ * the payload, and the trailing SHA-1 is checked first. `limits` bound one
+ * object's and all objects' inflated bytes (an untrusted remote's pack).
  */
-export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
+export async function parsePack(
+  pack: Uint8Array,
+  limits: { maxObjectBytes?: number; maxTotalObjectBytes?: number } = {},
+): Promise<RawGitObject[]> {
+  const { maxObjectBytes, maxTotalObjectBytes = Infinity } = limits;
   if (pack.length < 32 || textDecoder.decode(pack.subarray(0, 4)) !== "PACK") {
     throw new Error("not a pack stream");
   }
   const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-1", pack.subarray(0, pack.length - 20) as BufferSource),
+    await crypto.subtle.digest(
+      "SHA-1",
+      pack.subarray(0, pack.length - 20) as Uint8Array<ArrayBuffer>,
+    ),
   );
   if (toHex(digest) !== toHex(pack.subarray(pack.length - 20))) {
     throw new Error("pack checksum mismatch");
@@ -430,6 +417,7 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   };
   const entries: Entry[] = [];
   const byEntryOffset = new Map<number, Entry>();
+  let declaredBytes = 0;
   let cursor = 12;
   for (let index = 0; index < count; index++) {
     const entryOffset = cursor;
@@ -444,6 +432,11 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
       declaredSize |= (byte & 0x7f) << shift;
       shift += 7;
     }
+    if (maxObjectBytes !== undefined && declaredSize > maxObjectBytes)
+      throw new Error(`pack object exceeds ${maxObjectBytes} bytes`);
+    declaredBytes += declaredSize;
+    if (declaredBytes > maxTotalObjectBytes)
+      throw new Error(`pack objects exceed ${maxTotalObjectBytes} bytes`);
     const kind = OBJECT_TYPE_CODES[typeCode];
     if (!kind) throw new Error(`unknown pack object type ${typeCode}`);
     const entry: Entry = { offset: entryOffset, payload: new Uint8Array(0) };
@@ -498,14 +491,17 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
           throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
         }
         const baseResolved = resolve(base);
-        out = { payload: applyDelta(baseResolved.payload, entry.payload), type: baseResolved.type };
+        out = {
+          payload: applyDelta(baseResolved.payload, entry.payload, maxObjectBytes),
+          type: baseResolved.type,
+        };
       } else {
         const base = byOid.get(entry.baseOid!);
         if (!base) {
           // Retryable: a later pass may have hashed this base by then.
           throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
         }
-        out = { payload: applyDelta(base.payload, entry.payload), type: base.type };
+        out = { payload: applyDelta(base.payload, entry.payload, maxObjectBytes), type: base.type };
       }
       resolved.set(entry, out);
       return out;
@@ -516,8 +512,12 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   // Ref-delta bases are found by oid, so hash non-delta entries first, then
   // sweep deltas in passes (a ref-delta may target another delta's RESULT).
   const objects: RawGitObject[] = [];
+  let resolvedBytes = 0;
   const emit = async (entry: Entry) => {
     const out = resolve(entry);
+    resolvedBytes += out.payload.byteLength;
+    if (resolvedBytes > maxTotalObjectBytes)
+      throw new Error(`pack objects exceed ${maxTotalObjectBytes} bytes`);
     const oid = await hashObject(out.type, out.payload);
     byOid.set(oid, out);
     objects.push({ oid, ...out });
@@ -567,46 +567,50 @@ export async function buildPack(
     parts.push(deflate(object.payload));
   }
   const body = concat(parts);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", body as BufferSource));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", body));
   return concat([body, digest]);
 }
 
 // ── protocol v2 requests ──
 
-function encodeFetchRequest(input: { deepen: number; wants: string[] }): Uint8Array {
+export function encodeFetchRequest(input: {
+  deepen?: number;
+  filter?: "blob:none";
+  wants: string[];
+}): Uint8Array {
   const parts = [pktLine("command=fetch"), DELIM];
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
-  parts.push(pktLine(`deepen ${input.deepen}`));
+  if (input.deepen !== undefined) parts.push(pktLine(`deepen ${input.deepen}`));
+  if (input.filter) parts.push(pktLine(`filter ${input.filter}`));
   parts.push(pktLine("no-progress"));
   parts.push(pktLine("done"));
   parts.push(FLUSH);
   return concat(parts);
 }
 
-function encodeLsRefsRequest(ref: string): Uint8Array {
-  return concat([
-    pktLine("command=ls-refs"),
-    DELIM,
-    pktLine("peel"),
-    pktLine(`ref-prefix ${ref}`),
-    FLUSH,
-  ]);
+export function encodeLsRefsRequest(prefixes: string[]): Uint8Array {
+  const parts = [pktLine("command=ls-refs"), DELIM, pktLine("peel")];
+  for (const prefix of prefixes) parts.push(pktLine(`ref-prefix ${prefix}`));
+  parts.push(FLUSH);
+  return concat(parts);
 }
 
-/** The oid of `ref` among the `<oid> <name> [attributes…]` lines (the attributes — peeled, symref
- *  targets — are not read), or undefined when the response names no such ref (an unborn branch). */
-function tipOfLsRefs(body: Uint8Array, ref: string): string | undefined {
+/** The `<oid> <name> [attributes…]` lines; `peeledOid` is an annotated tag's commit. */
+export function parseLsRefs(body: Uint8Array) {
+  const refs: { name: string; oid: string; peeledOid: string | undefined }[] = [];
   for (const frame of pktFrames(body)) {
     if (frame.kind !== "line") continue;
-    const [oid, name] = pktText(frame.payload).split(" ");
-    if (name === ref) return oid;
+    const [oid, name, ...attributes] = pktText(frame.payload).split(" ");
+    if (!oid || !name) continue;
+    const peeled = attributes.find((attribute) => attribute.startsWith("peeled:"));
+    refs.push({ name, oid, peeledOid: peeled?.slice(7) });
   }
-  return undefined;
+  return refs;
 }
 
 /** The pack out of a v2 fetch response: sideband channel 1 after the `packfile` marker; channel 3 is
  *  a fatal from the server. The `acknowledgments`/`shallow-info` sections before it are skipped. */
-function demuxFetchResponse(body: Uint8Array): Uint8Array {
+export function demuxFetchResponse(body: Uint8Array): Uint8Array {
   const packChunks: Uint8Array[] = [];
   let inPack = false;
   for (const frame of pktFrames(body)) {
@@ -694,7 +698,7 @@ export function createGitWireTransport(input: { remote: string; token: string })
   const authorization = `Basic ${btoa(`x:${input.token}`)}`;
   const post = async (service: string, body: Uint8Array): Promise<Uint8Array> => {
     const response = await fetch(`${input.remote}/${service}`, {
-      body: body as BodyInit,
+      body: body as Uint8Array<ArrayBuffer>,
       headers: {
         authorization,
         "content-type": `application/x-${service}-request`,
@@ -712,7 +716,9 @@ export function createGitWireTransport(input: { remote: string; token: string })
     fetchObjects: async (request: { deepen: number; wants: string[] }): Promise<RawGitObject[]> =>
       parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request)))),
     tipOf: async (ref: string): Promise<string | undefined> =>
-      tipOfLsRefs(await post("git-upload-pack", encodeLsRefsRequest(ref)), ref),
+      parseLsRefs(await post("git-upload-pack", encodeLsRefsRequest([ref]))).find(
+        (entry) => entry.name === ref,
+      )?.oid,
     push: async (request: {
       newOid: string;
       oldOid: string;

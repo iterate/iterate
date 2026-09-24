@@ -10,7 +10,7 @@
 // Artifacts proxy threw), which `create` throws; a later `create` is a new attempt, and one on a
 // created repo answers at once, appending nothing. Every other method refuses until the certificate.
 // Every commit that lands through the facet is a `repo/commit-completed` fact on its path, cross-posted to `/`. The facet
-// is the ONLY thing that speaks git (git protocol v2 over HTTP, src/repo/git-wire.ts): `itx.cfArtifacts`
+// is the ONLY thing that speaks git (git protocol v2 over HTTP, shared/git-wire.ts): `itx.cfArtifacts`
 // — the binding proxy, by the same path — hands it a token and the remote URL; the tip's snapshot is
 // memoized under its oid — one `ls-refs` per read, the pack only when the tip moved. Locally the
 // physical tier is a fake git REMOTE (support/fake-git-server.ts) behind a fake `itx.cfArtifacts`
@@ -22,7 +22,7 @@
 // binds Artifacts too (wrangler's local runtime serves it).
 
 import { expect, test } from "vitest";
-import type { RepoLogEntry } from "../src/repo/git-wire.ts";
+import type { RepoLogEntry } from "../src/repo/durable-object.ts";
 import {
   freshCtx,
   openItx,

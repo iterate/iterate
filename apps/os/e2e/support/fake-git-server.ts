@@ -1,5 +1,5 @@
 // fake-git-server.ts — an in-memory git REMOTE for the local e2e run: a Node `http` server on
-// 127.0.0.1 speaking exactly the protocol-v2 subset the repo facet speaks (src/repo/git-wire.ts,
+// 127.0.0.1 speaking exactly the protocol-v2 subset the repo facet speaks (shared/git-wire.ts,
 // whose codecs this reuses — so a pack this serves is a pack the facet parses, and a pack the facet
 // pushes is one this parses): `ls-refs` for the tip of `refs/heads/main`, a shallow `fetch` (wants +
 // `deepen N` → one pack in sideband-1 frames) and `receive-pack` (one ref update, compare-and-swapped
@@ -14,10 +14,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import {
-  AUTHOR,
   DELIM,
   FLUSH,
-  REF,
   ZERO_OID,
   buildPack,
   concat,
@@ -32,9 +30,13 @@ import {
   pktText,
   treeObjectsOf,
   type RawGitObject,
-  type RepoFileChange,
   type RepoManifest,
-} from "../../src/repo/git-wire.ts";
+} from "@iterate-com/shared/git-wire";
+import type { RepoFileChange } from "../../src/repo/durable-object.ts";
+
+/** The repo facet's one branch, and the author of a commit landed from outside it. */
+const REF = "refs/heads/main";
+const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();

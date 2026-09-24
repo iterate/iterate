@@ -1,12 +1,12 @@
 import { expect, test, vi } from "vitest";
 import {
   buildPack,
+  concat,
   encodeCommit,
-  encodeTree,
   hashObject,
   pktLine,
-  type TreeEntry,
-} from "./git-wire.ts";
+  treeObjectsOf,
+} from "../git-wire.ts";
 import {
   downloadPublicGithubTemplate,
   pinPublicGithubTemplate,
@@ -26,7 +26,7 @@ test("pins a branch without downloading its tree and leaves exact commits alone"
   const githubFetch = vi
     .fn()
     .mockResolvedValue(
-      new Response(concatBytes([pktLine(`${ref} refs/heads/main`), textEncoder.encode("0000")])),
+      new Response(concat([pktLine(`${ref} refs/heads/main`), textEncoder.encode("0000")])),
     );
   const pinned = await pinPublicGithubTemplate(reference, githubFetch);
   expect(pinned).toEqual({ ...reference, ref });
@@ -75,10 +75,7 @@ test("resolves a GitHub pull ref before fetching its objects", async () => {
     .fn()
     .mockResolvedValueOnce(
       new Response(
-        concatBytes([
-          pktLine(`${fixture.commitOid} refs/pull/2503/head`),
-          textEncoder.encode("0000"),
-        ]),
+        concat([pktLine(`${fixture.commitOid} refs/pull/2503/head`), textEncoder.encode("0000")]),
       ),
     )
     .mockResolvedValueOnce(gitFetchResponse(fixture.graphPack))
@@ -226,21 +223,19 @@ async function createFixture(
       return { file, oid: await hashObject("blob", payload), payload };
     }),
   );
-  const templateTree = encodeTree(
-    blobs.map(
-      ({ file, oid }): TreeEntry => ({ mode: file.mode || "100644", name: file.name, oid }),
+  const { rootOid, trees } = await treeObjectsOf(
+    new Map(
+      blobs.map(({ file, oid }) => [
+        `configs/with-voice/${file.name}`,
+        { mode: file.mode || "100644", oid },
+      ]),
     ),
   );
-  const templateTreeOid = await hashObject("tree", templateTree);
-  const configsTree = encodeTree([{ mode: "40000", name: "with-voice", oid: templateTreeOid }]);
-  const configsTreeOid = await hashObject("tree", configsTree);
-  const rootTree = encodeTree([{ mode: "40000", name: "configs", oid: configsTreeOid }]);
-  const rootTreeOid = await hashObject("tree", rootTree);
   const commit = encodeCommit({
     author: { date: new Date(0), email: "test@iterate.com", name: "Test" },
     message: "fixture",
     parents: [],
-    tree: rootTreeOid,
+    tree: rootOid,
   });
   const commitOid = await hashObject("commit", commit);
   return {
@@ -248,9 +243,7 @@ async function createFixture(
     commitOid,
     graphPack: await buildPack([
       { payload: commit, type: "commit" },
-      { payload: rootTree, type: "tree" },
-      { payload: configsTree, type: "tree" },
-      { payload: templateTree, type: "tree" },
+      ...trees.map((tree) => ({ payload: tree.payload, type: "tree" as const })),
     ]),
   };
 }
@@ -260,23 +253,13 @@ function gitFetchResponse(pack: Uint8Array): Response {
   for (let offset = 0; offset < pack.byteLength; offset += 60_000) {
     const payload = pack.subarray(offset, offset + 60_000);
     const header = textEncoder.encode((payload.byteLength + 5).toString(16).padStart(4, "0"));
-    chunks.push(concatBytes([header, Uint8Array.of(1), payload]));
+    chunks.push(concat([header, Uint8Array.of(1), payload]));
   }
   chunks.push(textEncoder.encode("0000"));
-  return new Response(concatBytes(chunks));
+  return new Response(concat(chunks));
 }
 
 function decodeRequestBody(body: RequestInit["body"]): string {
   if (!(body instanceof Uint8Array)) throw new Error("expected a Uint8Array request body");
   return new TextDecoder().decode(body);
-}
-
-function concatBytes(parts: Uint8Array[]): Uint8Array {
-  const result = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.byteLength;
-  }
-  return result;
 }

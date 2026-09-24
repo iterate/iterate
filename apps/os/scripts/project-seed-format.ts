@@ -1,7 +1,7 @@
 import { z } from "zod";
+import { hashObject, treeObjectsOf } from "@iterate-com/shared/git-wire";
 import { decryptSecretMaterial, type MaterialKeys } from "../src/secret-at-rest.ts";
 import { normalizeSecretRecord } from "../src/secrets.ts";
-import { hashObject, treeObjectsOf } from "../src/repo/git-wire.ts";
 
 const Path = z
   .string()

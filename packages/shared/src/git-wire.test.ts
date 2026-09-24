@@ -1,8 +1,9 @@
-// src/repo/git-wire.test.ts — the git codecs' unit pins (blob/tree/commit ids exactly as git computes
+// git-wire.test.ts — the git codecs' unit pins (blob/tree/commit ids exactly as git computes
 // them, the manifest ⇄ tree round trip) and the wire's one refusal that matters: a TRUNCATED pkt-line
 // body is an outage, never an empty ref list. Pure: no DO, no bindings; `fetch` is stubbed where the
 // transport is exercised. The packs themselves are pinned against the real endpoint deployed
-// (e2e/cfartifacts.e2e.test.ts) and against the local fake remote (e2e/support/fake-git-server.ts).
+// (apps/os/e2e/cfartifacts.e2e.test.ts), against the local fake remote (apps/os/e2e/support/
+// fake-git-server.ts) and, for GitHub's fetch, in config-repo-template/github.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import {

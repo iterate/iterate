@@ -33,7 +33,6 @@
     "iterate": "workspace:*",
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",
-    "pako": "^3.0.1",
     "posthog-js": "1.404.0",
     "posthog-node": "^5.52.5",
     "react": "^19.2.7",

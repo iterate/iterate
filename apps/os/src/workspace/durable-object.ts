@@ -13,14 +13,14 @@
 //
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
 // `deleted` flag that makes it a whiteout. Text only, ONE writer, no policies. The repo facets speak
-// git themselves (src/repo/git-wire.ts) and reach the Artifacts binding — their token and remote — as
+// git themselves (shared/git-wire.ts) and reach the Artifacts binding — their token and remote — as
 // `itx.cfArtifacts` through THEIR context's rules, so a test lends a fake proxy there
 // (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts). Hosted from `ctx.exports`
 // (first-party-facets.ts): ordinary bundled worker code, reached as `itx.facets.get("workspace")`
 // (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
-import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
+import type { RepoFileChange, RepoLogEntry } from "../repo/durable-object.ts";
 import {
   assertCreated,
   EntityLifecycleProcessor,
