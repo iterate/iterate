@@ -163,7 +163,7 @@ export class FetchUpgradeSpliceEnd {
   // ── the local socket ──
 
   #sendData(data: unknown): void {
-    if (this.#ended) return;
+    if (this.#ended || this.#closeFrame) return;
     const payload =
       typeof data === "string"
         ? { kind: KIND.text, bytes: new TextEncoder().encode(data) }
@@ -185,17 +185,26 @@ export class FetchUpgradeSpliceEnd {
     this.#sendOnSocket(frame.buffer);
   }
 
-  /** The local socket closed: the orderly end, said to the other end in-band. */
+  /** The local socket closed: the orderly end, said to the other end in-band — once the splice is
+   *  whole, after everything sent before it. While the DO socket is down it waits for the resume. */
   #endLocally(code: number | undefined, reason: string | undefined): void {
-    if (this.#ended) return;
-    this.#ended = true;
-    this.#clearDeadline();
+    if (this.#ended || this.#closeFrame) return;
     const reasonBytes = new TextEncoder().encode(truncateCloseReason(reason || ""));
     const frame = new Uint8Array(3 + reasonBytes.byteLength);
     frame[0] = KIND.close;
     new DataView(frame.buffer).setUint16(1, sendableCloseCode(code));
     frame.set(reasonBytes, 3);
-    this.#sendOnSocket(frame.buffer);
+    this.#closeFrame = frame.buffer;
+    if (this.#downSince === null) this.#sendClose();
+  }
+
+  /** The local socket's close, owed to the other end until the splice is whole (`#endLocally`). */
+  #closeFrame: ArrayBuffer | null = null;
+
+  #sendClose(): void {
+    this.#ended = true;
+    this.#clearDeadline();
+    this.#sendOnSocket(this.#closeFrame!);
     closeQuietly(this.#socket, 1000, "closed");
     this.#socket = null;
   }
@@ -259,6 +268,7 @@ export class FetchUpgradeSpliceEnd {
       for (const { frame } of this.#unacked) this.#sendOnSocket(frame);
       if (bytes[9] === 0) this.#sendOnSocket(controlFrame(KIND.resume, this.#receivedThrough, 1));
       this.#resumed();
+      if (this.#closeFrame) this.#sendClose();
       return;
     }
     if (kind === KIND.close) {

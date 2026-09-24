@@ -94,6 +94,44 @@ test("an orderly close on either socket closes the other with its code and reaso
   });
 });
 
+test("the visitor closes while the context is down: its code and reason reach the provider once the ends resume, after the frames it sent first", async () => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  splice.context.reset({ deployId: "deploy-2", downForMs: 1_500 });
+  splice.visitor.send("last words");
+  splice.visitor.close(4002, "page closed");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(splice.provider).toMatchObject({
+    received: ["last words"],
+    closed: { code: 4002, reason: "page closed" },
+  });
+});
+
+test("the platform cuts every socket, and a stale close reaches the context after the edge re-dialed but before the relay did: it closes the re-dialed socket once, the edge re-dials again, and nothing is lost", async () => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  splice.context.failing.leg = 1; // the relay's first re-dial fails: its next is 1 s later
+  splice.context.cutAll(5);
+  splice.visitor.send("v1");
+  splice.provider.send("p1");
+  await vi.advanceTimersByTimeAsync(3_000);
+  splice.visitor.send("v2");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(splice).toMatchObject({
+    provider: { received: ["v1", "v2"], closed: null },
+    visitor: { received: ["p1"], closed: null },
+    // the first two, then: the edge's re-dial (closed by the stale close) and its second; the
+    // relay's failed one and its second
+    context: { dials: 6 },
+    reports: [
+      { type: "resumed", side: "eyeball", dials: 2 },
+      { type: "resumed", side: "leg", dials: 2 },
+    ],
+  });
+});
+
 test("the other end never comes back (its relay died with the tunnel): the edge's end gives up at the deadline and closes the visitor's socket 1011", async () => {
   vi.useFakeTimers();
   using splice = spliced();
@@ -193,52 +231,87 @@ function socketPair(): [FakeSocket, FakeSocket] {
   return [a, b];
 }
 
-/** The context: per side, the socket it holds for the newest dial; frames forwarded to the other
- *  side's, a side's close closing the other's (1000), frames dropped while the other side is absent. */
+/** The context, as rpc-stubs.ts `RpcStubFetchServer` behaves: the sockets it holds per side,
+ *  frames forwarded to the other side's current socket, a new dial of a side REPLACING the older
+ *  one (closed without touching its peer), and a side's close — delivered when the context gets to
+ *  it — closing the other side's current socket. A cut socket stays listed until its close is
+ *  delivered, as a dead socket does in the runtime. */
 class FakeContext {
   deployId = "deploy-1";
   dials = 0;
   swallowNextFrames = 0;
   #downUntil = 0;
-  readonly #held = new Map<"eyeball" | "leg", FakeSocket>();
+  readonly #listed: { side: "eyeball" | "leg"; socket: FakeSocket; replaced: boolean }[] = [];
+
+  #current(side: "eyeball" | "leg") {
+    return this.#listed.find((entry) => entry.side === side && !entry.replaced);
+  }
+
+  /** Dials of a side that fail next (a slow relay's re-dial). */
+  readonly failing = { eyeball: 0, leg: 0 };
 
   dial(side: "eyeball" | "leg"): { socket: FakeSocket; deployId: string } | null {
     this.dials += 1;
     if (Date.now() < this.#downUntil) throw new Error("the context is resetting");
+    if (this.failing[side] > 0) {
+      this.failing[side] -= 1;
+      throw new Error("the dial failed");
+    }
+    for (const older of this.#listed.filter((entry) => entry.side === side)) {
+      older.replaced = true;
+      older.socket.close(1000, "replaced");
+    }
     const [end, held] = socketPair();
-    this.#held.get(side)?.close(1000, "replaced");
-    this.#held.set(side, held);
+    const entry = { side, socket: held, replaced: false };
+    this.#listed.push(entry);
     held.addEventListener("message", (event) => {
-      if (this.#held.get(side) !== held) return;
+      if (entry.replaced) return;
       if (this.swallowNextFrames > 0) {
         this.swallowNextFrames -= 1;
         return;
       }
-      const peer = this.#held.get(side === "leg" ? "eyeball" : "leg");
-      if (peer && !peer.closed) peer.send((event as MessageEvent).data as ArrayBuffer);
+      const peer = this.#current(side === "leg" ? "eyeball" : "leg");
+      if (peer && !peer.socket.closed)
+        peer.socket.send((event as MessageEvent).data as ArrayBuffer);
     });
-    held.addEventListener("close", () => {
-      if (this.#held.get(side) !== held) return;
-      this.#held.delete(side);
-      this.#held.get(side === "leg" ? "eyeball" : "leg")?.close(1000, "peer closed");
-    });
+    held.addEventListener("close", () => this.#closed(entry));
     return { socket: end, deployId: this.deployId };
   }
 
-  /** Every socket cut, as a deploy's reset does; dials fail for `downForMs`. */
+  /** A side's close, delivered: forgotten, and — unless a re-dial replaced it — its peer closed. */
+  #closed(entry: { side: "eyeball" | "leg"; socket: FakeSocket; replaced: boolean }): void {
+    const index = this.#listed.indexOf(entry);
+    if (index === -1) return;
+    this.#listed.splice(index, 1);
+    if (entry.replaced) return;
+    this.#current(entry.side === "leg" ? "eyeball" : "leg")?.socket.close(1000, "peer closed");
+  }
+
+  /** Every socket cut, as a deploy's reset does — a fresh incarnation holds none; dials fail for
+   *  `downForMs`. */
   reset(input: { deployId: string; downForMs: number }): void {
     this.deployId = input.deployId;
     this.#downUntil = Date.now() + input.downForMs;
-    const held = [...this.#held.values()];
-    this.#held.clear();
-    for (const socket of held) socket.other.cut();
+    const listed = this.#listed.splice(0);
+    for (const entry of listed) entry.socket.other.cut();
+  }
+
+  /** Every socket cut WITHOUT a reset (the platform dropped them): the ends see it at once, the
+   *  context delivers the closes `lateMs` later — after the ends have re-dialed. */
+  cutAll(lateMs: number): void {
+    const cut = [...this.#listed];
+    for (const entry of cut) entry.socket.other.cut();
+    setTimeout(() => {
+      for (const entry of cut) this.#closed(entry);
+    }, lateMs);
   }
 
   /** One side's connection cut: the context sees it close and closes the other side's. */
   drop(side: "eyeball" | "leg"): void {
-    const held = this.#held.get(side);
-    held?.other.cut();
-    held?.emit("close", { code: 1006, reason: "" });
+    const entry = this.#current(side);
+    if (!entry) return;
+    entry.socket.other.cut();
+    this.#closed(entry);
   }
 }
 
