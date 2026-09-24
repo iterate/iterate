@@ -29,7 +29,6 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import {
-  append,
   collector,
   freshCtx,
   openItx,
@@ -301,17 +300,17 @@ test("a resumed { afterOffset } while HEALTHY redelivers exactly the events afte
   const itx = openItx(freshCtx("replay"));
   const c = collector();
   await cursorSubscribe(itx, "replay", c.fn, ["mark"]);
-  const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
-  const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
-  const [m3] = await append(itx, { type: "mark", payload: { n: 3 } });
+  const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
+  const [m2] = await itx.append({ type: "mark", payload: { n: 2 } });
+  const [m3] = await itx.append({ type: "mark", payload: { n: 3 } });
   await until("first wave", () => c.offsets().length >= 3, 8_000);
   expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset, m3.offset]);
   const before = c.invocations.length;
   // The operator's ONE recovery event — a plain append. It is level-triggered onto the cursor
   // row: the pump applies it the next time it runs for this row (the next consumed commit, or
   // the DO's alarm) — the resumed event itself is not a "mark", so m4 is that trigger.
-  await append(itx, { type: RESUMED, payload: { name: "replay", afterOffset: m1.offset } });
-  const [m4] = await append(itx, { type: "mark", payload: { n: 4 } });
+  await itx.append({ type: RESUMED, payload: { name: "replay", afterOffset: m1.offset } });
+  const [m4] = await itx.append({ type: "mark", payload: { n: 4 } });
   await until("redelivery", () => c.offsets().includes(m4.offset), 8_000);
   await sleep(400);
   const redelivered = c.invocations.slice(before).flatMap((i) => i.events.map((e) => e.offset));
@@ -329,10 +328,10 @@ test("a resumed afterOffset BEYOND head must not deaden the row — the next app
   const itx = openItx(freshCtx("beyond"));
   const c = collector();
   await cursorSubscribe(itx, "beyond", c.fn, ["mark"]);
-  const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
+  const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
   await until("lane works", () => c.offsets().includes(m1.offset), 8_000);
-  await append(itx, { type: RESUMED, payload: { name: "beyond", afterOffset: m1.offset + 1000 } });
-  const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
+  await itx.append({ type: RESUMED, payload: { name: "beyond", afterOffset: m1.offset + 1000 } });
+  const [m2] = await itx.append({ type: "mark", payload: { n: 2 } });
   await until("the event after the resume delivers", () => c.offsets().includes(m2.offset), 5_000);
 });
 
@@ -345,7 +344,7 @@ test("the view: a push target's row has NO cursor; a resumed fact for an unknown
   const before = await subscriptions(itx);
   expect(before).toHaveLength(1); // conny only
   expect(before.find((r: { name: string }) => r.name === "conny").cursor).toBeUndefined(); // push target: no cursor
-  const [fact] = await append(itx, { type: RESUMED, payload: { name: "never-was" } });
+  const [fact] = await itx.append({ type: RESUMED, payload: { name: "never-was" } });
   expect(fact.offset).toBeGreaterThan(0); // not refused — a fact nobody reduces into a row
   // the reduce ignored never-was: no row was created for it and conny's row is untouched.
   const after = await subscriptions(itx);
@@ -366,7 +365,7 @@ test("consumes ['*'] delivers every durable event; the row carries a cursor at `
   const control = collector();
   await cursorSubscribe(itx, "star", star.fn, ["*"]);
   await cursorSubscribe(itx, "control", control.fn, ["note"]);
-  const [note] = await append(itx, { type: "note" });
+  const [note] = await itx.append({ type: "note" });
   await until(
     "control got it (the lane works)",
     () => control.offsets().includes(note.offset),
@@ -400,10 +399,10 @@ test("ephemerals DO reach a caught-up cursor target (read back from the stream's
   const itx = openItx(freshCtx("ephcur"));
   const c = collector();
   await cursorSubscribe(itx, "ephcur", c.fn, ["blip"]);
-  await append(itx, { type: "unrelated" }); // a filtered durable commit — the row is still caught up
-  const [eph] = await append(itx, { type: "blip", ephemeral: true, payload: { kind: "eph" } });
+  await itx.append({ type: "unrelated" }); // a filtered durable commit — the row is still caught up
+  const [eph] = await itx.append({ type: "blip", ephemeral: true, payload: { kind: "eph" } });
   await until("the ephemeral blip delivers", () => c.offsets().includes(eph.offset), 8_000);
-  const [durable] = await append(itx, { type: "blip", payload: { kind: "durable" } });
+  const [durable] = await itx.append({ type: "blip", payload: { kind: "durable" } });
   await until("the durable blip delivers", () => c.offsets().includes(durable.offset), 8_000);
   await sleep(400);
   expect(c.offsets()).toEqual([eph.offset, durable.offset]); // both, once each, in order
@@ -431,7 +430,7 @@ test("removing a row (subscribe { target: null }) during an in-flight delivery l
     },
     ["mark"],
   );
-  await append(itx, { type: "mark" });
+  await itx.append({ type: "mark" });
   await until("delivery in flight", () => invocations >= 1, 8_000);
   await itx.subscribe({ name: "ghost", target: null }); // reduced inline: on return the row is gone and its cursor forgotten
   expect(await itx.subscriptions.get("ghost")).toBeNull();
@@ -453,10 +452,10 @@ test("row isolation — one halted row never blocks its neighbor", async () => {
   const good = collector();
   await digestSubscribe(itx, "bad", ["mark"]); // halts NOW on the poison (retryable: false)
   await cursorSubscribe(itx, "good", good.fn, ["mark"]);
-  const [m1] = await append(itx, { type: "mark", payload: { poison: true, n: 1 } });
+  const [m1] = await itx.append({ type: "mark", payload: { poison: true, n: 1 } });
   await until("bad halted", async () => (await itx.subscriptions.get("bad"))?.halted, 8_000);
   await until("good got m1", () => good.offsets().includes(m1.offset), 8_000);
-  const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
+  const [m2] = await itx.append({ type: "mark", payload: { n: 2 } });
   await until(
     "good keeps delivering AFTER the neighbor halted",
     () => good.offsets().includes(m2.offset),
@@ -508,7 +507,7 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
     target: "itx.does-not-exist.processEventBatch",
   });
   expect(await sub.name).toBe("unusable"); // configure resolved — the receiver was not probed
-  await append(itx, { type: "mark" }); // the first delivery fails inside the loop, never here
+  await itx.append({ type: "mark" }); // the first delivery fails inside the loop, never here
   await sleep(800);
   const r = await itx.subscriptions.get("unusable");
   expect(r).not.toBeNull(); // the row stands…
@@ -524,7 +523,7 @@ test("agreement: a push subscriber and a cursor subscriber see the SAME offsets 
   await cursorSubscribe(itx, "viaCursor", cursored.fn, ["mark"]);
   const committed: any[] = [];
   for (let i = 0; i < 5; i++)
-    committed.push(...(await append(itx, { type: "mark", payload: { i } })));
+    committed.push(...(await itx.append({ type: "mark", payload: { i } })));
   const offsets = committed.map((e) => e.offset);
   await until(
     "both done",
@@ -553,7 +552,7 @@ test("reentrancy: a cursor delivery targeting this stream's own append neither d
   await itx.subscribe({ name: "ctrl", consumes: ["seed"], target: ctrl.fn });
   // the cursor subscription whose delivery APPENDS BACK into the stream it delivers from
   await itx.subscribe({ name: "reenter", consumes: ["seed"], target: "itx.cd('/').append" });
-  const [seed] = await append(itx, { type: "seed", payload: { n: 1 } });
+  const [seed] = await itx.append({ type: "seed", payload: { n: 1 } });
   await until("control subscriber saw the seed", () => ctrl.offsets().includes(seed.offset));
 
   // no deadlock and no runaway: the head must go QUIET (stable for 2s within 15s)
@@ -580,7 +579,7 @@ test("reentrancy: a cursor delivery targeting this stream's own append neither d
   expect(ctrl.offsets().filter((o) => o === seed.offset)).toHaveLength(1); // seed seen exactly once
 
   // the stream stays serviceable for later work, and removing the row ends the ladder
-  const [post] = await append(itx, { type: "afterparty" });
+  const [post] = await itx.append({ type: "afterparty" });
   expect(post.offset).toBeGreaterThan(seed.offset);
   await itx.subscribe({ name: "reenter", target: null });
   expect(await itx.subscriptions.get("reenter")).toBeNull();

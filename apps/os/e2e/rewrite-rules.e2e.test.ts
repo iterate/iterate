@@ -30,7 +30,6 @@ import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import {
   adminCredentials,
-  append,
   freshCtx,
   openItx,
   readAll,
@@ -400,7 +399,7 @@ test("300 rules: invoking the NEWEST rule and a built-in root both stay under 15
     type: REWRITE_RULE_CONFIGURED,
     payload: { match: `itx.m${i}`, target: ["itx", "whoami"] },
   }));
-  const committed = await append(itx, ...rules);
+  const committed = await itx.append(...rules);
   expect(committed).toHaveLength(300);
 
   const time = async (fn: () => Promise<unknown>, iters = 12): Promise<number> => {
@@ -434,7 +433,7 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
   // malformed rewrite-rule is rejected at the door — not committed and then skipped at the reduce.
   // An unparseable target:
   const unparseable = await rejection(
-    append(itx, {
+    itx.append({
       type: REWRITE_RULE_CONFIGURED,
       payload: { match: "itx.broken", target: "((((" },
     }),
@@ -442,10 +441,10 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
   );
   expect(unparseable.message).toMatch(/expected|itx/i);
   // NO payload at all:
-  await rejection(append(itx, { type: REWRITE_RULE_CONFIGURED }), "a payload-less rewrite rule");
+  await rejection(itx.append({ type: REWRITE_RULE_CONFIGURED }), "a payload-less rewrite rule");
   // wrong shapes inside the payload:
   await rejection(
-    append(itx, {
+    itx.append({
       type: REWRITE_RULE_CONFIGURED,
       payload: { match: 42, target: ["not", "a", "string"] },
     }),

@@ -36,7 +36,7 @@
 
 import { beforeAll, expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { append, freshCtx, openItx, rejection } from "./support/client.ts";
+import { freshCtx, openItx, rejection } from "./support/client.ts";
 import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
 import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
@@ -68,7 +68,7 @@ beforeAll(async () => {
   const itx = openItx(seededCtx);
   seededOffsets = [];
   for (let n = 0; n < EVENT_COUNT; n++) {
-    const [event] = await append(itx, { type: "blob", payload: { n, blob: blobFor(n) } });
+    const [event] = await itx.append({ type: "blob", payload: { n, blob: blobFor(n) } });
     seededOffsets.push(event.offset as number);
   }
 }, 600_000);
@@ -213,15 +213,15 @@ test.sequential(
   { timeout: 120_000 },
   async () => {
     const itx = openItx(freshCtx("membudget-door"));
-    const [marker] = await append(itx, { type: "marker" });
+    const [marker] = await itx.append({ type: "marker" });
     const error = await rejection(
-      append(itx, { type: "blob", payload: { blob: "z".repeat(9 * MiB) } }),
+      itx.append({ type: "blob", payload: { blob: "z".repeat(9 * MiB) } }),
       "a 9 MiB append",
       60_000,
     );
     expect(errorCode(error)).toBe("EVENT_TOO_LARGE");
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
-    const [next] = await append(itx, { type: "after" });
+    const [next] = await itx.append({ type: "after" });
     expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
   },
 );
@@ -250,7 +250,7 @@ crashHunt(
       });
     const results = await Promise.all(
       Array.from({ length: 30 }, (_, i) =>
-        settle(append(itx, { type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
+        settle(itx.append({ type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
       ),
     );
     const reset = results.some((r) => !r.ok && isDurableObjectReset(r.e));
@@ -267,8 +267,8 @@ crashHunt(
       () => recovered.invoke("itx.facets.get('core').snapshot()") as Promise<{ offset: number }>,
     );
     expect(snapshot.offset).toBeGreaterThan(0);
-    const [ev] = await retryWhileOverloaded(() =>
-      append(recovered, { type: "fan-out-recovery-marker" }),
+    const [ev] = await retryWhileOverloaded<any[]>(() =>
+      recovered.append({ type: "fan-out-recovery-marker" }),
     );
     expect(ev.offset).toBeGreaterThan(0);
   },
@@ -290,8 +290,7 @@ crashHunt(
     const results = await Promise.all(
       Array.from({ length: 8 }, () => openItx(freshCtx("degrade-edge"))).map((itx) =>
         settle(
-          append(
-            itx,
+          itx.append(
             ...Array.from({ length: 4 }, (_, j) => ({
               type: "blob",
               payload: { j, blob: blob(7 * MiB) },
@@ -330,7 +329,7 @@ crashHunt(
     const ctx = freshCtx("degrade-poison");
     const itx = openItx(ctx);
     for (let n = 0; n < 16; n++)
-      await append(itx, { type: "blob", payload: { n, blob: blob(4 * MiB) } });
+      await itx.append({ type: "blob", payload: { n, blob: blob(4 * MiB) } });
     await itx.processors.enable("hoarder", {
       source: HOARDER_SOURCE,
       className: "HoarderDurableObject",
@@ -346,7 +345,7 @@ crashHunt(
       expect(isDurableObjectReset((r as { e: any }).e)).toBe(false); // the facet wedged; the DO did not reset
     }
     // The parent is intact: a fresh session's append lands.
-    const [ev] = await append(openItx(ctx), { type: "after-poison" });
+    const [ev] = await openItx(ctx).append({ type: "after-poison" });
     expect(ev.offset).toBeGreaterThan(0);
   },
 );
@@ -367,7 +366,7 @@ deployedOnly.sequential(
     expect(e?.overloaded === true || /exceeded memory limit/i.test(String(e?.message))).toBe(true);
     expect(isDurableObjectReset(e)).toBe(false); // the loaded isolate died, not the parent DO
     // The parent is intact: a small append lands on the same session.
-    const [ev] = await append(itx, { type: "after-loaded-oom" });
+    const [ev] = await itx.append({ type: "after-loaded-oom" });
     expect(ev.offset).toBeGreaterThan(0);
   },
 );

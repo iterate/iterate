@@ -12,7 +12,6 @@ import { dirname } from "node:path";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import {
-  append,
   collector,
   durableCountsByType,
   freshCtx,
@@ -71,13 +70,13 @@ localSequential(
   async () => {
     const itx = await worker.itx(freshCtx("middrive"));
     await enableFixtureProcessor(itx, "tally");
-    await append(itx, { type: "warm" }); // one delivery so the facet exists
+    await itx.append({ type: "warm" }); // one delivery so the facet exists
     const headWarm = await readHead(itx);
     await until("tally warm", async () => ((await tallySnapshot(itx)) as any).offset >= headWarm);
 
     // the burst + the disable, racing (in-flight pushes vs facet delete)
     const burst = Array.from({ length: 10 }, (_, i) =>
-      append(itx, { type: "burst", payload: { i } }),
+      itx.append({ type: "burst", payload: { i } }),
     );
     const disabled = itx.processors.disable("tally");
     await Promise.all([...burst, disabled]); // appends must all survive the disable
@@ -87,7 +86,7 @@ localSequential(
     // bounded burst at the disable moment, but NOTHING new may appear afterwards
     await sleep(500);
     const beforeErrors = deliveryErrors();
-    for (let i = 0; i < 10; i++) await append(itx, { type: "post", payload: { i } });
+    for (let i = 0; i < 10; i++) await itx.append({ type: "post", payload: { i } });
     await sleep(700);
     expect(deliveryErrors()).toBe(beforeErrors); // no NEW delivery errors
 
@@ -153,7 +152,7 @@ localSequential(
     const c = collector();
     await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });
     // one probe proves the lane end-to-end BEFORE the stall
-    await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
+    await itx.append({ type: "flood", ephemeral: true, payload: { probe: true } });
     await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
     // the victim's row is a PUSH row (pure data — target `itx.builtins.rpcStubs.get('subscription:victim')`,
     // no cursor); whether that stub is ONLINE is the registry's fact, read separately
@@ -182,8 +181,7 @@ localSequential(
     let floodedBytes = 0;
     let stubDropped = false;
     for (let i = 0; i < 120 && !stubDropped; i++) {
-      await append(
-        itx,
+      await itx.append(
         { type: "flood", ephemeral: true, payload: { i, chunk } },
         { type: "flood", ephemeral: true, payload: { i: i + 0.5, chunk } },
       );
@@ -233,7 +231,7 @@ localSequential(
     await until("the victim's row removed with its session", async () =>
       (await subscriptions(itx)).every((r) => r.name !== "victim"),
     );
-    await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
+    await itx.append({ type: "flood", ephemeral: true, payload: { afterKill: true } });
     await sleep(300);
     expect(droppedWarns()).toBe(droppedAfterFlood); // nothing new: no push to a dead stub, no warn
     expect(await subscriptions(itx)).toEqual([]);

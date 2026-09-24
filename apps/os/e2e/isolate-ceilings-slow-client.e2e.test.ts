@@ -2,7 +2,7 @@
 // runs beside the rest: a live subscriber whose callback never resolves, and the producer that floods past
 // the DO's in-flight budget. Deployed-only, like the rest of isolate-ceilings-deployed.
 import { expect } from "vitest";
-import { append, freshCtx, openItx } from "./support/client.ts";
+import { freshCtx, openItx } from "./support/client.ts";
 import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
@@ -33,7 +33,7 @@ deployedOnly(
       while (next < 160 && !reset) {
         const i = next++;
         const r = await settle(
-          append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
+          producer.append({ type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
         );
         if (!r.ok) {
           if (isDurableObjectReset(r.e)) reset = r.e;

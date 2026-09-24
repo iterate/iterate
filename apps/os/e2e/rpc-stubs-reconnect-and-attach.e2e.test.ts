@@ -24,7 +24,6 @@
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import {
-  append,
   collector,
   freshCtx,
   openItx,
@@ -227,7 +226,7 @@ test("subscribe({ target: fn }): the row is appended INSIDE the pager attach â€”
   ]);
   expect(rowEvent.offset).toBeLessThan(attachedOffset);
   // The row delivers: a mark lands on the live callback through the pager the attach opened.
-  await append(observer, { type: "mark", payload: { n: 1 } });
+  await observer.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered", () => deliveries.types().includes("mark"));
 });
 
@@ -236,7 +235,7 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED â
   // the coded capnweb error a client classifies by; the attach itself is pinned at the DO's door.
   const ctx = freshCtx("attach-refused");
   const itx = openItx(ctx);
-  await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
+  await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
 
   const provideError = await rejection(
     itx.provide("itx.refused", new Tools("refused")),
@@ -249,11 +248,11 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED â
   );
   expect(errorCode(subscribeError)).toBe("STREAM_PAUSED");
 
-  await append(itx, { type: "events.iterate.com/stream/resumed" });
+  await itx.append({ type: "events.iterate.com/stream/resumed" });
   await itx.provide("itx.refused", new Tools("resumed"));
   const marks = collector();
   await itx.subscribe({ name: "refused", target: marks.fn, consumes: ["mark"] });
   expect(await itx.invoke("itx.refused.hello()")).toBe("hello-from-resumed");
-  await append(itx, { type: "mark", payload: { n: 1 } });
+  await itx.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
 });

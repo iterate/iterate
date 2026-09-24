@@ -17,7 +17,7 @@ import {
   type LiveStateDelta,
   type LiveStateSeed,
 } from "iterate/next/client";
-import { append, freshCtx, openItx, until } from "./support/client.ts";
+import { freshCtx, openItx, until } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -213,14 +213,14 @@ test("a payload-less live-state/changed event never rejects an append that alrea
     },
   });
   // The lane itself works: a WELL-FORMED change payload for the watched key is delivered.
-  await append(itx, {
+  await itx.append({
     type: "events.iterate.com/live-state/changed",
     ephemeral: true,
     payload: { key: "avatar", from: 0, to: 1, patch: [] },
   });
   await until("well-formed change delivered", () => seen.length >= 1);
   // A BARE change event (no payload) still commits-and-resolves.
-  const [bare] = await append(itx, {
+  const [bare] = await itx.append({
     type: "events.iterate.com/live-state/changed",
     ephemeral: true,
   });

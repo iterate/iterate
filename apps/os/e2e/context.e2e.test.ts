@@ -18,7 +18,7 @@
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { append, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
+import { freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
 import { fetchProjectHost, ingressHostname, subdomainsOnly } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
@@ -101,8 +101,8 @@ test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api h
 test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", async () => {
   // enforcement refusals ride the same coded channel end to end
   const itx = openItx(freshCtx("codepause"));
-  await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
-  const err = await rejection(append(itx, { type: "mark", payload: { n: 1 } }));
+  await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
   expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused");
 });

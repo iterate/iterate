@@ -30,7 +30,6 @@
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import {
-  append,
   durableCountsByType,
   freshCtx,
   openItx,
@@ -189,7 +188,7 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
       source: SOURCES.tally,
       className: "TallyDurableObject",
     });
-    const [mark] = await append(itx, { type: "mark", payload: { name } });
+    const [mark] = await itx.append({ type: "mark", payload: { name } });
     const snap: any = await until(`${name} reduced the mark`, async () => {
       const s: any = await itx
         .invoke(`itx.facets.get('${name}').snapshot()`)
@@ -207,7 +206,7 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
 
 test("the raw event-sourced door agrees with the verb — a hand-appended subscription-configured naming the facet's processEventBatch IS the enablement", async () => {
   const itx = openItx(freshCtx("rawdoor"));
-  await append(itx, {
+  await itx.append({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name: "tally",
@@ -220,7 +219,7 @@ test("the raw event-sourced door agrees with the verb — a hand-appended subscr
     },
   });
   expect(await processorNames(itx)).toEqual(["tally"]); // listed as enabled — and it is
-  const [mark] = await append(itx, { type: "mark" });
+  const [mark] = await itx.append({ type: "mark" });
   const snap: any = await until("tally reduced the mark", async () => {
     const s: any = await tallySnapshot(itx).catch(() => undefined); // NO_FACET while it materializes
     return s && s.offset >= mark.offset && s;
@@ -239,7 +238,7 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   // table holds ONE row named tally
   expect((await processorNames(itxA)).filter((s) => s === "tally")).toHaveLength(1);
 
-  for (let i = 0; i < 3; i++) await append(itxA, { type: "seen", payload: { i } });
+  for (let i = 0; i < 3; i++) await itxA.append({ type: "seen", payload: { i } });
   const head = await readHead(itxA);
   const expected = durableCountsByType(await readAll(itxA));
   expect([1, 2]).toContain(expected["events.iterate.com/stream/subscription-configured"]);
@@ -256,8 +255,8 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
 test("re-enable while WARM with the same spec appends NOTHING (idempotent at the door) and never corrupts the reduce (no reset, no double-count)", async () => {
   const itx = openItx(freshCtx("reenable"));
   await enableFixtureProcessor(itx, "tally");
-  await append(itx, { type: "mark" });
-  await append(itx, { type: "mark" });
+  await itx.append({ type: "mark" });
+  await itx.append({ type: "mark" });
   const head1 = await readHead(itx);
   const s1: any = await until("tally at head", async () => {
     const s: any = await tallySnapshot(itx);
@@ -273,7 +272,7 @@ test("re-enable while WARM with the same spec appends NOTHING (idempotent at the
   await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ nothing appended: the door answers from the table
   expect(await configuredEvents()).toBe(configuredBefore);
   expect((await processorNames(itx)).filter((s) => s === "tally")).toHaveLength(1);
-  await append(itx, { type: "mark" });
+  await itx.append({ type: "mark" });
   const head2 = await readHead(itx);
   const expected = durableCountsByType(await readAll(itx));
   const s2: any = await until("tally at head after re-enable", async () => {
@@ -288,7 +287,7 @@ test("double-enable then ONE processors.disable disables it (same name REPLACES 
   const itx = openItx(freshCtx("disshadow"));
   await enableFixtureProcessor(itx, "tally");
   await enableFixtureProcessor(itx, "tally"); // re-enable while WARM (supported: one more configured event replaces the row)
-  await append(itx, { type: "mark" });
+  await itx.append({ type: "mark" });
   const head = await readHead(itx);
   await until("tally at head", async () => ((await tallySnapshot(itx)) as any).offset >= head);
 
@@ -304,7 +303,7 @@ test("double-enable then ONE processors.disable disables it (same name REPLACES 
 test("waitUntilProcessed(future offset) times out with its documented error and leaks no waiter", async () => {
   const itx = openItx(freshCtx("barrier"));
   await enableFixtureProcessor(itx, "tally");
-  await append(itx, { type: "mark" });
+  await itx.append({ type: "mark" });
   const head = await readHead(itx);
   await until("tally at head", async () => ((await tallySnapshot(itx)) as any).offset >= head);
 
@@ -322,7 +321,7 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
   expect(elapsed).toBeLessThan(8_000); // and rejected at ITS deadline, not a transport one
 
   // a LATER append releases nothing stale: the barrier still works exactly
-  const [m] = await append(itx, { type: "mark" });
+  const [m] = await itx.append({ type: "mark" });
   await itx.invoke([
     "itx",
     "facets",
@@ -339,13 +338,13 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
 test("the raw event agrees with processors.disable — a hand-appended subscription-configured { target: null } deletes the facet the row HOSTED, storage included", async () => {
   const itx = openItx(freshCtx("rawdisable"));
   await enableFixtureProcessor(itx, "tally");
-  const [mark] = await append(itx, { type: "mark" });
+  const [mark] = await itx.append({ type: "mark" });
   await until("tally reduced the mark", async () => {
     const s: any = await tallySnapshot(itx).catch(() => undefined);
     return s && s.offset >= mark.offset && s;
   });
   // ONE event, no verb: the DO deletes the hosted facet before the append returns
-  await append(itx, {
+  await itx.append({
     type: "events.iterate.com/stream/subscription-configured",
     payload: { name: "tally", target: null },
   });
@@ -370,13 +369,12 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   await enableFixtureProcessor(itx, "breaker");
   // The breaker's own enablement (subscription-configured) is a durable non-control event: the bucket
   // (capacity 5) is at 4 once it has reduced its own row. Nothing paused yet.
-  await append(itx, { type: "warm" }); // 3 left
+  await itx.append({ type: "warm" }); // 3 left
   expect((await readAll(itx)).some((e) => e.type === PAUSED)).toBe(false);
 
   // ONE batch of 8 durable events — more than the bucket holds. The crossing happens mid-batch; the
   // breaker's processEvent trips exactly once (the crossing), appending `paused`.
-  const burst = await append(
-    itx,
+  const burst = await itx.append(
     ...Array.from({ length: 8 }, (_, i) => ({ type: "burst", payload: { i } })),
   );
   expect(burst).toHaveLength(8); // the burst itself was admitted — policy reads the REDUCE, after the commit
@@ -388,7 +386,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(paused.idempotencyKey).toMatch(/^breaker\/trip@\d+$/); // a replay can never double-pause
 
   // the stream is paused: a further append refuses at the door, coded, with the breaker's reason
-  const err = await rejection(append(itx, { type: "more" }));
+  const err = await rejection(itx.append({ type: "more" }));
   expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused: breaker: durable events exceeded the bucket");
   // the core snapshot shows the same truth
@@ -396,8 +394,8 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(core.state.paused).toEqual({ reason: "breaker: durable events exceeded the bucket" });
 
   // the operator's recovery is a plain control append — resume always lands on a paused stream
-  await append(itx, { type: "events.iterate.com/stream/resumed" });
-  const [after] = await append(itx, { type: "after" });
+  await itx.append({ type: "events.iterate.com/stream/resumed" });
+  const [after] = await itx.append({ type: "after" });
   expect(after.offset).toBeGreaterThan(paused.offset); // flow restored
   // the bucket is in debt (no second crossing) — the ONE trip is the only `paused` in the log
   expect((await readAll(itx)).filter((e) => e.type === PAUSED)).toHaveLength(1);

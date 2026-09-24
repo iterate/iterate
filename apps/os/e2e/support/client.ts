@@ -205,11 +205,7 @@ export const disposeFileSessions = (): void => dispose(fileTransports);
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-// ── the stream, through the ONE dispatch door ──
-
-/** `itx.append(...events)` spelled as an expression — one commit, one receipt per input. */
-export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invoke(["itx", ["append", ...events]]);
+// ── the stream ──
 
 /** A rewrite-rule event's `match` AT REST is the parsed prefix (the append boundary canonicalizes
  *  it the way it does the target); the keys these tests provide are plain dotted names, so joining

@@ -8,7 +8,11 @@
 // paths configuration (support/worker-config.ts) — the shared worker routes by subdomain.
 import { afterAll, beforeAll, expect } from "vitest";
 import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
-import { localOnly, projectHostsAreLocal } from "./support/project-host.ts";
+import {
+  freshDnsSafeProjectSlug,
+  localOnly,
+  projectHostsAreLocal,
+} from "./support/project-host.ts";
 
 /** An app that answers with what it was handed: the URL it saw, its base path, its app label. */
 const SRC_ECHO_URL_APP = {
@@ -27,7 +31,7 @@ export default class Echo extends WorkerEntrypoint {
 
 let worker: OwnWorker;
 let origin: string;
-const slug = `prj-paths-${Date.now().toString(36)}`;
+const slug = freshDnsSafeProjectSlug("paths");
 
 beforeAll(async () => {
   if (!projectHostsAreLocal()) return;
@@ -69,7 +73,7 @@ localOnly(
     const apex = await fetch(`${origin}/projects/${slug}/`, { redirect: "manual" });
     expect(apex.status, await apex.clone().text()).toBe(404);
     expect(apex.headers.get("content-security-policy")).toMatch(/\bsandbox\b/);
-    const unknown = await fetch(`${origin}/projects/prj-nobody-${Date.now().toString(36)}/echo/`, {
+    const unknown = await fetch(`${origin}/projects/${freshDnsSafeProjectSlug("nobody")}/echo/`, {
       redirect: "manual",
     });
     expect(unknown.status).toBeGreaterThanOrEqual(400);

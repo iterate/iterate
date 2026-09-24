@@ -3,7 +3,7 @@
 // source is read from is born through the collection (`itx.repos.create(path)`) and addressed as
 // `itx.repos.get(path)`.
 import { expect, test } from "vitest";
-import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
+import { freshCtx, openItx, readAll, until } from "./support/client.ts";
 
 const PING = "events.iterate.com/config-ping";
 const PONG = "events.iterate.com/config-pong";
@@ -34,7 +34,7 @@ test("a fresh context has no implicit worker subscription; an explicit cross-con
     ],
     consumes: [PING],
   });
-  const [ping] = await append(child, { type: PING });
+  const [ping] = await child.append({ type: PING });
   await until("the explicit worker answered on the root", async () =>
     (await readAll(root)).find(
       (event) => event.type === PONG && event.payload?.pinged === ping.offset,
@@ -61,7 +61,7 @@ test("a repo-backed worker changes when its explicit subscription spec is update
     target: ["itx", "workers", ["get", spec], "processEventBatch"],
     consumes: [PING, "events.iterate.com/repo/commit-completed"],
   });
-  const [ping1] = await append(root, { type: PING });
+  const [ping1] = await root.append({ type: PING });
   await until("v1 answered", async () =>
     (await readAll(root)).find(
       (event) =>
@@ -72,11 +72,11 @@ test("a repo-backed worker changes when its explicit subscription spec is update
   );
   const second = await repo.writeFile("worker.ts", source("v2"));
   // Even delivery of a commit fact does not mutate routing or subscriptions inside ConfigWorker.
-  await append(root, {
+  await root.append({
     type: "events.iterate.com/repo/commit-completed",
     payload: { commitOid: second.commitOid },
   });
-  const [stillOld] = await append(root, { type: PING });
+  const [stillOld] = await root.append({ type: PING });
   await until("the existing spec remains selected", async () =>
     (await readAll(root)).find(
       (event) =>
@@ -95,7 +95,7 @@ test("a repo-backed worker changes when its explicit subscription spec is update
     ],
     consumes: [PING],
   });
-  const [ping2] = await append(root, { type: PING });
+  const [ping2] = await root.append({ type: PING });
   await until("v2 answered", async () =>
     (await readAll(root)).find(
       (event) =>
