@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import {
   crc32,
   encodeDeviceConfiguration,
@@ -15,18 +15,119 @@ const configuration: DeviceConfiguration = {
   },
 };
 
-describe("normalizeOsBaseUrl", () => {
-  test("defaults a bare host to HTTPS", () => {
-    expect(normalizeOsBaseUrl("os.iterate.com")).toBe("https://os.iterate.com");
-  });
+test("normalizeOsBaseUrl: defaults a bare host to HTTPS", () => {
+  expect(normalizeOsBaseUrl("os.iterate.com")).toBe("https://os.iterate.com");
+});
 
-  test("preserves an explicit local HTTP origin", () => {
-    expect(normalizeOsBaseUrl("http://localhost:5173")).toBe("http://localhost:5173");
-  });
+test("normalizeOsBaseUrl: preserves an explicit local HTTP origin", () => {
+  expect(normalizeOsBaseUrl("http://localhost:5173")).toBe("http://localhost:5173");
+});
 
-  test("rejects paths so the device cannot silently dial the wrong endpoint", () => {
-    expect(() => normalizeOsBaseUrl("https://os.iterate.com/not-os")).toThrow("must be an origin");
-  });
+test("normalizeOsBaseUrl: rejects paths so the device cannot silently dial the wrong endpoint", () => {
+  expect(() => normalizeOsBaseUrl("https://os.iterate.com/not-os")).toThrow("must be an origin");
+});
+
+test("encodeDeviceConfiguration: writes fields the firmware's own decoder accepts", () => {
+  const image = encodeDeviceConfiguration(configuration, 512);
+  const fields = decodeLikeFirmware(image);
+
+  expect(fields.get(1)).toBe("studio");
+  expect(fields.get(2)).toBe("correct horse battery staple");
+  expect(fields.get(3)).toBe("https://os.iterate.com");
+  expect(fields.get(4)).toBe("prj_voice_lab");
+  expect(fields.get(5)).toBe("itxk_secret");
+  // Every field the firmware requires, and nothing it would reject.
+  expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
+});
+
+test("encodeDeviceConfiguration: writes an empty password tag for an open network", () => {
+  // The firmware requires tag 2 to be PRESENT and decodes it with
+  // allow_empty — the one field where those two rules differ. Dropping it
+  // for an open SSID made the partition fail closed as "missing field".
+  const fields = decodeLikeFirmware(
+    encodeDeviceConfiguration({ ...configuration, wifi: { ssid: "open-cafe", password: "" } }, 512),
+  );
+  expect(fields.get(2)).toBe("");
+  expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
+});
+
+test("encodeDeviceConfiguration: refuses an empty required field instead of shipping a partition the device will reject", () => {
+  expect(() =>
+    encodeDeviceConfiguration({ ...configuration, wifi: { ssid: "", password: "x" } }, 512),
+  ).toThrow("missing its Wi-Fi SSID");
+  expect(() =>
+    encodeDeviceConfiguration(
+      { ...configuration, iterate: { ...configuration.iterate, projectApiKey: "" } },
+      512,
+    ),
+  ).toThrow("missing its project API key");
+});
+
+test("encodeDeviceConfiguration: pads the rest of the partition as erased flash", () => {
+  const image = encodeDeviceConfiguration(configuration, 512);
+  const payloadLength = new DataView(image.buffer, image.byteOffset, 16).getUint32(8, true);
+  expect(image.slice(16 + payloadLength).every((byte) => byte === 0xff)).toBe(true);
+});
+
+test("encodeDeviceConfiguration: encodes non-ASCII credentials by byte length, not character count", () => {
+  const fields = decodeLikeFirmware(
+    encodeDeviceConfiguration(
+      { ...configuration, wifi: { ...configuration.wifi, ssid: "café–studio" } },
+      512,
+    ),
+  );
+  expect(fields.get(1)).toBe("café–studio");
+});
+
+test("encodeDeviceConfiguration: rejects a payload larger than the firmware's declared partition", () => {
+  expect(() => encodeDeviceConfiguration(configuration, 32)).toThrow("the partition allows");
+});
+
+test("encodeDeviceConfiguration: rejects values the firmware's fixed C strings cannot represent", () => {
+  expect(() =>
+    encodeDeviceConfiguration(
+      { ...configuration, wifi: { ...configuration.wifi, ssid: "a".repeat(33) } },
+      512,
+    ),
+  ).toThrow("Wi-Fi SSID is longer than firmware allows");
+  expect(() =>
+    encodeDeviceConfiguration(
+      { ...configuration, iterate: { ...configuration.iterate, projectApiKey: "key\0suffix" } },
+      512,
+    ),
+  ).toThrow("project API key cannot contain a NUL");
+});
+
+test("encodeDeviceConfiguration: rejects Wi-Fi and project identities that boot networking would reject", () => {
+  expect(() =>
+    encodeDeviceConfiguration(
+      { ...configuration, wifi: { ...configuration.wifi, password: "short" } },
+      512,
+    ),
+  ).toThrow("invalid Wi-Fi password");
+  expect(() =>
+    encodeDeviceConfiguration(
+      { ...configuration, wifi: { ...configuration.wifi, password: "g".repeat(64) } },
+      512,
+    ),
+  ).toThrow("invalid Wi-Fi password");
+  expect(() =>
+    encodeDeviceConfiguration(
+      { ...configuration, iterate: { ...configuration.iterate, projectId: "voice lab" } },
+      512,
+    ),
+  ).toThrow("invalid project id");
+});
+
+/* A project's id on the platform IS its DNS-safe slug: no `prj_` to insist on,
+ * and hyphens are ordinary. Refusing one here is a board that cannot be
+ * provisioned for the deployment it is meant to talk to. */
+test("encodeDeviceConfiguration: writes a bare slug project id", () => {
+  const image = encodeDeviceConfiguration(
+    { ...configuration, iterate: { ...configuration.iterate, projectId: "prj-voice" } },
+    512,
+  );
+  expect(decodeLikeFirmware(image).get(4)).toBe("prj-voice");
 });
 
 /**
@@ -60,111 +161,3 @@ function decodeLikeFirmware(image: Uint8Array) {
   }
   return fields;
 }
-
-describe("encodeDeviceConfiguration", () => {
-  test("writes fields the firmware's own decoder accepts", () => {
-    const image = encodeDeviceConfiguration(configuration, 512);
-    const fields = decodeLikeFirmware(image);
-
-    expect(fields.get(1)).toBe("studio");
-    expect(fields.get(2)).toBe("correct horse battery staple");
-    expect(fields.get(3)).toBe("https://os.iterate.com");
-    expect(fields.get(4)).toBe("prj_voice_lab");
-    expect(fields.get(5)).toBe("itxk_secret");
-    // Every field the firmware requires, and nothing it would reject.
-    expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  test("writes an empty password tag for an open network", () => {
-    // The firmware requires tag 2 to be PRESENT and decodes it with
-    // allow_empty — the one field where those two rules differ. Dropping it
-    // for an open SSID made the partition fail closed as "missing field".
-    const fields = decodeLikeFirmware(
-      encodeDeviceConfiguration(
-        { ...configuration, wifi: { ssid: "open-cafe", password: "" } },
-        512,
-      ),
-    );
-    expect(fields.get(2)).toBe("");
-    expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  test("refuses an empty required field instead of shipping a partition the device will reject", () => {
-    expect(() =>
-      encodeDeviceConfiguration({ ...configuration, wifi: { ssid: "", password: "x" } }, 512),
-    ).toThrow("missing its Wi-Fi SSID");
-    expect(() =>
-      encodeDeviceConfiguration(
-        { ...configuration, iterate: { ...configuration.iterate, projectApiKey: "" } },
-        512,
-      ),
-    ).toThrow("missing its project API key");
-  });
-
-  test("pads the rest of the partition as erased flash", () => {
-    const image = encodeDeviceConfiguration(configuration, 512);
-    const payloadLength = new DataView(image.buffer, image.byteOffset, 16).getUint32(8, true);
-    expect(image.slice(16 + payloadLength).every((byte) => byte === 0xff)).toBe(true);
-  });
-
-  test("encodes non-ASCII credentials by byte length, not character count", () => {
-    const fields = decodeLikeFirmware(
-      encodeDeviceConfiguration(
-        { ...configuration, wifi: { ...configuration.wifi, ssid: "café–studio" } },
-        512,
-      ),
-    );
-    expect(fields.get(1)).toBe("café–studio");
-  });
-
-  test("rejects a payload larger than the firmware's declared partition", () => {
-    expect(() => encodeDeviceConfiguration(configuration, 32)).toThrow("the partition allows");
-  });
-
-  test("rejects values the firmware's fixed C strings cannot represent", () => {
-    expect(() =>
-      encodeDeviceConfiguration(
-        { ...configuration, wifi: { ...configuration.wifi, ssid: "a".repeat(33) } },
-        512,
-      ),
-    ).toThrow("Wi-Fi SSID is longer than firmware allows");
-    expect(() =>
-      encodeDeviceConfiguration(
-        { ...configuration, iterate: { ...configuration.iterate, projectApiKey: "key\0suffix" } },
-        512,
-      ),
-    ).toThrow("project API key cannot contain a NUL");
-  });
-
-  test("rejects Wi-Fi and project identities that boot networking would reject", () => {
-    expect(() =>
-      encodeDeviceConfiguration(
-        { ...configuration, wifi: { ...configuration.wifi, password: "short" } },
-        512,
-      ),
-    ).toThrow("invalid Wi-Fi password");
-    expect(() =>
-      encodeDeviceConfiguration(
-        { ...configuration, wifi: { ...configuration.wifi, password: "g".repeat(64) } },
-        512,
-      ),
-    ).toThrow("invalid Wi-Fi password");
-    expect(() =>
-      encodeDeviceConfiguration(
-        { ...configuration, iterate: { ...configuration.iterate, projectId: "voice lab" } },
-        512,
-      ),
-    ).toThrow("invalid project id");
-  });
-
-  /* A project's id on the platform IS its DNS-safe slug: no `prj_` to insist on,
-   * and hyphens are ordinary. Refusing one here is a board that cannot be
-   * provisioned for the deployment it is meant to talk to. */
-  test("writes a bare slug project id", () => {
-    const image = encodeDeviceConfiguration(
-      { ...configuration, iterate: { ...configuration.iterate, projectId: "prj-voice" } },
-      512,
-    );
-    expect(decodeLikeFirmware(image).get(4)).toBe("prj-voice");
-  });
-});

@@ -8,24 +8,6 @@ const bundle = {
   workerKey,
   cacheKey: `voice-worker:${"a".repeat(64)}`,
 };
-const project = () => ({
-  whoami: vi.fn().mockResolvedValue({ path: "/" }),
-  processors: { enable: vi.fn().mockResolvedValue(undefined), disable: vi.fn(), list: vi.fn() },
-  secrets: {
-    list: vi.fn().mockResolvedValue([{ path: "/secrets/openai" }]),
-    set: vi.fn(),
-    delete: vi.fn(),
-  },
-  rewriteRules: { get: vi.fn().mockResolvedValue(null), list: vi.fn(), resolve: vi.fn() },
-  kv: {
-    put: vi.fn().mockResolvedValue({ ok: true }),
-    get: vi.fn(),
-    list: vi.fn(),
-    delete: vi.fn(),
-  },
-  append: vi.fn().mockResolvedValue([]),
-  invoke: vi.fn().mockResolvedValue({ ok: true }),
-});
 
 test("a failed upload never publishes a broken voice service and retry completes", async () => {
   const root = project();
@@ -49,4 +31,23 @@ test("a broken existing voice service is reported without replacing it", async (
   expect(load).not.toHaveBeenCalled();
   expect(root.append).not.toHaveBeenCalled();
   expect(root.kv.put).not.toHaveBeenCalled();
+});
+
+const project = () => ({
+  whoami: vi.fn().mockResolvedValue({ path: "/" }),
+  processors: { enable: vi.fn().mockResolvedValue(undefined), disable: vi.fn(), list: vi.fn() },
+  secrets: {
+    list: vi.fn().mockResolvedValue([{ path: "/secrets/openai" }]),
+    set: vi.fn(),
+    delete: vi.fn(),
+  },
+  rewriteRules: { get: vi.fn().mockResolvedValue(null), list: vi.fn(), resolve: vi.fn() },
+  kv: {
+    put: vi.fn().mockResolvedValue({ ok: true }),
+    get: vi.fn(),
+    list: vi.fn(),
+    delete: vi.fn(),
+  },
+  append: vi.fn().mockResolvedValue([]),
+  invoke: vi.fn().mockResolvedValue({ ok: true }),
 });
