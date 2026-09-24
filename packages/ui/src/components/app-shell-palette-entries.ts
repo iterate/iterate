@@ -58,8 +58,8 @@ export function filterPaletteEntries<Entry extends PaletteEntry>(
 }
 
 /** Reads the sidebar's navigation off `content` (the sidebar's `SidebarContent`): each enabled menu
- *  button and sub-button, labelled by its text (or its aria-label when it shows none), under its
- *  group's label; a sub-button's detail is its parent item's label. Nothing on a phone, where the
+ *  button and sub-button, labelled by its first text (or its aria-label when it shows none), under
+ *  its group's label; its detail is a sub-button's parent item, or the rest of its text. Nothing on a phone, where the
  *  sidebar is a sheet (`data-mobile`): closed, `content` is not mounted (null); open, the palette's
  *  first press is outside it, the sheet closes and unmounts, and a row's element would be detached
  *  by the time it is chosen — a click on it does nothing. */
@@ -71,7 +71,8 @@ export function readSidebarNav(content: Element | null): SidebarNavItem[] {
     ),
   ].flatMap((element) => {
     if (element.matches(':disabled, [aria-disabled="true"]')) return [];
-    const label = textOf(element) || element.getAttribute("aria-label")?.trim();
+    const [text, ...more] = textBlocks(element);
+    const label = text || element.getAttribute("aria-label")?.trim();
     if (!label) return [];
     const group = element.closest('[data-slot="sidebar-group"]');
     const parent =
@@ -86,8 +87,9 @@ export function readSidebarNav(content: Element | null): SidebarNavItem[] {
         element,
         label,
         group:
-          textOf(group?.querySelector('[data-slot="sidebar-group-label"]')) || UNLABELLED_NAV_GROUP,
-        detail: textOf(parent) || undefined,
+          textBlocks(group?.querySelector('[data-slot="sidebar-group-label"]'))[0] ||
+          UNLABELLED_NAV_GROUP,
+        detail: textBlocks(parent)[0] || more.join(" · ") || undefined,
         active: element.hasAttribute("data-active"),
         href: element instanceof HTMLAnchorElement ? element.href : undefined,
       },
@@ -95,8 +97,18 @@ export function readSidebarNav(content: Element | null): SidebarNavItem[] {
   });
 }
 
-function textOf(element: Element | null | undefined) {
-  return element?.textContent?.replace(/\s+/g, " ").trim() || "";
+/** The element's text, one entry per element that holds some: a row that stacks a title over a
+ *  path (the agents app) reads as `["title", "/agents/…"]`, a group label with a count badge
+ *  (`Agents` · `2 active or waiting`) as its name first — the first entry is the label. */
+function textBlocks(element: Element | null | undefined) {
+  if (!element) return [];
+  const blocks = new Map<Node, string>();
+  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const holder = node.parentNode || element;
+    blocks.set(holder, `${blocks.get(holder) || ""}${node.nodeValue || ""}`);
+  }
+  return [...blocks.values()].map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
 
 /** The sidebar's items less those that are only a link to a project — the dash's organization tree

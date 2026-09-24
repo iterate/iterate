@@ -79,6 +79,15 @@ test("reads menu buttons and sub-buttons with their group, parent, active state 
         </li>
       </ul>
     </div>
+    <div data-slot="sidebar-group">
+      <div data-slot="sidebar-group-label"><span>Agents</span><span>2 active or waiting</span></div>
+      <ul data-slot="sidebar-menu">
+        <li data-slot="sidebar-menu-item">
+          <a data-slot="sidebar-menu-button" href="/projects/acme?agent=/agents/web/a"><span><svg></svg><span aria-label="Running"></span></span><span><span>Fix the build</span><span>/agents/web/a</span></span></a>
+          <button type="button" data-sidebar="menu-action" aria-label="Pin agent"><svg></svg></button>
+        </li>
+      </ul>
+    </div>
   `;
   expect(
     readSidebarNav(content).map(({ element, ...item }) => ({ tag: element.tagName, ...item })),
@@ -122,6 +131,14 @@ test("reads menu buttons and sub-buttons with their group, parent, active state 
       detail: undefined,
       active: false,
       href: "https://agents.example.com/",
+    },
+    {
+      tag: "A",
+      label: "Fix the build",
+      group: "Agents",
+      detail: "/agents/web/a",
+      active: false,
+      href: "http://localhost:3000/projects/acme?agent=/agents/web/a",
     },
   ]);
 });
