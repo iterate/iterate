@@ -55,13 +55,25 @@ test(
       children.push(running.child);
       // A rejection handler while consent is driven, so an early process failure cannot go unhandled.
       void running.catch(() => {});
+      // The URL is printed once a fresh Node process has loaded the built CLI and registered its
+      // client, seconds on a loaded runner. The process's own 30 s timeout bounds the wait: a command
+      // that ends first, killed or not, fails at once with its stderr.
       let stderr = "";
-      running.child.stderr!.on("data", (chunk) => {
-        stderr += chunk;
+      const printed = new Promise<string>((resolve, reject) => {
+        running.child.stderr!.on("data", (chunk) => {
+          stderr += chunk;
+          const url = /https?:\/\/\S+\/oauth2\/auth\?\S+/.exec(stderr)?.[0];
+          if (url) resolve(url);
+        });
+        running.child.once("close", (code, signal) =>
+          reject(
+            new Error(
+              `\`iterate ${args.join(" ")}\` ended (${signal || `exit ${code}`}) before printing an authorize URL; its stderr:\n${stderr}`,
+            ),
+          ),
+        );
       });
-      const url = () => stderr.match(/https?:\/\/\S+\/oauth2\/auth\?\S+/)?.[0];
-      await expect.poll(url).toBeTruthy();
-      const authorize = new URL(url()!);
+      const authorize = new URL(await printed);
       // oxlint-disable-next-line iterate/no-capnweb-http-batch -- The issuer's one consent action, with the signed-in user's cookie.
       using issuer = newHttpBatchRpcSession<IterateRpcTarget>(
         new Request(workerUrl("/api"), {

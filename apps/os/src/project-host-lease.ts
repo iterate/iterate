@@ -118,8 +118,8 @@ export function holdGrantLease(
 }
 
 /** A WebSocket relayed through a pair the edge owns: every message passes through, a close on
- *  either end closes the other, and the lease's end closes both with 1008. The app's handshake
- *  headers (a chosen subprotocol) are the client's. */
+ *  either end closes the other (a drop as 1011, `sendableCloseCode`), and the lease's end closes
+ *  both with 1008. The app's handshake headers (a chosen subprotocol) are the client's. */
 function relayed(
   answer: Response,
   upstream: WebSocket,
@@ -179,9 +179,12 @@ function piped(
   return new Response(readable, answer);
 }
 
-/** A close code a WebSocket may send: the reserved ones (1005 none given, 1006 abnormal, 1015 TLS)
- *  only ever describe a close, so they are answered as a normal one; anything out of range is 1011. */
+/** A close code a WebSocket may send in place of `code`. A close frame that carried no code (1005)
+ *  was an orderly close: 1000. A connection that dropped without one (1006; 1015 for TLS) did not
+ *  close normally, and a client told 1000 may take the end as meant and not reconnect: 1011, as for
+ *  the reserved 1004 and anything out of range. */
 function sendableCloseCode(code: number): number {
-  if (code === 1005 || code === 1006 || code === 1015) return 1000;
-  return code >= 1000 && code < 5000 && code !== 1004 ? code : 1011;
+  if (code === 1005) return 1000;
+  const sendable = code >= 1000 && code < 5000 && ![1004, 1006, 1015].includes(code);
+  return sendable ? code : 1011;
 }
