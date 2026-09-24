@@ -692,8 +692,7 @@ same names.
 
 Main OS e2e tests one Worker Preview, `main`, which every run redeploys in place and no run
 deletes. The latency guard does the same with `latency`, the real-model suite with `real-model`,
-the slow e2e rows with `slow-e2e` (`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`). Until 2026-09-24 each run deployed a
-brand-new `main-<short sha>` and deleted it afterwards.
+the slow e2e rows with `slow-e2e` (`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`).
 
 A brand-new preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
 10–40 s after it is created, and the deploy's readiness gate (`apps/os/scripts/preview-readiness.ts`)
@@ -718,8 +717,6 @@ storage reset, "no longer active"), and CI's one retry absorbs it.
 - The nightly sweep keeps such a preview through quiet days and takes it only once its workflow has
   not deployed it for 7 days (rules 1 and 3 in `preview-sweep.ts`). Deleting one by hand
   (`pnpm preview delete --name main`) makes the workflow's next run brand-new, behind the gate.
-- Each workflow's first step, `pnpm preview delete-superseded`, deletes the per-run previews it
-  used to make. `os-slow-e2e.yml` never made any, so it has no such step.
 
 ## Interactive trace reports
 

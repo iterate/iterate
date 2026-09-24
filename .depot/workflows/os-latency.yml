@@ -98,12 +98,6 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # the `latency-<run>-<attempt>` previews this workflow deployed and deleted until 2026-09-24
-      - name: Delete the per-run previews this one replaced
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm preview delete-superseded
       # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
       # still answers in (up to ~100 s measured), so its reset lands on a probe, never on a measurement
       # (apps/os/scripts/preview-readiness.ts).

@@ -2,7 +2,6 @@ import { expect, test } from "vitest";
 import { previewResourceSuffixes, type PreviewResourceKind } from "./preview-config.ts";
 import {
   planPreviewSweep,
-  supersededMainPreviews,
   type PreviewSweepInput,
   type PullRequestState,
 } from "./preview-sweep.ts";
@@ -209,43 +208,6 @@ test("5: a stale preview's resources are not orphans — deletePreview takes the
     previews: [expect.objectContaining({ name: "pr7-x", verdict: "stale" })],
     orphans: [],
   });
-});
-
-test.each<[string, string[], string, string[]]>([
-  // the per-run previews its workflow made before it kept one go; the workflow's own stays
-  [
-    "Main OS e2e's",
-    ["main-44db0e6", "main-7ea6741", "main"],
-    "main",
-    ["main-44db0e6", "main-7ea6741"],
-  ],
-  ["none left", ["main"], "main", []],
-  // PR previews and hand-named ones are never a workflow's, even when they begin `main-`
-  ["PR and branch previews", ["pr7-x", "main-branch", "soak", "main"], "main", []],
-  // each workflow deletes only its own
-  [
-    "the latency guard's",
-    ["latency-94096387667921-1", "latency", "main-44db0e6", "pr7-latency-x"],
-    "latency",
-    ["latency-94096387667921-1"],
-  ],
-  [
-    "the real-model suite's, beside the guard's and Main OS e2e's",
-    ["real-model-940963876-1", "real-model", "latency-940963877-1", "main-44db0e6"],
-    "real-model",
-    ["real-model-940963876-1"],
-  ],
-  // a name that is no workflow's own preview supersedes nothing, a per-run one included
-  ["a hand-named current", ["main-44db0e6", "latency-94096387667921-1"], "soak", []],
-  ["a per-run current", ["main-44db0e6", "main-7ea6741"], "main-7ea6741", []],
-  [
-    "the slow e2e rows', which never had per-run ones",
-    ["main-44db0e6", "slow-e2e"],
-    "slow-e2e",
-    [],
-  ],
-])("a CI workflow's superseded per-run previews: %s", (_label, names, current, superseded) => {
-  expect(supersededMainPreviews(names, current)).toEqual(superseded);
 });
 
 const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();

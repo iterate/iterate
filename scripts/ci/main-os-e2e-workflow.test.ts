@@ -77,15 +77,6 @@ test("runs every e2e row, the ones tagged slow included", () => {
   });
 });
 
-test("first deletes the per-run `main-<sha>` previews the one preview replaced", () => {
-  expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeGreaterThan(
-    -1,
-  );
-  expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeLessThan(
-    runs("deploy").indexOf("doppler run -- pnpm preview deploy --settle 150"),
-  );
-});
-
 // The checks a main push shows are the ones a PR's preview shows: Deploy preview, E2E tests,
 // Browser specs, CI trace.
 test("names its deploy, test and trace jobs as Preview OS does, each suite in its own job after the deploy", () => {

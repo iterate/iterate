@@ -54,15 +54,12 @@ export type SweptPreview = { name: string; lastDeployedAt?: string };
  *  the latency guard's `latency` (os-latency.yml), the real-model suite's `real-model`
  *  (os-real-model.yml), the slow e2e rows' `slow-e2e` (os-slow-e2e.yml), each deploy's readiness gate
  *  held past the window its previous version still answers in
- *  (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Each maps to the per-run names its workflow gave
- *  its previews before (`main-<short sha>`, `latency-<run id>-<attempt>`,
- *  `real-model-<run id>-<attempt>`), which `supersededMainPreviews` deletes; `slow-e2e` always had
- *  its one. */
-export const CI_WORKFLOW_PREVIEWS: ReadonlyMap<string, RegExp | undefined> = new Map([
-  ["main", /^main-[0-9a-f]{7}$/],
-  ["latency", /^latency-[0-9a-z]+-[0-9]+$/],
-  ["real-model", /^real-model-[0-9a-z]+-[0-9]+$/],
-  ["slow-e2e", undefined],
+ *  (docs/depot-ci.md#main-os-e2e-keeps-one-preview). */
+export const CI_WORKFLOW_PREVIEWS: ReadonlySet<string> = new Set([
+  "main",
+  "latency",
+  "real-model",
+  "slow-e2e",
 ]);
 
 /** One row of an account listing: a KV namespace (id + title), an R2 bucket (id = name), a D1
@@ -182,15 +179,4 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     orphans.push({ ...resource, previewName, reason });
   }
   return { previews, orphans };
-}
-
-/** The per-run previews `current`'s CI workflow made before it kept one preview
- *  (CI_WORKFLOW_PREVIEWS): Main OS e2e's `main-<short sha>`, the latency guard's
- *  `latency-<run id>-<attempt>`, the real-model suite's `real-model-<run id>-<attempt>`, a run
- *  cancelled before its delete had left behind. Each run deletes its own workflow's before it
- *  deploys; no run ever deletes another workflow's. A `current` that is no such workflow's preview
- *  supersedes nothing. Pure. */
-export function supersededMainPreviews(previewNames: string[], current: string) {
-  const perRun = CI_WORKFLOW_PREVIEWS.get(current);
-  return perRun ? previewNames.filter((name) => perRun.test(name)) : [];
 }

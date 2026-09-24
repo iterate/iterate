@@ -21,9 +21,6 @@
 # alert, posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
 # preview's does (docs/ci-traces.md).
 #
-# Each run first deletes any `main-<short sha>` preview, the per-run shape this workflow deployed and
-# deleted until 2026-09-24 (`pnpm preview delete-superseded`).
-#
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials, _shared/prd the Slack token and the telemetry finalizer's config.
@@ -143,11 +140,6 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Delete the per-run previews this one replaced
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm preview delete-superseded
       # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
       # still answers in (up to ~100 s measured), so its reset lands on a probe, never on e2e
       # (apps/os/scripts/preview-readiness.ts).
