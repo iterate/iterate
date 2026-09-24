@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { dashEnvs } from "../../envs.ts";
+import { dashEnvs, kitEnvs } from "../../envs.ts";
 import { ownZones, startAppPreviewConfig, startAppWorkerConfig } from "./start-app.ts";
 
 // ── a start app's preview config (a pure transform of the built wrangler.json) ──
@@ -74,6 +74,24 @@ test("a preview parent (the app's `preview` build, main on the dev/preview accou
     notes: "https://notes.iterate-dev-preview.workers.dev",
     voice: "https://voice.iterate-dev-preview.workers.dev",
     kit: "https://kit.iterate-dev-preview.workers.dev",
+  });
+});
+
+test("every request starts the app's Worker but its static files: vite's /assets/ and each entry of its public/ directory", () => {
+  const dash = startAppWorkerConfig(
+    { name: "dash", root: new URL("../../apps/dash/", import.meta.url), envs: dashEnvs },
+    "prd",
+  );
+  expect(dash.assets).toMatchObject({
+    run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg"],
+  });
+  // a directory of public files is one rule; kit's public/ also holds the gitignored voice-install.json once built
+  const kit = startAppWorkerConfig(
+    { name: "kit", root: new URL("../../apps/kit/", import.meta.url), envs: kitEnvs },
+    "prd",
+  );
+  expect(kit.assets).toMatchObject({
+    run_worker_first: expect.arrayContaining(["/*", "!/assets/*", "!/favicon.svg", "!/vendors/*"]),
   });
 });
 
