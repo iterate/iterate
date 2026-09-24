@@ -2,10 +2,12 @@
 // it (the package's bin, operator credentials) and a tiny HTTP + WebSocket server on a local port.
 // The project is a fresh one on the default template, so its config worker is the template's router
 // (configs/default/worker.ts: `itx.ingressRoutes.match`, then `env.ITX.fetch`). Pins:
-//   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401
+//   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401;
+//     refused outright where projects are served under paths (a per-PR preview)
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
-//   • a tunnel killed outright leaves its route standing and answering 502, "not connected"
+//   • a tunnel killed outright leaves its route standing and answering 502, "not connected", with
+//     `x-iterate-ingress-route-offline` naming the route
 // The proxy's own behaviour (headers, bodies, frames) is packages/cli src/tunnel.test.ts; the route
 // and the subprotocol through the platform, e2e/ingress-routes.e2e.test.ts.
 
@@ -23,6 +25,7 @@ import { adminCredentials, session, untilValue, workerUrl } from "./support/clie
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
+  ingressRouting,
   navigateProjectUrl,
   registerProject,
   wsRoundTripOnProjectUrl,
@@ -31,9 +34,9 @@ import {
 const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
-  "iterate tunnel: private by default, public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
-  // Two CLI processes each connect and set a route (a few seconds each against a preview).
-  { timeout: 90_000 },
+  "iterate tunnel: private by default (refused under paths), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
+  // Up to three CLI processes each connect and set a route (a few seconds each against a preview).
+  { timeout: 120_000 },
   async () => {
     await using local = await localServer();
     const slug = freshDnsSafeProjectSlug("tunnel");
@@ -46,19 +49,28 @@ test(
     });
     await using cli = await cliConfig();
 
-    // private (the default)
+    // private (the default). Under paths routing it is refused before anything is set: the
+    // tunnel's pages run sandboxed on the platform's origin, where no cookie reaches a subresource.
     const privateTunnel = cli.tunnel([String(local.port), "--name", "web", "--project", projectId]);
-    const privateUrl = new URL((await privateTunnel.live).url);
-    const navigation = await navigateProjectUrl(privateUrl, {
-      "sec-fetch-mode": "navigate",
-      "sec-fetch-dest": "document",
-    });
-    expect(navigation).toMatchObject({ status: 302 });
-    expect(navigation.headers.location).toContain("/.auth/login");
-    expect(await fetchProjectUrl(privateUrl)).toMatchObject({ status: 401 });
-    expect(await privateTunnel.stop("SIGINT")).toBe(0);
-    expect(await itx.ingressRoutes.list()).toEqual([]);
-    expect(await fetchProjectUrl(privateUrl)).toMatchObject({ status: 404, text: "Not found\n" });
+    if (ingressRouting()?.type === "paths") {
+      await expect(privateTunnel.live).rejects.toThrow("Private tunnels need their own origin");
+      expect(await itx.ingressRoutes.list()).toEqual([]);
+    } else {
+      const privateUrl = new URL((await privateTunnel.live).url);
+      const navigation = await navigateProjectUrl(privateUrl, {
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+      });
+      expect(navigation).toMatchObject({ status: 302 });
+      expect(navigation.headers.location).toContain("/.auth/login");
+      expect(await fetchProjectUrl(privateUrl)).toMatchObject({ status: 401 });
+      expect(await privateTunnel.stop("SIGINT")).toBe(0);
+      expect(await itx.ingressRoutes.list()).toEqual([]);
+      expect(await fetchProjectUrl(privateUrl)).toMatchObject({
+        status: 404,
+        text: "Not found\n",
+      });
+    }
 
     // public
     const publicTunnel = cli.tunnel([
@@ -93,8 +105,25 @@ test(
         (page) => page.status === 502,
         { timeoutMs: 30_000 },
       ),
-    ).toMatchObject({ status: 502, text: "tunnel-web is not connected\n" });
-    await itx.ingressRoutes.set("tunnel-web", null);
+    ).toMatchObject({
+      status: 502,
+      headers: { "x-iterate-ingress-route-offline": "tunnel-web" },
+      text: "tunnel-web is not connected\n",
+    });
+
+    // run again, then Ctrl-C: the route is deleted and the host is the template's own 404 again
+    const again = cli.tunnel([
+      String(local.port),
+      "--name",
+      "web",
+      "--public",
+      "--project",
+      projectId,
+    ]);
+    await again.live;
+    expect(await again.stop("SIGINT")).toBe(0);
+    expect(await itx.ingressRoutes.list()).toEqual([]);
+    expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
   },
 );
 

@@ -373,11 +373,63 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
+  // An ingress route whose target is not connected (`iterate tunnel` killed without Ctrl-C) answers
+  // 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
+  // "ingress-route.target-offline", … })` (apps/os context/built-ins.ts); a Vite tab left open
+  // re-requests it every second. Each hop of that request (the project host's Worker, the context
+  // DO's fetch, again for the config worker's `env.ITX.fetch`) logs its own 502 summary at error
+  // level under its own requestId, and all of them share the request's traceId with the info line
+  // (prd Workers Logs, 2026-09-24). These filters keep every event EXCEPT a 502 summary in a trace
+  // that logged the info line: another status, another event or another trace still pages. One
+  // `not_in` takes 500 IDs here (2,000 answers "Internal error"). A capped or failed read excludes
+  // nothing: it can only remove noise, never lose an observed fault.
+  const notTargetOffline = await rows(
+    [{ key: "event", operation: "eq", value: "ingress-route.target-offline", type: "string" }],
+    "$metadata.traceId",
+  ).then(
+    (found) => {
+      const traces = found.map(([traceId]) => traceId).filter(Boolean);
+      const capped = traces.length >= 2000;
+      console.log(
+        JSON.stringify({
+          event: "prd-fault-alarm.target-offline-evidence",
+          traces: traces.length,
+          capped,
+        }),
+      );
+      if (capped) return [];
+      const chunks: string[][] = [];
+      for (let start = 0; start < traces.length; start += 500)
+        chunks.push(traces.slice(start, start + 500));
+      return chunks.map((chunk) => ({
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key: "$metadata.type", operation: "is_null", type: "string" },
+          { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+          { key: "$workers.event.response.status", operation: "is_null", type: "number" },
+          { key: "$workers.event.response.status", operation: "neq", value: 502, type: "number" },
+          { key: "$metadata.traceId", operation: "is_null", type: "string" },
+          { key: "$metadata.traceId", operation: "not_in", value: chunk.join(","), type: "string" },
+        ],
+      }));
+    },
+    (error: unknown) => {
+      console.warn(
+        JSON.stringify({
+          event: "prd-fault-alarm.target-offline-classification-failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return [];
+    },
+  );
   // Every 5xx pages, so they are counted twice: by URL, and in all. The ones the URL rows miss
   // (no URL logged, or past 2,000 groups) page as `unknown`.
   const readServerErrors = async () => {
     const status = [
       { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
+      ...notTargetOffline,
     ];
     const [byUrl, all] = await Promise.all([
       rows(status, "$workers.event.request.url"),
@@ -401,6 +453,7 @@ async function readWindow(
     const common = [
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
+      ...notTargetOffline,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([
