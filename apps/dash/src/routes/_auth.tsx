@@ -29,8 +29,9 @@ import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
 import { OrganizationTree, useOrganizationTree } from "../components/organization-tree.tsx";
 import { projectHostOf } from "../lib/origins.ts";
+import { dashScopes } from "../lib/scopes.ts";
 
-const iterate = createIterateClient({ scopes: ["iterate", "account", "organizations:write"] });
+const iterate = createIterateClient({ scopes: dashScopes });
 
 export const Route = createFileRoute("/_auth")({
   ssr: false,

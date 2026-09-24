@@ -25,20 +25,19 @@ function OrganizationActivity() {
   const [context, setContext] = useState<ActivityItx>();
   useEffect(() => {
     let disposed = false;
-    let held: (ActivityItx & Partial<Disposable>) | undefined;
+    let held: Awaited<ReturnType<typeof api.organizations.get>> | undefined;
     api.organizations.get(orgId).then(
       (stub) => {
-        // the org's context stub has the itx surface the activity view reads (log, tables, invoke)
-        held = stub as unknown as ActivityItx & Partial<Disposable>;
-        if (disposed) held[Symbol.dispose]?.();
-        else setContext(() => held);
+        if (disposed) return stub[Symbol.dispose]();
+        held = stub;
+        setContext(() => stub);
       },
       () => undefined,
     );
     return () => {
       // another organization, or gone: release the stub and show nothing until the next one lands
       disposed = true;
-      held?.[Symbol.dispose]?.();
+      held?.[Symbol.dispose]();
       setContext(undefined);
     };
   }, [api, orgId]);
