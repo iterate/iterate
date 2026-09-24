@@ -18,7 +18,8 @@ const osBaseUrl = configuredOsBaseUrl || `http://localhost:${localOsPort}`;
 /** The Notes app deployed against that OS: the notes project's baseURL. Its session specs also
  *  sign in to the Dash (DASH_BASE_URL). Locally, unset skips them; in CI, unset fails them. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
-/** The Voice app deployed against that OS; unset skips the voice project's specs. */
+/** The Voice app deployed against that OS: the voice project's baseURL. Locally, unset skips its
+ *  specs; in CI, unset fails them. */
 const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
 const desktopWebUse = {
   ...devices["Desktop Chrome"],
