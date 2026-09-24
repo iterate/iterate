@@ -1,4 +1,4 @@
-/** Erase all OS-Next data while retaining the worker, routes and resource identities.
+/** Erase all apps/os data while retaining the worker, routes and resource identities.
  * Run `pnpm erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
  * The worker is parked and its Durable Objects retired first, stopping writers and alarms.
  * Both KV namespaces, R2 files and Artifacts repositories are then emptied and verified; the catalog

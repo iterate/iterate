@@ -27,14 +27,14 @@ describe("the preview name (cloudflare-os: pr<n>-<branch slug>)", () => {
 
   test("a long branch is truncated with a stable hash, inside the limit, number first", () => {
     const name = resolvePreviewName({
-      name: "jonas/os-next-worker-previews-with-a-very-long-descriptive-branch-name",
+      name: "jonas/os-worker-previews-with-a-very-long-descriptive-branch-name",
       prNumber: "2750",
     });
     expect(name.length).toBeLessThanOrEqual(MAX_PREVIEW_NAME_LENGTH);
     expect(name).toMatch(/^pr2750-[a-z0-9-]+-[0-9a-f]{6}$/);
     expect(name).toBe(
       resolvePreviewName({
-        name: "jonas/os-next-worker-previews-with-a-very-long-descriptive-branch-name",
+        name: "jonas/os-worker-previews-with-a-very-long-descriptive-branch-name",
         prNumber: "2750",
       }),
     );
@@ -133,7 +133,7 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
       BrowserSession: { type: "durable-object", storage: "sqlite" },
       AgentDurableObject: { type: "durable-object", state: "deleted" },
     },
-    r2_buckets: [{ binding: "FILES", bucket_name: "os-next-files" }],
+    r2_buckets: [{ binding: "FILES", bucket_name: "os-files" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-dev-repos" }],
     kv_namespaces: [
       { binding: "ITX_KV", id: "1" },

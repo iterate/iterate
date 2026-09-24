@@ -135,7 +135,7 @@ export function viteWranglerConfig(
   if (!name)
     return {
       ...local,
-      name: options.localDev ? local.name : "os-next-local-build",
+      name: options.localDev ? local.name : "os-local-build",
       vars: {
         APP_CONFIG_URLS__OS: `http://localhost:${options.port}`,
         APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({
@@ -152,7 +152,7 @@ export function viteWranglerConfig(
       },
     };
   const deployment = env[name];
-  if (!deployment) throw new Error(`Unknown os-next environment: ${name}`);
+  if (!deployment) throw new Error(`apps/os: unknown env ${JSON.stringify(name)}`);
   return { ...local, ...deployment };
 }
 

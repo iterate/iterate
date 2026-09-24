@@ -157,7 +157,7 @@ describe("encodeDeviceConfiguration", () => {
     ).toThrow("invalid project id");
   });
 
-  /* A project's id on os-next IS its DNS-safe slug: no `prj_` to insist on,
+  /* A project's id on the platform IS its DNS-safe slug: no `prj_` to insist on,
    * and hyphens are ordinary. Refusing one here is a board that cannot be
    * provisioned for the deployment it is meant to talk to. */
   test("writes a bare slug project id", () => {

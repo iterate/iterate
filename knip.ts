@@ -59,7 +59,7 @@ export default {
       ],
     },
     "apps/os": {
-      // The os-next platform worker. Knip's vitest plugin reads vitest.config.ts (its global
+      // The platform worker. Knip's vitest plugin reads vitest.config.ts (its global
       // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
       entry: [
         "src/worker.ts!",
