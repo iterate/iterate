@@ -39,17 +39,23 @@ run.
 scheduled sync's creation and its own, both less five minutes (Depot can show
 a job as running for a few seconds after its recorded finish). Successful syncs
 therefore tile time without a stored cursor, and a failed sync leaves its
-window to the next one. A window longer than six hours is cut to the last six,
-with a warning naming the dropped start. Every event's UUID derives from
-Depot's execution or attempt ID, and PostHog deduplicates by it, so replaying
-an overlapping window does not double count.
+window to the next one. A window longer than six hours is cut to the last six.
+Every cut, this one or the listing's below, logs a `ci-telemetry.unreported`
+warning with the `from` and `until` of the time whose work goes unreported and
+the `reason`, and the sync still succeeds, so the next one starts after it.
+Every event's UUID derives from Depot's execution or attempt ID, and PostHog
+deduplicates by it, so replaying an overlapping window does not double count.
 
 **Listing.** Depot's `ListWorkflows` returns at most the newest 200 and has no
 paging, so the sync lists each workflow named in `.depot/workflows` (on main)
 separately, plus one unnamed listing for workflows that exist only on a branch.
-It fails when a named listing fills its 200 without reaching two hours before
-the window (the longest a push, pull-request or scheduled workflow runs;
-`os-e2e-soak` is dispatch-only).
+A workflow can finish up to two hours after it was created (the longest a push,
+pull-request or scheduled workflow runs; `os-e2e-soak` is dispatch-only), so
+each named listing has to reach two hours before the window. One that fills
+its 200 without reaching back holds every workflow of its name created since
+its oldest, and the window then starts two hours after that; the warning's
+`listings` names each such workflow and the oldest time its listing reaches.
+The listings take no time or branch filter to narrow them by.
 
 **Late re-runs are not reported.** A re-run keeps its workflow's original
 creation time, and Depot's listings offer no update or finish time to list by,
