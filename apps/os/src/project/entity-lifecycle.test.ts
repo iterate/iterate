@@ -101,8 +101,10 @@ for (const contract of [RepoContract, WorkspaceContract]) {
   for (const { name, events, state } of rows)
     test(`the ${slug} lifecycle — the reduce: ${name}`, () => {
       // The reduce never reaches the context; the sagas are the e2e's.
-      const processor = new EntityLifecycleProcessor(contract, () =>
-        Promise.reject(new Error("the reduce reaches no itx")),
+      const processor = new EntityLifecycleProcessor(
+        contract,
+        () => Promise.reject(new Error("the reduce reaches no itx")),
+        () => path,
       );
       expect(reduceProcessor(processor, events)).toEqual(state);
     });

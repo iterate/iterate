@@ -7,12 +7,31 @@
 // an entity (`itx.repos.get(path)`) is the library's (library.ts): straight to the path, never through `/`.
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
-import { codedError, resolveContextPath } from "iterate/lib";
+import { codedError, errorCode, resolveContextPath } from "iterate/lib";
 import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
 import type { EntityCreationAndDeletionState } from "./entity-lifecycle.ts";
+
+/** How long `create` and `delete` wait for the entity's terminal fact in all: what one
+ *  `waitForEvent` waited by default before the wait was sliced. */
+const TERMINAL_WAIT_MS = 30_000;
+/** How long ONE call on the entity's context waits before it is asked again — WORKAROUND for a
+ *  platform fault no test can raise. Cloudflare sometimes replaces a context's Durable Object while
+ *  a call is in flight on it and leaves the call on the old instance: its storage writes throw
+ *  ("this Durable Object instance is no longer active", "…caused object to be reset"), its timers
+ *  still fire, and the new instance's appends never reach its waiters — so a wait held there sits
+ *  out its whole timeout while the certificate is already on the log (the latency guard,
+ *  2026-09-24: 3 of the 8 creations that failed in ~1,470; the config repo's `repo/created` landed
+ *  on the new incarnation at +23 s, and `create` failed at +31 s with WAIT_TIMEOUT all the same).
+ *  A reset the platform is asked for — `ctx.abort()`, a storage reset — fails the call instead
+ *  (e2e/context-abort.e2e.test.ts). Each slice is a fresh call, which reaches the active instance,
+ *  and that instance's birth revives the claim the old one left (FacetHost), so the creation goes
+ *  on within seconds. Remove when a call on a replaced instance fails. */
+const TERMINAL_WAIT_SLICE_MS = 5_000;
+/** Each incarnation's first event (stream.ts `appendWakeRecord`). */
+const WOKEN = "events.iterate.com/stream/woken";
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";
@@ -36,6 +55,58 @@ export class EntityCollectionRpcTarget extends RpcTarget {
   async #state(context: { invoke(steps: (string | unknown[])[]): unknown }) {
     const snapshot = await context.invoke(["itx", "facets", ["get", this.slug], ["snapshot"]]);
     return (snapshot as { state: EntityCreationAndDeletionState }).state;
+  }
+
+  /** The first of `types` on the entity's log after `afterOffset`, waited for TERMINAL_WAIT_MS in
+   *  slices of TERMINAL_WAIT_SLICE_MS, each a fresh call (the constant says why). The context's
+   *  wake record rides along: one found after a slice timed out is an incarnation the timed-out wait
+   *  never saw — the object was replaced under it — and is logged as the platform failure it heals;
+   *  one already on the log when the wait began (a creation joined after an eviction) is skipped. */
+  async #terminalFact(
+    context: { waitForEvent(filter: object): unknown },
+    path: string,
+    types: string[],
+    afterOffset: number,
+  ): Promise<StreamEvent> {
+    const started = Date.now();
+    let after = afterOffset;
+    let timedOut = 0;
+    for (;;) {
+      const remainingMs = started + TERMINAL_WAIT_MS - Date.now();
+      if (remainingMs <= 0)
+        throw codedError(
+          "WAIT_TIMEOUT",
+          `${this.slug} ${path}: no ${types.join(" or ")} after offset ${afterOffset} within ${TERMINAL_WAIT_MS}ms`,
+        );
+      let event: StreamEvent;
+      try {
+        // Over the loopback stub a wait's answer types as an RPC result; the wire copied it.
+        event = (await context.waitForEvent({
+          type: [...types, WOKEN],
+          afterOffset: after,
+          timeoutMs: Math.min(TERMINAL_WAIT_SLICE_MS, remainingMs),
+        })) as StreamEvent;
+      } catch (error) {
+        if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+        timedOut += 1;
+        continue;
+      }
+      if (event.type !== WOKEN) return event;
+      if (timedOut > 0)
+        console.warn({
+          event: "iterate-context.platform-failure-wait-moved",
+          namespace: "iterate-context",
+          message:
+            "the entity's context was reborn under a wait that never saw it: waited again on the active instance",
+          path,
+          types: types.join(","),
+          waitedMs: Date.now() - started,
+          slicesTimedOut: timedOut,
+          incarnation: Number(event.payload?.incarnation),
+          reason: String(event.payload?.reason),
+        });
+      after = event.offset;
+    }
   }
 
   /** Every entity of this kind born under the project, by path — the certificates cross-posted to
@@ -97,13 +168,15 @@ export class EntityCollectionRpcTarget extends RpcTarget {
         )) as unknown as StreamEvent[];
         requestedAtOffset = appended.at(-1)!.offset;
       }
-      const settled = (await context.waitForEvent({
-        type: [
+      const settled = await this.#terminalFact(
+        context,
+        path,
+        [
           `events.iterate.com/${this.slug}/created`,
           `events.iterate.com/${this.slug}/create-failed`,
         ],
-        afterOffset: requestedAtOffset,
-      })) as unknown as StreamEvent;
+        requestedAtOffset,
+      );
       if (settled.type === `events.iterate.com/${this.slug}/create-failed`)
         throw new Error(
           `${this.slug} ${path}: creation failed — ${String(settled.payload?.error)}`,
@@ -137,10 +210,12 @@ export class EntityCollectionRpcTarget extends RpcTarget {
           })) as unknown as StreamEvent[];
           requestedAtOffset = requested!.offset;
         }
-        await context.waitForEvent({
-          type: `events.iterate.com/${this.slug}/deleted`,
-          afterOffset: requestedAtOffset,
-        });
+        await this.#terminalFact(
+          context,
+          path,
+          [`events.iterate.com/${this.slug}/deleted`],
+          requestedAtOffset,
+        );
       }
       // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
       // and the disable would otherwise leave the row and the facet's storage behind (a workspace's

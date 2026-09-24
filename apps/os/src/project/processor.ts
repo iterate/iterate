@@ -10,8 +10,8 @@
 // commit — publishing a config-repo website needs a commit, not a manual ingress event.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
-// the seed is skipped once `main` has a tip, every ingress append is keyed by the commit it points
-// at, the certificate is keyed. The host's `withItx` and the template download are its constructor
+// a born `main` refuses the seed, every ingress append is keyed by the commit it points at, the
+// certificate is keyed. The host's `withItx` and the template download are its constructor
 // arguments; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or
 // hands it a fake download (templates.test.ts); the effects are proven on
 // the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
@@ -318,44 +318,42 @@ export class ProjectProcessor extends StreamProcessor<
       try {
         await this.withItx((itx) => itx.repos.create("/repos/config"));
         const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
-        // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-        const tip = async () =>
-          (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
-        let commitOid = await tip();
-        if (!commitOid) {
-          const reference = state.creation?.configRepoTemplate;
+        // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
+        // of the tip first — one Artifacts round trip less on every creation, and the one that hung
+        // 22.8 s (2026-09-24, the latency guard). A born `main` refuses it: an attempt of this saga
+        // lost with an incarnation seeded it, or another commit got there first — `create` answers
+        // before this certificate, so the config repo may be written meanwhile (a voice delegation's
+        // website edit was, 2026-09-24, and the seed put the seed homepage back over it). Either
+        // way `main`'s tip is the project's config and what the ingress names; a failure that left
+        // `main` unborn — the template's download included — is the saga's own failure.
+        let commitOid: string | null;
+        const reference = state.creation?.configRepoTemplate;
+        try {
           const changes = reference
             ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
             : defaultFiles;
           if (!changes.some((file) => file.path === "worker.ts"))
             throw new Error("The config template needs a worker.ts entrypoint");
-          // THE SEED LANDS ONLY ON THE UNBORN `main` IT WAS DECIDED ON (`parent: null`). `create`
-          // answers before this certificate, so the config repo may be written between the read
-          // above and this commit — a voice delegation's website edit was (2026-09-24), and the seed,
-          // applied on top of it, put the seed homepage back over the edit. Refused, the seed leaves
-          // the commit that got there first as the project's config, and `main`'s tip is what the
-          // ingress names. A failure that left `main` unborn is the saga's own failure.
-          try {
-            const seeded = (await this.withItx((itx) =>
-              config(itx).commitFiles({
-                message: reference ? `seed: ${reference}` : "seed: minimal project config",
-                changes,
-                parent: null,
-              }),
-            )) as unknown as { commitOid: string | null };
-            commitOid = seeded.commitOid;
-          } catch (error) {
-            commitOid = await tip();
-            if (!commitOid) throw error;
-            console.info({
-              event: "project.seed-on-born-main",
-              namespace: "project",
-              message:
-                "the seed commit threw with main born — a commit got there first (the seed refused itself) or the seed landed without its answer: main's tip is the project's config",
-              commitOid,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
+          const seeded = (await this.withItx((itx) =>
+            config(itx).commitFiles({
+              message: reference ? `seed: ${reference}` : "seed: minimal project config",
+              changes,
+              parent: null,
+            }),
+          )) as unknown as { commitOid: string | null };
+          commitOid = seeded.commitOid;
+        } catch (error) {
+          // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
+          commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
+          if (!commitOid) throw error;
+          console.info({
+            event: "project.seed-on-born-main",
+            namespace: "project",
+            message:
+              "the seed threw with main born — an earlier attempt seeded it, or a commit got there first (the seed refused itself), or the seed landed without its answer: main's tip is the project's config",
+            commitOid,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
         if (!commitOid) throw new Error("the config repo's seed left main unborn");
         const manifestText = await this.withItx((itx) =>
