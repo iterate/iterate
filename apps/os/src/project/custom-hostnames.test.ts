@@ -3,7 +3,11 @@
 // is shown, delete.
 import { expect, test } from "vitest";
 import type { AppConfig } from "../app-config.ts";
-import { cloudflareCustomHostnameProvider, customHostnameProblem } from "./custom-hostnames.ts";
+import {
+  cloudflareCustomHostnameProvider,
+  customHostnameProblem,
+  customHostnameRecords,
+} from "./custom-hostnames.ts";
 
 const reserved = ["iterate.com", "iterate.app", "garple.com"];
 const rows: [hostname: string, problem: string | null][] = [
@@ -50,64 +54,63 @@ test("cloudflareCustomHostnameProvider: none without a token", () => {
   expect(cloudflareCustomHostnameProvider(config(""))).toBeNull();
 });
 
-test("cloudflareCustomHostnameProvider: provision finds or creates with an HTTP DV certificate, and reports the CNAME to add; remove deletes what exists", async () => {
-  const hostnames: Record<string, unknown>[] = [];
+test("customHostnameRecords: the hostname and every name under it to the fallback origin, and _acme-challenge delegated to Cloudflare", () => {
+  expect(customHostnameRecords("iterate.somedomain.com", SAAS)).toEqual([
+    { name: "iterate.somedomain.com", value: "cname.iterate.app" },
+    { name: "*.iterate.somedomain.com", value: "cname.iterate.app" },
+    {
+      name: "_acme-challenge.iterate.somedomain.com",
+      value: "iterate.somedomain.com.dcv-uuid.dcv.cloudflare.com",
+    },
+  ]);
+});
+
+test("cloudflareCustomHostnameProvider: provision finds or creates a wildcard custom hostname validated over TXT; remove deletes what exists", async () => {
+  const hostnames: { id: string; hostname: string; status: string }[] = [];
   const requests: string[] = [];
-  const bodies: unknown[] = [];
   const fetcher = (async (input: string, init?: RequestInit) => {
     const url = new URL(input);
-    requests.push(`${init?.method || "GET"} ${url.pathname}${url.search}`);
+    requests.push(`${init?.method || "GET"} ${url.pathname.split("/zone-1/")[1]}${url.search}`);
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token-1");
     const ok = (result: unknown) => Response.json({ success: true, result });
-    if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-1" }]);
     if (init?.method === "POST") {
-      bodies.push(JSON.parse(String(init.body)));
-      const created = {
-        id: "ch-1",
-        ...(JSON.parse(String(init.body)) as object),
-        status: "pending",
-        ssl: { status: "pending_validation", validation_errors: [{ message: "no CNAME yet" }] },
-      };
-      hostnames.push(created);
-      return ok(created);
+      expect(JSON.parse(String(init.body))).toEqual({
+        hostname: "iterate.shop.test",
+        ssl: { method: "txt", type: "dv", wildcard: true, settings: { min_tls_version: "1.2" } },
+      });
+      hostnames.push({ id: "ch-1", hostname: "iterate.shop.test", status: "pending" });
+      return ok(hostnames[0]);
     }
-    if (init?.method === "DELETE") {
-      hostnames.length = 0;
-      return ok({ id: "ch-1" });
-    }
+    if (init?.method === "DELETE") return ok({ id: hostnames.pop()!.id });
     return ok(hostnames);
   }) as typeof fetch;
   const provider = cloudflareCustomHostnameProvider(config("token-1"), fetcher)!;
   const expected = {
     status: "pending",
-    sslStatus: "pending_validation",
-    records: [{ type: "CNAME", name: "www.shop.test", value: "cname.iterate.app" }],
-    errors: ["no CNAME yet"],
+    sslStatus: "unknown",
+    records: customHostnameRecords("iterate.shop.test", SAAS),
   };
-  expect(await provider.provision("www.shop.test")).toEqual(expected);
-  expect(bodies).toEqual([
-    {
-      hostname: "www.shop.test",
-      ssl: { method: "http", type: "dv", settings: { min_tls_version: "1.2" } },
-    },
-  ]);
-  expect(await provider.provision("www.shop.test")).toEqual(expected);
-  await provider.remove("www.shop.test");
-  await provider.remove("www.shop.test");
+  expect(await provider.provision("iterate.shop.test")).toEqual(expected);
+  expect(await provider.provision("iterate.shop.test")).toEqual(expected);
+  await provider.remove("iterate.shop.test");
+  await provider.remove("iterate.shop.test");
   expect(requests).toEqual([
-    "GET /client/v4/zones?name=iterate.app",
-    "GET /client/v4/zones/zone-1/custom_hostnames?hostname=www.shop.test",
-    "POST /client/v4/zones/zone-1/custom_hostnames",
-    "GET /client/v4/zones/zone-1/custom_hostnames?hostname=www.shop.test",
-    "GET /client/v4/zones/zone-1/custom_hostnames?hostname=www.shop.test",
-    "DELETE /client/v4/zones/zone-1/custom_hostnames/ch-1",
-    "GET /client/v4/zones/zone-1/custom_hostnames?hostname=www.shop.test",
+    "GET custom_hostnames?hostname=iterate.shop.test",
+    "POST custom_hostnames",
+    "GET custom_hostnames?hostname=iterate.shop.test",
+    "GET custom_hostnames?hostname=iterate.shop.test",
+    "DELETE custom_hostnames/ch-1",
+    "GET custom_hostnames?hostname=iterate.shop.test",
   ]);
 });
 
+const SAAS = {
+  zone: "iterate.app",
+  zoneId: "zone-1",
+  dcvDelegationUuid: "dcv-uuid",
+  reservedZones: [],
+};
+
 function config(token: string): Pick<AppConfig, "customHostnames" | "cloudflareApiToken"> {
-  return {
-    customHostnames: { zone: "iterate.app", reservedZones: [] },
-    cloudflareApiToken: { exposeSecret: () => token } as never,
-  };
+  return { customHostnames: SAAS, cloudflareApiToken: { exposeSecret: () => token } as never };
 }

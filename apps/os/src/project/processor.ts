@@ -148,20 +148,17 @@ export class ProjectProcessor extends StreamProcessor<
           },
         };
       }
-      case "events.iterate.com/project/hostname-provisioned":
-      case "events.iterate.com/project/hostname-add-failed": {
-        // an answer to an add; one that lands after a remove was asked for changes nothing
-        const known = state.hostnames[event.payload.hostname];
+      case "events.iterate.com/project/hostname-add-answered": {
+        // one that lands after a remove was asked for changes nothing; a failure keeps what
+        // Cloudflare last said
+        const { hostname, cloudflare, error } = event.payload;
+        const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
-        const answer =
-          event.type === "events.iterate.com/project/hostname-provisioned"
-            ? { cloudflare: event.payload.cloudflare, error: null }
-            : { cloudflare: known.cloudflare, error: event.payload.error };
         return {
           ...state,
           hostnames: {
             ...state.hostnames,
-            [event.payload.hostname]: { requested: null, ...answer },
+            [hostname]: { requested: null, cloudflare: cloudflare || known.cloudflare, error },
           },
         };
       }
@@ -358,44 +355,28 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   /** Claim the hostname, then find-or-create its custom hostname: the answer to an add. A refusal
-   *  releases a claim nothing was ever provisioned under; a hostname already serving keeps its claim
-   *  through a failed re-check. */
+   *  after the claim releases it unless the hostname was already serving (a failed re-check keeps it). */
   async #addHostname(hostname: string, offset: number, provisioned: boolean) {
-    const answer = { idempotencyKey: `project/hostname-add:${hostname}:${offset}` };
     const hostnames = this.hostnames();
-    const problem = !hostnames?.provider
-      ? "This deployment cannot add custom hostnames."
-      : customHostnameProblem(hostname, hostnames.reservedZones);
-    if (problem || !hostnames?.provider)
-      return {
-        ...answer,
-        type: "events.iterate.com/project/hostname-add-failed" as const,
-        payload: { hostname, error: problem! },
-      };
+    let cloudflare = null;
+    let error = null;
+    let claimed = false;
     try {
+      if (!hostnames?.provider) throw new Error("This deployment cannot add custom hostnames.");
+      const problem = customHostnameProblem(hostname, hostnames.reservedZones);
+      if (problem) throw new Error(problem);
       await hostnames.claim(hostname);
-    } catch (error) {
-      return {
-        ...answer,
-        type: "events.iterate.com/project/hostname-add-failed" as const,
-        payload: { hostname, error: errorMessage(error) },
-      };
+      claimed = true;
+      cloudflare = await hostnames.provider.provision(hostname);
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+      if (claimed && !provisioned) await hostnames!.release(hostname);
     }
-    try {
-      const cloudflare = await hostnames.provider.provision(hostname);
-      return {
-        ...answer,
-        type: "events.iterate.com/project/hostname-provisioned" as const,
-        payload: { hostname, cloudflare },
-      };
-    } catch (error) {
-      if (!provisioned) await hostnames.release(hostname);
-      return {
-        ...answer,
-        type: "events.iterate.com/project/hostname-add-failed" as const,
-        payload: { hostname, error: errorMessage(error) },
-      };
-    }
+    return {
+      type: "events.iterate.com/project/hostname-add-answered" as const,
+      idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
+      payload: { hostname, cloudflare, error },
+    };
   }
 
   /** Delete the custom hostname, then release the claim: the answer to a remove. */
@@ -410,5 +391,3 @@ export class ProjectProcessor extends StreamProcessor<
     };
   }
 }
-
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

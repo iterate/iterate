@@ -86,6 +86,25 @@ export function projectWildcardHostOf(
     : null;
 }
 
+/** A PROJECT'S OWN HOSTNAME — `iterate.example.com`, added by the project (apps/os
+ *  project/custom-hostnames.ts) — is that project's apex, and one label under it names an app:
+ *  `notes.iterate.example.com` is the `notes` app, as `notes--<project>.<hostname>` is. The hostnames
+ *  a request's host could be a project's own hostname for, most specific first: the host itself (the
+ *  apex), then its parent with the first label as the app — which must be an app label. The caller
+ *  looks them up in that order; the first a project holds wins. Case and a trailing dot are
+ *  forgiven. Pure. */
+export function customHostnameCandidatesOf(
+  host: string,
+): { hostname: string; app: string | null }[] {
+  const hostname = host.toLowerCase().replace(/\.$/, "");
+  const dot = hostname.indexOf(".");
+  const [app, parent] = [hostname.slice(0, dot), hostname.slice(dot + 1)];
+  return [
+    { hostname, app: null },
+    ...(dot > 0 && parent.includes(".") && APP_LABEL.test(app) ? [{ hostname: parent, app }] : []),
+  ];
+}
+
 /** The URL of `app` (null ⇒ the apex, the config worker) in `project` under `routing`, at `path`
  *  (default "/", must start with "/"). Null when there is no ingress, or when the result would not
  *  parse back to the same address (a bad label; a `path` that climbs out of its app). subdomains:

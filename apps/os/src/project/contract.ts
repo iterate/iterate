@@ -22,10 +22,8 @@ export const CustomHostnameObservation = z.object({
   status: z.string(),
   /** The certificate's status: `pending_validation` … `active`. */
   sslStatus: z.string(),
-  /** What the owner adds to DNS: the CNAME to the SaaS zone's fallback origin. */
-  records: z.array(z.object({ type: z.literal("CNAME"), name: z.string(), value: z.string() })),
-  /** Cloudflare's verification errors, verbatim. */
-  errors: z.array(z.string()),
+  /** The CNAMEs the owner adds (custom-hostnames.ts `customHostnameRecords`). */
+  records: z.array(z.object({ name: z.string(), value: z.string() })),
 });
 export type CustomHostnameObservation = z.infer<typeof CustomHostnameObservation>;
 
@@ -99,21 +97,17 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
-        "Serve this project's apex on `hostname` too. The processor claims it in the control plane's hostname table, creates the Cloudflare for SaaS custom hostname, and lands hostname-provisioned or hostname-add-failed. Again for a hostname already added re-reads Cloudflare's status.",
+        "Serve this project on `hostname` — its apex there, and `<app>.<hostname>` its apps. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-answered. Again for a hostname already added re-reads Cloudflare's status.",
       payloadSchema: z.object({ hostname: z.string().min(1) }),
     },
-    "events.iterate.com/project/hostname-provisioned": {
+    "events.iterate.com/project/hostname-add-answered": {
       description:
-        "The hostname is the project's, and Cloudflare's status: the DNS records its owner adds, `active` once the CNAME is seen.",
+        "The answer to an add: Cloudflare's status and the DNS records the owner adds, or why it failed (taken, reserved, malformed, Cloudflare's refusal). A failed first add releases the claim.",
       payloadSchema: z.object({
         hostname: z.string().min(1),
-        cloudflare: CustomHostnameObservation,
+        cloudflare: CustomHostnameObservation.nullable(),
+        error: z.string().nullable(),
       }),
-    },
-    "events.iterate.com/project/hostname-add-failed": {
-      description:
-        "Why the hostname could not be added (taken, reserved, malformed, or Cloudflare's refusal). A hostname never provisioned is released.",
-      payloadSchema: z.object({ hostname: z.string().min(1), error: z.string() }),
     },
     "events.iterate.com/project/hostname-remove-requested": {
       description:
@@ -132,8 +126,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
     "events.iterate.com/project/hostname-add-requested",
-    "events.iterate.com/project/hostname-provisioned",
-    "events.iterate.com/project/hostname-add-failed",
+    "events.iterate.com/project/hostname-add-answered",
     "events.iterate.com/project/hostname-remove-requested",
     "events.iterate.com/project/hostname-removed",
     "events.iterate.com/repo/created",
@@ -147,8 +140,7 @@ export const ProjectContract = defineProcessorContract({
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
-    "events.iterate.com/project/hostname-provisioned",
-    "events.iterate.com/project/hostname-add-failed",
+    "events.iterate.com/project/hostname-add-answered",
     "events.iterate.com/project/hostname-removed",
     // the core's: the saga points the project's apex at the seeded config repo's commit, and the
     // processor re-points it at every later commit of the config repo (a commit IS its publication)

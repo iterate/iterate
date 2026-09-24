@@ -88,8 +88,8 @@ const appConfigRows: {
       APP_CONFIG_URLS__DASH: "https://dash.iterate.com",
       APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"Iterate.app"}',
       APP_CONFIG_URLS__PROJECT_WILDCARD: '{"hostname":"Iterate.com","project":"iterate"}',
-      APP_CONFIG_CUSTOM_HOSTNAMES__ZONE: "iterate.app",
-      APP_CONFIG_CUSTOM_HOSTNAMES__RESERVED_ZONES: '["iterate.app","iterate.com"]',
+      APP_CONFIG_CUSTOM_HOSTNAMES:
+        '{"zone":"iterate.app","zoneId":"zone-1","dcvDelegationUuid":"dcv-1","reservedZones":["iterate.app","iterate.com"]}',
       APP_CONFIG_CLOUDFLARE_API_TOKEN: "cloudflare-token",
       APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
       APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id",
@@ -107,7 +107,12 @@ const appConfigRows: {
         ingressRouting: { type: "subdomains", hostname: "iterate.app" },
         projectWildcard: { hostname: "iterate.com", project: "iterate" },
       },
-      customHostnames: { zone: "iterate.app", reservedZones: ["iterate.app", "iterate.com"] },
+      customHostnames: {
+        zone: "iterate.app",
+        zoneId: "zone-1",
+        dcvDelegationUuid: "dcv-1",
+        reservedZones: ["iterate.app", "iterate.com"],
+      },
       cloudflareApiToken: "cloudflare-token",
       login: {
         password: "password",

@@ -7,6 +7,7 @@ import {
   projectUrlOf,
   type IngressRouting,
   type ProjectAddress,
+  customHostnameCandidatesOf,
   projectWildcardHostOf,
 } from "./project-ingress.ts";
 
@@ -270,4 +271,43 @@ test.each([
 
 test("no project wildcard names no project", () => {
   expect(projectWildcardHostOf("iterate.com", undefined)).toBeNull();
+});
+
+// ── customHostnameCandidatesOf ── a project's own hostname is its apex; one label under it, an app
+test.each([
+  {
+    host: "iterate.somedomain.com",
+    candidates: [
+      { hostname: "iterate.somedomain.com", app: null },
+      { hostname: "somedomain.com", app: "iterate" },
+    ],
+  },
+  {
+    host: "notes.iterate.somedomain.com",
+    candidates: [
+      { hostname: "notes.iterate.somedomain.com", app: null },
+      { hostname: "iterate.somedomain.com", app: "notes" },
+    ],
+  },
+  {
+    host: "Notes.Iterate.SomeDomain.com.",
+    candidates: [
+      { hostname: "notes.iterate.somedomain.com", app: null },
+      { hostname: "iterate.somedomain.com", app: "notes" },
+    ],
+  },
+  // a bare domain's parent is a TLD, never a project's hostname
+  { host: "garple.com", candidates: [{ hostname: "garple.com", app: null }] },
+  // a first label that is no app label (a digit first, `--`) names no app: only the exact host
+  {
+    host: "1st.iterate.somedomain.com",
+    candidates: [{ hostname: "1st.iterate.somedomain.com", app: null }],
+  },
+  {
+    host: "a--b.iterate.somedomain.com",
+    candidates: [{ hostname: "a--b.iterate.somedomain.com", app: null }],
+  },
+  { host: "localhost", candidates: [{ hostname: "localhost", app: null }] },
+])("custom hostname candidates of $host", ({ host, candidates }) => {
+  expect(customHostnameCandidatesOf(host)).toEqual(candidates);
 });

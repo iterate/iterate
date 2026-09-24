@@ -19,11 +19,11 @@ function urlVars(env: OsEnv) {
     vars.APP_CONFIG_URLS__PROJECT_WILDCARD = JSON.stringify(env.projectWildcard);
   // a project's own custom hostnames go on the first SaaS zone; the token is Doppler's
   // (APP_CONFIG_CLOUDFLARE_API_TOKEN)
-  const [saasZone] = env.cloudflareForSaasProjectHostnameBases || [];
-  if (saasZone) {
-    vars.APP_CONFIG_CUSTOM_HOSTNAMES__ZONE = saasZone;
-    vars.APP_CONFIG_CUSTOM_HOSTNAMES__RESERVED_ZONES = JSON.stringify([...ownZonesOf(env)].sort());
-  }
+  if (env.cloudflareForSaas)
+    vars.APP_CONFIG_CUSTOM_HOSTNAMES = JSON.stringify({
+      ...env.cloudflareForSaas,
+      reservedZones: [...ownZonesOf(env)].sort(),
+    });
   return vars;
 }
 
@@ -36,7 +36,7 @@ function ownZonesOf(env: OsEnv) {
     registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
     ...(env.ingressRouting?.type === "subdomains" ? [env.ingressRouting.hostname] : []),
     ...(env.projectWildcard ? [env.projectWildcard.hostname] : []),
-    ...(env.cloudflareForSaasProjectHostnameBases || []),
+    ...(env.cloudflareForSaas ? [env.cloudflareForSaas.zone] : []),
   ]);
 }
 
@@ -107,10 +107,9 @@ function wranglerConfig() {
               pattern: `${hostname}/*`,
               zone_name: zone,
             })),
-            ...(env.cloudflareForSaasProjectHostnameBases || []).map((zone) => ({
-              pattern: "*/*",
-              zone_name: zone,
-            })),
+            ...(env.cloudflareForSaas
+              ? [{ pattern: "*/*", zone_name: env.cloudflareForSaas.zone }]
+              : []),
           ],
           ...bindings,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],

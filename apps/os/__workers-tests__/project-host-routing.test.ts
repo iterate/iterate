@@ -97,62 +97,68 @@ test("under the base, only a project host: a hostname that fails the grammar is 
   expect(await call(`${ORIGIN}/version`)).toMatchObject({ status: 200 });
 });
 
-test("a project's own hostname: added, the processor claims it and creates its Cloudflare custom hostname (faked), and the edge serves the project's apex there; removed, the custom hostname is deleted and the claim released", async () => {
+test("a project's own hostname: added, the processor claims it and creates its wildcard Cloudflare custom hostname (faked); the edge serves the project's apex there and `<app>.<hostname>` its apps; no other project can take it or a name under it; removed, the custom hostname is deleted and the claim released", async () => {
   const cloudflare = fakeCloudflareCustomHostnames();
   using session = await api();
   const admin = session.authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "own-hostname" });
-  const { projectId } = await itx.whoami();
   await itx.append({
     type: "events.iterate.com/project/ingress-configured",
     payload: {
       target: ["itx", "workers", ["get", { source: SRC_HOSTNAME_SITE, cacheKey: "own-hostname" }]],
     },
   });
-  const [requested] = await itx.append({
-    type: "events.iterate.com/project/hostname-add-requested",
-    payload: { hostname: "www.own-hostname.test" },
-  });
-  const answer = await itx.waitForEvent({
-    type: [
-      "events.iterate.com/project/hostname-provisioned",
-      "events.iterate.com/project/hostname-add-failed",
-    ],
-    afterOffset: requested!.offset,
-    timeoutMs: 10_000,
-  });
-  expect(answer).toMatchObject({
-    type: "events.iterate.com/project/hostname-provisioned",
-    payload: {
-      hostname: "www.own-hostname.test",
-      cloudflare: {
-        status: "pending",
-        records: [{ type: "CNAME", name: "www.own-hostname.test", value: "cname.saas.test" }],
-      },
-    },
-  });
-  expect(cloudflare).toMatchObject({ hostnames: ["www.own-hostname.test"] });
-  const served = await call("https://www.own-hostname.test/");
-  expect(served, await served.clone().text()).toMatchObject({ status: 200 });
-  expect(await served.json()).toEqual({ host: "www.own-hostname.test", app: null });
-  // another project cannot take it; a hostname under the deployment's own zones is refused
-  const other = await admin.projects.create({ project: "own-hostname-other" });
-  for (const hostname of ["www.own-hostname.test", "x.projects.test"]) {
-    const [asked] = await other.append({
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const add = async (project: typeof itx, hostname: string) => {
+    const [asked] = await project.append({
       type: "events.iterate.com/project/hostname-add-requested",
       payload: { hostname },
     });
-    expect(
-      await other.waitForEvent({
-        type: "events.iterate.com/project/hostname-add-failed",
-        afterOffset: asked!.offset,
-        timeoutMs: 10_000,
-      }),
-    ).toMatchObject({ payload: { hostname } });
-  }
+    return project.waitForEvent({
+      type: "events.iterate.com/project/hostname-add-answered",
+      afterOffset: asked!.offset,
+      timeoutMs: 10_000,
+    });
+  };
+  expect(await add(itx, "iterate.somedomain.test")).toMatchObject({
+    payload: {
+      hostname: "iterate.somedomain.test",
+      error: null,
+      cloudflare: {
+        status: "pending",
+        records: [
+          { name: "iterate.somedomain.test", value: "cname.saas.test" },
+          { name: "*.iterate.somedomain.test", value: "cname.saas.test" },
+          {
+            name: "_acme-challenge.iterate.somedomain.test",
+            value: "iterate.somedomain.test.dcv-uuid.dcv.cloudflare.com",
+          },
+        ],
+      },
+    },
+  });
+  expect(cloudflare).toMatchObject({ hostnames: ["iterate.somedomain.test"] });
+  // the apex: the project's config worker, no app label
+  const apex = await call("https://iterate.somedomain.test/");
+  expect(apex, await apex.clone().text()).toMatchObject({ status: 200 });
+  expect(await apex.json()).toEqual({ host: "iterate.somedomain.test", app: null });
+  // one label under it: that app, as `echo--own-hostname.projects.test` is
+  const app = await call("https://echo.iterate.somedomain.test/");
+  expect(app, await app.clone().text()).toMatchObject({ status: 200 });
+  expect(await app.json()).toMatchObject({ app: "echo" });
+  // another project cannot take it or a name under it; the deployment's own zones are refused
+  const other = await admin.projects.create({ project: "own-hostname-other" });
+  for (const hostname of [
+    "iterate.somedomain.test",
+    "echo.iterate.somedomain.test",
+    "x.projects.test",
+  ])
+    expect(await add(other, hostname)).toMatchObject({
+      payload: { hostname, cloudflare: null, error: expect.any(String) },
+    });
   const [removal] = await itx.append({
     type: "events.iterate.com/project/hostname-remove-requested",
-    payload: { hostname: "www.own-hostname.test" },
+    payload: { hostname: "iterate.somedomain.test" },
   });
   await itx.waitForEvent({
     type: "events.iterate.com/project/hostname-removed",
@@ -161,9 +167,8 @@ test("a project's own hostname: added, the processor claims it and creates its C
   });
   expect(cloudflare).toMatchObject({ hostnames: [] });
   expect(
-    await env.CONTROL_PLANE.getByName("global").projectByHostname("www.own-hostname.test"),
+    await env.CONTROL_PLANE.getByName("global").projectByHostname(["iterate.somedomain.test"]),
   ).toBeNull();
-  expect(projectId).toMatch(/^prj_/);
 });
 
 /** A config worker that says which host it answered, and the app label it saw. */

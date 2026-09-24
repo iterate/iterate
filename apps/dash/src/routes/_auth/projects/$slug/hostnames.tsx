@@ -1,35 +1,19 @@
-// /projects/<slug>/hostnames — the project's own hostnames: `www.example.com` serving the project's
-// site as `<project>.<hostname>` does. The `project` facet's LIVE STATE on `/` is the list
-// (apps/os/src/project/contract.ts `hostnames`): each hostname, what the processor still owes, and
-// Cloudflare's last word — its status and the CNAME record its owner adds. Adding one
-// is a SHEET (`?add=1`); adding, re-checking and removing are each ONE event appended to the root
-// (`project/hostname-add-requested`, again for a re-check; `project/hostname-remove-requested`), and
-// the processor's answer lands in the live state.
+// /projects/<slug>/hostnames — the project's own hostnames: `iterate.example.com` serves the project's
+// site and `<app>.iterate.example.com` its apps. The `project` facet's LIVE STATE on `/` is the list
+// (apps/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
+// and the CNAMEs the owner adds. Adding (`?add=1`, a sheet), checking again and removing each append
+// ONE event to the root; the processor's answer lands in the live state.
 import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@iterate-com/ui/components/alert-dialog";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Identifier } from "@iterate-com/ui/components/identifier";
+import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import {
   Sheet,
-  SheetClose,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -44,13 +28,12 @@ const HostnamesLive = z.looseObject({
     .record(
       z.string(),
       z.object({
-        requested: z.object({ verb: z.enum(["add", "remove"]), offset: z.number() }).nullable(),
+        requested: z.object({ verb: z.enum(["add", "remove"]) }).nullable(),
         cloudflare: z
           .object({
             status: z.string(),
             sslStatus: z.string(),
-            records: z.array(z.object({ type: z.string(), name: z.string(), value: z.string() })),
-            errors: z.array(z.string()),
+            records: z.array(z.object({ name: z.string(), value: z.string() })),
           })
           .nullable(),
         error: z.string().nullable(),
@@ -58,7 +41,6 @@ const HostnamesLive = z.looseObject({
     )
     .default({}),
 });
-type Hostname = z.infer<typeof HostnamesLive>["hostnames"][string];
 
 export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
   validateSearch: z.object({ add: z.literal(1).optional().catch(undefined) }),
@@ -75,18 +57,21 @@ function ProjectHostnames() {
   const live = useFacetLiveState(context, "project");
   const hostnames = Object.entries(HostnamesLive.safeParse(live.value).data?.hostnames ?? {});
   const [error, setError] = useState<string | null>(null);
-  /** Append one hostname request to the project's root; the answer arrives in the live state. */
-  const request = async (verb: "add" | "remove", hostname: string) => {
-    setError(null);
-    try {
-      await context!.append({
+  const request = (verb: "add" | "remove", hostname: string) =>
+    context!
+      .append({
         type: `events.iterate.com/project/hostname-${verb}-requested`,
         payload: { hostname },
-      });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-      throw caught;
-    }
+      })
+      .then(
+        () => setError(null),
+        (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)),
+      );
+  const add = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const hostname = String(new FormData(event.currentTarget).get("hostname"));
+    await request("add", hostname.trim().toLowerCase().replace(/\.$/, ""));
+    await navigate({ search: {}, replace: true });
   };
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
@@ -99,12 +84,13 @@ function ProjectHostnames() {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          Serve this project's site on a domain of your own. Add the hostname here, then point it at
-          us with the DNS record shown: it goes live, with a certificate, once the record is seen.
+          Serve this project on a domain of your own: <code>iterate.example.com</code> is its site,
+          <code> &lt;app&gt;.iterate.example.com</code> its apps. Add the DNS records shown once; it
+          goes live, with a certificate, when they are seen.
         </p>
       </div>
       {error && (
-        <p role="alert" data-type="error" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       )}
@@ -112,15 +98,62 @@ function ProjectHostnames() {
         <p className="text-sm text-muted-foreground">No hostnames yet.</p>
       ) : (
         <ul className="flex flex-col divide-y rounded-lg border" data-testid="hostnames">
-          {hostnames.map(([hostname, entry]) => (
-            <HostnameRow
-              key={hostname}
-              hostname={hostname}
-              entry={entry}
-              onCheck={() => void request("add", hostname).catch(() => {})}
-              onRemove={() => void request("remove", hostname).catch(() => {})}
-            />
-          ))}
+          {hostnames.map(([hostname, entry]) => {
+            const live =
+              entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
+            const status = entry.requested
+              ? entry.requested.verb === "remove"
+                ? "Removing…"
+                : "Checking…"
+              : entry.error && !entry.cloudflare
+                ? "Failed"
+                : live
+                  ? "Live"
+                  : "Waiting for DNS";
+            return (
+              <li key={hostname} className="flex flex-col gap-3 p-4" data-hostname={hostname}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono">{hostname}</span>
+                    <Badge variant={status === "Failed" ? "destructive" : "secondary"}>
+                      {status}
+                    </Badge>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={Boolean(entry.requested)}
+                      onClick={() => void request("add", hostname)}
+                    >
+                      Check again
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={entry.requested?.verb === "remove"}
+                      onClick={() => void request("remove", hostname)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+                {entry.error && <p className="text-sm text-destructive">{entry.error}</p>}
+                {entry.cloudflare && !live && (
+                  <div className="flex flex-col gap-1 text-sm">
+                    <p className="text-muted-foreground">
+                      Add these CNAME records at your DNS provider (on Cloudflare, DNS only):
+                    </p>
+                    {entry.cloudflare.records.map((record) => (
+                      <code key={record.name} className="break-all">
+                        {record.name} CNAME {record.value}
+                      </code>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       <Sheet
@@ -128,167 +161,20 @@ function ProjectHostnames() {
         onOpenChange={(open) => !open && void navigate({ search: {}, replace: true })}
       >
         <SheetContent side="right" className="data-[side=right]:sm:max-w-md">
-          <AddHostnameForm
-            onAdd={async (hostname) => {
-              await request("add", hostname);
-              await navigate({ search: {}, replace: true });
-            }}
-          />
+          <form onSubmit={(event) => void add(event)} className="flex h-full flex-col">
+            <SheetHeader>
+              <SheetTitle>Add hostname</SheetTitle>
+            </SheetHeader>
+            <Field className="px-4">
+              <FieldLabel htmlFor="hostname">Hostname</FieldLabel>
+              <Input id="hostname" name="hostname" placeholder="iterate.example.com" required />
+            </Field>
+            <SheetFooter>
+              <Button type="submit">Add hostname</Button>
+            </SheetFooter>
+          </form>
         </SheetContent>
       </Sheet>
     </div>
-  );
-}
-
-/** Where a hostname stands, in a word: what the processor owes, its refusal, or Cloudflare's status. */
-function statusOf(entry: Hostname): {
-  label: string;
-  variant: "secondary" | "destructive" | "default";
-} {
-  if (entry.requested?.verb === "remove") return { label: "Removing…", variant: "secondary" };
-  if (entry.requested) return { label: "Checking…", variant: "secondary" };
-  if (entry.error && !entry.cloudflare) return { label: "Failed", variant: "destructive" };
-  if (entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active")
-    return { label: "Live", variant: "default" };
-  return { label: "Waiting for DNS", variant: "secondary" };
-}
-
-function HostnameRow({
-  hostname,
-  entry,
-  onCheck,
-  onRemove,
-}: {
-  hostname: string;
-  entry: Hostname;
-  onCheck: () => void;
-  onRemove: () => void;
-}) {
-  const status = statusOf(entry);
-  const [cname] = entry.cloudflare?.records ?? [];
-  const live = status.label === "Live";
-  return (
-    <li className="flex flex-col gap-4 p-4" data-hostname={hostname}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {live ? (
-            <a href={`https://${hostname}`} target="_blank" rel="noreferrer" className="font-mono">
-              {hostname}
-            </a>
-          ) : (
-            <span className="font-mono">{hostname}</span>
-          )}
-          <Badge variant={status.variant}>{status.label}</Badge>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={Boolean(entry.requested)} onClick={onCheck}>
-            {entry.error && !entry.cloudflare ? "Retry" : "Check again"}
-          </Button>
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={<Button variant="outline" size="sm" />}
-              disabled={entry.requested?.verb === "remove"}
-            >
-              Remove
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Remove {hostname}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  The project stops answering on it, and its certificate is dropped. You can add it
-                  again later.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={onRemove}>Remove</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </div>
-      {entry.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {entry.error}
-        </p>
-      )}
-      {cname && !live && (
-        <div className="flex flex-col gap-3 text-sm">
-          <p className="text-muted-foreground">
-            At your DNS provider, add this record. On a bare domain (<code>example.com</code>), use
-            your provider's ALIAS, ANAME or CNAME flattening.
-          </p>
-          <DnsRecord record={cname} />
-          {entry.cloudflare?.errors.map((message) => (
-            <p key={message} className="text-xs text-muted-foreground">
-              Cloudflare: {message}
-            </p>
-          ))}
-        </div>
-      )}
-    </li>
-  );
-}
-
-function DnsRecord({ record }: { record: { type: string; name: string; value: string } }) {
-  return (
-    <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[4rem_1fr]">
-      <dt className="text-muted-foreground">Type</dt>
-      <dd className="font-mono">{record.type}</dd>
-      <dt className="text-muted-foreground">Name</dt>
-      <dd>
-        <Identifier value={record.name} />
-      </dd>
-      <dt className="text-muted-foreground">Value</dt>
-      <dd>
-        <Identifier value={record.value} />
-      </dd>
-    </dl>
-  );
-}
-
-function AddHostnameForm({ onAdd }: { onAdd: (hostname: string) => Promise<void> }) {
-  const [pending, setPending] = useState(false);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const hostname = String(new FormData(event.currentTarget).get("hostname") ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/\.$/, "");
-    setPending(true);
-    try {
-      await onAdd(hostname);
-    } finally {
-      setPending(false);
-    }
-  };
-  return (
-    <form onSubmit={(event) => void submit(event)} className="flex h-full flex-col">
-      <SheetHeader>
-        <SheetTitle>Add hostname</SheetTitle>
-        <SheetDescription>
-          A domain or subdomain you control. The DNS record to add is shown once it is set up.
-        </SheetDescription>
-      </SheetHeader>
-      <FieldGroup className="px-4">
-        <Field>
-          <FieldLabel htmlFor="hostname">Hostname</FieldLabel>
-          <Input
-            id="hostname"
-            name="hostname"
-            placeholder="www.example.com"
-            autoComplete="off"
-            required
-          />
-          <FieldDescription>Without https:// or a path.</FieldDescription>
-        </Field>
-      </FieldGroup>
-      <SheetFooter>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Adding…" : "Add hostname"}
-        </Button>
-        <SheetClose render={<Button variant="outline" />}>Cancel</SheetClose>
-      </SheetFooter>
-    </form>
   );
 }

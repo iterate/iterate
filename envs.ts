@@ -102,13 +102,13 @@ export interface OsEnv {
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
    *  specific Worker routes on that zone continue to take precedence. */
   projectWildcard?: { hostname: string; project: string; excludedHostnames?: string[] };
-  /** The project-host zones this deployment serves as a Cloudflare for SaaS provider (the zone's
-   *  fallback origin, `cname.<zone>`, is the deployment's), reached through the one `*\/*` route the
-   *  generator adds per SaaS zone. A hostname a project adds itself (apps/os
-   *  src/project/custom-hostnames.ts) is a custom hostname on the first of these, created at runtime
-   *  with the worker's `APP_CONFIG_CLOUDFLARE_API_TOKEN` (Doppler); its owner CNAMEs it to the
-   *  fallback origin. */
-  cloudflareForSaasProjectHostnameBases?: string[];
+  /** The zone this deployment serves projects' own hostnames on as a Cloudflare for SaaS provider
+   *  (apps/os src/project/custom-hostnames.ts): its fallback origin `cname.<zone>` is the
+   *  deployment's, reached through the one `*\/*` route the generator adds. The worker creates each
+   *  custom hostname at runtime with `APP_CONFIG.cloudflareApiToken` (Doppler). `dcvDelegationUuid`
+   *  is the zone's Delegated DCV id (`GET /zones/:id/dcv_delegation/uuid`), which the owner's
+   *  `_acme-challenge` CNAME names. */
+  cloudflareForSaas?: { zone: string; zoneId: string; dcvDelegationUuid: string };
   resources: { oauthKvId: string; itxKvId: string };
 }
 export const osEnvs: Record<string, OsEnv> = {
@@ -162,7 +162,11 @@ export const osEnvs: Record<string, OsEnv> = {
         "install.iterate.com",
       ],
     },
-    cloudflareForSaasProjectHostnameBases: ["iterate.app"],
+    cloudflareForSaas: {
+      zone: "iterate.app",
+      zoneId: "4dcf5f055005471a00eb7f7befb29e54",
+      dcvDelegationUuid: "248299803bb79c97",
+    },
     // Not `os-prd-repos`: the legacy platform's namespace of that name (2026-05-18) is still bound
     // by its artifact viewer, cf-artifact-viewer-prd (artifacts.iterate.com).
     artifactsNamespace: "os-prd-project-repos",

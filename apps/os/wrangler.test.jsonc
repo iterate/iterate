@@ -70,8 +70,7 @@
     "APP_CONFIG_URLS__INGRESS_ROUTING": "{\"type\":\"subdomains\",\"hostname\":\"projects.test\"}",
     // projects' own hostnames, on a SaaS zone whose Cloudflare API the tests fake
     // (project-host-routing.test.ts); the consent test claims one directly (issuer-bootstrap.test.ts)
-    "APP_CONFIG_CUSTOM_HOSTNAMES__ZONE": "saas.test",
-    "APP_CONFIG_CUSTOM_HOSTNAMES__RESERVED_ZONES": "[\"control.test\",\"dash.test\",\"projects.test\",\"saas.test\"]",
+    "APP_CONFIG_CUSTOM_HOSTNAMES": "{\"zone\":\"saas.test\",\"zoneId\":\"zone-saas\",\"dcvDelegationUuid\":\"dcv-uuid\",\"reservedZones\":[\"control.test\",\"dash.test\",\"projects.test\",\"saas.test\"]}",
     "APP_CONFIG_CLOUDFLARE_API_TOKEN": "cloudflare-test-token",
     // the password signs in through the page's real posts; the mailed code is tested with a fake
     // mailbox handed to password-and-code-sign-in.ts directly

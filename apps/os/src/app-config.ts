@@ -10,7 +10,7 @@
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
 //     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
-//     customHostnames: { zone, reservedZones }, cloudflareApiToken,
+//     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -115,15 +115,15 @@ export const AppConfig = z.object({
         .optional(),
     })
     .prefault({}),
-  /** CUSTOM HOSTNAMES a project adds itself (project/custom-hostnames.ts): each a Cloudflare for
-   *  SaaS custom hostname on `zone`, whose fallback origin `cname.<zone>` its owner CNAMEs to, routed
-   *  by the control plane's hostname table. Unset ⇒ no project can add one. Both keys come from
-   *  envs.ts (scripts/generate-wrangler-config.ts). */
+  /** CUSTOM HOSTNAMES a project adds itself (project/custom-hostnames.ts): each a wildcard
+   *  Cloudflare for SaaS custom hostname on `zone`, routed by the control plane's hostname table.
+   *  Unset ⇒ no project can add one. From envs.ts `cloudflareForSaas` (the generator), with the
+   *  deployment's own zones as `reservedZones`: a hostname equal to or under one is refused. */
   customHostnames: z
     .object({
-      /** The SaaS zone the custom hostnames are created on (`iterate.app`). */
       zone: dnsName,
-      /** The deployment's own zones: a hostname equal to or under one is refused — it is ours. */
+      zoneId: z.string().trim().min(1, REQUIRED),
+      dcvDelegationUuid: z.string().trim().min(1, REQUIRED),
       reservedZones: z.array(dnsName).default([]),
     })
     .optional(),

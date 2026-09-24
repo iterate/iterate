@@ -53,8 +53,8 @@ export class ControlPlaneDurableObject extends DurableObject {
   accessibleTo(userId: string) {
     return this.#db.accessibleTo(userId);
   }
-  projectByHostname(hostname: string) {
-    return this.#db.projectByHostname(hostname);
+  projectByHostname(hostnames: readonly string[]) {
+    return this.#db.projectByHostname(hostnames);
   }
   invitation(tokenHash: string, userId: string | null) {
     return this.#db.invitation(tokenHash, userId, Date.now());
