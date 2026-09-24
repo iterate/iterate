@@ -499,8 +499,8 @@ function describeError(error: unknown): string {
  * The source a manifest records. `tree` is the files on disk, not HEAD's tree: a copy of the index
  * with every change and untracked file added (`git add --all`, which leaves ignored files such as
  * test-results/ out) is written as a tree, and the real index is not touched. It is the tree the
- * tests read, and the one a proof that they ran would name
- * (docs/test-evidence.md#skipping-ci-when-a-trusted-run-proves-it).
+ * tests read, and the one a proof that they ran would name (skipping CI on such a proof is
+ * designed, not built: https://github.com/iterate/iterate/issues/3110).
  */
 export async function testEvidenceSource(repoRoot: string) {
   const git = (args: string[], env: Record<string, string> = {}) =>
