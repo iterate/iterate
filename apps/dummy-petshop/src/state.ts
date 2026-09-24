@@ -63,12 +63,10 @@ export interface GithubApp {
  * signing secret, and backdoor toggles.
  */
 export interface PetshopState {
-  /** Legacy baseline for tokens minted before revocation became client-scoped. */
-  accessTokenEpoch: number;
   /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
    * so concurrent integration tests can expire their own credentials without
    * invalidating an unrelated client's freshly refreshed token. */
-  accessTokenEpochs?: Record<string, number>;
+  accessTokenEpochs: Record<string, number>;
   clients: Record<string, OauthClient>;
   /** `jti` values of refresh tokens the backdoor has revoked. */
   revokedRefreshTokenIds: string[];
@@ -86,11 +84,9 @@ export interface PetshopState {
   apps: Record<string, GithubApp>;
 }
 
-/** Resolve the revocation epoch for one token client. The legacy scalar is
- * the fallback so a deployment can continue validating already-minted tokens
- * and state blobs written before client-scoped revocation existed. */
+/** A client whose tokens were never expired through the backdoor is at epoch 0. */
 export function accessTokenEpochFor(state: PetshopState, clientId: string): number {
-  return state.accessTokenEpochs?.[clientId] ?? state.accessTokenEpoch;
+  return state.accessTokenEpochs[clientId] ?? 0;
 }
 
 /** The seeded default GitHub App installation — well-known ids, no verifying
@@ -115,32 +111,8 @@ function defaultGithubApp(): GithubApp {
 export class PetshopStateDurableObject extends DurableObject {
   async #load(): Promise<PetshopState> {
     const existing = await this.ctx.storage.get<PetshopState>("state");
-    if (existing) {
-      let changed = false;
-      // Backfill the App registry for a blob written before it existed (the
-      // shop's state is one long-lived blob; a preview DO can predate this).
-      // Persisted once so the seeded webhook secret is stable across reads.
-      if (!existing.apps) {
-        existing.apps = { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() };
-        changed = true;
-      }
-      // A single deployment-global failure counter could leak from an aborted
-      // run or be consumed by a concurrent client. Deliberately discard it
-      // while moving existing preview state to client-scoped fault injection.
-      if (!existing.tokenEndpointFailuresRemainingByClient) {
-        existing.tokenEndpointFailuresRemainingByClient = {};
-        changed = true;
-      }
-      if ("tokenEndpointFailuresRemaining" in existing) {
-        delete (existing as PetshopState & { tokenEndpointFailuresRemaining?: number })
-          .tokenEndpointFailuresRemaining;
-        changed = true;
-      }
-      if (changed) await this.ctx.storage.put("state", existing);
-      return existing;
-    }
+    if (existing) return existing;
     const initial: PetshopState = {
-      accessTokenEpoch: 0,
       accessTokenEpochs: {},
       clients: {
         [DEFAULT_CLIENT_ID]: {
@@ -191,7 +163,6 @@ export class PetshopStateDurableObject extends DurableObject {
   async expireAccessTokens(clientId: string): Promise<number> {
     const state = await this.#load();
     const next = accessTokenEpochFor(state, clientId) + 1;
-    state.accessTokenEpochs ||= {};
     state.accessTokenEpochs[clientId] = next;
     await this.#save(state);
     return next;
@@ -206,14 +177,11 @@ export class PetshopStateDurableObject extends DurableObject {
   }
 
   /** Consume a single-use authorization code by its jti. Returns true the
-   * first time, false on replay (RFC 6749 §4.1.2). Defaults the field so state
-   * persisted before this existed still works. */
+   * first time, false on replay (RFC 6749 §4.1.2). */
   async consumeAuthorizationCode(codeId: string): Promise<boolean> {
     const state = await this.#load();
-    const used = state.usedAuthorizationCodeIds || [];
-    if (used.includes(codeId)) return false;
-    used.push(codeId);
-    state.usedAuthorizationCodeIds = used;
+    if (state.usedAuthorizationCodeIds.includes(codeId)) return false;
+    state.usedAuthorizationCodeIds.push(codeId);
     await this.#save(state);
     return true;
   }
