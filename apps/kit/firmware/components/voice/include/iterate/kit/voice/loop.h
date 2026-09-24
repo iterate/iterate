@@ -108,7 +108,7 @@ enum iterate_kit_voice_answer_note_kind {
  * The answer's timeline, as the playout saw it, in the order it happened.
  *
  * A face uses ABANDONED to drop the audio its mouth delay line still holds
- * (waveshare_device.c). No board reads ADMITTED today; it is the seam
+ * (waveshare_device.c). No board reads ADMITTED today; it is the hook
  * tests/voice_loop_answer_clock_test.c asserts the answer timeline through:
  * a new answer that fails to start shows as frames admitted under the previous
  * answer's number.
@@ -139,7 +139,7 @@ struct iterate_kit_voice_capture_meta {
   bool playback_content_active;
 };
 
-/** The two audio seams a board hands the loop once it has powered them. */
+/** The two audio interfaces a board hands the loop once it has powered them. */
 struct iterate_kit_board_audio {
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_audio_processor processor;
@@ -156,7 +156,7 @@ struct iterate_kit_board_audio {
  */
 struct iterate_kit_board_ops {
   /**
-   * Power the board and hand back its audio seams.
+   * Power the board and hand back its audio interfaces.
    *
    * Ordering inside is the board's business — the Waveshare must bring the
    * panel up before the codec because both resets hang off one TCA9554.
@@ -210,7 +210,7 @@ struct iterate_kit_board_facts {
    * The board's speaker, as the portable capability already describes one.
    *
    * A whole driver rather than two ops plus a ceiling, because that struct is
-   * the existing seam and re-wrapping it in the loop would have been a third
+   * the existing interface and re-wrapping it in the loop would have been a third
    * spelling of the same three facts. The ceilings really do differ: 92 on the
    * board with a measured reason, 100 on the three whose drivers clamp inside.
    */
@@ -234,7 +234,7 @@ struct iterate_kit_board_facts {
    *
    * 320 (one whole 20 ms frame) on three boards; 128 (8 ms) on the one whose
    * I2S completion is that size. It is a fact rather than a codec property
-   * because the codec seam describes rates and channels, not scheduling: two
+   * because the codec interface describes rates and channels, not scheduling: two
    * boards could share a driver and be reserved differently.
    *
    * The bridge reconciles this with `processing_frame_samples` and the wire's

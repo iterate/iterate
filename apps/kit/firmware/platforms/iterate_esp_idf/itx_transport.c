@@ -29,7 +29,7 @@
  * arbitrary RPC and stream-event work out of ESP-IDF's callback task, while
  * bounded poll/send bursts cap application and network-task work. A1 carries
  * PCM16 media as ephemeral Cap'n Web stream events on this same /api socket;
- * there is no second binary PCM lane. We rejected a callback-driven session
+ * there is no second binary PCM channel. We rejected a callback-driven session
  * because device methods could block ESP-IDF networking. The global queue and
  * the MIC_FRAMES_PER_APPEND (8) append bound provide the explicit pressure
  * limit for media.

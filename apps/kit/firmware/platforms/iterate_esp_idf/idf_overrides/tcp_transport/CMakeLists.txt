@@ -1,6 +1,6 @@
 #
 # ESP-IDF explicitly supports project components overriding components of the
-# same name. We use that seam because tcp_transport's WebSocket reader treats a
+# same name. We use that override point because tcp_transport's WebSocket reader treats a
 # normal nonblocking payload stall as end-of-frame and destroys its own offset.
 # Tuning our reconnect policy around that behavior would merely make ordinary
 # Wi-Fi loss look less noisy while still discarding live conversations.

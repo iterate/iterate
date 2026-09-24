@@ -94,7 +94,7 @@ enum {
    * (~175 ms a round trip), so a 4-event cap was 80 ms of audio per 175 ms —
    * 0.46x realtime. The device played 94 of the 200 frames in one answer and
    * concealed 122. That is the choppiness, and no amount of buffering fixes
-   * a lane that delivers at half speed.
+   * a stream that delivers at half speed.
    *
    * 16 KiB holds a 12-event batch (240 ms of audio) with room for the
    * envelope, which is 1.37x realtime at the same round trip.
@@ -127,7 +127,7 @@ enum {
    * How much of that the microphone may never touch. Replies to inbound
    * calls are NOT gated on headroom — the session generates them whenever the
    * platform delivers something — so the mic must leave them room or it
-   * starves the very lane that keeps the session alive.
+   * starves the very stream that keeps the session alive.
    */
   MIC_OUTBOX_RESERVE = ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE,
   TERMINAL_PENDING_CAPACITY = 2U,
@@ -158,7 +158,7 @@ enum {
   CONTROL_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
-  /* No inbound traffic while a call is wanted means the delivery lane is stale. */
+  /* No inbound traffic while a call is wanted means the delivery stream is stale. */
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
   /*
    * Last resort. The transport can be READY, the socket open, and nothing
@@ -1578,7 +1578,7 @@ void iterate_kit_voice_loop_capture_step(void) {
       &runtime.capture_generation, memory_order_acquire);
   const size_t chunk_samples = runtime.facts->capture_chunk_samples;
   /*
-   * A reference plane exactly when the codec advertises one — the seam's own
+   * A reference plane exactly when the codec advertises one — the codec interface's own
    * rule. Where there is none the plane stays the zeroed static it started
    * as, which is the honest reading: this board reports no loudspeaker
    * feedback, rather than a fabricated one.
@@ -2020,7 +2020,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkSupersededMidplay", runtime.answers_superseded_midplay},
     /* Drops obeyed, and the board uptime at the last one. Compare against
      * `uptimeMs` in this same payload to get how long ago it happened, on
-     * a clock that owes nothing to the event lane. */
+     * a clock that owes nothing to the event stream. */
     {"spkDrops", runtime.speaker_drops},
     {"spkLastDropUptimeMs", runtime.last_drop_uptime_ms},
     {"spkWaitPriming", runtime.playout.stats.waits_priming},
@@ -2828,7 +2828,7 @@ void iterate_kit_voice_loop_step(void) {
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
        *
        * Holding the liveness clock while the transport is down is right — you
-       * cannot fault a device for missing round trips it had no lane for — but
+       * cannot fault a device for missing round trips it had no stream for — but
        * it was once the ONLY thing this branch did, so a transport that never
        * came back reset the clock every tick and the restart could never fire.
        * Measured on the StackChan: unreachable for ten minutes and more, no
@@ -3048,7 +3048,7 @@ void iterate_kit_voice_loop_step(void) {
        * `lastFrameOfAnswer` has not come
        * (iterate_kit_voice_stream_downlink_expected) — since the facet drops
        * idle silence and an accepted call with nothing owed delivers nothing.
-       * Ten seconds of nothing in either state is a dead lane: recycle the
+       * Ten seconds of nothing in either state is a dead stream: recycle the
        * connection (make-before-break, one round trip); three recycles that
        * change nothing mean the session under it is broken, so replace it —
        * and the call under that session ends with it (the rule above).
@@ -3090,7 +3090,7 @@ void iterate_kit_voice_loop_step(void) {
           }
         }
       }
-      /* Any delivery at all means the lane recovered; forget the escalation. */
+      /* Any delivery at all means the stream recovered; forget the escalation. */
       if (runtime.downlink_recycles_running > 0U &&
           runtime.voice_stream->batches_on_connection > 0U) {
         runtime.downlink_recycles_running = 0U;
@@ -3131,7 +3131,7 @@ void iterate_kit_voice_loop_step(void) {
         const bool discarding = atomic_load_explicit(
             &runtime.capture_discard_requested, memory_order_acquire);
         /*
-         * A MICROPHONE THAT CANNOT DRAIN INTO A LIVE CALL IS A DEAD LANE,
+         * A MICROPHONE THAT CANNOT DRAIN INTO A LIVE CALL IS A DEAD STREAM,
          * and the device is the only one who can tell: the appends are
          * one-way, so nothing upstream ever refuses them — they just
          * vanish. Measured 2026-08-19 16:07 after a DO storage reset: the

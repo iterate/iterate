@@ -251,7 +251,7 @@ static bool open_codec(void) {
        * one. Retune it only against a recording, never by reasoning.
        */
       /*
-       * Reg 0x44 = 0x58 (the default) puts DAC output in the ADC lane's right
+       * Reg 0x44 = 0x58 (the default) puts DAC output in the ADC path's right
        * slot as an AEC reference. That was blamed for this board's "broadband
        * garbage" capture and worked around here — but the real cause was two
        * codec instances fighting over one I2S channel pair (see below), and

@@ -100,7 +100,7 @@ static void rejects_truncated_and_wrong_version_images(void) {
  * Convert only the transport scheme into a caller-sized fixed buffer and prove
  * both production TLS and local cleartext development forms.
  *
- * THE PATH IS `/api`: the OS's public door, whose OAuth gate resolves the
+ * THE PATH IS `/api`: the OS's public endpoint, whose OAuth gate resolves the
  * `Authorization: Bearer` the transport sends on the upgrade (the blob's key,
  * a personal access token). The endpoint is four bytes longer than the base
  * URL.

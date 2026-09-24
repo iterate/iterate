@@ -92,7 +92,7 @@ struct FaceState {
   /*
    * The MOUTH: the same envelope animator the CoreS3 runs, fed by the
    * playback task with the PCM it just handed to I2S, snapshotted here at
-   * 12 Hz. The snapshot API is the bounded cross-task seam — a contended
+   * 12 Hz. The snapshot API is the bounded cross-task interface — a contended
    * attempt keeps the previous pose rather than waiting.
    */
   face_animator_t animator;

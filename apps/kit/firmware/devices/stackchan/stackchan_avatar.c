@@ -589,7 +589,7 @@ static void analyze_frame(
   }
   if (frame_peak >= 256U) {
     /*
-     * Natural speech crosses zero and stream frames can have tiny seams.
+     * Natural speech crosses zero and stream frames can have tiny discontinuities where they join.
      * Letting each such valley flip AI->MIC made the rail look like VAD was
      * oscillating even when I2S was playing one coherent reply. This bounded
      * 180 ms physical-playout hangover is only presentation state: it neither

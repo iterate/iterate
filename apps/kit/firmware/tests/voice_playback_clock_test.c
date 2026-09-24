@@ -164,7 +164,7 @@ static void concealment_never_costs_a_real_frame(void) {
 /*
  * response.done turns an empty ring into normal answer completion, never an
  * underrun.  If this regresses every healthy answer contributes a false hole
- * and the endurance report cannot distinguish a broken lane from success.
+ * and the endurance report cannot distinguish a broken stream from success.
  */
 static void completed_answer_returns_to_priming_without_silence(void) {
   struct iterate_kit_voice_playback_clock clock;

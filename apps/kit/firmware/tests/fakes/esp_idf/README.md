@@ -66,4 +66,4 @@ every fixture, beside the host ESP-IDF's.
 
 If a test needs a behaviour these fakes do not have, add the behaviour here (or
 in `platforms/host/esp_idf` if it is an ESP-IDF primitive) rather than reaching
-around them. A test that bypasses the seam is testing the test.
+around them. A test that bypasses the fake is testing the test.

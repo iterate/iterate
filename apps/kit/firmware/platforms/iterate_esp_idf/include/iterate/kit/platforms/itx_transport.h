@@ -34,7 +34,7 @@ extern "C" {
 #endif
 
 /*
- * Single-lane A1 transport for Cap'n Web calls and ephemeral media events.
+ * Single-connection A1 transport for Cap'n Web calls and ephemeral media events.
  *
  * Audio is PCM16, base64 wrapped, and sent through the same bounded Cap'n Web
  * /api session as every other stream event. There is deliberately no second

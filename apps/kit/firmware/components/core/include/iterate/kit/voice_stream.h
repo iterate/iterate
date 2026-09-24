@@ -42,8 +42,8 @@ enum iterate_kit_voice_stream_control {
    *
    * Raised from `clearSpeakerBufferBeforeFrame` on the first frame of a
    * replacing answer, so it arrives IN ORDER with the audio it invalidates. A
-   * separate event type would be a second lane, and nothing would decide which
-   * lane won.
+   * separate event type would be a second channel, and nothing would decide which
+   * channel won.
    */
   ITERATE_KIT_VOICE_STREAM_CONTROL_SPEECH_STARTED = 0,
   /**
@@ -71,7 +71,7 @@ typedef void (*iterate_kit_voice_stream_control_fn)(
     void *context, enum iterate_kit_voice_stream_control control);
 
 /**
- * Every downlink event, by type, as it arrives — the observability seam.
+ * Every downlink event, by type, as it arrives — the observability hook.
  *
  * The typed callbacks above say what the device should DO. This says what
  * actually came down the wire, which is a different question and the one you
@@ -169,7 +169,7 @@ struct iterate_kit_voice_stream {
   /*
    * One inbound chunk of PCM16, decoded from base64 once. Bounded and static:
    * the decode never allocates, and a chunk larger than this is refused at the
-   * door rather than overrunning anything.
+   * on arrival rather than overrunning anything.
    */
   uint8_t chunk_buffer[ITERATE_KIT_VOICE_STREAM_CHUNK_BYTES];
 };
@@ -207,7 +207,7 @@ enum capnweb_status iterate_kit_voice_stream_recycle_subscription(
  *
  * `pcm` is ONE contiguous run of `frame_count * frame_length` bytes: the
  * frames of a flush are one continuous stretch of capture, so the body is one
- * base64 encode with no seams for a group to straddle. A caller whose queue
+ * base64 encode with no chunk boundaries for a group to straddle. A caller whose queue
  * wraps stages the run itself.
  */
 enum capnweb_status iterate_kit_voice_stream_append_frames(

@@ -337,7 +337,7 @@ static const char *frames_b64(size_t frames) {
   return encoded;
 }
 
-/** Offsets must climb: the delivery lane dedupes on them. */
+/** Offsets must climb: the delivery stream dedupes on them. */
 static long long next_offset = 100;
 static long long next_release_id = 1;
 
@@ -432,7 +432,7 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
 /**
  * Deliver the call's acceptance, exactly as the stream delivers it.
  *
- * The delivery lane refuses `spk-frame`s for a call the device is not on —
+ * The delivery stream refuses `spk-frame`s for a call the device is not on —
  * that refusal is what stops an ended call's in-flight tail from playing
  * after the end chime — so an answer with no accepted call in front of it
  * is now silence by design, in this harness as on the desk.

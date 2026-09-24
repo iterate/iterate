@@ -82,7 +82,7 @@ struct iterate_kit_audio_codec {
   void *context;
 };
 
-/** Validate and dispatch through the codec seam. */
+/** Validate and dispatch through the codec interface. */
 enum iterate_kit_status iterate_kit_audio_codec_read(
     struct iterate_kit_audio_codec *codec,
     int16_t *capture,

@@ -132,7 +132,7 @@ iterate_kit_add_test(
   iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
-iterate_kit_add_test(iterate-kit-audio-seams-test audio_seams_test.c
+iterate_kit_add_test(iterate-kit-audio-interfaces-test audio_interfaces_test.c
   LINK iterate-kit-audio)
 
 iterate_kit_add_test(iterate-kit-camera-test camera_test.c

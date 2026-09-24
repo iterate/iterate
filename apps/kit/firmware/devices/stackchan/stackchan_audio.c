@@ -20,7 +20,7 @@
  * logging); the priority-23 core-1 I/O task's blocking codec write/read pair
  * IS the 8 ms audio clock. Three consecutive failures disable a direction
  * loudly. Deinterleaving happens on the portable capture task through the
- * codec seam's read().
+ * codec interface's read().
  */
 #include "stackchan_audio.h"
 #include "iterate/kit/platforms/i2s_codec.h"
@@ -164,7 +164,7 @@ static void store_volume(uint8_t percent) {
   nvs_close(handle);
 }
 
-/* Chunk meta stashed by the last successful seam read (single consumer). */
+/* Chunk meta stashed by the last successful codec read (single consumer). */
 static uint32_t last_chunk_sequence;
 static uint64_t last_chunk_captured_us;
 static bool last_chunk_content_active;
@@ -181,7 +181,7 @@ static volatile uint32_t playback_driver_failures;
  * Codec edges that had SOME response audio and had to pad the rest with
  * zeros. That padding is a splice into the middle of speech, not idle
  * silence, and it is inaudible in every other counter: the frame was
- * received, played and never dropped. Counted so the seam's buffer depth
+ * received, played and never dropped. Counted so the codec interface's buffer depth
  * can be argued about with a number.
  */
 static volatile uint32_t playback_partial_chunks;
@@ -218,7 +218,7 @@ void stackchan_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
   portEXIT_CRITICAL(&sound_lock);
 }
 
-/* --- the shared codec seam ------------------------------------------------ */
+/* --- the shared codec interface ------------------------------------------- */
 
 static enum iterate_kit_status codec_read(
     void *context,

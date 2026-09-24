@@ -53,7 +53,7 @@ static void renders_one_shared_three_sector_grammar(void) {
 /*
  * A ready full-duplex device that is currently silent is still listening.
  * Keeping one dim green pixel distinguishes that valid state from a dead media
- * lane; the Stick's simulated grid must preserve the same distinction as the
+ * stream; the Stick's simulated grid must preserve the same distinction as the
  * physical HAVPE and StackChan LEDs.
  */
 static void distinguishes_listening_silence_from_idle(void) {
@@ -126,7 +126,7 @@ static void keeps_microphone_dark_when_capture_is_disabled(void) {
 /*
  * A broken media socket must never look like quiet listening. Both audio
  * sectors become red so a physical run can attribute “nothing happened” to a
- * failed lane without serial logs or a camera-based UI oracle.
+ * failed stream without serial logs or a camera-based UI oracle.
  */
 static void makes_media_failure_unambiguously_red(void) {
   struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];

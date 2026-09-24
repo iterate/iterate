@@ -365,12 +365,12 @@ static void downlink_flow(void) {
   }
   /* The platform invokes the exported callback exactly like the live wire:
    * a push with an EMPTY path, followed by a release of the result import
-   * (the zero-return-frame lane never pulls). */
+   * (the zero-return-frame path never pulls). */
   {
     static char message[16384];
     /*
      * The acceptance leads the audio, as it does on the wire: the delivery
-     * lane refuses `spk-frame`s for a call the device is not on — that
+     * stream refuses `spk-frame`s for a call the device is not on — that
      * refusal is what keeps an ended call's in-flight tail from playing
      * after the end chime — so an answer with no accepted call in front of
      * it is silence by design, here as on the desk.
@@ -397,7 +397,7 @@ static void downlink_flow(void) {
    * THE ORDER, WHICH IS THE POINT. The flush is announced BEFORE the frame
    * that replaces what it flushed — 'f' then 'd' then 'f' — so the owner has
    * emptied its queue by the time the new answer's first frame is classified
-   * into it. The old `grok-event` lane could deliver these either way round.
+   * into it. The old `grok-event` channel could deliver these either way round.
    */
   assert(order_length == 3U);
   assert(memcmp(order_log, "fdf", 3U) == 0);
@@ -406,7 +406,7 @@ static void downlink_flow(void) {
   /*
    * THE END OF AN ANSWER, ON ITS LAST FRAME.
    *
-   * This used to be a `response.done` on the `grok-event` lane — one small text
+   * This used to be a `response.done` on the `grok-event` channel — one small text
    * event against hundreds of large audio events, so it routinely overtook them
    * and a device that treated it as "the answer is over" received 258 frames
    * and played none. `last` cannot overtake anything: it IS the final frame,
@@ -564,7 +564,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
   spoken_frames = 0U;
 
   /* The acceptance leads the audio in one batch, as it does on the wire — the
-   * delivery lane refuses frames for a call the device is not on. */
+   * delivery stream refuses frames for a call the device is not on. */
   {
     static char message[16384];
     (void)snprintf(
@@ -653,7 +653,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
    * An interruption is exactly when the sender has no audio left to attach the
    * flag to — it has just thrown the answer away — so the clear rides a frame
    * whose `pcm` is empty. The decode has an early return on failure, so the
-   * clear must be obeyed before it or the message is discarded on the doorstep
+   * clear must be obeyed before it or the message is discarded on arrival
    * for being an empty envelope.
    */
   spoken_frames = 0U;
@@ -690,7 +690,7 @@ static void recycle_keeps_call_epoch_and_fences_closed_predecessor(void) {
   assert(fixture.voice_stream.batches_on_connection == 0U);
   assert(fixture.voice_stream.last_batch_ms == fixture.clock_ms);
   /* Make-before-break means A still plays while B is opening, but A cannot
-   * certify B's delivery lane or retain its old batch count. */
+   * certify B's delivery stream or retain its old batch count. */
   frames = spoken_frames;
   push_spk_to(&fixture, -1, 3, 3, "", frames_b64(1U, 0x42));
   assert(spoken_frames == frames + 1U);

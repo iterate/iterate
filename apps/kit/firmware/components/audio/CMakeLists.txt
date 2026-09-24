@@ -1,6 +1,6 @@
 # Audio is a separate link unit so targets without audio never acquire its
 # implementations, platform frameworks, or transitive dependencies. The
-# portable module contains only the two seams and the fail-closed passthrough
+# portable module contains only the two interfaces and the fail-closed passthrough
 # processor; concrete codec drivers remain in platform modules.
 set(ITERATE_KIT_AUDIO_SOURCES
   src/aec_capture_bridge.c
