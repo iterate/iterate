@@ -471,6 +471,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(this.#scriptExecution(code));
+      // An agent's turns nest in the call chain until the runtime refuses a hop (#3019). The failed
+      // settlement is on the log only, so this warn is how its rate shows in Workers Logs. A run
+      // redirected to another context settles, and warns, on both.
+      if (
+        settlement.status === "failed" &&
+        settlement.error.includes("Subrequest depth limit exceeded")
+      )
+        console.warn({
+          event: "iterate-context.run-subrequest-depth-exceeded",
+          namespace: "iterate-context",
+          message: "a script run failed: the runtime refused a hop past its subrequest depth limit",
+          name: this.#durableObjectAddress.name,
+          requestOffset,
+        });
       try {
         settle(settlement);
       } catch (error) {

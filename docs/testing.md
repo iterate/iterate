@@ -572,7 +572,7 @@ every PR wait for it. The numbers live in `e2e-policy/budgets.ts`.
 | Number                       | Value | What it does                                                                                                                                                                       |
 | ---------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `E2E_ROW_BUDGET_MS`          | 60s   | An e2e row that runs on every PR finishes within it at its p95.                                                                                                                    |
-| `E2E_ROW_WARN_MS`            | 45s   | `RetryTelemetryReporter` prints each e2e row that ran longer, `[row-budget]` in the e2e step's log, and marks exempt rows.                                                         |
+| `E2E_ROW_WARN_MS`            | 45s   | `RetryTelemetryReporter` prints each e2e row that ran longer, `[row-budget]` in the e2e step's log.                                                                                |
 | `E2E_ROW_TIMEOUT_CEILING_MS` | 90s   | The longest timeout such a row may declare. A `createFlake` / `createFailing` deadline counts, plus the second the wrapper adds.                                                   |
 | `E2E_SLEEP_CEILING_MS`       | 30s   | The longest fixed wait (`sleep`, a `setTimeout` that does not reject) such a row may make. Poll for the condition instead.                                                         |
 | `E2E_SLOW_ROW_TIMEOUT_MS`    | 300s  | The timeout of a row tagged `slow`.                                                                                                                                                |
@@ -589,13 +589,9 @@ out of its scope: the PR's E2E tests job, against the preview, never starts it. 
 same file pins the run's parallelism (`--sequence.concurrent`, `maxWorkers` 16
 in CI, `maxConcurrency` 32) and `E2E_CI_RETRIES` as the only retry setting.
 
-A row over the budget has three ways out:
+A row over the budget has two ways out:
 
 - **Make it faster.** Poll for the condition instead of sleeping through it.
-- **Exempt it** in `E2E_BUDGET_EXEMPTIONS`, with the reason, when it guards a
-  production incident or a behaviour no faster row can show. An entry may
-  carry its own timeout above the ceiling. An exempt row is only ever proposed
-  for making faster.
 - **Tag it `slow`** when it waits out real platform time (a quiet minute, a
   sweep, an alarm). It then runs only where that costs no PR
   ([slow rows](#slow-rows)), with a timeout up to `E2E_SLOW_ROW_TIMEOUT_MS`,
@@ -618,7 +614,10 @@ A row that waits out real platform time is tagged `slow`
 tag, with `E2E_SLOW_ROW_TIMEOUT_MS` as its timeout, and sets `strictTags`, so
 a misspelled tag fails its row. Today these are the three residency rows in
 `context-residency.e2e.test.ts` that prove a careless facet stops, each
-sleeping 110–180 s. Every PR used to wait for the longest of them.
+sleeping 110–180 s, the row there that proves claimed background work outlives
+its context (a 60 s sleep), and the pin in
+`facet-abort-storage-reset.e2e.test.ts` of a Cloudflare fault that resets the
+context it runs on. Every PR used to wait for the longest residency row.
 
 `pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`)
 and prints its choice as `[slow-rows] <run|skip|only>: <reason>`:
@@ -695,14 +694,13 @@ protocol below instead of repeatedly making unrelated PRs pay for it.
 
 ### Flaky-test quarantine protocol
 
-A row leaves the PR's way in one of four forms, each with a way back:
+A row leaves the PR's way in one of three forms, each with a way back:
 
-| Cause                                                      | Form                                                 | Where it runs                                                                                                   | Way back                                                      |
-| ---------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Flaky, always with the same error                          | `createFlake` ([below](#flakes-and-pinned-failures)) | Every PR, where it cannot fail the run                                                                          | Unwrapped once its records show it passes consistently        |
-| Slow: waits out real platform time, or its p95 is over 60s | The `slow` tag ([slow rows](#slow-rows))             | PRs that change its code or carry `slow-e2e`, every main push, every 2 hours (pages on its own change of state) | Rewritten to a p95 of 45s or less, then untagged              |
-| Guards an incident, over the budget                        | An `E2E_BUDGET_EXEMPTIONS` entry with its reason     | Every PR                                                                                                        | Never proposed for `slow` or deletion, only for making faster |
-| Hangs, or harms the rest of the suite                      | A dated skip ([parked](#parked-tests-expire))        | Nowhere; it needs an issue                                                                                      | The date forces a decision                                    |
+| Cause                                                      | Form                                                 | Where it runs                                                                                                   | Way back                                               |
+| ---------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Flaky, always with the same error                          | `createFlake` ([below](#flakes-and-pinned-failures)) | Every PR, where it cannot fail the run                                                                          | Unwrapped once its records show it passes consistently |
+| Slow: waits out real platform time, or its p95 is over 60s | The `slow` tag ([slow rows](#slow-rows))             | PRs that change its code or carry `slow-e2e`, every main push, every 2 hours (pages on its own change of state) | Rewritten to a p95 of 45s or less, then untagged       |
+| Hangs, or harms the rest of the suite                      | A dated skip ([parked](#parked-tests-expire))        | Nowhere; it needs an issue                                                                                      | The date forces a decision                             |
 
 A flaky or pathologically slow test may be quarantined only after the current
 change is shown not to cause its failure. Failures on behavior changed by the

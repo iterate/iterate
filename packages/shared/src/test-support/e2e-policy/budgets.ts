@@ -51,7 +51,7 @@ export const E2E_ROW_BUDGET_MS = 60_000;
 /**
  * The longest timeout an e2e row that runs on every PR may declare: a hung row holds the run for
  * its timeout, twice with `E2E_CI_RETRIES`. scripts/ci/e2e-policy.test.ts reads every row's
- * declared timeout; only an `E2E_BUDGET_EXEMPTIONS` entry with its own `timeoutMs` goes higher.
+ * declared timeout; only a row tagged `slow` goes higher.
  */
 export const E2E_ROW_TIMEOUT_CEILING_MS = 90_000;
 
@@ -69,41 +69,13 @@ export const E2E_SLEEP_CEILING_MS = 30_000;
 export const E2E_SLOW_ROW_TIMEOUT_MS = 300_000;
 
 /**
- * Rows over the budget on purpose, by title: each guards a production incident or a behaviour no
- * faster row can show. The reporter marks them exempt, and the Cost section never proposes them
- * for `slow` or deletion, only for making faster. `timeoutMs` is the row's own timeout when it
- * needs more than `E2E_ROW_TIMEOUT_CEILING_MS`.
- */
-export const E2E_BUDGET_EXEMPTIONS: Record<string, { reason: string; timeoutMs?: number }> = {
-  "a facet's claimed background work finishes across its context's incarnations, and no birth resets the claimed facet":
-    {
-      reason:
-        "the one residency row that guards behaviour, not cost: work started with runInBackground survives its context's birth. It sleeps 60 s of real platform time so the claim's alarm lands mid-sleep, then waits up to 30 s for the work",
-      timeoutMs: 120_000,
-    },
-  "a website project's facets do not outlive their contexts after a page load": {
-    reason:
-      "guards the 2026-09-22 residency billing incident: after one page load a website project's facets were billed every minute until the next deploy",
-  },
-  "creating a repo does not keep the project root resident": {
-    reason:
-      "guards the 2026-09-22 residency billing incident: handles kept contexts resident and billed around the clock",
-  },
-  "a repo read through its facet does not keep its own context resident": {
-    reason:
-      "guards the 2026-09-22 residency billing incident: handles kept contexts resident and billed around the clock",
-  },
-};
-
-/**
  * The longest timeout an e2e row may declare: `E2E_SLOW_ROW_TIMEOUT_MS` when it is tagged `slow`,
- * else its exemption's own `timeoutMs`, else `E2E_ROW_TIMEOUT_CEILING_MS`. scripts/ci/e2e-policy.test.ts
- * holds every row to it from source, and apps/os/e2e/support/setup.ts holds each row of a run against
- * a preview to it before the row starts.
+ * else `E2E_ROW_TIMEOUT_CEILING_MS`. scripts/ci/e2e-policy.test.ts holds every row to it from source,
+ * and apps/os/e2e/support/setup.ts holds each row of a run against a preview to it before the row
+ * starts.
  */
-export function e2eRowTimeoutCeilingMs(row: { title: string; slow: boolean }) {
-  if (row.slow) return E2E_SLOW_ROW_TIMEOUT_MS;
-  return E2E_BUDGET_EXEMPTIONS[row.title]?.timeoutMs ?? E2E_ROW_TIMEOUT_CEILING_MS;
+export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
+  return row.slow ? E2E_SLOW_ROW_TIMEOUT_MS : E2E_ROW_TIMEOUT_CEILING_MS;
 }
 
 /**
@@ -122,6 +94,7 @@ export const SLOW_ROW_PATHS = [
   "apps/os/wrangler.base.jsonc",
   "apps/os/e2e/context-residency.e2e.test.ts",
   "apps/os/e2e/support/residency-facets.ts",
+  "apps/os/e2e/facet-abort-storage-reset.e2e.test.ts",
 ];
 
 /**

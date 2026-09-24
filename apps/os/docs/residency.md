@@ -142,5 +142,6 @@ pages on 5xx, platform-failure heals and errors.
   that started it. Under the e2e run these sampled the platform: it stopped facets 0–25 s after
   their call and evicted a context mid-traffic while the control plane stalled (#2899, #2921,
   #2939). The latency guard never runs them.
-- Deployed, opt-in: `e2e/facet-abort-storage-reset.e2e.test.ts` (`RUN_FACET_ABORT_REPRO=1`) drives every
-  abort, and an eviction, with a storage-heavy facet.
+- Deployed: `e2e/facet-abort-storage-reset.e2e.test.ts` pins the raw fault (a `createFailing` tagged
+  `slow`), and, opt-in (`RUN_FACET_ABORT_REPRO=1`), drives every abort, and an eviction, with a
+  storage-heavy facet.

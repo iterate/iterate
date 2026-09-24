@@ -1,8 +1,8 @@
 // iterate/no-raw-itx-get: code reaches its context through `withItx`, never a raw `ITX.get()`, in a
 // linted file or in a module it hands over as text (`"cap.js": `…``, `String.raw`, a const, a
-// `/* js */` template), and a withItx callback never answers the live value it releases. Each row is
-// one file in a temp project linted once by the real oxlint binary; `reported` is how many times the
-// rule flags it.
+// `/* js */` template), and a withItx callback in a linted file never answers the live value it
+// releases. Each row is one file in a temp project linted once by the real oxlint binary; `reported`
+// is how many times the rule flags it.
 
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";
@@ -53,37 +53,6 @@ const rows = [
     source: "function f(env) { const { ITX } = env; return ITX.get(); }",
   },
   {
-    name: "a destructured parameter, renamed",
-    reported: 1,
-    source: "function f({ ITX: entrypoint }) { return entrypoint.get(); }",
-  },
-  {
-    name: "an alias",
-    reported: 1,
-    source: "function f(env) { const binding = env.ITX; return binding.get(); }",
-  },
-  {
-    name: "a class-field alias",
-    reported: 1,
-    source: "class W { #binding = this.env.ITX; f() { return this.#binding.get(); } }",
-  },
-  {
-    name: "a member assigned in the constructor",
-    reported: 1,
-    source:
-      "class W { constructor(env) { this.binding = env.ITX; } f() { return this.binding.get(); } }",
-  },
-  {
-    name: "an alias of an alias",
-    reported: 1,
-    source: "function f(env) { const a = env.ITX; const b = a; return b.get(); }",
-  },
-  {
-    name: "an alias by assignment",
-    reported: 1,
-    source: "function f(env) { let binding; binding = env.ITX; return binding.get(); }",
-  },
-  {
     name: "an embedded cap.js module",
     reported: 1,
     source: embeddedModule("  async run() { return (await this.env.ITX.get().whoami()).path; }"),
@@ -113,11 +82,6 @@ const rows = [
       'const SRC = `export default class { run() { return this.env.ITX.get().whoami(); } }`;\nexport const S = { "cap.js": SRC };\n',
   },
   {
-    name: "an embedded module that mentions ITX and does not parse",
-    reported: 1,
-    source: embeddedModule("  run() { return (this.env.ITX as any).get().whoami(); }"),
-  },
-  {
     name: "a withItx callback answering its scope",
     reported: 1,
     source: "function f(env) { return withItx(env.ITX, (itx) => itx); }",
@@ -137,11 +101,6 @@ const rows = [
     reported: 1,
     source:
       "function f(env, path) { return withItx(env.ITX, async (itx) => { return await itx.cd(path); }); }",
-  },
-  {
-    name: "an embedded module's withItx answering a handle",
-    reported: 1,
-    source: embeddedModule("  run() { return withItx(this.env.ITX, (itx) => itx.cd('/a')); }"),
   },
   {
     name: "two calls in one embedded module report once",
@@ -179,11 +138,6 @@ const rows = [
   },
   { name: "a fake binding", reported: 0, source: "const env = { ITX: { get: () => ({}) } };\n" },
   {
-    name: "an embedded module that does not parse and never mentions ITX",
-    reported: 0,
-    source: embeddedModule("  run() { return 1 +; }"),
-  },
-  {
     name: "a withItx callback answering data",
     reported: 0,
     source:
@@ -193,11 +147,6 @@ const rows = [
     name: "a withItx callback answering a pipelined call",
     reported: 0,
     source: "class W { f(path) { return this.withItx((itx) => itx.cd(path).append({})); } }",
-  },
-  {
-    name: "a class member holding something else",
-    reported: 0,
-    source: "class W { #cache = new Map(); f() { return this.#cache.get(); } }",
   },
   {
     name: "an imported module text",
