@@ -9,7 +9,7 @@
 // code makes still answers, and a secret path that resolves onto its owner's root (`/secrets/..`) is
 // refused before `itx.secrets.set` can steer the `secret` facet there.
 
-import { SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, expect, test, vi } from "vitest";
 import { errorCode } from "iterate/next/lib";
@@ -30,8 +30,8 @@ afterAll(() => {
 async function signedInSession(email: string) {
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => SELF.fetch(new Request(input, init)));
-  const login = await SELF.fetch(`${origin}/login`, {
+    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
+  const login = await exports.default.fetch(`${origin}/login`, {
     method: "POST",
     redirect: "manual",
     headers: { Origin: origin },
@@ -42,7 +42,7 @@ async function signedInSession(email: string) {
     .getSetCookie()
     .find((cookie) => cookie.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
-  const response = await SELF.fetch(`${origin}/api`, {
+  const response = await exports.default.fetch(`${origin}/api`, {
     headers: { Upgrade: "websocket", Origin: origin, Cookie: sessionCookie },
   });
   response.webSocket!.accept();

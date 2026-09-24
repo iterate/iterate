@@ -7,7 +7,7 @@
 // real capnweb session; a real eyeball dials the app's project host. Every hop is
 // production-shaped:
 //
-//   eyeball SELF.fetch `wsdev--<project>.projects.test` → the edge sets x-itx-expression to
+//   eyeball exports.default.fetch `wsdev--<project>.projects.test` → the edge sets x-itx-expression to
 //   `itx.apps.wsdev` → the DO's itx-expression fetch lane → the rewrite rule at `itx.apps.wsdev`
 //   (pure data: target `itx.rpcStubs.get('itx.apps.wsdev')`, the registry naming the lent provider)
 //   → context/rpc-stubs.ts: the DO asks the borrowed stub to dial (an RPC call that EXECUTES in the
@@ -31,7 +31,7 @@
 // Run:
 //   pnpm exec vitest run --project workers __workers-tests__/ws-fetch-live-101.test.ts
 
-import { SELF } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { adminCredentials, openSession } from "./support.ts";
@@ -73,7 +73,7 @@ async function provideLiveSite(project: string): Promise<{ site: LiveSite; host:
 
 test("plain fetch through a LENT RPC STUB: the eyeball's GET on the project host reaches the workerd provider and its 200 rides back out", async () => {
   const { site, host } = await provideLiveSite("ws101-plain");
-  const page = await SELF.fetch(host);
+  const page = await exports.default.fetch(host);
   const body = await page.text();
   console.log("[ws101] plain GET:", page.status, JSON.stringify(body).slice(0, 400));
   expect(page.status).toBe(200);
@@ -91,7 +91,7 @@ test("plain fetch through a LENT RPC STUB: the eyeball's GET on the project host
 test("lent-stub WebSocket fetch: the eyeball's upgrade on the project host gets the provider's GENUINE 101, echoes, and closes cleanly", async () => {
   const { site, host } = await provideLiveSite("ws101-correct");
   // THE CORRECT BEHAVIOR: a genuine 101 bearing a usable WebSocket…
-  const res = await SELF.fetch(host, { headers: { Upgrade: "websocket" } });
+  const res = await exports.default.fetch(host, { headers: { Upgrade: "websocket" } });
   expect(res.status).toBe(101);
   expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
   expect(site.observations).toContain("fabricated a genuine 101 with a webSocket");
@@ -137,7 +137,7 @@ class GreetingSite extends RpcTarget {
 test("a lent-stub WebSocket provider that GREETS on connect: the eyeball receives the server's first frame without sending one", async () => {
   const project = "ws101-greet";
   await (await createProject(project)).provide("itx.apps.wsdev", new GreetingSite());
-  const res = await SELF.fetch(`https://wsdev--${project}.projects.test/`, {
+  const res = await exports.default.fetch(`https://wsdev--${project}.projects.test/`, {
     headers: { Upgrade: "websocket" },
   });
   expect(res.status).toBe(101);
@@ -181,7 +181,7 @@ export default class CapnwebServer extends WorkerEntrypoint {
 test("a LOADED worker's 101 through the project host: the SDK's newWorkersRpcResponse serves a capnweb API at `rpc--<project>.<base>/<path>`, the path arriving verbatim", async () => {
   const itx = await createProject("ws101-capnweb");
   await itx.provide("itx.apps.rpc", ["itx", "workers", ["get", { source: SRC_CAPNWEB_SERVER }]]);
-  const res = await SELF.fetch("https://rpc--ws101-capnweb.projects.test/rpc/v1", {
+  const res = await exports.default.fetch("https://rpc--ws101-capnweb.projects.test/rpc/v1", {
     headers: { Upgrade: "websocket" },
   });
   expect(res.status).toBe(101);

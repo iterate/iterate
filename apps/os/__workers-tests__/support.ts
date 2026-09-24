@@ -1,10 +1,10 @@
 // __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the CONTROL_PLANE
-// registry stub, a capnweb session over SELF's /api (disposed at teardown — importing this module
+// registry stub, a capnweb session over the worker's /api (disposed at teardown — importing this module
 // registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
 // release on demand, the alarm a context owes, and the one poll-until.
-import { runInDurableObject, SELF } from "cloudflare:test";
-import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, vi } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
@@ -17,9 +17,7 @@ import type { IterateRpcTarget } from "../src/session.ts";
  *  binding — the raw Workers-RPC stub, which is this lane's whole point: the DO's verbs with no
  *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
-  (
-    env as unknown as { ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
+  env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
 /** One client's rpc stub, lent under its key: the per-instance tag (`echo-<i>:<s>`) proves no
  *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i))`, so
@@ -38,23 +36,15 @@ export class Echo extends RpcTarget {
 /** THE REGISTRY, the `CONTROL_PLANE` singleton DO (src/control-plane/durable-object.ts): the raw
  *  Workers-RPC stub, so a test calls its methods directly (`controlPlaneStub().project(ref)`) with no
  *  edge or session between. Fresh per test. */
-export const controlPlaneStub = () =>
-  (
-    env as unknown as { CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject> }
-  ).CONTROL_PLANE.getByName("global");
+export const controlPlaneStub = () => env.CONTROL_PLANE.getByName("global");
 
 /** This lane's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
-const adminApiSecret = (): string =>
-  String(
-    (env as unknown as { APP_CONFIG_SECRETS__ADMIN_BEARER: string })
-      .APP_CONFIG_SECRETS__ADMIN_BEARER,
-  );
+const adminApiSecret = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 /** THE lane's credentials (src/session.ts): the admin bearer — every project, `{ actor: "admin" }`. */
 export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
 /** This lane's sign-in password (wrangler.test.jsonc `APP_CONFIG_LOGIN__PASSWORD`) — what a browser
  *  session is minted with through `POST /login` (email + password). */
-export const loginPassword = (): string =>
-  String((env as unknown as { APP_CONFIG_LOGIN__PASSWORD: string }).APP_CONFIG_LOGIN__PASSWORD);
+export const loginPassword = (): string => env.APP_CONFIG_LOGIN__PASSWORD!;
 
 /** An app that answers with what the platform handed it: the principal stamp, the bearer, the
  *  cookies and the trusted app label — provided as `itx.apps.<label>` and fetched on a project host. */
@@ -75,7 +65,7 @@ export default class Echo extends WorkerEntrypoint {
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).
 const sessions: unknown[] = [];
-/** Open a capnweb session to the worker over a BARE WebSocket upgrade on SELF.fetch (`/api` with no
+/** Open a capnweb session to the worker over a BARE WebSocket upgrade on `exports.default.fetch` (`/api` with no
  *  credential: the socket authenticates in-band) — newWebSocketRpcSession accepts the existing
  *  (accepted) socket per its typings. */
 // The RETURN is deliberately `any`: this is the shared LENDING door — callers reach through it to
@@ -84,7 +74,7 @@ const sessions: unknown[] = [];
 // RpcTarget instance. A READ caller that wants the real surface names it locally
 // (`const root: RpcStub<IterateRpcTarget> = await openSession()`), the way userSession does.
 export async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://control.test/api`, {
+  const res = await exports.default.fetch(`https://control.test/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -115,8 +105,8 @@ export async function signedInSession(email: string): Promise<any> {
   const origin = "https://control.test";
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => SELF.fetch(new Request(input, init)));
-  const login = await SELF.fetch(`${origin}/login`, {
+    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
+  const login = await exports.default.fetch(`${origin}/login`, {
     method: "POST",
     redirect: "manual",
     headers: { Origin: origin },
@@ -127,7 +117,7 @@ export async function signedInSession(email: string): Promise<any> {
     .getSetCookie()
     .find((cookie) => cookie.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
-  const response = await SELF.fetch(`${origin}/api`, {
+  const response = await exports.default.fetch(`${origin}/api`, {
     headers: { Upgrade: "websocket", Origin: origin, Cookie: sessionCookie },
   });
   response.webSocket!.accept();

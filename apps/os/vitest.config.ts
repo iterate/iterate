@@ -4,8 +4,8 @@
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
-//               under test is Vite's built dist/server/index.js — SELF.fetch, never
-//               a source import of the Start entry.
+//               under test is Vite's built dist/server/index.js — `exports.default.fetch`
+//               from cloudflare:workers, never a source import of the Start entry.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production

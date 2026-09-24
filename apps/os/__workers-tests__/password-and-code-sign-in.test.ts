@@ -1,6 +1,6 @@
 // The email code sign-in (src/password-and-code-sign-in.ts) with a fake mailbox, so the test can read the code it
 // mailed: the message, the right code, the wrong ones, the spent challenge, the reserved domains.
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { Env } from "../src/env.ts";
 import { finishLoginCode, startLoginCode } from "../src/password-and-code-sign-in.ts";
@@ -20,7 +20,7 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
     messageId: "message-1",
   }));
   const mailbox = {
-    ...(env as unknown as Env),
+    ...env,
     EMAIL: { send } as unknown as Env["EMAIL"],
     APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@control.test>",
   } as Env;

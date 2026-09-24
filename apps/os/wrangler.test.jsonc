@@ -60,7 +60,7 @@
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
   // Configuration (src/app-config.ts): the `APP_CONFIG_<PATH>__<KEY>` spellings of the one object —
-  // this lane's issuer is `control.test`, its project hosts hang under `projects.test` (SELF.fetch
+  // this lane's issuer is `control.test`, its project hosts hang under `projects.test` (`exports.default.fetch`
   // takes any hostname — no DNS), and its secrets are test values (control-plane.test.ts and
   // session-doors.test.ts sign in with the password and authenticate with the admin bearer).
   "vars": {

@@ -13,7 +13,7 @@
 // itx.apps.<app>`, the rewrite rule provided at `itx.apps.<app>` whose target is the hosting
 // spelling — and at the DO's own `invoke` method, where a caller passes the Request itself.
 
-import { SELF } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import { adminCredentials, openSession, stub } from "./support.ts";
@@ -56,13 +56,15 @@ test("a project host reaches a facet-hosted app over plain HTTP and RPC; a WebSo
   const { ctx, host } = await projectWithAppFacet("facet-app");
 
   // The upgrade FIRST — before any plain call: a refusal that touched the facet would show as a hit.
-  const upgrade = await SELF.fetch(`${host}/live`, { headers: { Upgrade: "websocket" } });
+  const upgrade = await exports.default.fetch(`${host}/live`, {
+    headers: { Upgrade: "websocket" },
+  });
   expect(upgrade.status).toBe(400);
   expect(upgrade.webSocket).toBeNull();
   expect(await upgrade.text()).toMatch(/never a WebSocket/);
 
   // Plain HTTP through the same route: the facet's own fetch answers.
-  const page = await SELF.fetch(`${host}/index`);
+  const page = await exports.default.fetch(`${host}/index`);
   expect(page.status).toBe(200);
   expect(await page.json()).toEqual({ served: "plain-http", hits: 1, path: "/index" });
   // RPC through the itx expression: the same instance (the refused upgrade never reached it).

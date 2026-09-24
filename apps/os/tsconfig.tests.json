@@ -5,7 +5,7 @@
   // node types (the tests run in Node). `pnpm typecheck` runs all three configs.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types", "node", "@cloudflare/vitest-plugin/types"]
+    "types": ["@cloudflare/workers-types", "node", "vite/client", "@cloudflare/vitest-plugin/types"]
   },
   "include": [
     "e2e",

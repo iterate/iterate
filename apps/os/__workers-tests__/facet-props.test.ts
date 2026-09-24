@@ -26,7 +26,7 @@ export class ProbeDurableObject extends DurableObject {
 
 test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async () => {
   const seen = await runInDurableObject(stub("prj_facet_props_probe"), async (_instance, state) => {
-    const loader = (env as unknown as { LOADER: WorkerLoader }).LOADER;
+    const loader = env.LOADER;
     // A fixed key: low-cardinality by construction (the loader cacheKey rule), test-lane only.
     const worker = loader.get("probe:facet-props:v1", () => ({
       compatibilityDate: "2026-09-01",

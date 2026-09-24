@@ -1,15 +1,12 @@
-import { env, SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import type { Env } from "../src/env.ts";
 import { SRC_ECHO_APP } from "./support.ts";
-
-const bindings = env as unknown as Env;
-const ADMIN = { type: "admin-secret", secret: bindings.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
+const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
 const sessions: Disposable[] = [];
 const call = (url: string, init?: RequestInit) =>
-  SELF.fetch(new Request(url, { redirect: "manual", ...init }));
+  exports.default.fetch(new Request(url, { redirect: "manual", ...init }));
 afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
 });
