@@ -93,7 +93,9 @@ test("leaves an explicit failure artifact when a runner never reaches its end ho
     status: "failed",
     error: { name: "TestTelemetryIncompleteError" },
   });
-  expect(written.runners[0]?.collectionErrors[0]).toContain("did not write its completed telemetry");
+  expect(written.runners[0]?.collectionErrors[0]).toContain(
+    "did not write its completed telemetry",
+  );
   rmSync(artifactDirectory, { recursive: true });
 });
 

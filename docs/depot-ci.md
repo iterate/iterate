@@ -69,29 +69,29 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 
 ## Workflows
 
-| File                         | Runs on                                                  | What it does                                                                                           |
-| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `lint-typecheck.yml`         | PR, main push, dispatch                                  | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                 |
-| `test.yml`                   | PR, main push                                            | **Test** (required): `pnpm test`, then the Kit firmware host tests                                     |
-| `loc-report.yml`             | PR, dispatch                                             | The LOC table in the PR body                                                                           |
-| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed            | The Slack PR update and the daily PR dashboard                                                         |
-| `preview-os.yml`             | PR touching the preview paths, dispatch                  | **Preview OS**: the PR's preview, its e2e job, the CI trace and report statuses                        |
-| `preview-delete.yml`         | Such a PR closing, dispatch                              | Deletes the PR's preview                                                                               |
-| `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                  |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: a throwaway preview of main, e2e and specs, trace, delete, alert                      |
-| `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                 |
-| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                            |
-| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                               |
-| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image))                                                     |
-| `do-duration-probe.yml`      | Hourly, dispatch                                         | Durable Object cost alarm for both Cloudflare accounts                                                 |
-| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                       |
-| `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                     |
-| `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                      |
+| File                         | Runs on                                                  | What it does                                                                                            |
+| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `lint-typecheck.yml`         | PR, main push, dispatch                                  | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                  |
+| `test.yml`                   | PR, main push                                            | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
+| `loc-report.yml`             | PR, dispatch                                             | The LOC table in the PR body                                                                            |
+| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed            | The Slack PR update and the daily PR dashboard                                                          |
+| `preview-os.yml`             | PR touching the preview paths, dispatch                  | **Preview OS**: the PR's preview, its e2e job, the CI trace and report statuses                         |
+| `preview-delete.yml`         | Such a PR closing, dispatch                              | Deletes the PR's preview                                                                                |
+| `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                   |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: a throwaway preview of main, e2e and specs, trace, delete, alert                       |
+| `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                  |
+| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
+| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                |
+| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch      | Bakes the CI image ([Custom Image](#custom-image))                                                      |
+| `do-duration-probe.yml`      | Hourly, dispatch                                         | Durable Object cost alarm for both Cloudflare accounts                                                  |
+| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                        |
+| `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                      |
+| `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
 | `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against a throwaway preview of main; PostHog; pages on a change of state |
-| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state         |
-| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                   |
-| `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                               |
-| `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                  |
+| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state          |
+| `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                    |
+| `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
+| `release.yml`                | Daily, dispatch                                          | A dated `v…` release with a changelog when main moved                                                   |
 
 Each file's header comment and `on:` block are the details.
 

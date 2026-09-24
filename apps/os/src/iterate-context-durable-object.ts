@@ -1092,7 +1092,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const status =
           code === "NO_ITX_EXPRESSION_MATCH" ? 404 : code === "FACET_NO_UPGRADE" ? 400 : 500;
         if (status === 500)
-          reportIssue("iterate-context.expression-fetch", error, { itxExpression: itxExpressionHeader });
+          reportIssue("iterate-context.expression-fetch", error, {
+            itxExpression: itxExpressionHeader,
+          });
         const message = error instanceof Error ? error.message : String(error);
         return new Response(`expression fetch error: ${message}\n`, { status });
       }
