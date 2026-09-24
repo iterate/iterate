@@ -58,11 +58,12 @@ function withoutBasePath(request: Request, basePath: string): Request {
   return new Request(url, request);
 }
 
-/** A project host's answer when its admission needed a control-plane read that failed on the
- *  platform's side (ControlPlaneUnavailableError, edge.ts) and no last-known copy stood in: 503 at
- *  once, logged as `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages
- *  on a burst, and on the 5xx); on 2026-09-24 each visitor instead waited 12–15 s for an exception.
- *  Any other error is rethrown. */
+/** A project host's answer when a control-plane read it needed failed on the platform's side
+ *  (ControlPlaneUnavailableError, edge.ts): its admission's, with no last-known copy to stand in,
+ *  or a signed-in visitor's access, which has none. 503 at once, logged as
+ *  `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages on a burst,
+ *  and on the 5xx); on 2026-09-24 each visitor instead waited 12–15 s for an exception. Any other
+ *  error is rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
   if (!(error instanceof ControlPlaneUnavailableError)) throw error;
   console.warn({
@@ -208,13 +209,27 @@ export default {
     }).catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
     if (admitted instanceof Response) return admitted;
     if (admitted) {
-      const { address: projectHost, project } = admitted;
+      const { address: projectHost, project, stale } = admitted;
       if (!project)
         return new Response(
           `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
           { status: 421 },
         );
       const projectId = project.id;
+      /** A request admitted on last-known copies logs it ONCE, as what it became: served (here) or,
+       *  for a signed-in visitor, a 503 (below). scripts/ci/prd-fault-alarm.ts pages on a burst. */
+      const logServedStale = () => {
+        if (stale)
+          console.warn({
+            event: "control-plane.platform-failure-stale-project",
+            name: url.hostname,
+            project: projectHost.project,
+            method: stale.error.method,
+            waitedMs: stale.error.waitedMs,
+            message: stale.error.message,
+            copies: stale.copies,
+          });
+      };
       // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
       // from the bucket, before any session or DO — the token in the URL is the authorization.
       if (projectHost.app === FILES_APP_LABEL) {
@@ -225,6 +240,7 @@ export default {
           keyPrefix: `${resourceScope(projectId, "/").id}/`,
           request: withoutBasePath(request, projectHost.basePath),
         });
+        logServedStale();
         // Under paths a stored HTML or SVG file is a document on the platform's own origin: it runs
         // sandboxed exactly as an app's answer does (an opaque origin, no cookie to spend).
         return routing?.type === "paths" ? sandboxed(file) : file;
@@ -234,7 +250,10 @@ export default {
       // the issuer's: an app there has no cookie sign-in of its own (it authenticates in-band).
       if (routing?.type !== "paths") {
         const browserResponse = await browserClient(request, env, ctx);
-        if (browserResponse) return browserResponse;
+        if (browserResponse) {
+          logServedStale();
+          return browserResponse;
+        }
       }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
@@ -246,7 +265,10 @@ export default {
           headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
         });
       if (authorization) {
-        // A person's access has no stand-in: a membership read the control plane fails is a 503.
+        // A person's access has no stand-in: a membership read the control plane fails is a 503,
+        // and once this request's admission found the control plane down, it is one at once — a
+        // second bounded wait would only end the same way.
+        if (stale) return controlPlaneUnavailable(stale.error, url.hostname);
         const reaches = await controlPlane
           .reachesProject(authorization.reach, projectId)
           .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
@@ -254,6 +276,7 @@ export default {
         if (!reaches)
           return new Response("This session cannot access this project", { status: 403 });
       }
+      logServedStale();
       if (authorization?.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
       const answer = await env.ITERATE_CONTEXT.getByName(

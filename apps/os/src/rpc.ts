@@ -3,7 +3,7 @@ import { reportIssue } from "iterate/lib";
 import type { Env } from "./env.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { GrantsRpcTarget } from "./grants.ts";
-import { ControlPlane } from "./control-plane/edge.ts";
+import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
 import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 import { authorizationForToken, grantIsLive, recordGrantUse, type Authorization } from "./oauth.ts";
 import {
@@ -148,10 +148,15 @@ export async function rpcResponse(
         // A RETRYABLE READ is asked again, not a lost session: every deploy resets the Durable
         // Objects the tick reads (the person's account, the control plane), and the call it cut is
         // a retryable transport error — expected, where any other cut is a platform failure the
-        // prd fault alarm counts. The retry is
-        // bounded by the deadline above — the grant stays good only until `until`, so a read that
-        // keeps failing ends the session there, "Session authorization expired".
-        if (isRetryableTransportError(error) && !stopped) {
+        // prd fault alarm counts. So is a control-plane read that timed out or failed on the
+        // platform's side (control-plane/edge.ts ControlPlaneUnavailableError): the control plane is
+        // down, not the session. The retry is bounded by the deadline above — the grant stays good
+        // only until `until`, so a read that keeps failing ends the session there, "Session
+        // authorization expired".
+        if (
+          (isRetryableTransportError(error) || error instanceof ControlPlaneUnavailableError) &&
+          !stopped
+        ) {
           console.warn({
             event: isDeployReset(error)
               ? "oauth.deploy-reset-live-authorization-retry"

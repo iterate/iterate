@@ -5,9 +5,10 @@
 // organization never change, so a hit is kept for the isolate's life (a miss never is); a person's
 // access is kept five seconds — dropped at once here for the person a command was made by or for —
 // and a refusal is never memoized: a project not in a memoized access set is re-read once before it
-// is refused, so a creation is reachable at once. Every READ is bounded (READ_TIMEOUT_MS): one that
-// times out or fails on the platform's side throws ControlPlaneUnavailableError, which a project
-// host's admission models (last-known-project.ts, worker.ts); a command is never cut short.
+// is refused, so a creation is reachable at once. Every READ is bounded (READ_TIMEOUT_MS, a listing
+// LIST_READ_TIMEOUT_MS): one that times out or fails on the platform's side throws
+// ControlPlaneUnavailableError, which a project host's admission models (last-known-project.ts,
+// worker.ts); a command is never cut short.
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
@@ -38,23 +39,33 @@ export const describeReach = (reach: Reach): string =>
       ? `the projects of the orgs ${reach.userId} belongs to`
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
-/** How long the edge waits for one control-plane READ before the platform counts as down: 3 s. In
- *  prd the singleton answers in 23–30 ms at the median, 266 ms at p99 and ~300 ms at p999 (a wake
- *  after a deploy's reset); the slowest of 14,622 calls on 2026-09-23/24 took 1.25 s (Workers Logs,
- *  `ControlPlaneDurableObject` jsrpc wall time). On 2026-09-24 it was unreachable for 188 s and each
- *  call failed only after 12–15 s ("internal error; reference = …"), so every visitor of every
- *  project host waited that long for a 5xx. Three seconds is over twice the slowest healthy call and
- *  a quarter of the platform's own give-up. A command (a write) is not bounded: one abandoned
- *  here may still land, and its caller would report a change that happened as failed. */
+/** How long the edge waits for one control-plane POINT READ (a project, a hostname, a person's
+ *  access, a grant, a user) before the platform counts as down: 3 s. In prd the singleton answers in
+ *  23–30 ms at the median, 266 ms at p99 and ~300 ms at p999 (a wake after a deploy's reset); the
+ *  slowest of 14,622 calls on 2026-09-23/24 took 1.25 s (Workers Logs, `ControlPlaneDurableObject`
+ *  jsrpc wall time, measured inside the object: a far data center adds its round trip). On
+ *  2026-09-24 it was unreachable for 188 s and each call failed only after 12–15 s ("internal error;
+ *  reference = …"), so every visitor of every project host waited that long for a 5xx. Three
+ *  seconds is over twice the slowest healthy call and a quarter of the platform's own give-up. A
+ *  command (a write) is not bounded: one abandoned here may still land, and its caller would report
+ *  a change that happened as failed. */
 const READ_TIMEOUT_MS = 3_000;
+/** A LISTING's bound (LIST_READS): 10 s. A listing grows with the catalog (every project, user,
+ *  organization, a grant page), so the point reads' 3 s would one day fail it on every call, not
+ *  only in an outage; none is on a project host's path. Still under the platform's 12–15 s. */
+const LIST_READ_TIMEOUT_MS = 10_000;
+/** The Durable Object's reads whose answer grows with the catalog. */
+const LIST_READS = new Set(["projects", "organizations", "members", "users", "listOAuthGrants"]);
 
-/** A control-plane READ that did not answer within READ_TIMEOUT_MS, or that failed on the platform's
- *  side: cut at the transport ("Network connection lost.", retryable-error.ts) or workerd's opaque
- *  "internal error; reference = …", what the 2026-09-24 outage threw. A deploy's reset of the
- *  Durable Object (`isDeployReset`) is our own expected cut, not the platform being down, and a
- *  refusal the catalog coded or any other throw is not one either: each surfaces as what it is. The
- *  project host's admission models it (worker.ts); everywhere else it surfaces, after 3 s instead of
- *  the platform's 12–15. */
+/** A control-plane READ that did not answer within its bound (READ_TIMEOUT_MS,
+ *  LIST_READ_TIMEOUT_MS), or that failed on the platform's side: cut at the transport ("Network
+ *  connection lost.", retryable-error.ts) or workerd's opaque "internal error; reference = …", what
+ *  the 2026-09-24 outage threw. A deploy's reset of the Durable Object (`isDeployReset`) is our own
+ *  expected cut, not the platform being down, and a refusal the catalog coded or any other throw is
+ *  not one either: each surfaces as what it is. The project host's admission models it (worker.ts);
+ *  everywhere else it surfaces, after 3 s instead of the platform's 12–15. Its message names the
+ *  method and the cause only (the wait is `waitedMs`), so the fault alarm groups one failure as one
+ *  row. */
 export class ControlPlaneUnavailableError extends Error {
   override readonly name = "ControlPlaneUnavailableError";
   /** the Durable Object method read (`project`, `accessibleTo`, …) */
@@ -62,11 +73,12 @@ export class ControlPlaneUnavailableError extends Error {
   readonly waitedMs: number;
   /** The cause's transport flag, kept: oauth-store.ts asks a cut grant read again once. */
   readonly retryable: boolean;
-  constructor(method: string, waitedMs: number, cause?: Error) {
+  constructor(input: { method: string; waitedMs: number; boundMs: number; cause?: Error }) {
+    const { method, waitedMs, boundMs, cause } = input;
     super(
       cause
-        ? `The control plane failed ${method} after ${waitedMs} ms: ${cause.message}`
-        : `The control plane did not answer ${method} within ${READ_TIMEOUT_MS} ms`,
+        ? `The control plane failed ${method}: ${cause.message}`
+        : `The control plane did not answer ${method} within ${boundMs} ms`,
       { cause },
     );
     this.method = method;
@@ -115,17 +127,21 @@ export class ControlPlane {
     }
   }
 
-  /** ONE read (`#call`), BOUNDED: past READ_TIMEOUT_MS, or failed on the platform's side, it throws
-   *  ControlPlaneUnavailableError. Workers RPC takes no abort signal, so a call that times out is
-   *  abandoned, not cancelled; the stub it hung on is replaced, as a cut one is. */
+  /** ONE read (`#call`), BOUNDED: past READ_TIMEOUT_MS (a listing, LIST_READ_TIMEOUT_MS), or failed
+   *  on the platform's side, it throws ControlPlaneUnavailableError. Workers RPC takes no abort
+   *  signal, so a call that times out is abandoned, not cancelled; the stub it hung on is replaced,
+   *  as a cut one is. */
   async #read<T>(method: string, ...args: unknown[]): Promise<T> {
     const started = Date.now();
+    const boundMs = LIST_READS.has(method) ? LIST_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         this.#stub = this.#namespace.getByName("global");
-        reject(new ControlPlaneUnavailableError(method, Date.now() - started));
-      }, READ_TIMEOUT_MS);
+        reject(
+          new ControlPlaneUnavailableError({ method, waitedMs: Date.now() - started, boundMs }),
+        );
+      }, boundMs);
     });
     try {
       return await Promise.race([this.#call<T>(method, ...args), timedOut]);
@@ -136,7 +152,12 @@ export class ControlPlane {
         (isRetryableTransportError(error) ||
           error.message.startsWith("internal error; reference ="))
       )
-        throw new ControlPlaneUnavailableError(method, Date.now() - started, error);
+        throw new ControlPlaneUnavailableError({
+          method,
+          waitedMs: Date.now() - started,
+          boundMs,
+          cause: error,
+        });
       throw error;
     } finally {
       clearTimeout(timer);
@@ -161,8 +182,9 @@ export class ControlPlane {
    *  itself (project/custom-hostnames.ts): its apex, or one label under it an app
    *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read.
    *  A deployment that serves no custom hostnames, the platform's own origins and anything under its
-   *  reserved zones never reach the table. What worker.ts admits a project host with, and what
-   *  consent.ts binds a project's CIMD client to. */
+   *  reserved zones never reach the table. What consent.ts binds a project's CIMD client to; a
+   *  request's own admission reads the same two halves through last-known-project.ts
+   *  `admitProjectHost`, which keeps a copy of each answer for when a read fails. */
   async projectHostOf(
     config: AppConfig,
     url: URL,

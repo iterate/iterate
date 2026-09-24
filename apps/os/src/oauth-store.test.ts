@@ -14,9 +14,7 @@ test.each([
   [
     "Network connection lost.",
     "oauth.platform-failure-grant-store-retry",
-    expect.stringMatching(
-      /^ControlPlaneUnavailableError: The control plane failed oauthGrant after \d+ ms: Network connection lost\.$/,
-    ),
+    "ControlPlaneUnavailableError: The control plane failed oauthGrant: Network connection lost.",
   ],
 ])(
   "a grant read cut at the transport (%s) is asked once more on a fresh stub, and logged as %s",

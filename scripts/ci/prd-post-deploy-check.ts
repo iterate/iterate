@@ -124,7 +124,8 @@ export type FailureCause =
       /** the down hosts' most frequent failure since `since`, and how many failures they logged
        *  in all (the newest 100 read) — none: nothing logged */
       dominant?: { signature: string; count: number; of: number };
-      /** that failure anywhere in os-prd before the upload: how often, and the first */
+      /** that failure anywhere in os-prd before the upload: how often (in the newest 100 read), and
+       *  the earliest of those */
       before?: { count: number; first: number };
     };
 
@@ -141,7 +142,11 @@ function causeLine(cause: FailureCause) {
   const upload = `the new version's upload (${clock(cause.uploadedAt)} UTC)`;
   if (!cause.before) return `${most}; none of it came before ${upload}`;
   const { count: earlier, first } = cause.before;
-  return `${most}; it began BEFORE ${upload}: first at ${clock(first)}, ${Math.round((cause.uploadedAt - first) / 1000)} s earlier, ${atLeast(earlier)} times before the upload`;
+  const lead = `${Math.round((cause.uploadedAt - first) / 1000)} s earlier`;
+  // past the newest 100 read, the earliest read is only a bound on when it began
+  if (earlier >= 100)
+    return `${most}; it began BEFORE ${upload}: by ${clock(first)} at the latest, ${lead}, ${atLeast(earlier)} times before the upload`;
+  return `${most}; it began BEFORE ${upload}: first at ${clock(first)}, ${lead}, ${earlier} times before the upload`;
 }
 
 /** A failure on a request, as the post-deploy page names it: a platform-failure warn by its
@@ -164,12 +169,14 @@ const signatureOf = (failure: z.infer<typeof LoggedFailure>) => {
     /reference = \w+/g,
     "reference = …",
   );
-  const frames = [...(failure.source?.exception?.stack ?? "").matchAll(/at (?:async )?([^\s(]+)/g)]
-    .slice(0, 2)
-    .map((match) => match[1])
-    .join(" < ");
+  const frames = framesOf(failure).join(" < ");
   return frames ? `${message} at ${frames}` : message;
 };
+/** An exception's first two stack frames, by name. */
+const framesOf = (failure: z.infer<typeof LoggedFailure>) =>
+  [...(failure.source?.exception?.stack ?? "").matchAll(/at (?:async )?([^\s(]+)/g)]
+    .slice(0, 2)
+    .map((match) => match[1]!);
 
 /** An exception (not the invocation's own summary line) or a platform-failure warn. */
 const FAILURE_FILTER = {
@@ -232,21 +239,29 @@ export async function readFailureCause(input: {
   if (!dominant) return { since, uploadedAt };
   const [signature, count] = dominant;
   if (!uploadedAt) return { since, dominant: { signature, count, of: onHosts.length } };
-  // the same failure anywhere before the upload: filtered to its message (or event) here, to its
-  // frames below
+  // the same failure anywhere before the upload: its event, or its text in the field it came from
+  // and its frames on the stack (`internal error;` alone is every opaque error in os-prd), so the
+  // newest 100 read are this failure's; then its whole signature here
   const sample = onHosts.find((failure) => signatureOf(failure) === signature)!;
+  const includes = (key: string, value: string) => ({
+    key,
+    operation: "includes",
+    value,
+    type: "string",
+  });
   const earlier = (
     await failures(since, uploadedAt, [
-      sample.source?.event?.includes("platform-failure")
-        ? { key: "event", operation: "eq", value: sample.source.event, type: "string" }
-        : {
-            key: "$metadata.message",
-            operation: "includes",
-            value: (sample.$metadata.message || sample.$metadata.error || "").split(
-              " reference = ",
-            )[0],
-            type: "string",
-          },
+      ...(sample.source?.event?.includes("platform-failure")
+        ? [{ key: "event", operation: "eq", value: sample.source.event, type: "string" }]
+        : [
+            sample.$metadata.message
+              ? includes("$metadata.message", sample.$metadata.message.split(" reference = ")[0]!)
+              : includes(
+                  "$metadata.error",
+                  (sample.$metadata.error || "").split(" reference = ")[0]!,
+                ),
+            ...framesOf(sample).map((frame) => includes("exception.stack", frame)),
+          ]),
       FAILURE_FILTER,
     ])
   ).filter((failure) => signatureOf(failure) === signature);

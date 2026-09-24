@@ -58,7 +58,9 @@ after a deploy), its last line is the down hosts' most frequent failure in Worke
 it began before the new version's upload; before the upload means the deploy only landed in it.
 `readFailureCause` holds that query. A project host whose control-plane read failed logs
 `control-plane.platform-failure-stale-project` (served from the data center's last-known copy) or
-`control-plane.platform-failure-unavailable` (answered 503).
+`control-plane.platform-failure-unavailable` (answered 503). Whether the copies are written at all:
+each isolate logs `control-plane.last-known-copy` once, `readBack` true when its first copy read
+back; a cache that failed logs `control-plane.last-known-copy-unwritten` or `-unread`.
 
 ## Drill down
 

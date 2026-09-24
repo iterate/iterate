@@ -9,7 +9,7 @@ import { platformAddressesOf } from "../src/app-config.ts";
 import type { GrantEnded } from "../src/account/contract.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { projectsForClient } from "../src/consent.ts";
-import { ControlPlane } from "../src/control-plane/edge.ts";
+import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
 import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oauth.ts";
 import { rpcResponse } from "../src/rpc.ts";
 import type { Env } from "../src/env.ts";
@@ -549,7 +549,7 @@ test("a socket holding no project re-checks its grant every thirty seconds and r
   expect(await root.whoami()).toMatchObject({ actor: flow.user.id }); // still live: it holds nothing to lose
 });
 
-test("a live session rides out a deploy's Durable Object reset during its re-check", async () => {
+test("a live session rides out a deploy's Durable Object reset, and a control-plane read that gave up, during its re-check", async () => {
   fetchReachesThisWorker();
   const flow = await grant([`${ORIGIN}/api`]);
   // THE GUARD FROM SOURCE (src/rpc.ts), not through `exports.default`: it serves the built worker, whose own
@@ -586,13 +586,25 @@ test("a live session rides out a deploy's Durable Object reset during its re-che
           durableObjectReset: true,
         }),
       ),
+    )
+    // then what an outage does to it: the edge's bounded read gives up (control-plane/edge.ts),
+    // which no transport flag marks — the control plane is down, not the session
+    .mockImplementationOnce(() =>
+      Promise.reject(
+        new ControlPlaneUnavailableError({
+          method: "accessibleTo",
+          waitedMs: 3_000,
+          boundMs: 3_000,
+        }),
+      ),
     );
   const warns = vi.spyOn(console, "warn");
   onTestFinished(() => {
     membershipReads.mockRestore();
     warns.mockRestore();
   });
-  // Real elapsed time: the 30 s tick meets the reset, and its retry 2 s later reads through.
+  // Real elapsed time: the 30 s tick meets the reset, its retry 2 s later the outage, and the next
+  // retry reads through.
   await until(
     "the re-check's retry reads through",
     () => membershipReads.mock.settledResults.some((result) => result.type === "fulfilled"),
@@ -600,13 +612,21 @@ test("a live session rides out a deploy's Durable Object reset during its re-che
   );
   const reads = membershipReads.mock.calls.length; // mockRestore clears the record
   membershipReads.mockRestore();
-  expect(reads).toBeGreaterThanOrEqual(2);
+  expect(reads).toBeGreaterThanOrEqual(3);
   // a deploy's reset is expected, never a platform failure the prd fault alarm counts
   expect(warns).toHaveBeenCalledWith({
     event: "oauth.deploy-reset-live-authorization-retry",
     name: "live-authorization",
     grantId: flow.token!.access_token.split(":")[1],
     message: "Error: Durable Object reset because its code was updated.",
+  });
+  // the outage's is a platform failure the fault alarm counts, retried all the same
+  expect(warns).toHaveBeenCalledWith({
+    event: "oauth.platform-failure-live-authorization-retry",
+    name: "live-authorization",
+    grantId: flow.token!.access_token.split(":")[1],
+    message:
+      "ControlPlaneUnavailableError: The control plane did not answer accessibleTo within 3000 ms",
   });
   expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
   await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers

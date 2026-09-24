@@ -180,8 +180,11 @@ test("the page names the down hosts' failure in Workers Logs and that it began b
     {
       timeframe: { from: uploadedAt - 10 * 60_000, to: uploadedAt },
       parameters: {
+        // `internal error;` is every opaque error in os-prd: its frames narrow it to this one
         filters: expect.arrayContaining([
           expect.objectContaining({ key: "$metadata.message", value: "internal error;" }),
+          expect.objectContaining({ key: "exception.stack", value: "#call" }),
+          expect.objectContaining({ key: "exception.stack", value: "ControlPlane.getProject" }),
         ]),
       },
     },
@@ -204,7 +207,50 @@ test("the page names the down hosts' failure in Workers Logs and that it began b
   `);
 });
 
+test("a failure whose text Workers Logs holds as `$metadata.error` is looked for before the upload in that field", async () => {
+  const uncaught = (at: string) => ({
+    timestamp: Date.parse(at),
+    $metadata: {
+      level: "error",
+      type: "cf-worker",
+      error: "Error: The script will never generate a response.",
+    },
+  });
+  const logs = stubCloudflare({
+    onHosts: [uncaught("2026-09-24T13:25:00Z")],
+    beforeUpload: [uncaught("2026-09-24T13:23:00Z")],
+  });
+  const cause = await readFailureCause({
+    cloudflare: { accountId: "account", apiToken: "token" },
+    hosts: ["https://iterate.com/"],
+    newVersion: INCIDENT.version,
+    now: INCIDENT.checkedAt,
+  });
+
+  expect(cause).toMatchObject({ before: { count: 1, first: Date.parse("2026-09-24T13:23:00Z") } });
+  expect(logs.queries[1]).toMatchObject({
+    parameters: {
+      filters: expect.arrayContaining([
+        expect.objectContaining({
+          key: "$metadata.error",
+          value: "Error: The script will never generate a response.",
+        }),
+      ]),
+    },
+  });
+});
+
 test.each<{ case: string; cause: FailureCause; line: string }>([
+  {
+    case: "a failure read 100 times before the upload: when it began is a bound",
+    cause: {
+      since: Date.parse("2026-09-24T13:13:46Z"),
+      uploadedAt: Date.parse("2026-09-24T13:23:46Z"),
+      dominant: { signature: "internal error; reference = … at #call", count: 40, of: 40 },
+      before: { count: 100, first: Date.parse("2026-09-24T13:20:00Z") },
+    },
+    line: "• Workers Logs: 40 of these hosts' 40 failures since 13:13:46 UTC are `internal error; reference = … at #call`; it began BEFORE the new version's upload (13:23:46 UTC): by 13:20:00 at the latest, 226 s earlier, 100+ times before the upload",
+  },
   {
     case: "the failure only began with the new version",
     cause: {
