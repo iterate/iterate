@@ -684,7 +684,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     this.#background(async () => {
       await this.deps.sleep(OPENING_DEADLINE_MS);
       if (this.#dial !== dial || dial.ready) return;
-      this.#dial = null;
+      this.#releaseDial(dial);
       try {
         dial.socket?.close();
       } catch {
@@ -702,7 +702,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
         socket = await this.deps.dialProvider();
       } catch (error) {
         if (this.#dial !== dial) return;
-        this.#dial = null;
+        this.#releaseDial(dial);
         await this.#end(activation, `the provider dial failed: ${String(error).slice(0, 200)}`);
         return;
       }
@@ -740,7 +740,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
 
       socket.addEventListener("close", (event: CloseEvent) => {
         if (this.#dial !== dial) return;
-        this.#dial = null;
+        this.#releaseDial(dial);
         this.#flushTurns(dial, true);
         this.#providerClosed(
           conversationId,
@@ -888,7 +888,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
 
       case "session.closed": {
         this.#flushTurns(dial, true);
-        if (this.#dial === dial) this.#dial = null;
+        this.#releaseDial(dial);
         this.#providerClosed(
           conversationId,
           dial.activation,
@@ -1020,11 +1020,10 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
         while (this.#dial === dial) {
           const frame = dial.speakerOutbox.shift();
           if (!frame) {
-            /* One background registration per dial: the sender waits for the next frame, and
-             * the tick only notices a dial that ended. */
+            /* One background registration per dial: the sender waits for the next frame, or for
+             * `#releaseDial` to end it. */
             await new Promise<void>((resolve) => {
               dial.wakeSender = resolve;
-              void this.deps.sleep(1_000).then(resolve);
             });
             dial.wakeSender = null;
             continue;
@@ -1210,12 +1209,20 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     dial.socket.send(JSON.stringify(message));
   }
 
+  /** Let go of the dial if it is still this incarnation's, waking its speaker sender so the sender
+   * sees the dial is gone and returns instead of waiting on an outbox nothing fills any more. */
+  #releaseDial(dial: Dial): void {
+    if (this.#dial !== dial) return;
+    this.#dial = null;
+    dial.wakeSender?.();
+  }
+
   /** Let the dial and everything hanging off it go. Safe to call twice. The provider is asked to
    * close first (`session.close` is what makes it finalize usage) and the socket is closed behind
    * it without waiting. */
   #hangUp(): void {
     const dial = this.#dial;
-    this.#dial = null;
+    if (dial) this.#releaseDial(dial);
     try {
       if (dial?.ready && dial.socket) {
         dial.socket.send(JSON.stringify({ type: "session.close" }));

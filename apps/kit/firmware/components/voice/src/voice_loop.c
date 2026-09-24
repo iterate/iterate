@@ -567,8 +567,8 @@ static void admit_speaker_frame(const uint8_t *pcm, size_t pcm_length) {
         &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
     return;
   }
-  /* Counted only for frames actually admitted, so the answer's timeline says
-   * what the listener can hear. */
+  /* Noted only for frames actually admitted, so the answer's timeline says
+   * what the listener can hear; see loop.h for who reads it. */
   {
     const struct iterate_kit_voice_answer_note note = {
       .kind = ITERATE_KIT_VOICE_ANSWER_ADMITTED,

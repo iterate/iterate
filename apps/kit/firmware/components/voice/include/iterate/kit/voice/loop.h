@@ -105,11 +105,13 @@ enum iterate_kit_voice_answer_note_kind {
 };
 
 /**
- * The answer's timeline, for a board with a face.
+ * The answer's timeline, as the playout saw it, in the order it happened.
  *
- * One op rather than several because the notes must arrive on the SAME task in
- * the SAME order the audio did: a face that is told what was admitted and what
- * was abandoned out of order animates audio nobody will hear.
+ * A face uses ABANDONED to drop the audio its mouth delay line still holds
+ * (waveshare_device.c). No board reads ADMITTED today; it is the seam
+ * tests/voice_loop_answer_clock_test.c asserts the answer timeline through:
+ * a new answer that fails to start shows as frames admitted under the previous
+ * answer's number.
  */
 struct iterate_kit_voice_answer_note {
   enum iterate_kit_voice_answer_note_kind kind;
