@@ -16,6 +16,7 @@ on:
       # firmware ships as GitHub releases (kit-firmware.yml)
       - "!apps/kit/firmware/**"
       - packages/ui/**
+      - packages/shared/**
       - apps/agents/**
       - packages/iterate/**
       - package.json
