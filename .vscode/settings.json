@@ -36,18 +36,14 @@
     "**/dist": true,
     "**/build": true,
     "**/.git": true,
-    "**/.repomix-*": true,
-    "**/.next": true,
     "**/.wrangler": true,
-    "**/routeTree.gen.ts": true,
-    "**/worker-configuration.d.ts": true
+    "**/routeTree.gen.ts": true
   },
   "files.readonlyInclude": {
     "**/routeTree.gen.ts": true
   },
   "files.watcherExclude": {
     "**/routeTree.gen.ts": true,
-    "**/worker-configuration.d.ts": true,
     "**/node_modules": true,
     "**/dist": true,
     "**/build": true,

@@ -3,9 +3,6 @@ node_modules
 .pnpm-store
 *.tsbuildinfo
 
-# React Router
-.react-router
-
 # TanStack
 .tanstack
 build
@@ -15,8 +12,6 @@ dist
 .mf
 .wrangler
 .dev.vars*
-
-.dev-server
 !.dev.vars.example
 .env*
 !.env.example
@@ -28,12 +23,8 @@ dist
 .cache
 __pycache__/
 
-# Experiment artifacts
-experiments/*/disk-config.json
-
 # ad-hoc ignored files/paths
 *ignoreme*
-evalite-export
 
 # Playwright test artifacts
 test-results/
@@ -44,17 +35,12 @@ playwright-report/
 *.sqlite
 *.db-wal
 
-# sqlfu scratch databases
-.sqlfu/
 *.db-shm
 *.db-journal
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite-journal
 .output
-
-# opensrc - source code for packages
-opensrc/
 
 # opencode sessions
 session-ses*.md
@@ -71,26 +57,12 @@ playwriter-screenshot-*
 # PR video recordings
 pr-videos/
 *.log
-experiments/archil-node-modules/disk-config.json
 
-# Local alchemy-era dev artifacts (local dev secrets + miniflare state); never commit.
+# Local dev secrets and miniflare state an older checkout may still hold; never commit.
 .alchemy/
-
-# Voicelab run evidence: audio both directions plus metrics, one dir per run.
 
 # The host CLI's default playback file: an artifact of running it, not source.
 iterate-kit-playback.wav
 
 # Whisper models: build-tool input, fetched on demand. 141MB — over GitHub's limit.
 apps/kit/firmware/tools/models/
-
-# Local artifacts left by retired apps.
-apps/docs/dist-package/
-apps/mobile/.expo/
-apps/mobile/expo-env.d.ts
-
-# Retired app directories may contain local build/development state.
-apps/*/wrangler.jsonc
-apps/auth/
-apps/semaphore/
-apps/streams-example-app/
