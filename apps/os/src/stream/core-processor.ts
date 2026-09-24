@@ -174,6 +174,21 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
   return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
 }
 
+/** Does a live row PUSH this context's facet `facetName` every commit it consumes — a row not halted
+ *  whose target resolves, through the rules alone, to `itx.builtins.facets.get(facetName…)
+ *  .processEventBatch`, the delivery loop's push (subscription-delivery.ts)? What the facet host
+ *  tells a facet as it starts (`fedByPushes`, iterate/sdk FacetProps): its processor's engine then
+ *  trusts the head a catch-up read until the next push, instead of re-reading the log on every read.
+ *  A row that addresses another context's facet (`cd`) resolves past `builtins.facets` and pushes
+ *  none of this context's. */
+export function facetIsPushedByARow(state: CoreState, facetName: string): boolean {
+  return Object.values(state.subscriptions).some((row) => {
+    if (row.halted || row.target.at(-1) !== "processEventBatch") return false;
+    const resolved = resolveThroughState(state, row.target);
+    return !!resolved && builtInsGetStep(resolved, "facets")?.[1] === facetName;
+  });
+}
+
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
  *  in place from then on, so a page of N control events costs O(rows + N), not N copies of the whole
  *  table (the O(rows²) constructor re-reduce memory-budget.test.ts pins). The set is fresh per batch

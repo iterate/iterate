@@ -19,6 +19,8 @@ import {
   type ReduceArgs,
   sameIdempotentEvent,
   LiveState,
+  type ScannedRange,
+  type StreamEventInput,
 } from "./processor.ts";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
@@ -268,6 +270,161 @@ test("caughtUp: a single push that reaches the shown head fires caughtUp once", 
   const { probe, engine } = caughtUpProbe();
   await engine.processEventBatch([ev(1)], { after: 0, through: 1 });
   expect(probe).toMatchObject({ caughtUps: 1 });
+});
+
+// ── the read verbs' catch-up: a head a push showed, or — fed by pushes — one the log answered ──
+
+test.for([
+  {
+    name: "a row pushes it (the host's word): the first snapshot reads, the next four read nothing",
+    fedByPushes: true,
+    readsForFiveSnapshots: 1,
+  },
+  {
+    name: "nothing pushes it: every snapshot reads the log, the only way it learns of an event",
+    fedByPushes: false,
+    readsForFiveSnapshots: 5,
+  },
+])(
+  "an idle processor, snapshotted between commits it does not consume — $name",
+  async ({ fedByPushes, readsForFiveSnapshots }) => {
+    const { mem, engine } = ledger({
+      fedByPushes,
+      pushedByARow: fedByPushes,
+      history: [{ type: "counted" }], // committed before this incarnation: no push carries it
+    });
+    const readsBefore = mem.reads;
+    const snapshots = [];
+    for (let i = 0; i < 5; i++) {
+      mem.stream.append({ type: "noise" }); // the busy log: a commit the processor does not consume
+      snapshots.push(await engine.snapshot());
+    }
+    expect({ reads: mem.reads - readsBefore, states: snapshots.map((s) => s.state) }).toEqual({
+      reads: readsForFiveSnapshots,
+      states: Array.from({ length: 5 }, () => ({ counted: [1] })),
+    });
+  },
+);
+
+test("fed by pushes: an event that lands past the head read from the log is applied before the next read", async () => {
+  const { mem, engine } = ledger({ fedByPushes: true, pushedByARow: true });
+  await engine.snapshot(); // reads the log to its head (an empty one)
+  const readsAtHead = mem.reads;
+  mem.stream.append({ type: "noise" }, { type: "counted" }); // pushed in the commit's own turn…
+  // …so the very next read, issued before the push has even run, sees it — and pays one catch-up
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [2] } });
+  expect(mem.reads - readsAtHead).toBe(1);
+  await settle();
+  mem.stream.append({ type: "counted" }); // offset 4: the reduce's live-state delta took 3
+  await settle(); // the push ran: its head is reduced, so the read reads nothing
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [2, 4] } });
+  expect(await engine.liveSnapshot()).toMatchObject({ state: { counted: [2, 4] } });
+  expect(mem.reads - readsAtHead).toBe(1);
+});
+
+test("fed by pushes: a read that arrives while an earlier push is in flight sees a later event whose push still waits behind it", async () => {
+  // The context's delivery loop queues a row's pushes one behind another (subscription-delivery.ts
+  // `deliveryChain`): the second commit's push is not even sent while the first one's slow batch
+  // runs. The read's catch-up queues behind that batch and reads the log after it.
+  const { mem, engine } = ledger({ fedByPushes: true, pushedByARow: true, slowOffsets: [1] });
+  await engine.snapshot();
+  mem.stream.append({ type: "counted" }); // offset 1: its push runs a slow batch
+  mem.stream.append({ type: "counted" }); // offset 2: its push is queued behind the first
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [1, 2] } });
+  await settle(60); // the queued push lands behind the read: already reduced, it changes nothing
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [1, 2] } });
+});
+
+test("fed by pushes: reads interleaved with appends never miss or skip an event — each sees every event appended before it", async () => {
+  const { mem, engine } = ledger({ fedByPushes: true, pushedByARow: true, slowOffsets: [4, 10] });
+  const reads: { appendedBefore: number[]; answered: Promise<{ state: { counted: number[] } }> }[] =
+    [];
+  const counted: number[] = [];
+  for (let i = 1; i <= 24; i++) {
+    const [event] = mem.stream.append({ type: i % 3 === 0 ? "noise" : "counted" });
+    if (event!.type === "counted") counted.push(event!.offset);
+    if (i % 2 === 0) reads.push({ appendedBefore: [...counted], answered: engine.snapshot() });
+    if (i % 5 === 0) await settle(1);
+  }
+  for (const read of reads) {
+    const { state } = await read.answered;
+    // never a gap: what a read answers is a prefix of the log's counted events, and it holds every
+    // one appended before the read was asked
+    expect(state).toMatchObject({ counted: counted.slice(0, state.counted.length) });
+    expect(state.counted.length).toBeGreaterThanOrEqual(read.appendedBefore.length);
+  }
+  await settle(60);
+  expect(await engine.snapshot()).toMatchObject({ state: { counted } });
+});
+
+test("fed by pushes: checkpoints still land, and a new incarnation trusts no head it has not read — its first read catches up from the checkpoint", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const first = new ProcessorEngine(new LedgerProcessor(), {
+    stream: mem.stream,
+    storage,
+    fedByPushes: true,
+  });
+  const row = pushedByARow(mem, first, ["counted"]);
+  await first.snapshot();
+  const writesAtHead = storage.writes;
+  mem.stream.append({ type: "noise" }, { type: "counted" });
+  await settle();
+  // the push checkpointed its batch: cursor and state, one write
+  expect({
+    writes: storage.writes - writesAtHead,
+    checkpoint: storage.read("ledger"),
+  }).toEqual({
+    writes: 1,
+    checkpoint: { reducerVersion: "1", reducedThroughOffset: 2, state: { counted: [2] } },
+  });
+  // the incarnation ends; what lands meanwhile reaches no engine (no push, no read)
+  row.unsubscribe();
+  // offsets 4–6 (the push's live-state delta, an ephemeral, took 3)
+  mem.stream.append({ type: "counted" }, { type: "noise" }, { type: "counted" });
+  const next = new ProcessorEngine(new LedgerProcessor(), {
+    stream: mem.stream,
+    storage,
+    fedByPushes: true,
+  });
+  pushedByARow(mem, next, ["counted"]);
+  const readsAtBirth = mem.reads;
+  expect(await next.snapshot()).toMatchObject({ offset: 6, state: { counted: [2, 4, 6] } });
+  expect(await next.snapshot()).toMatchObject({ offset: 6, state: { counted: [2, 4, 6] } });
+  expect({
+    reads: mem.reads - readsAtBirth,
+    checkpoint: storage.read("ledger"),
+  }).toEqual({
+    reads: 1,
+    checkpoint: { reducerVersion: "1", reducedThroughOffset: 6, state: { counted: [2, 4, 6] } },
+  });
+});
+
+test("the host's word leaves a push's at-head judgement alone: a push the log already showed still runs its at-head pass", async () => {
+  // A catch-up that read the head, then a push whose range the log had already shown: the push
+  // is still judged against the pushed head alone (rule 5), exactly as without the word.
+  const results = [];
+  for (const fedByPushes of [false, true]) {
+    const probe = new CaughtUpProbeProcessor();
+    const engine = new ProcessorEngine(probe, {
+      stream: {
+        append: () => [],
+        read: (after = 0) =>
+          Promise.resolve({
+            events: [ev(1), ev(2), ev(3)].filter((event) => event.offset > after),
+            scannedThroughOffset: 3,
+            atHead: true,
+          }),
+        claim: () => Promise.reject(new Error("the probe runs no background work")),
+      },
+      storage: memoryStorage(),
+      fedByPushes,
+    });
+    await engine.snapshot(); // reduces 1–3 from the log; its at-head pass is one caught-up
+    await engine.processEventBatch([ev(2)], { after: 1, through: 2 }); // a push the log beat
+    results.push(probe.caughtUps);
+  }
+  expect(results).toEqual([2, 2]);
 });
 
 // ── ephemeral events ──
@@ -1264,6 +1421,96 @@ function caughtUpProbe(readFails?: Error) {
     storage: memoryStorage(),
   });
   return { probe, engine };
+}
+
+// ── the read verbs' suite: a ledger processor, pushed the way a row of its context pushes it ──
+
+const LedgerContract = defineProcessorContract({
+  slug: "ledger",
+  version: "1",
+  description: "the offsets of the `counted` events it reduced — what a read must hold",
+  stateSchema: z.object({ counted: z.array(z.number()).default([]) }),
+  consumes: ["counted"],
+  emits: [],
+});
+class LedgerProcessor extends StreamProcessor<{ counted: number[] }> {
+  readonly contract = LedgerContract;
+  /** Offsets whose batch blocks for 20 ms: a push still in flight when the next commit lands. */
+  readonly #slowOffsets: readonly number[];
+  constructor(slowOffsets: readonly number[] = []) {
+    super();
+    this.#slowOffsets = slowOffsets;
+  }
+  override reduce({ event, state }: ReduceArgs<{ counted: number[] }>) {
+    return { counted: [...state.counted, event.offset] };
+  }
+  override processEvent(args: ProcessEventArgs<{ counted: number[] }>): undefined {
+    if (args.event && this.#slowOffsets.includes(args.event.offset))
+      args.blockProcessorWhile(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  }
+}
+
+/** A LedgerProcessor's engine over a fresh stream and storage — `history` committed before it
+ *  exists (nothing pushes it that) — and, with `pushedByARow`, pushed as a row pushes it. */
+function ledger(options: {
+  fedByPushes: boolean;
+  pushedByARow: boolean;
+  slowOffsets?: number[];
+  history?: StreamEventInput[];
+}) {
+  const mem = memoryStream();
+  if (options.history) mem.stream.append(...options.history);
+  const engine = new ProcessorEngine(new LedgerProcessor(options.slowOffsets), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+    fedByPushes: options.fedByPushes,
+  });
+  if (options.pushedByARow) pushedByARow(mem, engine, LedgerContract.consumes);
+  return { mem, engine };
+}
+
+/** A subscription row pushing `engine`, as the context's delivery loop does (os
+ *  subscription-delivery.ts): a commit is pushed only when it carries an event the row consumes, its
+ *  range opening where the row's last push closed (a skipped commit rides inside the next range),
+ *  and one push at a time — a push waits in the row's queue until the one ahead of it settled. The
+ *  loop queues a push in the commit's own turn, so a push behind nothing reaches the facet before
+ *  the appender hears back; that is modelled by sending it at once. `unsubscribe()` ends the row's
+ *  pushes (the incarnation it fed is gone). */
+function pushedByARow<State>(
+  mem: ReturnType<typeof memoryStream>,
+  engine: ProcessorEngine<State>,
+  consumes: readonly string[],
+) {
+  let subscribed = true;
+  let lastDeliveredThroughOffset: number | undefined;
+  let pushesOutstanding = 0;
+  let queueTail: Promise<unknown> = Promise.resolve();
+  const pump = {
+    processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
+      const consumed = events.filter((event) => consumesEvent(consumes, event));
+      if (!subscribed || consumed.length === 0) return Promise.resolve();
+      const pushRange = {
+        after: lastDeliveredThroughOffset ?? range.after,
+        through: range.through,
+      };
+      lastDeliveredThroughOffset = range.through;
+      pushesOutstanding++;
+      const send = () =>
+        engine
+          .processEventBatch(consumed, pushRange)
+          .catch(() => {})
+          .finally(() => pushesOutstanding--);
+      queueTail = pushesOutstanding === 1 ? send() : queueTail.then(send);
+      return Promise.resolve();
+    },
+  };
+  // The pump only needs `processEventBatch` (test-support.ts `engines`).
+  mem.engines.push(pump as unknown as ProcessorEngine<unknown>);
+  return {
+    unsubscribe: () => {
+      subscribed = false;
+    },
+  };
 }
 
 // ── the ephemeral-events suite's processors ──

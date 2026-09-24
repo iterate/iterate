@@ -74,9 +74,9 @@ export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
-// that knows it (pinned in __workers-tests__/facet-props.test.ts). THE STREAM is the itx scope
-// `this.withItx(fn)` hands `fn` (apps/os iterate-context.ts `ItxEntrypoint`); the engine's
-// `append`/`read` ride it like any other dotted call.
+// that knows it (pinned in __workers-tests__/facet-props.test.ts), plus `fedByPushes` when a row
+// pushes it (FacetProps). THE STREAM is the itx scope `this.withItx(fn)` hands `fn` (apps/os
+// iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
 // cannot set alarms."); a timer, when one is needed, is a scheduled append on the context. The
@@ -91,8 +91,16 @@ export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // provider socket — runs through `runInBackground` (ProcessEventArgs), never as a bare floating
 // promise, a `ctx.waitUntil` or a timer the facet keeps on its own.
 
-/** What the parent mints a facet's class with — the whole identity. */
-export type FacetProps = { iterateContextName: string; name: string };
+/** What the parent mints a facet's class with — the whole identity, and one fact about its feed. */
+export type FacetProps = {
+  iterateContextName: string;
+  name: string;
+  /** Set when, as this facet started, a subscription row of its context pushed it every commit it
+   *  consumes (`processEventBatch`, the delivery loop's push): a processor's engine then trusts the
+   *  head a catch-up read until the next push (stream/processor.ts, the read verbs). Absent, only a
+   *  push is proof, so a processor no row pushes reads its log on every read. */
+  fedByPushes?: true;
+};
 
 /** THE FACET SHELL: a `DurableObject` a context hosts as a facet — `itx.facets.get(name, { source,
  *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
@@ -240,6 +248,7 @@ export abstract class StreamProcessorDurableObject<
         claim: (at) => this.withItx((itx) => itx.processors.claim(this.ctx.props.name, at)),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
+      fedByPushes: this.ctx.props.fedByPushes === true,
     }));
   }
 

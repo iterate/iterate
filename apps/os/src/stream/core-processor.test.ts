@@ -13,6 +13,7 @@ import type { StreamEvent } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
+  facetIsPushedByARow,
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
@@ -1029,6 +1030,70 @@ test.for(markerRows)("the marker follows the rules: $rule", ({ log, hosts, targe
   const s = reduceAll(log);
   expect(s.subscriptions.s.hostedFacet?.name).toBe(hosts);
   if (target) expect(print(s.subscriptions.s.target)).toBe(target);
+});
+
+// ── which facets a row PUSHES — what a facet is told as it starts (`fedByPushes`) ──
+
+const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
+  {
+    row: "a processor row in the platform's spelling (its source elided at configure)",
+    log: [configured(1, "p", `${facetF}.processEventBatch`)],
+    pushesF: true,
+  },
+  {
+    row: "the caller's short spelling, an address with no spec",
+    log: [configured(1, "p", "itx.facets.get('f').processEventBatch")],
+    pushesF: true,
+  },
+  {
+    row: "a row through a rule of the caller's that names the facet",
+    log: [rule(1, "itx.proc", facetF), configured(2, "s", "itx.proc.processEventBatch")],
+    pushesF: true,
+  },
+  {
+    row: "a row pushing ANOTHER facet of this context",
+    log: [configured(1, "p", `${facetG}.processEventBatch`)],
+    pushesF: false,
+  },
+  {
+    row: "a row that calls another method of the facet: the loop walks it, never pushes",
+    log: [configured(1, "p", "itx.facets.get('f').fetch")],
+    pushesF: false,
+  },
+  {
+    row: "a row pushing another context's facet `f` (`cd` resolves past `builtins.facets`)",
+    log: [configured(1, "p", "itx.cd('/other').facets.get('f').processEventBatch")],
+    pushesF: false,
+  },
+  {
+    row: "a halted row: the loop skips it until an operator resumes it",
+    log: [
+      configured(1, "p", "itx.facets.get('f').processEventBatch"),
+      at(2, "events.iterate.com/stream/subscription-delivery-halted", {
+        name: "p",
+        afterOffset: 1,
+        attempts: 1,
+      }),
+    ],
+    pushesF: false,
+  },
+  {
+    row: "a removed row",
+    log: [configured(1, "p", "itx.facets.get('f').processEventBatch"), configured(2, "p", null)],
+    pushesF: false,
+  },
+  {
+    row: "a rule re-pointed away from the facet",
+    log: [
+      rule(1, "itx.proc", facetF),
+      configured(2, "s", "itx.proc.processEventBatch"),
+      rule(3, "itx.proc", facetG),
+    ],
+    pushesF: false,
+  },
+];
+test.for(pushedRows)("facetIsPushedByARow: $row", ({ log, pushesF }) => {
+  expect(facetIsPushedByARow(reduceAll(log), "f")).toBe(pushesF);
 });
 
 // ── the platform rows a null MASKS (kept) vs a plain delete ──

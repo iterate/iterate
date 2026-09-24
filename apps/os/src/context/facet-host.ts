@@ -22,8 +22,10 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/expression";
+import type { FacetProps } from "iterate/sdk";
 import {
   CoreContract,
+  facetIsPushedByARow,
   facetSpecFromHostingTarget,
   type CoreState,
 } from "../stream/core-processor.ts";
@@ -848,7 +850,18 @@ export class FacetHost {
     facetStartupMemo: FacetSpec | undefined,
     { platformStart }: { platformStart: boolean },
   ): Promise<MaterializedFacet> {
-    const props = { iterateContextName: this.#deps.iterateContextName, name };
+    // THE PROPS, read as the class is minted — only for a facet that starts: its identity, and
+    // whether a row pushes it right now (`fedByPushes`, iterate/sdk FacetProps), so its engine trusts
+    // the head a catch-up read until the next push. A row enabled after the start earns the same
+    // trust from its first push; a row removed after it takes a hosted facet with it.
+    const propsAtStart = () =>
+      ({
+        iterateContextName: this.#deps.iterateContextName,
+        name,
+        ...(facetIsPushedByARow(this.#deps.stream.coreReducedState, name) && {
+          fedByPushes: true,
+        }),
+      }) satisfies FacetProps;
     let mintClass: () => DurableObjectClass;
     let retireLoadedIdentity: (() => void) | undefined;
     let recordLoadedIdentity: (() => void) | undefined;
@@ -856,9 +869,9 @@ export class FacetHost {
       // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facet-from-exports.test.ts).
       const exportsOf = this.#deps.ctx.exports as unknown as Record<
         string,
-        (options: { props: typeof props }) => DurableObjectClass
+        (options: { props: FacetProps }) => DurableObjectClass
       >;
-      mintClass = () => exportsOf[firstPartyClassName]!({ props });
+      mintClass = () => exportsOf[firstPartyClassName]!({ props: propsAtStart() });
     } else {
       const memo = facetStartupMemo!;
       // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
@@ -925,7 +938,7 @@ export class FacetHost {
         recordLoadedIdentity?.();
         recordLoadedIdentity = undefined;
       }
-      mintClass = () => load().getDurableObjectClass(memo.className, { props });
+      mintClass = () => load().getDurableObjectClass(memo.className, { props: propsAtStart() });
       retireLoadedIdentity = retire;
     }
     // THE CLASS. A facet this actor holds LIVE (#liveFacetNames) is running: `facets.get` reuses
