@@ -7,7 +7,7 @@
 // outage threw, lose their connection, or never answer.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import { appConfigOf, sessionSigningSecretOf } from "../src/app-config.ts";
 import { signClaims, verifyClaims } from "../src/caller.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
@@ -33,15 +33,17 @@ test.for(["throws", "is cut", "hangs"] as const)(
     // admitted: the project's own context answered (it has no site yet)
     expect(served).toMatchObject({ status: 404 });
     expect(await served.text()).toMatch(/has no site yet/);
-    expect(warn).toHaveBeenCalledExactlyOnceWith({
-      event: "control-plane.platform-failure-stale-project",
-      name: new URL(host).hostname,
-      project: slug,
-      method: "project",
-      waitedMs: expect.any(Number),
-      message: failed(how, "project"),
-      copies: [{ what: `project/${slug}`, ageMs: expect.any(Number) }],
-    });
+    expect(controlPlaneWarns(warn)).toEqual([
+      {
+        event: "control-plane.platform-failure-stale-project",
+        name: new URL(host).hostname,
+        project: slug,
+        method: "project",
+        waitedMs: expect.any(Number),
+        message: failed(how, "project"),
+        copies: [{ what: `project/${slug}`, ageMs: expect.any(Number) }],
+      },
+    ]);
 
     // the stale answer was never memoized: the next request asks the control plane
     await outage.end();
@@ -64,18 +66,20 @@ test("a project's own hostname: its address and its row both stand in, after ONE
   expect(Date.now() - started).toBeLessThan(WAIT_MS.hangs);
   expect(served).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
-  expect(warn).toHaveBeenCalledExactlyOnceWith({
-    event: "control-plane.platform-failure-stale-project",
-    name: new URL(host).hostname,
-    project: projectId,
-    method: "projectByHostname",
-    waitedMs: expect.any(Number),
-    message: failed("hangs", "projectByHostname"),
-    copies: [
-      { what: `hostname/${new URL(host).hostname}`, ageMs: expect.any(Number) },
-      { what: `project/${projectId}`, ageMs: expect.any(Number) },
-    ],
-  });
+  expect(controlPlaneWarns(warn)).toEqual([
+    {
+      event: "control-plane.platform-failure-stale-project",
+      name: new URL(host).hostname,
+      project: projectId,
+      method: "projectByHostname",
+      waitedMs: expect.any(Number),
+      message: failed("hangs", "projectByHostname"),
+      copies: [
+        { what: `hostname/${new URL(host).hostname}`, ageMs: expect.any(Number) },
+        { what: `project/${projectId}`, ageMs: expect.any(Number) },
+      ],
+    },
+  ]);
   expect(outage.reads.project).not.toHaveBeenCalled();
 });
 
@@ -91,13 +95,15 @@ test.for(["throws", "is cut", "hangs"] as const)(
     const refused = await call(host);
     expect(Date.now() - started).toBeLessThan(WAIT_MS[how]);
     await expectUnavailable(refused, new URL(host).hostname);
-    expect(warn).toHaveBeenCalledExactlyOnceWith({
-      event: "control-plane.platform-failure-unavailable",
-      name: new URL(host).hostname,
-      method: "project",
-      waitedMs: expect.any(Number),
-      message: failed(how, "project"),
-    });
+    expect(controlPlaneWarns(warn)).toEqual([
+      {
+        event: "control-plane.platform-failure-unavailable",
+        name: new URL(host).hostname,
+        method: "project",
+        waitedMs: expect.any(Number),
+        message: failed(how, "project"),
+      },
+    ]);
   },
 );
 
@@ -121,9 +127,9 @@ test("a copy the platform did not sign is no copy: one in an older shape, or sig
     const warn = vi.spyOn(console, "warn");
 
     await expectUnavailable(await call(host), new URL(host).hostname);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect(controlPlaneWarns(warn)).toEqual([
       expect.objectContaining({ event: "control-plane.platform-failure-unavailable" }),
-    );
+    ]);
     warn.mockRestore();
     await outage.end();
   }
@@ -147,12 +153,12 @@ test("a hostname moved to another project: the control plane's next answer rewri
   onTestFinished(() => warn.mockRestore());
 
   expect(await call(from.host)).toMatchObject({ status: 404 });
-  expect(warn).toHaveBeenCalledExactlyOnceWith(
+  expect(controlPlaneWarns(warn)).toEqual([
     expect.objectContaining({
       event: "control-plane.platform-failure-stale-project",
       project: to.projectId,
     }),
-  );
+  ]);
 });
 
 test("a hostname its project removed: the control plane's null answer deletes the copy, so an outage answers 503", async () => {
@@ -238,13 +244,15 @@ test("a signed-in visitor while admission found the control plane down: their ac
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
   expect(Date.now() - started).toBeLessThan(WAIT_MS.throws);
   await expectUnavailable(refused, new URL(host).hostname);
-  expect(warn).toHaveBeenCalledExactlyOnceWith({
-    event: "control-plane.platform-failure-unavailable",
-    name: new URL(host).hostname,
-    method: "projectByHostname",
-    waitedMs: expect.any(Number),
-    message: failed("throws", "projectByHostname"),
-  });
+  expect(controlPlaneWarns(warn)).toEqual([
+    {
+      event: "control-plane.platform-failure-unavailable",
+      name: new URL(host).hostname,
+      method: "projectByHostname",
+      waitedMs: expect.any(Number),
+      message: failed("throws", "projectByHostname"),
+    },
+  ]);
   expect(outage.reads.accessibleTo).not.toHaveBeenCalled();
 });
 
@@ -262,14 +270,24 @@ test("a signed-in visitor whose access read fails while admission read through: 
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
   vi.useRealTimers();
   await expectUnavailable(refused, new URL(host).hostname);
-  expect(warn).toHaveBeenCalledExactlyOnceWith({
-    event: "control-plane.platform-failure-unavailable",
-    name: new URL(host).hostname,
-    method: "accessibleTo",
-    waitedMs: expect.any(Number),
-    message: failed("throws", "accessibleTo"),
-  });
+  expect(controlPlaneWarns(warn)).toEqual([
+    {
+      event: "control-plane.platform-failure-unavailable",
+      name: new URL(host).hostname,
+      method: "accessibleTo",
+      waitedMs: expect.any(Number),
+      message: failed("throws", "accessibleTo"),
+    },
+  ]);
 });
+
+/** The warns a project host's admission logs (`control-plane.*`): the context Durable Objects this
+ *  isolate also runs log their own, on their own timers. */
+function controlPlaneWarns(warn: MockInstance<typeof console.warn>) {
+  return warn.mock.calls
+    .map(([entry]) => entry as { event?: unknown } | undefined)
+    .filter((entry) => String(entry?.event).startsWith("control-plane."));
+}
 
 /** How a row makes the control plane's reads fail. */
 type Failure = "throws" | "is cut" | "hangs";
