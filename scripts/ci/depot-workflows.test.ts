@@ -820,7 +820,10 @@ describe("Depot validation capacity", () => {
   });
 
   test.for([
-    { file: ".depot/workflows/preview-os.yml", results: `preview-os-test-artifacts${attemptSuffix}` },
+    {
+      file: ".depot/workflows/preview-os.yml",
+      results: `preview-os-test-artifacts${attemptSuffix}`,
+    },
     { file: ".depot/workflows/main-os-e2e.yml", results: `main-os-test-artifacts${attemptSuffix}` },
   ])(
     "$file's e2e job keeps the browser evidence, whatever the suite's outcome",
