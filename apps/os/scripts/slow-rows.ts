@@ -1,8 +1,8 @@
 // scripts/slow-rows.ts — WHICH E2E ROWS A RUN AGAINST A PREVIEW INCLUDES (docs/testing.md#slow-rows).
 // A row tagged `slow` waits out real platform time (a quiet minute, a sweep, an alarm), so a PR that
 // changes none of its code skips it and finishes as soon as its slowest other row does. The rows
-// still run on a PR that changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, on every
-// main push (Main OS e2e) and every 2 hours against main (os-slow-e2e.yml). The pure half;
+// still run on a PR that changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, and on
+// every main push (Main OS e2e, which pages them on their own change of state). The pure half;
 // scripts/preview.ts `runSuite` reads the pull request and runs the suite.
 import { SLOW_ROW_PATHS } from "@iterate-com/shared/test-support/e2e-policy";
 import { z } from "zod";

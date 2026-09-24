@@ -11,8 +11,8 @@
 //
 // THE PIN, the first row: the raw fault, with no platform code between the abort and the fault (a
 // loaded facet aborts its OWN child facet), as a createFailing. It resets the context it runs on,
-// so it is tagged `slow` (docs/testing.md#slow-rows): every main push and the 2-hourly run against
-// main run it, and a PR runs it when it changes the workaround's code. When it goes red because it
+// so it is tagged `slow` (docs/testing.md#slow-rows): every main push runs it, and a PR runs it
+// when it changes the workaround's code. When it goes red because it
 // passed, Cloudflare fixed the fault: remove the workaround (FACET_START_WATCHDOG_MS names every
 // piece) and the rows below, and keep the pin's body as a plain row.
 //

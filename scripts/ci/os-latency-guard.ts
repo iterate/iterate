@@ -20,7 +20,7 @@
 // no row recorded, no report.
 //
 // The memory between runs is the previous main run's `os-latency-state` artifact (depot.ts
-// `newestArtifactFile`, `stateArtifact` below): the last 20 main runs' medians, what each
+// `saveNewestArtifactFile`, `stateArtifact` below): the last 20 main runs' medians, what each
 // crossed, and which metrics are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
 // pages whatever crossed in this run alone, marked 🧪 and mentioning nobody, and keeps no state.
 //
@@ -42,7 +42,7 @@ import {
   type LatencyMetricName,
 } from "../../apps/os/perf/latency.ts";
 import { osEnvs } from "../../envs.ts";
-import { newestArtifactFile } from "./depot.ts";
+import { saveNewestArtifactFile } from "./depot.ts";
 import { sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds, slackEscape } from "./slack.ts";
 
@@ -453,15 +453,7 @@ if (isMainModule(import.meta.url)) {
   });
   const done =
     positionals[0] === "previous-state" && values.out
-      ? newestArtifactFile({
-          repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
-          ...stateArtifact,
-        }).then((state) => {
-          console.log(state ? `previous state: ${state.length} bytes` : "no previous state");
-          if (!state) return;
-          mkdirSync(dirname(values.out!), { recursive: true });
-          writeFileSync(values.out!, state);
-        })
+      ? saveNewestArtifactFile({ ...stateArtifact, out: values.out }).then(console.log)
       : positionals[0] === "judge" && values.report && values.run && values.ref && values.trigger
         ? judge({
             report: values.report,

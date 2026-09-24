@@ -86,14 +86,22 @@ test("names its deploy, test and trace jobs as Preview OS does, each suite in it
   expect([main.jobs.specs?.needs].flat()).toEqual(["deploy"]);
 });
 
-test("pages on main's change of state, naming both suites' failing rows, never for a run cancelled by hand", () => {
-  expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
+// docs/testing.md#slow-rows: the slow rows page under their own name on their own change of state,
+// so one that breaks while main is already red still pages.
+test("pages on main's and the slow rows' change of state, naming the failing rows, never for a run cancelled by hand or off main", () => {
+  expect(main.jobs.alert?.if).toBe("${{ !cancelled() }}");
   expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e", "specs"]);
-  expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
-  for (const job of ["e2e", "specs"])
-    expect(main.jobs[job]?.steps?.find((step) => step.id === "failing-rows")?.run).toBe(
-      "pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw",
-    );
+  expect(runs("alert")).toContain(
+    "pnpm tsx scripts/ci/main-e2e-alert.ts alert ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}",
+  );
+  const collect = (job: string) =>
+    main.jobs[job]?.steps?.find((step) => step.id === "failing-rows")?.run;
+  expect(collect("specs")).toBe(
+    "pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw",
+  );
+  expect(collect("e2e")).toBe(
+    'pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw --suite "slow e2e rows" --tag slow',
+  );
 });
 
 // docs/ci-traces.md: main is traced as a PR preview is, and nothing that follows the suites waits for it.

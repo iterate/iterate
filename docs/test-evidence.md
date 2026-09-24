@@ -31,8 +31,7 @@ marked _next_ are design only.
 A **test run** is one CI job attempt that runs tests: the Test job, and the
 `e2e` jobs of Preview OS and Main OS e2e. (A run on a laptop or an agent's
 machine is [next](#local-and-agent-runs). So are the other workflows that run
-suites against a preview, such as the slow e2e rows every two hours,
-`os-slow-e2e.yml`, and the latency and real-model guards: each needs the
+suites against a preview, such as the latency and real-model guards: each needs the
 same write, upload and report steps and a line in `testEvidenceJobs`.) Its folder is the repository's
 `test-results/`, the directory most producers already wrote to. The paths are
 `testEvidencePaths` in
@@ -99,7 +98,7 @@ today's main, which need not be what the earlier deploy built. Comparing
 | The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/upload-test-telemetry.ts`                                                                   | today       |
 | The evidence writer                                                               | `tables/tests.parquet`, then `manifest.json`                        | `scripts/ci/test-evidence.ts write`                                                                     | **this PR** |
 | Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; rows are next         | **this PR** |
-| Perf, soak, bench and real-model reports                                          | `os/`                                                               | move `apps/os/output/{perf-report,real-model-report}.json` and `soak/` here                             | next        |
+| Perf, soak and bench reports                                                      | `os/`                                                               | move `apps/os/output/perf-report.json` and `soak/` here                                                 | next        |
 | Step logs                                                                         | `logs/<step>.log`                                                   | fetched from Depot's API after the job; the bucket is private and the viewer never serves them          | next        |
 | The CI trace                                                                      | `ci-trace/trace.{json,html}`, `tables/spans.parquet`                | the trace job, as its own test run folder                                                               | next        |
 | The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runE2eSuites`, before the suites: the preview, the OS deployment `/version` names, the apps' URLs      | **this PR** |
