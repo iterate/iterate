@@ -76,7 +76,15 @@ function ProjectNav({
             <SidebarMenuItem key={to}>
               <SidebarMenuButton
                 tooltip={label}
-                isActive={Boolean(matchRoute({ to, params: { slug: project.slug }, fuzzy: false }))}
+                // Activity is a splat (`/activity/<any context path>`): active on every path under
+                // it; the others only on their own page, so Overview is not lit everywhere
+                isActive={Boolean(
+                  matchRoute({
+                    to,
+                    params: { slug: project.slug },
+                    fuzzy: to === "/projects/$slug/activity/$",
+                  }),
+                )}
                 render={<Link to={to} params={{ slug: project.slug }} />}
               >
                 <Icon />
