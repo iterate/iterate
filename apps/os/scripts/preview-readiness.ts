@@ -121,7 +121,7 @@ async function probe(url: string, adminSecret: string): Promise<ProbeOutcome> {
     socket.addEventListener("close", (event) => {
       socketFailure += ` (close ${event.code}${event.reason ? ` ${event.reason}` : ""})`;
     });
-    // The call shapes this probe makes, typed here: `iterate/next/api`'s types need the worker's
+    // The call shapes this probe makes, typed here: `iterate/api`'s types need the worker's
     // lib, which tsconfig.scripts.json does not load (the same reason previewSignIn types its own).
     using rpc = newWebSocketRpcSession<{
       authenticate(credentials: { type: "admin-secret"; secret: string }): {
