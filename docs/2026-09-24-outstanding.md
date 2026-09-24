@@ -47,7 +47,7 @@ The PR that carries this file also carries the merge-queue workflows ([Proposals
 You said to skip this until you have talked to Misha. The full proposal, the implementation (in this PR) and the switch-on procedure are in [Proposals](#proposals-with-implementation). The decision has two parts:
 
 - **Turn the queue on?** Recommendation: **yes**, requiring Lint and Typecheck and Test in the queue.
-- **Require Preview OS too?** Recommendation: **later.** Add `Preview OS / gate` once the first try of PR e2e passes about 98% of the time; today it is about 93%, after one retry. Requiring it now would block roughly one preview PR in fifteen on a flake.
+- **Require Preview OS too?** Recommendation: **later.** Add `Preview OS / gate` once the Preview OS e2e job (which retries a failed row once) passes about 98% of the time; in calm hours today it is about 93%. Requiring it now would block roughly one preview PR in fifteen on a flake.
 
 ### 2. Agents authority
 
@@ -162,7 +162,7 @@ You said there should be no polling. [#2970](https://github.com/iterate/iterate/
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Org invitations** ([#2993](https://github.com/iterate/iterate/pull/2993)): copyable links only, or also email them?                                                                                                                                                                                                                                     | **Links only for now.** Email needs a sender domain on the Email Sending binding and a per-org send cap against abuse.                                                                                                                                                                       |
 | **Operator browser sessions for prd support** (#1929 `session create --project <slug> --open`, the #1473 /admin view)                                                                                                                                                                                                                                     | **Not now.** It would give support a browser path into any customer's project in prd, which needs a design first: one-shot, origin-bound, project-scoped, audited, minted with the admin bearer.                                                                                             |
-| **A first-class AI interception API** (`itx.ai.intercept`, `intercepted/*` models from #2523/#2528, lost in #2837)                                                                                                                                                                                                                                        | **No.** #3012 and THE JAIL fake the model with a plain `itx.ai` shadow (`provide("itx.ai", fake)`), which is enough for deterministic agent tests.                                                                                                                                           |
+| **A first-class AI interception API** (`itx.ai.intercept`, `intercepted/*` models from #2523/#2528, lost in #2837)                                                                                                                                                                                                                                        | **No.** #3012 and THE JAIL fake the model by shadowing `itx.ai` in the test's own project, which is enough for deterministic agent tests.                                                                                                                                                    |
 | **Deferred restores:** bundle-size delta in the PR table (#1753), config-repo reset to the template (#2245), a browser itx REPL (#2469), an OAuth "Connect" preset in the secrets sheet, workspace file review with comments (#2367), an account chooser (#1633), CLI device-code login (#1042), a "debug info" sheet, a `-w` worktree picker for `getin` | **Leave deferred**, unless one of them bites.                                                                                                                                                                                                                                                |
 | **Deliberately not restored:** the mobile app with its QR, deep link and one-tap sign-in; the @claude GitHub Actions workflow; the `.superset`/`.cursor` bootstrap configs; event-type docs pages; the fixed-OTP carve-out; the `login_hint` "Continue as" button                                                                                         | **Confirm.** Each was replaced or has no subject left.                                                                                                                                                                                                                                       |
 | **How commit hooks spot Claude Code**: `CLAUDE_CODE_CHILD_SESSION=1` ([`packages/cli/src/coding-agent.ts:15`](../packages/cli/src/coding-agent.ts#L15)), not `CLAUDECODE`                                                                                                                                                                                 | **Keep.** `CLAUDECODE` is also set in IDE terminals where a person types, so it would block your own `--amend`. Codex is not detected yet: add `CODEX_THREAD_ID` when someone uses it here.                                                                                                  |
@@ -174,7 +174,7 @@ You said there should be no polling. [#2970](https://github.com/iterate/iterate/
 
 ### Production account (`04b3b57291ef2626c6a8daa9d47065a7`)
 
-Listed read-only today at 12:55 UTC. Nothing on main names any of these. Deleting a Worker with `?force=true` also deletes its Durable Object namespaces. The API refuses to delete a non-empty R2 bucket or Artifacts namespace, so empty those first.
+Listed read-only today at about 12:00 UTC. Nothing on main binds any of these on this account. Deleting a Worker with `?force=true` also deletes its Durable Object namespaces. The API refuses to delete a non-empty R2 bucket or Artifacts namespace, so empty those first.
 
 | Delete                                                                                                                                                                                                            | Why                                                                                                                |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -250,15 +250,19 @@ The looping onboarding agents on the legacy `preview_<n>` environments (about $1
 
 ### Domains
 
-- **40 legacy preview domains** (`iterate-preview-1..20.com` and `.app`). Their 78 Worker routes are deleted. The zones cannot go while the domains are registered with Cloudflare Registrar, and all 40 auto-renew on 2027-04-21. **Decide:** turn auto-renew off, then delete the zones after expiry with a token that can delete zones (`/home/jonas/iterate-preview-cleanup-2026-09-24/delete-preview-zones.sh`). For each domain:
+- **40 legacy preview domains** (`iterate-preview-1..20.com` and `.app`). Their 78 Worker routes are deleted. The zones cannot go while the domains are registered with Cloudflare Registrar, and all 40 auto-renew on 2027-04-21. **Decide:** turn auto-renew off, then delete the zones once they can go, with a token that can delete zones (`/home/jonas/iterate-preview-cleanup-2026-09-24/delete-preview-zones.sh`). The token in Doppler can read registrations; whether it can change them is untested. The older `PUT …/registrar/domains/{name}` stops working on 2026-09-27; this is the current endpoint:
 
   ```bash
-  curl -sS -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    "https://api.cloudflare.com/client/v4/accounts/376ef7ed81b0573f93524de763666c15/registrar/domains/iterate-preview-1.com" \
-    --data '{"auto_renew":false}'
+  A=376ef7ed81b0573f93524de763666c15
+  for n in $(seq 1 20); do for tld in com app; do
+    d="iterate-preview-$n.$tld"
+    curl -sS -X PATCH "https://api.cloudflare.com/client/v4/accounts/$A/registrar/registrations/$d" \
+      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "content-type: application/json" \
+      --data '{"auto_renew":false}' | jq -c --arg d "$d" '{d: $d, success, errors, auto_renew: .result.auto_renew}'
+  done; done
   ```
 
-  Cloudflare says this old registrar endpoint stops working on 2026-09-27; after that, use the dashboard (Registrar → Manage → Auto-renew).
+  The dashboard does the same: Domain Registration → Manage Domains → each domain → Configuration → Auto-renew. The details are in `domains-log.md` in that directory.
 
 - **20 zones on dev/preview that nobody has explained**, registered 2026-04-21 and 2026-04-27 with default DNS only (`bopers.com`, `bosync.com`, `brulf.com`, …, `bysors.com`). Say what they are for, or remove them.
 - **8 legacy dev zones** (`iterate-dev.{app,com}`, `iterate-dev-{jonas,misha,rahul}.{app,com}`): the old platform's per-developer hostnames. Delete them with the dev tunnels.
@@ -288,8 +292,8 @@ for c in preview_1 preview_2 preview_3 preview_4 preview_5 preview_6 preview_7 p
   doppler configs delete "$c" --project _shared --yes
 done
 
-# 4. Your checkouts: repo root on _shared/dev, apps/os on os/dev.
-doppler setup
+# 4. Your checkouts. Here, apps/os still points at project-worker/dev, which no longer exists.
+cd ~/src/github.com/iterate/iterate/apps/os && doppler setup --project os --config dev
 ```
 
 Projects that nothing in this repo reads: `ai-engineer-workshop`, `auth`, `channel-agent-poc`, `cloudflare-os`, `docs`, `env-manager`, `events`, `example`, `ingress-proxy`, `iterate-com`, `mini-agent`, `project-v4`, `semaphore`, `streams-example-app`, `tunnels`. Some may serve other repos (`env-manager` still has a Worker), so check before you delete. The DO duration alarm reads `os/dev` and `os/prd` ([`scripts/ci/do-duration-alert.ts:177`](../scripts/ci/do-duration-alert.ts#L177)). After the rename that is the platform's project, and it works: the 11:41 UTC probe was green.
@@ -352,12 +356,12 @@ Since midnight UTC today 86 PRs merged, most of them from agents working in para
 | dispatch    | skipped                 | e2e succeeded                       | green                                                                                                                   |
 | dispatch    | skipped                 | anything else, or no PR number      | red. A dispatch posts on the dispatched ref's head, where it counts for that PR, so it never goes green without an e2e. |
 
-Evidence so far: on this PR, `changes` ran and matched (the PR edits `preview-os.yml`), and deploy and e2e ran behind it. A branch dispatch with no PR number ran the gate behind three skipped jobs (Depot run `vngc26m2mx`). That dispatch passed under the first version of the rule, and showed that a dispatch's green gate lands on the PR's head. The dispatch rule above is the fix. The `merge_group` path cannot run before this is on main, because Depot registers triggers from the default branch; the trial below covers it.
+Evidence so far: on this PR, `changes` ran and matched (the PR edits `preview-os.yml`), deploy and e2e ran behind it and passed, and the gate went green after them. A branch dispatch with no PR number ran the gate behind three skipped jobs (Depot run `vngc26m2mx`). That dispatch passed under the first version of the rule, and showed that a dispatch's green gate lands on the PR's head. The dispatch rule above is the fix. The `merge_group` path cannot run before this is on main, because Depot registers triggers from the default branch; the trial below covers it.
 
 **Phases.**
 
 1. **Queue with Lint and Typecheck and Test** (recommended now). Queue latency is one Test run: 3–3.5 minutes on main today (Lint takes 25–50 s), plus runner start. With a build concurrency of 5, the queue merges up to about 60 PRs an hour.
-2. **Add `Preview OS / gate`** once the first try of PR e2e passes about 98% of the time. The PR's own gate then has to be green before the PR can join the queue. In the queue, the gate passes without redeploying.
+2. **Add `Preview OS / gate`** once the Preview OS e2e job passes about 98% of the time (about 93% in calm hours today). The PR's own gate then has to be green before the PR can join the queue. In the queue, the gate passes without redeploying.
 3. **Optional later: e2e on the group itself.** Deploy a preview of the group commit and run e2e in the queue. That catches semantic conflicts that only the deployed platform shows, but it adds about 8 minutes per group and needs preview names for groups. It is not built.
 
 **The ruleset** (phase 1; for phase 2, add `{ "context": "Preview OS / gate" }` to the list):
@@ -437,9 +441,12 @@ gh pr create --base merge-queue-trial --title "merge-queue trial B" --body "Thro
 # 3. When both PRs are green (each gets a green changes and gate, with no preview), queue A, then B
 gh pr merge <A>; gh pr merge <B>
 
-# 4. What to check
-gh api "repos/iterate/iterate/commits/$(git ls-remote origin 'refs/heads/gh-readonly-queue/merge-queue-trial/*' | head -1 | cut -f1)/check-runs" \
-  --jq '.check_runs[] | "\(.name) \(.conclusion)"'
+# 4. What to check, once A has merged: the queue pushes A's group commit itself, so the trial
+#    branch's head carries the checks that ran in the queue
+gh api "repos/iterate/iterate/commits/merge-queue-trial/check-runs" --jq '.check_runs[] | "\(.name) \(.conclusion)"'
+gh api graphql -f query='{ repository(owner: "iterate", name: "iterate") { pullRequest(number: <B>) {
+  state timelineItems(last: 5, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+    nodes { ... on RemovedFromMergeQueueEvent { reason createdAt } } } } } }'
 ```
 
 What should happen:
@@ -447,7 +454,7 @@ What should happen:
 - Depot runs Lint and Typecheck, Test and Preview OS on each `gh-readonly-queue/merge-queue-trial/pr-<n>-…` branch.
 - The check names equal the required contexts **exactly**. This is the main thing to verify; a mismatch would make the queue wait 30 minutes and then drop the PR.
 - The gate says "merge group".
-- A merges. B's group fails Typecheck (`touchesPreview` no longer exists), and B leaves the queue with a comment.
+- A merges. B's group fails Typecheck (`touchesPreview` no longer exists), and B leaves the queue with a timeline entry naming the check.
 
 Then clean up: delete the trial ruleset (`gh api -X DELETE repos/iterate/iterate/rulesets/<id>`), close B, and delete `merge-queue-trial`, `mq-trial-a` and `mq-trial-b`. Then apply the ruleset to main.
 
