@@ -5,7 +5,9 @@
 // e2e/session.e2e.test.ts.
 
 import { expect, test } from "vitest";
+import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
+import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { ProjectProcessor } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
 
@@ -257,12 +259,13 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
 
 // Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
 // facet runs the at-head pass over its checkpointed state: the state, not this incarnation's memory,
-// says whether the tip is published.
-test("ProjectProcessor — a fresh incarnation whose state already holds the tip's publication appends nothing and starts no background work, so it claims nothing; a tip the state does not hold published is published", async () => {
-  const appended: { idempotencyKey?: string }[] = [];
+// says whether the tip is published. The state learns it from the processor's own event as the
+// context's append boundary stores it (`normalizeControlEvent`).
+test("ProjectProcessor — a tip the state does not hold published is published; a fresh incarnation over the state that reduced that append appends nothing and starts no background work, so it claims nothing", async () => {
+  const appended: StreamEventInput[] = [];
   let background = 0;
   const append = async (...events: unknown[]) => {
-    appended.push(...(events as typeof appended));
+    appended.push(...(events as StreamEventInput[]));
     return [];
   };
   const runInBackground = (work: () => Promise<unknown>) => {
@@ -271,21 +274,20 @@ test("ProjectProcessor — a fresh incarnation whose state already holds the tip
   };
   deliver(
     processorWithoutHostnames(),
-    { ...empty, configRepoTip: tip("aaa", 5), publishedCommitOid: "aaa" },
+    { ...empty, configRepoTip: tip("aaa", 1) },
     append,
     runInBackground,
   );
   await settle();
-  expect({ appended, background }).toEqual({ appended: [], background: 0 });
-  deliver(
-    processorWithoutHostnames(),
-    { ...empty, configRepoTip: tip("bbb", 9), publishedCommitOid: "aaa" },
-    append,
-    runInBackground,
-  );
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["project/ingress-configured:aaa"]);
+  const state = reduceProcessor(processorWithoutHostnames(), [
+    committed("/repos/config", "aaa"),
+    normalizeControlEvent(appended[0]!, "/"),
+  ]);
+  expect(state).toEqual({ ...empty, configRepoTip: tip("aaa", 1), publishedCommitOid: "aaa" });
+  deliver(processorWithoutHostnames(), state, append, runInBackground);
   await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual(["project/ingress-configured:bbb"]);
-  expect(background).toBe(1);
+  expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
 });
 
 // THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
