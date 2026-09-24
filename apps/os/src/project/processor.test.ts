@@ -23,6 +23,7 @@ const empty: ProjectState = {
   workspaces: {},
   secrets: {},
   configRepoTip: null,
+  publishedCommitOid: null,
   hostnames: {},
 };
 
@@ -62,6 +63,17 @@ const reduceRows: {
     state: { ...empty, configRepoTip: { commitOid: "ccc", offset: 3 } },
   },
   {
+    name: "the apex pointed at a config-repo commit publishes that commit — the saga's seed, then each later tip; a target set by hand, one that only looks like a commit's, or none, publishes nothing and keeps the last",
+    events: [
+      ingressAt(configRepoTarget("aaa")),
+      ingressAt(configRepoTarget("bbb")),
+      ingressAt(["itx", "workers", ["get", { source: { "cap.js": "export default {}" } }]]),
+      ingressAt(["itx", "workers", ["get", { source: { "cap.js": "" }, cacheKey: "ccc" }]]),
+      ingressAt(null),
+    ],
+    state: { ...empty, publishedCommitOid: "bbb" },
+  },
+  {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
     events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
     state: {
@@ -70,6 +82,7 @@ const reduceRows: {
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       secrets: {},
       configRepoTip: null,
+      publishedCommitOid: null,
       hostnames: {},
     },
   },
@@ -240,6 +253,39 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
   expect(appended).toHaveLength(2);
+});
+
+// Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
+// facet runs the at-head pass over its checkpointed state: the state, not this incarnation's memory,
+// says whether the tip is published.
+test("ProjectProcessor — a fresh incarnation whose state already holds the tip's publication appends nothing and starts no background work, so it claims nothing; a tip the state does not hold published is published", async () => {
+  const appended: { idempotencyKey?: string }[] = [];
+  let background = 0;
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as typeof appended));
+    return [];
+  };
+  const runInBackground = (work: () => Promise<unknown>) => {
+    background += 1;
+    void work();
+  };
+  deliver(
+    processorWithoutHostnames(),
+    { ...empty, configRepoTip: tip("aaa", 5), publishedCommitOid: "aaa" },
+    append,
+    runInBackground,
+  );
+  await settle();
+  expect({ appended, background }).toEqual({ appended: [], background: 0 });
+  deliver(
+    processorWithoutHostnames(),
+    { ...empty, configRepoTip: tip("bbb", 9), publishedCommitOid: "aaa" },
+    append,
+    runInBackground,
+  );
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["project/ingress-configured:bbb"]);
+  expect(background).toBe(1);
 });
 
 // THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
@@ -434,6 +480,25 @@ function secretDeleted(path: string) {
 
 const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
 
+/** The target the processor points the apex at for a config-repo commit, spelled out. */
+function configRepoTarget(commitOid: string) {
+  return [
+    "itx",
+    "workers",
+    [
+      "get",
+      {
+        source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
+        cacheKey: commitOid,
+      },
+    ],
+  ];
+}
+
+function ingressAt(target: unknown[] | null) {
+  return { type: "events.iterate.com/project/ingress-configured", payload: { target } };
+}
+
 function hostname(verb: "add-requested" | "remove-requested") {
   return {
     type: `events.iterate.com/project/hostname-${verb}`,
@@ -477,6 +542,7 @@ const deliver = (
   processor: ProjectProcessor,
   state: ProjectState,
   append: (...events: unknown[]) => Promise<unknown>,
+  runInBackground: (work: () => Promise<unknown>) => void = (work) => void work(),
 ) =>
   processor.processEvent({
     event: null,
@@ -485,5 +551,5 @@ const deliver = (
     delivery: { caughtUp: true },
     append: append as never,
     blockProcessorWhile: () => {},
-    runInBackground: (work) => void work(),
+    runInBackground,
   });

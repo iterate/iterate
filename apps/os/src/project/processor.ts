@@ -18,6 +18,7 @@
 // e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { z } from "zod";
+import { jsonEqual } from "iterate/lib";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
@@ -53,6 +54,20 @@ function configRepoIngressTarget(commitOid: string) {
       },
     ],
   ];
+}
+
+/** The shape `configRepoIngressTarget` writes, read back: the commit is its cache key. */
+const ConfigRepoIngressTarget = z.tuple([
+  z.literal("itx"),
+  z.literal("workers"),
+  z.tuple([z.literal("get"), z.object({ source: z.unknown(), cacheKey: z.string().min(1) })]),
+]);
+
+/** The commit an ingress target publishes: the one `configRepoIngressTarget` names, when the target
+ *  is exactly what it writes for it; null for any other target, a worker set by hand or none. */
+function configRepoCommitOf(target: unknown): string | null {
+  const commitOid = ConfigRepoIngressTarget.safeParse(target).data?.[2][1].cacheKey;
+  return commitOid && jsonEqual(target, configRepoIngressTarget(commitOid)) ? commitOid : null;
 }
 
 /** The files of a config-repo template, which seed a project created from one: the host passes
@@ -103,11 +118,13 @@ export class ProjectProcessor extends StreamProcessor<
    *  ground is `state.creation`. */
   #creating = false;
   /** The apex following the config repo: the newest tip any delivery has shown this incarnation,
-   *  and the offset it has published — the durable ground is the keyed ingress event itself, so a
-   *  fresh incarnation appending again for the same commit lands nothing. One attempt runs at a
-   *  time and DRAINS: a tip that arrives while an append is in flight is published by the same
-   *  attempt once that append settles, without waiting for another delivery (an idempotent hit
-   *  lands no fresh event to be delivered). */
+   *  and the offset it has published. The durable ground is the keyed ingress event itself, reduced
+   *  into `state.publishedCommitOid`: a delivery whose state holds the tip's publication marks it
+   *  published, so a fresh incarnation owes nothing for a commit an earlier one published. The
+   *  state learns of this incarnation's own append a delivery later, so the mark is kept here too.
+   *  One attempt runs at a time and DRAINS: a tip that arrives while an append is in flight is
+   *  published by the same attempt once that append settles, without waiting for another delivery
+   *  (an idempotent hit lands no fresh event to be delivered). */
   #newestTip: { commitOid: string; offset: number } | null = null;
   #published: number | null = null;
   #publishing = false;
@@ -227,6 +244,13 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
         };
+      case "events.iterate.com/project/ingress-configured": {
+        // A target set by hand publishes no commit and moves nothing: the appends below are keyed
+        // by their commit, so a commit once published is never owed again, whatever the apex names.
+        const commitOid = configRepoCommitOf(event.payload.target);
+        if (!commitOid || commitOid === state.publishedCommitOid) return undefined;
+        return { ...state, publishedCommitOid: commitOid };
+      }
       default:
         return undefined;
     }
@@ -281,9 +305,15 @@ export class ProjectProcessor extends StreamProcessor<
     // THE APEX FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the latest commit
     // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
     // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
-    // ONE event, and an attempt lost with an incarnation is run again by the next for nothing. The
-    // target is `configRepoIngressTarget`, the same one the saga writes for the seed.
-    if (state.configRepoTip) this.#newestTip = state.configRepoTip;
+    // ONE event, and an attempt lost with an incarnation is run again by the next. A tip the state
+    // already holds published is owed nothing: no append, and no background work to claim the
+    // context's alarm for. The target is `configRepoIngressTarget`, the same one the saga writes
+    // for the seed.
+    if (state.configRepoTip) {
+      this.#newestTip = state.configRepoTip;
+      if (state.configRepoTip.commitOid === state.publishedCommitOid)
+        this.#published = state.configRepoTip.offset;
+    }
     if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
       this.#publishing = true;
       runInBackground(async () => {

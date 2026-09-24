@@ -84,7 +84,7 @@ The sweep's deadline is decided by one pure rule, `decideQuietDeadline`
 |                    | Sweep                                                                                                           |
 | ------------------ | --------------------------------------------------------------------------------------------------------------- |
 | Window             | 60 s (`UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`)                                                                   |
-| Armed by           | a loaded facet materialized, a claim released                                                                   |
+| Armed by           | a loaded facet materialized, or its claim released                                                              |
 | Clock restarted by | the end of an inbound call from outside the project's loaded code, a claim, an alarm pass that did durable work |
 | When due           | resets the unclaimed loaded facets                                                                              |
 

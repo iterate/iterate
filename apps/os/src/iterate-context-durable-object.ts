@@ -85,6 +85,7 @@ import { ControlPlane } from "./control-plane/edge.ts";
 import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
+import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
@@ -654,8 +655,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#residency.outsideActivityEnded(); // a claim restarts the sweep's quiet clock
       this.#facetHost.claim(name, at);
       // A RELEASE is the last thing the facet's work did: its instance is unclaimed from here, and
-      // the sweep may have run (and disarmed) while the claim held it — so the release arms it.
-      if (at === null) this.#residency.armUnclaimedFacetSweep();
+      // the sweep may have run (and disarmed) while the claim held it — so a loaded facet's release
+      // arms it. The sweep never resets a first-party facet, so that release arms nothing.
+      if (at === null && !firstPartyFacetClassOf(name)) this.#residency.armUnclaimedFacetSweep();
     },
     facets: {
       get: (name, spec) => this.#facetHost.handle(name, spec),
