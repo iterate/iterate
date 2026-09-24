@@ -8,8 +8,7 @@ export type ConfigRepoTemplateReference = {
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 
-/** The path invariant shared by the string parser, RPC schema, and public
- * GitHub downloader. */
+/** The path invariant shared by the string parser and the GitHub template downloader. */
 export function isSafeConfigRepoTemplatePath(path: string): boolean {
   const segments = path.split("/");
   return (

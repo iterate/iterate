@@ -1,4 +1,4 @@
-// ONE shell for the os-next apps — agents, notes, voice, the dash next: the sidebar (the project
+// The one shell for the client apps (agents, notes, voice, dash): the sidebar (the project
 // switcher in its header, the app's own navigation in its body, the collapse button and the account
 // menu in its footer, the rail) and the page beside it under a header row that carries the phone's
 // sidebar trigger. Router-agnostic on purpose:

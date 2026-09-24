@@ -249,8 +249,6 @@ test("without FLAKE_RECORD_DIR nothing is written anywhere", async () => {
   }
 });
 
-// --- helpers ---
-
 /** Register a body through a fake vitest-shaped runner and return the wrapped body. */
 function registerWithFakeRunner(
   pattern: RegExp,

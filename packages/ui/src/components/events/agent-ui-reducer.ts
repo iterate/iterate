@@ -10,16 +10,10 @@ import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution"
 import { z } from "zod";
 import type { Event } from "./types.ts";
 
-// ---------------------------------------------------------------------------
-// Reduced state model + pure batch planner
-//
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
 // requests · 7.4 s") → assistant message, with quiet stream wake dividers.
-// Settled items are published by the server Feed facet as immutable revisions.
-// Browsers query those publications alongside raw events in a SQLite view.
-// Reduced state holds in-flight activity, streamed text and presence; the
-// server exposes that current presentation separately through live state.
-// ---------------------------------------------------------------------------
+// Reduced from raw events: settled items, plus in-flight activity, streamed
+// text and presence.
 
 export type AgentUiLlmStep = {
   kind: "llm";
@@ -665,8 +659,7 @@ export function isCurrentAgentUiState(value: unknown): value is AgentUiState {
 /**
  * A durable completion normally follows its idle boundary immediately. Keep a
  * small correction window, but never let malformed streams with permanently
- * missing completions grow the browser's persisted reducer state without
- * bound.
+ * missing completions grow the reducer state without bound.
  */
 export const AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT = 32;
 export const AGENT_UI_PENDING_MENTION_LIMIT = 32;
@@ -742,16 +735,6 @@ export function reduceAgentUiRuntime(
   return { endState, items };
 }
 
-/** Append a settled item in emission order. */
-function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem): AgentUiState {
-  items.push(item);
-  return state;
-}
-
-// ---------------------------------------------------------------------------
-// Event types
-// ---------------------------------------------------------------------------
-
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
@@ -769,10 +752,6 @@ const AGENT_PAUSED = "events.iterate.com/agent/paused";
 const AGENT_RESUMED = "events.iterate.com/agent/resumed";
 const AGENT_SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
-
-// ---------------------------------------------------------------------------
-// Reducer
-// ---------------------------------------------------------------------------
 
 function reduceAgentUiEvent(
   previous: AgentUiState,
@@ -1195,12 +1174,13 @@ function reduceAgentUiEvent(
         ),
       };
       if (isInitialStreamWake(event)) return next;
-      return emitItem(next, items, {
+      items.push({
         kind: "stream-woken",
         id: `stream-woken-${event.offset}`,
         text: STREAM_WAKE_LABEL,
         timestampMs,
       });
+      return next;
     }
 
     case STREAM_PROCESSOR_REVIVED: {
@@ -1211,24 +1191,26 @@ function reduceAgentUiEvent(
       const processorSlug =
         typeof payload?.processorSlug === "string" ? payload.processorSlug : undefined;
       const revivals = typeof payload?.revivals === "number" ? payload.revivals : undefined;
-      return emitItem(state, items, {
+      items.push({
         kind: "processor-revived",
         id: `processor-revived-${event.offset}`,
         ...(processorSlug === undefined ? {} : { processorSlug }),
         ...(revivals === undefined ? {} : { revivals }),
         timestampMs,
       });
+      return state;
     }
 
     case STREAM_CHILD_STREAM_CREATED: {
       const childPath = readString(event, "childPath");
       if (childPath == null) return state;
-      return emitItem(state, items, {
+      items.push({
         kind: "child-stream-created",
         id: `child-stream-created-${event.offset}`,
         childPath,
         timestampMs,
       });
+      return state;
     }
 
     // The stream-level facts (the whole stream stops accepting appends) and
@@ -1244,33 +1226,31 @@ function reduceAgentUiEvent(
     case AGENT_PAUSED: {
       const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
       const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
-      return emitItem(flushed, items, {
+      items.push({
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
         text: "Agent paused",
         ...readOptionalReason(event),
         timestampMs,
       });
+      return flushed;
     }
 
     case STREAM_RESUMED:
     case AGENT_RESUMED:
-      return emitItem({ ...state, paused: false }, items, {
+      items.push({
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
         text: "Agent resumed",
         ...readOptionalReason(event),
         timestampMs,
       });
+      return { ...state, paused: false };
 
     default:
       return state;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Reducer helpers
-// ---------------------------------------------------------------------------
 
 function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): AgentUiActivity {
   // Multiple simultaneous steps render as one live activity.
@@ -1384,15 +1364,13 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
       delete provisionalActivities[oldestId];
     }
   }
-  return emitItem({ ...state, live: null, provisionalActivities }, items, settled);
+  items.push(settled);
+  return { ...state, live: null, provisionalActivities };
 }
 
 function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
-  let next: AgentUiState = { ...state, queuedUserMessages: [] };
-  for (const item of state.queuedUserMessages) {
-    next = emitItem(next, items, item);
-  }
-  return next;
+  items.push(...state.queuedUserMessages);
+  return { ...state, queuedUserMessages: [] };
 }
 
 /**
@@ -1401,11 +1379,8 @@ function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): Age
  * from appearing in the composer's "queued messages" affordance.
  */
 function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
-  let next: AgentUiState = { ...state, deferredAssistantMessages: [] };
-  for (const item of state.deferredAssistantMessages) {
-    next = emitItem(next, items, item);
-  }
-  return flushQueuedUserMessages(next, items);
+  items.push(...state.deferredAssistantMessages);
+  return flushQueuedUserMessages({ ...state, deferredAssistantMessages: [] }, items);
 }
 
 function rememberPendingMentionMessage(
@@ -1452,7 +1427,8 @@ function applyAgentMentionResolution(
     queuedUserMessages[queuedIndex] = corrected;
     return { ...state, pendingMentionMessages, queuedUserMessages };
   }
-  return emitItem({ ...state, pendingMentionMessages }, items, corrected);
+  items.push(corrected);
+  return { ...state, pendingMentionMessages };
 }
 
 // A user message while steps are still running must not archive those steps
@@ -1469,7 +1445,8 @@ function emitUserMessageItem(
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
-  return emitItem(flushed, items, item);
+  items.push(item);
+  return flushed;
 }
 
 /**
@@ -1490,7 +1467,8 @@ function emitAssistantMessageItem(
     };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
-  return emitItem(flushed, items, item);
+  items.push(item);
+  return flushed;
 }
 
 function correctProvisionalCodeStep(
@@ -1520,7 +1498,8 @@ function correctProvisionalCodeStep(
   } else {
     delete provisionalActivities[corrected.id];
   }
-  return emitItem({ ...state, provisionalActivities }, items, corrected);
+  items.push(corrected);
+  return { ...state, provisionalActivities };
 }
 
 function applyDurableCodeOutcome(
@@ -1578,9 +1557,8 @@ function updateLlmStep(
 /**
  * The response/thinking text deltas inside one streamed LLM chunk, across the
  * vendor dialects we receive (Workers AI, OpenAI chat completions, Anthropic).
- * Exported as the ONE place that knows chunk shapes: the live feed folds these
- * into the streaming tail, and the LLM trace panel re-assembles a request's
- * partial response from the same chunks.
+ * The ONE place that knows chunk shapes: the live feed folds these into the
+ * streaming tail.
  */
 export function extractCloudflareChunkDeltas(chunk: unknown): {
   responseDelta: string;
