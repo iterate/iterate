@@ -592,9 +592,15 @@ export async function lendRpcStubOverPager(
       waitUntil(redialPager(event));
     });
   };
-  /** The leg dropped under a live lend: dial again — three tries, two seconds apart — and take the
-   *  new pager into service. A lend recalled meanwhile, or a DO that refuses the attach, ends here. */
+  /** The leg dropped under a live lend: dial again and take the new pager into service. Bounded:
+   *  five tries over ~30 s (a deploy's reset answers 503 for seconds; on 2026-09-24 14:06 all four
+   *  voice boards gave up inside four), each dial given 10 s — a dial the DO never answers must
+   *  not hold the loop. A 5xx is the DO not ready yet and is tried again; any other non-101 is its
+   *  refusal (a paused stream) and ends it. A lend recalled meanwhile ends it too. Giving up is an
+   *  ERROR: the client is still connected but unreachable through its key, and the prd fault alarm
+   *  pages on errors. */
   const redialPager = async (dropped: CloseEvent): Promise<void> => {
+    const droppedAt = Date.now();
     console.warn({
       event: "rpc-stub-pager-dropped",
       namespace: "rpc-stubs",
@@ -604,15 +610,36 @@ export async function lendRpcStubOverPager(
       reason: dropped.reason,
     });
     let lastFailure = "";
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const delaysMs = [0, 2_000, 4_000, 8_000, 16_000];
+    for (const [index, delayMs] of delaysMs.entries()) {
+      const attempt = index + 1;
+      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
       if (lendEnded.reason) return;
-      let redialed: Response;
+      const dial = dialPager();
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let redialed: Response | null;
       try {
-        redialed = await dialPager();
+        redialed = await Promise.race([
+          dial,
+          new Promise<null>((resolve) => (deadline = setTimeout(() => resolve(null), 10_000))),
+        ]);
       } catch (error) {
         // the DO did not answer (a reset in progress): the next try
         lastFailure = error instanceof Error ? error.message : String(error);
+        continue;
+      } finally {
+        clearTimeout(deadline);
+      }
+      if (!redialed) {
+        lastFailure = "the dial did not answer within 10 s";
+        // a pager that arrives after its deadline is never taken into service
+        void dial.then(
+          (late) => {
+            late.webSocket?.accept();
+            late.webSocket?.close(1000, "dial timed out");
+          },
+          () => undefined,
+        );
         continue;
       }
       lastFailure = `the DO answered ${redialed.status}`;
@@ -630,18 +657,21 @@ export async function lendRpcStubOverPager(
           message: "the pager is back in service; the DO re-appended what names the key",
           rpcStubKey,
           attempt,
+          downMs: Date.now() - droppedAt,
         });
         return;
       }
-      break; // refused (a paused stream): the DO's answer, not a fault to retry
+      await redialed.body?.cancel();
+      if (redialed.status < 500) break; // refused (a paused stream): the DO's answer, not a fault to retry
     }
-    console.warn({
+    console.error({
       event: "rpc-stub-pager-redial-failed",
       namespace: "rpc-stubs",
       message:
         "the pager could not be re-dialed; the lend ends and the DO has un-set what named it",
       rpcStubKey,
       lastFailure,
+      downMs: Date.now() - droppedAt,
     });
     disposeSessionRpcStub("went offline (its pager dropped and could not be re-dialed)");
   };

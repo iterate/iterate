@@ -173,8 +173,8 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 // the /api isolate and the DO, never the client's own socket, so it drops while the session lives (a
 // fault on the hop between colos; a DO reset kills every hibernatable socket). What a close MEANS is
 // its code: 1000 is deliberate — this side's dispose, the DO replacing the pager with a newer one —
-// and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: three
-// tries) while the session's dup stays lent.
+// and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: five
+// tries over ~30 s, 10 s each) while the session's dup stays lent.
 
 test.each([
   {
@@ -210,20 +210,76 @@ test.each([
   },
 );
 
-test("a pager that closes under a live session: a re-dial the DO never answers is given up after three tries, two seconds apart: the dup is released, the lend ends", async () => {
+test("a pager that closes under a live session: a re-dial the DO never answers is given up after five tries over ~30 s, logged as an error: the dup is released, the lend ends", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
   const fake = await relayOverFakeDurableObject((dial) =>
     dial === 1 ? new FakePagerWebSocket() : new Error("Durable Object reset"),
   );
 
   fake.pagers[0].close(1006);
-  const redial = fake.waitedUntil[0]!; // try 1 is immediate; tries 2 and 3 wait two seconds each
-  await vi.advanceTimersByTimeAsync(2_000);
-  await vi.advanceTimersByTimeAsync(2_000);
+  const redial = fake.waitedUntil[0]!; // try 1 is immediate; then 2, 4, 8 and 16 s apart
+  await vi.advanceTimersByTimeAsync(30_000);
   await redial;
-  expect(fake).toMatchObject({ dials: 4, disposed: 1 }); // the first dial and three re-dials
+  expect(fake).toMatchObject({ dials: 6, disposed: 1 }); // the first dial and five re-dials
+  expect(error).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "rpc-stub-pager-redial-failed",
+      rpcStubKey: "key-4",
+      lastFailure: "Durable Object reset",
+      downMs: 30_000,
+    }),
+  );
+});
+
+// 2026-09-24 14:06: a deploy's reset answered the voice boards' re-dials with 503, and the relay
+// read that as a refusal and gave up on the first answer. A 5xx is the DO not ready yet.
+test.each([
+  { answers: "503 (the DO not ready yet)", status: 503, dials: 3, disposed: 0 },
+  { answers: "409 (the DO's refusal)", status: 409, dials: 2, disposed: 1 },
+])(
+  "a re-dial the DO answers with $answers is tried again only on a 5xx",
+  async ({ status, dials, disposed }) => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fake = await relayOverFakeDurableObject((dial) =>
+      dial === 2 ? new Response(null, { status }) : new FakePagerWebSocket(),
+    );
+
+    fake.pagers[0].close(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await fake.waitedUntil[0];
+    expect(fake).toMatchObject({ dials, disposed });
+  },
+);
+
+test("a re-dial the DO never answers times out after 10 s and is tried again; the late pager is closed, never taken into service", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let answerLate: (pager: FakePagerWebSocket) => void = () => {};
+  const late = new FakePagerWebSocket();
+  const closed = vi.spyOn(late, "close");
+  const fake = await relayOverFakeDurableObject((dial) =>
+    dial === 2
+      ? new Promise<FakePagerWebSocket>((resolve) => (answerLate = resolve))
+      : new FakePagerWebSocket(),
+  );
+
+  fake.pagers[0].close(1006);
+  await vi.advanceTimersByTimeAsync(12_000); // the 10 s deadline, then the 2 s wait
+  await fake.waitedUntil[0];
+  answerLate(late);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fake).toMatchObject({ dials: 3, disposed: 0 });
+  expect(closed).toHaveBeenCalledWith(1000, "dial timed out");
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "rpc-stub-pager-redialed", attempt: 2, downMs: 12_000 }),
+  );
 });
 
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
@@ -338,7 +394,7 @@ class FakePagerWebSocket {
   send(_data: string): void {}
   /** Close with `code` — 1000 is a deliberate close (this side's dispose, the DO's "replaced");
    *  anything else is the leg dropping under a live lend. */
-  close(code = 1000): void {
+  close(code = 1000, _reason = ""): void {
     this.#emit("close", { code, reason: "" });
   }
   addEventListener(type: string, cb: (e: unknown) => void): void {
@@ -359,7 +415,7 @@ class FakePagerWebSocket {
  *  kept (a test drops one, pages the next), every lend and the dup's disposal are counted, and the
  *  relay's `waitUntil` promises are kept so a test awaits the re-dial it fired. */
 async function relayOverFakeDurableObject(
-  answerDial: (dial: number) => FakePagerWebSocket | Error,
+  answerDial: (dial: number) => FakePagerWebSocket | Error | Response | Promise<FakePagerWebSocket>,
 ) {
   const fake = {
     pagers: [] as FakePagerWebSocket[],
@@ -376,8 +432,9 @@ async function relayOverFakeDurableObject(
   };
   const context = {
     fetch: async () => {
-      const answer = answerDial(++fake.dials);
+      const answer = await answerDial(++fake.dials);
       if (answer instanceof Error) throw answer;
+      if (answer instanceof Response) return answer;
       fake.pagers.push(answer);
       return { status: 101, webSocket: answer };
     },
