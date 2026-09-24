@@ -1,5 +1,6 @@
 import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
+import { OAuthScope } from "iterate/next/oauth-scopes";
 import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
@@ -30,7 +31,7 @@ export async function startIssuerSession(
       client: { name: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
       issuer: platformOrigin,
       resource: api,
-      scopes: ["iterate", "account", "organizations:write"],
+      scopes: [...OAuthScope.options],
     },
     sameOriginPath(next, platformOrigin),
   );

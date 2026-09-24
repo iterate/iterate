@@ -15,6 +15,7 @@ import {
 import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
+import { OAuthScope } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { templates } from "./generated/config-templates.js";
@@ -148,7 +149,7 @@ export class IterateRpcTarget extends RpcTarget {
     return new SessionRpcTarget(this.#input, this.#sessionTeardown, {
       principal,
       reach: user ? { userId: user.id } : "every",
-      ...(user && { scopes: ["iterate", "account", "organizations:write"] }),
+      ...(user && { scopes: [...OAuthScope.options] }),
     });
   }
 

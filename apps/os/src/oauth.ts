@@ -135,13 +135,7 @@ export async function authorizationOf(env: Env, props: unknown): Promise<Authori
     principal: { actor: grant.userId, email: grant.email },
     // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
     reach: { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
-    // The issuer's own session is the person at the issuer, not a consent: it holds every scope,
-    // whatever list it was minted with — a cookie from before a scope existed still creates
-    // organizations on the consent page.
-    grant:
-      grant.kind === "issuer"
-        ? { ...grant, scope: ["iterate", "account", "organizations:write"] }
-        : grant,
+    grant,
   };
 }
 
