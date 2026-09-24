@@ -73,9 +73,9 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
-      // THE CONTROL PLANE: one singleton `ControlPlaneDurableObject` (getByName("global")) — the
-      // registry, reached by binding, not hosted as a facet of any context (so no other context can
-      // host it). control-plane/edge.ts is the worker's typed client over it.
+      // THE CONTROL PLANE: one singleton `ControlPlaneDurableObject` (getByName("global")), reached
+      // by binding, not hosted as a facet of any context (so no other context can host it).
+      // control-plane/edge.ts is the worker's typed client over it.
       { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDurableObject" },
     ],
   },
