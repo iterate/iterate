@@ -3,11 +3,11 @@
 // `liveSnapshot`) catch up from the log unless the reduce has provably reached the head it was
 // SHOWN (iterate/stream/processor.ts). A push shows a head; a facet a row pushes is also told so as
 // it starts (`fedByPushes` in its props, context/facet-host.ts), so the head its first catch-up read
-// counts as shown too. Before, a facet no commit it consumes had reached this incarnation re-read
-// its log through the context on every read: every `itx.ingressRoutes.match` — every request to a
-// project host whose config worker routes — paid an ItxEntrypoint `readEvents` round trip (prd
-// 2026-09-24: 183 of 183 matches). A processor NO row pushes still reads every time: a read is the
-// only way it learns of an event.
+// counts as shown too. Without that word, a facet no commit it consumes has reached this
+// incarnation re-reads its log through the context on every read, and every
+// `itx.ingressRoutes.match` (every request to a project host whose config worker routes) pays an
+// ItxEntrypoint `readEvents` round trip. A processor NO row pushes still reads every time: a read
+// is the only way it learns of an event.
 //
 // Pinned in the `workers` project: it needs the real facet host, a loaded SDK facet and its props.
 // Run:
