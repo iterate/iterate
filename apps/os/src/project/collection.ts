@@ -12,7 +12,7 @@ import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
-import type { EntityCreationAndDeletionState } from "./entity-state.ts";
+import type { EntityCreationAndDeletionState } from "./entity-lifecycle.ts";
 
 const CreationOptions = z.object({ creator: z.string().startsWith("/") });
 
@@ -30,6 +30,14 @@ export class EntityCollectionRpcTarget extends RpcTarget {
     this.slug = slug;
     this.withItx = withItx;
     this.catalog = catalog;
+  }
+
+  /** Where the entity at `context` stands: the facet is the platform's own durable object for the
+   *  entity and `snapshot()` the engine's `{ offset, state }`, its state the contract's parsed shape
+   *  — ours, so asserted, not re-validated. */
+  async #state(context: { invoke(steps: (string | unknown[])[]): unknown }) {
+    const snapshot = await context.invoke(["itx", "facets", ["get", this.slug], ["snapshot"]]);
+    return (snapshot as { state: EntityCreationAndDeletionState }).state;
   }
 
   /** Every entity of this kind born under the project, by path — the certificates cross-posted to
@@ -61,14 +69,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
         );
       const creator = resolveContextPath("/", parsed.data.creator);
       const context = itx.cd(path);
-      // The facet is the platform's own durable object for the entity and `snapshot()` the engine's
-      // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
-      const { state } = (await context.invoke([
-        "itx",
-        "facets",
-        ["get", this.slug],
-        ["snapshot"],
-      ])) as { state: EntityCreationAndDeletionState };
+      const state = await this.#state(context);
       if (state.deletion) throw new Error(`${this.slug} ${path}: deleted — not re-creatable`);
       if (state.creation?.status === "created") return { path };
       let requestedAtOffset: number;
@@ -123,14 +124,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
   delete(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       const context = itx.cd(path);
-      // The facet is the platform's own durable object for the entity and `snapshot()` the engine's
-      // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
-      const { state } = (await context.invoke([
-        "itx",
-        "facets",
-        ["get", this.slug],
-        ["snapshot"],
-      ])) as { state: EntityCreationAndDeletionState };
+      const state = await this.#state(context);
       if (state.deletion?.status !== "deleted") {
         if (state.creation?.status !== "created")
           throw new Error(`${this.slug} ${path}: not created — nothing to delete`);

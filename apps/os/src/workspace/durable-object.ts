@@ -6,11 +6,10 @@
 // write shadows the repo's file until `gitCommit` lands ONE mount's changes as one commit on that
 // repo's `main` and clears them; a delete of a repo file is a WHITEOUT until then. A path under no
 // mount is scratch (`/workspace/…` by convention): writable, never committed. It is also what makes a
-// workspace a DOMAIN OBJECT: it hosts the workspace processor (processor.ts) — the creation saga
-// `itx.workspaces.create(path)` opens, whose certificate is cross-posted to `/` for the catalog
-// `itx.workspaces.list()` reads — and every method refuses until the certificate has landed
-// (`state.creation`) and again once deletion has been asked for (`state.deletion`, the saga
-// `itx.workspaces.delete(path)` opens; the overlay goes with the facet when the row is dropped).
+// workspace a DOMAIN OBJECT: it hosts the entity lifecycle (src/project/entity-lifecycle.ts: the
+// sagas `itx.workspaces.create(path)` and `itx.workspaces.delete(path)` open), and every method
+// refuses until the certificate has landed and again once deletion has been asked for (the overlay
+// goes with the facet when the row is dropped).
 //
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
 // `deleted` flag that makes it a whiteout. Text only, ONE writer, no policies. The repo facets speak
@@ -22,8 +21,12 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
-import type { WorkspaceState } from "./contract.ts";
-import { WorkspaceProcessor } from "./processor.ts";
+import {
+  assertCreated,
+  EntityLifecycleProcessor,
+  type EntityCreationAndDeletionState,
+} from "../project/entity-lifecycle.ts";
+import { WorkspaceContract } from "./contract.ts";
 
 /** One mount: the PATH of the project repo whose `main` shows through at the mount path (its own). */
 type WorkspaceMount = { repo: string };
@@ -77,7 +80,7 @@ export const workspaceVerbs = [
 ] as const;
 
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<
-  WorkspaceState,
+  EntityCreationAndDeletionState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
@@ -85,7 +88,9 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
    *  (library.ts). */
   static override publicMethods = [...super.publicMethods, ...workspaceVerbs];
 
-  processor = new WorkspaceProcessor((call) => this.withItx(call));
+  /** The entity lifecycle (src/project/entity-lifecycle.ts), with nothing to provision: the overlay
+   *  is this facet's own storage, born with it and deleted with it. */
+  processor = new EntityLifecycleProcessor(WorkspaceContract, (call) => this.withItx(call));
 
   #pathRead?: string;
   async #path(): Promise<string> {
@@ -121,17 +126,9 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       .toArray();
   }
 
-  /** Every verb starts here: a workspace whose certificate has not landed refuses, and so does one
-   *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
-   *  every call (in memory once the facet is caught up). */
+  /** Every verb starts here (`assertCreated`). */
   async #created(): Promise<void> {
-    const path = await this.#path();
-    const { state } = await this.snapshot();
-    if (state.deletion) throw new Error(`workspace ${path}: deleted`);
-    if (state.creation?.status !== "created")
-      throw new Error(
-        `workspace ${path}: not created — itx.workspaces.create(${JSON.stringify(path)}) first`,
-      );
+    assertCreated("workspace", await this.#path(), (await this.snapshot()).state);
   }
 
   /** The mount table: every repo in the project catalog at its OWN path. */
