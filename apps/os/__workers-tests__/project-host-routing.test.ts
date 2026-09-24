@@ -1,8 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { ORIGIN, SRC_ECHO_APP } from "./support.ts";
+import { fakeCloudflareCustomHostnames, ORIGIN, SRC_ECHO_APP } from "./support.ts";
 const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
 
 const SRC_CONFIG_ROUTER = {
@@ -180,39 +180,6 @@ export default class extends ConfigWorker {
   }
 }`,
 };
-
-/** Cloudflare's custom-hostname API on the SaaS zone (wrangler.test.jsonc `saas.test`), faked in
- *  this isolate's `fetch`; every other request goes through. */
-function fakeCloudflareCustomHostnames() {
-  const hostnames: string[] = [];
-  const through = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const request = new Request(input, init);
-    const url = new URL(request.url);
-    if (url.hostname !== "api.cloudflare.com") return through(request);
-    const ok = (result: unknown) => Response.json({ success: true, result });
-    const entry = (hostname: string) => ({
-      id: `ch-${hostname}`,
-      hostname,
-      status: "pending",
-      ssl: { wildcard: true },
-    });
-    if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-saas" }]);
-    if (request.method === "POST") {
-      const { hostname } = (await request.json()) as { hostname: string };
-      hostnames.push(hostname);
-      return ok(entry(hostname));
-    }
-    if (request.method === "DELETE") {
-      hostnames.splice(hostnames.indexOf(url.pathname.split("/ch-")[1]!), 1);
-      return ok({});
-    }
-    const asked = url.searchParams.get("hostname");
-    return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
-  });
-  onTestFinished(() => spy.mockRestore());
-  return { hostnames };
-}
 
 function call(url: string, init?: RequestInit) {
   return exports.default.fetch(new Request(url, { redirect: "manual", ...init }));

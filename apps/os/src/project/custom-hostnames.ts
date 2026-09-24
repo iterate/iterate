@@ -16,7 +16,7 @@ import type { CustomHostnameObservation } from "./contract.ts";
 
 /** A DNS name of two labels or more: lowercase letters, digits and inner hyphens (an IDN's `xn--`
  *  label included), each label at most 63. */
-const HOSTNAME =
+export const HOSTNAME =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /** Why a project may not add `hostname`, or null when it may. Pure: the deployment's own zones

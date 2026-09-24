@@ -29,7 +29,7 @@ import {
   type WaitUntil,
 } from "./iterate-context.ts";
 import {
-  isOperator,
+  ADMIN_ORG_ID,
   type InvitationPreview,
   type InvitationRecord,
   type MemberRecord,
@@ -38,7 +38,7 @@ import {
   type UserRecord,
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
-import { OrganizationRole } from "./organization/contract.ts";
+import { OrganizationRole, type OrganizationState } from "./organization/contract.ts";
 import type { AppConfig } from "./app-config.ts";
 import { isRetryableTransportError } from "./retryable-error.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
@@ -263,6 +263,83 @@ async function foldPlatformFacts(
       appendPlatformFacts(input.contextNamespace, owner, facts, caller, { folded: true }),
     ),
   );
+}
+
+/** A PROJECT ON ITS ORGANIZATION'S RECORD — the fold the dash tree lists an organization's projects
+ *  from (session-fed: the control-plane database is imperative). ONE path for every creation —
+ *  a person's, the operator's acting as one, and the operator's own into a named organization (a
+ *  project seed's `apply`) — and for a creation asked again: it lands what the record LACKS, read
+ *  at head, so the same creation again (a rerun `apply`, a retry) appends nothing, and one whose
+ *  landing an earlier deployment skipped lands now. An organization the record has never heard of
+ *  is one this creation minted (a person's first project, catalog.ts): its creation and its members
+ *  come first, in one ordered append, so the fold sees the organization before its project; each
+ *  membership also lands on the member's account. The deployment's own organization (the
+ *  operator's projects with no `orgId`) has no members and no page: nothing lands there.
+ *
+ *  TWO AT ONCE both read the record without it, so each fact lands under an idempotency key: the
+ *  stream keeps the first event under a key and answers every later one with it, whoever appends
+ *  it. A minted organization's first members are keyed as that first landing (`:mint`), never as
+ *  the membership itself, so a later removal and re-add is never swallowed.
+ *  A KEY TAKEN FIRST by someone else — a member can append to the organization's context, and the
+ *  fold trusts only the platform's facts — would leave the record without the fact (the same body:
+ *  the stream answers with theirs) or refuse it (another body). So the record is read again, and
+ *  what it still lacks lands unkeyed: the normal path costs that one read. */
+async function landProjectOnOrganization(
+  input: Pick<SessionInput, "contextNamespace" | "controlPlane">,
+  project: ProjectRecord,
+  caller: Caller,
+): Promise<void> {
+  if (project.orgId === ADMIN_ORG_ID) return;
+  // The record at head (the facet catches up from its log before answering), its processor enabled
+  // first: an organization this creation just minted has no row yet, and a second enable appends
+  // nothing. `invoke` answers `unknown` across the DO hop; the `organization` facet is the
+  // platform's own OrganizationDurableObject and `snapshot()` the engine's `{ offset, state }`.
+  const organizationContext = ownerContext(input.contextNamespace, { organization: project.orgId });
+  await organizationContext.invoke(["itx", "processors", ["enable", "organization"]], [], caller);
+  type Landing = [FactOwner, StreamEventInput | StreamEventInput[]];
+  const lacking = async (keyed: boolean): Promise<Landing[]> => {
+    const { state: record } = (await organizationContext.invoke(
+      ["itx", "facets", ["get", "organization"], ["snapshot"]],
+      [],
+      caller,
+    )) as { state: OrganizationState };
+    const key = (idempotencyKey: string) => (keyed ? { idempotencyKey } : {});
+    const onOrganization: StreamEventInput[] = [];
+    const landings: Landing[] = [];
+    if (!record.name) {
+      const organization = await input.controlPlane.getOrganization(project.orgId);
+      onOrganization.push({
+        ...orgCreatedFact(organization?.name ?? project.orgId),
+        ...key("organization/created"),
+      });
+      for (const { userId, role } of await input.controlPlane.listMembers(project.orgId)) {
+        if (record.members[userId]?.role === role) continue;
+        const membership = {
+          ...memberAddedFact(project.orgId, userId, role),
+          ...key(`organization/member-added:${project.orgId}:${userId}:mint`),
+        };
+        onOrganization.push(membership);
+        landings.push([{ account: userId }, membership]);
+      }
+    }
+    // a project is created once and its slug never changes: every landing of it is the same event
+    if (!record.projects[project.id])
+      onOrganization.push({
+        ...projectCreatedFact(project.id, project.slug),
+        ...key(`organization/project-created:${project.id}`),
+      });
+    return onOrganization.length
+      ? [[{ organization: project.orgId }, onOrganization], ...landings]
+      : [];
+  };
+  const keyed = await lacking(true);
+  if (!keyed.length) return;
+  await foldPlatformFacts(input, keyed, caller).catch((error: unknown) => {
+    // another body under a key (idempotencyConflictMessage, greppable across the hop): taken first
+    if (!String(error).includes("already names a different event")) throw error;
+  });
+  const unkeyed = await lacking(false);
+  if (unkeyed.length) await foldPlatformFacts(input, unkeyed, caller);
 }
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
@@ -861,7 +938,10 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  tree); the control plane refuses a slug ANY other organization holds (PROJECT_NAME_TAKEN),
    *  answers the same organization's again with the same project, and opens the project's own saga
    *  on its root (src/project/processor.ts seeds it from the template — the dash watches that
-   *  facet's live state). A grant narrowed to named projects creates none: FORBIDDEN. */
+   *  facet's live state). Whoever creates it, the project then lands on its organization's record,
+   *  which the dash lists (`landProjectOnOrganization`); the same creation again lands nothing
+   *  twice, so a project seed's `apply` converges an existing project through this same call. A
+   *  grant narrowed to named projects creates none: FORBIDDEN. */
   async create(input: {
     project: string;
     orgId?: string;
@@ -889,19 +969,6 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         )
       : undefined;
     const { input: sessionInput, caller } = this.#session;
-    // A person's FIRST project mints their own organization (catalog.ts) — read the orgs they already
-    // belong to (FRESH, past the edge's memo, so a membership added seconds ago in another isolate is
-    // not mistaken for the mint), to tell that new one apart below and land its creation on the fold
-    // the dash renders. The operator's projects go to the deployment's own organization, which the
-    // dash never shows, so it feeds no facts.
-    const priorOrgIds =
-      caller.principal && !isOperator(caller)
-        ? new Set(
-            (
-              await sessionInput.controlPlane.accessibleTo(caller.principal.actor, true)
-            ).organizations.map((organization) => organization.id),
-          )
-        : null;
     const project = await sessionInput.controlPlane.createProject(caller, {
       project: data.project,
       organizationId: data.orgId,
@@ -923,34 +990,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         },
       ],
     ]);
-    // Feed the entity folds the dash tree reads (session-fed since the control-plane database is
-    // imperative). Every non-operator project lands on its organization; a first project's minted
-    // organization gets its creation and the owner's membership first, in one ordered append, so the
-    // fold sees the organization before its project.
-    if (priorOrgIds) {
-      const projectFact = projectCreatedFact(project.id, project.slug);
-      if (priorOrgIds.has(project.orgId))
-        await foldPlatformFacts(
-          sessionInput,
-          [[{ organization: project.orgId }, projectFact]],
-          caller,
-        );
-      else {
-        const organization = await sessionInput.controlPlane.getOrganization(project.orgId);
-        const membership = memberAddedFact(project.orgId, caller.principal!.actor, "owner");
-        await foldPlatformFacts(
-          sessionInput,
-          [
-            [
-              { organization: project.orgId },
-              [orgCreatedFact(organization?.name ?? project.orgId), membership, projectFact],
-            ],
-            [{ account: caller.principal!.actor }, membership],
-          ],
-          caller,
-        );
-      }
-    }
+    // The organization's record, before the answer: the dash lists the project as soon as it has it.
+    await landProjectOnOrganization(sessionInput, project, caller);
     return context;
   }
 
