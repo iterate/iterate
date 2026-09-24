@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // memory-budget.test.ts — THE MEMORY PINS: every way a context's isolate can exceed 128 MiB, each
-// run as a real workload (memory-budget-scenarios.ts beside it: the real Stream / ProcessorEngine /
+// run as a real workload (memory-budget.test-support.ts beside it: the real Stream / ProcessorEngine /
 // SubscriptionDelivery over node:sqlite) in a Node child process capped at the isolate budget.
 // Local workerd enforces no memory limit, so that child is the only local instrument; the deployed
 // twin is e2e/isolate-ceilings-deployed.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
@@ -15,9 +15,9 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import type { ScenarioFacts, ScenarioName } from "./memory-budget-scenarios.ts";
+import type { ScenarioFacts, ScenarioName } from "./memory-budget.test-support.ts";
 
-const SCENARIOS = fileURLToPath(new URL("./memory-budget-scenarios.ts", import.meta.url).href);
+const SCENARIOS = fileURLToPath(new URL("./memory-budget.test-support.ts", import.meta.url).href);
 /** The production Durable Object isolate limit, as a V8 old-space cap on the child. */
 const ISOLATE_BUDGET_MB = 128;
 /** Every spelling V8 gives a heap-limit death — the local twin of "isolate exceeded its memory limit". */

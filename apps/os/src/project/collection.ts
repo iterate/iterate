@@ -14,8 +14,6 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
 import type { EntityCreationAndDeletionState } from "./entity-lifecycle.ts";
 
-const CreationOptions = z.object({ creator: z.string().startsWith("/") });
-
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";
   private readonly withItx: WithItx<ItxEntrypointScope>;
@@ -61,7 +59,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
     return this.withItx(async (itx) => {
       // The library always names an absolute creator, but a project member at `/` reaches this facet
       // directly (`itx.facets.get('project')`), and the creator becomes a parent link as written.
-      const parsed = CreationOptions.safeParse(options);
+      const parsed = z.object({ creator: z.string().startsWith("/") }).safeParse(options);
       if (!parsed.success)
         throw codedError(
           "INVALID_INPUT",
@@ -79,7 +77,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
         // The link is written HERE, never by the entity's processor from the request: whoever may
         // append on a path may append a request, so a creator it named would be the appender's
         // choice (e2e/loaded-code.e2e.test.ts). `creator` is the library's, from the caller's
-        // originating context (library.ts `createEntity`); any other caller reaches this facet only
+        // originating context (library.ts `entityRoot`); any other caller reaches this facet only
         // at `/`, from where it may write the same row itself. It lands with the request, before the
         // certificate: a born context is never re-pointed, and an owner's later row is the last word.
         const link = {

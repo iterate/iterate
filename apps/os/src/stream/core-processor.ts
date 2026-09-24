@@ -609,16 +609,6 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   STREAM_ALARM_TRACE_EVENT,
 ]);
 
-/** The operator's control events: `itx.append` of a literal event, no command in between. Checked,
- *  never rewritten: strict, so an unknown key throws instead of being dropped, and the event is
- *  stored as sent (an idempotent retry compares the stored payload with `jsonEqual`). */
-const StreamPaused = z.strictObject({ reason: z.string().optional() }).optional();
-const StreamResumed = z.strictObject({}).optional();
-const SubscriptionDeliveryResumed = z.strictObject({
-  name: z.string().transform(parseSubscriptionName),
-  afterOffset: z.number().int().nonnegative().optional(),
-});
-
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
@@ -632,16 +622,22 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
   // signed by their appender, and processors that ignore an event whose signature does not check.
   if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
+  // The operator's control events: checked, never rewritten — strict, so an unknown key throws
+  // instead of being dropped, and the event is stored as sent (an idempotent retry compares the
+  // stored payload with `jsonEqual`).
   if (event.type === "events.iterate.com/stream/paused") {
-    StreamPaused.parse(event.payload);
+    z.strictObject({ reason: z.string().optional() }).optional().parse(event.payload);
     return event;
   }
   if (event.type === "events.iterate.com/stream/resumed") {
-    StreamResumed.parse(event.payload);
+    z.strictObject({}).optional().parse(event.payload);
     return event;
   }
   if (event.type === "events.iterate.com/stream/subscription-delivery-resumed") {
-    SubscriptionDeliveryResumed.parse(event.payload);
+    z.strictObject({
+      name: z.string().transform(parseSubscriptionName),
+      afterOffset: z.number().int().nonnegative().optional(),
+    }).parse(event.payload);
     return event;
   }
   if (event.type === "events.iterate.com/project/ingress-configured") {

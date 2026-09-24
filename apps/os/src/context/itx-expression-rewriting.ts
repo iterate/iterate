@@ -519,7 +519,7 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
  *  hop is a fresh resolve — so the append boundary refuses it against the path the row lands on
  *  (core-processor.ts `normalizeControlEvent`), whichever caller appends: `provide`, a script's
  *  `itx.append`, a sibling's `cd(path).append`, a schedule's batch, a pager attach. Two contexts
- *  pointing at each other is refused only where it would be created (library.ts `createEntity`: a
+ *  pointing at each other is refused only where it would be created (library.ts `entityRoot`: a
  *  context does not create its own ancestor); rows written by hand can still spell it, a
  *  trusted-client misconfiguration. Runs on the normalized row: the match and target parsed once. */
 export function refuseSelfLoopRow(

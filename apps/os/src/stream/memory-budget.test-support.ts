@@ -1,14 +1,14 @@
 /// <reference types="node" />
-// memory-budget-scenarios.ts — THE MEMORY PROOFS: each scenario drives the REAL classes (`Stream`
-// over node:sqlite, `ProcessorEngine`, `SubscriptionDelivery`) through one workload that must fit a
-// 128 MiB Durable Object isolate and prints its facts as ONE JSON line. src/stream/memory-budget.test.ts
-// runs each in a Node CHILD PROCESS capped with `--max-old-space-size` — the stand-in for the
-// production cap, which local workerd does not enforce (NullIsolateLimitEnforcer); a child that
-// dies of V8's heap limit is the local spelling of "Durable Object's isolate exceeded its memory
-// limit and was reset". A process, not a worker thread, on purpose: a heap death inside
-// `JSON.parse` or `v8.serialize` aborts the whole process, and a thread would take the test runner
-// with it (measured: two rows vanished). By hand: `node memory-budget-scenarios.ts <scenario>
-// '<json args>'`.
+// memory-budget.test-support.ts — TEST CODE, never imported by the Worker: THE MEMORY PROOFS that
+// memory-budget.test.ts runs. Each scenario drives the REAL classes (`Stream` over node:sqlite,
+// `ProcessorEngine`, `SubscriptionDelivery`) through one workload that must fit a 128 MiB Durable
+// Object isolate and prints its facts as ONE JSON line. The test runs each in a Node CHILD PROCESS
+// capped with `--max-old-space-size` — the stand-in for the production cap, which local workerd
+// does not enforce (NullIsolateLimitEnforcer); a child that dies of V8's heap limit is the local
+// spelling of "Durable Object's isolate exceeded its memory limit and was reset". A process, not a
+// worker thread, on purpose: a heap death inside `JSON.parse` or `v8.serialize` aborts the whole
+// process, and a thread would take the test runner with it (measured: two rows vanished). By hand:
+// `node memory-budget.test-support.ts <scenario> '<json args>'`.
 //
 // The two platform copies a real read pays are reproduced deliberately: the Workers-RPC result
 // serialization (`v8.serialize` — the same ValueSerializer bytes workerd caps at 32 MiB,

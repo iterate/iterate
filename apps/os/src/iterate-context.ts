@@ -53,7 +53,7 @@ import {
   GLOBAL_PROJECT_ID,
   type DurableObjectAddress,
 } from "./context/paths.ts";
-import { SessionTeardown } from "./session-teardown.ts";
+import { SessionTeardown } from "./session.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
