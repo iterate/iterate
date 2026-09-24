@@ -5,9 +5,7 @@
  * swaps `cloudflare:workers` for src/test/cloudflare-workers-shim.ts.
  */
 import { createHmac } from "node:crypto";
-import { createServer } from "node:http";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { pkceS256 } from "./seal.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
@@ -15,6 +13,7 @@ import {
   DEFAULT_CLIENT_SECRET,
   type PetshopState,
 } from "./state.ts";
+import { startReceiver } from "./test/receiver.ts";
 import { makeShop, ORIGIN, type Shop } from "./test/shop.ts";
 
 /** What POST /__backdoor/clients returns. */
@@ -412,7 +411,7 @@ test("token endpoint outage: requires a client and rejects a non-integer times",
 
 test("webhooks: fires HMAC-signed webhooks the receiver can verify", async () => {
   const shop = makeShop();
-  const receiver = await startReceiver();
+  const receiver = await startReceiver("x-petshop-signature-256");
   try {
     const fire = await shop.call(
       "/__backdoor/webhooks/fire",
@@ -434,7 +433,7 @@ test("webhooks: fires HMAC-signed webhooks the receiver can verify", async () =>
 
 test("webhooks: badSignature deliveries fail verification; rotation switches the key", async () => {
   const shop = makeShop();
-  const receiver = await startReceiver();
+  const receiver = await startReceiver("x-petshop-signature-256");
   try {
     await shop.call(
       "/__backdoor/webhooks/fire",
@@ -767,28 +766,6 @@ async function backdoorState(shop: Shop): Promise<PetshopState> {
 }
 
 const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
-
-/** A local HTTP sink capturing exactly what the shop delivered. */
-async function startReceiver() {
-  const received: { body: string; signature: string | null }[] = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.on("data", (chunk) => (body += chunk));
-    request.on("end", () => {
-      received.push({
-        body,
-        signature: request.headers["x-petshop-signature-256"]?.toString() ?? null,
-      });
-      response.writeHead(200).end("ok");
-    });
-  });
-  const port = await listenOnFetchSafePort(server);
-  return {
-    url: `http://127.0.0.1:${port}/hook`,
-    received,
-    close: () => new Promise((resolve) => server.close(resolve)),
-  };
-}
 
 const hexHmac = (secret: string, body: string) =>
   `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;

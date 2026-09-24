@@ -9,10 +9,9 @@
  * even sees — the private key.
  */
 import { createHmac } from "node:crypto";
-import { createServer } from "node:http";
 import { expect, test, vi } from "vitest";
-import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID } from "./state.ts";
+import { startReceiver } from "./test/receiver.ts";
 import { makeShop, type Shop } from "./test/shop.ts";
 
 type AppKeys = Awaited<ReturnType<typeof generateAppKeys>>;
@@ -194,7 +193,7 @@ test("installation webhooks: deliver mode POSTs the x-hub-signature-256 header (
   const shop = makeShop();
   const { publicKeyPem } = (await sharedKeys()).app;
   await shop.call("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
-  const receiver = await startReceiver();
+  const receiver = await startReceiver("x-hub-signature-256");
   try {
     // This test is about the SIGNATURE SHAPE, not TCP reliability: a
     // loopback fetch can transiently fail in the CI sandbox (status 0), so
@@ -312,25 +311,3 @@ function appJwtClaims(
 
 const hexHmac = (secret: string, body: string) =>
   `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
-
-/** A local HTTP sink capturing the GitHub-shaped signature header + body. */
-async function startReceiver() {
-  const received: { body: string; signature: string | null }[] = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.on("data", (chunk) => (body += chunk));
-    request.on("end", () => {
-      received.push({
-        body,
-        signature: request.headers["x-hub-signature-256"]?.toString() ?? null,
-      });
-      response.writeHead(200).end("ok");
-    });
-  });
-  const port = await listenOnFetchSafePort(server);
-  return {
-    url: `http://127.0.0.1:${port}/hook`,
-    received,
-    close: () => new Promise((resolve) => server.close(resolve)),
-  };
-}
