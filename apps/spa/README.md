@@ -21,7 +21,7 @@ Deploy: `pnpm --dir apps/spa run deploy --env prd` → https://iterate-spa.itera
 talks to https://os.iterate.com by default.
 
 Production deploys automatically on main via `.depot/workflows/deploy-spa.yml`, including changes
-in `apps/browser-extension`. `envs.ts` owns worker names/accounts; Doppler `project-worker`
+in `apps/browser-extension`. `envs.ts` owns worker names/accounts; Doppler `os`
 supplies credentials. `--env preview` targets the separate preview account.
 
 `pnpm --filter @iterate-com/spa build` copies the static files and packages the Chrome extension

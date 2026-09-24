@@ -33,7 +33,7 @@ describe("detachExternalDurableObjectBindings", () => {
               class_name: "CapabilityHost",
               name: "CAPABILITY_HOST",
               namespace_id: "target-capability-host",
-              script_name: "os-next-preview",
+              script_name: "os-preview",
               type: "durable_object_namespace",
             },
             {
@@ -81,9 +81,9 @@ describe("detachExternalDurableObjectBindings", () => {
     await expect(
       detachExternalDurableObjectBindings({
         ctx: { cf } as never,
-        targetWorkerName: "os-next-preview",
+        targetWorkerName: "os-preview",
         targetNamespaceIds: ["target-capability-host", "target-project"],
-        workerNames: ["os-next-preview", "sidecar", "unrelated"],
+        workerNames: ["os-preview", "sidecar", "unrelated"],
       }),
     ).resolves.toEqual([
       {
@@ -108,7 +108,7 @@ describe("detachExternalDurableObjectBindings", () => {
         { name: "REDACTED_SECRET", type: "secret_text" },
       ],
     });
-    expect(cf.mock.calls.some(([path]) => path.includes("os-next-preview/settings"))).toBe(false);
+    expect(cf.mock.calls.some(([path]) => path.includes("os-preview/settings"))).toBe(false);
     expect(cf.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
   });
 
@@ -121,9 +121,9 @@ describe("detachExternalDurableObjectBindings", () => {
 
     await detachExternalDurableObjectBindings({
       ctx: { cf } as never,
-      targetWorkerName: "os-next-preview",
+      targetWorkerName: "os-preview",
       targetNamespaceIds: ["target-project"],
-      workerNames: ["os-next-preview", "dash-preview", "agents-preview", "unrelated-worker"],
+      workerNames: ["os-preview", "dash-preview", "agents-preview", "unrelated-worker"],
     });
 
     expect(scanned.sort()).toEqual(["agents-preview", "dash-preview", "unrelated-worker"]);
@@ -135,7 +135,7 @@ describe("detachExternalDurableObjectBindings", () => {
         {
           name: "PROJECT",
           namespace_id: "target-project",
-          script_name: "os-next-preview",
+          script_name: "os-preview",
           type: "durable_object_namespace",
         },
       ],
@@ -148,9 +148,9 @@ describe("detachExternalDurableObjectBindings", () => {
     await expect(
       detachExternalDurableObjectBindings({
         ctx: { cf } as never,
-        targetWorkerName: "os-next-preview",
+        targetWorkerName: "os-preview",
         targetNamespaceIds: ["target-project"],
-        workerNames: ["os-next-preview", "sidecar"],
+        workerNames: ["os-preview", "sidecar"],
       }),
     ).rejects.toThrow("settings readback did not preserve");
   });
@@ -161,30 +161,30 @@ describe("resetWorkerDurableObjects", () => {
     const applications = [
       {
         id: "sandbox-app",
-        name: "os-next-preview-SandboxBasicDurableObject",
+        name: "os-preview-SandboxBasicDurableObject",
         durable_objects: { namespace_id: "sandbox-namespace" },
       },
       {
         id: "retired-builder-app",
-        name: "os-next-preview-WorkerBuilderDurableObject",
+        name: "os-preview-WorkerBuilderDurableObject",
         durable_objects: { namespace_id: "retired-builder-namespace" },
       },
     ];
     let deployedMetadata: unknown;
     const cf = vi.fn(async (path: string, init?: RequestInit) => {
       if (path === "/workers/scripts") {
-        return [{ id: "os-next-preview" }, { id: "unrelated-worker" }];
+        return [{ id: "os-preview" }, { id: "unrelated-worker" }];
       }
       if (path.startsWith("/workers/durable_objects/namespaces?")) {
         return [
           {
             id: "sandbox-namespace",
-            script: "os-next-preview",
+            script: "os-preview",
             class: "SandboxBasicDurableObject",
           },
           {
             id: "retired-builder-namespace",
-            script: "os-next-preview",
+            script: "os-preview",
             class: "WorkerBuilderDurableObject",
           },
         ];
@@ -198,7 +198,7 @@ describe("resetWorkerDurableObjects", () => {
         );
         return undefined;
       }
-      if (path === "/workers/scripts/os-next-preview") {
+      if (path === "/workers/scripts/os-preview") {
         expect(init?.method).toBe("PUT");
         const body = init?.body;
         expect(body).toBeInstanceOf(FormData);
@@ -215,7 +215,7 @@ describe("resetWorkerDurableObjects", () => {
     await expect(
       resetWorkerDurableObjects({
         ctx: { cf } as never,
-        workerName: "os-next-preview",
+        workerName: "os-preview",
         cwd: "/tmp/os",
         credentials: {},
         compatibilityDate: "2026-07-01",
@@ -234,7 +234,7 @@ describe("resetWorkerDurableObjects", () => {
     expect(applications).toEqual([
       {
         id: "sandbox-app",
-        name: "os-next-preview-SandboxBasicDurableObject",
+        name: "os-preview-SandboxBasicDurableObject",
         durable_objects: { namespace_id: "sandbox-namespace" },
       },
     ]);
@@ -248,7 +248,7 @@ describe("resetWorkerDurableObjects", () => {
           class_name: "Project",
           name: "PROJECT",
           namespace_id: "project-namespace",
-          script_name: "os-next-preview",
+          script_name: "os-preview",
           type: "durable_object_namespace",
         },
       ],
@@ -256,10 +256,10 @@ describe("resetWorkerDurableObjects", () => {
     let uploadAttempts = 0;
     const cf = vi.fn(async (path: string, init?: RequestInit) => {
       if (path === "/workers/scripts") {
-        return [{ id: "os-next-preview" }, { id: "branch-sidecar" }, { id: "unrelated-worker" }];
+        return [{ id: "os-preview" }, { id: "branch-sidecar" }, { id: "unrelated-worker" }];
       }
       if (path.startsWith("/workers/durable_objects/namespaces?")) {
-        return [{ id: "project-namespace", script: "os-next-preview", class: "Project" }];
+        return [{ id: "project-namespace", script: "os-preview", class: "Project" }];
       }
       if (path === "/containers/applications") return [];
       if (path === "/workers/scripts/branch-sidecar/settings") {
@@ -268,7 +268,7 @@ describe("resetWorkerDurableObjects", () => {
         sidecarSettings.bindings = patch.bindings;
         return undefined;
       }
-      if (path === "/workers/scripts/os-next-preview") {
+      if (path === "/workers/scripts/os-preview") {
         uploadAttempts++;
         if (uploadAttempts === 1) {
           throw new Error(
@@ -283,7 +283,7 @@ describe("resetWorkerDurableObjects", () => {
     await expect(
       resetWorkerDurableObjects({
         ctx: { cf } as never,
-        workerName: "os-next-preview",
+        workerName: "os-preview",
         cwd: "/tmp/os",
         credentials: {},
         compatibilityDate: "2026-07-01",
@@ -309,7 +309,7 @@ describe("resetWorkerDurableObjects", () => {
           class_name: "Project",
           name: "PROJECT",
           namespace_id: "project-namespace",
-          script_name: "os-next-preview",
+          script_name: "os-preview",
           type: "durable_object_namespace",
         },
       ],
@@ -317,10 +317,10 @@ describe("resetWorkerDurableObjects", () => {
     let uploadAttempts = 0;
     const cf = vi.fn(async (path: string, init?: RequestInit) => {
       if (path === "/workers/scripts") {
-        return [{ id: "os-next-preview" }, { id: "branch-sidecar" }];
+        return [{ id: "os-preview" }, { id: "branch-sidecar" }];
       }
       if (path.startsWith("/workers/durable_objects/namespaces?")) {
-        return [{ id: "project-namespace", script: "os-next-preview", class: "Project" }];
+        return [{ id: "project-namespace", script: "os-preview", class: "Project" }];
       }
       if (path === "/containers/applications") return [];
       if (path === "/workers/scripts/branch-sidecar/settings") {
@@ -329,7 +329,7 @@ describe("resetWorkerDurableObjects", () => {
         sidecarSettings.bindings = patch.bindings;
         return undefined;
       }
-      if (path === "/workers/scripts/os-next-preview") {
+      if (path === "/workers/scripts/os-preview") {
         uploadAttempts++;
         if (uploadAttempts === 1) {
           throw new CloudflareApiError("PUT", path, 400, [
@@ -348,7 +348,7 @@ describe("resetWorkerDurableObjects", () => {
     await expect(
       resetWorkerDurableObjects({
         ctx: { cf } as never,
-        workerName: "os-next-preview",
+        workerName: "os-preview",
         cwd: "/tmp/os",
         credentials: {},
         compatibilityDate: "2026-07-01",
@@ -364,13 +364,13 @@ describe("resetWorkerDurableObjects", () => {
     let uploadAttempts = 0;
     const cf = vi.fn(async (path: string) => {
       if (path === "/workers/scripts") {
-        return [{ id: "os-next-preview" }, { id: "branch-sidecar" }];
+        return [{ id: "os-preview" }, { id: "branch-sidecar" }];
       }
       if (path.startsWith("/workers/durable_objects/namespaces?")) {
-        return [{ id: "project-namespace", script: "os-next-preview", class: "Project" }];
+        return [{ id: "project-namespace", script: "os-preview", class: "Project" }];
       }
       if (path === "/containers/applications") return [];
-      if (path === "/workers/scripts/os-next-preview") {
+      if (path === "/workers/scripts/os-preview") {
         uploadAttempts++;
         throw new Error("Cloudflare rejected the upload for an unrelated reason");
       }
@@ -380,7 +380,7 @@ describe("resetWorkerDurableObjects", () => {
     await expect(
       resetWorkerDurableObjects({
         ctx: { cf } as never,
-        workerName: "os-next-preview",
+        workerName: "os-preview",
         cwd: "/tmp/os",
         credentials: {},
         compatibilityDate: "2026-07-01",

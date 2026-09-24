@@ -11,7 +11,7 @@ export default function setup() {
   } catch (error) {
     throw new Error(
       [
-        "Playwright auth setup failed. Run with `doppler run --project project-worker --config preview -- pnpm spec` against a preview.",
+        "Playwright auth setup failed. Run with `doppler run --project os --config preview -- pnpm spec` against a preview.",
         error instanceof Error ? error.message : String(error),
       ].join("\n\n"),
     );

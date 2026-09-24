@@ -33,7 +33,7 @@ Substantive PRs get a **risk map** section:
 
 A reviewer should know where to spend attention before opening the diff.
 
-CI writes managed sections into the PR body on each push: `<!-- loc-report -->…<!-- /loc-report -->` (the LOC table, `scripts/ci/loc-report.ts`), `<!-- os-next-preview:begin -->…<!-- os-next-preview:end -->` (the preview links), and Bugbot's `<!-- CURSOR_SUMMARY -->…<!-- /CURSOR_SUMMARY -->`. Editing the description does not rewrite them.
+CI writes managed sections into the PR body on each push: `<!-- loc-report -->…<!-- /loc-report -->` (the LOC table, `scripts/ci/loc-report.ts`), `<!-- os-preview:begin -->…<!-- os-preview:end -->` (the preview links), and Bugbot's `<!-- CURSOR_SUMMARY -->…<!-- /CURSOR_SUMMARY -->`. Editing the description does not rewrite them.
 
 To edit a body, fetch the current one and change only your own text around those sections. Never PATCH a body written from scratch after the last push: that deletes the sections for good, and the squash commit ships without the LOC table.
 

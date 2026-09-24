@@ -65,7 +65,7 @@ export interface EnvContext<E extends DeployableEnv> {
  */
 export async function resolveEnvContext<E extends DeployableEnv>(options: {
   envs: Record<string, E>;
-  /** Doppler project the env's config lives in (e.g. "project-worker", "dash"). */
+  /** Doppler project the env's config lives in (e.g. "os", "dash"). */
   dopplerProject: string;
   /** Explicit environment name (the caller's --env flag). */
   env?: string;

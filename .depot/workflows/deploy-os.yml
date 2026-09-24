@@ -3,7 +3,7 @@ permissions:
   contents: read
   deployments: write
 concurrency:
-  # Every ref deploys to the same production Worker (os-next-prd:
+  # Every ref deploys to the same production Worker (os-prd:
   # os.iterate.com, mcp.iterate.com, *.iterate.app). Never interrupt a
   # credentialed deployment midway through its rollout.
   group: deploy-os-production
@@ -64,11 +64,10 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
-      # The Doppler project slug is still `project-worker` (the secrets bucket
-      # predates the platform's current name; renaming a Doppler project slug is a
-      # separate migration). The deployed Cloudflare Worker is os-next-prd.
+      # The Doppler project is envs.ts OS_DOPPLER_PROJECT; the deployed Cloudflare Worker is
+      # os-prd.
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project project-worker
+        run: doppler setup --config prd --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # `/version` answers `<version id> <origin>` (apps/os/src/worker.ts): the id prd serves before

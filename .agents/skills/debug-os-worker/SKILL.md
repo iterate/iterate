@@ -21,10 +21,10 @@ Never type a worker or account name from memory, because workers get renamed. Pr
 pnpm exec tsx -e 'import("./envs.ts").then((m) => console.log(m.osEnvs.prd.workerName, m.PRD_ACCOUNT_ID, m.osEnvs.preview.workerName, m.PREVIEW_AND_DEV_ACCOUNT_ID))'
 ```
 
-| Target    | `$metadata.service` in Workers Logs                                               | Credentials (`doppler run --project project-worker --config …`) |
-| --------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| prd       | `osEnvs.prd.workerName`                                                           | `prd`                                                           |
-| a preview | `osEnvs.preview.workerName`, plus `$workers.preview.slug` = `pr<n>-<branch slug>` | `preview`                                                       |
+| Target    | `$metadata.service` in Workers Logs                                               | Credentials (`doppler run --project os --config …`) |
+| --------- | --------------------------------------------------------------------------------- | --------------------------------------------------- |
+| prd       | `osEnvs.prd.workerName`                                                           | `prd`                                               |
+| a preview | `osEnvs.preview.workerName`, plus `$workers.preview.slug` = `pr<n>-<branch slug>` | `preview`                                           |
 
 A preview's name is `resolvePreviewName` in `apps/os/scripts/preview-config.ts`. The PR body
 shows it. Hosted apps log under their own workers (`<app>Envs.*.workerName`).
@@ -38,7 +38,7 @@ Logs. The dashboard is `https://dash.cloudflare.com/<account id>/workers-and-pag
 15 minutes. Replay any half hour without posting:
 
 ```sh
-doppler run --project project-worker --config prd -- \
+doppler run --project os --config prd -- \
   pnpm tsx scripts/ci/prd-fault-alarm.ts run --dry-run --at 2026-09-23T07:30:00Z
 ```
 
@@ -73,7 +73,7 @@ curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/wo
           entrypoint: ."$workers".entrypoint, outcome: ."$workers".outcome, version: ."$workers".scriptVersion.id, source}]'
 ```
 
-Run it under `doppler run --project project-worker --config <prd|preview> -- bash -c '…'`.
+Run it under `doppler run --project os --config <prd|preview> -- bash -c '…'`.
 Useful variations:
 
 - **View**: `view: "calculations"` with `calculations: [{ operator: "count" }]` and

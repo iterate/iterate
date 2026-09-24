@@ -1,5 +1,5 @@
 # THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the previews
-# of os-next-preview and of the apps on top whose PR closed without a delete, that went stale, or
+# of os-preview and of the apps on top whose PR closed without a delete, that went stale, or
 # that were hand-named and left idle, plus any per-preview resource that outlived its preview. The
 # rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a failed cleanup,
 # from leaking a preview.
@@ -12,7 +12,7 @@
 # Sweep now with a dispatch:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-sweep.yml --ref main
 # Depot registers the schedule once this file is on the default branch. The only Depot secret is
-# DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare credentials.
+# DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials.
 
 name: Preview sweep
 
@@ -50,7 +50,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Sweep previews whose PR is closed, or older than 7 days
