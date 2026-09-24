@@ -24,6 +24,18 @@ test("a context born at /a/b/c is announced to /, /a and /a/b — each ancestor 
   expect((await childPathsIn(project)).sort()).toEqual(["/a", "/a/b", "/a/b/c"]);
 });
 
+test("a paused ancestor still records a descendant's announcement", async () => {
+  const project = `prj_announce_${crypto.randomUUID().slice(0, 8)}`;
+  await stub(project).append({
+    type: "events.iterate.com/stream/paused",
+    payload: { reason: "test" },
+  });
+  await stub(`${project}.iterate/paused-child`).read(0, 1);
+  await until("the paused root names it", async () =>
+    (await childPathsIn(project)).includes("/paused-child"),
+  );
+});
+
 test("a user's contexts announce up to the user's root and no further: the kernel's global contexts hear nothing", async () => {
   const user = `u_${crypto.randomUUID().slice(0, 8)}`;
   await stub(`global.iterate/users/${user}/notes/today`).read(0, 1);

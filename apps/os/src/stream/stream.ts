@@ -74,6 +74,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/stream/append-schedule-cancelled",
   // the runner's own record of a run's end — a paused stream must still close a script it started
   "events.iterate.com/context/run-settled",
+  // a descendant's announcement — a paused ancestor must still learn which contexts exist below it
+  "events.iterate.com/context/child-created",
 ]);
 
 /** One waiting waitForEvent caller. In-memory only: the caller's own open RPC call keeps the DO
