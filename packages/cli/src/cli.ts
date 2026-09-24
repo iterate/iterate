@@ -162,7 +162,13 @@ const withAccountSession = async <T>(
   try {
     return await run(connection.session);
   } finally {
-    await connection.session.logout();
+    // A failed sign-out must not hide what the call answered (a minted key is printed once): the
+    // session held no refresh token on disk, and its access token lapses within the hour.
+    await connection.session.logout().catch((error: unknown) => {
+      console.error(
+        `Could not end this sign-in (${error instanceof Error ? error.message : String(error)}); end it from the Dash's Sessions page.`,
+      );
+    });
   }
 };
 const connectConfigured = async () => {
