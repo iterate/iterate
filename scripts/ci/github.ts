@@ -23,10 +23,12 @@ export function createOctokit(auth: string | undefined) {
  * still fails the job.
  *
  * Only GET, HEAD, PUT, PATCH and DELETE are asked again: each names its whole end state, so a
- * repeat after a write that did land is harmless. A POST creates (a release, a commit status,
- * a comment), and a repeat after a 5xx that had landed would create a second one, so a POST's
- * failure is thrown at once. A 4xx is an answer about the request and is never asked again.
- * Each repeat logs a `github.platform-failure-retry` warn.
+ * repeat after a write that did land is harmless. A POST creates (a release, a comment), and a
+ * repeat after a 5xx that had landed would create a second one, so a POST's failure is thrown at
+ * once, except a commit status: GitHub reports the latest status per context, so a second copy
+ * changes nothing (a 503 on the CI trace's status failed Main OS e2e's trace job, 2026-09-24).
+ * A 4xx is an answer about the request and is never asked again. Each repeat logs a
+ * `github.platform-failure-retry` warn.
  */
 export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly number[]) {
   octokit.hook.wrap("request", async (request, options) => {
@@ -38,7 +40,7 @@ export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly
         const delayMs = delaysMs[attempt - 1];
         const failure = githubPlatformFailure(error);
         if (delayMs === undefined || !failure) throw error;
-        if (!idempotentMethods.has(options.method)) throw error;
+        if (!idempotentMethods.has(options.method) && !repeatableRoutes.has(route)) throw error;
         console.warn({
           event: "github.platform-failure-retry",
           route,
@@ -54,6 +56,7 @@ export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly
 }
 
 const idempotentMethods = new Set(["GET", "HEAD", "PUT", "PATCH", "DELETE"]);
+const repeatableRoutes = new Set(["POST /repos/{owner}/{repo}/statuses/{sha}"]);
 
 /**
  * `@octokit/request` throws an `HttpError` for every failure: with a `response` when GitHub
