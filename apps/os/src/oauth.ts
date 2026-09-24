@@ -12,6 +12,7 @@ import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
+import { appendAccountFacts } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
@@ -152,33 +153,15 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
   const key = `${grant.userId}:${grant.grantId}`;
   if ((grantUseRecordedAt.get(key) ?? 0) > now - GRANT_USE_MEMO_MS) return;
   grantUseRecordedAt.set(key, now);
-  const name = DurableObjectNameCodec.stringify({
-    projectId: GLOBAL_PROJECT_ID,
-    path: `/users/${grant.userId}`,
-  });
-  const caller = {
-    principal: { actor: grant.userId, email: grant.email },
-    grant: grant.grantId,
-  };
-  const contextNamespace = env.ITERATE_CONTEXT;
-  const context = contextNamespace.getByName(name);
   try {
-    await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
-    // Stamped `source.platform` through the fixed point, as session.ts `publishAccountFact` says.
-    await context.invoke(
-      [
-        "itx",
-        "builtins",
-        [
-          "append",
-          {
-            type: "events.iterate.com/account/grant-used",
-            payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,
-          },
-        ],
-      ],
-      [],
-      { ...caller, platform: true },
+    await appendAccountFacts(
+      env.ITERATE_CONTEXT,
+      grant.userId,
+      {
+        type: "events.iterate.com/account/grant-used",
+        payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,
+      },
+      { principal: { actor: grant.userId, email: grant.email }, grant: grant.grantId },
     );
   } catch (error) {
     grantUseRecordedAt.delete(key); // the next use tries again

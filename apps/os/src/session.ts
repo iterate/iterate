@@ -200,29 +200,31 @@ export function publishAccountFact(
   facts: StreamEventInput | StreamEventInput[],
   caller: Caller,
 ): void {
-  const name = DurableObjectNameCodec.stringify({
-    projectId: GLOBAL_PROJECT_ID,
-    path: `/users/${userId}`,
-  });
-  const context = input.contextNamespace.getByName(name);
-  const events = Array.isArray(facts) ? facts : [facts];
   input.waitUntil(
-    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; neither answer is
-    // read, so `unknown` is all the promises need to be. Several facts are appended in ONE call,
-    // so they land in the order given.
-    (context.invoke(["itx", "processors", ["enable", "account"]], [], caller) as Promise<unknown>)
-      .then(
-        () =>
-          context.invoke(["itx", "builtins", ["append", ...events]], [], {
-            ...caller,
-            platform: true,
-          }) as Promise<unknown>,
-      )
-      .then(
-        () => undefined,
-        () => undefined,
-      ),
+    appendAccountFacts(input.contextNamespace, userId, facts, caller).catch(() => undefined),
   );
+}
+
+/** THE ACCOUNT APPEND itself, awaited and throwing: the account processor's row on `/users/<userId>`
+ *  (a second enable appends nothing), then the facts through the platform's fixed point, stamped
+ *  `source.platform`. `publishAccountFact` runs it best-effort; a grant's end (grants.ts) and a
+ *  grant's use (oauth.ts) await it. */
+export async function appendAccountFacts(
+  contextNamespace: SessionInput["contextNamespace"],
+  userId: string,
+  facts: StreamEventInput | StreamEventInput[],
+  caller: Caller,
+): Promise<void> {
+  const context = contextNamespace.getByName(
+    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: `/users/${userId}` }),
+  );
+  const events = Array.isArray(facts) ? facts : [facts];
+  await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
+  // Several facts are appended in ONE call, so they land in the order given.
+  await context.invoke(["itx", "builtins", ["append", ...events]], [], {
+    ...caller,
+    platform: true,
+  });
 }
 
 /** AN ORGANIZATION FACT, appended to the organization's own context (`/organizations/<id>`): its

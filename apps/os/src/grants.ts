@@ -4,12 +4,10 @@ import {
   OAuthProvider,
   type GrantSummary,
 } from "@cloudflare/workers-oauth-provider";
-import type { StreamEventInput } from "iterate/next/stream/processor";
 import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { PlatformAddresses } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -24,7 +22,7 @@ import {
   type Authorization,
 } from "./oauth.ts";
 import { ClientDisplayUrl, clientDisplay } from "./client-display.ts";
-import { publishAccountFact } from "./session.ts";
+import { appendAccountFacts, publishAccountFact } from "./session.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
@@ -71,49 +69,21 @@ export class GrantsRpcTarget extends RpcTarget {
       );
     return { sub: grant.userId, email: grant.email, reach: this.#auth.reach, grant };
   }
-  /** An ACCOUNT FACT on `/users/<userId>` — a token minted, a grant ended — stamped with this
-   *  caller; best-effort and async, as session.ts `publishAccountFact` says: the provider is the
-   *  truth for the grant, this is the person's record of it. */
-  #publishAccountFact(userId: string, fact: StreamEventInput): void {
-    publishAccountFact(
-      {
-        contextNamespace: this.#env.ITERATE_CONTEXT,
-        waitUntil: (promise) => this.#ctx.waitUntil(promise),
-      },
-      userId,
-      fact,
-      { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
-    );
-  }
   /** AN ACCOUNT FACT THE VERB AWAITS — a grant's end: from the moment it lands, every admission of
    *  the grant is refused (oauth.ts `grantIsRevoked` reads the account's `endedGrants`), whatever
-   *  the provider's rows still say. The row on the account first (a second enable appends nothing), then
-   *  the fact, keyed on the grant. */
+   *  the provider's rows still say. Keyed on the grant, and stamped `source.platform`
+   *  (session.ts `appendAccountFacts`): the account folds nothing else, so an end a person appends
+   *  themselves revokes nothing. */
   async #landGrantEnded(userId: string, grantId: string): Promise<void> {
-    const name = DurableObjectNameCodec.stringify({
-      projectId: GLOBAL_PROJECT_ID,
-      path: `/users/${userId}`,
-    });
-    const caller = { principal: this.#auth.principal, grant: this.#auth.grant?.grantId };
-    const context = this.#env.ITERATE_CONTEXT.getByName(name);
-    await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
-    // Stamped `source.platform` through the fixed point, as session.ts `publishAccountFact` says: the
-    // account folds nothing else, so an end a person appends themselves revokes nothing.
-    await context.invoke(
-      [
-        "itx",
-        "builtins",
-        [
-          "append",
-          {
-            type: "events.iterate.com/account/grant-ended",
-            idempotencyKey: `account/grant-ended/${grantId}`,
-            payload: { grantId } satisfies GrantEnded,
-          },
-        ],
-      ],
-      [],
-      { ...caller, platform: true },
+    await appendAccountFacts(
+      this.#env.ITERATE_CONTEXT,
+      userId,
+      {
+        type: "events.iterate.com/account/grant-ended",
+        idempotencyKey: `account/grant-ended/${grantId}`,
+        payload: { grantId } satisfies GrantEnded,
+      },
+      { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
     );
   }
   /** Any client can end its own grant. It cannot address another user's session. */
@@ -312,12 +282,22 @@ export class GrantsRpcTarget extends RpcTarget {
       .parse(await response.json());
     // The provider's access token is `<userId>:<grantId>:<secret>` (oauth-provider.ts): the grant's
     // id is its middle — the only place the mint learns it. The fact of the mint, on the account.
+    // Best-effort and async (session.ts `publishAccountFact`): the provider is the truth for the
+    // grant, this is the person's record of it.
     const [, grantId = ""] = tokens.access_token.split(":");
-    this.#publishAccountFact(session.sub, {
-      type: "events.iterate.com/account/grant-minted",
-      idempotencyKey: `account/grant-minted/${grantId}`,
-      payload: { grantId, name: data.name, projects, expiresAt } satisfies GrantMinted,
-    });
+    publishAccountFact(
+      {
+        contextNamespace: this.#env.ITERATE_CONTEXT,
+        waitUntil: (promise) => this.#ctx.waitUntil(promise),
+      },
+      session.sub,
+      {
+        type: "events.iterate.com/account/grant-minted",
+        idempotencyKey: `account/grant-minted/${grantId}`,
+        payload: { grantId, name: data.name, projects, expiresAt } satisfies GrantMinted,
+      },
+      { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
+    );
     return { token: tokens.access_token, expiresAt };
   }
 }
