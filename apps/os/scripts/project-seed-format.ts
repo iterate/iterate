@@ -94,3 +94,77 @@ export async function openProjectSeed(raw: unknown, keys: MaterialKeys) {
   }
   return { seed, secrets };
 }
+
+/** A deployment's users, organizations, memberships and projects (`project-seed structure`): what no
+ * one project seed carries — an organization's other members, a user with no project, the
+ * deployment's own organization. Identifiers are recorded but not restored: a project keeps its ID
+ * (`restoreProjectId`), while users and organizations are minted afresh by sign-in and `apply`. */
+export const DeploymentStructure = z.object({
+  capturedAt: z.iso.datetime(),
+  platform: z.url(),
+  users: z.array(z.object({ id: z.string(), email: z.email() })),
+  organizations: z.array(z.object({ id: z.string(), name: z.string(), projects: z.number() })),
+  memberships: z.record(
+    z.string(),
+    z.array(z.object({ userId: z.string(), email: z.email(), role: z.enum(["owner", "member"]) })),
+  ),
+  projects: z.array(z.object({ id: z.string(), slug: z.string(), orgId: z.string() })),
+});
+export type DeploymentStructure = z.infer<typeof DeploymentStructure>;
+
+/** How a live deployment differs from a captured structure, by what survives a recreation: users
+ * by email, organizations by name, memberships by (email, role), projects by ID and slug and their
+ * organization's name. `problems` fail `verify-structure`; `notes` are what a restore does not
+ * promise — a captured user or an empty organization nobody has recreated yet (sign-in recreates a
+ * user; an empty organization has nothing to restore), and anything live that was not captured. */
+export function compareStructure(captured: DeploymentStructure, live: DeploymentStructure) {
+  const problems: string[] = [];
+  const notes: string[] = [];
+  const orgName = (structure: DeploymentStructure, orgId: string) =>
+    structure.organizations.find((org) => org.id === orgId)?.name;
+  const members = (structure: DeploymentStructure, orgId: string) =>
+    (structure.memberships[orgId] || []).map(({ email, role }) => `${email} ${role}`).sort();
+  for (const org of captured.organizations) {
+    const matches = live.organizations.filter((entry) => entry.name === org.name);
+    const want = members(captured, org.id);
+    if (matches.length > 1)
+      problems.push(`organization "${org.name}" exists ${matches.length} times`);
+    else if (!matches.length && (want.length || org.projects))
+      problems.push(`organization "${org.name}" is missing`);
+    else if (!matches.length) notes.push(`empty organization "${org.name}" was not recreated`);
+    else {
+      const have = members(live, matches[0]!.id);
+      for (const member of want)
+        if (!have.includes(member))
+          problems.push(`organization "${org.name}" lacks member ${member}`);
+      for (const member of have)
+        if (!want.includes(member))
+          notes.push(`organization "${org.name}" has an uncaptured member ${member}`);
+    }
+  }
+  for (const project of captured.projects) {
+    const restored = live.projects.find((entry) => entry.id === project.id);
+    const where = orgName(captured, project.orgId);
+    if (!restored) problems.push(`project ${project.slug} (${project.id}) is missing`);
+    else if (restored.slug !== project.slug)
+      problems.push(`project ${project.id} is ${restored.slug}, not ${project.slug}`);
+    else if (orgName(live, restored.orgId) !== where)
+      problems.push(
+        `project ${project.slug} is in "${orgName(live, restored.orgId)}", not "${where}"`,
+      );
+  }
+  const liveEmails = new Set(live.users.map((user) => user.email));
+  for (const user of captured.users)
+    if (!liveEmails.has(user.email)) notes.push(`user ${user.email} has not signed in again yet`);
+  const capturedEmails = new Set(captured.users.map((user) => user.email));
+  for (const user of live.users)
+    if (!capturedEmails.has(user.email)) notes.push(`user ${user.email} was not captured`);
+  const capturedNames = new Set(captured.organizations.map((org) => org.name));
+  for (const org of live.organizations)
+    if (!capturedNames.has(org.name)) notes.push(`organization "${org.name}" was not captured`);
+  const capturedProjects = new Set(captured.projects.map((project) => project.id));
+  for (const project of live.projects)
+    if (!capturedProjects.has(project.id))
+      notes.push(`project ${project.slug} (${project.id}) was not captured`);
+  return { problems, notes };
+}

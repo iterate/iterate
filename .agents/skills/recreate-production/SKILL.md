@@ -24,6 +24,13 @@ pnpm --dir apps/os project-seed check \
 Capture creates a mode-0600 archive, Git mirror, working clone, and receipt. It refuses to
 overwrite an earlier archive. Report only the non-secret counts and paths.
 
+Capture the users, organizations and memberships as well; a project seed carries only its own
+organization:
+
+```sh
+pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json
+```
+
 ## Restore
 
 ```sh
@@ -35,7 +42,13 @@ pnpm --dir apps/os project-seed apply \
 `apply` creates or converges the selected project through normal project, repository, and secret
 operations. It restores the config tree, organization membership, and secrets into fresh project
 identity bindings. It verifies the Git tree, published commit, membership roles, and secret
-readback before returning.
+readback before returning. Project IDs are kept; user and organization IDs are minted afresh.
+
+After every seed is applied, compare the whole structure with the capture:
+
+```sh
+pnpm --dir apps/os project-seed verify-structure --env prd --file <absolute-path>-structure.json
+```
 
 ## Boundaries
 
