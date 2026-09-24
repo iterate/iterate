@@ -21,7 +21,7 @@
 
 /** The only JWT algorithm petshop's App registry verifies (`sign()` is RS256
  * today, ES256 later). */
-export const APP_JWT_ALG = "RS256";
+const APP_JWT_ALG = "RS256";
 
 /**
  * The outcome of verifying a presented App JWT: either it is good, or it is
