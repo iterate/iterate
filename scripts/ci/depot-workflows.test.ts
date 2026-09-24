@@ -7,6 +7,18 @@ import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 const repoRoot = resolve(import.meta.dirname, "../..");
 const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
 
+type WorkflowStep = {
+  env?: Record<string, string>;
+  id?: string;
+  name?: string;
+  if?: string;
+  parallel?: WorkflowStep[];
+  run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
+  "working-directory"?: string;
+};
+
 type WorkflowJob = {
   permissions?: Record<string, string>;
   "runs-on": {
@@ -14,16 +26,7 @@ type WorkflowJob = {
     size?: string;
   };
   "timeout-minutes"?: number;
-  steps?: Array<{
-    env?: Record<string, string>;
-    id?: string;
-    name?: string;
-    if?: string;
-    run?: string;
-    uses?: string;
-    with?: Record<string, unknown>;
-    "working-directory"?: string;
-  }>;
+  steps?: WorkflowStep[];
 };
 
 type Workflow = {
@@ -550,11 +553,35 @@ describe("Depot validation capacity", () => {
     ).toEqual([]);
   });
 
-  test("runs every workspace test script", () => {
-    const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/test.yml"), "utf8");
+  test("runs every workspace test script, then Kit's firmware host tests", () => {
+    const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps ?? [];
+    const runTests = steps.findIndex((step) => step.name === "Run Tests");
+    const firmwareHostTests = steps.findIndex(
+      (step) => step.run === "pnpm --dir apps/kit firmware:test:host",
+    );
 
     expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
-    expect(workflow).toContain("run: doppler run -- pnpm test");
+    expect(steps[runTests]?.run).toBe("doppler run -- pnpm test");
+    // The host tests need cmake, so they stay out of `pnpm test` (which then runs on any machine)
+    // and keep their place in the required Test check as a step of their own.
+    expect(readPackageJson("apps/kit").scripts?.test).not.toContain("firmware:test:host");
+    expect(firmwareHostTests).toBeGreaterThan(runTests);
+    expect(steps[firmwareHostTests]?.if).toBe("${{ !cancelled() }}");
+  });
+
+  test("the Lint check runs the root lint script that local runs use", () => {
+    const steps = loadWorkflow(".depot/workflows/lint-typecheck.yml").jobs["lint-typecheck"].steps;
+    const lint = steps
+      ?.flatMap((step) => step.parallel || [step])
+      .find((step) => step.name === "Run Lint");
+    const scripts = readPackageJson(".").scripts;
+
+    expect(lint?.run).toBe("pnpm lint");
+    expect(scripts?.lint).toBe("oxlint . --threads 1 --deny-warnings");
+    // One thread for fixes too: at the default one per core, every JS worker starts its own
+    // type-aware service and grandfather-rule git spawns, and a 16-core machine hits spawn ENOMEM.
+    // Measured at 1, 4, 8 and 12 threads, more threads were no faster.
+    expect(scripts?.["lint:fix"]).toBe("oxlint . --fix --threads 1");
   });
 
   test("the preview's e2e suite and browser specs write the canonical telemetry artifact", () => {

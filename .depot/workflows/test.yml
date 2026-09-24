@@ -56,6 +56,12 @@ jobs:
           TEST_TELEMETRY_LANE: unit
           TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: doppler run -- pnpm test
+      # Kit's firmware compiled for the host (ASan/UBSan) and run under CTest. Its own step, not
+      # part of Kit's `test`, so `pnpm test` runs where cmake is missing; the image has cmake.
+      # `!cancelled()`, so a unit-test failure does not hide the firmware result.
+      - name: Run Kit firmware host tests
+        if: ${{ !cancelled() }}
+        run: pnpm --dir apps/kit firmware:test:host
       - name: Normalize and send test telemetry
         if: always()
         env:

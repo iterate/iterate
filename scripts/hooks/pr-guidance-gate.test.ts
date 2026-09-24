@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
 const projectDir = join(import.meta.dirname, "..", "..");
+const bash = which("bash");
 
 test("non-gh commands pass through untouched", () => {
   expect(runHook("pnpm test")).toMatchObject({ status: 0, stderr: "" });
@@ -55,24 +57,69 @@ test("a stale hash — the doc changed since it was read — is blocked again", 
   });
 });
 
+// The tests above use this machine's PATH, so they cover only the hash tool it has. These cover
+// each case on every machine.
+test.each(["sha1sum", "shasum"])("with only %s on the PATH, the gate blocks and acks", (tool) => {
+  using path = pathWith([tool]);
+  const denied = runHook(`gh pr create --title "hello"`, path.dir);
+  expect(denied).toMatchObject({ status: 2 });
+  expect(denied.stderr).toContain(`PR_GUIDANCE_HASH=${currentHash()}`);
+  expect(
+    runHook(`PR_GUIDANCE_HASH=${currentHash()} gh pr create --title "hello"`, path.dir),
+  ).toMatchObject({ status: 0, stderr: "" });
+});
+
+test("with no hash tool, a gated command is blocked rather than let through", () => {
+  using path = pathWith([]);
+  expect(runHook(`gh pr create --title "hello"`, path.dir)).toMatchObject({
+    status: 2,
+    stderr: "pr-guidance-gate: need shasum or sha1sum to hash docs/pull-requests.md\n",
+  });
+  expect(runHook("pnpm test", path.dir)).toMatchObject({ status: 0, stderr: "" });
+});
+
 // spawn the real hook script the way Claude Code does: PreToolUse payload on stdin,
 // CLAUDE_PROJECT_DIR in the environment
-function runHook(command: string) {
+function runHook(command: string, path = process.env.PATH) {
   const payload = JSON.stringify({
     session_id: "test-session",
     tool_name: "Bash",
     tool_input: { command, description: "test command" },
   });
-  const result = spawnSync("bash", [join(import.meta.dirname, "pr-guidance-gate.sh")], {
+  const result = spawnSync(bash, [join(import.meta.dirname, "pr-guidance-gate.sh")], {
     input: payload,
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, PATH: path },
   });
   return { status: result.status, stderr: result.stderr };
 }
 
-// first 8 hex chars of `shasum docs/pull-requests.md` — the ack token the hook expects
+// first 8 hex chars of docs/pull-requests.md's SHA-1 — the ack token the hook expects
 function currentHash() {
   const doc = readFileSync(join(projectDir, "docs", "pull-requests.md"));
   return createHash("sha1").update(doc).digest("hex").slice(0, 8);
+}
+
+// A PATH directory holding only the hook's external commands: `cat`, `cut` and the given hash
+// tools. Each hash tool runs whichever SHA-1 tool this machine has (macOS ships `shasum`, Arch
+// Linux only `sha1sum`), so both of the hook's branches hash for real on every machine.
+function pathWith(hashTools: string[]) {
+  const dir = mkdtempSync(join(tmpdir(), "pr-guidance-gate-"));
+  for (const tool of ["cat", "cut"]) symlinkSync(which(tool), join(dir, tool));
+  const sha1 = which("sha1sum", "shasum");
+  for (const tool of hashTools) {
+    writeFileSync(join(dir, tool), `#!${bash}\nexec ${sha1} "$@"\n`, { mode: 0o755 });
+  }
+  return { dir, [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+// the path of the first of `tools` on this machine's PATH
+function which(...tools: string[]) {
+  for (const tool of tools) {
+    const found = spawnSync("bash", ["-c", 'command -v "$1"', "which", tool], {
+      encoding: "utf8",
+    }).stdout.trim();
+    if (found) return found;
+  }
+  throw new Error(`none of ${tools.join(", ")} is on the PATH`);
 }
