@@ -790,5 +790,10 @@ if (!scenario) {
 }
 await scenario(JSON.parse(argsJson || "{}") as Record<string, number>);
 notePeakHeap();
-// THE REPORT: one JSON line — the runner parses it; a heap death never gets here.
-console.log(JSON.stringify({ ...facts, peakHeapMB: Math.round(peakHeapBytes / MiB) }));
+// THE REPORT: one JSON line — the runner parses it; a heap death never gets here. Once it is
+// written the child exits: a scenario whose sinks never answer leaves each call's 20 s cursor
+// watchdog armed, which would hold the child open for 20–40 s after its facts are in.
+process.stdout.write(
+  `${JSON.stringify({ ...facts, peakHeapMB: Math.round(peakHeapBytes / MiB) })}\n`,
+  () => process.exit(0),
+);

@@ -14,7 +14,7 @@ import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oaut
 import { rpcResponse } from "../src/rpc.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
+import { adminSession, controlPlane, loginPassword, ORIGIN, stub, until } from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
@@ -580,7 +580,11 @@ test("a live session rides out a deploy's Durable Object reset during its re-che
     warns.mockRestore();
   });
   // Real elapsed time: the 30 s tick meets the reset, and its retry 2 s later reads through.
-  await new Promise((resolve) => setTimeout(resolve, 34_000));
+  await until(
+    "the re-check's retry reads through",
+    () => membershipReads.mock.settledResults.some((result) => result.type === "fulfilled"),
+    45_000,
+  );
   const reads = membershipReads.mock.calls.length; // mockRestore clears the record
   membershipReads.mockRestore();
   expect(reads).toBeGreaterThanOrEqual(2);

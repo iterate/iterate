@@ -45,11 +45,18 @@ const onUnhandledError = (error: unknown): boolean | void => {
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
  *  row that waits a real deadline started after ninety seconds of short files and the run ended at
  *  170 s instead of its floor (measured 2026-09-21). These files start in slot one, longest first;
- *  everything else follows vitest's own order. With rows concurrent the poles are (deployed, 2026-09-22):
- *  session's 30 s grant re-check 34 s, the dormant deadline 24 s, the 144 MiB file's sequential rows,
- *  the slow client's upload 10–15 s, then nothing above 12 s. A file that stops being long drops off
- *  this list. */
+ *  everything else follows vitest's own order, which runs every unit file before the first workers
+ *  file. `pnpm test` (unit + workers, 3 slots in CI), 2026-09-24: oauth's 30 s re-check rows 128 s,
+ *  the facet-push watchdog 60 s, the memory children ~35 s; alarm-and-pins (42 s) needs no head start.
+ *  `pnpm e2e`, with rows concurrent (deployed): context-watchdog's two eviction windows 37 s (it
+ *  started 13 s in behind the first sixteen files), session's 30 s grant re-check 34 s, the dormant
+ *  deadline 24 s, the 144 MiB file's sequential rows, the slow client's upload 10–15 s. A file that
+ *  stops being long drops off this list. */
 const LONG_POLES = [
+  "__workers-tests__/oauth.test.ts",
+  "__workers-tests__/facet-push-timeout-heals.test.ts",
+  "src/stream/memory-budget.test.ts",
+  "e2e/context-watchdog.e2e.test.ts",
   "e2e/session.e2e.test.ts",
   "e2e/scheduled-appends-dormant.e2e.test.ts",
   "e2e/isolate-ceilings-deployed.e2e.test.ts",
@@ -68,7 +75,7 @@ class LongPolesFirst extends BaseSequencer {
 export default defineConfig({
   test: {
     // The sequencer is a ROOT option — vitest reads `ctx.config.sequence.sequencer`, never a project's;
-    // it orders every project's files, and only the e2e files are named in LONG_POLES.
+    // it orders every project's files, and one list serves all three that name a pole.
     sequence: { sequencer: LongPolesFirst },
     globalSetup: ["./vitest.global-setup.ts"],
     // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
