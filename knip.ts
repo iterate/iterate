@@ -37,8 +37,7 @@ export default {
         "eslint-plugin-codegen",
         "eslint-plugin-eslint-comments",
         "eslint-plugin-import",
-        // The .depot/workflows steps run these bins from the root.
-        "tsx",
+        // The .depot/workflows steps run this bin from the root.
         "trpc-cli",
         // `cloudflare:workers` parses as the "cloudflare" package.
         "cloudflare",

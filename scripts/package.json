@@ -11,6 +11,7 @@
     "@iterate-com/shared": "workspace:*",
     "@octokit/rest": "^22.0.0",
     "@slack/web-api": "^7.14.1",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
     "yaml": "^2.8.3",
     "zod": "4.5.4"
   },
