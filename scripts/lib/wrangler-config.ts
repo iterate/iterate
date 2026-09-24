@@ -11,7 +11,7 @@ export const OBSERVABILITY = {
 
 /** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
  *  a workers.dev origin ⇒ `<subdomain>.workers.dev`, the account's own). The zone a hostname routes
- *  on: the start apps' routes and os-next's wrangler generator and ensure-resources. */
+ *  on: the start apps' routes and the OS platform's wrangler config and ensure-resources. */
 export function registrableDomainOf(urlOrHostname: string) {
   const hostname = urlOrHostname.includes("://") ? new URL(urlOrHostname).hostname : urlOrHostname;
   const labels = hostname.split(".");

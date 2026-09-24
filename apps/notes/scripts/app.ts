@@ -6,6 +6,5 @@ export const notes = {
   name: "notes",
   root: new URL("..", import.meta.url),
   envs: notesEnvs,
-  nothingToErase: "Notes owns no server data; notes belong to their projects.",
 };
 if (process.argv[1]?.endsWith("app.ts")) void startAppCli(notes).run();

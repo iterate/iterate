@@ -6,6 +6,5 @@ export const voice = {
   name: "voice",
   root: new URL("..", import.meta.url),
   envs: voiceEnvs,
-  nothingToErase: "Voice owns no server data; calls belong to their projects.",
 };
 if (process.argv[1]?.endsWith("app.ts")) void startAppCli(voice).run();

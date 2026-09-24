@@ -1,15 +1,11 @@
 /**
- * The scripts of a TanStack Start app on Workers — dash, agents, notes, voice and kit. Each carried
- * byte-identical copies of deploy, ensure-resources, erase-data and generate-route-tree that
- * differed only in the app's name; this is the one copy. An app describes itself in
- * apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the Cloudflare Vite plugin
- * `startAppWorkerConfig`, and its package scripts run `startAppCli`, whose commands keep the old
- * scripts' names:
+ * The scripts of a TanStack Start app on Workers — dash, agents, notes, voice and kit. An app
+ * describes itself in apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the
+ * Cloudflare Vite plugin `startAppWorkerConfig`, and its package scripts run `startAppCli`:
  *
  *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts)
  *   ensure-resources           the proxied DNS record for a custom-domain baseUrl (dash, kit); a
  *                              workers.dev baseUrl has no zone in the account, so it only warns
- *   erase-data                 nothing to erase — these apps own no server data; the line says where it lives
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
  */
@@ -42,8 +38,6 @@ export interface StartApp {
   root: URL;
   /** The app's map in envs.ts. */
   envs: Record<string, StartAppEnv>;
-  /** erase-data's whole output: the app owns no server data, and this says where the data lives instead. */
-  nothingToErase: string;
 }
 
 /** The zone one of our own ORIGINS denies: its registrable domain — except on workers.dev, where that
@@ -55,7 +49,7 @@ function ownOriginZone(url: string): string {
   return hostname.endsWith(".workers.dev") ? hostname : registrableDomainOf(hostname);
 }
 
-/** THE ZONES THAT ARE OURS, from envs.ts: every os-next deployment's origins, its project wildcard
+/** THE ZONES THAT ARE OURS, from envs.ts: every OS deployment's origins, its project wildcard
  *  and custom apexes, and the first-party apps' origins — deduped and sorted. The browser-auth gate
  *  (`appAuth` `denyZones`) refuses to connect an app to an issuer under any of them: a project host
  *  or a custom apex is userspace and could serve a look-alike issuer. */
@@ -160,15 +154,6 @@ async function ensureResources(app: StartApp, options: { env?: string }) {
     new URL(ctx.env.baseUrl).hostname,
     `${app.name[0].toUpperCase()}${app.name.slice(1)} app`,
   );
-}
-
-async function eraseData(app: StartApp, options: { env: string }) {
-  const ctx = await resolveEnvContext({
-    envs: app.envs,
-    dopplerProject: app.name,
-    env: options.env,
-  });
-  console.log(`${ctx.name}: ${app.nothingToErase}`);
 }
 
 /**
@@ -286,7 +271,7 @@ export function writeStartAppPreviewConfig(app: StartApp, input: { issuer: strin
 /**
  * The app's command line: `tsx scripts/app.ts <command> [--env <name>]` behind its package scripts.
  * `--env` names the envs.ts entry; deploy and ensure-resources fall back to CI's DOPPLER_CONFIG
- * (env-context.ts), erase-data never does.
+ * (env-context.ts).
  */
 export function startAppCli(app: StartApp) {
   const env = z.string().describe("Target environment name from envs.ts");
@@ -299,7 +284,6 @@ export function startAppCli(app: StartApp) {
       ensureResources: t.procedure
         .input(z.object({ env: env.optional() }))
         .handler(({ input }) => ensureResources(app, input)),
-      eraseData: t.procedure.input(z.object({ env })).handler(({ input }) => eraseData(app, input)),
       generateRouteTree: t.procedure
         .input(
           z.object({

@@ -298,8 +298,7 @@ export async function resetWorkerDurableObjects(input: {
   // DURABLE_OBJECT_NOT_CONTAINER_ENABLED, and exports is one-way — error
   // 100403 forbids ever going back to `migrations`), so a tombstoned
   // container class could never come back. Kept instances become
-  // unreachable orphans like every pre-teardown DO did (D1/KV are wiped;
-  // running containers are reaped by the sandbox destroy-on-idle sweeper),
+  // unreachable orphans like every pre-teardown DO did (D1/KV are wiped),
   // and their container applications stay attached to the live namespaces.
   let applications =
     await input.ctx.cf<{ id: string; name: string; durable_objects?: { namespace_id?: string } }[]>(
