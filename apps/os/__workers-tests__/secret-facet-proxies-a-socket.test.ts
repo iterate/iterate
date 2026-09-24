@@ -165,7 +165,7 @@ test("an app's fetch expression inherits WebSocket egress through its parent con
 });
 
 /** The shop at `SHOP` for the rest of the test: the isolate's `fetch` — which the secret facet's
- *  terminal dial is — answers that origin in-process and leaves every other one alone. Its doors
+ *  terminal dial is — answers that origin in-process and leaves every other one alone. Its endpoints
  *  accept one freshly minted bearer, returned: `/capnweb` in `Authorization` (a capnweb session
  *  over the socket), `/gateway-subprotocol` as the offered `petshop.access-token.<token>`. Anything
  *  else — an unsubstituted placeholder included — is a 401 and no socket. */
@@ -186,7 +186,7 @@ function serveShop(): string {
 async function shopFetch(request: Request, accessToken: string): Promise<Response> {
   const { pathname } = new URL(request.url);
   if (request.headers.get("upgrade") !== "websocket")
-    return new Response("a websocket door", { status: 426 });
+    return new Response("a websocket endpoint", { status: 426 });
   if (pathname === "/capnweb") {
     if (request.headers.get("authorization") !== `Bearer ${accessToken}`)
       return new Response("invalid_token", { status: 401 });

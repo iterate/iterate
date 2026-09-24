@@ -10,6 +10,7 @@ files:
     "**/CMakeLists.txt",
     "!**/pnpm-lock.yaml",
   ]
+suggestions: forbidden
 ---
 
 # Ban lane, door, and seam as code metaphors
