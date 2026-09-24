@@ -73,6 +73,44 @@ for (const [label, message] of Object.entries(platformFailures)) {
   });
 }
 
+// THE PLATFORM'S OWN START (facet-host.ts `#start`, after every abort it makes and at a birth) meets
+// the same defect, and heals the same way: its one call, `listPublicMethods`, is the call that
+// rejects here, once — after `itx.facets.abort`.
+test("a platform start that rejects with the platform's clone-version text restarts once under a fresh loaded identity, and the facet answers", async () => {
+  const source = {
+    "cap.js": `
+import { FacetDurableObject } from "./processor.js";
+export class StartsFlaky extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "arm", "hello"];
+  arm() { this.ctx.storage.kv.put("reject-next-start", true); }
+  hello() { return "hello"; }
+  listPublicMethods() {
+    if (this.ctx.storage.kv.get("reject-next-start")) {
+      this.ctx.storage.kv.delete("reject-next-start");
+      throw new Error(${JSON.stringify(platformFailures.clone_version)});
+    }
+    return super.listPublicMethods();
+  }
+}`,
+  };
+  const s = stub("prj_facet_start_clone_version");
+  const call = (method: string) =>
+    s.invoke(["itx", "facets", ["get", "flaky", { source, className: "StartsFlaky" }], [method]]);
+  await call("arm");
+  const loaderIdBefore = (await runInDurableObject(
+    s,
+    (_i, state) => state.storage.kv.get("facet:flaky:loader-id") as string,
+  ))!;
+  await s.invoke(["itx", "facets", ["abort", "flaky", "restart it"]]);
+  expect(await call("hello")).toBe("hello");
+  expect(
+    await runInDurableObject(s, (_i, state) => ({
+      loaderId: state.storage.kv.get("facet:flaky:loader-id"),
+      restarts: state.storage.kv.get("facet:flaky:restarts"),
+    })),
+  ).toEqual({ loaderId: `${loaderIdBefore}#1`, restarts: 1 });
+});
+
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
   const source = {
     "cap.js": `

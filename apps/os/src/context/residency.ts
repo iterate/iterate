@@ -12,7 +12,8 @@
 //   - THE UNCLAIMED-FACET SWEEP: a loaded facet left running without a claim is reset once the
 //     context has been quiet from OUTSIDE its loaded code (FacetHost `resetUnclaimedLoadedFacets`).
 //   - THE BIRTH RESET: the same reset, run as an incarnation is born, for the facets the last one
-//     left running.
+//     left running — and a start of every facet it called, before the birth writes anything
+//     (FacetHost `startFacetsTheLastIncarnationRan`).
 // The two quiet deadlines share one pure rule (`decideQuietDeadline`), each with its own window and
 // its own clock. How these four relate to the three session-release mechanisms in the SDK and the
 // step walk: apps/os/docs/residency.md.
@@ -36,7 +37,10 @@ type ResidencyDeps = {
   /** `id` names the held actor on the watchdog's warn; `getWebSockets` counts its sockets. */
   ctx: Pick<DurableObjectState, "id" | "getWebSockets">;
   /** The facets' work in flight and live names; the reset the sweep and the birth run. */
-  facetHost: Pick<FacetHost, "snapshot" | "resetUnclaimedLoadedFacets">;
+  facetHost: Pick<
+    FacetHost,
+    "snapshot" | "resetUnclaimedLoadedFacets" | "startFacetsTheLastIncarnationRan"
+  >;
   /** The borrowed stubs: a pin, and what the release returns. */
   rpcStubs: Pick<
     RpcStubDirectory,
@@ -194,9 +198,9 @@ export class Residency {
 
   /** The first thing every alarm pass does, inside the coordinator's hold: the watchdog's
    *  decision, then the sweep's. A wake with nothing durable due is theirs alone. */
-  alarmPassStarted(now: number): void {
+  async alarmPassStarted(now: number): Promise<void> {
     this.#checkResidencyWatchdog(now);
-    this.#checkUnclaimedFacetSweep(now);
+    await this.#checkUnclaimedFacetSweep(now);
   }
 
   /** Inbound calls, facet work, script runs and pin calls in flight right now — what keeps both quiet
@@ -262,7 +266,7 @@ export class Residency {
    *  flight or the quiet period is young, or THE SWEEP — this still-resident incarnation's unclaimed
    *  loaded facets reset in place. An incarnation that evicted on time never gets here: the alarm
    *  wakes a fresh one, whose birth reset them. */
-  #checkUnclaimedFacetSweep(now: number): void {
+  async #checkUnclaimedFacetSweep(now: number): Promise<void> {
     const decision = decideQuietDeadline({
       armedFor: this.#unclaimedFacetSweepArmedFor,
       now,
@@ -276,7 +280,7 @@ export class Residency {
       return;
     }
     this.#unclaimedFacetSweepArmedFor = null;
-    const facets = this.#deps.facetHost.resetUnclaimedLoadedFacets();
+    const facets = await this.#deps.facetHost.resetUnclaimedLoadedFacets();
     if (facets.length > 0)
       console.log({
         event: "context.facets-reset-when-quiet",
@@ -286,17 +290,18 @@ export class Residency {
       });
   }
 
-  // ── THE BIRTH RESET (FacetHost `resetUnclaimedLoadedFacets`): what the last incarnation left running unclaimed ──
+  // ── THE BIRTH RESET (FacetHost `startFacetsTheLastIncarnationRan`): what the last incarnation left running unclaimed ──
 
   /** The loaded facets this incarnation's birth reset — named on its wake record. */
   #facetsResetAtBirth: string[] = [];
 
-  /** THE BIRTH RESET, run once in the DO's constructor before it serves anything: a loaded facet
-   *  the last incarnation left running without a claim ends here, before this incarnation reaches
-   *  it. Named on this incarnation's wake record, and logged: the watchdog's and the sweep's own
-   *  wake writes no record. */
-  resetUnclaimedFacetsAtBirth(): void {
-    this.#facetsResetAtBirth = this.#deps.facetHost.resetUnclaimedLoadedFacets();
+  /** THE BIRTH RESET, run once in the DO's constructor before it serves anything or writes
+   *  anything: every facet the last incarnation called is started, and a loaded one it left
+   *  running without a claim is reset first — it ends here, before this incarnation reaches it.
+   *  Named on this incarnation's wake record, and logged: the watchdog's and the sweep's own wake
+   *  writes no record. */
+  async resetUnclaimedFacetsAtBirth(): Promise<void> {
+    this.#facetsResetAtBirth = await this.#deps.facetHost.startFacetsTheLastIncarnationRan();
     if (this.#facetsResetAtBirth.length > 0)
       console.log({
         event: "context.facets-reset-at-birth",

@@ -306,8 +306,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#platformOrigin =
         this.#appConfig.urls.os ||
         ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
+      // Before this incarnation writes anything: the facets the last one ran are started (and the
+      // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
+      await this.#residency.resetUnclaimedFacetsAtBirth();
+      this.#stream.storage.countIncarnation();
       this.#stream.appendBirthRecord();
-      this.#residency.resetUnclaimedFacetsAtBirth();
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
       // source wants (the last incarnation's watchdog or sweep) is superseded instead.
@@ -323,6 +326,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
+    incarnationCountedByHost: true,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
@@ -908,7 +912,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       await this.#alarmCoordinator.pass(
         async () => {
-          this.#residency.alarmPassStarted(wokeAt);
+          await this.#residency.alarmPassStarted(wokeAt);
           // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
           // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
           // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.

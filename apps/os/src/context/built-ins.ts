@@ -333,9 +333,9 @@ export interface BuiltInScope extends LibraryRoots {
     /** RESET ONE FACET — `ctx.facets.abort(name)` from the HOST (facet-host.ts `abort`), so it works
      *  on any facet, a class of this worker or a loaded one, an SDK host or not, and on one that
      *  would never answer a call: its instance goes and every call in flight on it rejects
-     *  FACET_ABORTED; its storage stays; the next call starts it fresh from its startup memo. This
-     *  context's incarnation is untouched. The fact is `context/facet-aborted { name, reason?,
-     *  callerPath?, app? }`. NO_FACET for a name never hosted here. */
+     *  FACET_ABORTED; its storage stays; a fresh instance is started from its startup memo before
+     *  this answers. This context's incarnation is untouched. The fact is `context/facet-aborted {
+     *  name, reason?, callerPath?, app? }`. NO_FACET for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
   };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
@@ -487,10 +487,10 @@ interface BuildBuiltInsDeps {
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
   /** The facet host's entry, verbatim (accepted trade: a busy stateful facet pins its stream), and the
-   *  host's synchronous reset of one facet (facet-host.ts `abort`). */
+   *  host's reset of one facet, started again before it answers (facet-host.ts `abort`). */
   facets: {
     get: BuiltInScope["facets"]["get"];
-    abort(name: string, reason: string | undefined): void;
+    abort(name: string, reason: string | undefined): Promise<void>;
   };
   /** The platform's own call into a facet of this context, past the methods its class lists for
    *  callers (context/facet-host.ts `callFacetAsPlatform`): the `itx.secrets` verbs' way to the
@@ -957,13 +957,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rpcStubs: deps.rpcStubs,
     facets: {
       get: deps.facets.get,
-      // The reset and its fact in ONE synchronous turn — the host's abort, then the append — so no
-      // event lands between them, and the fact's own delivery to a processor facet meets the fresh
+      // The reset, then its fact: the host's abort and restart hold every other event off
+      // (facet-host.ts `#restart`), so the fact's own delivery to a processor facet meets the fresh
       // instance, never the one going away.
       abort: async (name, reasonInput) => {
         const reason = abortReasonOf(reasonInput, "itx.facets.abort");
         const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
-        deps.facets.abort(name, reason);
+        await deps.facets.abort(name, reason);
         const [aborted] = await append({
           type: "events.iterate.com/context/facet-aborted",
           payload: { name, reason, callerPath, app },

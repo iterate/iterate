@@ -18,7 +18,7 @@
 // edge (measured), and a TIMER 30 s after the pin's last use returns the stubs and closes the sockets
 // — memory releasing memory, no durable alarm. A facet is NOT a pin: on the edge it does not hold
 // the actor (it runs on after it; the next incarnation's birth resets it unless it is claimed —
-// FacetHost `resetUnclaimedLoadedFacets`). Here in workerd a materialized facet or a borrowed stub does keep the DO non-hibernatable
+// FacetHost `startFacetsTheLastIncarnationRan`). Here in workerd a materialized facet or a borrowed stub does keep the DO non-hibernatable
 // (workerd#6800 — evictDurableObject on such a DO times out after 30s, "still has active
 // references"), so a test must release BEFORE it can evict (support.ts's `releasePins` runs the release
 // directly, facets included).

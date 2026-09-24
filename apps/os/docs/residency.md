@@ -15,8 +15,8 @@ on purpose or cannot stop others from holding. The last one records whatever the
 | 2   | `itxAnswerDetachedFromSession`         | a caller's hold on what the context answered              | `src/context/dispatch.ts`, called by the DO's `invoke`           | #2855                                |
 | 3   | `awaitAnswerReleasedIfRejected`        | a rejected call's session                                 | `src/context/dispatch.ts`, called by the step walk               | #2874                                |
 | 4   | The pins' release, 30 s                | borrowed rpc stubs, the library's open sockets            | [`src/context/residency.ts`](../src/context/residency.ts)        | named in #2756                       |
-| 5   | The birth reset                        | unclaimed loaded facets the last incarnation left running | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`           | #2905                                |
-| 6   | The quiet-period sweep, 60 s           | the same facets, while the context is still resident      | `residency.ts`                                                   | #2905, clock fixed in #2922          |
+| 5   | The birth reset                        | unclaimed loaded facets the last incarnation left running | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`     | #2905                                |
+| 6   | The quiet-period sweep, 60 s           | the same facets, while the context is still resident      | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`           | #2905, clock fixed in #2922          |
 | 7   | The residency watchdog, 15 min         | nothing: it records a held context                        | `residency.ts`, `src/context/residency-watchdog.ts`              | #2858                                |
 
 Mechanisms 4–7 live in one class, `Residency` in [`src/context/residency.ts`](../src/context/residency.ts).
@@ -37,13 +37,26 @@ The context DO forwards its entry points to it and reads its two deadlines back 
 | Anything else                                                        | a response body still streaming, a leaked session none of the above catches | 7: recorded after 15 quiet minutes, never ended                                     |
 
 A facet needs 5 and 6 on top of 1 because the context cannot end a session from its side: the
-facet holds the value. A loaded facet that keeps any value from its `env.ITX` keeps running after
+facet holds the value. Both reset only a facet called since its last start (its `facet-ran:<name>`
+row, written on its first call of an incarnation): one nobody called is not running. A loaded facet that keeps any value from its `env.ITX` keeps running after
 its context is evicted, billed per instance, and the next incarnation reuses that same instance
 (measured 2026-09-23: 19 minutes and counting, or until the next deploy). First-party facets are
 never reset: they release every round trip through `withItx`, and the `secret` facet pumps a
 proxied socket with no claim. A loaded facet that must outlive the call that started it (an LLM
 attempt, its backoff, a live voice dial) holds a claim through `runInBackground`, and a claimed
 facet is never reset.
+
+## A reset is an abort and a start
+
+On the edge, a facet that wrote a few dozen pages and then stops — aborted, or evicted with its
+context — makes one of the context's next commits fail with "Internal error in Durable Object
+storage caused object to be reset", and the whole context resets
+([`e2e/facet-abort-storage-reset.e2e.test.ts`](../e2e/facet-abort-storage-reset.e2e.test.ts) measures
+it). A facet started again before the context commits anything more avoids it. So every abort the
+platform makes (5, 6, `itx.facets.abort`, the call watchdog, a new loaded identity) is followed by a
+start under `blockConcurrencyWhile`, and a birth starts every facet the last incarnation called,
+before its first write: the reset ones after their abort, a claimed or first-party one as it is.
+FacetHost `FACET_START_WATCHDOG_MS` names every piece.
 
 ## After the last call
 
@@ -91,6 +104,7 @@ preview, 2026-09-23). So:
 | Signal                                                                                               | Written by                                                     |
 | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `stream/woken` payload `facetsReset`                                                                 | 5, on the incarnation's wake record                            |
+| warn `facet.start-failed`, `facet.platform-failure-start`                                            | a start after a reset or at birth that did not start the facet |
 | log `context.facets-reset-at-birth`                                                                  | 5                                                              |
 | log `context.facets-reset-when-quiet`                                                                | 6                                                              |
 | warn `context.held-resident-while-idle`, event `events.iterate.com/context/held-resident-while-idle` | 7; `durableObjectId` finds the held invocation in Workers Logs |
@@ -121,3 +135,5 @@ pages on 5xx, platform-failure heals and errors.
   that started it. Under the e2e run these sampled the platform: it stopped facets 0–25 s after
   their call and evicted a context mid-traffic while the control plane stalled (#2899, #2921,
   #2939). The latency guard never runs them.
+- Deployed, opt-in: `e2e/facet-abort-storage-reset.e2e.test.ts` (`RUN_FACET_ABORT_REPRO=1`) drives every
+  abort, and an eviction, with a storage-heavy facet.
