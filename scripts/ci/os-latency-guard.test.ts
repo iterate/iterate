@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import {
-  baselineOf,
+  baselineWindow,
   GuardState,
   judgeRun,
   latencyEvents,
@@ -127,14 +127,32 @@ test("a rate's budget is a floor, and halving its baseline is a regression; a me
   });
 });
 
-test("the baseline is the median of the newest 10 runs that measured the metric, and none below 5", () => {
+test("the baseline is the newest 10 runs that measured the metric, and none below 5", () => {
   const runs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((value, i) => ({
     ...stateRun(`r${i}`, []),
     judged: { "context.append": value * 10 },
   }));
-  expect(baselineOf("context.append", runs)).toBe(80); // 30…120: the 6th of 10
-  expect(baselineOf("context.append", runs.slice(0, 4))).toBe(undefined);
-  expect(baselineOf("context.wake", runs)).toBe(undefined);
+  expect(baselineWindow("context.append", runs)).toEqual([
+    30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+  ]);
+  expect(baselineWindow("context.append", runs.slice(0, 4))).toBe(undefined);
+  expect(baselineWindow("context.wake", runs)).toBe(undefined);
+});
+
+test("a metric whose runs spread wide regresses only beyond the slowest of them", () => {
+  // the slowest of 25 concurrent projects: 7 s to 21 s across runs on one commit
+  const history = [7, 9, 21, 8, 12, 10, 7].map((seconds, i) => ({
+    ...stateRun(`r${i}`, []),
+    judged: { "project.create.x25.all-ready": seconds * 1000 },
+  }));
+  const reading = (seconds: number) =>
+    judgeRun({
+      samples: { "project.create.x25.all-ready": [seconds * 1000] },
+      history,
+      scale: 1,
+    }).find((reading) => reading.metric === "project.create.x25.all-ready");
+  expect(reading(20)).toMatchObject({ baseline: 9000, regressionLine: 21000, regressed: false });
+  expect(reading(22)).toMatchObject({ regressed: true });
 });
 
 test("a metric turns red when it crossed in two runs in a row, and pages once", () => {

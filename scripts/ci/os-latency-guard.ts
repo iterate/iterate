@@ -3,8 +3,10 @@
 // one run of apps/os's perf lane — Vitest's JSON report, where each row left its raw samples on its
 // meta (apps/os/perf/record.ts) — and judges every metric's statistic against two lines:
 //   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and
-//   • a sharp REGRESSION against the guard's own rolling baseline: more than twice the median of the
-//     last 10 main runs (and 100 ms more than it), or under half of it for a rate.
+//   • a sharp REGRESSION against the guard's own rolling baseline, the last 10 main runs: more than
+//     twice their median (and 100 ms more), AND beyond the slowest of them — so a metric whose runs
+//     already spread wide (the slowest of 25 concurrent projects) does not page on its own spread.
+//     For a rate: under half the median and under the lowest.
 // Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). The
 // page is the alarm and it pages #error-pulse on a change of state only: RED once when a metric
 // crossed a line in two runs in a row (one slow run is weather; the next one confirms it — at most 3
@@ -14,8 +16,8 @@
 // no row recorded, no report.
 //
 // The memory between runs is the previous main run's `os-latency-state` artifact (depot.ts
-// `newestArtifactFile`, `stateArtifact` below): the last 20 main runs' judged values, what each crossed, and which metrics
-// are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
+// `newestArtifactFile`, `stateArtifact` below): the last 20 main runs' judged values, what each
+// crossed, and which metrics are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
 // pages whatever crossed in this run alone, marked 🧪 and mentioning nobody, and keeps no state.
 //
 //   pnpm tsx scripts/ci/os-latency-guard.ts previous-state --out <state.json>
@@ -147,8 +149,9 @@ export function judgeRun(input: {
     const summary = summarize(recorded);
     const value = summary[LATENCY_METRICS[metric].judged];
     const budget = budgetLine(metric, input.scale);
-    const baseline = baselineOf(metric, input.history);
-    const regressionLine = baseline === undefined ? undefined : regressionLineOf(metric, baseline);
+    const window = baselineWindow(metric, input.history);
+    const baseline = window && summarize(window).p50;
+    const regressionLine = window && regressionLineOf(metric, window);
     const overBudget = crosses(metric, value, budget);
     const regressed = regressionLine !== undefined && crosses(metric, value, regressionLine);
     return {
@@ -168,20 +171,22 @@ export function judgeRun(input: {
 export type Reading = ReturnType<typeof judgeRun>[number];
 type Measured = Extract<Reading, { missing: false }>;
 
-/** The median of the metric's judged value over the newest BASELINE_RUNS runs that measured it, or
- *  undefined below BASELINE_MIN_RUNS. Pure. */
-export function baselineOf(metric: LatencyMetricName, history: GuardState["runs"]) {
+/** The metric's judged values in the newest BASELINE_RUNS runs that measured it, or undefined below
+ *  BASELINE_MIN_RUNS. Pure. */
+export function baselineWindow(metric: LatencyMetricName, history: GuardState["runs"]) {
   const values = history
     .flatMap((run) => (run.judged[metric] === undefined ? [] : [run.judged[metric]]))
     .slice(-BASELINE_RUNS);
-  if (values.length < BASELINE_MIN_RUNS) return undefined;
-  return summarize(values).p50;
+  return values.length < BASELINE_MIN_RUNS ? undefined : values;
 }
 
-function regressionLineOf(metric: LatencyMetricName, baseline: number) {
+/** Past which a judged value is a sharp regression on `window`: REGRESSION_FACTOR times its median
+ *  (and REGRESSION_FLOOR_MS above it) and beyond its extreme; for a rate, the factor below. */
+function regressionLineOf(metric: LatencyMetricName, window: number[]) {
+  const { p50, max, min } = summarize(window);
   return LATENCY_METRICS[metric].unit === "events/s"
-    ? baseline / REGRESSION_FACTOR
-    : Math.max(baseline * REGRESSION_FACTOR, baseline + REGRESSION_FLOOR_MS);
+    ? Math.min(p50 / REGRESSION_FACTOR, min)
+    : Math.max(p50 * REGRESSION_FACTOR, p50 + REGRESSION_FLOOR_MS, max);
 }
 
 /** The state after this run and the page it owes, if any. A metric turns red when it crossed a line
