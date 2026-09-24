@@ -5,11 +5,20 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import { providerStore } from "./oauth-store.ts";
 
 test.each([
-  ["Durable Object reset because its code was updated.", "oauth.deploy-reset-grant-store-retry"],
-  ["Network connection lost.", "oauth.platform-failure-grant-store-retry"],
+  [
+    "Durable Object reset because its code was updated.",
+    "oauth.deploy-reset-grant-store-retry",
+    "Error: Durable Object reset because its code was updated.",
+  ],
+  // any other cut is the platform's failure, which the edge's bounded read names (control-plane/edge.ts)
+  [
+    "Network connection lost.",
+    "oauth.platform-failure-grant-store-retry",
+    "ControlPlaneUnavailableError: The control plane failed oauthGrant: Network connection lost.",
+  ],
 ])(
   "a grant read cut at the transport (%s) is asked once more on a fresh stub, and logged as %s",
-  async (message, event) => {
+  async (message, event, logged) => {
     const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
     onTestFinished(() => {
       warns.mockRestore();
@@ -22,7 +31,7 @@ test.each([
     expect(warns).toHaveBeenCalledExactlyOnceWith({
       event,
       name: "grant-store-get",
-      message: `Error: ${message}`,
+      message: logged,
     });
   },
 );

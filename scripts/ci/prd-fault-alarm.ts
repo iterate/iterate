@@ -58,7 +58,7 @@ export const stateArtifact = {
 };
 
 /** The prd account's Workers Logs API access. */
-type CloudflareCredentials = { accountId: string; apiToken: string };
+export type CloudflareCredentials = { accountId: string; apiToken: string };
 
 /** One window's rows per signal: [label, count], biggest first. `pagers` is not a fault: the
  *  rpc-stub pagers' re-dial outcomes by event, the recovery a page shows beside a connection's
@@ -310,45 +310,18 @@ async function readWindow(
 ): Promise<FaultReading> {
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
   // or past 2,000 groups, drop out) — a burst still pages.
-  const query = async (view: "calculations" | "events", filters: object[], parameters: object) => {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
+  const query = (view: "calculations" | "events", filters: object[], parameters: object) =>
+    queryWorkersLogs(
+      { accountId, apiToken },
       {
-        method: "POST",
-        signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
-        headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          queryId: "prd-fault-alarm",
-          view,
-          ...(view === "events" && { limit: 100 }),
-          timeframe: { from: window.from.getTime(), to: window.to.getTime() },
-          parameters: {
-            datasets: ["cloudflare-workers"],
-            ...parameters,
-            filters: [
-              {
-                key: "$metadata.service",
-                operation: "in",
-                value: PRD_WORKERS.join(","),
-                type: "string",
-              },
-              ...filters,
-            ],
-          },
-        }),
+        view,
+        services: PRD_WORKERS,
+        from: window.from.getTime(),
+        to: window.to.getTime(),
+        filters,
+        parameters,
       },
     );
-    const body = z
-      .object({
-        success: z.boolean(),
-        errors: z.unknown().optional(),
-        result: z.unknown().optional(),
-      })
-      .parse(await response.json());
-    // A broken token or a renamed field must fail the run, never read as a quiet prd.
-    if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
-    return body.result;
-  };
   // Without `groupBy`, one row: ["", the total].
   const rows = async (filters: object[], groupBy?: string): Promise<[string, number][]> => {
     const result = z
@@ -537,6 +510,59 @@ async function readWindow(
     errors: [...errors, ...structuredErrors],
     pagers,
   };
+}
+
+/** ONE read of prd `services`' Workers Logs (the telemetry query API), bounded at 30 s: `events`
+ *  (the newest 100) or `calculations`, from `from` to `to` (epoch ms), under `filters`. A failed read
+ *  throws — a broken token or a renamed field must never read as a quiet prd. Also the prd
+ *  post-deploy check's, on os-prd alone (prd-post-deploy-check.ts `readFailureCause`). */
+export async function queryWorkersLogs(
+  { accountId, apiToken }: CloudflareCredentials,
+  input: {
+    view: "calculations" | "events";
+    services: readonly string[];
+    from: number;
+    to: number;
+    filters: object[];
+    parameters?: object;
+  },
+): Promise<unknown> {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
+      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        queryId: "prd-fault-alarm",
+        view: input.view,
+        ...(input.view === "events" && { limit: 100 }),
+        timeframe: { from: input.from, to: input.to },
+        parameters: {
+          datasets: ["cloudflare-workers"],
+          ...input.parameters,
+          filters: [
+            {
+              key: "$metadata.service",
+              operation: "in",
+              value: input.services.join(","),
+              type: "string",
+            },
+            ...input.filters,
+          ],
+        },
+      }),
+    },
+  );
+  const body = z
+    .object({
+      success: z.boolean(),
+      errors: z.unknown().optional(),
+      result: z.unknown().optional(),
+    })
+    .parse(await response.json());
+  if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
+  return body.result;
 }
 
 const WorkerErrorEvent = z.object({
