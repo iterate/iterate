@@ -1,149 +1,140 @@
-// src/ingress-routes/processor.test.ts — the IngressRoutesProcessor's executable spec: the reduce as
-// declarative `{ events → state }` rows (iterate/stream/test-support `reduceProcessor`), and the
-// match as `{ routes, request → route name }` rows. The verbs — `itx.ingressRoutes.set` landing the
-// fact, a config worker forwarding a match to a lent stub, a WebSocket with its subprotocol — are
-// pinned in __workers-tests__/ingress-routes.test.ts.
+// src/ingress-routes.test.ts — the route table's executable spec: the fold as declarative
+// `{ events → table }` rows, and the match as `{ routes, request → route name }` rows. The table in
+// core state (the append boundary, the reduce, a checkpoint from before the move) is pinned in
+// stream/core-processor.test.ts; the verbs — `itx.ingressRoutes.set` landing the fact, a config
+// worker forwarding a match to a lent stub, a WebSocket with its subprotocol — in
+// __workers-tests__/ingress-routes.test.ts.
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "iterate/stream/test-support";
-import { IngressRoutesProcessor, matchIngressRoute } from "./processor.ts";
-import type { IngressRoutesState } from "./contract.ts";
+import {
+  matchIngressRoute,
+  reduceIngressRouteConfigured,
+  type IngressRouteTable,
+} from "./ingress-routes.ts";
 
-const blog = configured({
+const blog = {
   ingressRouteName: "tunnel-blog",
   requestMatcher: { routingSlug: "blog" },
   target: ["itx", "tunnels", "blog"],
   authRequirement: { visitors: "project-members" },
-});
-const blogPublic = configured({
+};
+const blogPublic = {
   ingressRouteName: "tunnel-blog",
   requestMatcher: { routingSlug: "blog" },
   target: ["itx", "tunnels", "blog"],
   authRequirement: null,
   priority: 5,
-});
-const blogDeleted = configured({ ingressRouteName: "tunnel-blog", requestMatcher: null });
+};
+const blogDeleted = { ingressRouteName: "tunnel-blog", requestMatcher: null };
 
-test.for([
-  { name: "the empty state", events: [], state: { ingressRoutes: {} } },
+test.for<{ name: string; facts: unknown[]; table: IngressRouteTable }>([
+  { name: "the empty table", facts: [], table: {} },
   {
     name: "a route is set at its offset; priority defaults to 0, authRequirement to null when absent",
-    events: [
-      configured({
-        ingressRouteName: "api",
+    facts: [{ ingressRouteName: "api", requestMatcher: {}, target: ["itx", "api"] }],
+    table: {
+      api: {
         requestMatcher: {},
         target: ["itx", "api"],
-      }),
-    ],
-    state: {
-      ingressRoutes: {
-        api: {
-          requestMatcher: {},
-          target: ["itx", "api"],
-          authRequirement: null,
-          priority: 0,
-          configuredOffset: 1,
-        },
+        authRequirement: null,
+        priority: 0,
+        configuredOffset: 1,
       },
     },
   },
   {
     name: "the latest fact is the route (a private tunnel made public, reprioritized)",
-    events: [blog, blogPublic],
-    state: {
-      ingressRoutes: {
-        "tunnel-blog": {
-          requestMatcher: { routingSlug: "blog" },
-          target: ["itx", "tunnels", "blog"],
-          authRequirement: null,
-          priority: 5,
-          configuredOffset: 2,
-        },
+    facts: [blog, blogPublic],
+    table: {
+      "tunnel-blog": {
+        requestMatcher: { routingSlug: "blog" },
+        target: ["itx", "tunnels", "blog"],
+        authRequirement: null,
+        priority: 5,
+        configuredOffset: 2,
       },
     },
   },
   {
     name: "a null requestMatcher deletes the route; deleting a route that is gone is a harmless fact",
-    events: [blog, blogDeleted, blogDeleted],
-    state: { ingressRoutes: {} },
+    facts: [blog, blogDeleted, blogDeleted],
+    table: {},
   },
   {
-    name: "a malformed payload for the KNOWN type is skipped: a bad name, a matcher without a target, an unknown matcher field, a bad URLPattern",
-    events: [
-      configured({ ingressRouteName: "Not A Label", requestMatcher: {}, target: ["itx", "x"] }),
-      configured({ ingressRouteName: "no-target", requestMatcher: {} }),
-      configured({
-        ingressRouteName: "bad",
-        requestMatcher: { method: "GET" },
-        target: ["itx", "x"],
-      }),
-      configured({
-        ingressRouteName: "bad-url",
-        requestMatcher: { url: { pathname: "(" } },
-        target: ["itx", "x"],
-      }),
+    name: "a name that is a key of Object.prototype is a route like any other: no route until one is set",
+    facts: [
+      { ingressRouteName: "constructor", requestMatcher: null },
+      { ingressRouteName: "constructor", requestMatcher: {}, target: ["itx", "x"] },
     ],
-    state: { ingressRoutes: {} },
-  },
-  {
-    name: "an unrelated event leaves the table as it was",
-    events: [blog, { type: "note" }],
-    state: {
-      ingressRoutes: {
-        "tunnel-blog": {
-          requestMatcher: { routingSlug: "blog" },
-          target: ["itx", "tunnels", "blog"],
-          authRequirement: { visitors: "project-members" },
-          priority: 0,
-          configuredOffset: 1,
-        },
+    table: {
+      constructor: {
+        requestMatcher: {},
+        target: ["itx", "x"],
+        authRequirement: null,
+        priority: 0,
+        configuredOffset: 2,
       },
     },
   },
-] satisfies {
-  name: string;
-  events: { type: string; payload?: unknown }[];
-  state: IngressRoutesState;
-}[])("IngressRoutesProcessor — the reduce: $name", ({ events, state }) => {
-  expect(reduceProcessor(new IngressRoutesProcessor(), events)).toEqual(state);
+  {
+    name: "a malformed payload is skipped: a bad name, a matcher without a target, an unknown matcher field, a bad URLPattern, none at all",
+    facts: [
+      { ingressRouteName: "Not A Label", requestMatcher: {}, target: ["itx", "x"] },
+      { ingressRouteName: "no-target", requestMatcher: {} },
+      { ingressRouteName: "bad", requestMatcher: { method: "GET" }, target: ["itx", "x"] },
+      {
+        ingressRouteName: "bad-url",
+        requestMatcher: { url: { pathname: "(" } },
+        target: ["itx", "x"],
+      },
+      undefined,
+    ],
+    table: {},
+  },
+])("reduceIngressRouteConfigured: $name", ({ facts, table }) => {
+  expect(tableOf(facts)).toEqual(table);
+});
+
+test("reduceIngressRouteConfigured: a fact that changes nothing answers undefined (the core reduce's keep-the-state signal); one that changes answers a new table and leaves the given one as it was", () => {
+  const table = tableOf([blog]);
+  const before = structuredClone(table);
+  expect(reduceIngressRouteConfigured(table, { offset: 9, payload: blogDeleted })).toEqual({});
+  expect(reduceIngressRouteConfigured(table, { offset: 9, payload: blogPublic })).toMatchObject({
+    "tunnel-blog": { priority: 5, configuredOffset: 9 },
+  });
+  expect(table).toEqual(before);
+  expect(reduceIngressRouteConfigured({}, { offset: 9, payload: blogDeleted })).toBeUndefined();
+  expect(
+    reduceIngressRouteConfigured(table, { offset: 9, payload: { nonsense: true } }),
+  ).toBeUndefined();
 });
 
 /** The table the match rows read: a route per matcher kind, two tied on priority. */
-const table = reduceProcessor(new IngressRoutesProcessor(), [
-  configured({
+const table = tableOf([
+  {
     ingressRouteName: "tunnel-blog",
     requestMatcher: { routingSlug: "blog" },
     target: ["itx", "tunnels", "blog"],
-  }),
-  configured({
+  },
+  {
     ingressRouteName: "api-v2",
     requestMatcher: { url: { pathname: "/api/v2/*" } },
     target: ["itx", "apiV2"],
     priority: 10,
-  }),
-  configured({
+  },
+  {
     ingressRouteName: "docs-host",
     requestMatcher: { url: { hostname: "docs.example.com" } },
     target: ["itx", "docs"],
-  }),
-  configured({
+  },
+  {
     ingressRouteName: "canary",
     requestMatcher: { headers: { "X-Canary": "1" } },
     target: ["itx", "canary"],
-  }),
-  configured({
-    ingressRouteName: "b-catch-all",
-    requestMatcher: {},
-    target: ["itx", "b"],
-    priority: -1,
-  }),
-  configured({
-    ingressRouteName: "a-catch-all",
-    requestMatcher: {},
-    target: ["itx", "a"],
-    priority: -1,
-  }),
-]).ingressRoutes;
+  },
+  { ingressRouteName: "b-catch-all", requestMatcher: {}, target: ["itx", "b"], priority: -1 },
+  { ingressRouteName: "a-catch-all", requestMatcher: {}, target: ["itx", "a"], priority: -1 },
+]);
 
 test.for<{ name: string; url: string; headers: Record<string, string>; ingressRouteName: string }>([
   {
@@ -213,7 +204,10 @@ test("matchIngressRoute: an empty table, or no route whose matcher holds, is nul
   ).toBeNull();
 });
 
-/** One `ingress-route/configured` fact. */
-function configured(payload: Record<string, unknown>) {
-  return { type: "events.iterate.com/ingress-route/configured", payload };
+/** The table the `configured` facts with these payloads fold to, the first at offset 1. */
+function tableOf(payloads: unknown[]): IngressRouteTable {
+  return payloads.reduce<IngressRouteTable>(
+    (table, payload, i) => reduceIngressRouteConfigured(table, { offset: i + 1, payload }) ?? table,
+    {},
+  );
 }

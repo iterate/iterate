@@ -4,7 +4,7 @@
 // with (configs/default/worker.ts) — reaching a lent stub over a real capnweb session:
 //
 //   eyeball `blog--<project>.projects.test` → the edge → the context DO → the config worker (loaded)
-//   → `ingressRoutes.match` (the `ingress-routes` facet's table) → `env.ITX.fetch` → the DO's
+//   → `ingressRoutes.match` (the root's core state) → `env.ITX.fetch` → the DO's
 //   expression fetch `itx.ingressRoutes.fetch('tunnel-blog', request)` → the route's target
 //   `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts, the fetch-upgrade leg for a socket).
 //
@@ -102,7 +102,7 @@ test("a config worker routes by `itx.ingressRoutes.match` to a lent stub: HTTP, 
   });
 });
 
-test("itx.ingressRoutes.set validates the route before it appends and is idempotent; list and match read the table", async () => {
+test("itx.ingressRoutes.set validates the route before it appends and is idempotent; list and match read the table, which is the root's core state and no facet", async () => {
   const itx = await createProject("ingress-routes-table");
   await expect(
     itx.ingressRoutes.set("Not A Label", { requestMatcher: {}, target: "itx.x" }),
@@ -125,10 +125,21 @@ test("itx.ingressRoutes.set validates the route before it appends and is idempot
         event.type.startsWith("events.iterate.com/ingress-route/"),
       )
       .at(-1);
+  const rowsBeforeTheFirstRoute = (await itx.subscriptions.list()).map(
+    (row: { name: string }) => row.name,
+  );
   await itx.ingressRoutes.set("api", route);
   const { offset } = (await lastRouteEvent())!;
   await itx.ingressRoutes.set("api", route); // the same route again appends nothing
   expect(await lastRouteEvent()).toMatchObject({ offset });
+  // the fact is all `set` appends — no processor row, so a request's `match` calls no facet — and
+  // the table is the root's core state
+  expect((await itx.subscriptions.list()).map((row: { name: string }) => row.name)).toEqual(
+    rowsBeforeTheFirstRoute,
+  );
+  expect(await itx.facets.get("core").snapshot()).toMatchObject({
+    state: { ingressRoutes: { api: { configuredOffset: offset } } },
+  });
   expect(await itx.ingressRoutes.list()).toEqual([
     {
       ingressRouteName: "api",

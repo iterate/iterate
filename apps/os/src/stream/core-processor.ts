@@ -7,6 +7,7 @@
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
 //   where the project apex goes project/ingress-configured { target|null } → ingressTarget
+//   which requests go where   ingress-route/configured { ingressRouteName, … } → ingressRoutes (every `match`)
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
 //   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
@@ -27,7 +28,9 @@
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
 // it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
-// validation, and `append` refuses them. No stored row predates its event's normalization.
+// validation, and `append` refuses them. No stored row predates its event's normalization, but for
+// one type: a project root's log keeps the `ingress-route/configured` facts appended while the route
+// table was a facet of its own, so that fold parses what it reads (src/ingress-routes.ts).
 
 import {
   itxExpressionStepName,
@@ -43,6 +46,11 @@ import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/p
 import type { RewriteRuleConfigured } from "iterate/api";
 import { RunRequested, RunSettled } from "iterate/stream/run";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
+import {
+  IngressRouteConfiguredPayload,
+  reduceIngressRouteConfigured,
+  type IngressRouteTable,
+} from "../ingress-routes.ts";
 import {
   BUILT_IN_ROOTS,
   builtInsGetStep,
@@ -255,6 +263,10 @@ export type CoreState = {
   subscriptions: Record<string, Subscription>;
   /** Explicit fetch target for the project apex; null until configured. */
   ingressTarget: ItxExpression | null;
+  /** THE INGRESS ROUTES, by name (src/ingress-routes.ts): which requests on the project's hosts go
+   *  where. Read by `itx.ingressRoutes` on a project's root — the config worker's `match` on every
+   *  request — straight from memory. */
+  ingressRoutes: IngressRouteTable;
   schedules: Record<string, ScheduledAppend>;
   /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`context/run-requested`)
    *  and not yet settled — what is running right now, or what a restart left open (never re-run:
@@ -289,7 +301,7 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "13.0.0",
+  version: "14.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas:
    *  iterate/stream/run). A processor that consumes them names the contract in its
    *  `processorDeps` (the agent); the runner and `itx.run` read them here. */
@@ -310,6 +322,7 @@ export const CoreContract = {
     itxExpressionRewriteRules: {},
     subscriptions: {},
     ingressTarget: null,
+    ingressRoutes: {},
     schedules: {},
     scriptRuns: {},
   }),
@@ -359,6 +372,12 @@ export function reduceCoreEvent(
       return jsonEqual(state.ingressTarget, target)
         ? undefined
         : { ...state, ingressTarget: target };
+    }
+    case "events.iterate.com/ingress-route/configured": {
+      const ingressRoutes = reduceIngressRouteConfigured(state.ingressRoutes, event, (table) =>
+        draftOf(table, draftTables),
+      );
+      return ingressRoutes && { ...state, ingressRoutes };
     }
     case "events.iterate.com/stream/append-scheduled":
     case "events.iterate.com/stream/append-schedule-cancelled":
@@ -643,6 +662,10 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
   if (event.type === "events.iterate.com/project/ingress-configured") {
     if (event.ephemeral) throw new Error("ingress configuration must be durable");
     return { ...event, payload: normalizeIngressConfigured(event.payload) };
+  }
+  if (event.type === "events.iterate.com/ingress-route/configured") {
+    if (event.ephemeral) throw new Error("an ingress route must be durable");
+    return { ...event, payload: IngressRouteConfiguredPayload.parse(event.payload) };
   }
   // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
   // its own message — this prefix check runs first and must not throw a TypeError of its own.
