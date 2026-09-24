@@ -19,7 +19,7 @@ async function read(ctx: string) {
   };
 }
 
-test.each([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", version: "1" } }])(
+test.for([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", version: "1" } }])(
   "live and replayed occurrences preserve absent attribution fields: %j",
   async (source) => {
     const ctx = `prj_schedule_source_${Object.keys(source)[0]}`;
@@ -230,7 +230,7 @@ test("a failed interval stays parked across later alarms", async () => {
   ).toHaveLength(1);
 });
 
-test.each(["once", "interval"])(
+test.for(["once", "interval"])(
   "a %s occurrence survives a post-commit effect failure without being parked or repeated",
   async (kind) => {
     const ctx = `prj_scheduled_effect_${kind}`;

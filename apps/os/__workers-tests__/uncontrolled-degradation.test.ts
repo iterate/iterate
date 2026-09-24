@@ -38,7 +38,6 @@ import { errorCode } from "iterate/next/lib";
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
-const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
 // ── THE PIN GUARD (see the header) ──
 
@@ -287,7 +286,7 @@ test.fails("A4 — a facet whose checkpoint outgrows the cell ceiling is refused
   let last = 0;
   for (let i = 0; i < 4; i++) {
     last = offsetOf(await s.append({ type: "blob", payload: { blob: `${i}:` + "x".repeat(MiB) } }));
-    await settle(200);
+    await sleep(200);
   }
   const ceiling = /over the \d+-char ceiling of one storage cell/;
   await untilIssue("subscription-delivery.deliver", ceiling);
@@ -598,7 +597,7 @@ async function walkLadder(
     for (let i = 0; i < fires; i++) {
       vi.setSystemTime(Date.now() + 40 * 60_000);
       if (await runDurableObjectAlarm(stub(ctx))) fired++;
-      await settle(30);
+      await sleep(30);
       row = await subscriptionRow(ctx, "u");
       if (row?.halted) break;
     }
@@ -696,3 +695,5 @@ test.fails("F1 — deleteAll() under a live incarnation: the tables are gone, th
   // WANTED: the stream notices its store was reset and starts over, or refuses in its own words.
   expect(errs.append).toBeUndefined();
 });
+
+const sleep = (ms = 150) => new Promise((r) => setTimeout(r, ms));

@@ -58,7 +58,8 @@ const contract = defineProcessorContract({
   slug: "counter",
   version: "1.0.0",
   description: "counts durable events",
-  stateSchema: z.object({ n: z.number().default(0) }),  consumes: ["*"],
+  stateSchema: z.object({ n: z.number().default(0) }),
+  consumes: ["*"],
   emits: [],
 });
 class CounterProcessor extends StreamProcessor {
