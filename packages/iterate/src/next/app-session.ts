@@ -188,7 +188,7 @@ export class BrowserSession extends DurableObject {
           // `authenticate(...)` returns a SessionRpcTarget STUB — its own RPC result to dispose (the
           // capnweb README's `using authedApi = api.authenticate(...)`); disposing only `api` leaves
           // it dangling and workerd warns the result was never disposed.
-          using session = api.authenticate({ type: "from-server-cookie" });
+          using session = api.authenticate({ type: "bearer" });
           await session.logout();
         }
       }
