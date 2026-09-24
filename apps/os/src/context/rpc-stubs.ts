@@ -352,13 +352,22 @@ export class RpcStubDirectory {
         reject = rej;
       });
       const timer = setTimeout(() => {
-        if (this.#rpcStubPagesInFlight.delete(rpcStubKey))
-          reject(
-            codedError(
-              "RPC_STUB_OFFLINE",
-              `rpc stub ${JSON.stringify(rpcStubKey)}: page timed out`,
-            ),
-          );
+        if (!this.#rpcStubPagesInFlight.delete(rpcStubKey)) return;
+        // Every call waiting on this page fails, and a push it carried is LOST: a live client's
+        // delivery treats RPC_STUB_OFFLINE as heal-by-read (stream/subscription-delivery.ts), so
+        // this line is the only trace of it. On 2026-09-24 lends came back in waves 3 s apart for
+        // 13 s while Cloudflare moved traffic out of IAD, and 33 of 200 pushes were lost unseen.
+        console.warn({
+          event: "rpc-stub-page-timed-out",
+          namespace: "rpc-stubs",
+          message:
+            "a paged relay did not lend within the page timeout: the calls waiting on it fail",
+          rpcStubKey,
+          waitedMs: RPC_STUB_PAGE_TIMEOUT_MS,
+        });
+        reject(
+          codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)}: page timed out`),
+        );
       }, RPC_STUB_PAGE_TIMEOUT_MS);
       page = { resolve, reject, timer, arrived };
       this.#rpcStubPagesInFlight.set(rpcStubKey, page);

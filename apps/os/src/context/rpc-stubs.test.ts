@@ -121,6 +121,49 @@ test("a borrowed stub after a rejected call: a late transport failure of a stub 
   expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(true);
 });
 
+// A PAGE THAT TIMES OUT loses what waited on it — a live client's push among them, which delivery
+// treats as heal-by-read and never logs — so the timeout is logged where it happens, once per page
+// however many calls share it. 2026-09-24: 33 of 200 pushes lost this way left no trace.
+test("a page the relay never answers fails every call waiting on it after 10 s, logged once", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const pager = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => ({ rpcStubKey: "fan-7" }),
+    send: vi.fn(),
+  };
+  const rpcStubDirectory = new RpcStubDirectory({
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [pager as unknown as WebSocket] },
+    onPresence: () => {},
+    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
+    appendEvents: () => {},
+  });
+  const waiting = [1, 2].map((round) =>
+    rpcStubDirectory.invokeRpcStub("fan-7", [["", round]]).catch((error: unknown) => error),
+  );
+  expect(pager.send).toHaveBeenCalledOnce(); // one page for both calls
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(warn).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  for (const error of await Promise.all(waiting))
+    expect(error).toMatchObject({
+      code: "RPC_STUB_OFFLINE",
+      message: expect.stringContaining("page timed out"),
+    });
+  expect(warn.mock).toMatchObject({
+    calls: [
+      [
+        expect.objectContaining({
+          event: "rpc-stub-page-timed-out",
+          rpcStubKey: "fan-7",
+          waitedMs: 10_000,
+        }),
+      ],
+    ],
+  });
+});
+
 // ── rpc stub relay ── a regression pin on the relay: it registers `onRpcBroken` on
 // the session's provider stub ONCE per session, never once per page. The DO borrows the stub on
 // every burst of traffic and returns it at each pins' release, so a long-lived device pages many

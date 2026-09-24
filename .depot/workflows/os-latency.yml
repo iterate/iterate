@@ -13,7 +13,10 @@
 # against its rolling baseline, on a change of state only: red once when it crossed in two runs in a
 # row, green once when it is back. A page leaves the run green (a scheduled run reports on main's head,
 # where red reads as "this commit broke"); a BROKEN PROBE — the deploy, a row failing for anything but
-# a budget, a metric not recorded — fails the run. Its memory is its own `os-latency-state` artifact,
+# a budget, a metric not recorded — fails the run, unless it is ONE row the platform broke (a
+# connection reset, a socket the edge dropped, a stalled edge: the judge's PLATFORM_FAILURES) that did
+# not break in the run before: that is recorded, a warning, a step-summary line and a PostHog event,
+# and the run stays green. Its memory is its own `os-latency-state` artifact,
 # which the next run reads back (Depot organization token from Doppler _shared/preview).
 #
 # Not on main pushes: every 3 hours the baseline (the last 10 runs) spans about 30 hours, where a busy

@@ -1,13 +1,24 @@
-import { expect, test } from "vitest";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { LATENCY_METRICS, type LatencyMetricName } from "../../apps/os/perf/latency.ts";
 import {
   baselineWindow,
+  brokenEvents,
+  brokenLine,
+  brokenProbes,
   GuardState,
+  judge,
+  judgeBroken,
   judgeRun,
   latencyEvents,
   readReport,
   rememberRun,
   renderPage,
   transition,
+  type BrokenProbe,
+  type PlatformFailure,
   type Reading,
 } from "./os-latency-guard.ts";
 
@@ -18,7 +29,7 @@ test("a report's metrics come off each row's meta; a row that missed only budget
     readReport({
       testResults: [
         {
-          name: "perf/rewrite-rules.perf.test.ts",
+          name: "/w/apps/os/perf/rewrite-rules.perf.test.ts",
           status: "failed",
           assertionResults: [
             {
@@ -30,20 +41,22 @@ test("a report's metrics come off each row's meta; a row that missed only budget
           ],
         },
         {
-          name: "perf/contexts.perf.test.ts",
+          name: "/w/apps/os/perf/contexts.perf.test.ts",
           status: "failed",
           assertionResults: [
             {
               fullName: "a context the platform evicted",
               status: "failed",
-              failureMessages: ["AssertionError: evicted after 15 s idle: expected 1 to be >= 3"],
+              failureMessages: [
+                "AssertionError: evicted after 15 s idle: expected 1 to be >= 3\n    at contexts.perf.test.ts:52:5",
+              ],
               meta: {},
             },
             { fullName: "first append", status: "passed", failureMessages: [], meta: {} },
           ],
         },
         {
-          name: "perf/sign-in-and-mcp.perf.test.ts",
+          name: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
           status: "failed",
           message: "Cannot find module",
           assertionResults: [],
@@ -53,9 +66,324 @@ test("a report's metrics come off each row's meta; a row that missed only budget
   ).toEqual({
     samples: { "rules.300.newest": [160], "rules.300.root": [20] },
     broken: [
-      "a context the platform evicted: AssertionError: evicted after 15 s idle: expected 1 to be >= 3",
-      "perf/sign-in-and-mcp.perf.test.ts: Cannot find module",
+      {
+        probe: "a context the platform evicted",
+        file: "/w/apps/os/perf/contexts.perf.test.ts",
+        error: "AssertionError: evicted after 15 s idle: expected 1 to be >= 3",
+        platform: undefined,
+        evidence: undefined,
+      },
+      {
+        probe: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
+        file: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
+        error: "Cannot find module",
+      },
     ],
+  });
+});
+
+// THE THREE RED RUNS OF MAIN ON 2026-09-24, each one row broken by the platform with every budget
+// fine: their failure messages as the perf reports hold them, and the meta the rows now leave
+// beside them (perf/setup.ts, perf/push-delivery.perf.test.ts) with the values the job logs and
+// Workers Logs measured.
+const redRunsOf20260924: {
+  main: string;
+  row: string;
+  file: string;
+  failureMessages: string[];
+  meta: Parameters<typeof readReport>[0]["testResults"][number]["assertionResults"][number]["meta"];
+  platform: PlatformFailure;
+  evidence: string;
+  unrecorded: LatencyMetricName[];
+}[] = [
+  {
+    main: "927f7a835",
+    row: "an MCP tool call on a project, with a personal access token",
+    file: "sign-in-and-mcp",
+    failureMessages: ["TypeError: fetch failed"],
+    meta: { failure: { causes: ["ECONNRESET"], socketsLost: [] } },
+    platform: "connection-reset",
+    evidence: "caused by ECONNRESET",
+    unrecorded: ["mcp.call"],
+  },
+  {
+    main: "6c4bd2319",
+    row: "a context the platform evicted answers its first call",
+    file: "contexts",
+    failureMessages: [
+      "Error: WebSocket connection failed.\n    at WebSocket.<anonymous> (file:///home/runner/work/iterate/iterate/node_modules/.pnpm/@iterate-com+capnweb@0.12.2/node_modules/@iterate-com/capnweb/dist/index.js:3021:40)\n    at WebSocket.#onSocketClose (node:internal/deps/undici/undici:15786:11)",
+    ],
+    meta: {
+      failure: {
+        causes: [],
+        socketsLost: [
+          { openedAfterMs: 65, failedAfterMs: 15_825, reason: "" },
+          { openedAfterMs: 379, failedAfterMs: 15_831, reason: "" },
+          { openedAfterMs: 546, failedAfterMs: 15_836, reason: "" },
+        ],
+      },
+    },
+    platform: "socket-lost",
+    evidence: "3 sockets lost with no Close frame 15,825–15,836 ms after the dial",
+    unrecorded: ["context.wake"],
+  },
+  {
+    main: "a8e6c6525",
+    row: "200 push subscribers: one append reaches all 200 in under 2 s, and a whoami during it takes under 1.5 s",
+    file: "push-delivery",
+    failureMessages: [
+      "Error: until(warm round complete): timed out after 60000ms (1200 polls, 0 threw, the slowest 1ms): 167 of 200 callbacks had the warm ping; the subscribes took 3012, 3150, 3204, 3088, 3121, 3066, 3175, 3190 ms a batch of 25\n    at pushSubscribers (/home/runner/work/iterate/iterate/apps/os/e2e/support/push-load.ts:128:11)",
+    ],
+    meta: {
+      failure: { causes: [], socketsLost: [] },
+      subscribeBatchMs: [3012, 3150, 3204, 3088, 3121, 3066, 3175, 3190],
+    },
+    platform: "edge-stall",
+    evidence: "subscribe round trips 3,012, 3,150, 3,204, 3,088, 3,121, 3,066, 3,175, 3,190 ms",
+    unrecorded: ["push.fan200.all", "push.fan200.whoami"],
+  },
+];
+
+test.for(redRunsOf20260924)(
+  "main $main: $platform broke one row, the metrics it left unrecorded are its breakage, and the run is RECORDED, not red",
+  ({ row, file, failureMessages, meta, platform, evidence, unrecorded }) => {
+    const report = readReport({
+      testResults: [
+        {
+          name: `/home/runner/work/iterate/iterate/apps/os/perf/${file}.perf.test.ts`,
+          status: "failed",
+          assertionResults: [{ fullName: row, status: "failed", failureMessages, meta }],
+        },
+      ],
+    });
+    const readings = judgeRun({ samples: everyMetricBut(unrecorded), history: [], scale: 1 });
+    const broken = brokenProbes(report.broken, readings);
+    expect(broken).toMatchObject([{ probe: row, platform, evidence }]);
+    expect(judgeBroken(broken, stateRun("the run before", []))).toMatchObject([
+      { probe: row, redBecause: undefined },
+    ]);
+    // broken again on the next run: red
+    expect(judgeBroken(broken, { ...stateRun("the run before", []), broken: [row] })).toMatchObject(
+      [{ redBecause: "broken in the run before too" }],
+    );
+  },
+);
+
+test.for([
+  {
+    name: "a wait that timed out while the subscribes ran at their usual ~0.1 s",
+    failureMessages: [
+      "Error: until(warm round complete): timed out after 60000ms (1200 polls, 0 threw, the slowest 1ms): 190 of 200 callbacks had the warm ping",
+    ],
+    meta: { subscribeBatchMs: [90, 110, 95, 120, 88, 101, 97, 93] },
+  },
+  {
+    name: "a wait that timed out on a row that timed no subscribes",
+    failureMessages: ["Error: until(all 200 received round 3): timed out after 10000ms"],
+    meta: {},
+  },
+  {
+    name: "a fetch that failed beside an assertion that failed",
+    failureMessages: ["TypeError: fetch failed", "AssertionError: expected 500 to be 200"],
+    meta: {},
+  },
+  {
+    name: "a socket the Worker closed (a close frame: ours)",
+    failureMessages: ["Error: Peer closed WebSocket: 3000 the session ended"],
+    meta: {},
+  },
+  {
+    name: "an MCP call our Worker answered with an error",
+    failureMessages: ['Error: MCP tools/call answered 500: {"error":"boom"}'],
+    meta: {},
+  },
+])("not a platform failure: $name", ({ failureMessages, meta }) => {
+  const { broken } = readReport({
+    testResults: [
+      {
+        name: "/w/apps/os/perf/push-delivery.perf.test.ts",
+        status: "failed",
+        assertionResults: [{ fullName: "a row", status: "failed", failureMessages, meta }],
+      },
+    ],
+  });
+  expect(broken).toMatchObject([{ probe: "a row", platform: undefined }]);
+  expect(judgeBroken(broken, undefined)).toMatchObject([{ redBecause: "not a platform failure" }]);
+});
+
+test("a metric no row recorded is broken on its own unless a row or file of its perf file broke", () => {
+  const broken: BrokenProbe[] = [
+    { probe: "the MCP row", file: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts", error: "x" },
+  ];
+  const readings = judgeRun({
+    samples: everyMetricBut(["mcp.call", "sign-in", "rules.300.root"]),
+    history: [],
+    scale: 1,
+  });
+  expect(brokenProbes(broken, readings)).toEqual([
+    ...broken,
+    { probe: "rules.300.root", error: "not recorded" },
+  ]);
+});
+
+test("two broken probes in one run are both red, whatever broke them", () => {
+  const broken: BrokenProbe[] = [
+    { probe: "a", error: "TypeError: fetch failed", platform: "connection-reset" },
+    { probe: "b", error: "Error: WebSocket connection failed.", platform: "socket-lost" },
+  ];
+  expect(judgeBroken(broken, undefined)).toMatchObject([
+    { probe: "a", redBecause: "one of 2 broken probes in this run" },
+    { probe: "b", redBecause: "one of 2 broken probes in this run" },
+  ]);
+  // a probe broken in the run before, then not, then broken again: recorded again
+  expect(judgeBroken([broken[0]!], { ...stateRun("r2", []), broken: ["b"] })).toMatchObject([
+    { redBecause: undefined },
+  ]);
+});
+
+test("a broken probe's line says whether it is red and why, what broke it, and what the row saw", () => {
+  const probe = {
+    probe: "an MCP tool call on a project, with a personal access token",
+    error: "TypeError: fetch failed",
+    platform: "connection-reset",
+    evidence: "caused by ECONNRESET",
+  } as const;
+  expect(brokenLine({ ...probe, redBecause: undefined })).toBe(
+    "RECORDED, broken by the platform: an MCP tool call on a project, with a personal access token: TypeError: fetch failed — connection-reset, a fetch got no HTTP response: the connection to the edge failed — caused by ECONNRESET. The run stays green; broken again in the next run, it is red.",
+  );
+  expect(brokenLine({ ...probe, redBecause: "broken in the run before too" })).toBe(
+    "RED, broken in the run before too: an MCP tool call on a project, with a personal access token: TypeError: fetch failed — connection-reset, a fetch got no HTTP response: the connection to the edge failed — caused by ECONNRESET",
+  );
+  expect(
+    brokenLine({ probe: "mcp.call", error: "not recorded", redBecause: "not a platform failure" }),
+  ).toBe("RED, not a platform failure: mcp.call: not recorded");
+});
+
+test("PostHog counts every broken probe, recorded or red, deduplicated per run attempt", () => {
+  const [event] = brokenEvents(
+    [
+      {
+        probe: "the MCP row",
+        error: "TypeError: fetch failed",
+        platform: "connection-reset",
+        evidence: "caused by ECONNRESET",
+        redBecause: undefined,
+      },
+    ],
+    {
+      sha: "abc",
+      run: "42-1",
+      ref: "refs/heads/main",
+      trigger: "schedule",
+      testRun: false,
+      at: "2026-09-24T08:00:00.000Z",
+    },
+  );
+  expect(event).toMatchObject({
+    event: "os latency probe broken",
+    properties: {
+      $insert_id: "os-latency:42-1:broken:the MCP row",
+      probe: "the MCP row",
+      platform_failure: "connection-reset",
+      verdict: "recorded",
+      red_because: null,
+      evidence: "caused by ECONNRESET",
+      sha: "abc",
+      test_run: false,
+    },
+  });
+});
+
+test("every metric names the perf file that records it", () => {
+  for (const [metric, { file }] of Object.entries(LATENCY_METRICS))
+    expect(
+      readFileSync(resolve(import.meta.dirname, "../../apps/os", file), "utf8"),
+      `${file} records ${metric}`,
+    ).toContain(`"${metric}"`);
+});
+
+// THE JUDGE, end to end on a report file: the verdict is its exit (a throw), the step summary, a
+// warning, and the state the next run reads — a dry run, so nothing is posted or sent.
+test.for([
+  {
+    name: "a probe the platform broke is recorded: a warning and a summary line, and the run stays green",
+    brokenBefore: [],
+    red: false,
+  },
+  {
+    name: "the same probe broken in the run before too: red",
+    brokenBefore: ["an MCP tool call on a project, with a personal access token"],
+    red: true,
+  },
+])("the judge: $name", async ({ brokenBefore, red }) => {
+  const dir = mkdtempSync(join(tmpdir(), "os-latency-guard-"));
+  const path = (name: string) => join(dir, name);
+  const mcpRow = "an MCP tool call on a project, with a personal access token";
+  writeFileSync(
+    path("report.json"),
+    JSON.stringify({
+      testResults: [
+        {
+          name: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
+          status: "failed",
+          assertionResults: [
+            {
+              fullName: mcpRow,
+              status: "failed",
+              failureMessages: ["TypeError: fetch failed"],
+              meta: { failure: { causes: ["ECONNRESET"], socketsLost: [] } },
+            },
+            {
+              fullName: "every other metric",
+              status: "passed",
+              failureMessages: [],
+              meta: { latency: everyMetricBut(["mcp.call"]) },
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    path("state.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      runs: [{ ...stateRun("the run before", []), broken: brokenBefore }],
+      red: [],
+    }),
+  );
+  writeFileSync(path("summary.md"), "");
+  vi.stubEnv("GITHUB_STEP_SUMMARY", path("summary.md"));
+  onTestFinished(() => void vi.unstubAllEnvs());
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  onTestFinished(() => log.mockRestore());
+
+  const judged = judge({
+    report: path("report.json"),
+    state: path("state.json"),
+    stateOut: path("next.json"),
+    run: "42-1",
+    ref: "refs/heads/main",
+    trigger: "schedule",
+    budgetScale: 1,
+    dryRun: true,
+  });
+  if (red) await expect(judged).rejects.toThrow(`RED, broken in the run before too: ${mcpRow}`);
+  else await judged;
+
+  const summary = readFileSync(path("summary.md"), "utf8");
+  expect(summary).toContain("### Broken latency probes");
+  expect(summary).toContain(
+    `${red ? "RED, broken in the run before too" : "RECORDED, broken by the platform"}: ${mcpRow}: TypeError: fetch failed`,
+  );
+  const warnings = log.mock.calls.flat().filter((line) => String(line).startsWith("::warning"));
+  expect(warnings).toHaveLength(red ? 0 : 1);
+  // the state remembers the broken probe either way, for the next run's verdict
+  expect(
+    GuardState.parse(JSON.parse(readFileSync(path("next.json"), "utf8"))).runs.at(-1),
+  ).toMatchObject({
+    run: "42-1",
+    broken: [mcpRow],
   });
 });
 
@@ -262,7 +590,7 @@ test("the state keeps the newest 20 runs", () => {
   );
 });
 
-test("a state from an older metrics table drops the metrics it no longer has", () => {
+test("a state from an older metrics table drops the metrics it no longer has, and one from before broken probes were remembered reads as none", () => {
   expect(
     GuardState.parse({
       schemaVersion: 1,
@@ -286,24 +614,30 @@ test("a state from an older metrics table drops the metrics it no longer has", (
         at: "2026-09-24T08:00:00.000Z",
         judged: { "sign-in": 1700 },
         over: ["sign-in"],
+        broken: [],
       },
     ],
     red: [],
   });
 });
 
-test("a run is remembered by each measured metric's median and what crossed", () => {
+test("a run is remembered by each measured metric's median, what crossed, and what broke", () => {
   const readings = judgeRun({
     samples: { "rules.300.newest": [160, 170, 180], "rules.300.root": [20, 30, 40] },
     history: [],
     scale: 1,
   });
-  expect(rememberRun(readings, { sha: "abc", run: "r1", at: "2026-09-24T08:00:00.000Z" })).toEqual({
+  expect(
+    rememberRun(readings, { sha: "abc", run: "r1", at: "2026-09-24T08:00:00.000Z" }, [
+      { probe: "the MCP row", error: "TypeError: fetch failed", platform: "connection-reset" },
+    ]),
+  ).toEqual({
     sha: "abc",
     run: "r1",
     at: "2026-09-24T08:00:00.000Z",
     judged: { "rules.300.newest": 170, "rules.300.root": 30 },
     over: ["rules.300.newest"],
+    broken: ["the MCP row"],
   });
 });
 
@@ -459,5 +793,18 @@ function stateRun(
     at: "2026-09-24T08:00:00.000Z",
     judged: Object.fromEntries([...over, ...under].map((metric) => [metric, 1])),
     over,
+    broken: [],
   } satisfies GuardState["runs"][number];
+}
+
+/** A sample of every metric but `unrecorded`, each under its budget. */
+function everyMetricBut(unrecorded: readonly LatencyMetricName[]) {
+  return Object.fromEntries(
+    Object.entries(LATENCY_METRICS)
+      .filter(([metric]) => !unrecorded.includes(metric as LatencyMetricName))
+      .map(([metric, { unit, budget }]) => [
+        metric,
+        [unit === "events/s" ? budget * 2 : budget / 2],
+      ]),
+  );
 }

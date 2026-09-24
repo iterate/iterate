@@ -18,48 +18,56 @@
 export const LATENCY_METRICS = {
   // ── concurrent project creation (perf/project-creation.perf.test.ts) ──
   "project.create.x1.answered": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "one person's projects.create answered, one person at a time",
     unit: "ms",
     budget: 3_000,
     calibration: "laptop 977–1,074, Depot 895–1,038",
   },
   "project.create.x1.ready": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "one person's project ready (its project/created certificate), one person at a time",
     unit: "ms",
     budget: 20_000,
     calibration: "laptop 3,819–6,055, Depot 6,864–8,249",
   },
   "project.create.x10.answered": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "one person's projects.create answered, 10 people at once",
     unit: "ms",
     budget: 6_000,
     calibration: "laptop 1,016–1,125, Depot 966–2,430",
   },
   "project.create.x10.ready": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "one person's project ready, 10 people at once",
     unit: "ms",
     budget: 20_000,
     calibration: "laptop 4,117–5,875, Depot 7,642–9,122",
   },
   "project.create.x10.all-ready": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "a round of 10 at once, until the last project is ready",
     unit: "ms",
     budget: 45_000,
     calibration: "laptop 7,012–20,261, Depot 8,919–11,606",
   },
   "project.create.x25.answered": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "one person's projects.create answered, 25 people at once",
     unit: "ms",
     budget: 5_000,
     calibration: "laptop 1,036–1,187, Depot 897–1,007",
   },
   "project.create.x25.ready": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "one person's project ready, 25 people at once",
     unit: "ms",
     budget: 20_000,
     calibration: "laptop 4,597–5,276, Depot 7,247–7,530",
   },
   "project.create.x25.all-ready": {
+    file: "perf/project-creation.perf.test.ts",
     sample: "a round of 25 at once, until the last project is ready",
     unit: "ms",
     budget: 45_000,
@@ -67,12 +75,14 @@ export const LATENCY_METRICS = {
   },
   // ── sign-in and MCP (perf/sign-in-and-mcp.perf.test.ts) ──
   "sign-in": {
+    file: "perf/sign-in-and-mcp.perf.test.ts",
     sample: "a new person's password sign-in (POST /login) answered with a session",
     unit: "ms",
     budget: 6_000,
     calibration: "laptop 1,742–2,209, Depot 2,028–2,214",
   },
   "mcp.call": {
+    file: "perf/sign-in-and-mcp.perf.test.ts",
     sample: "an MCP tools/call (the run tool, itx.whoami()) on a project, with a grant's bearer",
     unit: "ms",
     budget: 500,
@@ -80,24 +90,28 @@ export const LATENCY_METRICS = {
   },
   // ── contexts (perf/contexts.perf.test.ts) ──
   "context.first-append": {
+    file: "perf/contexts.perf.test.ts",
     sample: "a context's first append, the context born by it",
     unit: "ms",
     budget: 2_000,
     calibration: "laptop 417–557, Depot 310–520",
   },
   "context.append": {
+    file: "perf/contexts.perf.test.ts",
     sample: "a durable append on a warm context",
     unit: "ms",
     budget: 250,
     calibration: "laptop 27.1–34, Depot 24.9–71.9",
   },
   "context.wake": {
+    file: "perf/contexts.perf.test.ts",
     sample: "the first call to a context the platform evicted after it sat idle",
     unit: "ms",
     budget: 300,
     calibration: "laptop 39.3–47.2, Depot 36.8–57.2",
   },
   "facet.cold-start": {
+    file: "perf/contexts.perf.test.ts",
     sample: "a processor enabled on a fresh context until it reduced the first event",
     unit: "ms",
     budget: 3_000,
@@ -105,12 +119,14 @@ export const LATENCY_METRICS = {
   },
   // ── rule invocation (perf/rewrite-rules.perf.test.ts, rewrite-rules.e2e's budget until #2977) ──
   "rules.300.newest": {
+    file: "perf/rewrite-rules.perf.test.ts",
     sample: "invoking the newest of 300 rewrite rules",
     unit: "ms",
     budget: 150,
     calibration: "laptop 22.2–43.5, Depot 22–70",
   },
   "rules.300.root": {
+    file: "perf/rewrite-rules.perf.test.ts",
     sample: "invoking a built-in root (whoami) beside 300 rewrite rules",
     unit: "ms",
     budget: 150,
@@ -118,42 +134,49 @@ export const LATENCY_METRICS = {
   },
   // ── stream fan-out (perf/push-delivery.perf.test.ts, push-delivery.e2e's budgets until #2977) ──
   "push.flood.p50": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "a flood round's median append→callback latency (2000 ephemerals, one subscriber)",
     unit: "ms",
     budget: 500,
     calibration: "laptop 129–245, Depot 175–210",
   },
   "push.flood.p95": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "a flood round's p95 append→callback latency",
     unit: "ms",
     budget: 1_500,
     calibration: "laptop 188–313, Depot 193–225",
   },
   "push.flood.throughput": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "a flood round's events delivered per second, end to end",
     unit: "events/s",
     budget: 1_000,
     calibration: "laptop 5,988–10,101, Depot 6,349–7,968",
   },
   "push.fan200.all": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "one append until all 200 push subscribers have it",
     unit: "ms",
     budget: 2_000,
     calibration: "laptop 180–236, Depot 221–316",
   },
   "push.fan200.whoami": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "a whoami issued while one append fans out to 200 push subscribers",
     unit: "ms",
     budget: 1_500,
     calibration: "laptop 47.4–106, Depot 140–207",
   },
   "push.fan50.all": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "one append until all 50 userspace processors reduced it",
     unit: "ms",
     budget: 5_000,
     calibration: "laptop 245–739, Depot 195–291",
   },
   "push.fan50.whoami": {
+    file: "perf/push-delivery.perf.test.ts",
     sample: "a whoami issued while one append fans out to 50 processors",
     unit: "ms",
     budget: 1_500,
@@ -162,6 +185,9 @@ export const LATENCY_METRICS = {
 } satisfies Record<
   string,
   {
+    /** The perf file whose row records it (under apps/os/): a metric a broken row left unrecorded
+     *  is that row's breakage, not a second one (scripts/ci/os-latency-guard.ts). */
+    file: `perf/${string}.perf.test.ts`;
     /** What one sample is. */
     sample: string;
     /** `events/s` is the one higher-is-better unit: its budget is a floor. */
@@ -175,7 +201,7 @@ export const LATENCY_METRICS = {
 export type LatencyMetricName = keyof typeof LATENCY_METRICS;
 
 /** The first words of a perf row's budget miss (perf/record.ts): how the guard tells a missed budget,
- *  which it pages, from a broken probe, which fails its run. */
+ *  which it pages, from a broken probe, which fails its run (unless the platform broke it). */
 export const BUDGET_MISSED = "latency budget missed:";
 
 /** One run's samples of a metric, as nearest-rank percentiles (index ⌊q·n⌋, as the perf rows always

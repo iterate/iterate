@@ -187,7 +187,8 @@ export default defineConfig({
           environment: "node",
           include: ["perf/**/*.perf.test.ts"],
           globalSetup: ["./e2e/support/global-setup.ts"],
-          setupFiles: ["./e2e/support/setup.ts"],
+          // perf/setup.ts: what a failed row leaves for the latency guard beside its message
+          setupFiles: ["./e2e/support/setup.ts", "./perf/setup.ts"],
           testTimeout: 240_000,
           hookTimeout: 120_000,
           // ALONE ON THE WIRE: one file at a time, and `perf:run` passes no `--sequence.concurrent`,
