@@ -21,7 +21,7 @@ type FlashState =
     };
 
 /** Asks for the board's serial port (Chrome's chooser; the wizard says which entry to pick). */
-export async function choosePort() {
+async function choosePort() {
   return navigator.serial.requestPort().catch((error: unknown) => {
     // the person closed the chooser, or it listed nothing to pick
     if (error instanceof DOMException && error.name === "NotFoundError")
