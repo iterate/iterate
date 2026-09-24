@@ -203,7 +203,7 @@ function testEvidenceSteps(value: string | undefined, diagnostics: string[]) {
 }
 
 /** The manifest's `result` (TestEvidenceManifest): cancelled, then incomplete, then failed. */
-export function testRunResult(input: {
+function testRunResult(input: {
   cancelled: boolean;
   completeness: TestEvidenceManifest["completeness"];
   steps: TestEvidenceManifest["steps"];
