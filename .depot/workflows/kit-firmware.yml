@@ -1,7 +1,12 @@
-name: Build Kit Firmware
+name: Kit Firmware
 
-# Both builds read only the firmware tree, the Kit scripts that drive it and
-# the release catalog. Nothing else in the monorepo changes their output.
+# One GitHub release per device build, tagged kit-firmware/<device id>/<version>
+# (apps/kit/scripts/firmware-release.ts; apps/kit/README.md "Firmware releases").
+# The plan compares every device's firmware inputs with that device's newest release, so any
+# later run (a firmware push, the daily schedule, a dispatch) releases what a failed run left behind.
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -9,79 +14,174 @@ on:
     paths:
       - .depot/workflows/kit-firmware.yml
       - apps/kit/firmware/**
-      - apps/kit/package.json
-      - apps/kit/scripts/build-firmware-assets.ts
+      - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
   pull_request:
     paths:
       - .depot/workflows/kit-firmware.yml
       - apps/kit/firmware/**
-      - apps/kit/package.json
-      - apps/kit/scripts/build-firmware-assets.ts
+      - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
-  workflow_dispatch: {}
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      devices:
+        description: "changed: devices whose inputs changed since their newest release. all: every device not yet released at this commit (use after changing firmware-release.ts)."
+        type: choice
+        options:
+          - changed
+          - all
+        default: changed
 
 concurrency:
-  group: kit-firmware-${{ github.head_ref || github.ref_name || github.run_id }}
+  group: kit-firmware-${{ github.head_ref || github.ref_name }}
+  # Safe on main too: gh creates a release's tag only when it publishes the finished draft
+  # (`gh release create --help`), so a cancelled run leaves no partial release and the newer
+  # run plans every device again.
   cancel-in-progress: true
 
-env:
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
-
 jobs:
-  build-host-firmware:
-    name: Build host firmware
+  plan-firmware:
+    name: Plan
     runs-on:
-      size: 4x16
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 20
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           clean: false
+          # The version counts main's first-parent commits; diffs reach each device's last release.
+          fetch-depth: 0
+          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
-      # This is a build-only, host-native check. It does not download ESP-IDF,
-      # contact Cloudflare, use Doppler, or publish firmware artifacts.
-      - name: Build Kit firmware host targets
-        run: pnpm --dir apps/kit firmware:build:host
-
-  build-esp-idf-releases:
-    name: Build ESP-IDF firmware releases
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 45
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Install ESP-IDF 5.4.2
+      - name: Show the publish job's tools
+        run: gh --version && jq --version
+      - id: plan
+        name: Plan device builds
         env:
-          IDF_PATH: /tmp/esp-idf
-          IDF_TOOLS_PATH: /tmp/.espressif
+          DEVICES: ${{ inputs.devices || 'changed' }}
+          PUBLISH: ${{ github.ref == 'refs/heads/main' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node apps/kit/scripts/firmware-release.ts plan --devices "$DEVICES" --publish "$PUBLISH" --base "$BASE_SHA" >> "$GITHUB_OUTPUT"
+
+  build-firmware:
+    name: ${{ matrix.device }}
+    needs: plan-firmware
+    if: needs.plan-firmware.outputs.count != '0'
+    strategy:
+      fail-fast: false # one broken board never blocks the others' releases
+      matrix: ${{ fromJSON(needs.plan-firmware.outputs.matrix) }}
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    env:
+      IDF_PATH: /tmp/esp-idf
+      IDF_TOOLS_PATH: /tmp/.espressif
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install ESP-IDF 5.4.2
+        # Shallow submodules as ESP-IDF's own image clones (tools/docker/Dockerfile, IDF_CLONE_SHALLOW).
         run: |-
           set -euo pipefail
-          git clone --depth 1 --recursive --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
+          git clone --depth 1 --recursive --shallow-submodules --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
           test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0"
           "$IDF_PATH/install.sh" esp32s3
-          source "$IDF_PATH/export.sh"
-          idf.py --version
-      # `firmware:release` compiles every retained ESP-IDF catalog target and
-      # checks its flash plan and configuration partition. It only writes the
-      # checkout-local cache; this job has no deploy credentials or publish step.
-      - name: Build Kit ESP-IDF firmware releases
-        working-directory: apps/kit
+      - name: Build
         env:
-          IDF_PATH: /tmp/esp-idf
-          IDF_TOOLS_PATH: /tmp/.espressif
+          DEVICE: ${{ matrix.device }}
+          VERSION: ${{ needs.plan-firmware.outputs.version }}
+          PREVIOUS: ${{ matrix.previous }}
         run: |-
           set -euo pipefail
           source "$IDF_PATH/export.sh"
-          pnpm run firmware:release
+          node apps/kit/scripts/firmware-release.ts build --device "$DEVICE" \
+            --version "$VERSION" --previous "$PREVIOUS" --out "$RUNNER_TEMP/kit-firmware"
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: kit-firmware-${{ matrix.device }}
+          path: ${{ runner.temp }}/kit-firmware/release
+          if-no-files-found: error
+
+  publish-firmware:
+    name: Publish
+    needs:
+      - plan-firmware
+      - build-firmware
+    if: always() && needs.plan-firmware.result == 'success' && needs.plan-firmware.outputs.count != '0' && needs.build-firmware.result != 'cancelled'
+    permissions:
+      contents: write # the workflow's only writer: it checks out nothing and runs only gh and jq on the built files
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kit-firmware-*
+          path: dist
+      - name: Publish releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PUBLISH: ${{ github.ref == 'refs/heads/main' }}
+          VERSION: ${{ needs.plan-firmware.outputs.version }}
+        run: |-
+          set -euo pipefail
+          shopt -s nullglob
+          for release in dist/kit-firmware-*/; do
+            tag=$(jq -r .tag "$release/release.json")
+            # The build wrote the plan's version into both; anything else is another run's file.
+            if [[ ! "$tag" =~ ^kit-firmware/[a-z0-9-]+/${VERSION}$ ]] || [ "$(jq -r .version "$release/assets/manifest.json")" != "$VERSION" ]; then
+              echo "::error::$release holds $tag, not a kit-firmware release at $VERSION."
+              exit 1
+            fi
+            if [ "$PUBLISH" != true ]; then echo "Would publish $tag:"; ls -l "$release/assets"; continue; fi
+            if gh release view "$tag" >/dev/null 2>&1; then echo "$tag is already released."; continue; fi
+            gh release create "$tag" --target "$GITHUB_SHA" --latest=false \
+              --title "$(jq -r .title "$release/release.json")" \
+              --notes-file "$release/notes.md" "$release"/assets/*
+          done
+
+  # A job, not a final step: it must also report a failed plan (after which nothing else runs), and
+  # the publish job's boundary is that it checks out and runs no repository code.
+  notify:
+    needs:
+      - plan-firmware
+      - build-firmware
+      - publish-firmware
+    if: always() && github.ref == 'refs/heads/main' && (needs.plan-firmware.result == 'failure' || needs.build-firmware.result == 'failure' || needs.publish-firmware.result == 'failure')
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # the store the image was baked with, so the baked node_modules are reused (docs/depot-ci.md)
+      PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          persist-credentials: false
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Notify Slack
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: pnpm tsx scripts/ci/notify.ts workflow-failure

@@ -221,20 +221,26 @@ ready. Microphone and speaker events travel directly through that stream.
 
 ## Release and proof
 
-Kit releases are built from this checkout. With ESP-IDF active, run from
-`apps/kit`:
+A merge to main releases every board whose inputs changed, as the GitHub release
+`kit-firmware/<device id>/<version>` ([Kit firmware releases](../README.md#firmware-releases)).
+A board's inputs are the firmware tree minus the other boards' `devices/<board>` and
+`targets/<board>`, the host and Mac code, the tests and the docs; the release build
+fails if the board reads a tracked file outside them.
+
+For a bench build of the same thing, from the repository root with ESP-IDF active:
 
 ```sh
-source "$IDF_PATH/export.sh"
-pnpm firmware:release
-pnpm firmware:sync
+node apps/kit/scripts/firmware-release.ts build --device <id> --out /tmp/kit-<id>
+cd /tmp/kit-<id>/release/assets
+esptool.py --chip esp32s3 write_flash \
+  $(jq -r '.builds[0].parts[]|"\(.offset) \(.path|ltrimstr("./"))"' manifest.json) \
+  "$(jq -r .configurationPartition.offset manifest.json)" /tmp/cfg.bin
 ```
 
-`firmware:release` builds all catalogue targets into a
-fingerprinted cache, checks their ESP-IDF flash plans and configuration
-partitions, then records a hash for every part. `firmware:sync` only publishes
-that current cache as hashed ESP Web Tools parts and manifests. Do not edit
-release offsets by hand or substitute downloaded binaries.
+`/tmp/cfg.bin` is an image from `tools/make-config-image.py` (see Provisioning).
+The build runs CI's checks (flash layout, inputs, an unchanged tree) and reports
+its version as `dev`. Do not edit release offsets by hand or substitute
+downloaded binaries.
 
 The two reviewed UI WAVs are committed once. CMake deterministically converts
 them into each component build directory with the board's recorded trim and

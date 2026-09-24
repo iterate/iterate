@@ -5,6 +5,7 @@ import { loadInstallManifestTemplate } from "./prepare-manifest.ts";
 
 const device: FirmwareDevice = {
   id: "test-device",
+  target: "test_device",
   name: "Test device",
   description: "Test ESP32-S3",
   proofLabel: "Test device",
