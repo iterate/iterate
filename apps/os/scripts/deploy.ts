@@ -1,15 +1,23 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import { osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { build } from "./build.ts";
 
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(
+  options: {
+    env?: string;
+    /** Deploy with no routes, beside the Worker its hostnames still reach (deployApp
+     *  `withoutRoutes`): the first step of moving a deployment to a new Worker. */
+    withoutRoutes?: boolean;
+  } = {},
+) {
   await deployApp({
+    withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
     envs: osEnvs,
-    dopplerProject: "project-worker",
+    dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,

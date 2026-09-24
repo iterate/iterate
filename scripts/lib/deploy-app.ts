@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -69,6 +70,18 @@ export async function deployApp<E extends DeployableEnv>(input: {
     ok: (status: number) => boolean;
     label: string;
   }[];
+  /**
+   * Deploy the Worker with no routes: its code, bindings, secrets and workers.dev host, and no
+   * public hostname. For bringing a fresh Worker up BESIDE the one its hostnames still route to:
+   * Cloudflare refuses a route pattern another Worker holds (10020, "A route with the same pattern
+   * already exists", measured with wrangler 4.136.3 on 2026-09-24), and wrangler then exits 1
+   * after the upload. With no routes in its config wrangler leaves the zone's routes alone, so the
+   * operator moves each route to this Worker afterwards (`PUT /zones/<zone>/workers/routes/<id>`,
+   * https://developers.cloudflare.com/api/resources/workers/subresources/routes/methods/update/),
+   * and the next ordinary deploy finds them already its own. The smokes are skipped: the public
+   * URLs still reach the other Worker.
+   */
+  withoutRoutes?: boolean;
 }) {
   const ctx = await resolveEnvContext({
     envs: input.envs,
@@ -89,17 +102,21 @@ export async function deployApp<E extends DeployableEnv>(input: {
   const secretValues = collectSecrets(ctx, input.requiredSecrets || []);
   await input.prepare?.(ctx, secretValues, credentials);
   await viteBuild(input.appRoot, ctx.name);
-
-  await deployWithSecrets({
-    cwd: input.appRoot,
-    builtConfig: findBuiltWranglerConfig(input.appRoot),
-    secretValues,
-    credentials,
-  });
-
-  for (const probe of input.smokes(ctx.env)) {
-    await smoke(probe.url, probe.ok, probe.label);
+  const builtConfig = findBuiltWranglerConfig(input.appRoot);
+  if (input.withoutRoutes) {
+    const config = JSON.parse(readFileSync(builtConfig, "utf8"));
+    writeFileSync(builtConfig, JSON.stringify({ ...config, routes: [] }));
+    console.log(`Deploying ${workerName} without its ${config.routes?.length ?? 0} routes`);
   }
+
+  await deployWithSecrets({ cwd: input.appRoot, builtConfig, secretValues, credentials });
+
+  if (input.withoutRoutes)
+    console.log(`smokes skipped: ${input.servingUrl(ctx.env)} still routes to another Worker`);
+  else
+    for (const probe of input.smokes(ctx.env)) {
+      await smoke(probe.url, probe.ok, probe.label);
+    }
   await input.afterDeploy?.(ctx, secretValues);
 
   console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
