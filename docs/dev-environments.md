@@ -102,6 +102,10 @@ read secrets.
     --header "Authorization: Bearer dev-admin-api-secret"
   ```
 
+  Drive it from Claude Code: after `pnpm exec iterate config set --name local --os-base-url http://localhost:8788`,
+  `APP_CONFIG_ADMIN_API_SECRET=dev-admin-api-secret pnpm exec iterate mcp claude --config local`
+  checks `tools/list` and prints the `claude --mcp-config … --strict-mcp-config` command (`--exec` runs it).
+
 - Sign in as a human at `http://localhost:<port>/login`: any email, password
   `dev`. The mailed-code option works too: `wrangler dev` simulates the Email
   Sending binding and writes the message to a local file instead of mailing

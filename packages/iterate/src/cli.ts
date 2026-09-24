@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -611,6 +612,43 @@ const launcherProcedures = {
         return await context.run(`async (itx) => {\n${script}\n}`);
       }),
   },
+  mcp: {
+    claude: os
+      .input(
+        z.object({
+          exec: z
+            .boolean()
+            .optional()
+            .describe("Run Claude Code in this terminal instead of printing its command"),
+        }),
+      )
+      .meta({
+        description:
+          "Claude Code against the config's /mcp with the operator bearer (APP_CONFIG_ADMIN_API_SECRET): checks tools/list, then prints or runs the command",
+      })
+      .handler(async ({ input }) => {
+        const token = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+        if (!token)
+          throw new Error(
+            "iterate mcp claude needs APP_CONFIG_ADMIN_API_SECRET, the operator bearer of the deployment the config names (local dev's is dev-admin-api-secret; a deployed one comes from its Doppler config).",
+          );
+        const resolved = resolveConfig(process.cwd(), { throw: true });
+        const { mcpUrl, tools } = await preflightMcp(resolved.config.osBaseUrl, token);
+        console.error(`${mcpUrl} accepted the bearer; tools: ${tools.join(", ")}`);
+        const args = claudeMcpArgs({ mcpUrl, token });
+        if (!input.exec) {
+          // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it
+          console.log(shellCommand(["claude", ...args]));
+          return;
+        }
+        const claude = spawnSync("claude", args, { stdio: "inherit" });
+        if (claude.error)
+          throw new Error(`Could not start claude: ${claude.error.message}`, {
+            cause: claude.error,
+          });
+        process.exit(claude.status ?? 1);
+      }),
+  },
   menubar: os
     .input(z.object({ project: z.string().optional().describe("Project id or slug") }))
     .meta({ description: "Launch the macOS menu bar for sign-in and computer sharing" })
@@ -791,3 +829,85 @@ export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
   await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
 };
+
+/**
+ * The deployment's MCP endpoint, proven to accept `token` by a `tools/list`, which the platform's
+ * stateless handler (apps/os/src/mcp.ts) answers without an `initialize` first.
+ *
+ * Starts at `<osBaseUrl>/mcp`. A deployment with its own MCP origin answers there with a 308 to it
+ * (apps/os/src/worker.ts: os.iterate.com/mcp → https://mcp.iterate.com/). The redirect is followed
+ * here, bearer kept, because fetch drops `Authorization` on a cross-origin redirect
+ * (https://fetch.spec.whatwg.org/#http-redirect-fetch), which would read as a rejected bearer; the
+ * returned URL is the final one, so Claude Code never meets the redirect.
+ */
+export const preflightMcp = async (osBaseUrl: string, token: string) => {
+  let mcpUrl = new URL("/mcp", osBaseUrl).href;
+  let response = await postToolsList(mcpUrl, token);
+  const location = response.headers.get("location");
+  if ((response.status === 307 || response.status === 308) && location) {
+    mcpUrl = new URL(location, mcpUrl).href;
+    response = await postToolsList(mcpUrl, token);
+  }
+  if (response.status === 401)
+    throw new Error(
+      `${mcpUrl} rejected the bearer (401). APP_CONFIG_ADMIN_API_SECRET must be the operator bearer of the deployment at ${osBaseUrl}.`,
+    );
+  if (!response.ok)
+    throw new Error(
+      `tools/list on ${mcpUrl} failed (${response.status}): ${await readErrorBody(response)}`,
+    );
+  // Streamable HTTP answers a request with JSON or with an SSE stream whose `data:` lines carry the
+  // JSON-RPC response: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#sending-messages-to-the-server
+  const body = await response.text();
+  const json = response.headers.get("content-type")?.startsWith("text/event-stream")
+    ? body
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trim())
+        .join("\n")
+    : body;
+  const parsed = z
+    .object({ result: z.object({ tools: z.array(z.object({ name: z.string() })) }) })
+    .safeParse(JSON.parse(json));
+  if (!parsed.success)
+    throw new Error(`tools/list on ${mcpUrl} answered no tool list: ${json.slice(0, 300)}`);
+  return { mcpUrl, tools: parsed.data.result.tools.map((tool) => tool.name) };
+};
+
+const postToolsList = (mcpUrl: string, token: string) =>
+  fetch(mcpUrl, {
+    method: "POST",
+    redirect: "manual",
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+  });
+
+/**
+ * Claude Code's arguments for one HTTP MCP server named `iterate` and no other: `--mcp-config`
+ * takes the JSON inline, `--strict-mcp-config` ignores the user's own MCP servers
+ * (https://code.claude.com/docs/en/cli-reference, https://code.claude.com/docs/en/mcp).
+ */
+export const claudeMcpArgs = (input: { mcpUrl: string; token: string }) => [
+  "--mcp-config",
+  JSON.stringify({
+    mcpServers: {
+      iterate: {
+        type: "http",
+        url: input.mcpUrl,
+        headers: { Authorization: `Bearer ${input.token}` },
+      },
+    },
+  }),
+  "--strict-mcp-config",
+];
+
+/** POSIX-shell-quoted: plain words bare, anything else single-quoted with `'` spelled `'\''`. */
+export const shellCommand = (argv: string[]) =>
+  argv
+    .map((arg) => (/^[\w./:@%+=,-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`))
+    .join(" ");
