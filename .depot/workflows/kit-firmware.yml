@@ -13,12 +13,14 @@ on:
       - main
     paths:
       - .depot/workflows/kit-firmware.yml
+      - scripts/depot-ci/esp-idf.sh
       - apps/kit/firmware/**
       - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
   pull_request:
     paths:
       - .depot/workflows/kit-firmware.yml
+      - scripts/depot-ci/esp-idf.sh
       - apps/kit/firmware/**
       - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
@@ -82,9 +84,6 @@ jobs:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
-    env:
-      IDF_PATH: /tmp/esp-idf
-      IDF_TOOLS_PATH: /tmp/.espressif
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -92,13 +91,10 @@ jobs:
           clean: false
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Install ESP-IDF 5.4.2
-        # Shallow submodules as ESP-IDF's own image clones (tools/docker/Dockerfile, IDF_CLONE_SHALLOW).
-        run: |-
-          set -euo pipefail
-          git clone --depth 1 --recursive --shallow-submodules --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
-          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0"
-          "$IDF_PATH/install.sh" esp32s3
+      # The image carries ESP-IDF (scripts/depot-ci/esp-idf.sh, the pin); a leg downloads it only
+      # while that file differs from the image's, and then says so in a warning.
+      - name: ESP-IDF (baked)
+        run: scripts/depot-ci/esp-idf.sh ensure
       - name: Build
         env:
           DEVICE: ${{ matrix.device }}

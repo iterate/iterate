@@ -343,15 +343,20 @@ newest `kit-firmware/<device>/<version>` release, and each one builds in its own
 nothing, runs only `gh` and `jq` on the legs' artifacts, and creates releases only
 on main, where it then downloads every new file through `k.iterate.com` and
 compares the bytes. Deploy Kit builds no firmware. The ESP-IDF pin lives in
-`kit-firmware.yml` and in each target's `dependencies.lock`. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
+`scripts/depot-ci/esp-idf.sh` and in each target's `dependencies.lock`. The CI
+image carries that ESP-IDF, so a leg downloads none of it: `esp-idf.sh ensure`
+checks the image's receipt against the script and installs from the network,
+with a warning, only while they differ (a pull request that changes the script,
+or main until the image bake that change triggers finishes). The legs still
+fetch each target's managed components. Details: [Kit firmware releases](../apps/kit/README.md#firmware-releases).
 
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
-It contains Node, pnpm, workspace dependencies, Doppler CLI, and the preview
-browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
+It contains Node, pnpm, workspace dependencies, Doppler CLI, the preview
+browser, and Kit Firmware's ESP-IDF ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `8x32`, or `16x64` from measured workload demand. Preview deploy and e2e run on
 `4x16`; the e2e job runs Vitest and Playwright concurrently against the one
 preview. The image rebuilds when

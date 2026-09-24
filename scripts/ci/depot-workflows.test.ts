@@ -374,6 +374,24 @@ describe("Depot credential boundaries", () => {
     expect(workflow.on?.schedule).toEqual([{ cron: expect.any(String) }]);
   });
 
+  // A leg that installed ESP-IDF itself made a GitHub clone and a PyPI install, and one broken
+  // download failed a board with no firmware change (scripts/depot-ci/esp-idf.sh).
+  test("Kit Firmware legs take ESP-IDF from the CI image", () => {
+    const workflow = loadWorkflow(".depot/workflows/kit-firmware.yml");
+    const leg = workflow.jobs["build-firmware"]!;
+    const runs = (leg.steps || []).map((step) => step.run || "");
+    const bake = readFileSync(
+      resolve(repoRoot, "scripts/depot-ci/bake-preview-ci-image.sh"),
+      "utf8",
+    );
+
+    expect(leg["runs-on"]).toMatchObject({ image: bakedImage });
+    expect(runs).toContain("scripts/depot-ci/esp-idf.sh ensure");
+    expect(runs.filter((run) => /git clone|install\.sh/.test(run))).toEqual([]);
+    expect(bake).toContain("scripts/depot-ci/esp-idf.sh install");
+    expect(workflow.on?.pull_request?.paths).toContain("scripts/depot-ci/esp-idf.sh");
+  });
+
   test("release.yml never takes a kit-firmware tag for the last release", () => {
     const releaseInfo = loadWorkflow(".depot/workflows/release.yml").jobs.release?.steps?.find(
       (step) => step.name === "Get release info",
@@ -453,6 +471,7 @@ describe("Depot validation capacity", () => {
         "patches/**",
         "scripts/depot-ci/dependencies.mjs",
         "scripts/depot-ci/bake-preview-ci-image.sh",
+        "scripts/depot-ci/esp-idf.sh",
         ".depot/workflows/build-preview-ci-image.yml",
       ]),
     );

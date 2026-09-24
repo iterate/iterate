@@ -55,12 +55,13 @@ import {
 const FIRMWARE_DIRECTORY = "apps/kit/firmware";
 
 /**
- * A change to either rebuilds every device on a pull request (the builder is not a release input:
+ * A change to any of these rebuilds every device on a pull request (the builder is not a release input:
  * changing it on main releases nothing until a dispatch with `devices=all`).
  */
 const FIRMWARE_BUILDER = [
   "apps/kit/scripts/firmware-release.ts",
   ".depot/workflows/kit-firmware.yml",
+  "scripts/depot-ci/esp-idf.sh",
 ];
 
 /** A published release of one device, as `git ls-remote` lists it. */
