@@ -170,10 +170,14 @@ console text.
 
 The finalizer fails the job, after writing the manifest and the summaries, when:
 
-- a workspace in `TEST_TELEMETRY_EXPECTED_WORKSPACES` left no artifact. The
-  Test workflow names all ten test workspaces (a workflow test keeps the list
-  equal to the workspaces with a `test` script); Preview OS and Main OS e2e
-  name `iterate-root,os`. This is what catches a runner that never started;
+- an expected workspace left no artifact. The Test workflow passes
+  `--expect-unit-workspaces`, which reads them from the checkout: every
+  pnpm-workspace package with a `test` or `test:unit` script. It is not a list
+  in test.yml because a PR's workflow file comes from its merge ref while the
+  job checks out its head, so main's list failed every PR opened before a
+  workspace was added. Preview OS and Main OS e2e name `iterate-root,os` in
+  `TEST_TELEMETRY_EXPECTED_WORKSPACES`. This is what catches a runner that
+  never started;
 - a sentinel was never replaced (a runner started and was killed);
 - an artifact belongs to another CI run, attempt or job than the newest
   artifact's (a stale or foreign file);
@@ -213,8 +217,9 @@ Re-run the check on a downloaded artifact with
    steps still active at interruption, so the reporter records zero duration
    and a `PlaywrightIncompleteStepError`.
 4. Write the sentinel from the first real lifecycle hook.
-5. Add the workspace to its workflow's `TEST_TELEMETRY_EXPECTED_WORKSPACES` and
-   pin `TEST_TELEMETRY_WORKSPACE` in the command's environment.
+5. Pin `TEST_TELEMETRY_WORKSPACE` in the command's environment. A unit
+   workspace is expected once it has a `test` script; a preview lane's runner
+   goes in its workflow's `TEST_TELEMETRY_EXPECTED_WORKSPACES`.
 6. Keep the finalizer and the artifact upload as `if: always()` steps.
 
 ## Current unknown flakes

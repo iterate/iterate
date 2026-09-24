@@ -6,6 +6,7 @@ import {
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { expect, test } from "vitest";
+import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 import { finalizeTestTelemetry } from "./upload-test-telemetry.ts";
 
 const artifact: TestTelemetryArtifact = {
@@ -149,6 +150,40 @@ test("a workspace that left no artifact fails the job after the manifest is writ
     missingWorkspaces: ["os"],
     observedWorkspaces: ["iterate-root"],
   });
+});
+
+// Depot runs a PR's workflow file from its merge ref and the Test job checks out its head, so a list
+// of workspaces in test.yml is main's. PRs #2985, #2986 and #2991 predated @iterate-com/ci-reports
+// (#2969): every test passed and the finalizer failed on the workspace their head does not have.
+test("the Test job expects its checkout's test workspaces, not main's", async () => {
+  using tree = temporaryDirectory();
+  writeFileSync(join(tree.path, "pnpm-workspace.yaml"), "packages:\n  - apps/os\n  - apps/docs\n");
+  for (const [directory, packageJson] of [
+    ["apps/os", { name: "os", scripts: { test: "vitest run" } }],
+    ["apps/docs", { name: "docs", scripts: { build: "vite build" } }],
+  ] as const) {
+    mkdirSync(join(tree.path, directory), { recursive: true });
+    writeFileSync(join(tree.path, directory, "package.json"), JSON.stringify(packageJson));
+  }
+  using root = temporaryDirectory();
+  writeTestTelemetryArtifact(
+    { ...artifact, context: { ...artifact.context, workspace: "os" } },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") },
+  );
+
+  expect(unitTestWorkspaces(tree.path)).toEqual(["os"]);
+  await expect(
+    finalizeTestTelemetry({
+      artifactRoot: root.path,
+      expectedWorkspaces: unitTestWorkspaces(tree.path),
+    }),
+  ).resolves.toHaveLength(1);
+  await expect(
+    finalizeTestTelemetry({
+      artifactRoot: root.path,
+      expectedWorkspaces: ["os", "@iterate-com/ci-reports"],
+    }),
+  ).rejects.toThrow("Missing expected test telemetry workspaces: @iterate-com/ci-reports");
 });
 
 test.each([
