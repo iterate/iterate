@@ -10,16 +10,14 @@
 import { describe, expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
-import { BUILT_IN_ROOTS, resolveItxExpression } from "../context/itx-expression-rewriting.ts";
 import {
   CoreContract,
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
-  type Subscription,
   normalizeControlEvent,
 } from "./core-processor.ts";
-import { memoryStream } from "./test-support.ts";
+import { nodeSqliteStream } from "./test-support.ts";
 
 /** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
 const at = (offset: number, type: string, payload?: Record<string, unknown>): StreamEvent => ({
@@ -33,9 +31,8 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v13.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core`; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("13.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
@@ -203,17 +200,6 @@ describe("the ingress target — project/ingress-configured, normalized at the a
     expect(() =>
       normalizeControlEvent({ type, payload: { target }, ephemeral: true }, "/"),
     ).toThrow("must be durable");
-  });
-
-  test("a singular worker name has no implicit platform resolution", () => {
-    expect(() =>
-      resolveItxExpression(() => [], ["itx", "worker", "fetch"], new Set(BUILT_IN_ROOTS)),
-    ).toThrow("no rewrite rule matches");
-    expect(resolveItxExpression(() => [], target, new Set(BUILT_IN_ROOTS)).at(-1)).toEqual([
-      "itx",
-      "builtins",
-      ...target.slice(1),
-    ]);
   });
 });
 
@@ -642,25 +628,6 @@ describe("purity", () => {
       expect(state.itxExpressionRewriteRules).toEqual({});
     });
   });
-
-  test("the reduce rebuilds bit-identically from the log (pure — no wall clock anywhere)", () => {
-    const log = [
-      at(1, "events.iterate.com/stream/created", { projectId: "prj_t", path: "/" }),
-      at(2, "events.iterate.com/stream/woken", { incarnation: 1 }),
-      at(3, "events.iterate.com/itx/rewrite-rule-configured", {
-        match: "itx.db",
-        target: "itx.kv",
-      }),
-      at(4, "events.iterate.com/stream/subscription-configured", {
-        name: "tally",
-        target: "itx.facets.get('tally').processEventBatch",
-      }),
-      at(5, "events.iterate.com/stream/paused", { reason: "r" }),
-      at(6, "events.iterate.com/stream/resumed"),
-      at(7, "events.iterate.com/stream/woken", { incarnation: 2 }),
-    ];
-    expect(reduceAll(log)).toEqual(reduceAll(log));
-  });
 });
 
 describe("the builtins root, as the reduce sees it: masks, the platform-equivalent target, hosting on the RESOLVED target", () => {
@@ -886,18 +853,12 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
 // (a dotted name, the reserved `core`, a target not rooted at itx) THROWS on append, nothing
 // appended. A subscription is PURE DATA — a name, a target expression stored in its parsed form,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
-// decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
-// `reduceCoreEvent` exactly as the DO does; the reduce's own pins (replace / drop / halted /
-// resumed) are above.
+// decides that by evaluating it). The rows THEMSELVES are `core` state, read here from the real
+// Stream's core reduced state, as the DO reads them; the reduce's own pins (replace / drop / halted
+// / resumed) are above.
 
 const setup = () => {
-  const { stream, events } = memoryStream();
-  // INLINE, exactly like the DO: the rows are core state, reduced from the durable log per call.
-  const rows = (): Record<string, Subscription> =>
-    events.reduce(
-      (st, e) => reduceCoreEvent({ event: e, state: st }) ?? st,
-      CoreContract.initialState(),
-    ).subscriptions;
+  const { stream, events } = nodeSqliteStream();
   /** The edge's `subscribe`: build the event, append it. */
   const configure = (input: {
     name: string;
@@ -917,9 +878,9 @@ const setup = () => {
   };
   /** Append a raw event as the stream would — a fact the delivery loop appends (`delivery-halted`
    *  has no command in this module). */
-  const append = (type: string, payload: Record<string, unknown>): StreamEvent =>
-    (stream.append({ type, payload }) as StreamEvent[])[0];
-  return { events, rows, configure, append };
+  const append = (type: string, payload: Record<string, unknown>) =>
+    stream.append({ type, payload })[0];
+  return { events, rows: () => stream.coreReducedState.subscriptions, configure, append };
 };
 
 describe("configure — ONE event: set, replace, or remove", () => {

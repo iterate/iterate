@@ -19,8 +19,6 @@ import {
 } from "iterate/next/stream/processor";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 const contractOf = (slug: string, version: string, consumes: readonly string[]) =>
   defineProcessorContract({
     slug,
@@ -44,7 +42,7 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
         const offset = args.event.offset;
         startAt.set(offset, performance.now());
         args.blockProcessorWhile(async () => {
-          await sleep(30); // slow on purpose — a scheduling hiccup must not let N+1 sneak in
+          await settle(30); // slow on purpose — a scheduling hiccup must not let N+1 sneak in
           blockedDoneAt.set(offset, performance.now());
         });
       }
@@ -75,9 +73,9 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
         const offset = args.event.offset;
         trace.push(`start ${offset}`);
         args.blockProcessorWhile(async () => {
-          await sleep(10);
+          await settle(10);
           args.blockProcessorWhile(async () => {
-            await sleep(40);
+            await settle(40);
             trace.push(`nested-done ${offset}`);
           });
           trace.push(`outer-done ${offset}`);
@@ -90,7 +88,7 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
     });
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
     await p.catchUpFromLog();
-    await sleep(120); // let stragglers land so the trace is complete either way
+    await settle(120); // let stragglers land so the trace is complete either way
     expect(trace.indexOf("start 2")).toBeGreaterThan(trace.indexOf("nested-done 1"));
   });
 });
@@ -109,7 +107,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
       override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (!args.event) return;
         args.runInBackground(async () => {
-          await sleep(80);
+          await settle(80);
           bgDone = true;
           throw new Error("background attempt failed — must be swallowed, never the batch");
         });
@@ -121,7 +119,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     // The batch is durably committed BEFORE the background work lands (overtaking allowed):
     expect(bgDone).toBe(false);
     expect(storage.read("bg")).toMatchObject({ reducedThroughOffset: 1 });
-    await sleep(120);
+    await settle(120);
     expect(bgDone).toBe(true); // and the attempt did run (droppable, not dropped here)
     // the failed background attempt never poisoned the chain — the next batch still commits
     const next = mem.stream.append({ type: "e" }) as StreamEvent[];
@@ -287,7 +285,7 @@ describe("waitUntilProcessed", () => {
         return { n: state.n + 1 };
       }
       override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
-        if (args.event?.offset === 1) args.blockProcessorWhile(() => sleep(60));
+        if (args.event?.offset === 1) args.blockProcessorWhile(() => settle(60));
       }
       override projectLiveState() {
         return null; // exact-offset suite: opt out of the default live-state emit

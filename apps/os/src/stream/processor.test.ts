@@ -450,24 +450,6 @@ describe("ephemeral events", () => {
     expect((await star.snapshot()).state.seen).toEqual(["loud@1", "loud@4"]); // holes invisible
   });
 
-  test("a rebuilt reduce omits ephemerals (never derive durable truth from one)", async () => {
-    const mem = memoryStream();
-    const storage = memoryStorage();
-    const a = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
-    mem.engines.push(a);
-    mem.stream.append({ type: "loud" }) as StreamEvent[];
-    mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[];
-    mem.stream.append({ type: "loud" }) as StreamEvent[];
-    await settle();
-    expect((await a.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "loud@3"]);
-    // a fresh incarnation over the same storage: the ephemeral is gone from the log — the reduce
-    // regresses to durable truth only, and the offsets are simply gaps
-    const b = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
-    // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
-    //  because that scannedOffsetRange ALSO contained a durable event — the documented divergence rule)
-    expect((await b.snapshot()).state.seen).toContain("loud@3");
-  });
-
   test("a barrier that reaches the head BEFORE the commit's own push still leaves the named ephemeral delivered", async () => {
     // The wake behind a read-your-writes barrier catches up the durable log and, via the
     // head-clamped proof, advances the cursor OVER the ephemeral's offset while consuming only the

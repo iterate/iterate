@@ -20,7 +20,7 @@ import {
   type ProcessorStream,
   ReduceCheckpointTable,
 } from "iterate/next/stream/processor";
-import type { DurableObjectStorageSlice } from "./stream.ts";
+import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
  *  does — start from the contract's initial state, validate each payload against the contract (a
@@ -150,7 +150,7 @@ export function memoryStorage(): WriteCountingReduceCheckpointTable {
   return new WriteCountingReduceCheckpointTable(nodeSqliteDurableObjectStorage().sql);
 }
 
-/** Let fire-and-forget pushes land. */
+/** Wait `ms` on a timer — long enough, by default, for fire-and-forget pushes to land. */
 export const settle = (ms = 25) => new Promise((r) => setTimeout(r, ms));
 
 // ── node:sqlite durable object storage ── the `DurableObjectStorageSlice` over node:sqlite, so the
@@ -188,4 +188,18 @@ export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice {
       }
     },
   };
+}
+
+/** The REAL Stream over a fresh node:sqlite store, for tests that read its core reduced state the
+ *  way the DO does: `events` collects every committed event (the `onCommit` fan-out), in offset
+ *  order. No birth record, so the first append lands at offset 1. */
+export function nodeSqliteStream() {
+  const events: StreamEvent[] = [];
+  const stream = new Stream({
+    storage: nodeSqliteDurableObjectStorage(),
+    path: "/",
+    projectId: "prj_t",
+    onCommit: (fresh) => void events.push(...fresh),
+  });
+  return { stream, events };
 }
