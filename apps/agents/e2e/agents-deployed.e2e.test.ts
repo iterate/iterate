@@ -75,7 +75,6 @@ billed(
       log.find((e) => e.type === "events.iterate.com/agent/token-usage-reported")?.payload,
     ).toMatchObject({ model: "gpt-6-astra", maxContextTokens: 272_000 });
   },
-  150_000,
 );
 
 billed(
@@ -91,7 +90,6 @@ billed(
     const words = assistantWords(await firstAnswer(itx.cd("/agents/support")));
     expect(words.join("\n")).toMatch(/red/i);
   },
-  150_000,
 );
 
 deployedOnly(
