@@ -89,6 +89,17 @@ test("a run that cannot read prd fails: no Cloudflare credentials", async () => 
 });
 
 // Each fault is an incident: a new one pages, its repeats go into that page's thread.
+test("a quiet run never builds a Slack client, so a broken token cannot turn it red", async () => {
+  await using _cloudflare = workersLogs(serverErrorsOnly(0));
+  const slack = vi.fn(() => {
+    throw new Error("no Slack token");
+  });
+  await expect(
+    alarm({ window, state: null, cloudflare: credentials, slack }),
+  ).resolves.toMatchObject({ summary: "os-prd is quiet" });
+  expect(slack).not.toHaveBeenCalled();
+});
+
 test("a quiet prd posts nothing and the next run reads on from where this one stopped", async () => {
   await using _cloudflare = workersLogs(serverErrorsOnly(0));
   const slack = fakeSlack();

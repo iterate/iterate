@@ -103,7 +103,8 @@ export async function alarm(input: {
   const reading = await readWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
-  const slack = input.slack?.();
+  // Only a run that owes a post needs Slack: a quiet run stays green whatever its token does.
+  const slack = triage.page || triage.replies.length ? input.slack?.() : undefined;
   const channel = slackChannelIds["#error-pulse"];
   const incidents = { ...triage.incidents };
   if (triage.page && slack) {
