@@ -96,7 +96,6 @@ jobs:
         # Shallow submodules as ESP-IDF's own image clones (tools/docker/Dockerfile, IDF_CLONE_SHALLOW).
         run: |-
           set -euo pipefail
-          exec > >(tee -a "$RUNNER_TEMP/leg.log") 2>&1 # TEMPORARY diagnostics (PR #2934)
           git clone --depth 1 --recursive --shallow-submodules --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
           test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0"
           "$IDF_PATH/install.sh" esp32s3
@@ -107,7 +106,6 @@ jobs:
           PREVIOUS: ${{ matrix.previous }}
         run: |-
           set -euo pipefail
-          exec > >(tee -a "$RUNNER_TEMP/leg.log") 2>&1 # TEMPORARY diagnostics (PR #2934)
           source "$IDF_PATH/export.sh"
           node apps/kit/scripts/firmware-release.ts build --device "$DEVICE" \
             --version "$VERSION" --previous "$PREVIOUS" --out "$RUNNER_TEMP/kit-firmware"
@@ -117,14 +115,6 @@ jobs:
           name: kit-firmware-${{ matrix.device }}
           path: ${{ runner.temp }}/kit-firmware/release
           if-no-files-found: error
-      # TEMPORARY diagnostics (PR #2934): Depot's GitHub checks carry no log, so each leg's log goes
-      # to diagnose-firmware, which posts its tail as a check run.
-      - name: Keep the leg's log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-log-${{ matrix.device }}
-          path: ${{ runner.temp }}/leg.log
 
   publish-firmware:
     name: Publish
@@ -152,7 +142,6 @@ jobs:
           VERSION: ${{ needs.plan-firmware.outputs.version }}
         run: |-
           set -euo pipefail
-          exec > >(tee -a "$RUNNER_TEMP/publish.log") 2>&1 # TEMPORARY diagnostics (PR #2934)
           shopt -s nullglob
           for release in dist/kit-firmware-*/; do
             tag=$(jq -r .tag "$release/release.json")
@@ -166,47 +155,6 @@ jobs:
             gh release create "$tag" --target "$GITHUB_SHA" --latest=false \
               --title "$(jq -r .title "$release/release.json")" \
               --notes-file "$release/notes.md" "$release"/assets/*
-          done
-      - name: Keep the publish log # TEMPORARY diagnostics (PR #2934)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-log-publish
-          path: ${{ runner.temp }}/publish.log
-
-  # TEMPORARY diagnostics (PR #2934), removed before merge.
-  diagnose-firmware:
-    name: Diagnose
-    needs:
-      - build-firmware
-      - publish-firmware
-    if: always() && needs.build-firmware.result != 'skipped'
-    permissions:
-      checks: write
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 10
-    steps:
-      - name: Download the legs' and the publish log
-        uses: actions/download-artifact@v4
-        with:
-          pattern: firmware-log-*
-          path: logs
-      - name: Post each log's tail as a check run
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |-
-          set -euo pipefail
-          shopt -s nullglob
-          for log in logs/*/*.log; do
-            device=$(basename "$(dirname "$log")")
-            tail -c 60000 "$log" > tail.txt
-            jq -n --arg name "Kit Firmware log / ${device#firmware-log-}" --arg sha "$HEAD_SHA" --rawfile text tail.txt \
-              '{name: $name, head_sha: $sha, status: "completed", conclusion: "neutral", output: {title: "The last 60 kB of the leg log", summary: "Temporary diagnostics for PR #2934.", text: $text}}' \
-              | gh api -X POST "repos/$GH_REPO/check-runs" --input - --jq .html_url
           done
 
   # A job, not a final step: it must also report a failed plan (after which nothing else runs), and
