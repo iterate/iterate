@@ -442,20 +442,19 @@ export class FacetHost {
         await this.#call(started, name, steps, watchdog).catch(startedIfRefused);
         if (started.recordLoadedIdentity) owed.push(started.recordLoadedIdentity);
       } catch (error) {
-        // The platform defect at facet start (an alarm-woken incarnation's loaded facet, above all)
-        // is recovered as a call's is: a fresh loaded identity and one more start.
+        // The platform defect at facet start is recovered as a call's is — a fresh loaded identity
+        // and one more start — but NOT queued behind a call's recovery of the same facet: this
+        // start holds `blockConcurrencyWhile`, which that recovery would wait on.
         if (!this.#isRecoverableFacetFailure(name, error, started)) throw error;
-        await this.#afterEarlierRecoveries(name, () =>
-          this.#recover(
-            name,
-            firstPartyClassName,
-            facetStartupMemo,
-            steps,
-            { failedOn: started, error },
-            watchdog,
-            owed,
-          ).catch(startedIfRefused),
-        );
+        await this.#recover(
+          name,
+          firstPartyClassName,
+          facetStartupMemo,
+          steps,
+          { failedOn: started, error },
+          watchdog,
+          owed,
+        ).catch(startedIfRefused);
       }
     };
     try {
