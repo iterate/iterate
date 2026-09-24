@@ -67,7 +67,6 @@ test.each<{ preview: string; deployedHoursAgo?: number; verdict: "stale" | "keep
     { preview: "latency", deployedHoursAgo: 144, verdict: "keep" },
     { preview: "real-model", verdict: "keep" },
     { preview: "real-model", deployedHoursAgo: 192, verdict: "stale" },
-    { preview: "slow-e2e", deployedHoursAgo: 30, verdict: "keep" },
     // rule 3 still takes a branch preview that begins `main-`, and a workflow's old per-run name
     { preview: "main-branch", deployedHoursAgo: 30, verdict: "stale" },
     { preview: "latency-94096387667921-1", deployedHoursAgo: 30, verdict: "stale" },

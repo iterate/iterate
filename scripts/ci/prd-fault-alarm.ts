@@ -34,7 +34,7 @@ import {
   spaEnvs,
   voiceEnvs,
 } from "../../envs.ts";
-import { newestArtifactFile } from "./depot.ts";
+import { saveNewestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
@@ -614,14 +614,7 @@ export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[])
 
 /** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
 export async function previousState(options: { out: string }) {
-  const state = await newestArtifactFile({
-    repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
-    ...stateArtifact,
-  });
-  if (!state) return "no previous state";
-  mkdirSync(dirname(options.out), { recursive: true });
-  writeFileSync(options.out, state);
-  return `previous state: ${state.length} bytes`;
+  return saveNewestArtifactFile({ ...stateArtifact, out: options.out });
 }
 
 if (isMainModule(import.meta.url))

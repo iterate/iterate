@@ -30,8 +30,8 @@
 //
 // The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow` and
 // skip the PRs that change none of their code (docs/testing.md#slow-rows): they run on a PR that
-// changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, on every main push, and every
-// 2 hours against main (os-slow-e2e.yml). The claimed-work row waits out one claim's alarm (20 s)
+// changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, and on every main push, which
+// pages them on their own change of state. The claimed-work row waits out one claim's alarm (20 s)
 // and runs on every PR.
 import { expect, test } from "vitest";
 import {

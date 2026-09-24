@@ -90,7 +90,6 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
 | `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
 | `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
-| `os-slow-e2e.yml`            | Every 2 hours, dispatch                                  | **OS slow e2e**: the rows tagged `slow` against main's preview `slow-e2e`; pages on a change of state   |
 | `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records and row costs into [#2580](https://github.com/iterate/iterate/issues/2580)      |
 | `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
 | `pr-ttg.yml`                 | Hourly, dispatch                                         | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
@@ -378,8 +377,7 @@ freshness:
   run. The latency guard (`os-latency.yml`, group `os-latency`, preview
   `latency`) is built the same way for the same reason, and cutting a
   measurement short at every merge would starve it. So is the real-model suite
-  (`os-real-model.yml`, group `os-real-model`, preview `real-model`), and the
-  slow e2e rows (`os-slow-e2e.yml`, group `os-slow-e2e`, preview `slow-e2e`).
+  (`os-real-model.yml`, group `os-real-model`, preview `real-model`).
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
   Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout,
@@ -691,8 +689,8 @@ same names.
 ## Main OS e2e keeps one preview
 
 Main OS e2e tests one Worker Preview, `main`, which every run redeploys in place and no run
-deletes. The latency guard does the same with `latency`, the real-model suite with `real-model`,
-the slow e2e rows with `slow-e2e` (`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`).
+deletes. The latency guard does the same with `latency`, and the real-model suite with `real-model`
+(`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`).
 
 A brand-new preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
 10–40 s after it is created, and the deploy's readiness gate (`apps/os/scripts/preview-readiness.ts`)

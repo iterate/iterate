@@ -29,7 +29,7 @@
 // head, where red reads as "this commit broke"); failing to read Depot fails it.
 //
 // The memory between runs is the previous main run's `pr-ttg-state` artifact (depot.ts
-// `newestArtifactFile`): the pushes of the last 7 days as measured, and what the channel was last
+// `saveNewestArtifactFile`): the pushes of the last 7 days as measured, and what the channel was last
 // told. Each run lists the PR runs of the last 26 hours and measures those it has not. Every push it
 // measures is also a PostHog event, `pr checks settled`. A run off main, or with `--test-page`, keeps
 // no state and sends nothing to PostHog; `--test-page` posts its numbers marked 🧪, mentioning nobody.
@@ -44,7 +44,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
-import { depotCiApi, mapConcurrent, newestArtifactFile, unzip } from "./depot.ts";
+import { depotCiApi, mapConcurrent, saveNewestArtifactFile, unzip } from "./depot.ts";
 import { sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
@@ -525,15 +525,7 @@ if (isMainModule(import.meta.url)) {
   });
   const done =
     positionals[0] === "previous-state" && values.out
-      ? newestArtifactFile({
-          repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
-          ...stateArtifact,
-        }).then((state) => {
-          console.log(state ? `previous state: ${state.length} bytes` : "no previous state");
-          if (!state) return;
-          mkdirSync(dirname(values.out!), { recursive: true });
-          writeFileSync(values.out!, state);
-        })
+      ? saveNewestArtifactFile({ ...stateArtifact, out: values.out }).then(console.log)
       : positionals[0] === "measure" && values.ref
         ? measure({
             token: z

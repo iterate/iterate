@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { PLATFORM_FAILURE_DELAYS_MS, retryPlatformFailures } from "./platform-retry.ts";
@@ -144,6 +144,25 @@ export async function newestArtifactFile(input: {
     }
   }
   return undefined;
+}
+
+/** newestArtifactFile's text in this repository, written to `out`: a scheduled guard's
+ *  `previous-state` step, which hands its last run's state to this one. Nothing is written when none
+ *  of the last 20 runs kept one. What it did, for the log. */
+export async function saveNewestArtifactFile(input: {
+  workflow: string;
+  artifact: string;
+  file: string;
+  out: string;
+}) {
+  const text = await newestArtifactFile({
+    repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
+    ...input,
+  });
+  if (!text) return "no previous state";
+  await mkdir(dirname(input.out), { recursive: true });
+  await writeFile(input.out, text);
+  return `previous state: ${text.length} bytes`;
 }
 
 /**

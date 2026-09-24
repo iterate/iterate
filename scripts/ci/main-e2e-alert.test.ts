@@ -5,6 +5,7 @@ import {
   mainE2ePage,
   mainE2eVerdict,
   previousMainE2eState,
+  suiteVerdict,
 } from "./main-e2e-alert.ts";
 
 test.each<{ results: Record<string, string>; verdict: string | undefined }>([
@@ -151,3 +152,135 @@ test("failing rows are the unexpected (Playwright) or failed (vitest) tests, onc
     ]),
   ).toEqual(["a.e2e.test.ts: broken", "b.e2e.test.ts: slow", "c.spec.ts: red spec"]);
 });
+
+// A suite: the rows tagged `slow` of main's e2e run, or the `REAL:` rows of the real-model suite.
+test.each<{ label: string; rows: Row[]; status?: string; verdict: unknown }>([
+  {
+    label: "every slow row passed, the rest of the run skipped or failed",
+    rows: [
+      { name: "the careless facet", state: "passed", tags: ["slow"] },
+      { name: "a plain row", state: "failed" },
+      { name: "a skipped row", state: "skipped" },
+    ],
+    status: "failed",
+    verdict: { verdict: "green", failingRows: [] },
+  },
+  {
+    label: "a failed slow row, named with its first failure",
+    rows: [
+      { name: "the careless facet", state: "passed", tags: ["slow"] },
+      {
+        name: "the chatty facet",
+        state: "failed",
+        tags: ["slow"],
+        firstFailure: "Error: resident",
+      },
+    ],
+    verdict: {
+      verdict: "red",
+      failingRows: ["f.e2e.test.ts: the chatty facet (Error: resident)"],
+    },
+  },
+  { label: "no telemetry", rows: [], verdict: { broken: "no test telemetry" } },
+  {
+    label: "no row tagged slow",
+    rows: [{ name: "a plain row", state: "passed" }],
+    verdict: { broken: "no row tagged slow" },
+  },
+  {
+    label: "a slow row not run",
+    rows: [
+      { name: "the careless facet", state: "passed", tags: ["slow"] },
+      { name: "the chatty facet", state: "skipped", tags: ["slow"] },
+    ],
+    verdict: { broken: expect.stringContaining("1 row(s) tagged slow did not run (skipped)") },
+  },
+  {
+    label: "a runner that did not finish",
+    rows: [{ name: "the careless facet", state: "passed", tags: ["slow"] }],
+    status: "interrupted",
+    verdict: { broken: "a test run ended interrupted" },
+  },
+])("tagged slow: $label", ({ rows, status, verdict }) => {
+  expect(suiteVerdict(rows.length ? [artifact(rows, status)] : [], { tag: "slow" })).toEqual(
+    verdict,
+  );
+});
+
+test.each<{ label: string; rows: Row[]; verdict: unknown }>([
+  {
+    label: "every REAL: row passed; the intercepted rows beside them are not the suite's",
+    rows: [
+      { name: "one turn through the default model, the provider intercepted", state: "failed" },
+      { name: "REAL: one turn through the default model", state: "passed" },
+    ],
+    verdict: { verdict: "green", failingRows: [] },
+  },
+  {
+    label: "a failed REAL: row",
+    rows: [
+      {
+        name: "REAL: one turn through the default model",
+        state: "failed",
+        firstFailure: "Error: the AI Gateway's spend cap refused the model request",
+      },
+    ],
+    verdict: {
+      verdict: "red",
+      failingRows: [
+        "f.e2e.test.ts: REAL: one turn through the default model (Error: the AI Gateway's spend cap refused the model request)",
+      ],
+    },
+  },
+  {
+    label: "REAL: rows skipped (E2E_REAL_MODELS unset)",
+    rows: [{ name: "REAL: one turn through the default model", state: "skipped" }],
+    verdict: { broken: expect.stringContaining("titled REAL: did not run (skipped)") },
+  },
+])("titled REAL: $label", ({ rows, verdict }) => {
+  expect(suiteVerdict([artifact(rows)], { titlePrefix: "REAL:" })).toEqual(verdict);
+});
+
+test.each(["slow e2e rows", "real-model e2e"])(
+  "the %s suite's pages name no jobs, and its state is its own, never main e2e's",
+  (suite) => {
+    const page = mainE2ePage({
+      suite,
+      previous: "green",
+      verdict: "red",
+      commitSha: "0123456789abcdef",
+      commitSubject: "Some change (#1)",
+      failedJobs: [],
+      failingRows: ["f.e2e.test.ts: a row"],
+    });
+    expect(page).toBe(
+      `🔴 ${suite} red at \`012345678\` (Some change (#1)) <@U067G4QRFK2>\n• failing rows: f.e2e.test.ts: a row`,
+    );
+    const history = [
+      { bot_id: "B", text: page! },
+      { bot_id: "B", text: "🟢 main e2e green again at `x`" },
+    ];
+    expect(previousMainE2eState(history, suite)).toBe("red");
+    expect(previousMainE2eState(history)).toBe("green");
+  },
+);
+
+type Row = { name: string; state: string; tags?: string[]; firstFailure?: string };
+
+/** The parts of a vitest telemetry artifact a suite's verdict reads. */
+function artifact(
+  rows: Row[],
+  status = rows.some((row) => row.state === "failed") ? "failed" : "passed",
+) {
+  return {
+    run: { status },
+    tests: rows.map((row) => ({
+      fullName: row.name,
+      leafName: row.name,
+      moduleId: "/repo/apps/os/e2e/f.e2e.test.ts",
+      state: row.state,
+      tags: row.tags || [],
+      firstFailure: row.firstFailure,
+    })),
+  } as unknown as Parameters<typeof suiteVerdict>[0][number];
+}

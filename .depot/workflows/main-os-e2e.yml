@@ -17,7 +17,10 @@
 # tests its last commit). So every started run that is not cancelled by hand reaches a verdict, a
 # job that hits its timeout counting as red. The `alert` job pages #error-pulse only when main
 # changes state — once when it goes red, naming the failed jobs and the failing rows, once when it is
-# green again (scripts/ci/main-e2e-alert.ts). Nothing is written to any PR. The `trace` job, beside
+# green again (scripts/ci/main-e2e-alert.ts) — and pages the rows tagged `slow` the same way under
+# their own name, "slow e2e rows", so a slow row that breaks while main is already red still pages
+# (docs/testing.md#slow-rows). A run off main pages nobody: it prints what it would post. Nothing is
+# written to any PR. The `trace` job, beside
 # alert, posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
 # preview's does (docs/ci-traces.md).
 #
@@ -166,6 +169,7 @@ jobs:
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
     outputs:
       failing-rows: ${{ steps.failing-rows.outputs.failing-rows }}
+      suite-verdict: ${{ steps.failing-rows.outputs.suite-verdict }}
     steps:
       # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
       # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
@@ -198,11 +202,14 @@ jobs:
           # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows)
           E2E_SLOW_ROWS: run
         run: doppler run -- pnpm preview e2e
-      # The rows the alert names when main goes red.
+      # The rows the alert names when main goes red, and the slow rows' own verdict, which it pages
+      # under their own name.
       - name: Collect the failing rows
         id: failing-rows
         if: always()
-        run: pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
+        run: >-
+          pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
+          --suite "slow e2e rows" --tag slow
       - name: Check test telemetry and write the suite summary
         if: always()
         env:
@@ -423,12 +430,12 @@ jobs:
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
 
-  # Main's state changes only: red once, green again once. A job that hit its timeout is red; a run
-  # cancelled by hand gets no alert.
+  # Main's and the slow rows' state changes only: red once, green again once. A job that hit its
+  # timeout is red; a run cancelled by hand gets no alert, and a run off main pages nobody.
   alert:
     name: alert
     needs: [parent, deploy, e2e, specs]
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    if: ${{ !cancelled() }}
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -445,4 +452,6 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           NEEDS: ${{ toJSON(needs) }}
-        run: pnpm tsx scripts/ci/main-e2e-alert.ts alert
+        run: >-
+          pnpm tsx scripts/ci/main-e2e-alert.ts alert
+          ${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}

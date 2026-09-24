@@ -648,7 +648,6 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
     main: ".depot/workflows/main-os-e2e.yml",
     latency: ".depot/workflows/os-latency.yml",
     "real-model": ".depot/workflows/os-real-model.yml",
-    "slow-e2e": ".depot/workflows/os-slow-e2e.yml",
   });
   expect(ownPreviews.map(({ preview }) => preview).toSorted()).toEqual(
     [...CI_WORKFLOW_PREVIEWS].toSorted(),
@@ -665,27 +664,6 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
       file,
     ).toEqual([]);
   }
-});
-
-// docs/testing.md#slow-rows: most PRs skip the e2e rows tagged `slow`. Main OS e2e runs them on each
-// main push but pages only when main changes state, so they also run alone against main every 2
-// hours and page on their own change of state; a run off main pages nobody.
-test("the slow e2e rows run alone against main every 2 hours and page on their own change of state", () => {
-  const workflow = loadWorkflow(".depot/workflows/os-slow-e2e.yml");
-  const job = workflow.jobs["slow-rows"];
-  const runs = job?.steps?.map((step) => step.run || "") ?? [];
-  const suite = runs.findIndex((run) =>
-    run.startsWith("doppler run -- pnpm preview e2e --slow-rows only"),
-  );
-  const judge = runs.findIndex((run) =>
-    run.startsWith("pnpm tsx scripts/ci/os-slow-e2e-alert.ts --dir test-results/ci-telemetry/raw"),
-  );
-
-  expect(workflow.on?.schedule).toEqual([{ cron: expect.stringMatching(/^\d+ \*\/2 \* \* \*$/) }]);
-  expect(job?.env).toMatchObject({ TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw" });
-  expect(suite).toBeGreaterThan(-1);
-  expect(judge).toBeGreaterThan(suite);
-  expect(runs[judge]).toContain("${{ github.ref != 'refs/heads/main' && '--dry-run' || '' }}");
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
