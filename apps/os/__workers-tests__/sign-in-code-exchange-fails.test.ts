@@ -1,6 +1,7 @@
 // A sign-in whose last step fails on the platform's side (src/issuer-session.ts): the code exchange
 // against the issuer's own /oauth2/token, which the browser session bounds at 10 s. The person is
-// sent back to the sign-in page with the error, and the failure is logged as a platform failure.
+// sent back to the sign-in page with the error, and the failure is logged as a platform failure
+// naming the person, so it joins the line the token request logged about the hop it waited on.
 // And the token endpoint's own grant checks (src/oauth.ts `accountStateOf`) ride out a deploy's
 // Durable Object reset, so a sign-in during a deploy does not fail at all.
 import { createExecutionContext } from "cloudflare:test";
@@ -57,6 +58,7 @@ test("a code exchange that times out sends the person back to the sign-in page w
     reason: "timeout",
     message: "The operation was aborted due to timeout",
     waitedMs: expect.any(Number),
+    userId: (await controlPlane().ensureUser("slow-exchange@example.com")).id,
   });
 });
 
@@ -75,6 +77,7 @@ test("a token endpoint that answers a 500 sends the person back to the sign-in p
     reason: "token-endpoint",
     message: "Iterate token exchange failed (500). Try again.",
     waitedMs: expect.any(Number),
+    userId: (await controlPlane().ensureUser("failing-exchange@example.com")).id,
   });
 });
 
@@ -96,6 +99,7 @@ test("a token endpoint whose answer is no OAuth response at all (an uncaught exc
     reason: "token-endpoint",
     message: "Iterate token exchange failed (500). Try again.",
     waitedMs: expect.any(Number),
+    userId: (await controlPlane().ensureUser("uncaught-exchange@example.com")).id,
   });
 });
 

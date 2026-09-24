@@ -21,6 +21,7 @@ import { emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import { providerStore } from "./oauth-store.ts";
 import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
+import { watchSlowStep } from "./sign-in-watch.ts";
 import {
   isPersonalAccessToken,
   parsePersonalAccessToken,
@@ -106,16 +107,24 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  every admission and every code exchange reads here (`grantLifetime`), so a deploy's reset of
  *  the person's Durable Object would otherwise fail a sign-in's token request with a 500. The read
  *  is idempotent; a second failure throws. A deploy's reset is expected; any other cut is a
- *  platform failure the prd fault alarm counts. */
+ *  platform failure the prd fault alarm counts.
+ *
+ *  A read still pending after five seconds logs `oauth.step-slow` naming the person while it waits
+ *  (sign-in-watch.ts). A person's account is often brand new at their first sign-in's code
+ *  exchange, and Cloudflare can hold a new Durable Object's answers until its first write is
+ *  confirmed. */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
   // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
   // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
   const read = async () =>
     (
-      (await ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
-        ["itx", "facets", ["get", "account"], ["snapshot"]],
-        [],
-        { principal: null },
+      (await watchSlowStep(
+        { event: "oauth.step-slow", step: "account-state", userId },
+        ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
+          ["itx", "facets", ["get", "account"], ["snapshot"]],
+          [],
+          { principal: null },
+        ),
       )) as { state: AccountState }
     ).state;
   try {

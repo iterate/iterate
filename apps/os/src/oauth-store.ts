@@ -28,6 +28,7 @@
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
+import { watchSlowStep } from "./sign-in-watch.ts";
 
 const GRANT_KEY_PREFIX = "grant:";
 
@@ -37,35 +38,42 @@ const GRANT_KEY_PREFIX = "grant:";
 export function providerStore(env: Pick<Env, "CONTROL_PLANE" | "OAUTH_KV">): KVNamespace {
   const kv = env.OAUTH_KV;
   const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  /** A call on either store, still pending after five seconds, logs `oauth.step-slow` naming it
+   *  while it waits (sign-in-watch.ts): a code exchange reads and rewrites its grant in the control
+   *  plane and writes its access token to KV. A KV call names its key's kind, never the key. */
+  const watched = <T>(step: string, work: PromiseLike<T>, key?: string | null) =>
+    watchSlowStep({ event: "oauth.step-slow", step, keyKind: key?.split(":", 1)[0] }, work);
   /** Asked again ONCE when the call was cut at the transport, and edge.ts replaces the stub the cut
    *  call threw from. Each operation is idempotent (a read, or a whole-row write or delete); a second
    *  failure throws. A deploy's reset of the control plane's Durable Object is expected; any other
    *  cut is a platform failure, which the prd fault alarm counts. */
   const ask = async <T>(operation: string, call: () => Promise<T>): Promise<T> => {
+    const step = `grant-store-${operation}`;
     try {
-      return await call();
+      return await watched(step, call());
     } catch (error) {
       if (!isRetryableTransportError(error)) throw error;
       console.warn({
         event: isDeployReset(error)
           ? "oauth.deploy-reset-grant-store-retry"
           : "oauth.platform-failure-grant-store-retry",
-        name: `grant-store-${operation}`,
+        name: step,
         message: String(error),
       });
-      return call();
+      return watched(step, call());
     }
   };
   const store = {
     async get(key: string, options?: "text" | "json" | { type?: "text" | "json" }) {
       const type = typeof options === "string" ? options : options?.type;
       if (!key.startsWith(GRANT_KEY_PREFIX))
-        return type === "json" ? kv.get(key, "json") : kv.get(key);
+        return watched("kv-get", type === "json" ? kv.get(key, "json") : kv.get(key), key);
       const value = await ask("get", () => controlPlane.oauthGrant(key));
       return type === "json" && value ? JSON.parse(value) : value;
     },
     put(key: string, value: string, options: KVNamespacePutOptions = {}) {
-      if (!key.startsWith(GRANT_KEY_PREFIX)) return kv.put(key, value, options);
+      if (!key.startsWith(GRANT_KEY_PREFIX))
+        return watched("kv-put", kv.put(key, value, options), key);
       const expiresAt =
         options.expiration ??
         (options.expirationTtl === undefined
@@ -74,12 +82,13 @@ export function providerStore(env: Pick<Env, "CONTROL_PLANE" | "OAUTH_KV">): KVN
       return ask("put", () => controlPlane.putOAuthGrant(key, value, expiresAt));
     },
     delete(key: string) {
-      if (!key.startsWith(GRANT_KEY_PREFIX)) return kv.delete(key);
+      if (!key.startsWith(GRANT_KEY_PREFIX)) return watched("kv-delete", kv.delete(key), key);
       return ask("delete", () => controlPlane.deleteOAuthGrant(key));
     },
     list(options: KVNamespaceListOptions = {}) {
       const { prefix, cursor, limit } = options;
-      if (!prefix?.startsWith(GRANT_KEY_PREFIX)) return kv.list(options);
+      if (!prefix?.startsWith(GRANT_KEY_PREFIX))
+        return watched("kv-list", kv.list(options), prefix);
       return ask("list", () =>
         controlPlane.listOAuthGrants(prefix, { cursor: cursor || undefined, limit }),
       );

@@ -1,12 +1,19 @@
 // oauth.test.ts — a grant's use as its admission reads it off the person's account: a use the
 // account recorded within the hour is not recorded again, whichever isolate admits the grant next,
-// and a recorded use never admits a grant whose end has landed. The account is a fake that answers
-// what the `account` facet's snapshot answers; the real one is __workers-tests__/oauth.test.ts's.
-import { expect, test } from "vitest";
+// and a recorded use never admits a grant whose end has landed. And an account read that stalls is
+// named while it waits. The account is a fake that answers what the `account` facet's snapshot
+// answers; the real one is __workers-tests__/oauth.test.ts's.
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { AccountState } from "./account/contract.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
-import { authorizationForToken, grantIsLive, recordGrantUse, type AccessGrant } from "./oauth.ts";
+import {
+  accountStateOf,
+  authorizationForToken,
+  grantIsLive,
+  recordGrantUse,
+  type AccessGrant,
+} from "./oauth.ts";
 import { newPersonalAccessToken } from "./personal-access-token.ts";
 
 test.for([
@@ -63,6 +70,34 @@ test("a use recorded a moment ago admits nothing once the grant has ended: its v
   account.end(oauthGrant.grantId);
   expect(await account.admit()).toBeNull();
   expect(await grantIsLive(account.env, oauthGrant)).toBe(false);
+});
+
+test("an account read still waiting after five seconds names the person while it waits, and still answers", async () => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => {
+    vi.useRealTimers();
+    warn.mockRestore();
+  });
+  // what a brand-new account does while Cloudflare holds its first write: it answers late
+  let answer!: (snapshot: { offset: number; state: Partial<AccountState> }) => void;
+  const env = {
+    ITERATE_CONTEXT: {
+      getByName: () => ({ invoke: () => new Promise((resolve) => (answer = resolve)) }),
+    },
+  } as unknown as Env;
+  const read = accountStateOf(env, "user_held");
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(warn).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(warn).toHaveBeenCalledExactlyOnceWith({
+    event: "oauth.step-slow",
+    step: "account-state",
+    userId: "user_held",
+    waitedMs: 5_000,
+  });
+  answer({ offset: 1, state: { endedGrants: {} } });
+  expect(await read).toEqual({ endedGrants: {} });
 });
 
 /** A person's account holding one personal access token, used `usedMinutesAgo` (null: never),
