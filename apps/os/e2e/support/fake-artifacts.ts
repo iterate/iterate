@@ -11,11 +11,8 @@
 // `pushFromOutside` — is for a test's eyes, and is never on the real proxy.
 import { RpcTarget } from "capnweb";
 import { repoArtifactName, repoPathOf } from "../../src/context/cf-artifacts.ts";
-import type { RepoFileChange, RepoLogEntry } from "../../src/repo/git-wire.ts";
+import type { RepoFileChange } from "../../src/repo/git-wire.ts";
 import { FakeGitServer } from "./fake-git-server.ts";
-
-/** One commit as the repo facet's `log` lists it — the real `RepoLogEntry`, newest first. */
-export type FakeCommit = RepoLogEntry;
 
 /** What the fake's `get(path)` hands back — an `RpcTarget` like the real `ScopedArtifactRepoRpcTarget`, so it
  *  crosses the wire and `get(path).createToken(…)` / `.remote()` pipeline; the credential is a
@@ -87,7 +84,7 @@ export class FakeArtifacts extends RpcTarget {
     return new FakeArtifactRepo(this.#server.remote(name));
   }
   /** Every repo, as paths — ONE page, never a cursor. */
-  list(_options: { limit?: number; cursor?: string } = {}): { repos: { path: string }[] } {
+  list(): { repos: { path: string }[] } {
     return { repos: this.#server.repos().map((name) => ({ path: repoPathOf(name) })) };
   }
   /** True when the repo existed; false for one already gone — as the proxy's `delete` answers. */
