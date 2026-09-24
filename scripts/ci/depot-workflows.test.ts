@@ -646,8 +646,7 @@ test("every unit-test workspace writes the canonical telemetry artifact", () => 
     return [packageJson.name];
   });
 
-  // The finalizer reads the list from the checkout (a PR's workflow file is its merge ref's,
-  // its checkout its head), by the same rule this test applies.
+  // The finalizer reads the list from the checkout, by the same rule this test applies.
   const finalizer = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find((step) =>
     step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
   );
@@ -818,7 +817,19 @@ test.for([
   },
 );
 
-test("labels unit artifacts with the exact checked-out pull-request head", () => {
+// docs/depot-ci.md#which-tree-a-pull-requests-ci-tests: Depot reads a PR run's workflow files from
+// its merge commit, so the required checks test that commit, not the head it merges.
+test.each([".depot/workflows/test.yml", ".depot/workflows/lint-typecheck.yml"])(
+  "%s checks out the run's own commit, the tree its workflow file was read from",
+  (file) => {
+    const checkouts = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
+      (job.steps || []).filter((step) => step.uses?.startsWith("actions/checkout")),
+    );
+    expect(checkouts.map((step) => step.with?.ref)).toEqual(["${{ github.sha }}"]);
+  },
+);
+
+test("labels unit artifacts with the pull-request head, whose merge commit the job tests", () => {
   const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
     (step) => step.name === "Run Tests",
   );

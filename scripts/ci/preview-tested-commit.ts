@@ -10,6 +10,12 @@
 //   3. No merge commit at all (the pull request conflicts with main) means the run tests the head
 //      alone, and says so.
 //
+// On a pull_request run the first candidate is the run's own commit (PREVIEW_RUN_SHA, the workflow's
+// `github.sha`): the merge commit Depot read this workflow file from (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
+// By rule 1 the preview then deploys exactly the tree its workflow came from, even when the merge ref
+// has since moved to a newer main (a run queued behind the PR's previous preview run). Only when it
+// is not a merge of this head does the run fetch `refs/pull/<n>/merge` and apply the rules to that.
+//
 // .depot/workflows/preview-os.yml runs this right after checking out the head, before anything
 // is installed, so it needs no dependencies: node runs it with its own type stripping. It checks the
 // tested commit out in place and hands its SHA to the jobs after deploy, which check out that same
@@ -67,11 +73,49 @@ function gitOutput(...args: string[]): string {
   return result.stdout.trim();
 }
 
+/** The raw commit object names its parents even in a depth-1 clone. */
+function commitParents(sha: string): string[] {
+  return [...gitOutput("cat-file", "-p", sha).matchAll(/^parent (\w+)$/gm)].map(
+    (match) => match[1]!,
+  );
+}
+
+function testCommit(tested: PreviewTestedCommit): void {
+  if (tested.kind === "merge") gitOutput("checkout", "--quiet", "--detach", tested.sha);
+  console.log(`this run tests ${tested.description}`);
+  const outputs = [
+    `sha=${tested.sha}`,
+    `kind=${tested.kind}`,
+    `head-sha=${tested.headSha}`,
+    `description=${tested.description}`,
+  ];
+  if (process.env.GITHUB_OUTPUT)
+    appendFileSync(process.env.GITHUB_OUTPUT, `${outputs.join("\n")}\n`);
+}
+
 async function main(): Promise<void> {
   const pullRequestNumber = process.env.PREVIEW_PR_NUMBER;
   if (!pullRequestNumber || !/^\d+$/.test(pullRequestNumber))
     throw new Error("PREVIEW_PR_NUMBER must be the pull request's number");
   const headSha = gitOutput("rev-parse", "HEAD");
+  const runSha = process.env.PREVIEW_RUN_SHA;
+  if (runSha && runSha !== headSha) {
+    const fetched = git("fetch", "--quiet", "--depth=1", "origin", runSha);
+    const tested =
+      fetched.status === 0
+        ? previewTestedCommit({
+            headSha,
+            mergeCommit: { sha: runSha, parents: commitParents(runSha) },
+            finalAttempt: false,
+          })
+        : undefined;
+    if (tested?.kind === "merge") return testCommit(tested);
+    console.log(
+      `this run's commit ${runSha} is not a merge of the head ${headSha}` +
+        (fetched.status === 0 ? "" : ` (fetch failed: ${fetched.stderr.trim()})`) +
+        `; resolving refs/pull/${pullRequestNumber}/merge instead`,
+    );
+  }
   const mergeRef = `refs/remotes/origin/pull/${pullRequestNumber}/merge`;
   const attempts = 6;
   for (let attempt = 1; ; attempt++) {
@@ -87,30 +131,10 @@ async function main(): Promise<void> {
     const mergeSha = fetched.status === 0 ? gitOutput("rev-parse", mergeRef) : undefined;
     const tested = previewTestedCommit({
       headSha,
-      mergeCommit: mergeSha
-        ? {
-            sha: mergeSha,
-            // the raw commit object names its parents even in a depth-1 clone
-            parents: [...gitOutput("cat-file", "-p", mergeSha).matchAll(/^parent (\w+)$/gm)].map(
-              (match) => match[1]!,
-            ),
-          }
-        : undefined,
+      mergeCommit: mergeSha ? { sha: mergeSha, parents: commitParents(mergeSha) } : undefined,
       finalAttempt: attempt === attempts,
     });
-    if (tested) {
-      if (tested.kind === "merge") gitOutput("checkout", "--quiet", "--detach", tested.sha);
-      console.log(`this run tests ${tested.description}`);
-      const outputs = [
-        `sha=${tested.sha}`,
-        `kind=${tested.kind}`,
-        `head-sha=${tested.headSha}`,
-        `description=${tested.description}`,
-      ];
-      if (process.env.GITHUB_OUTPUT)
-        appendFileSync(process.env.GITHUB_OUTPUT, `${outputs.join("\n")}\n`);
-      return;
-    }
+    if (tested) return testCommit(tested);
     console.log(
       `GitHub's merge commit ${mergeSha} is not built from ${headSha} yet; asking again in 10 s`,
     );

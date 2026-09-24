@@ -1,0 +1,44 @@
+# MERGES WITH MAIN: a pull request that conflicts with its base gets a red check instead of no checks.
+# GitHub builds no test merge commit for a conflicted pull request, and Depot starts no workflow
+# without one, so such a PR shows no Lint and Typecheck, Test or Preview OS at all. GitHub Actions
+# still starts `pull_request_target` for it, an event Depot does not support, which is why this one
+# workflow lives here and not in .depot/workflows (docs/depot-ci.md#pull-requests-that-conflict-with-main).
+# The job fails on a conflict with the reason as its annotation; scripts/ci/merges-with-main.ts has
+# the rules.
+#
+# `pull_request_target` runs this file and the script from the base branch, never the pull
+# request's code: the checkout takes no `ref`, and the token can only read.
+name: Merges with main
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+permissions:
+  contents: read
+  pull-requests: read
+# A newer push supersedes the answer about an older head.
+concurrency:
+  group: merges-with-main-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  merges-with-main:
+    name: merges with main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci/merges-with-main.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check that the pull request merges with its base
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/merges-with-main.ts

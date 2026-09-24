@@ -35,11 +35,15 @@ jobs:
           id="${DEPOT_JOB_URL##*attempt=}"
           [[ "$id" =~ ^[a-z0-9]+$ ]] || { echo "DEPOT_JOB_URL names no job attempt: '${DEPOT_JOB_URL:-}'"; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
+      # THE RUN'S OWN COMMIT, the tree this workflow file was read from: on a pull request, the
+      # merge commit of its head into main (refs/pull/<n>/merge as Depot resolved it), so a workflow
+      # change on main never runs against a head that predates it
+      # (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       # THIS JOB INSTALLS. Reusing the baked node_modules (scripts/depot-ci/dependencies.mjs) skips a
       # ~55 s no-op install, but the image is loaded lazily and that install was what paged the tree
       # in: with the reuse, the first packages' tests ran 1.5–2× slower and 5 s rows timed out in
@@ -76,8 +80,8 @@ jobs:
         if: always()
         env:
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        # --expect-unit-workspaces reads the workspaces from this checkout, not from this file: a PR's
-        # workflow file comes from its merge ref while the checkout is its head.
+        # --expect-unit-workspaces reads the workspaces from the checkout, so the list has one source:
+        # the tree whose tests ran.
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow

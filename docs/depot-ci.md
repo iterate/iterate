@@ -54,13 +54,18 @@ replays.
   credentials live in Doppler; GitHub supplies a short-lived job token.
 - Non-secret variables are managed with `depot ci vars`.
 
-The only GitHub Actions workflow left is `.github/workflows/pkg-pr-new.yml`. It
-is not CI; it publishes the `iterate` SDK and the `@iterate-com/cli` packages to
-[pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes
-their inputs (`packages/iterate`, `packages/cli`, the root manifests and lockfile, or the
-workflow itself): the **publish** and **Continuous Releases** checks. Anything else that needs GitHub-only triggers,
-such as `issues`, `issue_comment`, or PR review comment events, which Depot CI
-does not support, belongs there too.
+Two GitHub Actions workflows are left, both for what Depot cannot do:
+
+- `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK and the
+  `@iterate-com/cli` packages to [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for
+  a PR that changes their inputs (`packages/iterate`, `packages/cli`, the root manifests and
+  lockfile, or the workflow itself): the **publish** and **Continuous Releases** checks.
+- `.github/workflows/merges-with-main.yml` is the **Merges with main** check, on
+  `pull_request_target`: a PR that conflicts with main gets a red check instead of none
+  ([Pull requests that conflict with main](#pull-requests-that-conflict-with-main)).
+
+Anything else that needs GitHub-only triggers, such as `pull_request_target`, `issues`,
+`issue_comment`, or PR review comment events, which Depot CI does not support, belongs there too.
 
 ## Workflows
 
@@ -466,6 +471,76 @@ can silently disappear. When validating previews, use one path at a time.
 `depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
 jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
 find the exact job/attempt id.
+
+## Which tree a pull request's CI tests
+
+A pull request's Depot run is built from GitHub's test merge commit, `refs/pull/<n>/merge`:
+the PR's head merged into main as main stood when GitHub last built it. `depot ci run show`
+prints it as `Sha` (the job's `github.sha`) next to `Head sha`
+(`github.event.pull_request.head.sha`). In all 113 pull-request runs on a merge ref between
+07:25 and 10:20 UTC on 2026-09-24, `Sha` was a merge commit whose second parent is the run's
+`Head sha`. Depot reads the jobs, steps and env of the workflow files from that merge commit;
+it registers the `on:` triggers from the default branch ([Trigger Gotchas](#trigger-gotchas)).
+
+So the workflow is main's, and a job that checks out `head.sha` runs it against the PR's own
+code, which is as old as the branch. Any workflow change on main that needs code landing with
+it (a new script, a new flag, a list of workspaces) then fails every PR not rebased past it,
+with nothing wrong in the PR. It happened on 2026-09-24: main's `test.yml` named the new
+`@iterate-com/ci-reports` workspace, the heads of #2985, #2986 and #2991 did not have it, and
+four Test jobs failed after every test had passed (#2999). Replayed on #2985's run
+`q0zxdw71pm`, the workspace check fails in the head `397df9615` and passes in the run's merge
+commit `fe85c66d0`.
+
+Every job that gates a pull request therefore tests the run's own commit, the tree its workflow
+file came from:
+
+- Lint and Typecheck and Test check out `github.sha` (`depot-workflows.test.ts` enforces it).
+- Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which
+  deploys it when it is a merge of the head, and otherwise resolves `refs/pull/<n>/merge` as
+  before; e2e and trace check out the commit deploy tested. The trace's statuses, the test
+  telemetry's `headSha` and the preview's name still use the PR head.
+
+What that means for a pull request:
+
+- A PR's checks cover the PR merged into main at the time of the push. A semantic conflict with
+  main (both sides merge cleanly, the result is broken) is a real red on the PR, as it would be on
+  main after merging.
+- A retry reruns the same merge commit. To test against a newer main, push (or rebase).
+- A PR that conflicts with main has no merge commit and gets no run at all
+  ([below](#pull-requests-that-conflict-with-main)).
+
+The hazard remains where a job still checks out the head on purpose: LOC report (it diffs the
+head against its base), the PR dashboard, Kit Firmware's pull-request builds and Preview
+delete. A main change to one of those workflows that needs new code fails un-rebased PRs until
+they rebase. A `workflow_dispatch` reads its file from the dispatched ref instead: a Preview OS
+dispatch from main for a PR runs main's file against that PR merged into main now.
+
+## Pull requests that conflict with main
+
+GitHub builds no test merge commit for a PR that conflicts with main, and Depot starts no
+workflow without one. It records a run with no commit and no workflows (`depot ci run list
+--output json` shows it with no `sha`), and the PR shows no Lint and Typecheck, Test or Preview OS
+checks: not red, not pending, absent. On 2026-09-24 between 09:23 and 09:59 UTC there were six
+such runs, for heads of #3004, #3006 and #3007, and each head conflicted with main at that moment
+(`git merge-tree`). #3007 sat with only Bugbot's check until it was rebased.
+
+The **Merges with main** check (`.github/workflows/merges-with-main.yml`, rules in
+`scripts/ci/merges-with-main.ts`) closes that gap. GitHub Actions starts `pull_request_target`
+for a conflicted PR, and Depot does not support that event, so this check is a GitHub
+Actions workflow. On every push, open and reopen it reads the PR's `mergeable` and:
+
+- fails when it is `false`, with the annotation "This PR conflicts with main, so GitHub builds no
+  merge commit for it and Depot runs no CI … Rebase onto main (or merge main in) and push to get
+  CI.";
+- passes when it is `true`;
+- asks again every 5 s while GitHub is still computing it (`null`), and after 12 tries passes with
+  a warning that it could not tell;
+- passes without deciding when the PR's head has moved on, since that push's run decides.
+
+`pull_request_target` runs the base branch's file with a token that can only read, and checks out
+only the base branch's script, never the PR's code. The check is not required: a conflicted PR
+cannot merge anyway. A PR that main moves under keeps its earlier checks, and its next push gets
+the red check.
 
 ## Which PRs get a preview
 
