@@ -273,20 +273,36 @@ async function readied(pid: number) {
   }
 }
 
-/** SIGTERM the server's process group (a detached one leads its own; an attached one's `serve`
- *  forwards the signal to vite), SIGKILL whatever is left after 10s. */
+/** SIGTERM the server — its process group when it leads one (a detached one does), else the
+ *  process, whose `serve` forwards it to vite — then SIGKILL whatever of its process tree is left
+ *  after 10s, and wait for it to be gone, so the next start finds the lock free. The tree is read
+ *  first (`pgrep -P`, macOS's and procps's alike): an attached `pnpm dev` shares its terminal's
+ *  group, and once it dies its vite and workerd are reparented out of reach. */
 async function stop(pid: number) {
-  const signal = (name: NodeJS.Signals) => {
+  const tree = [pid, ...descendants(pid)];
+  const signal = (target: number, name: NodeJS.Signals) => {
     try {
-      process.kill(-pid, name);
+      process.kill(target, name);
     } catch {
-      // not a group leader: an attached `pnpm dev`, which runs in its terminal's group
-      process.kill(pid, name);
+      // gone already, or (a negative target) no such group: an attached server's
     }
   };
-  signal("SIGTERM");
-  for (let waited = 0; waited < 10_000 && alive(pid); waited += 200) await sleep(200);
-  if (alive(pid)) signal("SIGKILL");
+  signal(-pid, "SIGTERM");
+  signal(pid, "SIGTERM");
+  const settled = async (ms: number) => {
+    for (let waited = 0; waited < ms && tree.some(alive); waited += 200) await sleep(200);
+  };
+  await settled(10_000);
+  for (const survivor of tree.filter(alive)) signal(survivor, "SIGKILL");
+  await settled(5_000);
+}
+
+function descendants(pid: number): number[] {
+  const children = spawnSync("pgrep", ["-P", `${pid}`], { encoding: "utf8" })
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map(Number);
+  return children.flatMap((child) => [child, ...descendants(child)]);
 }
 
 /** `/version` every 250ms until it answers, for up to 3 minutes (the first `vite dev` optimizes
