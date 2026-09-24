@@ -21,16 +21,19 @@ import {
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
 import { recordPipelinedSteps } from "./record-pipelined-steps.ts";
-export { auth };
 export {
+  // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
+  // `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
+  // cannot await — then `set` to mutate and `snapshot()` as the client's seed read (stream/processor.ts).
+  LiveState,
   StreamProcessor,
   defineProcessorContract,
-  jsonEqual,
   type ConsumedEvent,
   type EventCatalog,
   type EventDefinition,
   type EmittedEventInput,
   type EventInput,
+  type LiveStateSink,
   type ProcessorContract,
   type ProcessorState,
   type ProcessorStream,
@@ -48,11 +51,7 @@ export { z } from "zod";
 // to hold across calls, and a one-shot POST is the honest shape (the lint rule targets long-lived workers).
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
-export { applyPatch, diff, type PatchOp } from "../lib.ts";
-export { LiveState, type LiveStateSink } from "../stream/processor.ts";
-// LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
-// `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
-// cannot await — then `set` to mutate and `snapshot()` as the client's seed read (stream/processor.ts).
+export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -264,8 +263,7 @@ export abstract class StreamProcessorDurableObject<
 
 // ConfigWorker is a stateless event handler loaded with an explicit workers.get spec.
 // Subscribe its processEventBatch method explicitly; fetch routing is configured separately.
-export type ConfigWorkerItx = ItxScope;
-export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ConfigWorkerItx };
+export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ItxScope };
 
 export abstract class ConfigWorker<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },

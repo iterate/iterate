@@ -7,6 +7,8 @@
 // Kept to the one shape a UI or test needs — no reconnect/backoff/ping-watchdog (that policy belongs
 // to whoever owns the capnweb session; here the caller passes a ready `itx`).
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { SubscriptionListEntry } from "../api.ts";
+import type { StreamEvent } from "../stream/processor.ts";
 import {
   connectLiveState,
   type LiveStateItx,
@@ -108,30 +110,6 @@ export function useLiveState<S>(
 // of its processors table; who is here; named facets' live state. ONE hook here, pure components
 // there, so the UI kit stays free of the SDK and any app — the dash, the agents app — composes the two.
 
-/** One committed event as the hook hands it out: the itx envelope, structurally. */
-export type IterateContextEvent = {
-  offset: number;
-  type: string;
-  createdAt: string;
-  payload?: unknown;
-  metadata?: Record<string, unknown>;
-  idempotencyKey?: string;
-  source?: {
-    principal?: { actor: string; email?: string };
-    grant?: string;
-    processor?: { slug: string; version: string };
-  };
-};
-
-/** One row of a context's processors table (`itx.processors.list()`), structurally. */
-export type IterateContextProcessorRow = {
-  name: string;
-  target: string;
-  consumes?: string[];
-  configuredAtOffset: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
-};
-
 /** One presence: who acted on the context and when last, from the log's stamps. */
 export type IterateContextPresence = {
   actor: string;
@@ -141,23 +119,22 @@ export type IterateContextPresence = {
 };
 
 /** The slice of a context handle `useIterateContext` reads — a capnweb `IterateContextApi` stub
- *  satisfies it structurally. `rpcStubs` is optional: a handle typed without the census (a project
- *  context's client type) still gets the log, the table and the actors. `invoke` seeds a named
- *  facet's live state (`itx.facets.get('<name>').liveSnapshot()`, as an expression). */
+ *  satisfies it structurally. `invoke` seeds a named facet's live state
+ *  (`itx.facets.get('<name>').liveSnapshot()`, as an expression). */
 export type IterateContextHandle = LiveStateItx & {
   readEvents(
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: unknown[]; atHead: boolean; scannedThroughOffset: number }>;
-  processors: { list(): Promise<IterateContextProcessorRow[]> | IterateContextProcessorRow[] };
-  rpcStubs?: { list(): Promise<string[]> | string[] };
+  processors: { list(): Promise<SubscriptionListEntry[]> | SubscriptionListEntry[] };
+  rpcStubs: { list(): Promise<string[]> | string[] };
   invoke(call: string): Promise<unknown>;
 };
 
-/** A wire event (a capnweb proxy value or a plain object) as an `IterateContextEvent`, or null when
+/** A wire event (a capnweb proxy value or a plain object) as a `StreamEvent`, or null when
  *  it is not a committed row. Structural, not a schema: the transport validated it; this only refuses
  *  a shape the view cannot place (no offset, type or time). */
-function toIterateContextEvent(raw: unknown): IterateContextEvent | null {
+function toStreamEvent(raw: unknown): StreamEvent | null {
   const value = JSON.parse(JSON.stringify(raw)) as Record<string, unknown> | null;
   if (
     !value ||
@@ -166,7 +143,7 @@ function toIterateContextEvent(raw: unknown): IterateContextEvent | null {
     typeof value.createdAt !== "string"
   )
     return null;
-  return value as unknown as IterateContextEvent; // the three fields checked are all the hook indexes by
+  return value as unknown as StreamEvent; // the three fields checked are all the hook indexes by
 }
 
 /** A named live state before its first seed lands — and before the effect that opens it has run. */
@@ -193,15 +170,15 @@ export function useIterateContext(
   itx: IterateContextHandle | undefined,
   opts: { consumes?: string[]; liveState?: string[] } = {},
 ): {
-  events: IterateContextEvent[];
+  events: StreamEvent[];
   caughtUp: boolean;
   error?: string;
-  processors: { rows: IterateContextProcessorRow[]; loaded: boolean; error?: string };
+  processors: { rows: SubscriptionListEntry[]; loaded: boolean; error?: string };
   presence: { actors: IterateContextPresence[]; rpcStubs: string[] };
   liveState: Record<string, LiveStateResult>;
 } {
   // ── the log ──
-  const [events, setEvents] = useState<Map<number, IterateContextEvent>>(() => new Map());
+  const [events, setEvents] = useState<Map<number, StreamEvent>>(() => new Map());
   const [caughtUp, setCaughtUp] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const consumesKey = JSON.stringify(opts.consumes || ["*"]);
@@ -215,7 +192,7 @@ export function useIterateContext(
       setEvents((held) => {
         const next = new Map(held);
         for (const raw of batch) {
-          const event = toIterateContextEvent(raw);
+          const event = toStreamEvent(raw);
           if (event) next.set(event.offset, event);
         }
         return next;
@@ -255,7 +232,7 @@ export function useIterateContext(
   // than the old one's rows or error until the new read lands.
   const [table, setTable] = useState<{
     itx: IterateContextHandle;
-    rows: IterateContextProcessorRow[];
+    rows: SubscriptionListEntry[];
   }>();
   const [failure, setFailure] = useState<{ itx: IterateContextHandle; message: string }>();
   const tableVersion = sorted.reduce(
@@ -285,7 +262,7 @@ export function useIterateContext(
   const [census, setCensus] = useState<{ itx: IterateContextHandle; rpcStubs: string[] }>();
   const head = sorted.at(-1)?.offset ?? 0;
   useEffect(() => {
-    if (!itx?.rpcStubs) return;
+    if (!itx) return;
     let disposed = false;
     Promise.resolve(itx.rpcStubs.list()).then(
       (list) => !disposed && setCensus({ itx, rpcStubs: list }),

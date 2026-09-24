@@ -225,6 +225,8 @@ export interface IterateContextApi {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
   };
+  /** The rpc stubs lent to this context right now, by key (a live session's `provide`). */
+  rpcStubs: { list(): string[] };
   processors: {
     enable(
       name: string,

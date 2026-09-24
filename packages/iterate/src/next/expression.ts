@@ -615,7 +615,7 @@ export class RpcStubHandle extends InvokeHandle {}
 export const ITX_HANDLE_REFERENCE_KEY = "$itxHandleExpression";
 export type ItxHandleReference = { [ITX_HANDLE_REFERENCE_KEY]: ItxExpression };
 
-export const isItxHandleReference = (value: unknown): value is ItxHandleReference =>
+const isItxHandleReference = (value: unknown): value is ItxHandleReference =>
   Boolean(value) &&
   typeof value === "object" &&
   Array.isArray((value as Record<string, unknown>)[ITX_HANDLE_REFERENCE_KEY]);

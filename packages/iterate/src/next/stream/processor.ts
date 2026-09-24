@@ -663,9 +663,6 @@ export class ProcessorEngine<State> {
 // ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
 // runtime validator (the processor contract section below has the zod half).
 
-// THE one deep-equal lives in lib.ts; re-exported here for the SDK bundle.
-export { jsonEqual };
-
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
