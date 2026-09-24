@@ -10,7 +10,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID } from "./state.ts";
 import { makeShop, type Shop } from "./test/shop.ts";
@@ -18,6 +18,10 @@ import { makeShop, type Shop } from "./test/shop.ts";
 type AppKeys = Awaited<ReturnType<typeof generateAppKeys>>;
 
 let sharedKeysPromise: Promise<{ app: AppKeys; attacker: AppKeys }> | undefined;
+
+// Whichever row runs first pays for the two RSA keypairs (`sharedKeys()`), which dominate this
+// file; that one-time cost had a 30 s `beforeAll` budget and keeps it as this file's row budget.
+vi.setConfig({ testTimeout: 30_000 });
 
 test("installation-token minting: a signed App JWT exchanges for an installation token that works on the API", async () => {
   const shop = makeShop();

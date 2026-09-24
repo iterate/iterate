@@ -7,6 +7,10 @@ import { expect, test, vi } from "vitest";
 
 import { admitLoadedCodeRow } from "../../os/src/context/itx-expression-rewriting.ts";
 
+// Whichever row runs first pays for bundling the worker with esbuild (`loadVoiceWorker()`), which
+// used to run under the hook budget; every row gets that budget.
+vi.setConfig({ testTimeout: 10_000 });
+
 test.each([0, 1, 2, 3, 4])(
   "RGBA PNG row filter %i reaches the panel as 15000 black bytes",
   async (filter) => {

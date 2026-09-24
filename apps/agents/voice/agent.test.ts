@@ -3,6 +3,11 @@ import { expect, test, vi } from "vitest";
 import type { DelegationMessage } from "./delegation-turn.ts";
 import fixtures from "./screen-context-repro.json";
 
+// Whichever row runs first pays for bundling the processor with esbuild
+// (`loadVoiceDelegateProcessor()`), which used to run under the hook budget; every row gets that
+// budget.
+vi.setConfig({ testTimeout: 10_000 });
+
 // September 21 calls: the supplied Markdown was dropped and the agent edited the
 // project website. Fixture keeps context + first concrete maths request verbatim;
 // audio, transcripts (already in the request), and unrelated lifecycle events omitted.
