@@ -84,19 +84,32 @@ function Shell() {
     [active, activeOrg],
   );
   usePosthogIdentity(info.principal, posthogGroups);
+  // the switcher lists projects by organization, in the tree's order
+  const treeProjects = tree.organizations.flatMap((org) =>
+    org.projects.map((project) => ({
+      id: project.id,
+      slug: project.slug,
+      org: { id: org.id, name: org.name },
+    })),
+  );
+  // THE PAGE'S PROJECT, NAMED AT ONCE: a fresh page load resolves it from the catalog
+  // (projects/$slug/route.tsx) before the live tree has answered, and until the tree lists it the
+  // switcher would read "(select project)" on that very project's page — a second or more on a busy
+  // platform. It names the project the page shows, its organization by id (as the tree does before
+  // an organization's record lands).
+  const switcherProjects =
+    active && !treeProjects.some((project) => project.id === active.id)
+      ? [
+          ...treeProjects,
+          { id: active.id, slug: active.slug, org: { id: active.orgId, name: active.orgId } },
+        ]
+      : treeProjects;
   return (
     <>
       <OrganizationTree api={api} info={info} />
       <AppShell
         app="iterate"
-        // the switcher lists projects by organization, in the tree's order
-        projects={tree.organizations.flatMap((org) =>
-          org.projects.map((project) => ({
-            id: project.id,
-            slug: project.slug,
-            org: { id: org.id, name: org.name },
-          })),
-        )}
+        projects={switcherProjects}
         activeProjectId={active?.id || null}
         projectHref={(project) => `/projects/${project.slug}`}
         // the dash has a client router: a plain click on a switcher item is a route change, not a

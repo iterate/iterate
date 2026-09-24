@@ -65,21 +65,59 @@ test("openSocketWithRetry: a connection that opens first time makes one attempt,
   });
 });
 
-/** A WebSocket that fails its first `failures` constructions — an `error` carrying undici's reason,
- *  then a `close` 1006 before `open`, the way Node's WebSocket fails a refused upgrade — and opens
- *  every one after: what a flapping connection looks like from the page. */
-function fakeSocketClass(failures: number) {
+test("openSocketWithRetry: an attempt whose handshake never answers is closed at the handshake bound, explained and tried again", async () => {
+  using warn = captureWarn();
+  const Socket = fakeSocketClass(0, { silent: 1 });
+  const socket = await openSocketWithRetry("wss://example.test/api", {
+    WebSocket: Socket,
+    delaysMs: [1],
+    handshakeTimeoutMs: 20,
+    sleep: async () => {},
+  });
+  expect(socket).toBeInstanceOf(Socket);
+  expect({ constructions: Socket.constructions(), closed: Socket.closed() }).toEqual({
+    constructions: 2,
+    closed: 1,
+  });
+  expect(warn).toMatchObject({
+    calls: [{ attempt: 1, message: "WebSocket did not open in 20 ms" }],
+  });
+});
+
+test("openSocketWithRetry: a handshake that never answers on the last attempt rejects, naming the bound", async () => {
+  using _warn = captureWarn();
+  const Socket = fakeSocketClass(0, { silent: Infinity });
+  await expect(
+    openSocketWithRetry("wss://example.test/api", {
+      WebSocket: Socket,
+      delaysMs: [],
+      handshakeTimeoutMs: 20,
+    }),
+  ).rejects.toThrow("WebSocket did not open in 20 ms");
+  expect(Socket.closed()).toBe(1);
+});
+
+/** A WebSocket whose first `silent` constructions never answer (no `open`, no `close`: a hung
+ *  handshake), whose next `failures` fail — an `error` carrying undici's reason, then a `close` 1006
+ *  before `open`, the way Node's WebSocket fails a refused upgrade — and which opens every one
+ *  after: what a flapping connection looks like from the page. */
+function fakeSocketClass(failures: number, { silent = 0 }: { silent?: number } = {}) {
   let constructions = 0;
+  let closed = 0;
   class FakeWebSocket extends EventTarget {
     static constructions() {
       return constructions;
+    }
+    static closed() {
+      return closed;
     }
     readonly url: string | URL;
     constructor(url: string | URL) {
       super();
       this.url = url;
       constructions += 1;
-      const fails = constructions <= failures;
+      if (constructions <= silent) return;
+      const fails = constructions <= silent + failures;
       queueMicrotask(() => {
         if (!fails) return this.dispatchEvent(new Event("open"));
         this.dispatchEvent(
@@ -96,8 +134,14 @@ function fakeSocketClass(failures: number) {
         );
       });
     }
+    close() {
+      closed += 1;
+    }
   }
-  return FakeWebSocket as unknown as typeof WebSocket & { constructions(): number };
+  return FakeWebSocket as unknown as typeof WebSocket & {
+    constructions(): number;
+    closed(): number;
+  };
 }
 
 /** console.warn captured for one test, restored on dispose; `calls` are the first arguments. */
