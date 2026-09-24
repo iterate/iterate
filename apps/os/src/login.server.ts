@@ -14,14 +14,19 @@ import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
-import { switchAccountHref } from "./login-search.ts";
+import { switchAccountHref, type loginSearchOf } from "./login-search.ts";
 
-/** The sign-in page's data for this request: who is signed in, or which ways to sign in exist. */
-export async function loginState(request: Request, env: Env, ctx: ExecutionContext) {
+/** The sign-in page's data for this request and its search: who is signed in, or which ways to
+ *  sign in exist. */
+export async function loginState(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  search: ReturnType<typeof loginSearchOf>,
+) {
   const config = appConfigOf(env);
-  const url = new URL(request.url);
   const next = sameOriginPath(
-    url.searchParams.get("next") || "/login",
+    search.next || "/login",
     platformAddressesOf(env, request).platformOrigin,
   );
   const session = await browserAuthorization(env, request, ctx);
@@ -30,11 +35,11 @@ export async function loginState(request: Request, env: Env, ctx: ExecutionConte
     signedInAs: session ? session.principal.email || session.principal.actor : null,
     switchAccount: switchAccountHref(next),
     codeSentTo: session ? null : await loginCodePending(env, request),
-    error: url.searchParams.get("error"),
+    error: search.error || null,
     // the email the refused post carried, so the page keeps what was typed
-    email: url.searchParams.get("email") || "",
+    email: search.email || "",
     password: Boolean(config.login.password.exposeSecret()),
-    passwordSelected: url.searchParams.get("method") === "password",
+    passwordSelected: search.method === "password",
     // The code form needs both its configuration and the mailbox binding.
     emailSignIn: Boolean(env.EMAIL && config.login.emailCode),
     google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
