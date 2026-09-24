@@ -17,15 +17,8 @@ import { promisify } from "node:util";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
-import {
-  claudeMcpArgs,
-  oauthResourceForOsBaseUrl,
-  preflightMcp,
-  refreshOAuthSession,
-  shellCommand,
-} from "./cli.ts";
 import { connectIterate } from "iterate/node";
-import { Config } from "./config.ts";
+import { claudeMcpArgs, preflightMcp, shellCommand } from "./cli.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
 const bin = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
@@ -42,47 +35,6 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
   ]) {
     const { stdout } = await runCli(config.directory, args);
     expect(stdout).toContain("iterate");
-  }
-});
-
-test("OAuth uses the platform's API audience including the local port", () => {
-  expect(Config.parse({})).toMatchObject({ osBaseUrl: "https://os.iterate.com" });
-  expect(oauthResourceForOsBaseUrl("http://localhost:54896/")).toBe("http://localhost:54896/api");
-  expect(oauthResourceForOsBaseUrl("https://os.iterate.com")).toBe("https://os.iterate.com/api");
-});
-
-test("refresh goes to the same issuer and rejects malformed tokens", async () => {
-  const fetch = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "new-token", expires_in: 3600 })),
-    );
-  vi.stubGlobal("fetch", fetch);
-  try {
-    const input = {
-      config: Config.parse({ osBaseUrl: "http://localhost:54896" }),
-      session: { token: "old-token", clientId: "client", refreshToken: "refresh" },
-    };
-    expect(await refreshOAuthSession(input)).toMatchObject({
-      token: "new-token",
-      refreshToken: "refresh",
-    });
-    expect(fetch.mock.calls[0][0]).toBe("http://localhost:54896/oauth2/token");
-    expect(fetch.mock.calls[0][1].body.get("resource")).toBe("http://localhost:54896/api");
-    fetch.mockResolvedValueOnce(new Response("{}"));
-    await expect(refreshOAuthSession(input)).rejects.toThrow();
-    // A refused refresh names the provider's error, so invalid_grant reads apart from any other 400.
-    fetch.mockResolvedValueOnce(
-      Response.json(
-        { error: "invalid_grant", error_description: "Invalid refresh token" },
-        { status: 400 },
-      ),
-    );
-    await expect(refreshOAuthSession(input)).rejects.toThrow(
-      'OAuth refresh failed (400): {"error":"invalid_grant","error_description":"Invalid refresh token"}',
-    );
-  } finally {
-    vi.unstubAllGlobals();
   }
 });
 

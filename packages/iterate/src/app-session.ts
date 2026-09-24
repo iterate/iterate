@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { newHttpBatchRpcSession } from "capnweb";
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
-import { authorizationCodeRequest } from "./client/oauth.ts";
+import { authorizationCodeRequest, authorizationServer } from "./client/oauth.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
 import type { IterateApi } from "./api.ts";
@@ -87,11 +87,7 @@ export class BrowserSession extends DurableObject {
         return {
           error: "This sign-in expired or does not match this browser. Start sign-in again.",
         };
-      const as: oauth.AuthorizationServer = {
-        issuer: data.issuer,
-        token_endpoint: `${data.issuer}/oauth2/token`,
-        authorization_response_iss_parameter_supported: true,
-      };
+      const as = authorizationServer(data.issuer);
       const client: oauth.Client = { client_id: data.clientId };
       let callback: URLSearchParams;
       try {
@@ -210,10 +206,7 @@ export class BrowserSession extends DurableObject {
       return null;
     }
     if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
-    const as: oauth.AuthorizationServer = {
-      issuer: data.issuer,
-      token_endpoint: `${data.issuer}/oauth2/token`,
-    };
+    const as = authorizationServer(data.issuer);
     const client: oauth.Client = { client_id: data.clientId };
     const started = Date.now();
     let tokens: oauth.TokenEndpointResponse;
