@@ -789,7 +789,7 @@ test.each([
     file: ".depot/workflows/test.yml",
     group: "test-${{ github.head_ref || github.ref_name || github.run_id }}",
     jobId: "test",
-    size: "4x16",
+    size: "8x32",
     timeoutMinutes: 20,
   },
   {

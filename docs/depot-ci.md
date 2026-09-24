@@ -352,17 +352,19 @@ freshness:
   to name the new version, then four tries of each production project host)
   and its Slack notice, all in the one job. The client deploys get 15–20.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
-  on `8x32` (parallel oxlint/typecheck/format check/knip). Unit tests use `4x16` — measured
-  peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
-  lint is the common trigger for no-log `Sandbox terminated before worker
-reported completion` on main. Deploy OS uses `4x16`; the client
+  on `8x32` (parallel oxlint/typecheck/format check/knip). Unit tests use `8x32`
+  too: apps/os runs seven vitest slots there, and its test step took 80 s at the
+  p50 against 87 s on `4x16` (22 runs each, 2026-09-24; peak 14 % memory, 79 % CPU).
+  Two `8x32` sandboxes on one main push have ended the Test job with a no-log
+  `Sandbox terminated before worker reported completion` (#1952, #2030, July
+  2026; a retry passed), so watch main's Test job for that. Deploy OS uses `4x16`; the client
   deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports),
   the trace jobs, Main OS e2e's delete and alert jobs, and the jobs that only call APIs (LOC report, PR
   dashboard, Release) use `2x8`. Re-check with `depot ci metrics --run <run-id>`
   before increasing a size.
 
-These defaults keep a normal all-app main push to 34 requested vCPUs (lint 8,
-test 4, Deploy OS 4, 2 for each of the seven client deploys, and 4
+These defaults keep a normal all-app main push to 38 requested vCPUs (lint 8,
+test 8, Deploy OS 4, 2 for each of the seven client deploys, and 4
 for Main OS e2e, whose parent, deploy and e2e jobs run one after another; its
 trace, delete and alert jobs follow them), without reducing the parallel lint job that
 uses the larger machine. The sizing pass that set them cut the then-larger

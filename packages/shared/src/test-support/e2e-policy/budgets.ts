@@ -134,7 +134,7 @@ export const UNIT_ROW_WARN_MS = 10_000;
 export const UNIT_ROW_WARN_EXEMPTIONS: Record<string, string> = {
   "a push the watchdog timed out is caught up from the log by the restarted facet — no later event needed, reduced exactly once":
     "waits the facet push watchdog's real 60 s window",
-  "a live session rides out a deploy's Durable Object reset during its re-check":
+  "a live session rides out a deploy's Durable Object reset, and a control-plane read that gave up, during its re-check":
     "waits the grant's real 30 s re-check",
   "a socket holding no project re-checks its grant every thirty seconds and reads no membership":
     "waits the grant's real 30 s re-check",
