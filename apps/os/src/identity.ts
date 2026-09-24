@@ -6,6 +6,7 @@ import type { Env } from "./env.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
 
 const providers = {
   google: {
@@ -21,11 +22,11 @@ const providers = {
     // Cloudflare returns email + email_verified with these scopes. It rejects email/profile.
     scope: "openid user-details.read",
   },
-};
+} satisfies Record<IdentityProvider, { name: string; issuer: URL; path: string; scope: string }>;
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 const Flow = z.object({
   kind: z.literal("identity-login"),
-  provider: z.enum(["google", "cloudflare"]),
+  provider: IdentityProvider,
   clientId: z.string(),
   redirectUri: z.string(),
   state: z.string(),
