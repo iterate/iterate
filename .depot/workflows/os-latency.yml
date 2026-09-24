@@ -1,5 +1,5 @@
 # THE LATENCY GUARD for apps/os: every 3 hours, and on every main push to what reaches the platform,
-# deploy a THROWAWAY Worker Preview of main named `latency-<short sha>` that nothing else touches
+# deploy a THROWAWAY Worker Preview of main named `latency-<run id>-<attempt>` that nothing else touches
 # (Main OS e2e has its own; a latency measured beside another suite measures that suite), run the perf
 # lane against it (apps/os/perf: concurrent project creation at 1, 10 and 25 people, sign-in, MCP, a
 # context's first append, wake and processor cold start, rule invocation, stream fan-out — every
@@ -69,6 +69,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # One name per run attempt, never a commit's: a schedule, a re-run or a dispatch can measure the
+  # commit the run before just measured, and a preview recreated under the name just deleted answered
+  # "Durable Object Namespace was deleted" for a minute after (2026-09-24). apps/os/scripts/preview.ts
+  # reads it; preview-sweep.ts `supersededMainPreviews` knows its shape.
+  PREVIEW_NAME: latency-${{ github.run_id }}-${{ github.run_attempt }}
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
@@ -91,21 +96,20 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # A run cancelled by hand has its delete cancelled with it: every other `latency-<sha>` goes first.
+      # A run cancelled by hand has its delete cancelled with it: every other `latency-<run>-<attempt>`
+      # goes first.
       - name: Delete superseded runs' previews
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: PREVIEW_NAME="latency-${GITHUB_SHA::7}" doppler run -- pnpm preview delete-superseded
-      # A fresh name per commit, deleted by the run before it (the `delete` job): an empty control
-      # plane, as the calibration measured. Not `reset`: a preview recreated under the name it was
-      # just deleted by answered "Durable Object Namespace was deleted" for a minute after (2026-09-24).
+        run: doppler run -- pnpm preview delete-superseded
+      # A fresh preview: an empty control plane, as the calibration measured.
       - name: Deploy a throwaway preview of this commit
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
-        run: PREVIEW_NAME="latency-${GITHUB_SHA::7}" doppler run -- pnpm preview deploy
+        run: doppler run -- pnpm preview deploy
       # The perf lane alone on the preview; its verdict is the judge's, so a missed budget does not
       # stop the job here. Its credentials are the preview's parent's APP_CONFIG (e2e/support/global-setup.ts).
       - name: Measure (the perf lane)
@@ -182,4 +186,4 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: PREVIEW_NAME="latency-${GITHUB_SHA::7}" doppler run -- pnpm preview delete
+        run: doppler run -- pnpm preview delete

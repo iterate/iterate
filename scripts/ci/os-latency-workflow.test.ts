@@ -13,6 +13,7 @@ type LatencyWorkflow = {
     workflow_dispatch?: { inputs?: Record<string, unknown> };
   };
   concurrency: { group: string; "cancel-in-progress": boolean };
+  env: Record<string, string>;
   jobs: Record<
     string,
     {
@@ -58,8 +59,8 @@ test("runs on a schedule, on every main push that could change the platform's sp
 test("measures a throwaway preview of its own, deleted whatever happened", () => {
   const measure = runs("measure").join("\n");
   const order = [
-    'PREVIEW_NAME="latency-${GITHUB_SHA::7}" doppler run -- pnpm preview delete-superseded',
-    'PREVIEW_NAME="latency-${GITHUB_SHA::7}" doppler run -- pnpm preview deploy',
+    "doppler run -- pnpm preview delete-superseded",
+    "doppler run -- pnpm preview deploy",
     "pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json",
     "pnpm tsx scripts/ci/os-latency-guard.ts previous-state",
     "pnpm tsx scripts/ci/os-latency-guard.ts judge",
@@ -69,9 +70,11 @@ test("measures a throwaway preview of its own, deleted whatever happened", () =>
   // nothing but the one parent's preview: no app on top, no PR
   expect(JSON.stringify(latency)).not.toContain("PREVIEW_PR_NUMBER");
   expect(latency.jobs.delete).toMatchObject({ if: "always()", needs: "measure" });
-  expect(runs("delete")).toContain(
-    'PREVIEW_NAME="latency-${GITHUB_SHA::7}" doppler run -- pnpm preview delete',
-  );
+  expect(runs("delete")).toContain("doppler run -- pnpm preview delete");
+  // one preview per run attempt, a shape supersededMainPreviews knows (apps/os/scripts/preview-sweep.ts)
+  expect(latency.env).toMatchObject({
+    PREVIEW_NAME: "latency-${{ github.run_id }}-${{ github.run_attempt }}",
+  });
 });
 
 test("the judge reads the report the perf lane wrote and keeps the state the next run reads", () => {
