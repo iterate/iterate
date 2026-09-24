@@ -121,7 +121,7 @@ export async function serveDepotArtifact(
     .filter((entry) => safePath(entry.filename));
   const entries = files.map((entry) => entry.filename);
   if (!file) {
-    if (/^public-ci-trace-[a-z0-9]+-[a-z0-9]+$/.test(result.artifact.name)) file = "trace.html";
+    if (result.artifact.name.startsWith("public-ci-trace-")) file = "trace.html";
     else if (entries.includes("index.html") || entries.length !== 1) file = "index.html";
     else return Response.redirect(`${base}${encodePath(entries[0])}${url.search}`, 302);
   }

@@ -18,6 +18,17 @@ test("a CI trace opens its trace.html at the artifact root", async () => {
   expect(await response.text()).toBe(html);
 });
 
+// scripts/ci/tracing/cli.ts names it `public-ci-trace-<workflow>-<execution>`; Depot's ids are opaque.
+test("a CI trace opens its trace.html whatever its execution id looks like", async () => {
+  await using depot = await depotServer();
+  depot.data.artifact.name = "public-ci-trace-preview-0190c1f2-7a8b-7c3d-9e4f-5a6b7c8d9e0f";
+  const response = await serveDepotArtifact(new Request(`${reportUrl}/`), {
+    token: "secret",
+    fetch: depot.fetch,
+  });
+  expect(await response.text()).toBe(html);
+});
+
 test("the artifact path without its slash redirects to the directory its relative links need", async () => {
   await using depot = await depotServer();
   const response = await serveDepotArtifact(
