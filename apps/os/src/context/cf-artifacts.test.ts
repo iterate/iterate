@@ -76,7 +76,9 @@ function recordingNamespace(existing: string[] = []) {
     },
     delete: async (name) => {
       calls.push({ method: "delete", name });
-      return repos.delete(name);
+      // The binding's delete of a missing repo throws the same "not found" (API error 10200).
+      if (!repos.delete(name)) throw new Error("Repository not found (10200)");
+      return true;
     },
   };
   return { namespace, calls, forkCalled: () => forkCalled };
@@ -114,6 +116,25 @@ test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, 
 
   // A path that cannot back an Artifacts repo is refused before the binding is touched.
   await expect(a.create("/repos/a--b")).rejects.toThrow(/without "--"/);
+});
+
+test("cfArtifacts delete answers false for a repo already gone, and surfaces any other failure", async () => {
+  const { namespace } = recordingNamespace(["prj_a.repos--here"]);
+  const a = scoped(namespace, "prj_a");
+  expect(await a.delete("/repos/missing")).toBe(false);
+  expect(await a.delete("/repos/here")).toBe(true);
+  expect(await a.delete("/repos/here")).toBe(false);
+
+  const failing = scoped(
+    {
+      ...namespace,
+      delete: async () => {
+        throw new Error("Artifacts unavailable (503)");
+      },
+    },
+    "prj_a",
+  );
+  await expect(failing.delete("/repos/here")).rejects.toThrow(/unavailable/);
 });
 
 test("the '.' delimiter is collision-free for hyphenated project IDs; list filters locally and answers in paths", async () => {

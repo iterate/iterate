@@ -137,14 +137,8 @@ export class RepoProcessor extends StreamProcessor<RepoState, ConsumedEvent<type
       runInBackground(async () => {
         try {
           const { path } = await this.withItx((itx) => itx.whoami());
-          try {
-            await this.withItx((itx) => itx.cfArtifacts.delete(path)); // false when already gone
-          } catch (error) {
-            // A repo already gone (an attempt lost after its delete) is fine — the binding's "not
-            // found" signal, read as context/cf-artifacts.ts `create` reads it (API error 10200).
-            if (!/not found|10200/i.test(error instanceof Error ? error.message : String(error)))
-              throw error;
-          }
+          // false when already gone (an attempt lost after its delete)
+          await this.withItx((itx) => itx.cfArtifacts.delete(path));
           const certificate: EmittedEventInput<typeof RepoContract> = {
             type: "events.iterate.com/repo/deleted",
             payload: { path },
