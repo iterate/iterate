@@ -64,9 +64,15 @@ specs job the browser specs against them, side by side, each a required check. A
 preview path deploys nothing and skips both. The commands to run them from a checkout or from CI are
 below.
 
-A platform preview is named `pr<n>-<branch slug>` under the `os-preview` parent Worker. It
-has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the
-preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
+A PR's previews are named `pr<n>`: `https://pr<n>-os.iterate-dev-preview.workers.dev` for the
+platform, `https://pr<n>-dash.iterate-dev-preview.workers.dev` and so on for the clients. Each is a
+Cloudflare Worker Preview of a parent Worker named after its app (`os`, `dash`, …; envs.ts
+`<app>Envs.preview`). The parents are main on the dev/preview account: the Preview parents workflow
+deploys them from every push to main that a PR's preview would run for, and
+`https://dash.iterate-dev-preview.workers.dev` signs in against
+`https://os.iterate-dev-preview.workers.dev`. What people leave there is erased nightly
+(`pnpm preview reset-parent`, in the Preview sweep workflow); PR previews keep their data and keep
+serving through it. A platform preview has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
 see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
 Main OS e2e, the latency guard and the real-model suite each keep one preview, `main`, `latency` and
 `real-model`, which every run redeploys in place, its readiness gate held 150 s (`--settle 150`)
@@ -76,26 +82,27 @@ past the window the previous version still answers in
 A new Durable Object class needs care. An existing preview cannot gain a class it lacked when it was
 created: `wrangler preview` fails with Cloudflare 10061 ("Cannot create binding for class … not
 exported by the script"). The deploy then deletes that preview and its resources and creates it
-again, once. If the new preview fails the same way, the parent itself lacks the class. Deploy the
-parent from main with `pnpm --dir apps/os run deploy --env preview` (`run`, because `pnpm deploy` is
-pnpm's own command). A PR that itself adds a class needs the parent deployed from its branch first.
+again, once. A new preview does not need the class on its parent. To deploy the parents by hand,
+from a checkout: `pnpm preview deploy-parents`.
 
 Run preview operations from this directory under the parent Doppler config:
 
 ```sh
 doppler run --project os --config preview -- \
-  pnpm preview deploy --pr <number> --name <branch> --apps all
+  pnpm preview deploy --pr <number> --apps all
 doppler run --project os --config preview -- \
-  pnpm preview e2e --pr <number> --name <branch>
+  pnpm preview e2e --pr <number>
 doppler run --project os --config preview -- \
-  pnpm preview specs --name pr<number>-<branch slug>
+  pnpm preview specs --name main
 doppler run --project os --config preview -- \
   pnpm preview sweep
+doppler run --project os --config preview -- \
+  pnpm preview deploy-parents
 ```
 
 Use `e2e` (the vitest e2e suite) or `specs` (the Playwright specs) in place of `deploy` to test a
-preview as it is deployed, named by PR number and branch or, without `--pr`, by its whole name
-(`--name main` is the one Main OS e2e keeps). CI does the same without redeploying:
+preview as it is deployed, named by PR number or, without `--pr`, by its name (`--name main` is the
+one Main OS e2e keeps). CI does the same without redeploying:
 
 ```sh
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref ci-soak/<name> \

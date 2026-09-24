@@ -70,8 +70,7 @@ function withoutBasePath(request: Request, basePath: string): Request {
  *  (ControlPlaneUnavailableError, edge.ts): its admission's, with no last-known copy to stand in,
  *  or a signed-in visitor's access, which has none. A 503, logged as
  *  `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages on a burst,
- *  and on the 5xx), where on 2026-09-24 each visitor met an exception. Any other error is
- *  rethrown. */
+ *  and on the 5xx), not an exception. Any other error is rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
   if (!(error instanceof ControlPlaneUnavailableError)) throw error;
   console.warn({

@@ -355,8 +355,8 @@ export class RpcStubDirectory {
         if (!this.#rpcStubPagesInFlight.delete(rpcStubKey)) return;
         // Every call waiting on this page fails, and a push it carried is LOST: a live client's
         // delivery treats RPC_STUB_OFFLINE as heal-by-read (stream/subscription-delivery.ts), so
-        // this line is the only trace of it. On 2026-09-24 lends came back in waves 3 s apart for
-        // 13 s while Cloudflare moved traffic out of IAD, and 33 of 200 pushes were lost unseen.
+        // this line is the only trace of it (33 of 200 pushes, during a Cloudflare traffic move
+        // on 2026-09-24).
         console.warn({
           event: "rpc-stub-page-timed-out",
           namespace: "rpc-stubs",
@@ -609,8 +609,8 @@ export async function lendRpcStubOverPager(
     });
   };
   /** The leg dropped under a live lend: dial again and take the new pager into service. Bounded:
-   *  five tries over ~30 s (a deploy's reset answers 503 for seconds; on 2026-09-24 14:06 all four
-   *  voice boards gave up inside four), all inside 60 s of the drop — a dial the DO never answers
+   *  five tries over ~30 s (a deploy's reset answers 503 for seconds, and in prd four tries were
+   *  too few for it, 2026-09-24), all inside 60 s of the drop — a dial the DO never answers
    *  must not hold the loop. Tries are sequential and a dial is abandoned only when the whole
    *  re-dial gives up: an abandoned dial the DO accepts later would otherwise REPLACE a pager a
    *  later try brought back (the DO closes the older one with 1000, which ends the lend). A 5xx is

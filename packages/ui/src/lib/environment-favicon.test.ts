@@ -14,19 +14,19 @@ test.each([
   "agents.iterate.workers.dev",
   "notes.iterate.workers.dev",
   // the parents of the per-PR previews, and an experiment: not a PR
-  "os-preview.iterate-dev-preview.workers.dev",
-  "exp-jonas-os-preview.iterate-dev-preview.workers.dev",
+  "os.iterate-dev-preview.workers.dev",
+  "exp-jonas-os.iterate-dev-preview.workers.dev",
   // `pr` must lead the hostname, and the host must be workers.dev
-  "notpr12-x-os-preview.iterate-dev-preview.workers.dev",
+  "notpr12-os.iterate-dev-preview.workers.dev",
   "pr12-x.iterate.com",
 ])("%s is production", (hostname) => {
   expect(deploymentEnvironment(hostname)).toEqual({ kind: "production" });
 });
 
 test.each([
-  ["pr2990-environment-favicons-os-preview.iterate-dev-preview.workers.dev", 2990],
-  ["pr2990-environment-favicons-dash-preview.iterate-dev-preview.workers.dev", 2990],
-  ["pr7-x-os-preview.iterate-dev-preview.workers.dev", 7],
+  ["pr2990-os.iterate-dev-preview.workers.dev", 2990],
+  ["pr2990-dash.iterate-dev-preview.workers.dev", 2990],
+  ["pr7-kit.iterate-dev-preview.workers.dev", 7],
 ])("%s is PR %i's preview", (hostname, pr) => {
   expect(deploymentEnvironment(hostname)).toEqual({ kind: "preview", pr });
 });

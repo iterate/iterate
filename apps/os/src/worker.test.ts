@@ -444,8 +444,8 @@ test("public protocol origins: under path routing the platform's own paths are n
 });
 
 test("public protocol origins: a preview's one-click sign-in link (test-link.ts) is a 404 on prd, a plain 403 on another preview", async () => {
-  const pr123 = "https://pr123-feature-os-preview.iterate-dev-preview.workers.dev";
-  const pr124 = "https://pr124-other-os-preview.iterate-dev-preview.workers.dev";
+  const pr123 = "https://pr123-os.iterate-dev-preview.workers.dev";
+  const pr124 = "https://pr124-os.iterate-dev-preview.workers.dev";
   const link = (audience: string) =>
     mintTestLink({
       key: "secrets-key",
@@ -512,9 +512,7 @@ test("public protocol origins: /favicon.svg is production's logo, and a preview'
     );
   expect(await (await favicon("https://os.iterate.com")).text()).toBe("<svg>the logo</svg>");
   expect(assetPaths).toEqual(["/iterate-logo.svg"]);
-  const preview = await favicon(
-    "https://pr2990-environment-favicons-os-preview.iterate-dev-preview.workers.dev",
-  );
+  const preview = await favicon("https://pr2990-os.iterate-dev-preview.workers.dev");
   expect(preview.headers.get("content-type")).toBe("image/svg+xml");
   expect(await preview.text()).toMatch(/fill="#7C3AED".*>2990<\/text>/);
   expect(assetPaths).toEqual(["/iterate-logo.svg"]);

@@ -312,7 +312,7 @@ pnpm e2e
 
 # a PR preview (its URL is in the PR body)
 doppler run --project os --config preview -- \
-  env WORKER_BASE_URL=https://pr<n>-<branch-slug>-os-preview.iterate-dev-preview.workers.dev pnpm e2e
+  env WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev pnpm e2e
 
 # production
 doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm e2e

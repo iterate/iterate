@@ -102,7 +102,7 @@ For a hands-on smoke, take the preview URL from the PR body and sign in as in
 in a shell variable — never echo it:
 
 ```bash
-BASE_URL=https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev   # from the PR body
+BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev   # from the PR body
 PASSWORD=$(doppler secrets get APP_CONFIG --project os --config preview --plain | jq -r .login.password)
 ```
 

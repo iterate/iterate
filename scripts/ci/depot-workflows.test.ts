@@ -301,7 +301,11 @@ test.each([
   },
   {
     file: ".depot/workflows/preview-delete.yml",
-    permissions: { contents: "read", "pull-requests": "read" },
+    permissions: { contents: "read" },
+  },
+  {
+    file: ".depot/workflows/preview-parents.yml",
+    permissions: { contents: "read" },
   },
   {
     file: ".depot/workflows/deploy-os.yml",
@@ -496,7 +500,9 @@ test.for([
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
   { file: ".depot/workflows/preview-os.yml", jobId: "specs" },
   { file: ".depot/workflows/preview-sweep.yml", jobId: "sweep" },
+  { file: ".depot/workflows/preview-sweep.yml", jobId: "reset-parent" },
   { file: ".depot/workflows/preview-delete.yml", jobId: "delete" },
+  { file: ".depot/workflows/preview-parents.yml", jobId: "deploy" },
 ])("$file $jobId starts from the baked workspace", ({ file, jobId }) => {
   const job = loadWorkflow(file).jobs[jobId];
 
@@ -551,6 +557,50 @@ test("a step named for the baked reconcile runs it", () => {
       ),
     );
   expect(misnamed).toEqual([]);
+});
+
+// People and agents use the parents (os.iterate-dev-preview.workers.dev, dash.…); what they leave
+// goes nightly, never while a push to main deploys the parent.
+test("the os parent's data is reset nightly, in the parents' deploy group", () => {
+  const workflow = loadWorkflow(".depot/workflows/preview-sweep.yml");
+  const parents = loadWorkflow(".depot/workflows/preview-parents.yml");
+
+  expect(workflow.jobs["reset-parent"]).toMatchObject({
+    concurrency: { ...parents.concurrency, "cancel-in-progress": false },
+  });
+  expect(workflow.jobs["reset-parent"]?.steps?.at(-1)).toMatchObject({
+    "working-directory": "apps/os",
+    run: "doppler run -- pnpm preview reset-parent",
+  });
+});
+
+// The parents every preview branches from are main's: they deploy when a PR's preview would have.
+test("the preview parents deploy from main, for the paths a PR gets a preview for, one at a time", () => {
+  const workflow = loadWorkflow(".depot/workflows/preview-parents.yml");
+
+  expect(workflow).toMatchObject({
+    on: {
+      push: {
+        branches: ["main"],
+        paths: [...previewPaths, ".depot/workflows/preview-parents.yml"],
+      },
+      workflow_dispatch: { inputs: { ref: { required: false } } },
+    },
+    concurrency: { group: "preview-parents", "cancel-in-progress": false },
+  });
+  expect(workflow.jobs.deploy?.steps?.at(-1)).toMatchObject({
+    "working-directory": "apps/os",
+    run: "doppler run -- pnpm preview deploy-parents",
+  });
+  // and nothing else deploys a parent: Main OS e2e's preview does not wait for one
+  const deploysAParent = depotWorkflowFiles.filter((file) =>
+    Object.values(loadWorkflow(file).jobs).some((job) =>
+      (job.steps || []).some((step) =>
+        /pnpm (run-script deploy --env preview|preview deploy-parents)/.test(step.run || ""),
+      ),
+    ),
+  );
+  expect(deploysAParent).toEqual([".depot/workflows/preview-parents.yml"]);
 });
 
 // A job of Preview OS that ran only on `closed` was a skipped check on every push to an open PR.

@@ -6,7 +6,7 @@ import { ownZones, startAppPreviewConfig, startAppWorkerConfig } from "./start-a
 test("the top level is the parent: the build's own fields, the class as a migrations entry, no exports, no vite bookkeeping", () => {
   const { built, config } = previewConfig();
   expect(config).toMatchObject({
-    name: "notes-preview",
+    name: "notes",
     main: "index.js",
     preview_urls: true,
     migrations: [{ tag: "v1", new_sqlite_classes: ["BrowserSession"] }],
@@ -23,10 +23,10 @@ test("the preview's own block: the session class, observability, and the worker'
     observability: { enabled: true },
     durable_objects: built.durable_objects,
     vars: {
-      ITERATE_ORIGIN: "https://pr123-foo-os-preview.iterate-dev-preview.workers.dev",
+      ITERATE_ORIGIN: "https://pr123-os.iterate-dev-preview.workers.dev",
       ITERATE_DENY_ZONES: "iterate.app,iterate.com",
       ITERATE_APP_ORIGINS: JSON.stringify({
-        dash: "https://pr123-foo-dash-preview.iterate-dev-preview.workers.dev",
+        dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
       }),
     },
   });
@@ -36,12 +36,12 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
   const zones = ownZones();
   // a worker anyone deploys to these accounts (a self-host tried out on one) is not under any of them
   expect(zones.filter((zone) => zone.endsWith(".workers.dev"))).toEqual([
-    "agents-preview.iterate-dev-preview.workers.dev",
-    "dash-preview.iterate-dev-preview.workers.dev",
-    "kit-preview.iterate-dev-preview.workers.dev",
-    "notes-preview.iterate-dev-preview.workers.dev",
-    "os-preview.iterate-dev-preview.workers.dev",
-    "voice-preview.iterate-dev-preview.workers.dev",
+    "agents.iterate-dev-preview.workers.dev",
+    "dash.iterate-dev-preview.workers.dev",
+    "kit.iterate-dev-preview.workers.dev",
+    "notes.iterate-dev-preview.workers.dev",
+    "os.iterate-dev-preview.workers.dev",
+    "voice.iterate-dev-preview.workers.dev",
   ]);
   // elsewhere, still the whole zone: our origins' and our project wildcard's
   expect(zones).toEqual(expect.arrayContaining(["iterate.com", "iterate.app"]));
@@ -62,12 +62,27 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
   });
 });
 
+test("a preview parent (the app's `preview` build, main on the dev/preview account) signs in against the platform's parent and links to the other parents", () => {
+  const { vars } = startAppWorkerConfig(
+    { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
+    "preview",
+  );
+  expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate-dev-preview.workers.dev" });
+  expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
+    dash: "https://dash.iterate-dev-preview.workers.dev",
+    agents: "https://agents.iterate-dev-preview.workers.dev",
+    notes: "https://notes.iterate-dev-preview.workers.dev",
+    voice: "https://voice.iterate-dev-preview.workers.dev",
+    kit: "https://kit.iterate-dev-preview.workers.dev",
+  });
+});
+
 /** The built wrangler.json of a start app, and its preview config for PR 123. */
 function previewConfig() {
   const built = {
-    topLevelName: "notes-preview",
+    topLevelName: "notes",
     account_id: "acct",
-    name: "notes-preview",
+    name: "notes",
     main: "index.js",
     compatibility_date: "2026-09-01",
     assets: { binding: "ASSETS", directory: "../client", run_worker_first: true },
@@ -83,8 +98,8 @@ function previewConfig() {
     no_bundle: true,
   };
   const config = startAppPreviewConfig(built, {
-    issuer: "https://pr123-foo-os-preview.iterate-dev-preview.workers.dev",
-    appOrigins: { dash: "https://pr123-foo-dash-preview.iterate-dev-preview.workers.dev" },
+    issuer: "https://pr123-os.iterate-dev-preview.workers.dev",
+    appOrigins: { dash: "https://pr123-dash.iterate-dev-preview.workers.dev" },
   });
 
   return { built, config };

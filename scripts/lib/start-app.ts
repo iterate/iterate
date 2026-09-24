@@ -42,7 +42,7 @@ export interface StartApp {
 
 /** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
  *  `ITERATE_APP_ORIGINS` (startAppWorkerConfig) — each its envs.ts map. */
-const FIRST_PARTY_APPS = {
+const FIRST_PARTY_APPS: Record<string, Record<string, StartAppEnv>> = {
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
@@ -78,8 +78,7 @@ export function ownZones(): string[] {
     if (env.projectWildcard) zones.add(env.projectWildcard.hostname);
   }
   for (const envs of Object.values(FIRST_PARTY_APPS))
-    for (const env of Object.values(envs) as { baseUrl: string }[])
-      zones.add(ownOriginZone(env.baseUrl));
+    for (const env of Object.values(envs)) zones.add(ownOriginZone(env.baseUrl));
   return [...zones].sort();
 }
 
@@ -93,6 +92,20 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     throw new Error(
       `apps/${app.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(app.envs).join(", ")}`,
     );
+  // THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps sign in against prd's
+  // platform, and a `preview` build (the app's preview parent, main on the dev/preview account)
+  // against the platform's preview parent — and prd's for local dev, which takes a local issuer
+  // from a gitignored .dev.vars. A per-PR preview's config swaps in the same PR's (startAppPreviewConfig).
+  const linked = envName || "prd";
+  const platform = osEnvs[linked];
+  if (!platform)
+    throw new Error(`apps/${app.name}: envs.ts has no osEnvs.${linked} to sign in against`);
+  const appOrigins = Object.entries(FIRST_PARTY_APPS).map(([name, envs]) => {
+    const other = envs[linked];
+    if (!other)
+      throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
+    return [name, other.baseUrl];
+  });
   return {
     name: env?.workerName ?? app.name,
     main: "src/server.ts",
@@ -101,23 +114,17 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object" as const, storage: "sqlite" as const } },
     vars: {
-      // the default issuer: prd's platform origin (envs.ts always has a prd entry); a per-PR preview's
-      // config swaps in the same PR's apps/os preview (startAppPreviewConfig), and local dev takes a
-      // local one from a gitignored .dev.vars
-      ITERATE_ORIGIN: osEnvs.prd!.baseUrl,
+      // the default issuer: the linked environment's platform origin
+      ITERATE_ORIGIN: platform.baseUrl,
       // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
       // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
       // issuer is exempt) — derived from envs.ts, never spelled twice
       ITERATE_DENY_ZONES: ownZones().join(","),
       // the first-party apps' origins by name (JSON), what a link from one app to another follows —
-      // the dash's directory of apps, Kit's link to the sessions in the dash: prd's, as the issuer
-      // is; a per-PR preview's config names the same PR's app previews instead, only the ones that
-      // run deploys (startAppPreviewConfig)
-      ITERATE_APP_ORIGINS: JSON.stringify(
-        Object.fromEntries(
-          Object.entries(FIRST_PARTY_APPS).map(([name, envs]) => [name, envs.prd.baseUrl]),
-        ),
-      ),
+      // the dash's directory of apps, Kit's link to the sessions in the dash: the linked
+      // environment's, as the issuer is; a per-PR preview's config names the same PR's app previews
+      // instead, only the ones that run deploys (startAppPreviewConfig)
+      ITERATE_APP_ORIGINS: JSON.stringify(Object.fromEntries(appOrigins)),
       // unset ⇒ no var, no PostHog
       ...(env?.posthogProjectKey && { POSTHOG_PROJECT_KEY: env.posthogProjectKey }),
     },
@@ -256,8 +263,8 @@ export function buildStartApp(app: StartApp, env: string) {
  *  and its vars with the issuer swapped for the same PR's apps/os preview and the other apps for
  *  the same PR's app previews (`appOrigins`, apps/os/scripts/preview-config.ts
  *  `appPreviewOrigins`), so a link from one to another stays in the preview. The top level is
- *  the parent worker (what `wrangler preview` branches from; deployed from this same config the
- *  first time it is missing) with the class as a legacy `migrations` entry, because the pkg.pr.new
+ *  the parent worker (what `wrangler preview` branches from; main deploys it, apps/os
+ *  scripts/preview.ts `deployParents`) with the class as a legacy `migrations` entry, because the pkg.pr.new
  *  wrangler build that provisions previews predates `exports`; the `previews` block is the one
  *  preview's own — assets are not a `previews` key and are inherited from the top level. */
 export function startAppPreviewConfig(

@@ -624,7 +624,6 @@ const SourceWorkflow = z.object({
   jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
 });
 const jobLabels = new Map([
-  ["parent", "Preview parent"],
   ["deploy", "Deploy preview"],
   ["e2e", "E2E tests"],
   ["specs", "Browser specs"],
