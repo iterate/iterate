@@ -8,6 +8,7 @@ packages:
   - apps/spa
   - apps/dummy-petshop
   - apps/ci-reports
+  - packages/cli
   - packages/iterate
   - packages/shared
   - packages/ui

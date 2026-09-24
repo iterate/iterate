@@ -1,12 +1,8 @@
 {
-  // The package's Node program: `iterate/node` and the build/test configs. The Worker SDK is
-  // tsconfig.worker.json; tsconfig.node.json emits dist/node.d.ts.
   "compilerOptions": {
     "target": "esnext",
     "module": "nodenext",
     "lib": ["esnext", "dom"],
-    "jsx": "react-jsx",
-    "jsxImportSource": "react",
     "types": ["node"],
     "strict": true,
     "erasableSyntaxOnly": true,
@@ -18,6 +14,6 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src/node.ts", "tsdown.config.ts", "vitest.config.ts"],
+  "include": ["src/**/*.ts", "tsdown.config.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

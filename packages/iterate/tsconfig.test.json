@@ -1,9 +1,8 @@
 {
-  // The SDK unit tests, with tsconfig.next.json's Worker settings (vitest runs them untyped).
-  "extends": "./tsconfig.next.json",
+  // The SDK unit tests, with tsconfig.worker.json's Worker settings (vitest runs them untyped).
+  "extends": "./tsconfig.worker.json",
   "files": [],
   "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test-support"],
-  "exclude": ["src/cli.test.ts"],
   "compilerOptions": {
     "noEmit": true,
     "declaration": false,

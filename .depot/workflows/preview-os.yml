@@ -68,6 +68,8 @@ on:
       - "!apps/kit/firmware/**"
       - specs/**
       - playwright.config.ts
+      # apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI
+      - packages/cli/**
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**

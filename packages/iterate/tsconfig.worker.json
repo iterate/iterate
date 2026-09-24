@@ -1,7 +1,7 @@
 {
   // `iterate/*` — the SDK: Worker code (Durable Objects, WorkerEntrypoints, capnweb over
   // workerd), typed against the REAL Cloudflare types in its own program, apart from the package's
-  // Node/DOM program (tsconfig.json covers only the CLI entry points and what they import).
+  // Node program (tsconfig.json: `iterate/node` and what it imports).
   // `typecheck` runs it; `build` runs it with emitDeclarationOnly for dist/**/*.d.ts (the .mjs
   // come from tsdown.config.ts's neutral entries).
   "files": [

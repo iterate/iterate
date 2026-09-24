@@ -9,9 +9,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
@@ -23,7 +24,7 @@ import {
   refreshOAuthSession,
   shellCommand,
 } from "./cli.ts";
-import { connectIterate } from "./node.ts";
+import { connectIterate } from "iterate/node";
 import { Config } from "./config.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
@@ -296,7 +297,7 @@ test(
 test("a pnpm shim for this package does not redirect source development to stale dist", async () => {
   const directory = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
   try {
-    for (const path of ["bin", "src", "dist", "node_modules/.bin"])
+    for (const path of ["bin", "src", "dist", "node_modules/.bin", "node_modules/@iterate-com"])
       mkdirSync(join(directory, path), { recursive: true });
     copyFileSync(bin, join(directory, "bin/iterate.js"));
     writeFileSync(join(directory, "package.json"), '{"type":"module"}');
@@ -309,7 +310,7 @@ test("a pnpm shim for this package does not redirect source development to stale
       'export async function runCli() { console.log("build"); }',
     );
     writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");
-    symlinkSync(directory, join(directory, "node_modules/iterate"));
+    symlinkSync(directory, join(directory, "node_modules/@iterate-com/cli"));
     for (const [force, expected] of [
       ["0", "source"],
       ["1", "build"],
@@ -415,7 +416,7 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No port");
   const source = `
-    import { connectIterate } from ${JSON.stringify(new URL("./node.ts", import.meta.url).href)};
+    import { connectIterate } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("iterate/node")).href)};
     import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
     using connection = await connectIterate({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
     await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });

@@ -1,7 +1,7 @@
 {
   "name": "iterate",
-  "version": "0.3.0",
-  "description": "CLI and SDK for Iterate",
+  "version": "0.4.0",
+  "description": "SDK for Iterate",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -15,7 +15,6 @@
   },
   "keywords": [
     "iterate",
-    "cli",
     "sdk",
     "capnweb"
   ],
@@ -111,14 +110,12 @@
     }
   },
   "files": [
-    "bin",
     "dist",
-    "README.md",
-    "menubar"
+    "README.md"
   ],
   "scripts": {
-    "build": "tsdown && tsc -p tsconfig.next.json && tsc -p tsconfig.cli.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.next.json && tsc --noEmit -p tsconfig.test.json",
+    "build": "tsdown && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },
@@ -127,13 +124,15 @@
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",
     "zod": "4.5.4",
-    "@clack/prompts": "^1.0.0",
-    "@orpc/server": "1.13.14",
-    "trpc-cli": "0.15.1",
     "ws": "8.19.0"
   },
   "peerDependencies": {
     "react": "^19.1.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
@@ -144,8 +143,5 @@
     "typescript": "^5.9.3",
     "vitest": "4.0.15",
     "@types/ws": "^8.18.1"
-  },
-  "bin": {
-    "iterate": "./bin/iterate.js"
   }
 }

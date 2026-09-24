@@ -8,14 +8,12 @@ import { newHttpBatchRpcSession } from "capnweb";
 import { connectIterate } from "iterate/node";
 import { test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { MyComputer } from "../../../packages/iterate/src/use-my-computer.ts";
+import { MyComputer } from "../../../packages/cli/src/use-my-computer.ts";
 import { adminCredentials, freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
 import { issuerCookie } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
-const bin = fileURLToPath(
-  new URL("../../../packages/iterate/bin/iterate.js", import.meta.url).href,
-);
+const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
   "published CLI: OAuth PKCE login, refresh, project listing and an itx script with durable settlement",
@@ -130,7 +128,7 @@ test("computer provider is callable from another connection and released on disp
 async function buildPublishedCli(): Promise<void> {
   await promisify(execFile)(
     "pnpm",
-    ["--dir", fileURLToPath(new URL("../../../packages/iterate", import.meta.url).href), "build"],
+    ["--dir", fileURLToPath(new URL("../../../packages/cli", import.meta.url).href), "build"],
     { timeout: 60_000 },
   );
 }

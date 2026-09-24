@@ -15,6 +15,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
 | `apps/ci-reports`        | Opens CI traces and Playwright reports from Depot artifacts     |
 | `packages/iterate`       | `iterate/*` SDK                                                 |
+| `packages/cli`           | The `iterate` CLI and the macOS menu bar (`@iterate-com/cli`)   |
 | `packages/ui`            | Components used by the apps                                     |
 | `packages/shared`        | Shared configuration, events, and test telemetry                |
 | `configs`                | Config repository templates copied into new projects            |

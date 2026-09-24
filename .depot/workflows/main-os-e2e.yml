@@ -51,6 +51,7 @@ on:
       - "!apps/kit/firmware/**"
       - specs/**
       - playwright.config.ts
+      - packages/cli/**
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**

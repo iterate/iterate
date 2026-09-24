@@ -2,7 +2,7 @@ import { hostname } from "node:os";
 import * as prompts from "@clack/prompts";
 import { RpcTarget } from "capnweb";
 import { run } from "./run-command.ts";
-import type { connectIterate } from "./node.ts";
+import type { connectIterate } from "iterate/node";
 
 type ComputerEvent =
   | { type: "status"; loggedIn: true; name: string }

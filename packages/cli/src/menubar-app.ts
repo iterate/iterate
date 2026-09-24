@@ -2,7 +2,7 @@
 // `iterate menubar` — build (on first use) and launch the menu-bar
 // app.
 //
-// The published package ships only the Swift SOURCE (packages/iterate/menubar);
+// The published package ships only the Swift SOURCE (packages/cli/menubar);
 // this compiles it with swiftc on the user's Mac, cached by source hash next to
 // the config, and launches the .app — the same compile-on-first-use pattern as
 // the enclave signer. It also writes ~/.config/iterate/menubar.json so the app
