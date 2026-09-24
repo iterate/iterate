@@ -11,8 +11,8 @@
 //              the apex serving it (session.e2e proves that sequence; this times it).
 // and each round until its LAST project is ready. A project that is not ready by READY_DEADLINE_MS,
 // whose create threw or whose saga failed (`project/create-failed`, its error printed with the
-// round), counts as READY_DEADLINE_MS: a creation that stalls or fails under load is the slowness
-// this guards, never a broken probe. The network between the runner and Cloudflare's edge is not
+// round), counts as READY_DEADLINE_MS, and so does its round: a creation that stalls or fails under
+// load is the slowness this guards, never a broken probe. The network between the runner and Cloudflare's edge is not
 // what it guards: a person's socket that fails, or does not open within SOCKET_OPEN_MS, is opened
 // once more, logged (`perf.socket-reopened`), and the project still timed from its first call.
 //
@@ -77,12 +77,15 @@ test.for([
       const projects = await Promise.all(
         Array.from({ length: people }, () => createProject(`lat${people}`)),
       );
-      allReady.push(performance.now() - started);
+      const settledMs = performance.now() - started;
       answered.push(...projects.map((project) => project.answeredMs));
       ready.push(...projects.map((project) => project.readyMs));
       const failed = projects.flatMap((project) => (project.error ? [project.error] : []));
+      // A round with a project that never became ready counts as the deadline, however early the
+      // failure answered: its last project was never ready.
+      allReady.push(failed.length ? READY_DEADLINE_MS : settledMs);
       console.log(
-        `[x${people} round ${round}] all ready in ${allReady.at(-1)!.toFixed(0)}ms${failed.length ? `; ${failed.length} not ready: ${failed.join("; ")}` : ""}`,
+        `[x${people} round ${round}] ${failed.length ? `settled in ${settledMs.toFixed(0)}ms, counted as ${READY_DEADLINE_MS}ms; ${failed.length} not ready: ${failed.join("; ")}` : `all ready in ${settledMs.toFixed(0)}ms`}`,
       );
       if (failed.length === people)
         throw new Error(`no project of ${people} became ready: ${failed.join("; ")}`);
