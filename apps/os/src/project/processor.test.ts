@@ -306,7 +306,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   ]);
 });
 
-test("ProjectProcessor — one request per hostname at a time: a remove asked while an add runs waits for it", async () => {
+test("ProjectProcessor — one request per hostname at a time: a remove asked while an add runs waits for it, and the same worker runs it once the add is answered — no further delivery needed", async () => {
   const calls: string[] = [];
   let finish!: () => void;
   const held = new Promise<void>((resolve) => (finish = resolve));
@@ -342,9 +342,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
   owe("remove", 2); // the add is still running: nothing starts
   await settle();
   expect(calls).toEqual(["claim www.acme.test"]);
-  finish();
-  await settle();
-  owe("remove", 2); // the add's answer is delivered: the remove runs now
+  finish(); // the add is answered; the worker drains the remove it saw asked meanwhile
   await settle();
   expect(calls).toEqual(["claim www.acme.test", "remove www.acme.test", "release www.acme.test"]);
 });

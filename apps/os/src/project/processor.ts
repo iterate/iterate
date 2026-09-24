@@ -92,10 +92,12 @@ export class ProjectProcessor extends StreamProcessor<
     this.hostnames = hostnames;
   }
 
-  /** The hostnames this incarnation is working on — ONE request per hostname at a time, so an add
-   *  and a remove (or two adds) never race each other's claim; the durable ground is
-   *  `state.hostnames[…].requested`, and the answer's own delivery runs whatever was asked since. */
+  /** The hostnames this incarnation is working on — ONE worker per hostname, so an add and a remove
+   *  (or two adds) never race each other's claim — and the newest state any delivery has shown. A
+   *  worker DRAINS: a request that arrives while it runs is run by the same worker once its answer
+   *  lands, without waiting for another delivery. The durable ground is `state.hostnames[…].requested`. */
   #hostnameWork = new Set<string>();
+  #newestHostnames: ProjectState["hostnames"] = {};
 
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
@@ -245,17 +247,27 @@ export class ProjectProcessor extends StreamProcessor<
     // still owes, one hostname at a time, and any later delivery runs it again after an eviction.
     // Every step is idempotent: the claim for the same project, Cloudflare's find-or-create and
     // delete, the answer keyed by the request's offset.
+    this.#newestHostnames = state.hostnames;
     for (const [hostname, entry] of Object.entries(state.hostnames)) {
-      const { requested } = entry;
-      if (!requested || this.#hostnameWork.has(hostname)) continue;
+      if (!entry.requested || this.#hostnameWork.has(hostname)) continue;
       this.#hostnameWork.add(hostname);
       runInBackground(async () => {
         try {
-          await append(
-            requested.verb === "add"
-              ? await this.#addHostname(hostname, requested.offset, Boolean(entry.cloudflare))
-              : await this.#removeHostname(hostname, requested.offset),
-          );
+          // Drain: the newest request as of each pass, never the one just answered again.
+          let answered = 0;
+          for (
+            let owed = entry;
+            owed?.requested && owed.requested.offset !== answered;
+            owed = this.#newestHostnames[hostname]
+          ) {
+            const { verb, offset } = owed.requested;
+            await append(
+              verb === "add"
+                ? await this.#addHostname(hostname, offset, Boolean(owed.cloudflare))
+                : await this.#removeHostname(hostname, offset),
+            );
+            answered = offset;
+          }
         } finally {
           this.#hostnameWork.delete(hostname);
         }
