@@ -23,10 +23,10 @@
 // WHAT THESE ROWS ASSERT is what the platform code decides: a wake, a reset named on a wake record,
 // and a careless facet no longer running once its quiet minute is up. What CLOUDFLARE decides — how
 // long a facet the context no longer holds keeps running, whether a context stays resident under
-// traffic — is timed in perf/context-residency.perf.test.ts, alone on the wire. Here those numbers
-// sampled the platform: a facet the platform stopped 0 s and 20 s after its call (#2939, #2899),
-// a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while the control plane
-// stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
+// traffic — each row prints, and the opt-in perf/context-residency.perf.test.ts times alone. Here
+// those numbers sampled the platform: a facet the platform stopped 0 s and 20 s after its call
+// (#2939, #2899), a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while
+// the control plane stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
 import { expect, test } from "vitest";
 import {
   adminCredentials,
@@ -382,9 +382,9 @@ test("an SDK facet that reached its context through withItx does not outlive the
 // is woken fresh, and that birth resets the facet. The heartbeat (support/residency-facets.ts) keeps
 // its `env.ITX` answer AND beats a timer into its own storage, so its last beat says when it
 // stopped, with no call from here. That it stopped is the platform code's doing and asserted here;
-// that it ran past its context's eviction until the sweep is Cloudflare's, and timed in the perf
-// lane: here the platform stopped it 0 s and 20 s after its call (#2939, #2899) with no invocation
-// of the context in between, which no reset of ours can do.
+// that it ran past its context's eviction until the sweep is Cloudflare's, printed here and timed
+// in the opt-in perf file: here the platform stopped it 0 s and 20 s after its call (#2939, #2899),
+// with no invocation of the context in between, which no reset of ours can do.
 
 test("a careless loaded facet the last call left running is no longer running a quiet minute later, with no call from outside", async () => {
   const ctx = freshCtx("residency_sweep");
@@ -399,6 +399,7 @@ test("a careless loaded facet the last call left running is no longer running a 
   disposeSessions();
   await sleep(110_000); // no request: the context evicts in ~10 s; the sweep's alarm is its only wake
   const record = await heartbeat("beats");
+  console.log(`[residency] the careless facet beat on ${record.lastBeat - lastCallAt} ms`, record);
   // Stopped by the sweep a quiet minute after the call — or earlier, by the platform — and in either
   // case long before this call: a facet still beating here would beat until the next call's birth.
   expect(record.lastBeat - lastCallAt, JSON.stringify({ lastCallAt, ...record })).toBeLessThan(
@@ -412,9 +413,9 @@ test("a careless loaded facet the last call left running is no longer running a 
 // flight. A careless facet that calls its own context every few seconds keeps that context resident,
 // so no birth would ever reset it; it is reset in place a quiet minute after the last outside call.
 // That outside HTTP restarts the clock is decided in the Workers lane
-// (__workers-tests__/facet-birth-reset.test.ts) and timed on a deployment in the perf lane, where a
-// context under 5 s traffic keeps one instance; here that row saw two when the control plane stalled
-// 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
+// (__workers-tests__/facet-birth-reset.test.ts); that a context under 5 s of traffic keeps one
+// instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
+// plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
 
 test("a careless loaded facet calling its own context every 5 s is no longer running a quiet minute and a half after the last outside call", async () => {
   const ctx = freshCtx("residency_chatty");
@@ -431,6 +432,7 @@ test("a careless loaded facet calling its own context every 5 s is no longer run
   const chatter = (await readAll(openItx(ctx)))
     .filter((e: any) => e.type === "chatter")
     .map((e: any) => Date.parse(e.createdAt));
+  console.log(`[residency] the chatty facet chattered ${chatter.at(-1)! - chatter[0]!} ms`);
   // Reset in place by the sweep a quiet minute in — or stopped earlier by the platform — and in
   // either case long before this read: a facet still chattering here would chatter forever.
   expect(chatter.at(-1)! - chatter[0]!, JSON.stringify(chatter)).toBeLessThan(90_000);
@@ -442,8 +444,8 @@ test("a careless loaded facet calling its own context every 5 s is no longer run
 // env.ITX answer and beats a timer into its own storage; its claim holds past the first sweep and is
 // released at 70 s, so the sweep the release armed stops it at ~130 s. A release that armed nothing
 // would leave it beating until this row's call at 180 s. That the claimed facet ran on through the
-// first sweep, and that the release arms the next, the Workers lane decides; how long it ran, the
-// perf lane times.
+// first sweep, and that the release arms the next, the Workers lane decides; how long it ran is
+// printed here and timed in the opt-in perf file.
 
 test("a careless facet whose claim ends is no longer running a quiet minute and a half after the release, though the sweep ran while the claim held it", async () => {
   const ctx = freshCtx("residency_released");
@@ -458,6 +460,7 @@ test("a careless facet whose claim ends is no longer running a quiet minute and 
   disposeSessions();
   await sleep(180_000); // nothing from here: the sweep runs at ~60 s, the release lands at 70 s
   const beats = await releaser("beats");
+  console.log(`[residency] the releaser beat on ${beats.lastBeat - startedAt} ms`, beats);
   expect(beats.lastBeat - startedAt, JSON.stringify({ startedAt, ...beats })).toBeLessThan(160_000);
 }, 270_000);
 
@@ -468,7 +471,7 @@ test("a careless facet whose claim ends is no longer running a quiet minute and 
 // `resetUnclaimedLoadedFacets`) — and the attempt finishes. The sleeper keeps the SDK's rule 3 (what
 // it owes lives in state), so a revive restarts a sleep an instance the platform stopped still owed
 // (#2921 lost one mid-attempt with no reset of ours); that the attempt finishes on the instance
-// that started it is Cloudflare's to keep, and timed in the perf lane.
+// that started it is Cloudflare's to keep, printed here and timed in the opt-in perf file.
 
 test("a facet's claimed background work finishes across its context's incarnations, and no birth resets the claimed facet", async () => {
   const ctx = freshCtx("residency_claimed");
@@ -477,6 +480,7 @@ test("a facet's claimed background work finishes across its context's incarnatio
     source: SLEEPER_SOURCE,
     className: "SleeperDurableObject",
   });
+  const started = await facetStartedAt(itx.facets.get("sleeper"));
   const [sleep45] = await itx.append({ type: "sleep", payload: { ms: 45_000 } });
   disposeSessions();
   await sleep(60_000); // no request meanwhile: a poll would keep the context resident
@@ -490,6 +494,9 @@ test("a facet's claimed background work finishes across its context's incarnatio
       e.type === "events.iterate.com/stream/woken" &&
       e.offset > sleep45.offset &&
       e.offset < slept.offset,
+  );
+  console.log(
+    `[residency] ${woken.length} wake(s) mid-sleep; slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
   );
   // The claim's alarm woke the context mid-sleep (20 s in, the context idle since the append), and
   // every birth mid-sleep spared the claimed facet — a birth names what it reset on its wake record.
@@ -574,7 +581,3 @@ const carelessHolder = (itx: any, method: string, ...args: unknown[]) =>
     ],
     [method, ...args],
   ]);
-
-/** When the facet started — the construction time its live state's revision counts from. */
-const facetStartedAt = async (facet: any): Promise<number> =>
-  Math.floor((await facet.liveSnapshot()).rev / 4096);

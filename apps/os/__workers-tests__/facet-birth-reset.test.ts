@@ -10,7 +10,8 @@
 // What the reset ENDS — a careless facet still running after its context was evicted, billed — is a
 // deployed fact (workerd's harness cannot evict a context whose facet is live, workerd#6800): the
 // careless rows of e2e/context-residency.e2e.test.ts read the facet's own start across incarnations,
-// and perf/context-residency.perf.test.ts times how long the platform keeps such a facet running.
+// and the opt-in perf/context-residency.perf.test.ts times how long the platform keeps such a facet
+// running.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";

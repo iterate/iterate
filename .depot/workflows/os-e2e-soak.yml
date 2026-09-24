@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: "false"
+      residency-timing:
+        description: '"1" also runs the opt-in residency timing rows (apps/os/perf/context-residency.perf.test.ts) after each e2e run'
+        required: false
+        type: string
+        default: "0"
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
@@ -95,6 +100,7 @@ jobs:
           FILTER: ${{ inputs.filter }}
           # one prefix per dispatch, so dispatches running side by side never share a preview
           FRESH_PREVIEWS: ${{ inputs.fresh-previews == 'true' && format('sf-{0}', github.run_id) || '' }}
+          RUN_RESIDENCY_TIMING: ${{ inputs.residency-timing }}
         run: |
           if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS"); else target=(--preview "$PREVIEW"); fi
           doppler run -- pnpm e2e:soak --runs "$RUNS" "${target[@]}" ${FILTER:+--filter "$FILTER"}
