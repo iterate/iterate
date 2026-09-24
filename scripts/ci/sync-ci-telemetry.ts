@@ -15,8 +15,11 @@
  *
  * A sync reports what finished in [the previous successful scheduled sync's creation, its own
  * creation), both less `settleMs`, so successful syncs tile time with no stored cursor and a failed
- * sync leaves its window to the next one. Event UUIDs derive from Depot's execution and attempt IDs, so PostHog
- * deduplicates an overlapping replay (`--since`).
+ * sync leaves its window to the next one. A window is cut from its start to at most
+ * `longestWindowMs` and to what Depot's listings reach (candidateRuns); a cut logs a
+ * `ci-telemetry.unreported` warning naming the time whose work goes unreported, and the sync
+ * still succeeds, so the next one starts after it. Event UUIDs derive from Depot's execution and
+ * attempt IDs, so PostHog deduplicates an overlapping replay (`--since`).
  *
  *   DEPOT_CI_TELEMETRY_TOKEN=… GITHUB_TOKEN="$(gh auth token)" \
  *     pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z
@@ -59,14 +62,15 @@ async function main() {
     .parse(process.env.GITHUB_TOKEN);
   const depot = (method: string, body: object) => depotCiApi(method, body, depotToken);
 
-  const window = values.since
+  const requested = values.since
     ? {
         start: Date.parse(values.since),
         end: values.until ? Date.parse(values.until) : Date.now() - settleMs,
       }
     : await scheduledWindow(depot, z.url().parse(process.env.DEPOT_JOB_URL));
-  if (!Number.isFinite(window.start) || !(window.end > window.start))
+  if (!Number.isFinite(requested.start) || !(requested.end > requested.start))
     throw new Error(`Invalid window: ${values.since} → ${values.until}`);
+  const { window, runs: candidates } = await candidateRuns(depot, requested);
   console.log(
     `[ci-telemetry] window ${new Date(window.start).toISOString()} → ${new Date(window.end).toISOString()}`,
   );
@@ -75,7 +79,7 @@ async function main() {
   // before it did.
   const reportable = ({ workflow }: RunMetrics["workflows"][number]) =>
     workflow.status === "running" || Date.parse(workflow.finishedAt) >= window.start;
-  const runs = (await candidateRuns(depot, window)).filter((run) => run.workflows.some(reportable));
+  const runs = candidates.filter((run) => run.workflows.some(reportable));
   const workflows = await mapConcurrent(
     runs.flatMap((run) => run.workflows.filter(reportable)),
     8,
@@ -391,18 +395,23 @@ async function scheduledWindow(
   const end = Date.parse(self.workflowCreatedAt) - settleMs;
   const start = previous ? Date.parse(previous.createdAt) - settleMs : end - 3_600_000;
   if (end - start <= longestWindowMs) return { start, end };
-  console.warn(
-    `[ci-telemetry] no successful sync since ${new Date(start).toISOString()}: reporting only the last ${longestWindowMs / 3_600_000}h; what finished before is not reported`,
-  );
+  console.warn({
+    event: "ci-telemetry.unreported",
+    from: new Date(start).toISOString(),
+    until: new Date(end - longestWindowMs).toISOString(),
+    reason: `no successful sync since ${new Date(start).toISOString()}; a sync reports at most its last ${longestWindowMs / 3_600_000}h`,
+  });
   return { start: end - longestWindowMs, end };
 }
 
 /**
  * Every Depot run with a workflow created in the window or up to `longestWorkflowMs` before it,
- * with its workflows' jobs and attempts. `ListWorkflows` returns at most the newest 200 and has no
- * paging, so the sync lists each workflow on main by name; a listing that fills its 200 without
- * reaching back far enough fails the sync. One unnamed listing adds workflows that exist only on a
- * branch.
+ * with its workflows' jobs and attempts, and the window those runs cover. `ListWorkflows` returns
+ * at most the newest 200 and has no paging, so the sync lists each workflow on main by name, and
+ * one unnamed listing adds workflows that exist only on a branch. A named listing that fills its
+ * 200 without reaching back far enough holds every workflow of its name created since its oldest,
+ * so the window then starts `longestWorkflowMs` after that one, and what finished before goes
+ * unreported with a warning. The listings take no time or branch filter to narrow them by.
  *
  * A re-run started more than `longestWorkflowMs` after its workflow was created is not reported.
  * Depot keeps the workflow's original `createdAt` for a re-run, and neither `ListWorkflows` nor
@@ -410,9 +419,9 @@ async function scheduledWindow(
  * (https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto), so finding one would mean
  * fetching every workflow of the horizon it could come from, every hour.
  */
-async function candidateRuns(
+export async function candidateRuns(
   depot: (method: string, body: object) => Promise<unknown>,
-  window: { start: number; end: number },
+  requested: { start: number; end: number },
 ) {
   const directory = new URL("../../.depot/workflows/", import.meta.url);
   const names = await Promise.all(
@@ -425,22 +434,40 @@ async function candidateRuns(
             .parse(parseYaml(await readFile(new URL(file, directory), "utf8"))).name,
       ),
   );
-  const oldest = window.start - longestWorkflowMs;
   const listings = await mapConcurrent([undefined, ...names], 8, async (name) => {
     const { workflows } = WorkflowList.parse(
       await depot("ListWorkflows", { repo: repository, pageSize: 200, name }),
     );
-    const reachedBack = workflows.some((workflow) => Date.parse(workflow.createdAt) < oldest);
-    if (name && workflows.length === 200 && !reachedBack)
-      throw new Error(
-        `Depot's 200 newest "${name}" workflows do not reach back to ${new Date(oldest).toISOString()}; sync a shorter window`,
-      );
-    return workflows;
+    return { name, workflows };
   });
+  const short = listings.flatMap(({ name, workflows }) => {
+    if (!name || workflows.length < 200) return [];
+    const reach = Math.min(...workflows.map((workflow) => Date.parse(workflow.createdAt)));
+    return reach + longestWorkflowMs > requested.start ? [{ name, reach }] : [];
+  });
+  const window = {
+    start: Math.min(
+      Math.max(requested.start, ...short.map(({ reach }) => reach + longestWorkflowMs)),
+      requested.end,
+    ),
+    end: requested.end,
+  };
+  if (short.length)
+    console.warn({
+      event: "ci-telemetry.unreported",
+      from: new Date(requested.start).toISOString(),
+      until: new Date(window.start).toISOString(),
+      reason: `Depot's 200 newest workflows of each name in listings reach back only to the time given, and one created before it may finish up to ${longestWorkflowMs / 3_600_000}h later`,
+      listings: Object.fromEntries(
+        short.map(({ name, reach }) => [name, new Date(reach).toISOString()]),
+      ),
+    });
+
+  const oldest = window.start - longestWorkflowMs;
   const runIds = [
     ...new Set(
       listings
-        .flat()
+        .flatMap(({ workflows }) => workflows)
         .filter((workflow) => {
           const createdAt = Date.parse(workflow.createdAt);
           return createdAt >= oldest && createdAt < window.end && workflow.status !== "queued";
@@ -448,9 +475,10 @@ async function candidateRuns(
         .map((workflow) => workflow.runId),
     ),
   ];
-  return mapConcurrent(runIds, 8, async (runId) =>
+  const runs = await mapConcurrent(runIds, 8, async (runId) =>
     RunMetrics.parse(await depot("GetRunMetrics", { runId })),
   );
+  return { window, runs };
 }
 
 // Connect's JSON encoding omits empty strings and empty lists, so an unset time or conclusion is

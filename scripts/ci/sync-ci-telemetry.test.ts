@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import {
+  candidateRuns,
   ciTelemetryEvents,
   runSource,
   testEvidenceAttemptIds,
@@ -171,6 +172,39 @@ test("a scheduled run has no pull request", async () => {
   expect(github.pullRequestsForCommit).not.toHaveBeenCalled();
 });
 
+test("a full listing that does not reach back starts the window two hours after its oldest workflow, and warns", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const requested = {
+    start: Date.parse("2026-09-24T16:24:00Z"),
+    end: Date.parse("2026-09-24T22:24:00Z"),
+  };
+  const { window: covered, runs } = await candidateRuns(busyDepot, requested);
+  expect(covered).toEqual({ start: Date.parse("2026-09-24T21:01:00Z"), end: requested.end });
+  expect(warn).toHaveBeenCalledWith({
+    event: "ci-telemetry.unreported",
+    from: "2026-09-24T16:24:00.000Z",
+    until: "2026-09-24T21:01:00.000Z",
+    reason: expect.any(String),
+    listings: { "Lint and Typecheck": "2026-09-24T19:01:00.000Z" },
+  });
+  expect(runs).toHaveLength(200);
+  warn.mockRestore();
+});
+
+test("a full listing that reaches back leaves the window whole", async () => {
+  const warn = vi.spyOn(console, "warn");
+  const requested = {
+    start: Date.parse("2026-09-24T21:30:00Z"),
+    end: Date.parse("2026-09-24T22:24:00Z"),
+  };
+  const { window: covered, runs } = await candidateRuns(busyDepot, requested);
+  expect(covered).toEqual(requested);
+  expect(warn).not.toHaveBeenCalled();
+  // created from 19:30, two hours before the window
+  expect(runs).toHaveLength(171);
+  warn.mockRestore();
+});
+
 test("reads each job's runner size or label from the workflow file", () => {
   expect(
     workflowRunners(
@@ -298,5 +332,22 @@ function attempt(id: string, finishedAt: string, conclusion = "success", number 
       startedAt: "2026-09-24T05:10:04.000Z",
       finishedAt,
     },
+  };
+}
+
+/** Depot's API with 200 "Lint and Typecheck" workflows, one a minute from 19:01 to 22:20, and no others. */
+async function busyDepot(method: string, body: object) {
+  const { name, runId } = body as { name?: string; runId?: string };
+  if (method === "GetRunMetrics")
+    return { run: { runId, sha: "sha", headSha: "sha", trigger: "pull_request" } };
+  if (name !== "Lint and Typecheck") return { workflows: [] };
+  return {
+    workflows: Array.from({ length: 200 }, (_, index) => ({
+      workflowId: `wf${index}`,
+      runId: `run${index}`,
+      status: "finished",
+      trigger: "pull_request",
+      createdAt: new Date(Date.parse("2026-09-24T22:20:00Z") - index * 60_000).toISOString(),
+    })),
   };
 }
