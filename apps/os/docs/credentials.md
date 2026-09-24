@@ -29,7 +29,9 @@ device. It is not an OAuth token, so it has no single audience, and one key work
 
 - **What it can do.** It acts as you, with the `iterate` scope, on the projects you chose when you
   made it. It can't see or manage your sessions or keys, and it can't create organizations, so a
-  leaked key can't mint another.
+  leaked key can't mint another. `/api` and `/mcp` refuse a project it doesn't cover; that
+  project's host lets the request through anonymous, as it does any non-member's
+  (`src/project-host-sign-in.ts`), so the app sees no one.
 - **Format.** `itk_<your user id>_<key id>_<256 random bits><CRC32>`, 103 characters
   (`src/personal-access-token.ts`). The fixed prefix and checksum make a leaked key easy to find:
   `\bitk_[0-9a-f]{32}_[0-9a-f]{16}_[0-9A-Za-z]{49}\b` is a pattern for secret scanning.
