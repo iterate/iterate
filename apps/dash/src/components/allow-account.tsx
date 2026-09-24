@@ -6,7 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { stepUpUrl } from "../lib/scopes.ts";
 
 /** The dash asked for `account` and the person unticked it: the page offers the step-up instead of

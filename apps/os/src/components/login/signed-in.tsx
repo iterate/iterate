@@ -1,5 +1,5 @@
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 /** A browser already signed in: who, where to go on, and the way to become someone else. */
 export function SignedIn({

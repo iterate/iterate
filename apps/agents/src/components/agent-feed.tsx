@@ -40,7 +40,7 @@ import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import {
   formatClockTime,
   formatDateTime,

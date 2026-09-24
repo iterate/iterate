@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 /**
  * Compact fixed-width identifier pill for IDs and slugs.

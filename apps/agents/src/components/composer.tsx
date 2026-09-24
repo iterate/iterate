@@ -24,7 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { AttachmentChips, AttachmentFileInput } from "./composer-attachments.tsx";
 import { ComposerTextarea } from "./composer-textarea.tsx";
 import { useComposerAttachments } from "./use-composer-attachments.ts";

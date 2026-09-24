@@ -2,7 +2,7 @@
 // platform's housekeeping folded quiet. The two folds open in place on a click; an opened member
 // row opens the inspector like any row.
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { cn } from "../../lib/utils.ts";
+import { cn } from "cn";
 import { housekeepingSummary } from "./core-renderers.tsx";
 import { EventRow, EventSentence, formatClockTime, RowGutter } from "./event-row.tsx";
 import { actorLabel } from "./filters.tsx";

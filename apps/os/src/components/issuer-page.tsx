@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 /** The frame of every issuer page: one centred column on a plain background. A `wide` page — the
  *  consent page's two columns — starts at the top instead of the middle of the screen. */

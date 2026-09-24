@@ -14,7 +14,7 @@ import {
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";

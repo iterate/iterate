@@ -10,7 +10,7 @@ import type { AuthenticatedApp } from "iterate/app";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { useOrganizationTree } from "../../../../components/organization-tree.tsx";
 import { useContextStub, useFacetLiveState } from "../../../../lib/context-stub.ts";
 import { projectHostOf } from "../../../../lib/origins.ts";

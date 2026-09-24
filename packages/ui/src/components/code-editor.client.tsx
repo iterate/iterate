@@ -6,7 +6,7 @@ import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorView, keymap, placeholder as placeholderExt } from "@codemirror/view";
 import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 export interface CodeEditorProps {
   value: string;

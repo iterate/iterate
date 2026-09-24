@@ -1,5 +1,5 @@
 import { Suspense, lazy, type ComponentType } from "react";
-import { cn } from "../lib/utils.ts";
+import { cn } from "cn";
 import { Spinner } from "./spinner.tsx";
 import type { SerializedObjectCodeBlockProps } from "./serialized-object-code-block.client.tsx";
 

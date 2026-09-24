@@ -119,7 +119,7 @@ function OrganizationsPage() {
         <SheetContent
           side="right"
           showCloseButton={!pending}
-          className="overflow-y-auto data-[side=right]:sm:max-w-md"
+          className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           <NewOrganizationForm
             canWrite={info.scopes.includes("organizations:write")}

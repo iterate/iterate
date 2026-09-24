@@ -8,6 +8,8 @@ files:
     "!**/{__tests__,__workers-tests__,test,tests,spec,specs,e2e,test-support,fixtures}/**",
     "!**/*{test-helper,test-support,test-harness,fixture}*.{ts,tsx,mts,cts}",
     "!**/vitest*.config.*",
+    "!packages/ui/src/components/{alert-dialog,avatar,badge,breadcrumb,button,card,checkbox,command,dialog,dropdown-menu,empty,field,input,input-group,label,native-select,select,separator,sheet,sidebar,skeleton,sonner,spinner,table,tabs,textarea,tooltip}.tsx",
+    "!packages/ui/src/hooks/use-mobile.ts",
   ]
 ---
 

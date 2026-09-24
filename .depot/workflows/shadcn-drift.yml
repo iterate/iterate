@@ -1,0 +1,71 @@
+# SHADCN DRIFT (scripts/ci/shadcn-drift.ts check): packages/ui's vendored shadcn files are byte for byte
+# what the pinned CLI's `shadcn add <item> -o` writes (packages/ui/AGENTS.md). A pull request that
+# touches one of them, components.json, the pin (packages/ui/package.json) or this check asks the CLI
+# for its dry run against shadcn's live registry, and fails on any difference, printing each file's
+# diff. The fix is a refresh (`pnpm tsx scripts/ci/shadcn-drift.ts refresh`), never a hand edit.
+#
+# Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
+# checks and off every other pull request's time to green. The path filter runs it only where the
+# answer can change; the script tries the registry three times before it fails. Upstream moving
+# with no pull request in sight is the daily report's job (shadcn-upstream.yml).
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): none.
+name: shadcn drift
+permissions:
+  contents: read
+on:
+  pull_request:
+    paths:
+      - .depot/workflows/shadcn-drift.yml
+      - scripts/ci/shadcn-drift.ts
+      - packages/ui/components.json
+      - packages/ui/package.json
+      - packages/ui/src/components/alert-dialog.tsx
+      - packages/ui/src/components/avatar.tsx
+      - packages/ui/src/components/badge.tsx
+      - packages/ui/src/components/breadcrumb.tsx
+      - packages/ui/src/components/button.tsx
+      - packages/ui/src/components/card.tsx
+      - packages/ui/src/components/checkbox.tsx
+      - packages/ui/src/components/command.tsx
+      - packages/ui/src/components/dialog.tsx
+      - packages/ui/src/components/dropdown-menu.tsx
+      - packages/ui/src/components/empty.tsx
+      - packages/ui/src/components/field.tsx
+      - packages/ui/src/components/input-group.tsx
+      - packages/ui/src/components/input.tsx
+      - packages/ui/src/components/label.tsx
+      - packages/ui/src/components/native-select.tsx
+      - packages/ui/src/components/select.tsx
+      - packages/ui/src/components/separator.tsx
+      - packages/ui/src/components/sheet.tsx
+      - packages/ui/src/components/sidebar.tsx
+      - packages/ui/src/components/skeleton.tsx
+      - packages/ui/src/components/sonner.tsx
+      - packages/ui/src/components/spinner.tsx
+      - packages/ui/src/components/table.tsx
+      - packages/ui/src/components/tabs.tsx
+      - packages/ui/src/components/textarea.tsx
+      - packages/ui/src/components/tooltip.tsx
+      - packages/ui/src/hooks/use-mobile.ts
+  workflow_dispatch: {}
+concurrency:
+  group: shadcn-drift-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  shadcn-drift:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    steps:
+      # THE RUN'S OWN COMMIT (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Compare the vendored files with shadcn add
+        run: pnpm tsx scripts/ci/shadcn-drift.ts check

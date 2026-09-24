@@ -53,7 +53,7 @@ export default {
       // The programs .depot/workflows run (knip reads no Depot workflows); the modules beside them
       // get unused-export checks.
       entry: [
-        "ci/{create-release,do-duration-alert,do-duration-probe,loc-report,main-e2e-alert,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-tested-commit,sync-ci-telemetry,upload-test-telemetry}.ts",
+        "ci/{create-release,do-duration-alert,do-duration-probe,loc-report,main-e2e-alert,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-tested-commit,shadcn-drift,sync-ci-telemetry,upload-test-telemetry}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
         "depot-ci/dependencies.mjs",

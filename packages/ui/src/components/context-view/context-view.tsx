@@ -12,10 +12,10 @@
 // position-grade ephemera. Pure otherwise: every datum arrives as a prop from the SDK's hooks.
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, LayersIcon } from "lucide-react";
+import { cn } from "cn";
 import { Button } from "../button.tsx";
 import { Input } from "../input.tsx";
 import { Spinner } from "../spinner.tsx";
-import { cn } from "../../lib/utils.ts";
 import {
   contextViewFilterOf,
   RIGHT_EDGE_CLOSED,

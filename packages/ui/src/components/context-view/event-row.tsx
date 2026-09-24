@@ -4,7 +4,7 @@
 // and a glance at the payload's fields; Pretty + raw adds the raw line under it; Raw is the raw line.
 // What a line cuts the inspector (click) shows whole. The offset is in the time's tooltip and in
 // the inspector: people read the log by what happened, not by its numbers.
-import { cn } from "../../lib/utils.ts";
+import { cn } from "cn";
 import { actorLabel, payloadPreview, payloadSummary, shortEventType } from "./filters.tsx";
 import {
   type ContextViewEvent,

@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import type { ComponentProps, ComponentType, HTMLAttributes } from "react";
 import { Suspense, lazy, memo } from "react";
 import type { StreamdownProps } from "streamdown";

@@ -16,7 +16,7 @@ import { keymap } from "@codemirror/view";
 import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 
 export type SourceCodeBlockExtension = Exclude<
   NonNullable<ConstructorParameters<typeof EditorView>[0]>["extensions"],

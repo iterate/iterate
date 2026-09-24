@@ -3,7 +3,7 @@
 // blinking caret marks the tail.
 import { memo, useLayoutEffect, useRef } from "react";
 import { textGroupSize, type StreamText } from "@iterate-com/shared/chunked-text";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import { FullTextSnapshot } from "./full-text-snapshot.tsx";
 
 /** Sealed groups keep their React subtree; only the small append tail changes. */

@@ -25,7 +25,7 @@ export function ProcessorsPanel({
   const plain = processors.filter((row) => !row.hostedFacet);
   return (
     <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+      <SheetContent side="right" className="overflow-y-auto data-[side=right]:w-full sm:max-w-xl">
         <SheetHeader>
           <SheetTitle>Processors</SheetTitle>
           <SheetDescription>

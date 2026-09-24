@@ -14,11 +14,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
-import { toast } from "@iterate-com/ui/components/sonner";
+import { toast } from "sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import { cn } from "@iterate-com/ui/lib/utils";
+import { cn } from "cn";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   formatAgentUiDuration,
@@ -69,7 +69,7 @@ export function InspectorSheet({
     <Sheet open={!!inspected} onOpenChange={(open) => !open && onInspect(null)}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[min(92vw,64rem)] data-[side=right]:sm:max-w-[92vw]"
+        className="flex flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:w-[min(92vw,64rem)] data-[side=right]:sm:max-w-[92vw]"
       >
         {inspected?.kind === "llmRequest" ? (
           <LlmTraceContent

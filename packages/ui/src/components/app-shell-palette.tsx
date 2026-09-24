@@ -2,7 +2,16 @@
 // typing. The rows and the filter are app-shell-palette-entries.ts; this is the dialog, the
 // shortcut and the buttons that open it (the sidebar's "Search" row, and the header's on a phone,
 // where the sidebar is a sheet).
+//
+// command.tsx is vendored shadcn (packages/ui/AGENTS.md), so the palette's own look (#2991) lives
+// here, in the classNames it passes: flush rows edge to edge instead of upstream's inset, rounded
+// ones, and a borderless search row. Two parts are composed here instead: the search row is cmdk's
+// input under the palette's own markup, because upstream's CommandInput wraps it in an InputGroup
+// that takes no className; and the dialog is Dialog's parts, because upstream's CommandDialog puts
+// its sr-only title outside the popup, where a screen reader finds a "Search" heading on every page
+// even while the palette is closed.
 import { useEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { Command as CommandPrimitive } from "cmdk";
 import { CheckIcon, SearchIcon } from "lucide-react";
 import {
   filterPaletteEntries,
@@ -15,14 +24,13 @@ import type { AppShellProject } from "./app-shell.tsx";
 import { Button } from "./button.tsx";
 import {
   Command,
-  CommandDialog,
   CommandEmpty,
   CommandGroup,
-  CommandInput,
   CommandItem,
   CommandList,
   CommandShortcut,
 } from "./command.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./dialog.tsx";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./sidebar.tsx";
 
 type PaletteRow =
@@ -81,6 +89,7 @@ export function PaletteHeaderButton({ onOpen }: { onOpen: () => void }) {
       size="icon-sm"
       className="md:hidden"
       aria-label="Search"
+      title="Search"
       onClick={onOpen}
     >
       <SearchIcon />
@@ -108,27 +117,33 @@ export function AppShellPalette({
   onNavigate: ((href: string, event: MouseEvent<HTMLAnchorElement>) => void) | undefined;
 }) {
   return (
-    <CommandDialog
+    <Dialog
       open={Boolean(nav)}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
-      title="Search"
-      description="Switch project or go to a page"
-      // near the top, not centred: the list grows and shrinks under the input as you type
-      className="top-[12svh] translate-y-0 sm:max-w-lg"
     >
-      {nav ? (
-        <PaletteBody
-          nav={nav}
-          onClose={onClose}
-          projects={projects}
-          activeProjectId={activeProjectId}
-          projectHref={projectHref}
-          onNavigate={onNavigate}
-        />
-      ) : null}
-    </CommandDialog>
+      <DialogContent
+        showCloseButton={false}
+        // near the top, not centred: the list grows and shrinks under the input as you type
+        className="top-[12svh] translate-y-0 overflow-hidden p-0 sm:max-w-lg"
+      >
+        <DialogHeader className="sr-only">
+          <DialogTitle>Search</DialogTitle>
+          <DialogDescription>Switch project or go to a page</DialogDescription>
+        </DialogHeader>
+        {nav ? (
+          <PaletteBody
+            nav={nav}
+            onClose={onClose}
+            projects={projects}
+            activeProjectId={activeProjectId}
+            projectHref={projectHref}
+            onNavigate={onNavigate}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -180,21 +195,31 @@ function PaletteBody({
   );
   const groups = filterPaletteEntries([...navRows, ...projectRows], query);
   return (
-    <Command shouldFilter={false} loop>
-      <CommandInput
-        placeholder="Search projects and pages…"
-        aria-label="Search projects and pages"
-        value={query}
-        onValueChange={setQuery}
-      />
+    <Command shouldFilter={false} loop className="p-0">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <CommandPrimitive.Input
+          data-slot="command-input"
+          className="flex h-8 w-full min-w-0 bg-transparent text-sm outline-hidden placeholder:text-muted-foreground"
+          placeholder="Search projects and pages…"
+          aria-label="Search projects and pages"
+          value={query}
+          onValueChange={setQuery}
+        />
+      </div>
       <CommandList className="max-h-[min(24rem,60svh)] border-t">
-        <CommandEmpty>Nothing matches.</CommandEmpty>
+        <CommandEmpty className="text-muted-foreground">Nothing matches.</CommandEmpty>
         {groups.map(({ group, entries }) => (
-          <CommandGroup key={group} heading={group}>
+          <CommandGroup
+            key={group}
+            heading={group}
+            className="p-0 **:[[cmdk-group-heading]]:px-3 **:[[cmdk-group-heading]]:py-2"
+          >
             {entries.map((row) => (
               <CommandItem
                 key={row.id}
                 value={row.id}
+                className="rounded-none px-3 py-2 in-data-[slot=dialog-content]:rounded-none!"
                 onSelect={() => {
                   if (row.kind === "project") {
                     links.current.get(row.id)?.click();

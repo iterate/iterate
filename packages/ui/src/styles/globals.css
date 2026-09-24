@@ -1,5 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* shadcn's own Tailwind layer, which the vendored components are written against: the data-* variants
+   that match Base UI's attributes and skip a "false" value (cmdk renders data-selected="false"),
+   no-scrollbar, scroll-fade and shimmer. The `shadcn` devDependency pins it with the CLI.
+   https://ui.shadcn.com/docs/tailwind-v4 */
+@import "shadcn/tailwind.css";
 
 @source "../**/*.{ts,tsx}";
 /* Streamdown's built-in markdown components (headings, lists, tables…) carry
@@ -7,83 +12,12 @@
    https://streamdown.ai — "update your globals.css to include the following" */
 @source "../../node_modules/streamdown/dist/*.js";
 
-/* Light mode only (docs/frontend-development.md). Tailwind's default `dark:` follows the OS setting,
-   and Streamdown's dist, scanned above, carries `dark:` utilities, so the variant never matches.
-   https://tailwindcss.com/docs/dark-mode */
+/* Light mode only (docs/frontend-development.md). Tailwind's default `dark:` follows the OS setting;
+   the vendored shadcn components keep upstream's `dark:` classes, and Streamdown's dist, scanned
+   above, carries its own, so the variant never matches: `@media not all` is false everywhere. The
+   rules still ship (about 1.6 KB), which keeps the vendored files byte-identical to upstream.
+   https://tailwindcss.com/docs/dark-mode#toggling-dark-mode-manually */
 @custom-variant dark (@media not all);
-
-/* The part of shadcn/tailwind.css (the `shadcn` package, 4.21.0) the base-nova components are written
-   against: data-* variants that match Base UI's attributes and skip a "false" value (cmdk renders
-   data-selected="false"), and the no-scrollbar utility. Its unused utilities (scroll-fade, shimmer,
-   accordion keyframes) are left out. */
-@custom-variant data-open {
-  &:where([data-state="open"]),
-  &:where([data-open]:not([data-open="false"])) {
-    @slot;
-  }
-}
-
-@custom-variant data-closed {
-  &:where([data-state="closed"]),
-  &:where([data-closed]:not([data-closed="false"])) {
-    @slot;
-  }
-}
-
-@custom-variant data-checked {
-  &:where([data-state="checked"]),
-  &:where([data-checked]:not([data-checked="false"])) {
-    @slot;
-  }
-}
-
-@custom-variant data-unchecked {
-  &:where([data-state="unchecked"]),
-  &:where([data-unchecked]:not([data-unchecked="false"])) {
-    @slot;
-  }
-}
-
-@custom-variant data-selected {
-  &:where([data-selected="true"]) {
-    @slot;
-  }
-}
-
-@custom-variant data-disabled {
-  &:where([data-disabled="true"]),
-  &:where([data-disabled]:not([data-disabled="false"])) {
-    @slot;
-  }
-}
-
-@custom-variant data-active {
-  &:where([data-state="active"]),
-  &:where([data-active]:not([data-active="false"])) {
-    @slot;
-  }
-}
-
-@custom-variant data-horizontal {
-  &:where([data-orientation="horizontal"]) {
-    @slot;
-  }
-}
-
-@custom-variant data-vertical {
-  &:where([data-orientation="vertical"]) {
-    @slot;
-  }
-}
-
-@utility no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
 
 @theme inline {
   --color-background: var(--background);
