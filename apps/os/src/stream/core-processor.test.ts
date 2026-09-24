@@ -1061,6 +1061,19 @@ const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
     pushesF: false,
   },
   {
+    row: "a row that walks PAST the facet to a member's processEventBatch: walked, never pushed",
+    log: [configured(1, "p", "itx.facets.get('f').inner.processEventBatch")],
+    pushesF: false,
+  },
+  {
+    row: "a rule that turns the whole target, method included, into the push: the loop evaluates the head, which resolves nowhere",
+    log: [
+      rule(1, "itx.a.processEventBatch", `${facetF}.processEventBatch`),
+      configured(2, "s", "itx.a.processEventBatch"),
+    ],
+    pushesF: false,
+  },
+  {
     row: "a row pushing another context's facet `f` (`cd` resolves past `builtins.facets`)",
     log: [configured(1, "p", "itx.cd('/other').facets.get('f').processEventBatch")],
     pushesF: false,

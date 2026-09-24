@@ -853,7 +853,10 @@ export class FacetHost {
     // THE PROPS, read as the class is minted — only for a facet that starts: its identity, and
     // whether a row pushes it right now (`fedByPushes`, iterate/sdk FacetProps), so its engine trusts
     // the head a catch-up read until the next push. A row enabled after the start earns the same
-    // trust from its first push; a row removed after it takes a hosted facet with it.
+    // trust from its first push. The word is never taken back while the facet runs: a hosting row's
+    // removal deletes the facet (deleteFacetsWhoseHostingSubscriptionWasRemoved), but a row replaced
+    // or re-pointed by a rule leaves it running unpushed, trusting what it last read — as a facet
+    // pushed once already trusts its last push, word or no word.
     const propsAtStart = () =>
       ({
         iterateContextName: this.#deps.iterateContextName,

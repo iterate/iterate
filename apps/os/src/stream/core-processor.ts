@@ -175,17 +175,22 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
 }
 
 /** Does a live row PUSH this context's facet `facetName` every commit it consumes — a row not halted
- *  whose target resolves, through the rules alone, to `itx.builtins.facets.get(facetName…)
- *  .processEventBatch`, the delivery loop's push (subscription-delivery.ts)? What the facet host
- *  tells a facet as it starts (`fedByPushes`, iterate/sdk FacetProps): its processor's engine then
- *  trusts the head a catch-up read until the next push, instead of re-reading the log on every read.
- *  A row that addresses another context's facet (`cd`) resolves past `builtins.facets` and pushes
- *  none of this context's. */
+ *  that the delivery loop reads as the facet's push (subscription-delivery.ts
+ *  `#evaluateItxExpressionTargetHead`): a trailing `processEventBatch` past the root and one more
+ *  step is the method, and the HEAD before it resolves, through the rules alone, to exactly
+ *  `itx.builtins.facets.get(facetName…)`. What the facet host tells a facet as it starts
+ *  (`fedByPushes`, iterate/sdk FacetProps): its processor's engine then trusts the head a catch-up
+ *  read until the next push, instead of re-reading the log on every read — so this must never say
+ *  yes for a row the loop does not push: one that walks past the facet
+ *  (`…get(f).inner.processEventBatch`), or a rule that turns the whole target, method included,
+ *  into the push while its head resolves elsewhere. A row that addresses another context's facet
+ *  (`cd`) resolves past `builtins.facets` and pushes none of this context's. */
 export function facetIsPushedByARow(state: CoreState, facetName: string): boolean {
   return Object.values(state.subscriptions).some((row) => {
-    if (row.halted || row.target.at(-1) !== "processEventBatch") return false;
-    const resolved = resolveThroughState(state, row.target);
-    return !!resolved && builtInsGetStep(resolved, "facets")?.[1] === facetName;
+    if (row.halted || row.target.length <= 2 || row.target.at(-1) !== "processEventBatch")
+      return false;
+    const head = resolveThroughState(state, row.target.slice(0, -1));
+    return head?.length === 4 && builtInsGetStep(head, "facets")?.[1] === facetName;
   });
 }
 
