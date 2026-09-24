@@ -13,16 +13,18 @@ import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts"
 // edge is Cloudflare's ~10 s idle eviction; 20 s keeps twice that. 22 s sleep; 45 seconds bound the
 // deadline plus reconnect and assertions.
 //
-// KNOWN FLAKE, THE PLATFORM'S: the runtime sometimes holds an armed alarm 20–60 s past its time
-// (src/alarm-coordinator.ts, the overdue watch; 2026-09-24 on PR #2950's preview: this row's deadline
-// fired 20.7 s late). A resident actor's watch re-arms it within 5 s; this row's actor is evicted on
-// purpose, so nothing watches its alarm until the reconnect — and the reconnect waking it would void
-// the proof of dormancy. The pattern is exactly that case: no due event at the reconnect while the
-// context's alarm is armed for an instant already past (the WAIT_TIMEOUT's alarm story). An alarm
-// never armed ("armed for none") or not yet due ("in N ms") is a real failure.
+// KNOWN FLAKE, THE PLATFORM'S: the runtime sometimes holds an armed alarm past its time
+// (src/alarm-coordinator.ts, the overdue watch; 2026-09-24 on PR #2950's preview this row's deadline
+// fired 20.7 s late, and in soak qvs7pzv6rq 3.6 s late, delivered the instant the reconnect arrived).
+// A resident actor's watch passes it within 5 s; this row's actor is evicted on purpose, so nothing
+// watches its alarm until the reconnect, and a batch the reconnect's own incarnation commits voids
+// the proof of dormancy. The pattern is exactly that case, proven, not presumed: the batch committed
+// at or after the reconnect (or 3 s or more past its deadline — normal delivery is p99 4 ms) by a
+// pass whose alarm trace says it was armed for exactly this deadline. A pass armed for anything
+// else, or no batch at all, is a real failure.
 const platformHeldTheAlarm = createFlake(
   test,
-  /waitForEvent: no "job\/timed-out" event after offset \d+ within 1ms — alarm armed for \S+ \(\d+ ms ago\)/,
+  /the platform held this deadline's alarm \d+ ms past its time/,
   { timeoutMs: 44_000 },
 );
 
@@ -41,17 +43,35 @@ platformHeldTheAlarm(
     await sleep(22_000);
     const reconnectedAt = Date.now();
     const reconnected = openItx(ctx);
-    // Committed already, or the WAIT_TIMEOUT's alarm story (the flake's pattern, or a real failure).
+    // Committed already — or, when the platform held the alarm, by the reconnected actor.
     const first = await reconnected.waitForEvent({
       type: "job/timed-out",
       afterOffset: receipt.scheduledAtOffset,
-      timeoutMs: 1,
+      timeoutMs: 15_000,
     });
+    const heldMs = Date.parse(first.createdAt) - Date.parse(at);
+    if (Date.parse(first.createdAt) >= reconnectedAt || heldMs >= 3_000) {
+      // The pass that committed it ran in the incarnation this reconnect reached: its trace is in
+      // that incarnation's ring, and says what the alarm was armed for.
+      const { events: ring } = await reconnected.readEvents(receipt.scheduledAtOffset, 500, {
+        includeEphemeral: true,
+      });
+      const armedFor = ring.find(
+        (event: { type: string; payload: { reason?: string; dueSchedules?: number } }) =>
+          event.type === "events.iterate.com/stream/trace/alarm" &&
+          event.payload.reason === "alarm-fired" &&
+          (event.payload.dueSchedules ?? 0) > 0,
+      )?.payload.alarm.before;
+      if (armedFor === Date.parse(at))
+        throw new Error(`the platform held this deadline's alarm ${heldMs} ms past its time`);
+      throw new Error(
+        `the deadline's batch committed ${heldMs} ms past ${at} by a pass armed for ${armedFor}`,
+      );
+    }
     const events = await readAll(reconnected);
     const due = events.filter((event) => event.type === "job/timed-out");
     expect(due).toEqual([first]);
-    expect(Date.parse(due[0].createdAt)).toBeGreaterThanOrEqual(Date.parse(at));
-    expect(Date.parse(due[0].createdAt)).toBeLessThan(reconnectedAt);
+    expect(heldMs).toBeGreaterThanOrEqual(0);
     // THE DIRECT PROOF OF DORMANCY: before the deadline's event the DO woke exactly twice — born by
     // our request, then by its alarm as a new incarnation (never by a request of ours: the sessions
     // were disposed). The reconnect's own wake comes after `due` and is not counted.
