@@ -1,5 +1,5 @@
 import { startAppSession } from "iterate/app-server";
-import { sameOriginPath } from "iterate/lib";
+import { reportIssue, sameOriginPath } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import { clientDisplay } from "./client-display.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
@@ -7,6 +7,7 @@ import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import { isRetryableTransportError } from "./retryable-error.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
 import { redeemTestLink } from "./test-link.ts";
 
@@ -19,9 +20,17 @@ const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
  * identity provider's picture of the person, when it gave one (Google does).
  *
  * `{ error }` is the one modelled failure: the code exchange against the issuer's own public
- * `/oauth2/token` timed out (the browser session bounds it at 10 s). It logs
- * `issuer.platform-failure-sign-in`, and every caller sends the person back to the sign-in page
- * with the error; a fresh sign-in is the recovery. */
+ * `/oauth2/token` failed. A code is spent by the exchange that reached the token endpoint, so the
+ * exchange is never retried here; every caller sends the person back to the sign-in page with the
+ * error, and a fresh sign-in is the recovery. How the failure is logged is the split:
+ *  - a PLATFORM FAILURE (`codeExchangeFailure`) — the exchange timed out (the browser session
+ *    bounds it at 10 s), its call was cut at the transport (a Durable Object reset, a lost
+ *    connection), or the token endpoint answered a status instead of a token (a 500 when its own
+ *    grant checks failed) — logs a warn `issuer.platform-failure-sign-in` with its `reason`, which
+ *    the prd fault alarm counts;
+ *  - anything else is a defect of ours, reported at error level (`issuer.code-exchange-failed`),
+ *    which the prd fault alarm pages on. The person still lands on the sign-in page, not a 1101.
+ * The earlier steps' failures throw. */
 export async function startIssuerSession(
   env: Env,
   /** the sign-in request — its origin is the issuer on a deployment that named no `urls.os` */
@@ -83,19 +92,36 @@ export async function startIssuerSession(
     "code-exchange",
     flow.session.complete(new URL(approved.redirectTo).search),
   ).catch((error: unknown) => {
-    // workerd's RPC carries a DOMException across the session's hop as one, name and all
-    if (!(error instanceof DOMException && error.name === "TimeoutError")) throw error;
-    console.warn({
-      event: "issuer.platform-failure-sign-in",
-      name: "code-exchange",
-      message: error.message,
-      waitedMs: Date.now() - exchangeStarted,
-    });
+    const reason = codeExchangeFailure(error);
+    if (reason)
+      console.warn({
+        event: "issuer.platform-failure-sign-in",
+        name: "code-exchange",
+        reason,
+        message: error instanceof Error ? error.message : String(error),
+        waitedMs: Date.now() - exchangeStarted,
+      });
+    else
+      reportIssue("issuer.code-exchange-failed", error, {
+        waitedMs: Date.now() - exchangeStarted,
+      });
     return null;
   });
   if (!result) return { error: PLATFORM_FAILURE_MESSAGE };
   if (result.error) throw new Error(result.error);
   return { setCookie: flow.setCookie, location: result.next! };
+}
+
+/** Why a code exchange failed on the platform's side, or null when it did not (a defect of ours).
+ *  Read off what crosses the browser session's Durable Object RPC: workerd carries a DOMException
+ *  as one, name and all, stamps a cut call `retryable`, and the session names the token endpoint's
+ *  status in its own message (iterate/app-session.ts `#endOnDeadGrant`). */
+function codeExchangeFailure(error: unknown): "timeout" | "transport" | "token-endpoint" | null {
+  if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
+  if (isRetryableTransportError(error)) return "transport";
+  if (error instanceof Error && /^Iterate token exchange failed \(\d+\)/.test(error.message))
+    return "token-endpoint";
+  return null;
 }
 
 /** `GET /.auth/test-link?t=` (test-link.ts; routed by worker.ts on the platform origin): a
