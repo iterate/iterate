@@ -86,12 +86,12 @@ same internals (Supabase's situation), or a bundled tool with no type surface (W
 Revisit this if `@iterate-com/cli`, or a second SDK, starts needing SDK internals that user
 code should not see.
 
-**The CLI stays its own package.** `@iterate-com/cli` (#3004) ships the `iterate` command and
-uses the SDK the way any user does, through four public subpaths (`iterate/api`, `iterate/lib`,
-`iterate/node`, `iterate/oauth`). The SDK keeps the name `iterate` because code imports it: a
-Worker, a facet or a browser app that depends on `iterate` then installs no prompts, argument
-parser or macOS menu bar app, and the CLI, as an outside consumer, is held to the same `exports`
-map and lint rule as everyone else.
+**The CLI stays its own package.** `@iterate-com/cli` (#3004) ships the `iterate` command, and
+the name `iterate` stays with the SDK, which is what code imports. Keeping the command out of the
+SDK keeps the SDK light: a Worker, a facet or a browser app that depends on `iterate` installs no
+prompts, argument parser or macOS menu bar app. The CLI uses the SDK the way any user does,
+through four public subpaths (`iterate/api`, `iterate/lib`, `iterate/node`, `iterate/oauth`), so
+the `exports` map and the lint rule hold it to the same line as everyone else.
 
 ## The rule
 
@@ -121,9 +121,10 @@ After this change, the SDK's subpaths and who imports them:
 | `iterate/project-ingress`                                  | Project hostnames                                                                                                    | clients                   | dash, os, specs                      |
 
 Three subpaths are imported only by apps/os today: `iterate/expression`, `iterate/principal` and
-`iterate/oauth-scopes`. They stay public because the other subpaths' types refer to them (`api.ts` names `InvokeHandle`, `ItxExpressionInput`, `Principal`, the
-consent scopes and the ingress routing) and because apps/os's library tier builds its
-connectors on the codec and `InvokeHandle`, which is how a user's connector would do it.
+`iterate/oauth-scopes`. They stay public because the other subpaths' types refer to them
+(`api.ts` names `InvokeHandle`, `ItxExpressionInput`, `Principal`, the consent scopes and the
+ingress routing) and because apps/os's library tier builds its connectors on the codec and
+`InvokeHandle`, which is how a user's connector would do it.
 
 ## What the change does
 
@@ -154,7 +155,7 @@ connectors on the codec and `InvokeHandle`, which is how a user's connector woul
 (`@iterate-com/shared/config-repo-template/github`). This change keeps it there. By the rule
 above both would sit in apps/os: only the platform's Worker runs them (the repo facet, the
 project facet's template download and `session.projects.create`'s pin), and apps/os's e2e fake
-remote and seed script are its only other users. apps/dash imports only the template reference
+remote and seed script are their only other users. apps/dash imports only the template reference
 parser. Leaving them in packages/shared does not cross the line this file draws, because
 packages/shared is private, user code never sees it and neither module imports the platform.
 Move them into apps/os if packages/shared's charter is narrowed to "code more than one app runs".
