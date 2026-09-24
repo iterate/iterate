@@ -133,7 +133,7 @@ function ProjectSecrets() {
     try {
       await api.projects.get(project.id).secrets.delete(secretPath);
       setStatus(`${secretPath} is deleted.`);
-      await router.invalidate();
+      await router.invalidate({ sync: true });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -304,7 +304,7 @@ function ProjectSecrets() {
             onDone={async (message) => {
               setError(null);
               setStatus(message);
-              await router.invalidate();
+              await router.invalidate({ sync: true });
               await closeSheet();
             }}
           />

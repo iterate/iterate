@@ -92,7 +92,7 @@ function SessionsPage() {
       setMinted({ name, token, expiresAt });
       setCopied(false);
       setTokenName("");
-      await router.invalidate();
+      await router.invalidate({ sync: true });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {

@@ -120,7 +120,7 @@ function AgentsPage() {
               // The SDK models the public API as promises; capnweb's stub has the
               // same runtime methods with additional pipelining types.
               await installAgents(itx as unknown as IterateContextApi, agentRuntime);
-              await router.invalidate();
+              await router.invalidate({ sync: true });
               return;
             }
             await itx.invoke(["itx", "agents", ["create", path]]);

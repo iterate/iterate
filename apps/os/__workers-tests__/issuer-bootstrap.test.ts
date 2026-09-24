@@ -5,6 +5,7 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
 import { authorizationCodeRequest } from "iterate/oauth";
 import { platformAddressesOf } from "../src/app-config.ts";
+import type { UserRecord } from "../src/control-plane/catalog.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers } from "../src/oauth.ts";
@@ -35,7 +36,7 @@ test("first consent creates organization and project through the ordinary sessio
   const next = flow.url.pathname + flow.url.search;
   // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
   const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, next, { picture });
+  const login = await issuerSignIn(user, next, { picture });
   expect(login).toMatchObject({ location: next });
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
@@ -153,7 +154,7 @@ test("first consent creates organization and project through the ordinary sessio
 test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
   fetchReachesThisWorker();
   const user = await person("copied-client@example.com");
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
     issuer: ORIGIN,
@@ -226,7 +227,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
   using apexProject = await theirs.projects.create({ project: "custom-apex-project" });
   using _other = await theirs.projects.create({ project: "custom-apex-other" });
   const apexProjectId = (await apexProject.whoami()).projectId;
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
     issuer: ORIGIN,
@@ -246,7 +247,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
   fetchReachesThisWorker();
   const user = await person("ticked-scopes@example.com");
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const org = await issuer.organizations.create({ name: "Ticked scopes organization" });
   using project = await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
@@ -319,7 +320,7 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
   fetchReachesThisWorker();
   const user = await person("consent-checks@example.com");
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
   const api = await connect(headers);
   const flow = await authorizationCodeRequest({
@@ -387,7 +388,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
 test("consent omits missing, insecure and credential-bearing branding URLs", async () => {
   fetchReachesThisWorker();
   const user = await (await operator()).users.create({ email: "branding-urls@example.com" });
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   for (const url of [
     undefined,
@@ -439,7 +440,7 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
     return exports.default.fetch(request);
   });
   const user = await (await operator()).users.create({ email: "branding-cimd@example.com" });
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
     issuer: ORIGIN,
@@ -461,7 +462,7 @@ test("the consent page renders on the server, and Authorize posts the choice to 
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },
   );
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, "/");
+  const login = await issuerSignIn(user, "/");
   const cookie = login.setCookie.split(";")[0]!;
   const flow = await authorizationCodeRequest({
     issuer: ORIGIN,
@@ -524,6 +525,17 @@ test("the consent page renders on the server, and Authorize posts the choice to 
   expect(await app.info()).toMatchObject({ scopes: ["iterate"] });
   expect((await app.projects.list()).map((listed) => listed.id)).toEqual([project.id]);
 });
+
+/** `user`'s issuer session, as a sign-in starts it; this lane's code exchange reaches the worker. */
+async function issuerSignIn(
+  user: UserRecord,
+  next: string,
+  extras?: Parameters<typeof startIssuerSession>[4],
+) {
+  const login = await startIssuerSession(env, new Request(ORIGIN), user, next, extras);
+  if ("error" in login) throw new Error(login.error);
+  return login;
+}
 
 /** An admin session — `as` the person `email` names, when given — disposed when the test finishes. */
 function operator(email?: string) {

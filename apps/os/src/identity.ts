@@ -139,6 +139,11 @@ export async function identityResponse(request: Request, env: Env) {
       picture: identity.data.picture,
       name: identity.data.name,
     });
+    if ("error" in session) {
+      const query = new URLSearchParams({ next: flow.data.next, error: session.error });
+      headers.set("Location", `/login?${query}`);
+      return new Response(null, { status: 303, headers });
+    }
     headers.append("Set-Cookie", session.setCookie);
     headers.set("Location", session.location);
     return new Response(null, { status: 303, headers });
