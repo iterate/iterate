@@ -2,7 +2,7 @@
 // the sign-in page's password step (`login.password`, src/app-config.ts — the local worker's is
 // scripts/dev.ts's, a deployment's is handed to the run as LOGIN_PASSWORD) is how these sign in.
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "iterate/next/oauth";
@@ -52,8 +52,8 @@ test("first Claude consent creates the organization and project on the consent p
       .end("<h1>Claude authorization completed</h1>");
     receiveCallback(url);
   });
-  await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
-  const redirectUri = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/callback`;
+  // Chromium refuses the same bad ports fetch does (ERR_UNSAFE_PORT) when it follows the redirect.
+  const redirectUri = `http://127.0.0.1:${await listenOnFetchSafePort(listener)}/callback`;
   const flow = await authorizationCodeRequest({
     issuer: origin,
     clientId: claudeClient,

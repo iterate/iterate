@@ -7,7 +7,7 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { pkceS256 } from "./seal.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,

@@ -10,6 +10,7 @@ on:
     paths:
       - .depot/workflows/deploy-dummy-petshop.yml
       - apps/dummy-petshop/**
+      - packages/shared/**
       - envs.ts
       - scripts/lib/**
       - pnpm-lock.yaml
