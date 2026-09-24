@@ -4,7 +4,7 @@
 import { grandfatherRule } from "./grandfather-rule.ts";
 
 export const noShoutingConstants = grandfatherRule({
-  allowedUpTo: new Date("2026-11-10"),
+  allowedUpTo: new Date("2026-09-10T10:04:56Z"),
   meta: {
     /* normal rule metadata */
   },
@@ -14,7 +14,7 @@ export const noShoutingConstants = grandfatherRule({
 });
 
 // Or wrap a pre-built StrictRule:
-const wrapped = grandfatherRule({ allowedUpTo: new Date("2026-11-10"), ...existingRule });
+const wrapped = grandfatherRule({ allowedUpTo: new Date("2026-09-10T10:04:56Z"), ...existingRule });
 ```
 
 Reports at or before the cutoff are suppressed using the start line's Git
@@ -39,6 +39,6 @@ Shallow boundary lines are also checked because their true age is unknown;
 the CI lint job fetches full history. Unexpected Git failures stop linting
 instead of silently granting exemptions. No Git fetch or write is performed.
 
-The shouting rule uses the example cutoff above. Until that date, committing
-an edit can make it exempt even though it was flagged while uncommitted. Use
-a past rollout timestamp when the goal is to block every new committed edit.
+Use the rule's rollout instant, in UTC, as its cutoff. A future cutoff exempts
+every line committed before it, so CI, which lints committed lines, could not
+fail on the rule until then; grandfather-rule.test.ts fails on one.

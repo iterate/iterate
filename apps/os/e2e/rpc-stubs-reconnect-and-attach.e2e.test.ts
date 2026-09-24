@@ -171,8 +171,6 @@ test.fails("an EXPRESSION handle disposed after another session provided the IDE
 // so the rule / the row has a LOWER offset than the key's `attached` ──
 
 const ATTACHED = "events.iterate.com/rpc-stub/attached";
-const RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
-const SUBSCRIPTION_CONFIGURED = "events.iterate.com/stream/subscription-configured";
 
 /** A live watcher of presence: the ephemeral `rpc-stub/attached` events, WITH their offsets. */
 async function watchAttached(ctx: string) {
@@ -195,7 +193,9 @@ test("provide(match, stub): the rule is appended INSIDE the pager attach — its
     attachedOffsetOf("itx.pinned"),
   );
   const ruleEvent = (await readAll(observer)).find(
-    (e) => e.type === RULE_CONFIGURED && ruleMatchAtRest(e) === "itx.pinned",
+    (e) =>
+      e.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+      ruleMatchAtRest(e) === "itx.pinned",
   );
   expect(ruleEvent?.payload.target).toEqual(["itx", "builtins", "rpcStubs", ["get", "itx.pinned"]]);
   // THE PIN: the DO appended the rule while accepting the pager, before it announced presence.
@@ -216,7 +216,8 @@ test("subscribe({ target: fn }): the row is appended INSIDE the pager attach —
     attachedOffsetOf("subscription:live"),
   );
   const rowEvent = (await readAll(observer)).find(
-    (e) => e.type === SUBSCRIPTION_CONFIGURED && e.payload?.name === "live",
+    (e) =>
+      e.type === "events.iterate.com/stream/subscription-configured" && e.payload?.name === "live",
   );
   expect(rowEvent?.payload.target).toEqual([
     "itx",

@@ -11,7 +11,6 @@ test("mechanical-class-impl fixes implementation signatures from the TypeScript 
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -66,7 +65,6 @@ test("mechanical-class-impl reads methods from mapped helper implementations", (
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -116,7 +114,6 @@ test("mechanical-class-impl supports direct interface implementations", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -163,7 +160,6 @@ test("mechanical-class-impl allows omitted implementation params", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -217,7 +213,6 @@ test("mechanical-class-impl allows simple implementation param types", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -272,7 +267,6 @@ test("mechanical-class-impl fixes class field arrow implementations", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -319,7 +313,6 @@ test("type-aware lint service refreshes changed files without restarting the pro
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
   const service = new TypeAwareLintService({ cwd: fixture.root });
@@ -374,7 +367,6 @@ test("type-aware lint service keeps all open files in snapshot updates", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "off",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
   const service = new TypeAwareLintService({ cwd: fixture.root });
@@ -400,7 +392,6 @@ test("type-aware lint service can read unsaved text overlays", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
   const service = new TypeAwareLintService({ cwd: fixture.root });
@@ -457,7 +448,6 @@ test("mechanical-class-impl reports only the method params when params are not m
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -497,7 +487,6 @@ test("mechanical-class-impl reports only the return type when return type is dis
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -537,7 +526,6 @@ test("mechanical-class-impl follows arbitrary helper wrappers", () => {
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -587,7 +575,6 @@ test("mechanical-class-impl preserves defaults in nested helper implementations"
     tsconfig: true,
     rules: {
       "iterate/mechanical-class-impl": "error",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 
@@ -638,7 +625,6 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   using fixture = createOxlintFixture({
     tsconfig: true,
     rules: {
-      "iterate/mechanical-class-impl": "off",
       "iterate/typed-no-floating-promises": "error",
     },
   });
@@ -667,13 +653,46 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   expect(output).not.toMatch(/6:1/);
 });
 
+test("typed-no-floating-promises and simple-truthiness-check share one type-aware snapshot across files", () => {
+  // Both rules armed together, as .oxlintrc.json arms them: one rule must never dispose the
+  // snapshot the other is reading from ("Error running JS plugin … snapshot N not found").
+  using fixture = createOxlintFixture({
+    tsconfig: true,
+    rules: {
+      "iterate/simple-truthiness-check": "error",
+      "iterate/typed-no-floating-promises": "error",
+    },
+  });
+  for (const name of ["a", "b", "c"])
+    fixture.write(
+      `${name}.ts`,
+      [
+        "async function returnsPromise(): Promise<void> {}",
+        "declare const input: { label?: string };",
+        "returnsPromise();",
+        'export const label = input.label ?? "Default";',
+        "",
+      ].join("\n"),
+    );
+
+  const diagnostics = fixture.diagnostics(["a.ts", "b.ts", "c.ts"]);
+
+  expect(
+    diagnostics.map((diagnostic) => `${diagnostic.filename} ${diagnostic.code}`).sort(),
+  ).toEqual(
+    ["a.ts", "b.ts", "c.ts"].flatMap((file) => [
+      `${file} iterate(simple-truthiness-check)`,
+      `${file} iterate(typed-no-floating-promises)`,
+    ]),
+  );
+});
+
 test("contract-package-imports permits Cloudflare only in the worker-only contract module", () => {
   using fixture = createOxlintFixture({
     tsconfig: true,
     rules: {
       "iterate/contract-package-imports": "error",
       "iterate/mechanical-class-impl": "off",
-      "iterate/typed-no-floating-promises": "off",
     },
   });
 

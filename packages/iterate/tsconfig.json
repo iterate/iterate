@@ -16,6 +16,12 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src/cli.ts", "src/next-node.ts", "src/cli.test.ts"],
+  "include": [
+    "src/cli.ts",
+    "src/next-node.ts",
+    "src/cli.test.ts",
+    "tsdown.config.ts",
+    "vitest.config.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

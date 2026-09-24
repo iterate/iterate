@@ -11,6 +11,7 @@ import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { stub } from "./support.ts";
 
+/** The loaded Durable Object class the facet is built from: it reports what its ctx carries. */
 const PROBE_SRC = /* js */ `
 import { DurableObject } from "cloudflare:workers";
 export class ProbeDurableObject extends DurableObject {

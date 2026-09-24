@@ -532,7 +532,6 @@ export default class Waiter extends WorkerEntrypoint {
 
 const OPT_IN = process.env.RUN_WAKE_LOOP_PROBE === "1";
 const probe = test.skipIf(projectHostsAreLocal() || !OPT_IN);
-const WOKEN = "events.iterate.com/stream/woken";
 
 /** A cursor target that ALWAYS throws a plain (retryable) error — the stuck delivery whose retry
  *  ladder self-wakes fastest (the stream keeps its cursor; an entrypoint cannot own progress). */
@@ -597,7 +596,7 @@ probe(
         disposeSessions();
       }
       const events = await readAll(openItx(ctx));
-      const wokens = events.filter((e) => e.type === WOKEN);
+      const wokens = events.filter((e) => e.type === "events.iterate.com/stream/woken");
       console.log(
         `wake-loop OBSERVE: woken=${wokens.length} reasons=${JSON.stringify(wokens.map((e) => (e.payload as { reason?: string }).reason))}`,
       );

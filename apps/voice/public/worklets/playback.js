@@ -9,7 +9,6 @@
 // rule: audio arriving that soon after a starve means the answer was still going, so the pipe
 // genuinely ran dry mid-speech; running dry at the end of an answer is just the end.
 const PREFILL_SAMPLES = 16000 * 0.2; // 200 ms at 16 kHz
-const STARVE_WINDOW_S = 1;
 class PlaybackProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -29,8 +28,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this.primed = false;
         this.ranDryAt = -1;
       } else if (message.type === "push") {
-        if (this.ranDryAt >= 0 && currentTime - this.ranDryAt < STARVE_WINDOW_S)
-          this.underruns += 1;
+        if (this.ranDryAt >= 0 && currentTime - this.ranDryAt < 1) this.underruns += 1;
         this.ranDryAt = -1;
         this.queue.push(message.pcm);
         this.queued += message.pcm.length;

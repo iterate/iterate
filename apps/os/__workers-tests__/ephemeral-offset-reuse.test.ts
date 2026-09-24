@@ -11,7 +11,8 @@ import { expect, test } from "vitest";
 import type { ItxExpression } from "iterate/next/expression";
 import { releasePins, stub } from "./support.ts";
 
-const COUNTER_SRC = /* js */ `
+const COUNTER_MODULES = {
+  "cap.js": /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "counter", version: "1.0.0", description: "counts durable events",
@@ -24,8 +25,10 @@ class CounterProcessor extends StreamProcessor {
 export class CounterDurableObject extends StreamProcessorDurableObject {
   processor = new CounterProcessor();
 }
-`;
-const DIGEST_SRC = /* js */ `
+`,
+};
+const DIGEST_MODULES = {
+  "cap.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Digest extends WorkerEntrypoint {
   async processEventBatch(events, range) {
@@ -35,7 +38,8 @@ export default class Digest extends WorkerEntrypoint {
     await itx.kv.put("digested", JSON.stringify(seen));
   }
 }
-`;
+`,
+};
 type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: number };
 const page = async (ctx: string): Promise<Page> =>
   (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
@@ -47,8 +51,6 @@ const hostedFacet = (source: Record<string, string>, cls: string, name: string):
   "facets",
   ["get", name, { source, className: cls }],
 ];
-const COUNTER_MODULES = { "cap.js": COUNTER_SRC };
-const DIGEST_MODULES = { "cap.js": DIGEST_SRC };
 
 test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor along in memory and persists nothing past the durable mark; after the release + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";

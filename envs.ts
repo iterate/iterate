@@ -4,7 +4,7 @@ import type { IngressRouting } from "./packages/iterate/src/next/project-ingress
 
 /** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
  * dev/preview shares one account; use its preview credentials, not a preview slot. */
-export const cloudflareAccounts = {
+const cloudflareAccounts = {
   prd: {
     cloudflareAccountId: "04b3b57291ef2626c6a8daa9d47065a7",
     dopplerProject: "_shared",
@@ -62,7 +62,7 @@ export const kitEnvs = {
 
 /** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
-export const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
+const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
 export interface OsEnv {
   cloudflareAccountId: string;

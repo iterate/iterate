@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
@@ -165,6 +165,21 @@ test("rejects invalid cutoff dates", () => {
   expect(() => grandfatherRule({ allowedUpTo: new Date("invalid"), create: () => ({}) })).toThrow(
     "valid allowedUpTo date",
   );
+});
+
+test("every cutoff in the plugin is past, so no committed violation is exempt by date alone", () => {
+  // A future cutoff exempts every line committed before it, so CI (which lints committed lines)
+  // cannot fail on the rule until that date: lint/grandfather-rule.md.
+  const cutoffs = readdirSync(import.meta.dirname, { recursive: true, encoding: "utf8" })
+    .filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts"))
+    .flatMap((path) => [
+      ...readFileSync(join(import.meta.dirname, path), "utf8").matchAll(
+        /allowedUpTo(?::| =) new Date\("([^"]+)"\)/gi,
+      ),
+    ])
+    .map((match) => match[1]!);
+  expect(cutoffs.length).toBeGreaterThan(0);
+  expect(cutoffs.filter((cutoff) => new Date(cutoff).getTime() > Date.now())).toEqual([]);
 });
 
 const repoRoot = resolve(import.meta.dirname, "..");

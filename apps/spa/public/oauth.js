@@ -6,14 +6,14 @@
 const PENDING = "iterate-spa:pending";
 const SESSION = "iterate-spa:session";
 
-export async function discover(issuer) {
+async function discover(issuer) {
   const response = await fetch(`${issuer}/.well-known/oauth-authorization-server`);
   if (!response.ok) throw new Error(`${issuer} is not an OAuth issuer (${response.status})`);
   return response.json();
 }
 
 /** Where the issuer sends the browser back: this page, exactly. */
-export function redirectUri() {
+function redirectUri() {
   return new URL(location.pathname, location.origin).href;
 }
 

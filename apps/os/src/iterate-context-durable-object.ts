@@ -299,7 +299,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // the same time, no write, and a stale one is superseded). Null while an alarm is being
     // delivered (workerd hides a firing alarm for the whole run), so the wake record is NOT written
     // here: the first entry point to run names the wake (`appendWakeRecord` — `alarm()` says "alarm").
-    this.ctx.blockConcurrencyWhile(async () => {
+    // Not awaited: a constructor cannot, and the runtime holds every event until this settles.
+    void this.ctx.blockConcurrencyWhile(async () => {
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
       // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
       // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the

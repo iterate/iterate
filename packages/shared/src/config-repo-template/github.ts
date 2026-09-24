@@ -17,7 +17,6 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_COUNT = 500;
 const MAX_GITHUB_RESPONSE_BYTES = 12 * 1024 * 1024;
 const MAX_TEMPLATE_BYTES = 10 * 1024 * 1024;
-const REQUEST_TIMEOUT_MS = 15_000;
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 type GithubFetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -179,7 +178,7 @@ async function fetchGithub(
         "User-Agent": "git/2.45.0 (iterate-config-template)",
       },
       method: "POST",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(15_000),
     });
   } catch (error) {
     throw new RetryableRepoCreationError("GitHub could not be reached.", { cause: error });

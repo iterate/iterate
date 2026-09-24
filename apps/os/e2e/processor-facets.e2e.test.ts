@@ -47,7 +47,6 @@ import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 /** ONE event type for the rewrite-rule table: a set and an un-set (`target: null`) alike. */
 const RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
-const CONFIGURED = "events.iterate.com/stream/subscription-configured";
 
 test("facet spine: cold catch-up + driven reduces + the subscriptions table lists the processor", async () => {
   const itx = openItx(freshCtx("facet"));
@@ -60,7 +59,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   // Cold catch-up counts the pre-enable rule and tally's own enablement.
   // Both are subscriptions, NOT rewrite rules (an enablement is a subscription).
   expect(s1.state?.counts?.[RULE_CONFIGURED]).toBe(1);
-  expect(s1.state?.counts?.[CONFIGURED]).toBe(1);
+  expect(s1.state?.counts?.["events.iterate.com/stream/subscription-configured"]).toBe(1);
 
   // two more rules + one un-set AFTER enabling — the push path
   await itx.provide("itx.a", "itx.kv");

@@ -47,9 +47,6 @@ importers:
       '@tanstack/eslint-plugin-router':
         specifier: ^1.139.0
         version: 1.161.4(eslint@9.39.3(jiti@2.7.0))(typescript@5.9.3)
-      '@tanstack/router-generator':
-        specifier: 1.166.17
-        version: 1.166.17
       '@types/node':
         specifier: ^24.10.1
         version: 24.11.0
