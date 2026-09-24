@@ -1,15 +1,14 @@
 // alarm-coordinator.ts — THE ONE NATIVE ALARM of a context, derived: it holds no deadline of its
 // own. `reconcile()` asks the deadline sources — the earliest pending schedule (core state), the
 // earliest cursor-row claim (subscription-delivery.ts), the claims of hosted processors (the DO),
-// the residency watchdog and the unclaimed-facet sweep (both context/residency.ts) — and arms the
-// earliest, or deletes the alarm when they report none. Every durable reason is derivable at
-// construction (a schedule is durable, a cursor row is durable and the log is, a claim is a kv
-// row); the watchdog and the sweep are in memory on purpose — each watches the incarnation that
-// armed it, and a fresh one has nothing to watch. So the alarm read from storage is only the DEDUPE
-// SEED: the constructor's first reconcile derives the same time (no write) or supersedes it — and a
-// stored time no source still wants (one a dead incarnation left, its watchdog's or sweep's
-// included) is rightly superseded, even though workerd then cancels the run it would have started
-// (nothing durable was due).
+// the unclaimed-facet sweep (context/residency.ts) — and arms the earliest, or deletes the alarm
+// when they report none. Every durable reason is derivable at construction (a schedule is durable,
+// a cursor row is durable and the log is, a claim is a kv row); the sweep is in memory on purpose —
+// it watches the incarnation that armed it, and a fresh one has nothing to watch. So the alarm read
+// from storage is only the DEDUPE SEED: the constructor's first reconcile derives the same time (no
+// write) or supersedes it — and a stored time no source still wants (one a dead incarnation left,
+// its sweep's included) is rightly superseded, even though workerd then cancels the run it would
+// have started (nothing durable was due).
 // ONE HOLD: nothing is written while the pass's WORK runs — its own alarm stays stored, so a pass
 // that dies is retried by the runtime, and the next deadline is set ONCE, at the pass's end.
 // No clamp: the runtime clamps a past time to now. Every `setAlarm` call bills a write unit, so the

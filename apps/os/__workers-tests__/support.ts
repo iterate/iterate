@@ -7,7 +7,6 @@ import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, onTestFinished, vi } from "vitest";
-import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
@@ -196,19 +195,11 @@ export async function releasePins(ctx: string): Promise<void> {
   });
 }
 
-/** THE ALARM A CONTEXT OWES, from its physical alarm: null when there is none or it is only one of
- *  the running incarnation's in-memory deadlines (`inMemory`, the DO's `inMemoryAlarmDeadlines()`:
- *  the residency watchdog's, src/context/residency-watchdog.ts, and the unclaimed-facet sweep's,
- *  armed once a loaded facet is materialized) — neither is an obligation. A watchdog deadline an
- *  evicted incarnation left is no obligation either: every inbound call arms it a whole window out,
- *  a row here runs for seconds and every obligation it can create is owed within minutes, so an
- *  alarm more than half a window out is the watchdog's. */
+/** THE ALARM A CONTEXT OWES, from its physical alarm: null when there is none or it is only the
+ *  running incarnation's in-memory deadline (`inMemory`, the DO's `inMemoryAlarmDeadlines()`: the
+ *  unclaimed-facet sweep's, armed once a loaded facet is materialized) — no obligation. */
 export const owedAlarm = (alarm: number | null, inMemory: (number | null)[] = []): number | null =>
-  alarm !== null &&
-  !inMemory.includes(alarm) &&
-  alarm - Date.now() < RESIDENCY_WATCHDOG_WINDOW_MS / 2
-    ? alarm
-    : null;
+  alarm !== null && !inMemory.includes(alarm) ? alarm : null;
 
 /** `owedAlarm` of a context, read inside its DO: the physical alarm beside the running incarnation's
  *  in-memory deadlines. */
