@@ -7,7 +7,8 @@
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
-//   • a tunnel killed outright leaves its route standing and answering 502, "not connected", with
+//   • a tunnel killed outright closes a visitor's WebSocket at once, 1001 "tunnel disconnected",
+//     and leaves its route standing and answering 502, "not connected", with
 //     `x-iterate-ingress-route-offline` naming the route
 // The proxy's own behaviour (headers, bodies, frames) is packages/cli src/tunnel.test.ts; the route
 // and the subprotocol through the platform, e2e/ingress-routes.e2e.test.ts.
@@ -108,8 +109,17 @@ test(
       closeCode: null,
     });
 
-    // killed outright: nothing deletes the route, and its target is not connected
+    // killed outright: a visitor's socket closes at once — the relay knows its provider is gone —
+    // nothing deletes the route, and its target is not connected
+    const visitor = await openSocket(publicUrl);
+    const killedAt = Date.now();
     await publicTunnel.stop("SIGKILL");
+    const visitorClosed = await visitor.closed;
+    expect({ ...visitorClosed, afterMs: visitorClosed.at - killedAt }).toMatchObject({
+      code: 1001,
+      reason: "tunnel disconnected",
+      afterMs: expect.toSatisfy((ms: number) => ms < 2_000),
+    });
     expect(
       await untilValue(
         "the killed tunnel answers 502",
@@ -164,6 +174,21 @@ async function echoesAcrossContextReset(url: URL, reset: () => Promise<unknown>)
   );
   socket.close(1000, "done");
   return { echoes, closeCode };
+}
+
+/** A WebSocket open on `url`, and when and how it closed. */
+async function openSocket(url: URL) {
+  const socket = projectUrlSocket(url);
+  const closed = new Promise<{ code: number; reason: string; at: number }>((resolve) =>
+    socket.addEventListener("close", (event) =>
+      resolve({ code: event.code, reason: event.reason, at: Date.now() }),
+    ),
+  );
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => resolve());
+    socket.addEventListener("error", () => reject(new Error("the WebSocket did not open")));
+  });
+  return { closed };
 }
 
 /** The local server a tunnel serves: `local <path>` over HTTP, and a WebSocket choosing `vite-hmr`

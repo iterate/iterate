@@ -10,6 +10,7 @@ import {
   FETCH_UPGRADE_UNACKED_MAX_BYTES,
   FetchUpgradeSpliceEnd,
   type FetchUpgradeSpliceEvent,
+  reportFetchUpgradeSpliceEvent,
 } from "./fetch-upgrade-splice.ts";
 
 test("frames flow both ways, text as text and binary as binary, and the provider's greeting sent before the visitor's side exists arrives", async () => {
@@ -116,6 +117,31 @@ test("an orderly close on either socket closes the other with its code and reaso
   });
 });
 
+// A tunnel killed outright (`kill -9` on the CLI) ends its capnweb session, and the provider's socket
+// on the relay closes without a status (capnweb's tunneled socket, on the session's end) or fails.
+// The relay knows the provider is gone: the visitor's socket closes at once, not at the deadline.
+test.for([
+  { name: "closes without a status (1006)", end: (provider: FakeSocket) => provider.other.cut() },
+  {
+    name: "fails",
+    end: (provider: FakeSocket) => provider.other.emit("error", {}),
+  },
+])(
+  "the provider's socket $name — its tunnel's session ended: the visitor's socket closes at once, 1001 tunnel disconnected",
+  async ({ end }) => {
+    vi.useFakeTimers();
+    using splice = spliced();
+    splice.connectEyeball();
+    await vi.advanceTimersByTimeAsync(0);
+    end(splice.provider);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(splice).toMatchObject({
+      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
+      reports: [],
+    });
+  },
+);
+
 test("the visitor closes while the context is down: its code and reason reach the provider once the ends resume, after the frames it sent first", async () => {
   vi.useFakeTimers();
   using splice = spliced();
@@ -129,6 +155,72 @@ test("the visitor closes while the context is down: its code and reason reach th
     closed: { code: 4002, reason: "page closed" },
   });
 });
+
+// `itx.abort()` records `context/aborted` and then resets the context: a deliberate reset, not a
+// platform failure. The incarnation it began names that record on every 101 it answers, and an end
+// whose re-dial finds a record its old socket's incarnation did not name reports it.
+test("a recorded itx.abort() resets the context: both ends resume and report the abort's record; a later drop in the same incarnation is a platform failure again", async () => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  splice.context.reset({ deployId: "deploy-1", downForMs: 0, contextAbortedOffset: 41 });
+  await vi.advanceTimersByTimeAsync(0);
+  splice.context.drop("leg");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(splice).toMatchObject({
+    reports: [
+      { type: "resumed", deployReset: false, contextAbortedOffset: 41 },
+      { type: "resumed", deployReset: false, contextAbortedOffset: 41 },
+      { type: "resumed", deployReset: false, contextAbortedOffset: null },
+      { type: "resumed", deployReset: false, contextAbortedOffset: null },
+    ],
+  });
+});
+
+test.for([
+  {
+    resumed: "after a deploy's reset",
+    deployReset: true,
+    contextAbortedOffset: null,
+    logged: { level: "info", event: "fetch-upgrade.deploy-reset-resumed" },
+  },
+  {
+    resumed: "after a recorded itx.abort()",
+    deployReset: false,
+    contextAbortedOffset: 41,
+    logged: { level: "info", event: "fetch-upgrade.context-abort-resumed" },
+  },
+  {
+    resumed: "after anything else",
+    deployReset: false,
+    contextAbortedOffset: null,
+    logged: { level: "warn", event: "fetch-upgrade.platform-failure-resumed" },
+  },
+])(
+  "a resume $resumed is logged as $logged.event ($logged.level)",
+  ({ deployReset, contextAbortedOffset, logged }) => {
+    const lines: { level: string; event: unknown }[] = [];
+    const info = vi.spyOn(console, "info").mockImplementation((line: { event: unknown }) => {
+      lines.push({ level: "info", event: line.event });
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation((line: { event: unknown }) => {
+      lines.push({ level: "warn", event: line.event });
+    });
+    reportFetchUpgradeSpliceEvent({
+      type: "resumed",
+      side: "leg",
+      upgradeId: "upgrade-1",
+      downMs: 200,
+      dials: 1,
+      resent: 0,
+      deployReset,
+      contextAbortedOffset,
+    });
+    info.mockRestore();
+    warn.mockRestore();
+    expect(lines).toEqual([logged]);
+  },
+);
 
 test("the platform cuts every socket, and a stale close reaches the context after the edge re-dialed but before the relay did: it closes the re-dialed socket once, the edge re-dials again, and nothing is lost", async () => {
   vi.useFakeTimers();
@@ -260,6 +352,8 @@ function socketPair(): [FakeSocket, FakeSocket] {
  *  delivered, as a dead socket does in the runtime. */
 class FakeContext {
   deployId = "deploy-1";
+  /** The `context/aborted` whose reset began this incarnation (null: none). */
+  contextAbortedOffset: number | null = null;
   dials = 0;
   swallowNextFrames = 0;
   #downUntil = 0;
@@ -272,7 +366,11 @@ class FakeContext {
   /** Dials of a side that fail next (a slow relay's re-dial). */
   readonly failing = { eyeball: 0, leg: 0 };
 
-  dial(side: "eyeball" | "leg"): { socket: FakeSocket; deployId: string } | null {
+  dial(side: "eyeball" | "leg"): {
+    socket: FakeSocket;
+    deployId: string;
+    contextAbortedOffset: number | null;
+  } | null {
     this.dials += 1;
     if (Date.now() < this.#downUntil) throw new Error("the context is resetting");
     if (this.failing[side] > 0) {
@@ -297,7 +395,11 @@ class FakeContext {
         peer.socket.send((event as MessageEvent).data as ArrayBuffer);
     });
     held.addEventListener("close", () => this.#closed(entry));
-    return { socket: end, deployId: this.deployId };
+    return {
+      socket: end,
+      deployId: this.deployId,
+      contextAbortedOffset: this.contextAbortedOffset,
+    };
   }
 
   /** A side's close, delivered: forgotten, and — unless a re-dial replaced it — its peer closed. */
@@ -310,9 +412,10 @@ class FakeContext {
   }
 
   /** Every socket cut, as a deploy's reset does — a fresh incarnation holds none; dials fail for
-   *  `downForMs`. */
-  reset(input: { deployId: string; downForMs: number }): void {
+   *  `downForMs`. `contextAbortedOffset`: the reset a recorded `itx.abort()` asked for. */
+  reset(input: { deployId: string; downForMs: number; contextAbortedOffset?: number }): void {
     this.deployId = input.deployId;
+    this.contextAbortedOffset = input.contextAbortedOffset ?? null;
     this.#downUntil = Date.now() + input.downForMs;
     const listed = this.#listed.splice(0);
     for (const entry of listed) entry.socket.other.cut();
@@ -349,6 +452,7 @@ function spliced() {
     side: "leg",
     upgradeId,
     local: providerLocal,
+    localGoneClose: { code: 1001, reason: "tunnel disconnected" },
     ...context.dial("leg")!,
     redial: dial("leg"),
     report: (event) => reports.push(event),
@@ -364,6 +468,7 @@ function spliced() {
         side: "eyeball",
         upgradeId,
         local: visitorLocal,
+        localGoneClose: { code: 1001, reason: "visitor disconnected" },
         ...context.dial("eyeball")!,
         redial: dial("eyeball"),
         report: (event) => reports.push(event),

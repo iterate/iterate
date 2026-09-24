@@ -196,6 +196,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
     deployId: this.#appConfig.deployId,
     path: this.#durableObjectAddress.path,
+    contextAbortedOffset: () =>
+      this.#stream.coreReducedState.wokenAfterContextAbortedOffset ?? null,
   });
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,

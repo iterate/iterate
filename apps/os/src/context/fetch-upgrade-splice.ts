@@ -23,10 +23,17 @@
 //   close  [5][code: uint16][reason: UTF-8]
 // `close` is the only orderly end: a DO socket that closes without one is a drop.
 //
+// A LOCAL SOCKET WHOSE FAR SIDE IS GONE is an orderly end too, said at once: the provider's socket
+// on the relay closes without a status when the tunnel's capnweb session ends (a CLI killed
+// outright), so the leg end sends `close` 1001 "tunnel disconnected" and the visitor's socket closes
+// with it — likewise the edge's end for a visitor that vanished. A local socket that closes with a
+// code sends that code. Only a DO socket's drop, whose cause nobody can tell, waits for a resume.
+//
 // BOUNDED: an end whose other end has not resumed within `FETCH_UPGRADE_RESUME_DEADLINE_MS` of the
-// drop gives up and closes its own socket (1011): the other end is gone (a tunnel killed outright,
-// its relay with it). Frames kept for the other end are capped (`FETCH_UPGRADE_UNACKED_MAX_BYTES`);
-// past the cap the end gives up the same way.
+// drop gives up and closes its own socket (1011): the other end is gone without a word (its
+// invocation died). Frames kept for the other end are capped (`FETCH_UPGRADE_UNACKED_MAX_BYTES`);
+// past the cap the end gives up the same way. The edge's invocation dying is beyond any of this:
+// the visitor's connection terminates in it, so the visitor's socket dies with it.
 
 /** How long an end keeps trying after its DO socket dropped: re-dials, then the other end's
  *  resume. A deploy's reset answers again within seconds (the rpc-stub pager's re-dial: 0.2–4 s
@@ -68,6 +75,9 @@ export type FetchUpgradeSpliceEvent =
       resent: number;
       /** the DO answered the re-dial on another deploy: a deploy's reset, expected */
       deployReset: boolean;
+      /** the DO answered the re-dial on an incarnation a recorded `itx.abort()` began: the offset of
+       *  its `context/aborted` event — a deliberate reset, expected */
+      contextAbortedOffset: number | null;
     }
   | {
       type: "gave-up";
@@ -80,14 +90,20 @@ export type FetchUpgradeSpliceEvent =
 
 type FetchUpgradeSide = "eyeball" | "leg";
 
-/** A re-dial's answer: the DO socket, open, and the deploy that answered it. */
-type Redialed = { socket: SpliceSocket; deployId: string | null };
+/** A re-dial's answer: the DO socket, open, the deploy that answered it, and the `context/aborted`
+ *  event whose reset began the incarnation that answered it (null: none did). */
+type Redialed = {
+  socket: SpliceSocket;
+  deployId: string | null;
+  contextAbortedOffset: number | null;
+};
 
 /** One end of a spliced upgrade (the file header). */
 export class FetchUpgradeSpliceEnd {
   readonly #side: FetchUpgradeSide;
   readonly #upgradeId: string;
   readonly #local: SpliceSocket;
+  readonly #localGoneClose: { code: number; reason: string };
   readonly #redial: () => Promise<Redialed | null>;
   readonly #report: (event: FetchUpgradeSpliceEvent) => void;
 
@@ -95,6 +111,9 @@ export class FetchUpgradeSpliceEnd {
   #socket: SpliceSocket | null = null;
   /** The deploy the DO socket was answered on: a re-dial answered on another is a deploy's reset. */
   #deployId: string | null;
+  /** The `context/aborted` the DO socket's incarnation began after: a re-dial answered after another
+   *  is a recorded `itx.abort()`'s reset. */
+  #contextAbortedOffset: number | null;
   #ended = false;
 
   // SENDING: the last sequence number used, and every data frame the other end has not acknowledged.
@@ -118,9 +137,13 @@ export class FetchUpgradeSpliceEnd {
     /** The socket this end serves: the visitor's (the edge) or the provider's (the relay). Frames
      *  on it are the application's, untouched. */
     local: SpliceSocket;
-    /** The first DO socket, and the deploy it was answered on. */
+    /** What this end says when the local socket's far side is gone — it closed without a status
+     *  (1005 none, 1006 abnormal) or failed — rather than closed: the leg's "tunnel disconnected". */
+    localGoneClose: { code: number; reason: string };
+    /** The first DO socket, the deploy it was answered on, and the abort its incarnation began after. */
     socket: SpliceSocket;
     deployId: string | null;
+    contextAbortedOffset: number | null;
     /** Dial the DO for this side again: an open socket, or null when it answered no socket. */
     redial: () => Promise<Redialed | null>;
     report: (event: FetchUpgradeSpliceEvent) => void;
@@ -128,19 +151,24 @@ export class FetchUpgradeSpliceEnd {
     this.#side = input.side;
     this.#upgradeId = input.upgradeId;
     this.#local = input.local;
+    this.#localGoneClose = input.localGoneClose;
     this.#redial = input.redial;
     this.#report = input.report;
     this.#deployId = input.deployId;
+    this.#contextAbortedOffset = input.contextAbortedOffset;
     // an Event subtype per `type`: a MessageEvent's `data`, a CloseEvent's `code` and `reason`
     preferArrayBuffers(this.#local);
     this.#local.addEventListener("message", (event) =>
       this.#inOrder((event as SocketEventFields).data, (data) => this.#sendData(data)),
     );
+    const { code: goneCode, reason: goneReason } = this.#localGoneClose;
     this.#local.addEventListener("close", (event) => {
       const { code, reason } = event as SocketEventFields;
-      this.#endLocally(code, reason);
+      if (code === undefined || code === 1005 || code === 1006)
+        this.#endLocally(goneCode, goneReason);
+      else this.#endLocally(code, reason);
     });
-    this.#local.addEventListener("error", () => this.#endLocally(1011, "the socket failed"));
+    this.#local.addEventListener("error", () => this.#endLocally(goneCode, goneReason));
     // The first socket waits for the other end exactly as a re-dialed one does: the relay's leg is
     // up before the edge's socket exists, and neither end may wait forever.
     this.#downSince = Date.now();
@@ -328,9 +356,11 @@ export class FetchUpgradeSpliceEnd {
         deployReset:
           this.#deployReset ||
           (this.#deployChangedAt !== null && Date.now() - this.#deployChangedAt < DEPLOY_SETTLE_MS),
+        contextAbortedOffset: this.#contextAbortReset,
       });
     this.#dials = 0;
     this.#deployReset = false;
+    this.#contextAbortReset = null;
   }
 
   /** Whether a re-dial of this drop was answered on another deploy than the socket it replaced. */
@@ -339,6 +369,9 @@ export class FetchUpgradeSpliceEnd {
    *  first one on the same new deploy (prd 2026-09-24 20:40:22 → 20:40:27, and 20:11:59 →
    *  20:12:13) is the deploy's too. */
   #deployChangedAt: number | null = null;
+  /** The `context/aborted` a re-dial of this drop found newly behind the context: its reset was the
+   *  one `itx.abort()` asked for. */
+  #contextAbortReset: number | null = null;
 
   async #redialAfterDrop(): Promise<void> {
     if (this.#downSince === null) {
@@ -367,6 +400,12 @@ export class FetchUpgradeSpliceEnd {
         this.#deployChangedAt = Date.now();
       }
       this.#deployId = dialed.deployId;
+      if (
+        dialed.contextAbortedOffset !== null &&
+        dialed.contextAbortedOffset !== this.#contextAbortedOffset
+      )
+        this.#contextAbortReset = dialed.contextAbortedOffset;
+      this.#contextAbortedOffset = dialed.contextAbortedOffset;
       this.#attach(dialed.socket);
       return;
     }
@@ -457,7 +496,8 @@ function truncateCloseReason(reason: string): string {
 }
 
 /** THE LOG LINE for what an end reports. A resume after a deploy's reset is expected on every deploy
- *  under traffic (info); one without a deploy healed a platform failure (the prd fault alarm pages on
+ *  under traffic (info), and one after a recorded `itx.abort()` is the reset someone asked for (info,
+ *  naming its `context/aborted`); any other healed a platform failure (the prd fault alarm pages on
  *  a burst of `platform-failure` heals). Giving up is the other end gone — a tunnel killed outright,
  *  a laptop asleep — or a platform failure that outlasted the deadline: a warn, with its reason. */
 export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): void {
@@ -476,6 +516,13 @@ export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): v
       event: "fetch-upgrade.deploy-reset-resumed",
       name: `fetch-upgrade-${side}`,
       message: "a deploy reset the context's sockets; the upgrade resumed",
+      ...fields,
+    });
+  else if (event.contextAbortedOffset !== null)
+    console.info({
+      event: "fetch-upgrade.context-abort-resumed",
+      name: `fetch-upgrade-${side}`,
+      message: "itx.abort() reset the context's sockets; the upgrade resumed",
       ...fields,
     });
   else
