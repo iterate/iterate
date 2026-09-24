@@ -61,8 +61,6 @@ var LlmUsage = z.object({
 });
 var AgentContract = defineProcessorContract({
   slug: "agent",
-  // 2: the script obligation moved to the context (core state `runs`); the state lost its slot.
-  // 3: `path` became `creation` (the saga's offset); `agents/…` events became `agent/…`.
   version: "5",
   description: "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -92,15 +90,10 @@ var AgentContract = defineProcessorContract({
       maxAutonomousTurns: z.number().int().positive().default(20),
       /** How long a recorded request stays runnable; past it, settled as expired. */
       llmRequestExpiryMs: z.number().int().positive().default(10 * 6e4),
-      /** the platform's window: a request waits this long after its trigger for more content — a second
+      /** The debounce window: a request waits this long after its trigger for more content — a second
        *  message inside the window moves the trigger and ONE request answers both. */
       llmRequestDebounceMs: z.number().int().nonnegative().default(250),
-      /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
-       *  that carries no `<codemode>` block — the whole point being that the agent only ever writes
-       *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
-       *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
-       *  reply instead. Blank drops a bare reply (an agent that only acts). */
-      /** Consecutive model failures before the loop pauses; between attempts, the platform's backoff —
+      /** Consecutive model failures before the loop pauses; between attempts, the backoff —
        *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
       llmRequestRetryPolicy: z.object({
         maxAttempts: z.number().int().positive().default(3),
@@ -178,7 +171,7 @@ var AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
-        /** the platform's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
+        /** The policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next). */
         llmRequestPolicy: z.object({
@@ -1175,13 +1168,12 @@ export default class AgentAiTransport extends WorkerEntrypoint {
     const itx = this.env.ITX.get();
     const scoped = itx.cd(path);
     let call, reader, initialTimedOut = false;
-    const idle = Math.max(1_000, Number(idleBudgetMs) || 45_000);
     const withinIdle = async (operation, message) => {
       let timer;
       try {
         return await Promise.race([
           operation,
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), idle); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), idleBudgetMs); }),
         ]);
       } finally { if (timer) clearTimeout(timer); }
     };
@@ -1207,7 +1199,7 @@ export default class AgentAiTransport extends WorkerEntrypoint {
       let initialTimer;
       const raw = await Promise.race([
         call,
-        new Promise((_, reject) => { initialTimer = setTimeout(() => { initialTimedOut = true; reject(new Error("model transport initial response timeout")); }, idle); }),
+        new Promise((_, reject) => { initialTimer = setTimeout(() => { initialTimedOut = true; reject(new Error("model transport initial response timeout")); }, idleBudgetMs); }),
       ]).finally(() => clearTimeout(initialTimer));
       if (raw instanceof Response) {
         await sink.start({ kind: "response", status: raw.status, statusText: raw.statusText, headers: [...raw.headers], hasBody: raw.body !== null });
@@ -1246,7 +1238,7 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
   async #runModel(path, model, input, options, signal) {
     const sink = new AgentAiSink();
     const remote = this.withItx(
-      async (itx) => await itx.workers.get({ source: AI_TRANSPORT_SOURCE }).invoke([["run", path, model, input, options, sink, 45e3]])
+      async (itx) => await itx.workers.get({ source: AI_TRANSPORT_SOURCE }).invoke([["run", path, model, input, options, sink, STREAM_IDLE_BUDGET_MS]])
     );
     let locallyAborted = false;
     const finished = remote.then(
@@ -1292,7 +1284,7 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
     return this.#pathRead = path;
   }
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
-   *  each stored first under this agent's path (`itx.files`, the platform's `<path>/<8 of a uuid>-<name>`)
+   *  each stored first under this agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. The event is answered
    *  so a caller can wait for what follows it. */
   async message(input) {

@@ -10,7 +10,7 @@ import { StreamProcessorDurableObject } from "iterate/next/sdk";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
 
-export const AgentCatalogContract = defineProcessorContract({
+const AgentCatalogContract = defineProcessorContract({
   slug: "agents",
   version: "1",
   description: "The agents installed in this project by the userspace agents app.",
@@ -23,7 +23,7 @@ export const AgentCatalogContract = defineProcessorContract({
   emits: [],
 });
 export type AgentCatalogState = ProcessorState<typeof AgentCatalogContract>;
-export class AgentCatalogProcessor extends StreamProcessor<
+class AgentCatalogProcessor extends StreamProcessor<
   AgentCatalogState,
   ConsumedEvent<typeof AgentCatalogContract>
 > {

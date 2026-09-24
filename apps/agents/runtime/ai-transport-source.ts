@@ -6,13 +6,12 @@ export default class AgentAiTransport extends WorkerEntrypoint {
     const itx = this.env.ITX.get();
     const scoped = itx.cd(path);
     let call, reader, initialTimedOut = false;
-    const idle = Math.max(1_000, Number(idleBudgetMs) || 45_000);
     const withinIdle = async (operation, message) => {
       let timer;
       try {
         return await Promise.race([
           operation,
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), idle); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), idleBudgetMs); }),
         ]);
       } finally { if (timer) clearTimeout(timer); }
     };
@@ -38,7 +37,7 @@ export default class AgentAiTransport extends WorkerEntrypoint {
       let initialTimer;
       const raw = await Promise.race([
         call,
-        new Promise((_, reject) => { initialTimer = setTimeout(() => { initialTimedOut = true; reject(new Error("model transport initial response timeout")); }, idle); }),
+        new Promise((_, reject) => { initialTimer = setTimeout(() => { initialTimedOut = true; reject(new Error("model transport initial response timeout")); }, idleBudgetMs); }),
       ]).finally(() => clearTimeout(initialTimer));
       if (raw instanceof Response) {
         await sink.start({ kind: "response", status: raw.status, statusText: raw.statusText, headers: [...raw.headers], hasBody: raw.body !== null });

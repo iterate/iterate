@@ -1,6 +1,6 @@
 import { RpcTarget } from "cloudflare:workers";
 
-export type ModelTransportStart =
+type ModelTransportStart =
   | {
       kind: "response";
       status: number;
