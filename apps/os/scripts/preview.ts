@@ -5,8 +5,8 @@
 // deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its
 // status line), e2e (vitest and Playwright against the live preview; the status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
-// top), delete-superseded (every `main-<sha>`, `latency-<run>-<attempt>` or `real-model-<run>-<attempt>` preview but this one: main's
-// cancelled runs'), sweep
+// top), delete-superseded (the per-run previews this CI workflow's preview replaced: `main-<sha>`,
+// `latency-<run>-<attempt>`, `real-model-<run>-<attempt>`), sweep
 // (the stale previews and the resources that outlived theirs — the rules are
 // scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
@@ -105,7 +105,7 @@ type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
-const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--dry-run]`;
+const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--settle <seconds>] [--dry-run]`;
 
 /** The parent's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
  *  Cloudflare credentials for its account and the two secrets every preview inherits — the way
@@ -512,6 +512,7 @@ async function deployOsPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
   dashOrigin: string | undefined,
+  settleMs: number,
   recreated = false,
 ): Promise<{
   wrangler: ReturnType<typeof preparePreviewWrangler>;
@@ -544,7 +545,7 @@ async function deployOsPreview(
         );
         await deletePreview(ctx.cf, previewName, wrangler.command);
         wrangler.cleanup();
-        return deployOsPreview(ctx, previewName, dashOrigin, true);
+        return deployOsPreview(ctx, previewName, dashOrigin, settleMs, true);
       }
       const hint = isMissingWorkerError(output)
         ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm --dir apps/os run deploy --env preview`
@@ -577,14 +578,17 @@ async function deployOsPreview(
     // answer `internal error; reference = …` for seconds after it (preview-readiness.ts; 19 of 20
     // brand-new previews on 2026-09-24, for 6–27 s). Nothing is handed on — the apps on top, the
     // PR body's links, main's e2e job — until five rounds of eight in a row answer in full; a
-    // preview that does not within a minute fails the deploy, naming what it answered.
+    // preview that does not within a minute fails the deploy, naming what it answered. `--settle`
+    // holds the rounds past an in-place redeploy's window, when the old version still answers
+    // (preview-readiness.ts): the CI workflows' own previews, redeployed in place by every run.
     await awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
         collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
       ).secrets.adminBearer.exposeSecret(),
       width: 8,
       consecutive: 5,
-      deadlineMs: 60_000,
+      holdMs: settleMs,
+      deadlineMs: settleMs + 60_000,
     });
     return { wrangler, url, deploymentId, slug: data.preview?.slug || previewName };
   } catch (error) {
@@ -600,10 +604,11 @@ async function deployPreview(
   previewName: string,
   prNumber: string | undefined,
   apps: StartApp[],
+  settleMs: number,
 ) {
   await writeStatus(prNumber, { state: "deploying" });
   try {
-    await deployPreviewSteps(ctx, previewName, prNumber, apps);
+    await deployPreviewSteps(ctx, previewName, prNumber, apps, settleMs);
   } catch (error) {
     await writeStatus(prNumber, { state: "deploy failed", error: describe(error) });
     throw error;
@@ -615,6 +620,7 @@ async function deployPreviewSteps(
   previewName: string,
   prNumber: string | undefined,
   apps: StartApp[],
+  settleMs: number,
 ) {
   assertFreshInstall(REPO_ROOT);
   // The apps' vite builds run beside apps/os's build, their rejection handlers attached at once:
@@ -638,7 +644,7 @@ async function deployPreviewSteps(
     );
   const appOrigins = appPreviewOrigins(apps, previewName);
   const { wrangler, url, deploymentId, slug } = await traceOperation("Deploy OS preview", () =>
-    deployOsPreview(ctx, previewName, appOrigins.dash),
+    deployOsPreview(ctx, previewName, appOrigins.dash, settleMs),
   );
   try {
     const appPreviews = await Promise.all(
@@ -990,8 +996,8 @@ async function listSweptResources(cf: Cf): Promise<SweptResource[]> {
 
 type ListedPreview = { name: string; created_on?: string; deployed_on?: string };
 
-/** Main's superseded throwaway previews (preview-sweep.ts `supersededMainPreviews`), each deleted
- *  with everything it owns and the apps on top: the delete a cancelled run never ran. */
+/** The per-run previews this CI workflow's preview replaced (preview-sweep.ts `supersededMainPreviews`),
+ *  each deleted with everything it owns and the apps on top. */
 async function deleteSupersededMainPreviews(cf: Cf, current: string, dryRun: boolean) {
   const listed = await listAll<ListedPreview>(
     cf,
@@ -1005,7 +1011,7 @@ async function deleteSupersededMainPreviews(cf: Cf, current: string, dryRun: boo
     current,
   );
   console.log(
-    `superseded main previews on ${PREVIEW_PARENT.workerName}: ${superseded.join(", ") || "none"}`,
+    `superseded per-run previews on ${PREVIEW_PARENT.workerName}: ${superseded.join(", ") || "none"}`,
   );
   if (dryRun) return;
   for (const name of superseded) await deleteAll(cf, name);
@@ -1173,6 +1179,7 @@ function parseArgs(argv: string[]): {
   pr?: string;
   name?: string;
   apps?: AppsMode;
+  settleSeconds: number;
   dryRun: boolean;
 } {
   const command = Command.safeParse(argv[0]);
@@ -1180,6 +1187,7 @@ function parseArgs(argv: string[]): {
   let pr: string | undefined;
   let name: string | undefined;
   let apps: AppsMode | undefined;
+  let settleSeconds = 0;
   let dryRun = false;
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
@@ -1190,9 +1198,12 @@ function parseArgs(argv: string[]): {
       const mode = AppsMode.safeParse(argv[++i]);
       if (!mode.success) throw new Error(USAGE);
       apps = mode.data;
+    } else if (arg === "--settle") {
+      settleSeconds = Number(argv[++i]);
+      if (!(Number.isInteger(settleSeconds) && settleSeconds >= 0)) throw new Error(USAGE);
     } else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
   }
-  return { command: command.data, pr, name, apps, dryRun };
+  return { command: command.data, pr, name, apps, settleSeconds, dryRun };
 }
 
 /** The branch a PR-numbered run names its preview after: the flag, PREVIEW_NAME (the workflow's
@@ -1234,7 +1245,13 @@ async function main(argv: string[]) {
   const ctx = await parentContext();
   if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
   if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
-  return deployPreview(ctx, previewName, pr, await appsToPreview(appsMode, pr));
+  return deployPreview(
+    ctx,
+    previewName,
+    pr,
+    await appsToPreview(appsMode, pr),
+    parsed.settleSeconds * 1000,
+  );
 }
 
 if (process.argv[1]?.endsWith("preview.ts")) {

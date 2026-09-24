@@ -1,9 +1,12 @@
 # THE LATENCY GUARD for apps/os: every 3 hours, and on every main push to what reaches the platform,
-# deploy a THROWAWAY Worker Preview of main named `latency-<run id>-<attempt>` that nothing else touches
-# (Main OS e2e has its own; a latency measured beside another suite measures that suite), run the perf
-# suite against it (apps/os/perf: concurrent project creation at 1, 10 and 25 people, sign-in, MCP, a
-# context's first append, wake and processor cold start, rule invocation, stream fan-out — every
-# metric and its budget in apps/os/perf/latency.ts), judge the run, then DELETE the preview.
+# redeploy main IN PLACE to the Worker Preview `latency`, which nothing else touches (Main OS e2e has
+# its own; a latency measured beside another suite measures that suite), run the perf suite against
+# it (apps/os/perf: concurrent project creation at 1, 10 and 25 people, sign-in, MCP, a context's
+# first append, wake and processor cold start, rule invocation, stream fan-out — every metric and its
+# budget in apps/os/perf/latency.ts), and judge the run. No run deletes the preview: a brand-new one
+# answers Cloudflare's `internal error` for seconds after it is created (main-os-e2e.yml), and a
+# preview redeployed in place is what production is. Every perf row mints its own people and
+# projects, so nothing it measures reads what earlier runs left.
 #
 # The judge (scripts/ci/os-latency-guard.ts) records every measurement to PostHog (`os latency
 # measured`) and pages Slack #error-pulse when a metric crosses its budget or regresses sharply
@@ -13,14 +16,15 @@
 # a budget, a metric not recorded — fails the run. Its memory is its own `os-latency-state` artifact,
 # which the next run reads back (Depot organization token from Doppler _shared/preview).
 #
-# Nothing waits on it: its own concurrency group, beside Deploy OS and Main OS e2e. One run at a time:
-# a push or schedule that lands meanwhile queues, and Depot keeps only the newest queued run, so a
-# burst of merges measures its last commit. A running measurement is never cut short: cancelling one
-# would cancel its delete (main-os-e2e.yml saw that) and, merge after merge, starve the guard.
+# Nothing waits on it: its own concurrency group, beside Deploy OS and Main OS e2e. One run at a time,
+# since each redeploys the preview the run before measures: a push or schedule that lands meanwhile
+# queues, and Depot keeps only the newest queued run, so a burst of merges measures its last commit.
+# A running measurement is never cut short: merge after merge, that would starve the guard.
 #
 # Test a branch, and the Slack hookup end to end, by dispatching it: a budget scale of 0.01 puts every
 # budget under what anything measures, so every metric crosses and the run pages at once, marked
-# 🧪 TEST RUN and mentioning nobody; a test run, or any run off main, keeps no state.
+# 🧪 TEST RUN and mentioning nobody; a test run, or any run off main, keeps no state. A dispatch
+# redeploys the guard's preview with the branch; the next run of main puts main back.
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-latency.yml \
 #     --ref <branch> --input budget-scale=0.01
@@ -69,11 +73,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # One name per run attempt, never a commit's: a schedule, a re-run or a dispatch can measure the
-  # commit the run before just measured, and a preview recreated under the name just deleted answered
-  # "Durable Object Namespace was deleted" for a minute after (2026-09-24). apps/os/scripts/preview.ts
-  # reads it; preview-sweep.ts `supersededMainPreviews` knows its shape.
-  PREVIEW_NAME: latency-${{ github.run_id }}-${{ github.run_attempt }}
+  # THE GUARD'S ONE PREVIEW, redeployed in place by every run (apps/os/scripts/preview.ts reads it;
+  # preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
+  PREVIEW_NAME: latency
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
@@ -96,20 +98,21 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # A run cancelled by hand has its delete cancelled with it: every other `latency-<run>-<attempt>`
-      # goes first.
-      - name: Delete superseded runs' previews
+      # the `latency-<run>-<attempt>` previews this workflow deployed and deleted until 2026-09-24
+      - name: Delete the per-run previews this one replaced
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm preview delete-superseded
-      # A fresh preview: an empty control plane, as the calibration measured.
-      - name: Deploy a throwaway preview of this commit
+      # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
+      # still answers in (up to ~100 s measured), so its reset lands on a probe, never on a measurement
+      # (apps/os/scripts/preview-readiness.ts).
+      - name: Redeploy the preview in place
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
-        run: doppler run -- pnpm preview deploy
+        run: doppler run -- pnpm preview deploy --settle 150
       # The perf suite alone on the preview; its verdict is the judge's, so a missed budget does not
       # stop the job here. Its credentials are the preview's parent's APP_CONFIG (e2e/support/global-setup.ts).
       - name: Measure (the perf suite)
@@ -160,30 +163,3 @@ jobs:
           path: apps/os/output/perf-report.json
           if-no-files-found: ignore
           overwrite: true
-
-  # ALWAYS, cancelled included: the preview, its Artifacts namespace, KV namespaces and R2 bucket.
-  delete:
-    name: delete
-    needs: measure
-    if: always()
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Delete the throwaway preview and everything it created
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm preview delete

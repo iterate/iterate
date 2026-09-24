@@ -18,8 +18,9 @@ replays.
 
 - A merge to main just deploys: each app's deploy workflow finishes in about two minutes, and
   runs only when the merge touches what that app ships ([Which main pushes deploy](#which-main-pushes-deploy)).
-- A throwaway preview plus e2e (Main OS e2e) may run in parallel, but nothing waits on it; so
-  does the latency guard (`os-latency.yml`), on a throwaway preview of its own.
+- Main OS e2e (its preview redeployed in place, then e2e) may run in parallel, but nothing waits
+  on it; so does the latency guard (`os-latency.yml`), on a preview of its own
+  ([Main OS e2e keeps one preview](#main-os-e2e-keeps-one-preview)).
 - No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
   (Durable Object cost, prd faults) in a scheduled alarm (`do-duration-probe.yml`,
   `prd-fault-alarm.yml`), not in a gate on the merge path.
@@ -78,7 +79,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-os.yml`             | PR touching the preview paths, dispatch                  | **Preview OS**: the PR's preview, its e2e job, the CI trace and report statuses                         |
 | `preview-delete.yml`         | Such a PR closing, dispatch                              | Deletes the PR's preview                                                                                |
 | `preview-sweep.yml`          | Nightly, dispatch                                        | Deletes stale previews and orphaned preview resources                                                   |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: a throwaway preview of main, e2e and specs, trace, delete, alert                       |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch           | **Main OS e2e**: main redeployed in place to the preview `main`, e2e and specs, trace, alert            |
 | `deploy-os.yml`              | Main push touching what OS ships, dispatch               | **Deploy OS**: production, then the project-host check                                                  |
 | `deploy-<app>.yml`           | Main push touching what the app ships, dispatch          | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch               | Builds the changed boards; main publishes their releases                                                |
@@ -87,8 +88,8 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                               | Reads production's Workers Logs and pages #error-pulse on faults                                        |
 | `os-crash-hunt.yml`          | Nightly, dispatch                                        | The opt-in isolate-ceiling rows against production                                                      |
 | `os-e2e-soak.yml`            | Dispatch                                                 | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
-| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against a throwaway preview of main; PostHog; pages on a change of state |
-| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows on a throwaway preview of main; pages on a change of state          |
+| `os-latency.yml`             | Every 3 hours, main push to the Worker's paths, dispatch | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
+| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch         | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
 | `flake-dashboard.yml`        | Hourly, dispatch                                         | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580)                    |
 | `ci-telemetry.yml`           | Hourly, dispatch                                         | One PostHog event per Depot workflow run and job attempt                                                |
 | `pr-ttg.yml`                 | Hourly, dispatch                                         | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
@@ -330,13 +331,13 @@ freshness:
   `ref_name`) and `cancel-in-progress: true`. A newer commit makes an older
   validation result obsolete, including on `main`.
 - Main OS e2e is the exception: one fixed group, `main-os-e2e`, with
-  `cancel-in-progress: false`. A run creates a throwaway preview and deletes it
-  in a later job, and cancelling a run cancels that `always()` delete too, so
-  every started run finishes, delete and alert included. Pushes that land
-  meanwhile collapse to the newest pending run. The latency guard
-  (`os-latency.yml`, group `os-latency`) is built the same way for the same
-  reason, and cutting a measurement short at every merge would starve it. So is
-  the real-model suite (`os-real-model.yml`, group `os-real-model`).
+  `cancel-in-progress: false`. Every run redeploys the one preview `main`, so
+  two at once would redeploy it under each other's tests, and every started run
+  reaches a verdict. Pushes that land meanwhile collapse to the newest pending
+  run. The latency guard (`os-latency.yml`, group `os-latency`, preview
+  `latency`) is built the same way for the same reason, and cutting a
+  measurement short at every merge would starve it. So is the real-model suite
+  (`os-real-model.yml`, group `os-real-model`, preview `real-model`).
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
   Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout,
@@ -612,6 +613,39 @@ Playwright specs concurrently against the live preview (`runE2e` in
 there is no commit status to wait for, and a red e2e can run again without a
 redeploy (dispatch `action=e2e`, or retry the e2e job and then the trace job), because the preview persists
 until the PR closes.
+
+## Main OS e2e keeps one preview
+
+Main OS e2e tests one Worker Preview, `main`, which every run redeploys in place and no run
+deletes. The latency guard does the same with `latency`, the real-model suite with `real-model`
+(`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`). Until 2026-09-24 each run deployed a
+brand-new `main-<short sha>` and deleted it afterwards.
+
+A brand-new preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
+10–40 s after it is created, and the deploy's readiness gate (`apps/os/scripts/preview-readiness.ts`)
+waits that out, or fails the deploy after 60 s. A preview redeployed in place has no such window,
+but it has another: on some hosts its Durable Objects keep running the previous version for up to
+~100 s, then reset with "Durable Object reset because its code was updated.", failing every call in
+flight. The gate cannot see that window, since the old version answers, so these workflows deploy
+with `--settle 150`: the gate keeps probing for 150 s and the reset lands on a probe.
+
+Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`, 2026-09-24) counted the runs with a row
+that failed on a platform signature. Brand-new previews behind the gate: 3 of 52. Redeployed in
+place, e2e as soon as the gate passed: 7 of 48, 30 of their 39 rows "code was updated". Redeployed
+in place with `--settle 150`: 1 of 20. About one run in twenty keeps one such row either way (a
+storage reset, "no longer active"), and CI's one retry absorbs it.
+
+- Each workflow's runs are serialized (`cancel-in-progress: false`), so no deploy lands under another
+  run's tests.
+- Nothing resets the preview before a run. `pnpm preview reset` deletes the preview and creates it
+  again, which makes it brand-new. Every row mints its own people and projects, so nothing reads what
+  earlier runs left. What they leave accumulates: per e2e run about 40 Artifacts repos, 10 R2
+  objects and 100 KV keys, plus the gate's probe contexts.
+- The nightly sweep keeps such a preview through quiet days and takes it only once its workflow has
+  not deployed it for 7 days (rules 1 and 3 in `preview-sweep.ts`). Deleting one by hand
+  (`pnpm preview delete --name main`) makes the workflow's next run brand-new, behind the gate.
+- Each workflow's first step, `pnpm preview delete-superseded`, deletes the per-run previews it
+  used to make.
 
 ## Interactive trace reports
 

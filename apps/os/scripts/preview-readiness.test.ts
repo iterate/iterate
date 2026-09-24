@@ -67,6 +67,36 @@ test("awaitFullRounds: a preview that answers at once passes after exactly the r
   expect({ calls, warns: warn.calls.length }).toEqual({ calls: 3, warns: 0 });
 });
 
+test("awaitFullRounds: holdMs keeps asking past the streak, and a miss inside the hold (an in-place redeploy's old version resetting) starts the streak again", async () => {
+  using warn = captureWarn();
+  vi.useFakeTimers();
+  try {
+    let calls = 0;
+    const ready = awaitFullRounds(
+      async () => {
+        calls++;
+        // the reset lands on the 7th round, after a full streak
+        return calls === 7 ? [miss, ok] : [ok, ok];
+      },
+      {
+        label: "https://main-os-preview.example",
+        consecutive: 3,
+        deadlineMs: 60_000,
+        pauseMs: 100,
+        holdMs: 5_000,
+      },
+    );
+    await vi.runAllTimersAsync();
+    const { ms, misses } = await ready;
+    expect(ms).toBeGreaterThanOrEqual(5_000);
+    expect({ misses: misses.length, warns: warn.calls.length }).toEqual({ misses: 1, warns: 1 });
+    // three full rounds in a row after the miss before it lets go
+    expect(calls).toBeGreaterThanOrEqual(10);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 const ok = { ok: true as const, ms: 5 };
 const miss = { ok: false as const, stage: "whoami", detail: "internal error; reference = abc" };
 

@@ -38,7 +38,8 @@ test("runs on every main push a PR preview would run for, one run at a time, nev
       preview.on.pull_request.paths.filter((path) => !path.includes("preview-os.yml")),
     ),
   );
-  // every started run reaches delete and alert; Depot keeps only the newest pending push
+  // every started run reaches a verdict, and none redeploys the preview under another's e2e; Depot
+  // keeps only the newest pending push
   expect(main).toMatchObject({
     concurrency: { group: "main-os-e2e", "cancel-in-progress": false },
   });
@@ -52,35 +53,41 @@ test("first deploys the preview parent from main, one push at a time", () => {
   expect(main.jobs.deploy?.needs).toBe("parent");
 });
 
-test("deploys and tests a throwaway preview named for the commit", () => {
-  expect(runs("deploy")).toContain('echo "preview-name=main-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"');
-  expect(runs("deploy")).toContain("doppler run -- pnpm preview deploy");
+// Never brand-new, and the gate held past the old version's window
+// (docs/depot-ci.md#main-os-e2e-keeps-one-preview).
+test("redeploys one preview, `main`, in place and tests it, never deleting it", () => {
+  expect(main.env).toMatchObject({ PREVIEW_NAME: "main" });
+  expect(runs("deploy")).toContain("doppler run -- pnpm preview deploy --settle 150");
   expect(runs("e2e")).toContain("doppler run -- pnpm preview e2e");
+  const steps = Object.values(main.jobs).flatMap((job) => job.steps || []);
+  // no step names another preview, and none deletes or resets it (a reset is a delete)
+  expect(
+    steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),
+  ).toEqual([]);
+  expect(steps.map((step) => step.run || "")).not.toContainEqual(
+    expect.stringMatching(/pnpm preview (delete|reset)$/),
+  );
   // no PR number anywhere: nothing is written to a pull request
   expect(JSON.stringify(main)).not.toContain("PREVIEW_PR_NUMBER");
 });
 
-test("always deletes the preview and everything it created, cancelled or failed", () => {
-  expect(main.jobs.delete?.if).toBe("always()");
-  expect([main.jobs.delete?.needs].flat()).toEqual(["deploy", "e2e"]);
-  expect(runs("delete")).toContain(
-    'PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete',
+test("first deletes the per-run `main-<sha>` previews the one preview replaced", () => {
+  expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeGreaterThan(
+    -1,
   );
-  // a run cancelled by hand has its delete cancelled with it: the next run deletes its preview first
   expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeLessThan(
-    runs("deploy").indexOf("doppler run -- pnpm preview deploy"),
+    runs("deploy").indexOf("doppler run -- pnpm preview deploy --settle 150"),
   );
-  expect(runs("deploy")).toContain("doppler run -- pnpm preview delete-superseded");
 });
 
 test("pages on main's change of state, never for a run cancelled by hand", () => {
   expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
-  expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e", "delete"]);
+  expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e"]);
   expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
 });
 
 // docs/ci-traces.md: main is traced as a PR preview is, and nothing that follows e2e waits for it.
-test("the CI trace covers the parent, deploy and e2e, beside delete and alert", () => {
+test("the CI trace covers the parent, deploy and e2e, beside alert", () => {
   expect(main.env).toMatchObject({
     BASH_ENV: "${{ github.workspace }}/scripts/ci/tracing/shell.sh",
     CI_TRACE_ENABLED: "1",

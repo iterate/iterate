@@ -59,6 +59,36 @@ test.each<{
   },
 );
 
+// A CI workflow's own preview (CI_WORKFLOW_PREVIEWS) is judged by rule 1 alone: kept through quiet
+// days, taken once its workflow has stopped deploying it for a week.
+test.each<{ preview: string; deployedHoursAgo?: number; verdict: "stale" | "keep" }>(
+  // prettier-ignore
+  [
+    { preview: "main", deployedHoursAgo: 30, verdict: "keep" },
+    { preview: "latency", deployedHoursAgo: 144, verdict: "keep" },
+    { preview: "real-model", verdict: "keep" },
+    { preview: "real-model", deployedHoursAgo: 192, verdict: "stale" },
+    // rule 3 still takes a branch preview that begins `main-`, and a workflow's old per-run name
+    { preview: "main-branch", deployedHoursAgo: 30, verdict: "stale" },
+    { preview: "latency-94096387667921-1", deployedHoursAgo: 30, verdict: "stale" },
+  ],
+)(
+  "a CI workflow's own preview, never judged by rule 3: $preview deployed $deployedHoursAgo h ago ⇒ $verdict",
+  ({ preview, deployedHoursAgo, verdict }) => {
+    const plan = planPreviewSweep(
+      input({
+        previews: [
+          {
+            name: preview,
+            lastDeployedAt: deployedHoursAgo === undefined ? undefined : hoursAgo(deployedHoursAgo),
+          },
+        ],
+      }),
+    );
+    expect(plan).toMatchObject({ previews: [expect.objectContaining({ name: preview, verdict })] });
+  },
+);
+
 // Which resources are orphans (rules 4–7): previews soak and pr2847-x are listed, a worker
 // os-preview-2 exists, and the parent is 1000 h old.
 test.each<{
@@ -181,43 +211,33 @@ test("5: a stale preview's resources are not orphans — deletePreview takes the
 });
 
 test.each<[string, string[], string, string[]]>([
-  // a cancelled run's leftover goes; the run's own stays
-  ["one superseded", ["main-44db0e6", "main-7ea6741"], "main-7ea6741", ["main-44db0e6"]],
+  // the per-run previews its workflow made before it kept one go; the workflow's own stays
   [
-    "several",
-    ["main-aaaaaaa", "main-bbbbbbb", "main-ccccccc"],
-    "main-ccccccc",
-    ["main-aaaaaaa", "main-bbbbbbb"],
+    "Main OS e2e's",
+    ["main-44db0e6", "main-7ea6741", "main"],
+    "main",
+    ["main-44db0e6", "main-7ea6741"],
   ],
-  // PR previews and hand-named ones are never main's, even when they begin `main-`
-  ["PR and branch previews", ["pr7-x", "main-branch", "main", "soak"], "main-7ea6741", []],
-  ["only the run's own", ["main-7ea6741"], "main-7ea6741", []],
-  // the latency guard's and Main OS e2e's runs each delete only their own workflow's
+  ["none left", ["main"], "main", []],
+  // PR previews and hand-named ones are never a workflow's, even when they begin `main-`
+  ["PR and branch previews", ["pr7-x", "main-branch", "soak", "main"], "main", []],
+  // each workflow deletes only its own
   [
     "the latency guard's",
-    ["latency-94096387667921-1", "latency-94096387667990-2", "main-44db0e6", "pr7-latency-x"],
-    "latency-94096387667990-2",
+    ["latency-94096387667921-1", "latency", "main-44db0e6", "pr7-latency-x"],
+    "latency",
     ["latency-94096387667921-1"],
   ],
   [
     "the real-model suite's, beside the guard's and Main OS e2e's",
-    ["real-model-940963876-1", "real-model-940963877-1", "latency-940963877-1", "main-44db0e6"],
-    "real-model-940963877-1",
+    ["real-model-940963876-1", "real-model", "latency-940963877-1", "main-44db0e6"],
+    "real-model",
     ["real-model-940963876-1"],
   ],
-  [
-    "Main OS e2e's beside the guard's",
-    ["latency-44db0e6", "main-44db0e6"],
-    "main-7ea6741",
-    ["main-44db0e6"],
-  ],
-  [
-    "a hand-named current supersedes nothing",
-    ["main-44db0e6", "latency-94096387667921-1"],
-    "soak",
-    [],
-  ],
-])("main's superseded throwaway previews: %s", (_label, names, current, superseded) => {
+  // a name that is no workflow's own preview supersedes nothing, a per-run one included
+  ["a hand-named current", ["main-44db0e6", "latency-94096387667921-1"], "soak", []],
+  ["a per-run current", ["main-44db0e6", "main-7ea6741"], "main-7ea6741", []],
+])("a CI workflow's superseded per-run previews: %s", (_label, names, current, superseded) => {
   expect(supersededMainPreviews(names, current)).toEqual(superseded);
 });
 

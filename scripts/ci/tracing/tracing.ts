@@ -494,7 +494,7 @@ export function stepCommands(source: string) {
 
 /**
  * The jobs a workflow's `trace` job needs: the ones its trace covers. A job outside them (Main OS
- * e2e's delete and alert) can still be running while the trace job collects.
+ * e2e's alert) can still be running while the trace job collects.
  */
 export function tracedJobs(source: string) {
   return TraceJob.parse(parse(source)).jobs.trace.needs;

@@ -259,7 +259,7 @@ Each suite shows its latest complete main commit, run, test count and failure
 count. An incomplete attempt keeps that provenance visible with a warning,
 while any observed retry/failure still adds or resets its unknown-flake row.
 
-Main's preview suites run in Main OS e2e (`main-os-e2e.yml`), on a throwaway
-preview of each main push, and upload the same `flake-records-specs-attempt-<id>` and
+Main's preview suites run in Main OS e2e (`main-os-e2e.yml`), on its own
+preview redeployed with each main push, and upload the same `flake-records-specs-attempt-<id>` and
 `flake-records-preview-e2e-attempt-<id>` artifacts as a PR's Preview OS run; the writer's
 `SUITE_WORKFLOWS` lists Test, Preview OS and Main OS e2e.

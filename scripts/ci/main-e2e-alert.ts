@@ -1,6 +1,6 @@
 // scripts/ci/main-e2e-alert.ts — THE PAGE FOR MAIN'S E2E RUN (.depot/workflows/main-os-e2e.yml): every
-// push to main deploys a throwaway preview, runs the e2e suite and the browser specs against it, and
-// deletes it. This posts to #error-pulse only when main CHANGES state: once when it goes red (naming
+// push to main redeploys main's preview in place and runs the e2e suite and the browser specs against
+// it. This posts to #error-pulse only when main CHANGES state: once when it goes red (naming
 // the failed jobs and the failing rows), once when it is green again. A red that stays red, and every
 // green, post nothing. The last page in the channel is the state: nothing long-lived is kept anywhere
 // else. The daily real-model suite pages the same way under its own name (scripts/ci/os-real-model-alert.ts).

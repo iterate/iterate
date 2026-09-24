@@ -6,7 +6,10 @@
 //   1. its last deploy is more than 7 days old, whatever its name;
 //   2. it is named `pr<n>-…` and pull request #n is closed or does not exist;
 //   3. it names no pull request (a branch, or a hand-picked name like `exp-…` or `soak`), its last
-//      deploy is more than 24 h old, and no open pull request's head branch slugifies to its name.
+//      deploy is more than 24 h old, no open pull request's head branch slugifies to its name, and it
+//      is no CI workflow's own (CI_WORKFLOW_PREVIEWS: `main`, `latency`, `real-model`). A quiet day
+//      is no reason to make a workflow's next preview brand-new; rule 1 takes the preview of a
+//      workflow that stopped.
 // Anything else is kept. A GitHub lookup that failed never makes a preview stale: a PR state of
 // "unknown", or no open-branch list, leaves rule 1 alone.
 //
@@ -45,6 +48,19 @@ export type PullRequestState = "open" | "closed" | "missing" | "unknown";
 
 /** One preview of the parent, from the Worker Previews listing (`deployed_on`). */
 export type SweptPreview = { name: string; lastDeployedAt?: string };
+
+/** THE CI WORKFLOWS' OWN PREVIEWS, by name: one per serialized workflow of main, redeployed in place
+ *  by every run of it and deleted by none — Main OS e2e's `main` (.depot/workflows/main-os-e2e.yml),
+ *  the latency guard's `latency` (os-latency.yml), the real-model suite's `real-model`
+ *  (os-real-model.yml), each deploy's readiness gate held past the window its previous version still
+ *  answers in (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Each maps to the per-run names its
+ *  workflow gave its previews before (`main-<short sha>`, `latency-<run id>-<attempt>`,
+ *  `real-model-<run id>-<attempt>`), which `supersededMainPreviews` deletes. */
+export const CI_WORKFLOW_PREVIEWS: ReadonlyMap<string, RegExp> = new Map([
+  ["main", /^main-[0-9a-f]{7}$/],
+  ["latency", /^latency-[0-9a-z]+-[0-9]+$/],
+  ["real-model", /^real-model-[0-9a-z]+-[0-9]+$/],
+]);
 
 /** One row of an account listing: a KV namespace (id + title), an R2 bucket (id = name), a D1
  *  (uuid + name), an Artifacts namespace (id = name). `createdAt` where the listing has one. */
@@ -118,6 +134,7 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     const stale = (reason: string) => ({ name, verdict: "stale" as const, reason });
     const keep = (reason: string) => ({ name, verdict: "keep" as const, reason });
     if (hours > 7 * 24) return stale(`${deployed}, more than 7 days`); // rule 1
+    if (CI_WORKFLOW_PREVIEWS.has(name)) return keep(`a CI workflow's own, ${deployed}`);
     if (pullRequest?.state === "closed") return stale(`PR #${pullRequest.number} is closed`); // rule 2
     if (pullRequest?.state === "missing") return stale(`PR #${pullRequest.number} does not exist`);
     if (pullRequest) return keep(`PR #${pullRequest.number} is ${pullRequest.state}, ${deployed}`);
@@ -164,18 +181,13 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
   return { previews, orphans };
 }
 
-/** Main's throwaway previews of the same workflow as `current` that are not `current`: an earlier
- *  run's. Main OS e2e names each `main-<short sha>` (.depot/workflows/main-os-e2e.yml), the latency
- *  guard `latency-<run id>-<attempt>` (os-latency.yml), the real-model suite
- *  `real-model-<run id>-<attempt>` (os-real-model.yml); no run ever deletes another workflow's.
- *  Cancelling a run cancels its queued jobs, its `always()` delete included (observed 2026-09-23 on
- *  main-44db0e6), so each run deletes these before it deploys; the nightly sweep's rule 3 is the
- *  backstop. A `current` of no such workflow supersedes nothing. Pure. */
+/** The per-run previews `current`'s CI workflow made before it kept one preview
+ *  (CI_WORKFLOW_PREVIEWS): Main OS e2e's `main-<short sha>`, the latency guard's
+ *  `latency-<run id>-<attempt>`, the real-model suite's `real-model-<run id>-<attempt>`, a run
+ *  cancelled before its delete had left behind. Each run deletes its own workflow's before it
+ *  deploys; no run ever deletes another workflow's. A `current` that is no such workflow's preview
+ *  supersedes nothing. Pure. */
 export function supersededMainPreviews(previewNames: string[], current: string) {
-  const workflow = [
-    /^main-[0-9a-f]{7}$/,
-    /^latency-[0-9a-z]+-[0-9]+$/,
-    /^real-model-[0-9a-z]+-[0-9]+$/,
-  ].find((shape) => shape.test(current));
-  return workflow ? previewNames.filter((name) => name !== current && workflow.test(name)) : [];
+  const perRun = CI_WORKFLOW_PREVIEWS.get(current);
+  return perRun ? previewNames.filter((name) => perRun.test(name)) : [];
 }

@@ -395,9 +395,9 @@ the MCP and `/api` bearer challenges) mutate nothing, then, once `/version`
 names the new version, GETs each production project host and pages
 #error-pulse on a 421, a 5xx or no answer that four tries 10 s apart do not
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
-(`main-os-e2e.yml`) deploys a throwaway preview of the pushed commit, runs the
-e2e suite and the browser specs against it, deletes it, and pages #error-pulse
-only when main goes red or green again. Its runs never cancel each other: the
+(`main-os-e2e.yml`) redeploys the pushed commit in place to its own preview,
+`main`, runs the e2e suite and the browser specs against it, and pages
+#error-pulse only when main goes red or green again. Its runs never cancel each other: the
 pushes that land during a run queue behind it, collapsed to the newest, so
 every run that starts reaches a verdict unless someone cancels it by hand. A
 job that hangs until its timeout counts as red. The full mutating proof is each
