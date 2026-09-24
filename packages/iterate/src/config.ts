@@ -1,14 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { z } from "zod/v4";
+import { z } from "zod";
 
-const XDG_CONFIG_PARENT = join(
+export const CONFIG_DIR = join(
   process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
   "iterate",
 );
 
-export const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
+export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export const DEFAULT_CONFIG_NAME = "prd";
 
 /** Stored session (lives inside a config entry) */
@@ -17,7 +17,6 @@ export const StoredSession = z.object({
   refreshToken: z.string().optional(),
   clientId: z.string().optional(),
   scope: z.string().optional(),
-  tokenType: z.string().optional(),
   expiresAt: z.string().optional(),
 });
 
@@ -70,25 +69,18 @@ export const writeConfigFile = (configFile: ConfigFile): void => {
 
 /**
  * Read and validate a single named config, applying schema defaults and
- * normalizing URLs. Missing or invalid configs are returned as an Error value
- * by default, or thrown when called with `{ throw: true }`.
+ * normalizing URLs. A missing or invalid config is returned as an Error value.
  */
-export function readConfig(name: string): Config | Error;
-export function readConfig(name: string, options: { throw: true }): Config;
-export function readConfig(name: string, options?: { throw: true }): Config | Error {
-  const result = ((): Config | Error => {
-    const raw = readConfigFile().configs?.[name] ?? (name === DEFAULT_CONFIG_NAME ? {} : undefined);
-    if (!raw) return new Error(`Config "${name}" not found in ${CONFIG_PATH}`);
-    const parsed = Config.safeParse(raw);
-    if (!parsed.success) {
-      return new Error(
-        `Invalid config "${name}" in ${CONFIG_PATH}:\n${z.prettifyError(parsed.error)}`,
-      );
-    }
-    return normalizeConfig(parsed.data);
-  })();
-  if (result instanceof Error && options?.throw) throw result;
-  return result;
+export function readConfig(name: string): Config | Error {
+  const raw = readConfigFile().configs?.[name] ?? (name === DEFAULT_CONFIG_NAME ? {} : undefined);
+  if (!raw) return new Error(`Config "${name}" not found in ${CONFIG_PATH}`);
+  const parsed = Config.safeParse(raw);
+  if (!parsed.success) {
+    return new Error(
+      `Invalid config "${name}" in ${CONFIG_PATH}:\n${z.prettifyError(parsed.error)}`,
+    );
+  }
+  return normalizeConfig(parsed.data);
 }
 
 /**

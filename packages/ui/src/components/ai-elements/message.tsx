@@ -1,12 +1,7 @@
 "use client";
 
 import { cn } from "@iterate-com/ui/lib/utils";
-import type {
-  ComponentProps,
-  ComponentType,
-  HTMLAttributes,
-  ReactNode,
-} from "react";
+import type { ComponentProps, ComponentType, HTMLAttributes } from "react";
 import { Suspense, lazy, memo } from "react";
 import type { StreamdownProps } from "streamdown";
 
@@ -97,16 +92,9 @@ const RichMessageResponse: ComponentType<StreamdownProps> = import.meta.env.SSR
       return { default: Streamdown as ComponentType<StreamdownProps> };
     });
 
-export type MessageResponseProps = StreamdownProps & {
-  /** Optional honest loading UI while the client-only Markdown renderer chunk loads. */
-  loadingFallback?: ReactNode;
-};
-
 export const MessageResponse = memo(
-  ({ className, components, loadingFallback, ...props }: MessageResponseProps) => (
-    <Suspense
-      fallback={loadingFallback ?? <PlainMessageResponse className={className} {...props} />}
-    >
+  ({ className, components, ...props }: StreamdownProps) => (
+    <Suspense fallback={<PlainMessageResponse className={className} {...props} />}>
       <RichMessageResponse
         className={cn(
           "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
@@ -121,9 +109,7 @@ export const MessageResponse = memo(
       />
     </Suspense>
   ),
-  (prevProps, nextProps) =>
-    prevProps.children === nextProps.children &&
-    prevProps.loadingFallback === nextProps.loadingFallback
+  (prevProps, nextProps) => prevProps.children === nextProps.children
 );
 
 MessageResponse.displayName = "MessageResponse";

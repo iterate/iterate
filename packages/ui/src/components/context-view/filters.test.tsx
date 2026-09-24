@@ -2,14 +2,16 @@
 // exact type or the most specific prefix, and the row's short forms.
 import { describe, expect, test } from "vitest";
 import {
-  EMPTY_FILTER,
   filterEvents,
   payloadPreview,
   payloadSummary,
   shortEventType,
   typeCounts,
+  type ContextViewFilter,
 } from "./filters.tsx";
 import { rendererFor, type ContextViewEvent } from "./types.tsx";
+
+const EMPTY_FILTER: ContextViewFilter = { query: "", types: new Set() };
 
 const at = (offset: number, type: string, payload?: unknown, actor?: string): ContextViewEvent => ({
   offset,

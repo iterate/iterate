@@ -8,7 +8,7 @@ import { RpcTarget } from "capnweb";
 import * as prompts from "@clack/prompts";
 import { os } from "@orpc/server";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { connectOsNext } from "./next-node.ts";
 import type { SessionCredentials } from "./next/api.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
@@ -25,11 +25,14 @@ import {
   type StoredSession,
 } from "./config.ts";
 
+// Claude Code sets `CLAUDECODE=1`, not a bare `CLAUDE_CODE`; keep both spellings (as
+// lint-staged.config.cjs does).
 const isAgent =
   process.env.AGENT === "1" ||
   process.env.OPENCODE === "1" ||
   Boolean(process.env.OPENCODE_SESSION) ||
-  Boolean(process.env.CLAUDE_CODE);
+  Boolean(process.env.CLAUDE_CODE) ||
+  Boolean(process.env.CLAUDECODE);
 let configFlagOverride: string | undefined;
 const consumeCliStringFlag = (flagName: string): string | undefined => {
   const args = process.argv.slice(2);
@@ -59,7 +62,6 @@ const resolveConfigName = (workspacePath: string): string | Error => {
     return configFlagOverride;
   }
 
-  // Walk up directory tree for workspace match
   let dir = workspacePath;
   while (dir && dir !== "/") {
     const match = configFile.workspaces?.[dir];
@@ -81,7 +83,6 @@ const resolveConfigName = (workspacePath: string): string | Error => {
     return configFile.default;
   }
 
-  // If there's exactly one config, use it
   const configNames = Object.keys(configFile.configs || {});
   if (configNames.length === 1) return configNames[0];
 
@@ -114,19 +115,14 @@ function resolveConfig(
  */
 const storedCredentials = async (
   config: Config,
-  configName?: string,
+  configName: string,
 ): Promise<SessionCredentials> => {
   let session = config.session;
   if (!session) {
     throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
   }
-  if (sessionNeedsRefresh(session)) {
-    if (session.refreshToken && session.clientId) {
-      session = await refreshOAuthSession({ config, configName, session });
-    } else {
-      throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
-    }
-  }
+  if (sessionNeedsRefresh(session))
+    session = await refreshOAuthSession({ config, configName, session });
   if (session.token) {
     return { type: "bearer", token: session.token };
   }
@@ -175,7 +171,6 @@ const OAuthTokenResponse = z.object({
   refresh_token: z.string().optional(),
   expires_in: z.number().positive().optional(),
   expires_at: z.number().positive().optional(),
-  token_type: z.string().optional(),
   scope: z.string().optional(),
 });
 type OAuthTokenResponse = z.infer<typeof OAuthTokenResponse>;
@@ -388,7 +383,6 @@ const oauthTokenToSession = (
     refreshToken: token.refresh_token || existing?.refreshToken,
     clientId: existing?.clientId,
     scope: token.scope,
-    tokenType: token.token_type,
     expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : undefined,
   };
 };
@@ -786,7 +780,7 @@ const launcherProcedures = {
       }),
   },
 };
-export const getCli = async () => {
+const getCli = async () => {
   configFlagOverride = consumeCliStringFlag("--config");
   if (process.argv.length === 2) process.argv.push("--help");
   const cli = createCli({

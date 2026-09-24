@@ -7,6 +7,7 @@
 // lines are absent and the network-free permissions line (from the held scopes) is what we assert.
 import { describe, expect, test } from "vitest";
 import { appAuth } from "./app-server.ts";
+import type { BrowserSession } from "./app-session.ts";
 
 const ISSUER = "https://os.example";
 
@@ -19,7 +20,7 @@ function login(path: string, scopes: string[]) {
       scopes: async () => scopes,
       host: async () => ({ issuer: ISSUER, resource: "http://127.0.0.1:1/api" }),
     }),
-  } as unknown as DurableObjectNamespace<never>;
+  } as unknown as DurableObjectNamespace<BrowserSession>;
   return appAuth(
     new Request(`https://notes.example${path}`, {
       headers: { cookie: "__Host-itx-session=0c9a1c4e-7d2b-4d7e-9a4a-1f3c5e7b9d21" },
@@ -103,7 +104,7 @@ describe("a browser CONNECTED to another issuer stays there", () => {
           return `${host.issuer}/oauth2/auth?state=x`;
         },
       }),
-    } as unknown as DurableObjectNamespace<never>;
+    } as unknown as DurableObjectNamespace<BrowserSession>;
     const response = appAuth(
       new Request(`https://notes.example${path}`, {
         ...init,
@@ -174,7 +175,7 @@ describe("a browser CONNECTED to another issuer stays there", () => {
 
 test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {
   const response = await appAuth(new Request("https://notes.example/.auth/client.json"), {
-    sessions: {} as DurableObjectNamespace<never>,
+    sessions: {} as DurableObjectNamespace<BrowserSession>,
     issuer: ISSUER,
     resource: `${ISSUER}/api`,
     api: () => new Response(),

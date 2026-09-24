@@ -118,7 +118,7 @@
   ],
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.next.json && tsc -p tsconfig.cli.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.next.json && tsc --noEmit -p tsconfig.cli.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.next.json && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },
@@ -126,7 +126,6 @@
     "capnweb": "npm:@iterate-com/capnweb@0.12.2",
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",
-    "react": "^19.2.7",
     "zod": "4.5.4",
     "@clack/prompts": "^1.0.0",
     "@orpc/server": "1.13.14",
@@ -140,7 +139,7 @@
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
-    "jsdom": "27.4.0",
+    "react": "^19.2.7",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "4.0.15",

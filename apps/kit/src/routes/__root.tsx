@@ -31,7 +31,7 @@ function Root() {
       </head>
       <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
         {/* light only, like every client app: no theme picker, no system theme */}
-        <AppProviders config={{}} devtools={null} forcedTheme="light">
+        <AppProviders>
           <Outlet />
         </AppProviders>
         <Scripts />

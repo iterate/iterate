@@ -1,6 +1,7 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 import type { IterateApi, SessionCredentials } from "./next/api.ts";
+import { withTimeout } from "./next/lib.ts";
 
 /** One OS Next connection. Dispose the owner to close every child capability and its socket.
  * Operations are never retried: replaying a script could duplicate its effects. */
@@ -27,14 +28,12 @@ export async function connectOsNext(input: {
   });
   // The transport surfaces failures through RPC and `closed`; ws also emits an EventEmitter error.
   socket.on("error", () => {});
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const session = await Promise.race([
+    const session = await withTimeout(
       root.authenticate(input.auth),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("OS Next authentication timed out")), 20_000);
-      }),
-    ]);
+      20_000,
+      "OS Next authentication",
+    );
     return {
       session,
       closed,
@@ -57,7 +56,5 @@ export async function connectOsNext(input: {
       socket.terminate();
     }
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }

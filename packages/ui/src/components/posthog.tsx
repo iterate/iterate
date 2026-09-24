@@ -4,15 +4,6 @@ import { useEffect } from "react";
 // server bundle.
 const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
 
-export interface SetupPosthogOptions {
-  apiKey?: string;
-  proxyUrl?: string;
-  uiHost?: string;
-  appStage?: string;
-  capturePageviews?: boolean;
-  sessionRecording?: boolean;
-}
-
 export type PosthogProperties = Record<string, boolean | number | string>;
 
 export interface PosthogPerson {
@@ -31,79 +22,36 @@ export interface PosthogContext {
   groups: PosthogGroup[];
 }
 
-declare global {
-  interface Window {
-    __iteratePosthogInitialized?: boolean;
-    __iteratePosthogApiKey?: string;
-  }
-}
-
-export function shouldEnablePosthog(apiKey?: string) {
-  return Boolean(apiKey);
-}
-
-function resolveBrowserUrl(url?: string) {
-  if (!url) return undefined;
-  if (typeof window === "undefined") return url;
-
-  try {
-    return new URL(url, window.location.origin).toString();
-  } catch {
-    return url;
-  }
-}
-
-function buildPosthogInitOptions(options: SetupPosthogOptions) {
-  // Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK
-  // sends. Nothing is masked in replays: every app here is ours, and seeing it is the point.
-  const sessionRecording = options.sessionRecording !== false;
+// Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK sends.
+// Nothing is masked in replays: every app here is ours, and seeing it is the point. `api_host` is
+// this app's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog), resolved against
+// the page's origin.
+function posthogInitOptions() {
   return {
-    api_host: resolveBrowserUrl(options.proxyUrl ?? "/e"),
-    ui_host: resolveBrowserUrl(options.uiHost ?? "https://eu.posthog.com"),
+    api_host: new URL("/e", window.location.origin).toString(),
+    ui_host: "https://eu.posthog.com",
     defaults: "2026-06-25" as const,
     person_profiles: "identified_only" as const,
-    capture_pageview: options.capturePageviews === false ? false : ("history_change" as const),
+    capture_pageview: "history_change" as const,
     capture_pageleave: true,
     capture_exceptions: {
       capture_unhandled_errors: true,
       capture_unhandled_rejections: true,
       capture_console_errors: false,
     },
-    disable_session_recording: !sessionRecording,
+    disable_session_recording: false,
     disable_capture_url_hashes: true,
     strict_script_versioning: true,
-    ...(sessionRecording && {
-      session_recording: {
-        maskAllInputs: false,
-        recordBody: false,
-        recordHeaders: false,
-      },
-    }),
-    loaded: options.appStage
-      ? (client: import("posthog-js").PostHogInterface) => {
-          client.register({
-            $environment: options.appStage,
-          });
-        }
-      : undefined,
+    session_recording: {
+      maskAllInputs: false,
+      recordBody: false,
+      recordHeaders: false,
+    },
   };
-}
-
-function setupPosthog(client: import("posthog-js").PostHog, options: SetupPosthogOptions) {
-  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return;
-
-  if (window.__iteratePosthogInitialized && window.__iteratePosthogApiKey === options.apiKey) {
-    return;
-  }
-
-  client.init(options.apiKey!, buildPosthogInitOptions(options));
-  window.__iteratePosthogInitialized = true;
-  window.__iteratePosthogApiKey = options.apiKey;
 }
 
 let posthogInitStarted = false;
 let posthogClientPromise: Promise<import("posthog-js").PostHog> | undefined;
-let posthogAppStage: string | undefined;
 let appliedContextSignature: string | undefined;
 let identifiedPersonSignature: string | undefined;
 const identifiedGroupMetadata = new Map<string, string>();
@@ -117,12 +65,11 @@ const identifiedGroupMetadata = new Map<string, string>();
  * once-guard lives here at module scope and the first render with config in
  * hand kicks it off. Idempotent, so safe to call during render.
  */
-export function initPosthog(options: SetupPosthogOptions) {
-  if (posthogInitStarted || !loadPosthog || !shouldEnablePosthog(options.apiKey)) return;
+export function initPosthog(apiKey: string | undefined) {
+  if (posthogInitStarted || !loadPosthog || !apiKey) return;
   posthogInitStarted = true;
-  posthogAppStage = options.appStage;
   const clientPromise = loadPosthog().then((posthogModule) => {
-    setupPosthog(posthogModule.default, options);
+    posthogModule.default.init(apiKey, posthogInitOptions());
     return posthogModule.default;
   });
   posthogClientPromise = clientPromise;
@@ -163,20 +110,6 @@ export function usePosthogIdentity(
       groups,
     });
   }, [principal.actor, principal.email, groups]);
-}
-
-/** Apply identity/groups, then capture the resolved TanStack location. */
-export function capturePosthogPageview(input: PosthogContext | null, href?: string) {
-  withPosthogClient((client) => {
-    applyPosthogContext(client, input);
-    const currentUrl = resolveBrowserUrl(href);
-    client.capture("$pageview", currentUrl ? { $current_url: currentUrl } : undefined);
-  });
-}
-
-/** Capture errors handled by framework error boundaries. */
-export function capturePosthogException(error: unknown) {
-  withPosthogClient((client) => client.captureException(error));
 }
 
 function applyPosthogContext(client: import("posthog-js").PostHog, input: PosthogContext | null) {
@@ -229,5 +162,4 @@ function resetPosthogClient(client: import("posthog-js").PostHog) {
   appliedContextSignature = undefined;
   identifiedPersonSignature = undefined;
   identifiedGroupMetadata.clear();
-  if (posthogAppStage) client.register({ $environment: posthogAppStage });
 }

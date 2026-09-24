@@ -1,11 +1,11 @@
 import { deflate, Inflate } from "pako";
 
 /**
- * A minimal git protocol-v2 wire client for the Artifacts git endpoint —
- * exactly the primitives the lazy repo read path needs, nothing more.
+ * A minimal git protocol-v2 wire client: the ls-refs/fetch/pack primitives the
+ * GitHub config-repo template reader (github.ts) needs.
  *
- * The endpoint ("gitty/1.0") was probed empirically; the load-bearing
- * behaviors this module relies on:
+ * Observed against the Cloudflare Artifacts endpoint ("gitty/1.0"); github.ts
+ * relies only on ls-refs, want-by-tip and self-contained packs:
  *
  * - `ls-refs` resolves HEAD and branch tips.
  * - `fetch` accepts wants for ANY object id (not just ref tips): a want for a
@@ -42,8 +42,6 @@ const CODE_BY_TYPE: Record<GitObjectType, number> = { blob: 3, commit: 1, tag: 4
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-
-// -- pkt-line ----------------------------------------------------------------
 
 export function pktLine(line: string): Uint8Array {
   const payload = textEncoder.encode(`${line}\n`);
@@ -95,8 +93,6 @@ function pktText(payload: Uint8Array): string {
   return textDecoder.decode(payload.subarray(0, end));
 }
 
-// -- object identity ----------------------------------------------------------
-
 export async function hashObject(type: GitObjectType, payload: Uint8Array): Promise<string> {
   const framed = concat([textEncoder.encode(`${type} ${payload.length}\0`), payload]);
   return toHex(new Uint8Array(await crypto.subtle.digest("SHA-1", new Uint8Array(framed))));
@@ -115,8 +111,6 @@ function fromHex(oid: string): Uint8Array {
   }
   return out;
 }
-
-// -- tree and commit codecs ----------------------------------------------------
 
 export interface TreeEntry {
   /** Octal mode string as git writes it: 100644, 100755, 120000, 40000, 160000. */
@@ -191,8 +185,6 @@ export function encodeCommit(input: {
   ];
   return textEncoder.encode(lines.join("\n"));
 }
-
-// -- pack parsing ---------------------------------------------------------------
 
 /** Inflate one zlib stream starting at `offset`, reporting consumed bytes. */
 function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: Uint8Array } {
@@ -486,8 +478,6 @@ export async function buildPack(
   return concat([body, digest]);
 }
 
-// -- protocol v2 requests --------------------------------------------------------
-
 export function encodeFetchRequest(input: {
   deepen?: number;
   filter?: "blob:none";
@@ -564,8 +554,6 @@ export function demuxFetchResponse(body: Uint8Array): FetchResponse {
   return { acks, pack: concat(packChunks), shallow };
 }
 
-// -- receive-pack (push) ----------------------------------------------------------
-
 export function encodeReceivePackRequest(input: {
   newOid: string;
   oldOid: string;
@@ -627,8 +615,6 @@ export function parseReceivePackResponse(body: Uint8Array, expectedRef: string):
   notes.push(expectedRefOk ? "ok without unpack status" : `no status line for ${expectedRef}`);
   return { detail: notes.join("; "), kind: "indeterminate" };
 }
-
-// -- transport ---------------------------------------------------------------------
 
 export interface GitWireTransport {
   lsRefs(prefixes: string[]): Promise<LsRefsEntry[]>;

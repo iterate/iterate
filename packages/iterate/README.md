@@ -55,7 +55,7 @@ you trust: its callers can run local code. The capability belongs to the live
 connection and is released on exit. A disconnect or token expiry ends sharing
 with an error; rerun the command to refresh authentication and reconnect.
 
-## Configs and migration
+## Configs
 
 Configs live in `${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`. Selection
 order is `--config`, a parent-directory workspace mapping, the default config,
@@ -70,13 +70,9 @@ iterate config list
 iterate config get
 ```
 
-Existing configs keep their server URL. For a config that targets the old OS,
-set its `--os-base-url` to an OS Next deployment and log in again. Changing the
-server clears that config's session. There is no separate `authBaseUrl` setting.
-
-The old chat TUI and remotely discovered `iterate os ...` commands are removed.
-The menu bar supports sign-in and computer sharing. Use `iterate itx run` for scripts;
-its `--project` selects the project and `--context` selects a path within it.
+Changing a config's server clears its session. The menu bar supports sign-in and
+computer sharing. Use `iterate itx run` for scripts; its `--project` selects the
+project and `--context` selects a path within it.
 
 ## Node REPL
 

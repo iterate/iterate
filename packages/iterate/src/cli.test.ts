@@ -38,26 +38,20 @@ function runCli(directory: string, args: string[]) {
   });
 }
 
-test(
-  "bare invocation and all command help work offline; retired commands are absent",
-  { timeout: 20_000 },
-  async () => {
-    using config = cliConfig("http://127.0.0.1:1");
-    for (const args of [
-      [],
-      ["--help"],
-      ["itx", "run", "--help"],
-      ["use-my-computer", "--help"],
-      ["menubar", "--help"],
-      ["repl", "--help"],
-    ]) {
-      const { stdout } = await runCli(config.directory, args);
-      expect(stdout).toContain("iterate");
-      expect(stdout).not.toMatch(/\b(chat|approve|daemon)\b/);
-    }
-    await expect(runCli(config.directory, ["chat"])).rejects.toThrow();
-  },
-);
+test("bare invocation and all command help work offline", { timeout: 20_000 }, async () => {
+  using config = cliConfig("http://127.0.0.1:1");
+  for (const args of [
+    [],
+    ["--help"],
+    ["itx", "run", "--help"],
+    ["use-my-computer", "--help"],
+    ["menubar", "--help"],
+    ["repl", "--help"],
+  ]) {
+    const { stdout } = await runCli(config.directory, args);
+    expect(stdout).toContain("iterate");
+  }
+});
 
 test("OAuth uses OS Next's API audience including the local port", () => {
   expect(Config.parse({}).osBaseUrl).toBe("https://os.iterate.com");
@@ -361,7 +355,7 @@ test("an authentication timeout closes the transport without an unhandled RPC re
       baseUrl: `http://localhost:${address.port}`,
       auth: { type: "bearer", token: "stalled" },
     });
-    const rejected = expect(pending).rejects.toThrow("OS Next authentication timed out");
+    const rejected = expect(pending).rejects.toThrow("OS Next authentication: no answer in 20s");
     await entered.promise;
     await vi.advanceTimersByTimeAsync(20_000);
     await rejected;

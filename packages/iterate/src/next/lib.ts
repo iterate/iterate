@@ -1,9 +1,11 @@
-// lib.ts — the pure helpers every layer shares; four concepts, one platform-neutral file (it rides
-// the SDK bundle and the node unit lane, so no cloudflare:workers here):
-//   errors  — `codedError` / `errorCode` / `reportIssue`: THE machine-readable error channel
+// lib.ts — the pure helpers every layer shares, one platform-neutral file (it rides the SDK bundle
+// and the node unit lane, so no cloudflare:workers here):
+//   errors  — `codedError` / `errorCode` / `reportIssue` / `forwardIssues`: THE machine-readable
+//             error channel
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
 //   timeout — `withTimeout`: a promise raced against a deadline (code TIMEOUT)
-//   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries
+//   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries;
+//             `sameOriginPath`, `isLocalOrigin`, `resolveContextPath`: origins and paths
 
 // ── errors ── THE machine-readable error channel, after cloudflare-os
 // (workshop-shared/src/api.ts: plain Error + a `code` own-property via Object.assign, read with

@@ -4,6 +4,7 @@
 // The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
 // module and its own table.
 
+import { inspect } from "node:util";
 import { describe, expect, test, vi } from "vitest";
 
 // Routing is under test here; Start's generated server entry is exercised by the built-Worker and
@@ -74,8 +75,8 @@ describe("parseAppConfig", () => {
     vars: Record<string, unknown>;
     becomes?: unknown;
     throws?: RegExp;
-    /** how many unknown keys the boot warns about (the shared parser's for a stray var, ours for a
-     *  key inside the object) */
+    /** how many unknown keys the boot warns about, once each (a key inside the object or a stray
+     *  var) */
     warns?: number;
   }[] = [
     // the object alone, the overrides alone, and both — an override wins over the object
@@ -264,8 +265,47 @@ describe("parseAppConfig", () => {
     {
       vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: "retired" },
       becomes: MINIMAL_CONFIG,
-      warns: 2,
+      warns: 1,
     },
+    // an override merges INTO the object's block rather than replacing it; a JSON-looking value
+    // (object, array, boolean) is parsed, anything else is the string itself
+    // a record's keys are the deployment's own, never warned about
+    {
+      vars: { ...MINIMAL, APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES__EXAMPLE: "example" },
+      becomes: {
+        ...MINIMAL_CONFIG,
+        urls: { ...MINIMAL_CONFIG.urls, temporaryCustomHostnames: { example: "example" } },
+      },
+    },
+    {
+      vars: {
+        APP_CONFIG: JSON.stringify({
+          urls: { os: "https://os.test", mcp: "https://mcp.test" },
+          login: { password: "password" },
+          secrets: { key: "secrets-key" },
+        }),
+        APP_CONFIG_URLS__PROJECT_WILDCARD:
+          '{"hostname":"iterate.com","project":"iterate","excludedHostnames":["www.iterate.com"]}',
+        APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES: '{"iterate.com":"iterate"}',
+      },
+      becomes: {
+        ...MINIMAL_CONFIG,
+        urls: {
+          ...MINIMAL_CONFIG.urls,
+          os: "https://os.test",
+          mcp: "https://mcp.test",
+          temporaryCustomHostnames: { "iterate.com": "iterate" },
+          projectWildcard: {
+            hostname: "iterate.com",
+            project: "iterate",
+            excludedHostnames: ["www.iterate.com"],
+          },
+        },
+      },
+    },
+    // the object must be a JSON object
+    { vars: { ...MINIMAL, APP_CONFIG: "{not json" }, throws: /^APP_CONFIG must be valid JSON$/ },
+    { vars: { ...MINIMAL, APP_CONFIG: "[]" }, throws: /^APP_CONFIG must be a JSON object$/ },
   ];
   for (const { vars, becomes, throws, warns } of rows)
     test(`${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
@@ -279,6 +319,13 @@ describe("parseAppConfig", () => {
         warn.mockRestore();
       }
     });
+  test("a secret never prints", () => {
+    const { secrets } = parseAppConfig(MINIMAL);
+    expect(String(secrets.key)).toBe("REDACTED");
+    expect(JSON.stringify(secrets)).not.toContain("secrets-key");
+    expect(inspect(secrets.key)).toBe("Redacted {}");
+    expect(secrets.key.exposeSecret()).toBe("secrets-key");
+  });
   test("the deploy id is handed in", () => {
     expect(parseAppConfig(MINIMAL, "v-123").deployId).toBe("v-123");
   });

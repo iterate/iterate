@@ -326,7 +326,10 @@ test("hides reserved path segments from the path proxies the hop hands out, at e
 const fakeRpcPromiseAwaits: string[] = [];
 /** A thenable that records every await and chains svc/add like a remote API — the test brand. */
 class FakeRpcPromise {
-  constructor(readonly chain: string) {}
+  readonly chain: string;
+  constructor(chain: string) {
+    this.chain = chain;
+  }
   then(resolve: (v: unknown) => void): void {
     fakeRpcPromiseAwaits.push(this.chain);
     resolve({ settled: this.chain });
@@ -342,7 +345,10 @@ registerPipelinedRpcBrand(FakeRpcPromise);
 /** A stub an awaited call answered with (a facet's collection): not a promise, but it holds its
  *  session until disposed — as iterate-context.ts registers the native RpcStub. */
 class FakeRpcStub {
-  constructor(readonly chain: string) {}
+  readonly chain: string;
+  constructor(chain: string) {
+    this.chain = chain;
+  }
   list(): unknown {
     return new FakeRpcPromise(`${this.chain}.list()`);
   }

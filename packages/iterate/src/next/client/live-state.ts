@@ -11,7 +11,6 @@ import { applyPatch, type PatchOp } from "../lib.ts";
 //
 //   • SEED through the producer's door — `{rev, state}` read via an RPC method (a processor's
 //     `liveSnapshot()`, a mini-app's `state()`).
-//     subscription; here the stream keeps no per-subscriber state, so the seed is a separate read.
 //   • APPLY each `{key, from, to, patch}` delta the subscription delivers: a patch lands only when
 //     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
 //     epoch) — resync by re-reading the door.
@@ -21,8 +20,8 @@ import { applyPatch, type PatchOp } from "../lib.ts";
 // hands deltas in, so the same store backs a node test client and the React hook (client/react.tsx).
 
 /** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
- *  ephemeral event, delivered raw to the subscriber. */
-/** `patch: null` = the change was too large to send — the rev moved, re-seed through the door. */
+ *  ephemeral event, delivered raw to the subscriber. `patch: null` = the change was too large to
+ *  send — the rev moved, re-seed through the door. */
 export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] | null };
 
 /** The delta as it arrives over the wire — PARSED, never cast: `from`/`to` MUST be real numbers (a
@@ -105,7 +104,7 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
 // (`itx.subscribe({ target, consumes: ["events.iterate.com/live-state/changed"] })`) delivers every
 // key's deltas in batches; this filters the watched `key` and reduces each delta into the store; a
 // `door` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
-// the store (client/live-state.ts) and the React hook stay pure.
+// the store above and the React hook stay pure.
 
 /** The slice of an itx session this needs — a capnweb `IterateContextRpcTarget` proxy satisfies it structurally:
  *  `subscribe` hands back a DISPOSABLE handle (disposing it removes the subscription server-side). */
@@ -179,8 +178,7 @@ export async function connectLiveState<S>(
   const subscription = await itx.subscribe({
     name: opts.name,
     consumes: ["events.iterate.com/live-state/changed"],
-    // A batch of live-state deltas (every key's); keep the watched key's. capnweb hands each event
-    // as a live proxy value — deep-copy to a plain object before reducing.
+    // A batch of live-state deltas (every key's); keep the watched key's.
     target: (events: unknown[]) => {
       if (disposed) return;
       for (const e of events) {

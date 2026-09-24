@@ -9,8 +9,8 @@ export type StreamEventSource = {
   processor?: {
     slug: string;
     version: string;
-    /** The event the processor was handling when it appended this one (os-next's engine stamps
-     *  it): how a script request is tied back to the assistant item that wrote it. */
+    /** The event the processor was handling when it appended this one (the apps/os processor engine
+     *  stamps it): how a script request is tied back to the assistant item that wrote it. */
     whileProcessing?: { offset: number; type: string };
   };
 };

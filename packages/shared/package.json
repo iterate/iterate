@@ -7,9 +7,7 @@
     "./chunked-text": "./src/chunked-text.ts",
     "./message": "./src/message.ts",
     "./agent-events": "./src/agent-events.ts",
-    "./config": "./src/config.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
-    "./evlog/types": "./src/evlog/types.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
     "./test-support/flake-test": "./src/test-support/flake-test.ts",
@@ -34,7 +32,6 @@
     "test": "vitest run --environment node src --reporter=default --reporter=./src/test-support/e2e-policy/retry-telemetry-reporter.ts"
   },
   "dependencies": {
-    "type-fest": "^5.5.0",
     "zod": "4.5.4",
     "pako": "^3.0.1"
   },

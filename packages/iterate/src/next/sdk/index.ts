@@ -1,5 +1,5 @@
 // sdk/index.ts — THE userspace SDK surface, bundled (zod included — the owner's call) into every
-// loaded isolate as `processor.js` (os-next's scripts/vite-plugin-processor-sdk.ts bundles it):
+// loaded isolate as `processor.js` (apps/os/scripts/build.ts bundles it):
 //
 //   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 //

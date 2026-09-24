@@ -25,9 +25,9 @@ export type Caller = {
    *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
    *  the caller's own context on the INPUT expression; rewrites the owner wrote are never subject. */
   app?: true;
-  /** THE PLATFORM ORIGIN the caller reached the platform on (os-next platform-origin.ts) — what a
-   *  public URL is composed from (`itx.url`, a signed file URL). Absent for a caller with none (a
-   *  loaded worker's `env.ITX`, the kernel); the context then uses the last one it was reached on. */
+  /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
+   *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the
+   *  kernel); the context then uses the last one it was reached on. */
   platformOrigin?: string | null;
   /** Set ONLY by the platform's own code, on the one `itx.builtins.append` of a fact it vouches for
    *  on the principal's behalf — an account's or an organization's (apps/os session.ts
@@ -99,7 +99,8 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
   );
 }
 
-/** Sign JSON claims: the bounded Google login flow's cookie (identity.ts). */
+/** Sign JSON claims (HMAC) for the platform's own tokens: the login flow's cookie, signed file URLs,
+ *  secret-OAuth state. */
 export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(

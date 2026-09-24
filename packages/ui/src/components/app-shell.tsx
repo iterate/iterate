@@ -1,4 +1,4 @@
-// ONE shell for the os-next apps — agents, notes, voice, the dash next: the sidebar (the project
+// The one shell for the client apps (agents, notes, voice, dash): the sidebar (the project
 // switcher in its header, the app's own navigation in its body, the collapse button and the account
 // menu in its footer, the rail) and the page beside it under a header row that carries the phone's
 // sidebar trigger. Router-agnostic on purpose:
@@ -75,8 +75,8 @@ export function AppShell({
   nav?: ReactNode;
   /** what sits beside the phone's sidebar trigger in the header row */
   header?: ReactNode;
-  /** the signed-in person; "Sign out" posts to `logoutPath`, the SDK's `/.auth/logout` unless told */
-  account: { email: string; logoutPath?: string };
+  /** the signed-in person; "Sign out" posts to the SDK's `/.auth/logout` */
+  account: { email: string };
   /** the app's own items in the account menu, before Sign out — `DropdownMenuItem`s */
   accountActions?: ReactNode;
   /** the router's current href — a change closes the phone's sidebar sheet */
@@ -106,11 +106,7 @@ export function AppShell({
         <SidebarContent>{nav}</SidebarContent>
         <SidebarFooter>
           <CollapseButton />
-          <AccountMenu
-            email={account.email}
-            logoutPath={account.logoutPath || "/.auth/logout"}
-            actions={accountActions}
-          />
+          <AccountMenu email={account.email} actions={accountActions} />
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
@@ -282,15 +278,7 @@ function CollapseButton() {
 
 /** The signed-in person, and sign out: a POST to the app's own logout, which ends this browser's
  *  grant at the issuer. */
-function AccountMenu({
-  email,
-  logoutPath,
-  actions,
-}: {
-  email: string;
-  logoutPath: string;
-  actions?: ReactNode;
-}) {
+function AccountMenu({ email, actions }: { email: string; actions?: ReactNode }) {
   const { isMobile } = useSidebar();
   const logout = useRef<HTMLFormElement>(null);
   const initials = email.slice(0, 2).toUpperCase();
@@ -335,7 +323,7 @@ function AccountMenu({
         </DropdownMenu>
       </SidebarMenuItem>
       {/* the sign-out POST, outside the menu item so nothing but the item's click submits it */}
-      <form ref={logout} method="post" action={logoutPath} hidden />
+      <form ref={logout} method="post" action="/.auth/logout" hidden />
     </SidebarMenu>
   );
 }
