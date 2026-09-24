@@ -96,9 +96,12 @@ test("the CI trace covers the parent, deploy and e2e, beside delete and alert", 
 });
 
 test("main's trace job collects, uploads and posts exactly as a PR preview's does", () => {
-  // Only the checkout differs: main's pushed commit, a PR's head.
+  // Only the checkout and the traced commit differ: main's pushed commit; a PR's tested merge
+  // commit, with the statuses on its head.
   const afterCheckout = (workflow: MainWorkflow) =>
-    (workflow.jobs.trace?.steps || []).filter((step) => step.uses !== "actions/checkout@v4");
+    (workflow.jobs.trace?.steps || []).filter(
+      (step) => step.uses !== "actions/checkout@v4" && step.name !== "Record the traced commit",
+    );
   expect(afterCheckout(main)).toEqual(afterCheckout(preview));
 });
 

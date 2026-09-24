@@ -173,9 +173,10 @@ The finalizer fails the job, after writing the manifest and the summaries, when:
 - an expected workspace left no artifact. The Test workflow passes
   `--expect-unit-workspaces`, which reads them from the checkout: every
   pnpm-workspace package with a `test` or `test:unit` script. It is not a list
-  in test.yml because a PR's workflow file comes from its merge ref while the
-  job checks out its head, so main's list failed every PR opened before a
-  workspace was added. Preview OS and Main OS e2e name `iterate-root,os` in
+  in test.yml: while the job checked out a PR's head under its merge ref's
+  workflow file, main's list failed every PR opened before a workspace was
+  added ([Which tree a pull request's CI tests](depot-ci.md#which-tree-a-pull-requests-ci-tests)).
+  Preview OS and Main OS e2e name `iterate-root,os` in
   `TEST_TELEMETRY_EXPECTED_WORKSPACES`. This is what catches a runner that
   never started;
 - a sentinel was never replaced (a runner started and was killed);

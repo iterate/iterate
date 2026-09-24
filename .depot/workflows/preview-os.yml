@@ -1,8 +1,9 @@
 # ONE PREVIEW PER PULL REQUEST of apps/os, on Cloudflare Worker Previews — the shape of
 # cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
 # The script is apps/os/scripts/preview.ts. One job per operation, named for when it runs:
-#   deploy              every push: deploys the PR merged into main (GitHub's test merge commit;
-#                       the head alone when the PR conflicts, scripts/ci/preview-tested-commit.ts)
+#   deploy              every push: deploys the PR merged into main (the run's own commit, the merge
+#                       commit Depot read this file from; the head alone on a dispatch whose PR
+#                       conflicts, scripts/ci/preview-tested-commit.ts)
 #                       as a preview named `pr<n>-<branch slug>` of the parent worker
 #                       os-preview, and writes the URL, the tested commit and the operations
 #                       into the PR body, under a status line: deploying, deployed or deploy failed
@@ -137,12 +138,15 @@ jobs:
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
-      # The preview proves what main will be after the merge: GitHub's test merge commit, or the
-      # head alone when there is none (a conflict), which the PR body then says.
+      # The preview proves what main will be after the merge: on a push, this run's own commit (the
+      # merge commit this workflow file was read from, so the code and the workflow are one tree);
+      # on a dispatch, GitHub's current test merge commit, or the head alone when there is none (a
+      # conflict), which the PR body then says.
       - name: Check out the PR merged into main
         id: tested
         env:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: node scripts/ci/preview-tested-commit.ts
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
@@ -308,13 +312,17 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 10
     steps:
-      - name: Checkout the PR head
+      # The tree deploy tested, which on a push is the one this file was read from, so the tracing
+      # scripts are this workflow's own; the statuses still go on the PR head.
+      - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
       - name: Record the traced commit
-        run: echo "CI_TRACE_STATUS_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
+        run: echo "CI_TRACE_STATUS_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       # The Depot organization token CI telemetry uses (Doppler _shared/preview) reads the workflow

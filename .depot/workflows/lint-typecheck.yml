@@ -21,11 +21,15 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 20
     steps:
+      # THE RUN'S OWN COMMIT, the tree this workflow file was read from: on a pull request, the
+      # merge commit of its head into main (refs/pull/<n>/merge as Depot resolved it), so a workflow
+      # change on main never runs against a head that predates it
+      # (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - fail-fast: false

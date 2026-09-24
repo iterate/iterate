@@ -44,6 +44,10 @@ test("Preview OS deploys the PR merged into main, and e2e uses that very commit"
   const resolve = deploySteps.findIndex((step) => step.id === "tested");
   const deploy = deploySteps.findIndex((step) => step.run?.includes('pnpm preview "$ACTION"'));
   expect(deploySteps[resolve]?.run).toBe("node scripts/ci/preview-tested-commit.ts");
+  // on a push, the run's own commit: the merge commit this workflow file was read from
+  expect(deploySteps[resolve]?.env?.PREVIEW_RUN_SHA).toBe(
+    "${{ github.event_name == 'pull_request' && github.sha || '' }}",
+  );
   // resolved before anything is installed or deployed from the checkout
   expect(resolve).toBeLessThan(
     deploySteps.findIndex((step) => step.name === "Reconcile dependencies (baked)"),
@@ -53,8 +57,15 @@ test("Preview OS deploys the PR merged into main, and e2e uses that very commit"
     "${{ steps.tested.outputs.description }}",
   );
   expect(preview.jobs.deploy.outputs?.["tested-sha"]).toBe("${{ steps.tested.outputs.sha }}");
-  const checkout = preview.jobs.e2e.steps?.find((step) => step.uses === "actions/checkout@v4");
-  expect(checkout?.with?.ref).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
+  // e2e and trace run the scripts of the tree deploy tested, not of the PR head alone
+  for (const job of [preview.jobs.e2e, preview.jobs.trace]) {
+    const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
+    expect(checkout?.with?.ref).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
+  }
+  // the trace's statuses still go on the PR head
+  expect(
+    preview.jobs.trace.steps?.find((step) => step.name === "Record the traced commit")?.env,
+  ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
 });
 
 test("Preview OS: only the trace runs after the suite, so the next push's deploy waits for nothing else", () => {
