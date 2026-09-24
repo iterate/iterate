@@ -10,8 +10,7 @@ import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts"
 // Crosses the real idle eviction without a client or waitForEvent keeping the actor active. Measured on
 // a deployed preview 2026-09-22 (deadline → alarm woke a NEW incarnation): 10 s never (0/6, the alarm
 // fired in the first incarnation), 12 s always (16/16), 15 s always (22/22), 20 s always (22/22). The
-// edge is Cloudflare's ~10 s idle eviction; 20 s keeps twice that. 22 s sleep; 45 seconds bound the
-// deadline plus reconnect and assertions.
+// edge is Cloudflare's ~10 s idle eviction; 20 s keeps twice that. 22 s sleep.
 //
 // KNOWN FLAKE, THE PLATFORM'S: the runtime sometimes holds an armed alarm past its time
 // (src/alarm-coordinator.ts, the overdue watch; 2026-09-24 on PR #2950's preview this row's deadline
@@ -22,10 +21,13 @@ import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts"
 // at or after the reconnect (or 3 s or more past its deadline — normal delivery is p99 4 ms) by a
 // pass whose alarm trace says it was armed for exactly this deadline. A pass armed for anything
 // else, or no batch at all, is a real failure.
+// 70 s: the 22 s sleep and the checks, plus a stall BEFORE the first call reaches the context — a
+// fresh project's creation took ~23 s in 2 of 105 soak runs (cxqxfzpv5f, pd5152kz34, 2026-09-24;
+// the residual-timeouts cause, measured by its own rows), which is not this row's subject.
 const platformHeldTheAlarm = createFlake(
   test,
   /the platform held this deadline's alarm \d+ ms past its time/,
-  { timeoutMs: 44_000 },
+  { timeoutMs: 70_000 },
 );
 
 platformHeldTheAlarm(
