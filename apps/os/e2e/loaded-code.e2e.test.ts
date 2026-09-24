@@ -6,6 +6,7 @@
 // `subscribe` are a session's verbs (loaded code writes rows with `itx.append`). A raw `fetch()` is
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
 // egress. The chain a child inherits: own rows → the parent link → … → the root's rows → the built-ins.
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
@@ -123,3 +124,29 @@ test("owner-written physical redirects survive a loaded-code hop, while fresh ca
   ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
   expect(await root.builtins.rewriteRules.get("itx.escape")).toBeNull();
 });
+
+// Pinned: the repo and workspace processors write the parent link from `create-requested.creator`,
+// which whoever appends the request chooses.
+for (const kind of ["repo", "workspace"] as const)
+  createFailing(test, /should carry no parent link the request named/)(
+    `a ${kind} whose create-requested loaded code appended by hand is linked to nothing the request named: a script beneath a mask cannot reach past it through a ${kind} it births`,
+    async () => {
+      const root = openItx(freshCtx(`hand-${kind}`));
+      await root.provide("itx.tool", () => "hello-from-root");
+      await root.workspaces.create("/jail");
+      const jail = root.cd("/jail");
+      await jail.provide("itx.tool", null);
+      // The script runs at /jail, beneath the mask, and names the root as the creator.
+      const { links, tool } = (await jail.builtins.run(`async (itx) => {
+        const child = itx.cd('./escape');
+        await child.processors.enable('${kind}');
+        const [requested] = await child.append({ type: 'events.iterate.com/${kind}/create-requested', payload: { creator: '/' } });
+        await child.waitForEvent({ type: ['events.iterate.com/${kind}/created', 'events.iterate.com/${kind}/create-failed'], afterOffset: requested.offset });
+        const links = (await child.rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/jail/escape').map((r) => r.target);
+        const tool = await child.tool().then((v) => v, (e) => String(e.message));
+        return { links, tool };
+      }`)) as { links: string[]; tool: string };
+      expect(links, "the child should carry no parent link the request named").toEqual([]);
+      expect(tool).not.toBe("hello-from-root");
+    },
+  );
