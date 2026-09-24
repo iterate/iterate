@@ -258,6 +258,27 @@ export function splicePreviewStatus(body: string, status: PreviewStatus) {
   return body.slice(0, begin + SECTION_BEGIN.length) + spliced + body.slice(end);
 }
 
+/** A deploy's status writes around its steps. The PR body has no conditional update, so the last
+ *  write wins (scripts/preview.ts `writePullRequestBody`): `deploying` goes out beside the steps,
+ *  which do not wait for GitHub, and what follows it lands after it — `deploy failed` here, and the
+ *  steps' `deployed` section, which awaits the `deploying` write it is handed. `write` never
+ *  rejects: a status write that fails is logged, never the deploy's failure. */
+export async function deployWithStatus(
+  write: (
+    status: { state: "deploying" } | { state: "deploy failed"; error: unknown },
+  ) => Promise<void>,
+  steps: (deploying: Promise<void>) => Promise<void>,
+) {
+  const deploying = write({ state: "deploying" });
+  try {
+    await steps(deploying);
+  } catch (error) {
+    await deploying;
+    await write({ state: "deploy failed", error });
+    throw error;
+  }
+}
+
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
 /** The config templates a project can be born from: the directories of configs/. */

@@ -8,6 +8,7 @@ import {
   assertFreshInstall,
   changedApps,
   configTemplateNames,
+  deployWithStatus,
   isDurableObjectClassNotExportedError,
   lastLines,
   MAX_PREVIEW_NAME_LENGTH,
@@ -288,6 +289,40 @@ test("the status splice makes a body without a section (the first deploy failed)
   ).toBe(
     "What this PR does.\n\n<!-- os-preview:begin -->\n<!-- os-preview-status:begin -->\nStatus: **deploying** on `ccccccccc` · updated 2026-09-24 10:32 UTC\n<!-- os-preview-status:end -->\n<!-- os-preview:end -->\n",
   );
+});
+
+test("the deploy's status writes: `deploy failed` goes out only once `deploying` has landed, whenever the steps throw (the PR body's last write wins)", async () => {
+  const { events, write, release } = recordedStatusWrites();
+  const failure = new Error("wrangler preview failed with exit code 1");
+  const deploy = deployWithStatus(write, async () => {
+    events.push("steps");
+    throw failure;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(events).toEqual(["write deploying", "steps"]);
+  release();
+  await expect(deploy).rejects.toBe(failure);
+  expect(events).toEqual([
+    "write deploying",
+    "steps",
+    "landed deploying",
+    "write deploy failed",
+    "landed deploy failed",
+  ]);
+});
+
+test("the deploy's status writes: the steps run beside the `deploying` write and are handed it, so their section lands after it", async () => {
+  const { events, write, release } = recordedStatusWrites();
+  const deploy = deployWithStatus(write, async (deploying) => {
+    events.push("steps");
+    await deploying;
+    events.push("section");
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(events).toEqual(["write deploying", "steps"]);
+  release();
+  await deploy;
+  expect(events).toEqual(["write deploying", "steps", "landed deploying", "section"]);
 });
 
 test("lastLines keeps the tail and strips colour codes", () => {
@@ -573,4 +608,17 @@ function deployedSection() {
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [],
   });
+}
+
+/** A status write that records when it starts and lands; `deploying` lands only when released. */
+function recordedStatusWrites() {
+  const events: string[] = [];
+  let release = () => {};
+  const landed = new Promise<void>((resolve) => (release = resolve));
+  const write = async ({ state }: { state: string }) => {
+    events.push(`write ${state}`);
+    if (state === "deploying") await landed;
+    events.push(`landed ${state}`);
+  };
+  return { events, write, release };
 }

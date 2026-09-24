@@ -606,7 +606,10 @@ timed-out deploy posts failure.
 ## Preview job shape
 
 The Preview OS workflow runs **deploy**, then **e2e** as a separate job with
-`needs: deploy` (#2861). The e2e job starts only behind a deploy that succeeded,
+`needs: deploy` (#2861). Inside deploy, each step starts once what it needs is
+there: the wrangler install, the Previews secrets, the Artifacts namespace and
+the `deploying` status run beside the builds, and the clients deploy beside the
+OS ([the trace's spans](ci-traces.md#steps-and-phases)). The e2e job starts only behind a deploy that succeeded,
 or alone on an `action=e2e` dispatch, then runs the Vitest e2e suite and the
 Playwright specs concurrently against the live preview (`runE2e` in
 `apps/os/scripts/preview.ts`). Job dependencies replace milestone signalling:

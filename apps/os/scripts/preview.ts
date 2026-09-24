@@ -36,7 +36,7 @@ import {
 } from "../../../scripts/lib/start-app.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
-import { parseAppConfig } from "../src/app-config.ts";
+import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
 import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
@@ -56,6 +56,7 @@ import {
   assertFreshInstall,
   changedApps,
   configTemplateNames,
+  deployWithStatus,
   lastLines,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
@@ -396,13 +397,11 @@ async function deployAppPreview(
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.status !== 0)
     throw new Error(
-      `apps/${app.name}: wrangler preview failed with exit code ${result.status}\n${lastLines(`${result.stdout}\n${result.stderr}`, 40)}`,
+      `wrangler preview failed with exit code ${result.status}\n${lastLines(`${result.stdout}\n${result.stderr}`, 40)}`,
     );
   const url = parseWranglerJson(result.stdout).preview?.urls?.[0];
   if (url !== appPreviewUrl(app, previewName))
-    throw new Error(
-      `apps/${app.name}: expected ${appPreviewUrl(app, previewName)}, wrangler returned ${url}`,
-    );
+    throw new Error(`expected ${appPreviewUrl(app, previewName)}, wrangler returned ${url}`);
   await smoke(`${url}/healthz`, (status) => status === 200, `apps/${app.name} health`);
   return { name: app.name, url };
 }
@@ -486,16 +485,17 @@ async function deleteWorkerPreview(
  *  one upload covers every preview, and each run refreshes them. The two secrets are the deployment's
  *  (src/app-config.ts, scripts/deploy.ts ships the same two): the one `APP_CONFIG` object —
  *  `login.password`, `secrets.adminBearer` — and `APP_CONFIG_SECRETS__KEY` beside it. Values go
- *  through a 0600 tmp file, never argv or the config. */
+ *  through a 0600 tmp file, never argv or the config. The command reads only the worker's name and
+ *  account, so the config naming the parent alone serves, and the upload needs no build: it runs
+ *  beside the builds, in its own directory, away from the dist/ they write. */
 async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
   const secrets = collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
-  const dir = mkdtempSync(path.join(tmpdir(), "os-preview-secrets-"));
+  const config = writeParentConfig(PREVIEW_PARENT);
+  const dir = path.dirname(config);
   const file = path.join(dir, "secrets.json");
   try {
     writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
-    await runAsync(wrangler, ["preview", "secret", "bulk", file, "-c", PREVIEW_CONFIG_NAME], {
-      cwd: ROOT,
-    });
+    await runAsync(wrangler, ["preview", "secret", "bulk", file, "-c", config], { cwd: dir });
     console.log(
       `uploaded ${Object.keys(secrets).length} secrets to the Previews settings of ${PREVIEW_PARENT.workerName}`,
     );
@@ -504,84 +504,80 @@ async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
   }
 }
 
-/** The OS's own preview, from an OS build already made — its Artifacts namespace, its config
- *  (naming the PR's Dash preview when this run deploys one), the Previews secrets, `wrangler
- *  preview`, and the smoke that the new deployment serves. The wrangler it prepared comes back for
- *  the apps on top; the caller cleans it up (here, when this fails). */
+/** The OS's own preview, from an OS build already made, its Artifacts namespace and the Previews
+ *  secrets already in place: its config (naming the PR's Dash preview when this run deploys one),
+ *  `wrangler preview`, and the smoke that the new deployment serves. */
 async function deployOsPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
   dashOrigin: string | undefined,
+  wrangler: string,
   settleMs: number,
   recreated = false,
-): Promise<{
-  wrangler: ReturnType<typeof preparePreviewWrangler>;
-  url: string;
-  deploymentId: string;
-  slug: string;
-}> {
-  await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
+): Promise<{ url: string; deploymentId: string; slug: string }> {
   writePreviewWranglerConfig({ previewName, dashOrigin });
-  const wrangler = preparePreviewWrangler();
-  try {
-    await wrangler.ready;
-    await uploadPreviewSecrets(wrangler.command, ctx);
-    const result = await run(wrangler.command, [
-      "preview",
-      "--name",
-      previewName,
-      "-c",
-      PREVIEW_CONFIG_NAME,
-      "--json",
-    ]);
-    if (result.stderr) process.stderr.write(result.stderr);
-    if (result.status !== 0) {
-      const output = `${result.stdout}\n${result.stderr}`;
-      // An existing preview cannot gain a Durable Object class (preview-config.ts): delete it with
-      // its resources and create it again, once.
-      if (!recreated && isDurableObjectClassNotExportedError(output)) {
-        console.warn(
-          `preview ${previewName} lacks a Durable Object class this build binds (Cloudflare 10061), and an existing Worker Preview cannot gain one: deleting the preview and its resources, then creating it again`,
-        );
-        await deletePreview(ctx.cf, previewName, wrangler.command);
-        wrangler.cleanup();
-        return deployOsPreview(ctx, previewName, dashOrigin, settleMs, true);
-      }
-      const hint = isMissingWorkerError(output)
-        ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm --dir apps/os run deploy --env preview`
-        : isDurableObjectClassNotExportedError(output)
-          ? ` — Cloudflare 10061 on a new preview too: the parent worker ${PREVIEW_PARENT.workerName} does not export a Durable Object class this build binds. Deploy the parent from main (pnpm --dir apps/os run deploy --env preview); a PR that itself adds a class needs the parent deployed from its branch first`
-          : "";
-      throw new Error(
-        `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
+  const result = await run(wrangler, [
+    "preview",
+    "--name",
+    previewName,
+    "-c",
+    PREVIEW_CONFIG_NAME,
+    "--json",
+  ]);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.status !== 0) {
+    const output = `${result.stdout}\n${result.stderr}`;
+    // An existing preview cannot gain a Durable Object class (preview-config.ts): delete it with
+    // its resources and create it again, once. The apps on top deploying beside it are previews of
+    // their own parents, and stay.
+    if (!recreated && isDurableObjectClassNotExportedError(output)) {
+      console.warn(
+        `preview ${previewName} lacks a Durable Object class this build binds (Cloudflare 10061), and an existing Worker Preview cannot gain one: deleting the preview and its resources, then creating it again`,
       );
+      await deletePreview(ctx.cf, previewName, wrangler);
+      await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
+      return deployOsPreview(ctx, previewName, dashOrigin, wrangler, settleMs, true);
     }
-    const data = parseWranglerJson(result.stdout);
-    const url = data.preview?.urls?.[0];
-    const deploymentId = data.deployment?.id;
-    if (!url || !deploymentId)
-      throw new Error(`wrangler emitted no preview URL or deployment id:\n${result.stdout}`);
-    if (url !== previewUrl(previewName)) {
-      throw new Error(
-        `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
-      );
-    }
-    // apps/os's smoke is `/version` naming the new deployment (src/worker.ts); propagation was
-    // observed at a few seconds.
-    await smokeResponse(
+    const hint = isMissingWorkerError(output)
+      ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm --dir apps/os run deploy --env preview`
+      : isDurableObjectClassNotExportedError(output)
+        ? ` — Cloudflare 10061 on a new preview too: the parent worker ${PREVIEW_PARENT.workerName} does not export a Durable Object class this build binds. Deploy the parent from main (pnpm --dir apps/os run deploy --env preview); a PR that itself adds a class needs the parent deployed from its branch first`
+        : "";
+    throw new Error(
+      `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
+    );
+  }
+  const data = parseWranglerJson(result.stdout);
+  const url = data.preview?.urls?.[0];
+  const deploymentId = data.deployment?.id;
+  if (!url || !deploymentId)
+    throw new Error(`wrangler emitted no preview URL or deployment id:\n${result.stdout}`);
+  if (url !== previewUrl(previewName)) {
+    throw new Error(
+      `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
+    );
+  }
+  // apps/os's smoke is `/version` naming the new deployment (src/worker.ts), asked every 5 s. Not
+  // sooner: it hands straight on to the readiness gate, and an in-place redeploy's old version
+  // still answers for seconds after. Asked every 0.5 s it saved at most ~3.5 s, and the gate then
+  // missed in its first two rounds on 3 of 7 in-place redeploys (#3035).
+  await traceOperation("Smoke /version", () =>
+    smokeResponse(
       `${url}/version`,
       async (response) =>
         response.status === 200 && (await response.text()).startsWith(deploymentId),
       "version names the deployment",
-    );
-    // `/version` answering is not the preview answering: a brand-new preview's Durable Objects
-    // answer `internal error; reference = …` for seconds after it (preview-readiness.ts; 19 of 20
-    // brand-new previews on 2026-09-24, for 6–27 s). Nothing is handed on — the apps on top, the
-    // PR body's links, main's e2e job — until five rounds of eight in a row answer in full; a
-    // preview that does not within a minute fails the deploy, naming what it answered. `--settle`
-    // holds the rounds past an in-place redeploy's window, when the old version still answers
-    // (preview-readiness.ts): the CI workflows' own previews, redeployed in place by every run.
-    await awaitPreviewReady(url, {
+    ),
+  );
+  // `/version` answering is not the preview answering: a brand-new preview's Durable Objects
+  // answer `internal error; reference = …` for seconds after it (preview-readiness.ts; 19 of 20
+  // brand-new previews on 2026-09-24, for 6–27 s). Nothing is handed on — the PR body's links,
+  // the sign-in seed, main's e2e job — until five rounds of eight in a row answer in full; a
+  // preview that does not within a minute fails the deploy, naming what it answered. `--settle`
+  // holds the rounds past an in-place redeploy's window, when the old version still answers
+  // (preview-readiness.ts): the CI workflows' own previews, redeployed in place by every run.
+  await traceOperation("Readiness gate", () =>
+    awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
         collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
       ).secrets.adminBearer.exposeSecret(),
@@ -589,16 +585,15 @@ async function deployOsPreview(
       consecutive: 5,
       holdMs: settleMs,
       deadlineMs: settleMs + 60_000,
-    });
-    return { wrangler, url, deploymentId, slug: data.preview?.slug || previewName };
-  } catch (error) {
-    wrangler.cleanup();
-    throw error;
-  }
+    }),
+  );
+  return { url, deploymentId, slug: data.preview?.slug || previewName };
 }
 
 /** The status line says `deploying` first and `deploy failed`, with the error's tail, when any
- *  step throws; a deploy that lands rewrites the whole section, `deployed`. */
+ *  step throws; a deploy that lands rewrites the whole section, `deployed`. The `deploying` write
+ *  runs beside the steps, and both later writes land after it (preview-config.ts
+ *  `deployWithStatus`). */
 async function deployPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
@@ -606,106 +601,217 @@ async function deployPreview(
   apps: StartApp[],
   settleMs: number,
 ) {
-  await writeStatus(prNumber, { state: "deploying" });
-  try {
-    await deployPreviewSteps(ctx, previewName, prNumber, apps, settleMs);
-  } catch (error) {
-    await writeStatus(prNumber, { state: "deploy failed", error: describe(error) });
-    throw error;
-  }
+  await deployWithStatus(
+    (status) =>
+      traceOperation(`Write the ${status.state} status`, () =>
+        writeStatus(
+          prNumber,
+          status.state === "deploying"
+            ? status
+            : { state: status.state, error: describe(status.error) },
+        ),
+      ),
+    (deploying) => deployPreviewSteps(ctx, previewName, prNumber, apps, settleMs, deploying),
+  );
 }
 
+/** Wait for every promise, then throw the first failure: a step that fails early leaves none still
+ *  running when the deploy reports it, nor the wrangler install they run removed under them. */
+async function settleAll(promises: Promise<unknown>[]) {
+  const failed = (await Promise.allSettled(promises)).find(
+    (result) => result.status === "rejected",
+  );
+  if (failed) throw failed.reason;
+}
+
+/** Each step starts once what it needs is there, and each is a span in the CI trace
+ *  (docs/ci-traces.md): the wrangler install, the Previews secrets and the Artifacts namespace
+ *  need no build and run beside the builds; apps/os deploys once its build and those are done, and
+ *  each app on top once its own build and the wrangler are, beside apps/os — every URL is known
+ *  before anything deploys (preview-config.ts `previewUrl`, `appPreviewUrl`). Every step settles
+ *  before a failed one fails the deploy, named. Once apps/os's readiness gate has passed, the
+ *  sign-in seed and the PR body's section go out side by side. */
 async function deployPreviewSteps(
   ctx: EnvContext<OsEnv>,
   previewName: string,
   prNumber: string | undefined,
   apps: StartApp[],
   settleMs: number,
+  deploying: Promise<void>,
 ) {
   assertFreshInstall(REPO_ROOT);
-  // The apps' vite builds run beside apps/os's build, their rejection handlers attached at once:
-  // apps/os's build and deployment can take minutes, and an app build may fail before its result is
-  // consumed. Each step is a span in the CI trace (docs/ci-traces.md), so the deploy step shows
-  // where its time went.
-  const appBuilds = Promise.allSettled(
-    apps.map((app) => traceOperation(`Build ${app.name}`, () => buildStartApp(app, "preview"))),
-  );
-  await traceOperation("Build OS", () => buildOs("preview"));
-  const appBuildResults = await appBuilds;
-  const failedBuilds = appBuildResults.flatMap((result, index) =>
-    result.status === "rejected"
-      ? [{ app: apps[index]!.name, error: describe(result.reason) }]
-      : [],
-  );
-  // the apps on the first line (the PR body's summary), each one's error and output tail after it
-  if (failedBuilds.length)
-    throw new Error(
-      `app preview build failed: ${failedBuilds.map(({ app }) => app).join(", ")}\n${failedBuilds.map(({ app, error }) => `${app}: ${error}`).join("\n\n")}`,
-    );
   const appOrigins = appPreviewOrigins(apps, previewName);
-  const { wrangler, url, deploymentId, slug } = await traceOperation("Deploy OS preview", () =>
-    deployOsPreview(ctx, previewName, appOrigins.dash, settleMs),
-  );
+  // the paths this PR changes, for the Dash's template links (signInLinks), read beside the builds
+  const changed =
+    prNumber && apps.some((app) => app.name === "dash")
+      ? changedPaths(prNumber).catch((error: unknown) => {
+          console.warn(
+            `sign-in: ${describe(error)}; every template link names the preview's own copy`,
+          );
+          return [];
+        })
+      : Promise.resolve([]);
+  const wrangler = preparePreviewWrangler();
   try {
-    const appPreviews = await Promise.all(
-      apps.map((app) =>
-        traceOperation(`Deploy ${app.name}`, () =>
-          deployAppPreview(app, previewName, { issuer: url, appOrigins }, wrangler.command),
+    const installed = traceOperation("Install wrangler", () => wrangler.ready);
+    const prepared = settleAll([
+      installed.then(() =>
+        traceOperation("Upload the Previews secrets", () =>
+          uploadPreviewSecrets(wrangler.command, ctx),
         ),
       ),
-    );
-    const summary = {
-      previewName,
-      status: {
-        state: "deployed",
-        commit: checkedOutCommit(),
-        runUrl: process.env.DEPOT_JOB_URL,
-        at: new Date(),
-      } satisfies PreviewStatus,
-      url,
-      deploymentId,
-      slug,
-      dashboardUrl: `https://dash.cloudflare.com/${PREVIEW_PARENT.cloudflareAccountId}/workers/services/view/${PREVIEW_PARENT.workerName}/production/previews/${slug}`,
-      apps: appPreviews,
-      // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
-      testedCommit: process.env.PREVIEW_TESTED_COMMIT,
-      signIn: prNumber
-        ? await traceOperation("Seed sign-in", () =>
-            previewSignIn(ctx, { url, prNumber, apps: appPreviews }),
-          )
-        : undefined,
-    };
-    mkdirSync(OUTPUT_DIR, { recursive: true });
-    writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
-    console.log(`\npreview ${previewName}: ${url}`);
-    if (prNumber && process.env.GITHUB_TOKEN) {
-      const section = renderPullRequestSection(summary);
-      await writePullRequestBody(prNumber, "the preview section", (body) =>
-        splicePullRequestBody(body, section),
+      traceOperation("Ensure the Artifacts namespace", () =>
+        ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos")),
+      ),
+    ]);
+    const osPreview = (async () => {
+      await settleAll([traceOperation("Build OS", () => buildOs("preview")), prepared]);
+      return traceOperation("Deploy OS preview", () =>
+        deployOsPreview(ctx, previewName, appOrigins.dash, wrangler.command, settleMs),
       );
-    }
+    })();
+    const appPreviews = apps.map(async (app) => {
+      await settleAll([
+        traceOperation(`Build ${app.name}`, () => buildStartApp(app, "preview")),
+        installed,
+      ]);
+      return traceOperation(`Deploy ${app.name}`, () =>
+        deployAppPreview(
+          app,
+          previewName,
+          { issuer: previewUrl(previewName), appOrigins },
+          wrangler.command,
+        ),
+      );
+    });
+    const failures = (await Promise.allSettled([osPreview, ...appPreviews])).flatMap(
+      (result, index) =>
+        result.status === "rejected"
+          ? [
+              {
+                step: index === 0 ? "apps/os" : `apps/${apps[index - 1]!.name}`,
+                error: describe(result.reason),
+              },
+            ]
+          : [],
+    );
+    // the failed steps on the first line (the PR body's summary), each one's error and output tail after it
+    if (failures.length === 1) throw new Error(`${failures[0]!.step}: ${failures[0]!.error}`);
+    if (failures.length > 1)
+      throw new Error(
+        `${failures.map(({ step }) => step).join(", ")} failed\n\n${failures.map(({ step, error }) => `${step}: ${error}`).join("\n\n")}`,
+      );
+    const { url, deploymentId, slug } = await osPreview;
+    const deployedApps = await Promise.all(appPreviews);
+    console.log(`\npreview ${previewName}: ${url}`);
+    const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
+    const signIn = prNumber
+      ? await signInLinks(config, {
+          url,
+          prNumber,
+          apps: deployedApps,
+          changedPaths: await changed,
+        })
+      : undefined;
+    const publish = async (seeded: boolean) => {
+      const summary = {
+        previewName,
+        status: {
+          state: "deployed",
+          commit: checkedOutCommit(),
+          runUrl: process.env.DEPOT_JOB_URL,
+          at: new Date(),
+        } satisfies PreviewStatus,
+        url,
+        deploymentId,
+        slug,
+        dashboardUrl: `https://dash.cloudflare.com/${PREVIEW_PARENT.cloudflareAccountId}/workers/services/view/${PREVIEW_PARENT.workerName}/production/previews/${slug}`,
+        apps: deployedApps,
+        // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
+        testedCommit: process.env.PREVIEW_TESTED_COMMIT,
+        signIn: signIn && { ...signIn, seeded },
+      };
+      mkdirSync(OUTPUT_DIR, { recursive: true });
+      writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
+      if (!prNumber || !process.env.GITHUB_TOKEN) return;
+      await deploying;
+      const section = renderPullRequestSection(summary);
+      await traceOperation("Write the PR section", () =>
+        writePullRequestBody(prNumber, "the preview section", (body) =>
+          splicePullRequestBody(body, section),
+        ),
+      );
+    };
+    // The seed and the section side by side: a seed that failed rewrites the section to say so.
+    const [seeded] = await Promise.all([
+      signIn ? traceOperation("Seed sign-in", () => seedSignIn(config, { url, ...signIn })) : true,
+      publish(true),
+    ]);
+    if (!seeded) await publish(false);
   } finally {
     wrangler.cleanup();
   }
 }
 
-/** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): seed the PR's test person and
- *  project, mint the links — with the Dash, one per config template into its New project sheet
- *  (preview-config.ts `templateQuickLaunches`) — and smoke the heading's. The person is `pr<N>@preview.iterate.test`,
- *  the project `pr<N>` — created as them through the operator's bearer (`as`), the same idempotent
- *  call as e2e/support/project-host.ts `registerProject`, so the Dash link lands inside it. Each
- *  link is signed with the preview's own key for this preview's origin, expires in 14 days (every
- *  push mints a fresh one) and pre-approves this run's app previews (consent.ts: no Allow page).
- *  The heading's lands in the Dash's `/projects/pr<N>` when the Dash was previewed, else on the
- *  issuer's own `/login` ("Signed in as"). Neither the seed nor the smoke ever fails the deploy:
- *  they log, and the section says when the seed failed. */
-async function previewSignIn(
-  ctx: EnvContext<OsEnv>,
-  preview: { url: string; prNumber: string; apps: { name: string; url: string }[] },
+/** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): the heading's link, one per app,
+ *  and with the Dash one per config template into its New project sheet (preview-config.ts
+ *  `templateQuickLaunches`), all as the PR's test person `pr<N>@preview.iterate.test`, whose
+ *  project `pr<N>` seedSignIn creates. Each link is signed with the preview's own key for this
+ *  preview's origin, expires in 14 days (every push mints a fresh one) and pre-approves this run's
+ *  app previews (consent.ts: no Allow page). The heading's lands in the Dash's `/projects/pr<N>`
+ *  when the Dash was previewed, else on the issuer's own `/login` ("Signed in as"). */
+async function signInLinks(
+  config: AppConfig,
+  preview: {
+    url: string;
+    prNumber: string;
+    apps: { name: string; url: string }[];
+    changedPaths: string[];
+  },
 ) {
-  // The preview's two inherited secrets, parsed the way the worker parses them (uploadPreviewSecrets).
-  const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
   const { email, project } = testLinkIdentityOf(preview.prNumber);
+  const clients = preview.apps.map((app) => new URL(app.url).origin);
+  const link = async (next: string) =>
+    `${preview.url}${TEST_LINK_PATH}?${new URLSearchParams({
+      t: await mintTestLink({
+        key: config.secrets.key.exposeSecret(),
+        audience: preview.url,
+        email,
+        next,
+        clients,
+        expiresAt: Date.now() + 14 * 24 * 3600_000,
+      }),
+    })}`;
+  const landing = (app: { name: string; url: string }) =>
+    app.name === "dash" ? `${app.url}/projects/${project}` : app.url;
+  const dash = preview.apps.find((app) => app.name === "dash");
+  const heading = await link(dash ? landing(dash) : `${preview.url}/login`);
+  const apps = Object.fromEntries(
+    await Promise.all(preview.apps.map(async (app) => [app.name, await link(landing(app))])),
+  );
+  const templates = dash
+    ? await Promise.all(
+        templateQuickLaunches({
+          dashUrl: dash.url,
+          templates: configTemplateNames(REPO_ROOT),
+          changedPaths: preview.changedPaths,
+          // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
+          headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
+        }).map(async ({ name, fromHead, next }) => ({ name, fromHead, link: await link(next) })),
+      )
+    : [];
+  return { heading, apps, templates, email, project };
+}
+
+/** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
+ *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
+ *  lands inside it — then smoke the heading's link. Neither ever fails the deploy: they log, and
+ *  the section says when the seed failed. */
+async function seedSignIn(
+  config: AppConfig,
+  preview: { url: string; email: string; project: string; heading: string },
+) {
+  const { email, project } = preview;
   let seeded = false;
   try {
     const socketUrl = new URL("/api", preview.url);
@@ -735,49 +841,16 @@ async function previewSignIn(
   } catch (error) {
     console.warn(`sign-in: seeding ${email} with project ${project} failed: ${describe(error)}`);
   }
-  const clients = preview.apps.map((app) => new URL(app.url).origin);
-  const link = async (next: string) =>
-    `${preview.url}${TEST_LINK_PATH}?${new URLSearchParams({
-      t: await mintTestLink({
-        key: config.secrets.key.exposeSecret(),
-        audience: preview.url,
-        email,
-        next,
-        clients,
-        expiresAt: Date.now() + 14 * 24 * 3600_000,
-      }),
-    })}`;
-  const landing = (app: { name: string; url: string }) =>
-    app.name === "dash" ? `${app.url}/projects/${project}` : app.url;
-  const dash = preview.apps.find((app) => app.name === "dash");
-  const heading = await link(dash ? landing(dash) : `${preview.url}/login`);
-  const apps = Object.fromEntries(
-    await Promise.all(preview.apps.map(async (app) => [app.name, await link(landing(app))])),
+  const smoke = await fetch(preview.heading, { redirect: "manual" }).catch(
+    (error: unknown) => error,
   );
-  const templates = dash
-    ? await Promise.all(
-        templateQuickLaunches({
-          dashUrl: dash.url,
-          templates: configTemplateNames(REPO_ROOT),
-          changedPaths: await changedPaths(preview.prNumber).catch((error: unknown) => {
-            console.warn(
-              `sign-in: ${describe(error)}; every template link names the preview's own copy`,
-            );
-            return [];
-          }),
-          // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
-          headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
-        }).map(async ({ name, fromHead, next }) => ({ name, fromHead, link: await link(next) })),
-      )
-    : [];
-  const smoke = await fetch(heading, { redirect: "manual" }).catch((error: unknown) => error);
   if (smoke instanceof Response && smoke.status === 302 && smoke.headers.has("set-cookie"))
     console.log(`sign-in: the heading link signs in (302 to ${smoke.headers.get("location")})`);
   else
     console.warn(
       `sign-in: the heading link did not sign in: ${smoke instanceof Response ? `${smoke.status} ${await smoke.text()}` : describe(smoke)}`,
     );
-  return { heading, apps, templates, email, project, seeded };
+  return seeded;
 }
 
 /** The preview, then everything it owned, each found by its name: its Artifacts namespace (this
