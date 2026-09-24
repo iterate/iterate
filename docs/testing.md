@@ -614,10 +614,11 @@ A row that waits out real platform time is tagged `slow`
 tag, with `E2E_SLOW_ROW_TIMEOUT_MS` as its timeout, and sets `strictTags`, so
 a misspelled tag fails its row. Today these are the three residency rows in
 `context-residency.e2e.test.ts` that prove a careless facet stops, each
-sleeping 110–180 s, the row there that proves claimed background work outlives
-its context (a 60 s sleep), and the pin in
-`facet-abort-storage-reset.e2e.test.ts` of a Cloudflare fault that resets the
-context it runs on. Every PR used to wait for the longest residency row.
+sleeping 110–180 s, and the pin in `facet-abort-storage-reset.e2e.test.ts` of a
+Cloudflare fault that resets the context it runs on. Every PR used to wait for
+the longest residency row. The claimed-work row in
+`context-residency.e2e.test.ts` is not `slow`: it waits 30 s, so the claim's
+alarm lands mid-attempt, and runs on every PR.
 
 `pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`)
 and prints its choice as `[slow-rows] <run|skip|only>: <reason>`:
