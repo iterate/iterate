@@ -28,11 +28,9 @@
 // (#2939, #2899), a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while
 // the control plane stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
 //
-// The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow` and
-// skip the PRs that change none of their code (docs/testing.md#slow-rows): they run on a PR that
-// changes a file of `SLOW_ROW_PATHS` or carries the `slow-e2e` label, and on every main push, which
-// pages them on their own change of state. The claimed-work row waits out one claim's alarm (20 s)
-// and runs on every PR.
+// The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow`
+// (docs/testing.md#slow-rows): every main push runs them, and a PR runs them when it turns them on or
+// edits this file. The claimed-work row waits out one claim's alarm (20 s) and runs on every PR.
 import { expect, test } from "vitest";
 import {
   adminCredentials,
