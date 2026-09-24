@@ -57,23 +57,6 @@ function InvitationPage() {
         description="Check that the whole link was copied, or ask an owner of the organization for a new one."
       />
     );
-  // the link they joined by: "Open" accepts it again — it answers the same, and lands the
-  // membership on the organization's record and their account again, should the first answer have
-  // been cut before those folded (the tree reads the folds, so without it the page would be missing)
-  if (invitation.acceptedByYou && invitation.member)
-    return (
-      <Notice
-        title={`You joined ${invitation.orgName}`}
-        description="You accepted this invitation already."
-        action={
-          <Button type="button" disabled={joining} onClick={() => void join()}>
-            {joining ? <Spinner data-icon="inline-start" /> : null}
-            Open {invitation.orgName}
-          </Button>
-        }
-        error={error}
-      />
-    );
   const open = (
     <Link
       to="/organizations/$orgId"
@@ -83,6 +66,28 @@ function InvitationPage() {
       Open {invitation.orgName}
     </Link>
   );
+  // the link they joined by: "Open" accepts it again — it answers the same, and lands the
+  // membership on the organization's record and their account again, should the first answer have
+  // been cut before those folded (the tree reads the folds, so without it the page would be
+  // missing). A session without `organizations:write` cannot accept; it just opens.
+  if (invitation.acceptedByYou && invitation.member)
+    return (
+      <Notice
+        title={`You joined ${invitation.orgName}`}
+        description="You accepted this invitation already."
+        action={
+          canWrite ? (
+            <Button type="button" disabled={joining} onClick={() => void join()}>
+              {joining ? <Spinner data-icon="inline-start" /> : null}
+              Open {invitation.orgName}
+            </Button>
+          ) : (
+            open
+          )
+        }
+        error={error}
+      />
+    );
   if (invitation.member)
     return (
       <Notice
