@@ -1,5 +1,5 @@
-// Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads os-prd's Workers Logs since its last
-// run and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
+// Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the first-party prd Workers' Logs
+// since its last run and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
 // On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for ~2.5 hours:
 // ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and garple.com —
 // and our recovery kept most requests green, so only the logs knew.
@@ -24,11 +24,31 @@ import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import { osEnvs, PRD_ACCOUNT_ID } from "../../envs.ts";
+import {
+  agentsEnvs,
+  dashEnvs,
+  kitEnvs,
+  notesEnvs,
+  osEnvs,
+  PRD_ACCOUNT_ID,
+  spaEnvs,
+  voiceEnvs,
+} from "../../envs.ts";
 import { newestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
-const PRD_WORKER = osEnvs.prd!.workerName;
+/** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
+ *  of them pages; before 2026-09-24 only os-prd's did, and voice.iterate.com answered robots.txt
+ *  with a 500 unseen. */
+const PRD_WORKERS = [
+  osEnvs.prd!,
+  dashEnvs.prd,
+  agentsEnvs.prd,
+  notesEnvs.prd,
+  voiceEnvs.prd,
+  kitEnvs.prd,
+  spaEnvs.prd,
+].map((env) => env.workerName);
 
 /** Where one run leaves its state for the next: the workflow's `name:`, the artifact and its file. */
 export const stateArtifact = {
@@ -40,8 +60,13 @@ export const stateArtifact = {
 /** The prd account's Workers Logs API access. */
 type CloudflareCredentials = { accountId: string; apiToken: string };
 
-/** One window's rows per signal: [label, count], biggest first. */
-export type FaultReading = Record<"serverErrors" | "heals" | "errors", [string, number][]>;
+/** One window's rows per signal: [label, count], biggest first. `pagers` is not a fault: the
+ *  rpc-stub pagers' re-dial outcomes by event, the recovery a page shows beside a connection's
+ *  close (apps/os context/rpc-stubs.ts); one that gives up logs an error, which is. */
+export type FaultReading = Record<
+  "serverErrors" | "heals" | "errors" | "pagers",
+  [string, number][]
+>;
 
 /** The logs one run reads: from where the last run stopped to now. */
 export type LogWindow = { from: Date; to: Date };
@@ -58,7 +83,7 @@ export const AlarmState = z.object({
 });
 export type AlarmState = z.infer<typeof AlarmState>;
 
-/** Reads os-prd's Workers Logs since the last run and pages #error-pulse on a fault. */
+/** Reads the prd Workers' Logs since the last run and pages #error-pulse on a fault. */
 export async function run(
   options: { at?: string; dryRun?: boolean; state?: string; stateOut?: string } = {},
 ) {
@@ -123,7 +148,7 @@ export async function alarm(input: {
     .filter(Boolean)
     .join("\n\n");
   return {
-    summary: summary || `${PRD_WORKER} is quiet`,
+    summary: summary || "prd is quiet",
     next: { readUntil: window.to.toISOString(), incidents } satisfies AlarmState,
   };
 }
@@ -214,6 +239,10 @@ export function triageIncidents(
     threads.set(before.thread, thread);
   }
   const span = `${hhmm(window.from)}–${hhmm(window.to)} UTC`;
+  const pagers = Object.fromEntries(reading.pagers);
+  const recovery =
+    (pagers["rpc-stub-pager-dropped"] ?? 0) > 0 &&
+    `• pagers in the window: ${pagers["rpc-stub-pager-dropped"]} dropped, ${pagers["rpc-stub-pager-redialed"] ?? 0} re-dialed, ${pagers["rpc-stub-pager-redial-failed"] ?? 0} gave up`;
   const page = opened.length
     ? {
         keys: opened.map(([key]) => key),
@@ -221,6 +250,7 @@ export function triageIncidents(
           opened.map(([, sighting]) => sighting),
           window,
           Boolean(state),
+          recovery,
         ),
       }
     : null;
@@ -230,7 +260,10 @@ export function triageIncidents(
     text: [
       broadcast ? `🚨 grew tenfold, ${span} ${onCallMention}` : `still failing, ${span}`,
       ...lines,
-    ].join("\n"),
+      recovery,
+    ]
+      .filter(Boolean)
+      .join("\n"),
   }));
   return { page, replies, incidents };
 }
@@ -240,6 +273,7 @@ function renderFaultPage(
   sightings: { what: string; label: string; count: number }[],
   window: LogWindow,
   remembered = true,
+  recovery: string | false = false,
 ): string {
   const lines = ["5xx responses", "platform-failure heals", "errors"].map((what) => {
     const rows = sightings.filter((s) => s.what === what).sort((a, b) => b.count - a.count);
@@ -248,8 +282,9 @@ function renderFaultPage(
     return rows.length && `• ${total} ${what}: ${top.join(", ")}${rows.length > 4 ? ", …" : ""}`;
   });
   return [
-    `🚨 prd fault page: ${PRD_WORKER}, ${hhmm(window.from)}–${hhmm(window.to)} UTC ${onCallMention}`,
+    `🚨 prd fault page: ${hhmm(window.from)}–${hhmm(window.to)} UTC ${onCallMention}`,
     ...lines,
+    recovery,
     `<https://dash.cloudflare.com/${PRD_ACCOUNT_ID}/workers-and-pages/observability|Workers Logs>`,
     remembered
       ? "Repeats go in this thread."
@@ -285,7 +320,12 @@ async function readWindow(
             datasets: ["cloudflare-workers"],
             ...parameters,
             filters: [
-              { key: "$metadata.service", operation: "eq", value: PRD_WORKER, type: "string" },
+              {
+                key: "$metadata.service",
+                operation: "in",
+                value: PRD_WORKERS.join(","),
+                type: "string",
+              },
               ...filters,
             ],
           },
@@ -385,7 +425,7 @@ async function readWindow(
     ]);
     return [...errors, ...apiUnreadBodyErrors];
   };
-  const [serverErrors, heals, initialErrors, structuredErrors] = await Promise.all([
+  const [serverErrors, heals, initialErrors, structuredErrors, pagers] = await Promise.all([
     readServerErrors(),
     rows(
       [{ key: "event", operation: "includes", value: "platform-failure", type: "string" }],
@@ -402,6 +442,10 @@ async function readWindow(
         ],
       },
     ]),
+    rows(
+      [{ key: "event", operation: "includes", value: "rpc-stub-pager-", type: "string" }],
+      "event",
+    ),
   ]);
   let errors = initialErrors;
   if (errors.length) {
@@ -485,6 +529,7 @@ async function readWindow(
     serverErrors,
     heals,
     errors: [...errors, ...structuredErrors],
+    pagers,
   };
 }
 

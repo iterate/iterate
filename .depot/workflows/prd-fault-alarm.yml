@@ -1,4 +1,5 @@
-# Prd fault alarm: every 15 minutes, reads os-prd's Workers Logs since the last run and pages Slack
+# Prd fault alarm: every 15 minutes, reads every first-party prd Worker's logs since the last run (os-prd
+# and its clients, scripts/ci/prd-fault-alarm.ts PRD_WORKERS) and pages Slack
 # #error-pulse on any 5xx, a burst of platform-failure heals, or any error. Each fault is an
 # incident: a new one pages at the top level mentioning Jonas, its repeats reply in that page's
 # thread. The page is the alarm: the run goes red only when it could not read the logs or post to
@@ -49,7 +50,7 @@ jobs:
           DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" &&
             pnpm tsx scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
             echo "::warning::no previous state: this run pages every fault as new"
-      - name: Read os-prd's logs, page on a fault
+      - name: Read the prd Workers' logs, page on a fault
         run: >-
           doppler run --project os --config prd --
           pnpm tsx scripts/ci/prd-fault-alarm.ts run

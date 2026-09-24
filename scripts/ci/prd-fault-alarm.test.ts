@@ -15,6 +15,7 @@ const quiet: FaultReading = {
   serverErrors: [],
   heals: [],
   errors: [],
+  pagers: [],
 };
 const now = new Date("2026-09-23T07:30:00Z");
 const window = { from: new Date("2026-09-23T07:00:00Z"), to: now };
@@ -42,7 +43,7 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
       ],
     }),
   ).toMatchInlineSnapshot(`
-    "🚨 prd fault page: os-prd, 07:00–07:30 UTC <@U067G4QRFK2>
+    "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2>
     • 13 5xx responses: garple.com 7, lispwoso.com 6
     • 1815 platform-failure heals: project 1279, repo 536
     • 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2
@@ -74,7 +75,7 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(7);
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(8);
   expect(slack).toMatchObject({ posts: [] });
 });
 
@@ -96,7 +97,7 @@ test("a quiet run never builds a Slack client, so a broken token cannot turn it 
   });
   await expect(
     alarm({ window, state: null, cloudflare: credentials, slack }),
-  ).resolves.toMatchObject({ summary: "os-prd is quiet" });
+  ).resolves.toMatchObject({ summary: "prd is quiet" });
   expect(slack).not.toHaveBeenCalled();
 });
 
@@ -104,7 +105,7 @@ test("a quiet prd posts nothing and the next run reads on from where this one st
   await using _cloudflare = workersLogs(serverErrorsOnly(0));
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack);
-  expect(run1).toMatchObject({ summary: "os-prd is quiet", next: { incidents: {} } });
+  expect(run1).toMatchObject({ summary: "prd is quiet", next: { incidents: {} } });
   expect(slack).toMatchObject({ posts: [] });
   expect(logWindow(new Date("2026-09-23T07:45:00Z"), run1.next)).toEqual({
     from: new Date("2026-09-23T07:28:00Z"),
@@ -129,7 +130,7 @@ test("a new 5xx pages; its repeats reply in the page's thread without mentioning
       {
         channel,
         text: [
-          "🚨 prd fault page: os-prd, 06:58–07:28 UTC <@U067G4QRFK2>",
+          "🚨 prd fault page: 06:58–07:28 UTC <@U067G4QRFK2>",
           "• 1 5xx responses: lispwoso.com 1",
           "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>",
           "No state from the last run: an incident already paged pages again.",
@@ -174,7 +175,7 @@ test("a different 5xx during an open incident pages at once", async () => {
   expect(slack.posts[1]).toMatchObject({
     channel,
     text: expect.stringMatching(
-      /^🚨 prd fault page: os-prd, 07:28–07:43 UTC <@U067G4QRFK2>\n• 1 5xx responses: garple.com 1\n/,
+      /^🚨 prd fault page: 07:28–07:43 UTC <@U067G4QRFK2>\n• 1 5xx responses: garple.com 1\n/,
     ),
   });
   expect(slack.posts[1]).not.toHaveProperty("thread_ts");
@@ -224,6 +225,48 @@ test("5xx responses the URL rows miss page as unknown", async () => {
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1, 2));
   expect(run1.summary).toContain("• 3 5xx responses: unknown 2, lispwoso.com 1");
+});
+
+// The 12:42 and 12:57 pages on 2026-09-24: a DO shutdown closed four voice boards' pagers, each
+// logging an error; the page now says beside them whether the pagers came back.
+test("a page and a thread reply show how the pagers recovered in the window", () => {
+  const reading: FaultReading = {
+    ...quiet,
+    errors: [["Connection closed: this Durable Object instance is no longer active.", 2]],
+    pagers: [
+      ["rpc-stub-pager-dropped", 4],
+      ["rpc-stub-pager-redialed", 3],
+      ["rpc-stub-pager-redial-failed", 1],
+    ],
+  };
+  const recovery = "• pagers in the window: 4 dropped, 3 re-dialed, 1 gave up";
+  const opened = triageIncidents(reading, window, null);
+  expect(opened.page?.text).toContain(recovery);
+  const state = { readUntil: now.toISOString(), incidents: opened.incidents };
+  expect(triageIncidents(reading, window, state).replies[0]?.text).toContain(recovery);
+  expect(triageIncidents({ ...reading, pagers: [] }, window, null).page?.text).not.toContain(
+    "pagers",
+  );
+});
+
+test("every first-party prd Worker is read, not os-prd alone", async () => {
+  await using cloudflare = workersLogs(serverErrorsOnly(0));
+  await summary();
+  const services = cloudflare.fetch.mock.calls.map(
+    ([, init]) =>
+      (JSON.parse(init.body) as { parameters: { filters: { key: string; value: string }[] } })
+        .parameters.filters[0],
+  );
+  expect(new Set(services.map((filter) => JSON.stringify(filter)))).toEqual(
+    new Set([
+      JSON.stringify({
+        key: "$metadata.service",
+        operation: "in",
+        value: "os-prd,dash,agents,notes,voice,kiterate,iterate-spa",
+        type: "string",
+      }),
+    ]),
+  );
 });
 
 test("heals page only in a burst, or as an incident already open", () => {
@@ -291,9 +334,9 @@ test.for([
 test("a reset-only window goes quiet after the re-count and posts nothing", async () => {
   await using logs = queryableWorkersLogs(resetPair());
   const slack = fakeSlack();
-  await expect(summary(() => slack.client)).resolves.toBe("os-prd is quiet");
+  await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(10);
+  expect(logs.fetch).toHaveBeenCalledTimes(11);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -385,7 +428,7 @@ test("null optional evidence fields do not prevent classification of complete re
   }));
   await using _logs = queryableWorkersLogs(events);
   using warn = vi.spyOn(console, "warn");
-  await expect(summary()).resolves.toBe("os-prd is quiet");
+  await expect(summary()).resolves.toBe("prd is quiet");
   expect(warn).not.toHaveBeenCalled();
 });
 
@@ -471,7 +514,7 @@ test.for(["message", "error"])(
         $workers: {},
       })),
     );
-    await expect(summary()).resolves.toBe("os-prd is quiet");
+    await expect(summary()).resolves.toBe("prd is quiet");
   },
 );
 
@@ -699,6 +742,8 @@ function matchesLogFilter(event: unknown, filter: LogFilter): boolean {
       return typeof value === "string" && value.includes(String(filter.value));
     case "not_includes":
       return typeof value === "string" && !value.includes(String(filter.value));
+    case "in":
+      return typeof value === "string" && String(filter.value).split(",").includes(value);
     case "not_in":
       return typeof value === "string" && !String(filter.value).split(",").includes(value);
     case "regex":
