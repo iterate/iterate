@@ -1,5 +1,6 @@
-/** Semantic project recovery: config Git tree, organization membership and encrypted current
- * secret cells. No streams, offsets, OAuth sessions, files or processor state are archived. */
+/** Semantic project recovery: config Git tree, organization membership, encrypted current secret
+ * cells and the project's own hostnames. No streams, offsets, OAuth sessions, files or processor
+ * state are archived. */
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -16,9 +17,11 @@ import {
   DeploymentStructure,
   EncryptedSecretSeed,
   ProjectSeed,
+  captureHostnames,
   compareStructure,
   configTree,
   openProjectSeed,
+  restoreHostnames,
 } from "./project-seed-format.ts";
 
 type SeedApi = {
@@ -195,6 +198,7 @@ export async function capture(options: {
       throw new Error("Secret inventory changed during capture; retry into a new archive.");
     if (expectedTip && expectedTip !== (await root.invoke([...repoRef, ["tip"]])))
       throw new Error("Config head changed during capture; retry into a new archive.");
+    const hostnames = await captureHostnames(root);
     return ProjectSeed.parse({
       version: 1,
       capturedAt: new Date().toISOString(),
@@ -206,6 +210,7 @@ export async function capture(options: {
       },
       config: { commit, tree, files },
       secrets,
+      hostnames,
     });
   });
   await openProjectSeed(seed, context.keys);
@@ -214,11 +219,11 @@ export async function capture(options: {
   // The pending marker is retained as a capture receipt; no archive is overwritten on reruns.
   writeFileSync(
     pending,
-    `Verified ${seed.project}: ${seed.config.files.length} files, ${seed.secrets.length} encrypted secrets.\n`,
+    `Verified ${seed.project}: ${seed.config.files.length} files, ${seed.secrets.length} encrypted secrets, ${seed.hostnames.length} hostnames.\n`,
     { mode: 0o600 },
   );
   console.log(
-    `Captured ${seed.project}: ${seed.config.files.length} config files, ${seed.secrets.length} encrypted secrets → ${file}`,
+    `Captured ${seed.project}: ${seed.config.files.length} config files, ${seed.secrets.length} encrypted secrets, hostnames [${seed.hostnames.join(", ")}] → ${file}`,
   );
 }
 
@@ -230,7 +235,7 @@ export async function check(options: { env: string; file: string }) {
     context.keys,
   );
   console.log(
-    `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members.`,
+    `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members; hostnames [${seed.hostnames.join(", ")}].`,
   );
 }
 
@@ -279,7 +284,8 @@ async function readStructure(context: Awaited<ReturnType<typeof target>>, rpc: R
 }
 
 /** Restore current configuration through normal project/repository/secret commands. Owners may
- * explicitly replace archived membership. Existing projects must belong to the selected org. */
+ * explicitly replace archived membership. Existing projects must belong to the selected org.
+ * Every step converges, so a rerun (after a failure, or a deploy that cut it) finishes the job. */
 export async function apply(options: {
   env: string;
   file: string;
@@ -338,12 +344,22 @@ export async function apply(options: {
       // the owner's session adds each member (the owner again is a no-op on the record)
       await operator.organizations.addMember(org.id, { userId: user.actor, role: member.role });
     }
-    if (!existing)
-      await admin.projects.create({
-        project: seed.project,
-        orgId: org.id,
-        restoreProjectId: seed.source.projectId,
-      });
+    // Asked again for an existing project, create answers it and lands whatever its organization's
+    // record lacks (src/session.ts `landProjectOnOrganization`): the list the dash shows.
+    await admin.projects.create({
+      project: seed.project,
+      orgId: org.id,
+      restoreProjectId: seed.source.projectId,
+    });
+    const record = z
+      .object({ state: z.object({ projects: z.record(z.string(), z.unknown()) }) })
+      .parse(
+        await admin.organizations
+          .get(org.id)
+          .invoke(["itx", "facets", ["get", "organization"], ["snapshot"]]),
+      );
+    if (!record.state.projects[seed.source.projectId])
+      throw new Error(`The organization's record does not list ${seed.project}.`);
     const root = await operator.projects.get(seed.source.projectId);
     const identity = z
       .object({ projectId: z.string(), projectSlug: z.string().optional() })
@@ -417,6 +433,20 @@ export async function apply(options: {
         throw new Error("Config publication did not catch up to the restored commit.");
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
+    // A custom hostname is a Cloudflare for SaaS custom hostname on the capturing deployment's zone:
+    // it is restored onto that deployment only (a recreation keeps its base URL).
+    const hostnames =
+      context.env.baseUrl === seed.source.platform
+        ? await restoreHostnames(root, seed.hostnames)
+        : [];
+    if (seed.hostnames.length && !hostnames.length)
+      console.log(
+        `Skipped hostnames [${seed.hostnames.join(", ")}]: captured on ${seed.source.platform}, not ${context.env.baseUrl}.`,
+      );
+    for (const { hostname, asked, status } of hostnames)
+      console.log(
+        `Hostname ${hostname}: ${asked ? "requested again" : "already served"}, ${status}.`,
+      );
     for (const member of members) {
       const orgs = await rpc
         .authenticate({
@@ -429,7 +459,7 @@ export async function apply(options: {
         throw new Error(`Membership readback failed for ${member.email}.`);
     }
     console.log(
-      `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships. Commit ${committed.commitOid}.`,
+      `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships, ${hostnames.length} hostnames, listed on the organization's record. Commit ${committed.commitOid}.`,
     );
   });
 }

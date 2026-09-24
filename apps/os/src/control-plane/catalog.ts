@@ -18,7 +18,7 @@ import type { IdentityProvider } from "./contract.ts";
 /** WHO asked: the caller's principal and grant, as the edge hands them over. The operator is the
  *  admin secret's principal (oauth.ts) — actor `admin`, no email. */
 export type Caller = Pick<PrincipalCaller, "principal" | "grant">;
-export const isOperator = (caller: Caller) =>
+const isOperator = (caller: Caller) =>
   caller.principal?.actor === "admin" && !caller.principal.email;
 
 /** The deployment's own organization: the operator's projects go here; it has no members. */

@@ -247,6 +247,96 @@ test("concurrent restores through the control plane: one slug never answers a di
   ]);
 });
 
+test("the operator's project in a named organization lands on the organization's record — the list the dash shows — as a person's does; the same creation again (a project seed's apply, rerun) lands nothing twice, and lands one the record lacks", async () => {
+  const admin = await operator();
+  // what a seed's apply does: the owner (the operator acting as them) makes the organization, the
+  // operator itself makes the project under its archived id
+  const owner = await operator("seed-owner@directory.test");
+  const org = await owner.organizations.create({ name: "Seeded organization" });
+  const projectFacts = async () =>
+    (await globalLog(`/organizations/${org.id}`))
+      .filter((event) => event.type === "events.iterate.com/organization/project-created")
+      .map(({ payload, source }) => ({ payload, platform: source?.platform }));
+  const restore = (project: string, restoreProjectId: string) =>
+    admin.projects.create({ project, orgId: org.id, restoreProjectId });
+  using _seeded = await restore("seeded", "prj_seeded");
+  expect(await organizationState(owner, org.id)).toMatchObject({
+    projects: { prj_seeded: { slug: "seeded", createdAt: expect.any(String) } },
+  });
+  // the same creation again answers the same project and lands no second fact
+  using again = await restore("seeded", "prj_seeded");
+  expect(await again.whoami()).toMatchObject({ projectId: "prj_seeded" });
+  expect(await projectFacts()).toEqual([
+    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
+  ]);
+  // a project the catalog holds and the record lacks (the operator's creations landed nothing
+  // before): the next create lands it — once, however often it is asked
+  await controlPlaneStub().createProject(
+    { principal: { actor: "admin" } },
+    { project: "seeded-earlier", organizationId: org.id, restoreProjectId: "prj_seeded_earlier" },
+  );
+  expect((await organizationState(owner, org.id)).projects).not.toHaveProperty(
+    "prj_seeded_earlier",
+  );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    using _converged = await restore("seeded-earlier", "prj_seeded_earlier");
+  }
+  expect(await projectFacts()).toEqual([
+    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
+    { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
+  ]);
+  expect(Object.keys((await organizationState(owner, org.id)).projects).sort()).toEqual([
+    "prj_seeded",
+    "prj_seeded_earlier",
+  ]);
+  // the deployment's own organization (the operator's projects with no orgId) has no record to land on
+  using _own = await admin.projects.create({ project: "operator-own" });
+  expect(
+    (await globalLog("/organizations/org_admin")).filter((event) =>
+      event.type.startsWith("events.iterate.com/organization/"),
+    ),
+  ).toEqual([]);
+});
+
+test("a person's first project mints their organization: its record gets the creation, the owner and the project in that order, the owner's account the membership", async () => {
+  const person = await operator("first-project@directory.test");
+  const { actor } = await person.whoami();
+  using _project = await person.projects.create({ project: "first-of-mine" });
+  const [org] = await person.organizations.list();
+  expect(org).toMatchObject({ name: "first-project", role: "owner", projects: 1 });
+  const facts = (await globalLog(`/organizations/${org!.id}`)).filter((event) =>
+    event.type.startsWith("events.iterate.com/organization/"),
+  );
+  const { id: projectId } = (await person.projects.list())[0]!;
+  expect(facts.map(({ type, payload }) => ({ type, payload }))).toEqual([
+    { type: "events.iterate.com/organization/created", payload: { name: "first-project" } },
+    {
+      type: "events.iterate.com/organization/member-added",
+      payload: { orgId: org!.id, userId: actor, role: "owner" },
+    },
+    {
+      type: "events.iterate.com/organization/project-created",
+      payload: { projectId, slug: "first-of-mine" },
+    },
+  ]);
+  expect(await organizationState(person, org!.id)).toMatchObject({
+    name: "first-project",
+    members: { [actor]: { role: "owner" } },
+    projects: { [projectId]: { slug: "first-of-mine" } },
+  });
+  expect(await accountState(person)).toMatchObject({
+    memberships: { [org!.id]: { role: "owner" } },
+  });
+  // the next one lands in the same organization, and only the project lands
+  using _second = await person.projects.create({ project: "second-of-mine" });
+  expect(
+    (await globalLog(`/organizations/${org!.id}`))
+      .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
+      .map(({ type }) => type)
+      .slice(3),
+  ).toEqual(["events.iterate.com/organization/project-created"]);
+});
+
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
   fetchReachesThisWorker();
   // the bearer signs nobody in: the operator's endpoints are `/api` and `/mcp`, not the sign-in page

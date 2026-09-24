@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { hashObject, treeObjectsOf } from "@iterate-com/shared/git-wire";
+import type { ItxExpression } from "iterate/expression";
 import { decryptSecretMaterial, type MaterialKeys } from "../src/secret-at-rest.ts";
 import { normalizeSecretRecord } from "../src/secrets.ts";
 
@@ -42,6 +43,9 @@ export const ProjectSeed = z.object({
     files: z.array(z.object({ path: Path, content: z.string() })).min(1),
   }),
   secrets: z.array(EncryptedSecretSeed),
+  /** The project's own hostnames (`project/hostname-*`, src/project/custom-hostnames.ts): each one
+   *  it served at capture. Absent from an archive captured before they were recorded. */
+  hostnames: z.array(z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)).default([]),
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
 
@@ -167,4 +171,89 @@ export function compareStructure(captured: DeploymentStructure, live: Deployment
     if (!capturedProjects.has(project.id))
       notes.push(`project ${project.slug} (${project.id}) was not captured`);
   return { problems, notes };
+}
+
+/** A project's root context as the seed commands reach it: capnweb's stub over `/api`. */
+type SeedRoot = { invoke(expression: ItxExpression): Promise<unknown> };
+
+/** The project facet's hostnames (src/project/contract.ts `hostnames`), the fields read here. */
+const ProjectHostnames = z.object({
+  state: z.object({
+    hostnames: z.record(
+      z.string(),
+      z.object({
+        requested: z.object({ verb: z.enum(["add", "remove"]) }).nullable(),
+        cloudflare: z.object({ status: z.string(), sslStatus: z.string() }).nullable(),
+        error: z.string().nullable(),
+      }),
+    ),
+  }),
+});
+type ProjectHostnames = z.infer<typeof ProjectHostnames>["state"]["hostnames"];
+async function projectHostnames(root: SeedRoot): Promise<ProjectHostnames> {
+  return ProjectHostnames.parse(
+    await root.invoke(["itx", "facets", ["get", "project"], ["snapshot"]]),
+  ).state.hostnames;
+}
+/** Served: Cloudflare has provisioned it for the project, and no removal is pending. */
+const serves = (entry: ProjectHostnames[string] | undefined) =>
+  !!entry?.cloudflare && entry.requested?.verb !== "remove";
+
+/** What `capture` records: every hostname the project serves. A first add still in flight, or one
+ *  refused, was never the project's; a hostname being removed is on its way out. */
+export async function captureHostnames(root: SeedRoot): Promise<string[]> {
+  return Object.entries(await projectHostnames(root))
+    .filter(([, entry]) => serves(entry))
+    .map(([hostname]) => hostname)
+    .sort();
+}
+
+/** What `apply` does with the archived hostnames: ask again for each one the project does not
+ *  serve — absent (an erase), refused, or being removed — with the same `hostname-add-requested` the
+ *  dash appends, then wait for the processor's answer to it (and to an add already in flight). A
+ *  hostname the project serves is left alone, so a rerun asks for nothing. Answers each hostname's
+ *  outcome; throws when one is refused, or unanswered by `timeoutMs`. */
+export async function restoreHostnames(
+  root: SeedRoot,
+  hostnames: string[],
+  { timeoutMs = 60_000 }: { timeoutMs?: number } = {},
+): Promise<{ hostname: string; asked: boolean; status: string }[]> {
+  const before = await projectHostnames(root);
+  const ask = hostnames.filter(
+    (hostname) => !serves(before[hostname]) && before[hostname]?.requested?.verb !== "add",
+  );
+  if (ask.length)
+    await root.invoke([
+      "itx",
+      [
+        "append",
+        ...ask.map((hostname) => ({
+          type: "events.iterate.com/project/hostname-add-requested",
+          payload: { hostname },
+        })),
+      ],
+    ]);
+  const deadline = Date.now() + timeoutMs;
+  let now = await projectHostnames(root);
+  while (hostnames.some((hostname) => !now[hostname] || now[hostname].requested)) {
+    if (Date.now() > deadline)
+      throw new Error(
+        `No answer within ${timeoutMs / 1000} s for hostnames ${hostnames.filter((hostname) => !now[hostname] || now[hostname].requested).join(", ")}; rerun apply to wait again.`,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    now = await projectHostnames(root);
+  }
+  const refused = hostnames.filter((hostname) => !now[hostname]!.cloudflare);
+  if (refused.length)
+    throw new Error(
+      `Hostnames refused: ${refused.map((hostname) => `${hostname} (${now[hostname]!.error})`).join("; ")}.`,
+    );
+  return hostnames.map((hostname) => {
+    const { status, sslStatus } = now[hostname]!.cloudflare!;
+    return {
+      hostname,
+      asked: ask.includes(hostname),
+      status: `${status}, certificate ${sslStatus}`,
+    };
+  });
 }

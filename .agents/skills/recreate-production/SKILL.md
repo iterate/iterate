@@ -22,7 +22,8 @@ pnpm --dir apps/os project-seed check \
 ```
 
 Capture creates a mode-0600 archive, Git mirror, working clone, and receipt. It refuses to
-overwrite an earlier archive. Report only the non-secret counts and paths.
+overwrite an earlier archive. The archive also records the project's custom hostnames
+(`hostnames`). Report only the non-secret counts, hostnames and paths.
 
 Capture the users, organizations and memberships as well; a project seed carries only its own
 organization:
@@ -30,6 +31,21 @@ organization:
 ```sh
 pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json
 ```
+
+## Pause merges from the erase until verification
+
+Every merge to `main` that touches the Worker redeploys prd (Deploy OS). A deploy during the
+restore resets Durable Objects under a running `apply`. Before the erase:
+
+1. The owner or you announce a merge pause where the team merges, lasting until
+   `verify-structure` passes. Nothing enforces it.
+2. Check that no Deploy OS run is in flight:
+   `depot ci run list --org 0p91s0lz49 --repo iterate/iterate`.
+
+If a deploy lands mid-restore anyway (for example `apply` fails with "Durable Object reset
+because its code was updated"), wait for it to finish. Then rerun `apply` for every seed, not
+only the one that failed, and then `verify-structure`. `apply` is idempotent, so a rerun only
+finishes what was cut off. Lift the pause once verification passes.
 
 ## Restore
 
@@ -41,8 +57,11 @@ pnpm --dir apps/os project-seed apply \
 
 `apply` creates or converges the selected project through normal project, repository, and secret
 operations. It restores the config tree, organization membership, and secrets into fresh project
-identity bindings. It verifies the Git tree, published commit, membership roles, and secret
-readback before returning. Project IDs are kept; user and organization IDs are minted afresh.
+identity bindings. It lands the project on its organization's record, the list the dash shows,
+and restores the custom hostnames on the deployment the seed was captured from. It verifies the
+Git tree, published commit, membership roles, the organization's record, secret readback and
+each hostname's Cloudflare answer before returning. Project IDs are kept; user and organization
+IDs are minted afresh.
 
 After every seed is applied, compare the whole structure with the capture:
 

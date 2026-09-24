@@ -6,7 +6,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, vi } from "vitest";
+import { afterAll, expect, onTestFinished, vi } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
@@ -223,4 +223,37 @@ export async function until<T>(
       throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
     await new Promise((r) => setTimeout(r, 25));
   }
+}
+
+/** Cloudflare's custom-hostname API on the SaaS zone (wrangler.test.jsonc `saas.test`), faked in
+ *  this isolate's `fetch`; every other request goes through. */
+export function fakeCloudflareCustomHostnames() {
+  const hostnames: string[] = [];
+  const through = globalThis.fetch;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.hostname !== "api.cloudflare.com") return through(request);
+    const ok = (result: unknown) => Response.json({ success: true, result });
+    const entry = (hostname: string) => ({
+      id: `ch-${hostname}`,
+      hostname,
+      status: "pending",
+      ssl: { wildcard: true },
+    });
+    if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-saas" }]);
+    if (request.method === "POST") {
+      const { hostname } = (await request.json()) as { hostname: string };
+      hostnames.push(hostname);
+      return ok(entry(hostname));
+    }
+    if (request.method === "DELETE") {
+      hostnames.splice(hostnames.indexOf(url.pathname.split("/ch-")[1]!), 1);
+      return ok({});
+    }
+    const asked = url.searchParams.get("hostname");
+    return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
+  });
+  onTestFinished(() => spy.mockRestore());
+  return { hostnames };
 }
