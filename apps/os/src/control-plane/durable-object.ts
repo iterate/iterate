@@ -136,9 +136,7 @@ export class ControlPlaneDurableObject extends DurableObject<Pick<Env, "OAUTH_KV
     input: { project: string; organizationId?: string; restoreProjectId?: string },
   ) {
     const project = this.#write(() => this.#db.createProject(caller, input));
-    this.ctx.waitUntil(
-      this.#copyProject(project).catch((error: unknown) => copyUnwritten(project.slug, error)),
-    );
+    void this.#copyProject(project).catch((error: unknown) => copyUnwritten(project.slug, error));
     return project;
   }
 
