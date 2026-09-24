@@ -266,6 +266,28 @@ test("birth reset: nothing reset adds nothing to the wake record", async () => {
   }).toEqual({ wakeRecordDetail: {}, logged: [] });
 });
 
+test("alarm birth: the facets it stopped are logged, and no wake record names them — the birth before the first write does", () => {
+  const fixture = residencyFixture();
+  fixture.state.unclaimedLoadedFacets = ["site"];
+  fixture.residency.stopUnclaimedFacetsAtAlarmBirth();
+  expect({
+    wakeRecordDetail: fixture.residency.wakeRecordDetail(),
+    logged: fixture.log.mock.calls,
+  }).toEqual({
+    wakeRecordDetail: {},
+    logged: [
+      [
+        {
+          event: "context.facets-stopped-at-alarm-birth",
+          namespace: "iterate-context",
+          name: "project.iterate/",
+          facets: ["site"],
+        },
+      ],
+    ],
+  });
+});
+
 /** A `Residency` over fakes, the clock faked at T and restored when the test ends. */
 function residencyFixture() {
   vi.useFakeTimers({ now: T });
@@ -292,6 +314,7 @@ function residencyFixture() {
         return state.unclaimedLoadedFacets;
       },
       startFacetsTheLastIncarnationRan: async () => state.unclaimedLoadedFacets,
+      stopUnclaimedLoadedFacetsTheLastIncarnationRan: () => state.unclaimedLoadedFacets,
     },
     rpcStubs: {
       hasBorrowedRpcStubs: () => state.borrowed,

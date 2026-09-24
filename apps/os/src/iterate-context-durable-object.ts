@@ -159,6 +159,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operator RPC only. Bypass every project rewrite so no project code can observe
    * the admin credential. The first-party secret facet independently verifies it. */
   async exportSecretForProjectSeed(adminSecret: string): Promise<unknown> {
+    await this.#birth();
     return this.#facetHost.callFacetAsPlatform("secret", [["exportForProjectSeed", adminSecret]]);
   }
 
@@ -293,7 +294,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // the same time, no write, and a stale one is superseded). Null while an alarm is being
     // delivered (workerd hides a firing alarm for the whole run), so the wake record is NOT written
     // here: the first entry point to run names the wake (`appendWakeRecord` — `alarm()` says "alarm").
-    // Not awaited: a constructor cannot, and the runtime holds every event until this settles.
+    // Nothing is written here, and nothing is started: that is the birth (`#birth`), which waits for
+    // the first entry point that may write. Not awaited: a constructor cannot, and the runtime holds
+    // every event until this settles.
     void this.ctx.blockConcurrencyWhile(async () => {
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
       // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
@@ -302,8 +305,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#platformOrigin =
         this.#appConfig.urls.os ||
         ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
-      // Before this incarnation writes anything: the facets the last one ran are started (and the
-      // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
+    });
+  }
+
+  /** THE BIRTH, once per incarnation, under `blockConcurrencyWhile`, before this incarnation's first
+   *  write: the facets the last one ran are started (and the unclaimed loaded ones reset), so a
+   *  facet evicted mid-write meets no commit of it stopped (FacetHost FACET_START_WATCHDOG_MS); then
+   *  the incarnation is counted, a new stream's birth record appended, and an overdue alarm re-armed.
+   *  Every entry point that may write awaits it first — every entry point but the alarm pass of an
+   *  incarnation the sweep's alarm alone woke, which writes nothing and starts nothing
+   *  (`#runAlarmPass`): its starts are what cost, a code load per loaded facet. */
+  #born: Promise<void> | undefined;
+  #birth(): Promise<void> {
+    this.#born ??= this.ctx.blockConcurrencyWhile(async () => {
       await this.#residency.resetUnclaimedFacetsAtBirth();
       this.#stream.storage.countIncarnation();
       this.#stream.appendBirthRecord();
@@ -312,6 +326,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // source wants (the last incarnation's sweep) is superseded instead.
       this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
+    return this.#born;
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
@@ -341,6 +356,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event
    *  effects. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    await this.#birth();
     this.#inboundRequestInOneTurn();
     return this.#appendAndRunCommittedEffects(events);
   }
@@ -384,6 +400,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     limit = 500,
     options: { includeEphemeral?: boolean } = {},
   ): Promise<StreamPage> {
+    await this.#birth();
     this.#inboundRequestInOneTurn();
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
@@ -904,17 +921,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   async #runAlarmPass({ delivered }: { delivered: boolean }): Promise<void> {
-    const { armedAt: fired } = this.#alarmCoordinator.snapshot();
-    // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
-    // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
-    // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
-    if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
+    const durableDeadlines = this.#durableAlarmDeadlines();
+    // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery.
+    if (!durableDeadlines.some((at) => at !== null && at <= wokeAt)) {
+      // In an incarnation this alarm alone woke (its armer was evicted, the normal end), with no
+      // durable deadline to arm after it, the pass writes nothing: nothing is started or counted —
+      // the birth waits for this incarnation's first write, if it makes one — and the unclaimed
+      // loaded facets the last incarnation left running are only stopped (Residency
+      // `stopUnclaimedFacetsAtAlarmBirth`). A fresh incarnation armed no sweep, so there is no
+      // sweep to decide.
+      if (this.#born === undefined && delivered && durableDeadlines.every((at) => at === null)) {
+        this.#residency.stopUnclaimedFacetsAtAlarmBirth();
+        await this.#alarmCoordinator.pass(async () => {}, { delivered });
+        return;
+      }
+      await this.#birth();
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt), {
         delivered,
       });
       return;
     }
+    await this.#birth();
+    const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     try {
       await this.#alarmCoordinator.pass(
         async () => {
@@ -1047,6 +1076,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
+    await this.#birth();
     this.#residency.inboundCallStarted();
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
@@ -1098,6 +1128,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
+    await this.#birth();
     this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
       this.#residency.inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
@@ -1283,19 +1314,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#sibling(secretPath).fetch(outbound);
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    await this.#birth();
     this.#inboundRequestInOneTurn();
     // Fetch-upgrade frames only (eyeball ⇄ upgrade leg); a pager socket's inbound payloads carry
     // nothing this DO acts on.
     this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
-  webSocketClose(ws: WebSocket, code: number, reason: string): void {
+  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    await this.#birth();
     this.#inboundRequestInOneTurn();
     if (this.#rpcStubFetch.handleWebSocketClose(ws, code, reason)) return;
     this.#rpcStubs.rpcStubPagerClosed(ws);
   }
-  webSocketError(ws: WebSocket): void {
-    this.webSocketClose(ws, 1006, "transport error");
+  webSocketError(ws: WebSocket): Promise<void> {
+    return this.webSocketClose(ws, 1006, "transport error");
   }
 
   // ── the rpc-stub Workers-RPC verb — transport plumbing, OFF the itx surface (rpc-stubs.ts) ──
@@ -1304,7 +1337,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  stub, a callable Proxy on the wire: structural validation is impossible by design, so it rides
    *  permissively and the directory types it. (The pager has no verb: it is the
    *  `x-itx-rpc-stub-pager` upgrade at `fetch`.) */
-  lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
+  async lendRpcStub(input: { rpcStubKey: string; stub: unknown }): Promise<void> {
+    await this.#birth();
     this.#inboundRequestInOneTurn();
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,

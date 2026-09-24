@@ -7,7 +7,9 @@
 // storage caused object to be reset; reference = …": the whole object resets, and every call in
 // flight on it fails. The facet started again before the context commits anything more avoids it.
 // So the platform never stops a facet without starting it again, and a birth starts every facet
-// the last incarnation ran before its first write.
+// the last incarnation ran before its first write. An incarnation only the sweep's alarm woke
+// writes nothing and starts nothing: the two rows at the bottom call its context while that
+// incarnation is still resident, and after it evicted.
 //
 // THE PIN, the first row: the raw fault, with no platform code between the abort and the fault (a
 // loaded facet aborts its OWN child facet), as a createFailing. It resets the context it runs on,
@@ -272,3 +274,30 @@ repro(
   },
   240_000,
 );
+
+// THE SWEEP'S ALARM ALONE: a loaded facet armed its context's sweep, a minute out. The context
+// evicts ~10 s after the last call, the facet with it, and the alarm wakes a fresh incarnation
+// that writes nothing and starts nothing; the runtime then deletes the fired alarm. The next call
+// lands on that incarnation while it is resident (~60–70 s) or on a fresh one after it evicted.
+// Either way the birth before its first write starts the facet.
+for (const { row, probeAtMs } of [
+  { row: "on the alarm's incarnation", probeAtMs: 63_000 },
+  { row: "on the next incarnation", probeAtMs: 85_000 },
+])
+  repro(
+    `a facet evicted with its context right after 40 rows of 2 KB, then woken by its sweep's alarm alone: the next call answers ${row}`,
+    async () => {
+      const counts = await tally(`alarm birth, then a call ${row}`, async (ctx, run) => {
+        const t0 = Date.now();
+        const first = ownSession(ctx);
+        expect(await call(first.itx, "write", 40)).toBe(40);
+        run.onPath();
+        first.close();
+        await sleep(probeAtMs - (Date.now() - t0));
+        await probeCommits(openItx(ctx));
+        return "ok";
+      });
+      expect(counts).toMatchObject({ reset: 0, resetInSetup: 0 });
+    },
+    240_000,
+  );

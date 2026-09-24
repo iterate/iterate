@@ -61,15 +61,23 @@ start under `blockConcurrencyWhile`, and a birth starts every facet the last inc
 before its first write: the reset ones after their abort, a claimed or first-party one as it is.
 FacetHost `FACET_START_WATCHDOG_MS` names every piece.
 
+The birth waits for the incarnation's first write, not its construction: every entry point that may
+write awaits it (the DO's `#birth`). An incarnation only the sweep's alarm woke, with no durable
+deadline to arm after it, writes nothing, so it starts nothing. It stops the unclaimed loaded
+facets the last incarnation left running (FacetHost `stopUnclaimedLoadedFacetsTheLastIncarnationRan`)
+and leaves every `facet-ran` row in place, so the birth before its first call, or the next
+incarnation's, starts them. A start loads the facet's code, which took 1.2–2.6 s on such wakes on prd
+(2026-09-24).
+
 ## After the last call
 
 With nothing held, a context is evicted about 10 s after its last call and none of 4–6 does
 anything. When something is held:
 
-| After the last call                               | What happens                                                                                                                               |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 30 s after the last pin use                       | 4: borrowed stubs returned, library sockets closed; the actor can hibernate                                                                |
-| 60 s quiet from outside the project's loaded code | 6: if the context was evicted, the alarm wakes a fresh incarnation and its birth does the reset (5); if still resident, it resets in place |
+| After the last call                               | What happens                                                                                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 30 s after the last pin use                       | 4: borrowed stubs returned, library sockets closed; the actor can hibernate                                                     |
+| 60 s quiet from outside the project's loaded code | 6: if the context was evicted, the alarm wakes a fresh incarnation, which stops them (5); if still resident, it resets in place |
 
 ## The sweep's quiet clock
 
@@ -97,8 +105,9 @@ preview, 2026-09-23). So:
 - The pins' release is a timer. It is armed only while a pin already holds the actor, and a pin
   lives and dies in memory with the actor, so a timer costs nothing extra.
 - The sweep's deadline is a source of the context's one durable alarm. Its value lives in memory:
-  a fresh incarnation has none, so an alarm an evicted incarnation left wakes it for nothing but
-  its birth reset. These wakes write no wake record and no alarm trace.
+  a fresh incarnation has none, so an alarm an evicted incarnation left wakes it only to stop the
+  facets that incarnation left running. These wakes write nothing: no wake record, no alarm trace,
+  no incarnation count, and no facet is started.
 
 ## What to look for
 
@@ -107,6 +116,7 @@ preview, 2026-09-23). So:
 | `stream/woken` payload `facetsReset`                      | 5, on the incarnation's wake record                            |
 | warn `facet.start-failed`, `facet.platform-failure-start` | a start after a reset or at birth that did not start the facet |
 | log `context.facets-reset-at-birth`                       | 5                                                              |
+| log `context.facets-stopped-at-alarm-birth`               | 5, in an incarnation only the sweep's alarm woke               |
 | log `context.facets-reset-when-quiet`                     | 6                                                              |
 | alarm trace `deadlines.unclaimedFacetSweep`               | the DO's alarm pass                                            |
 | issue `itx-expression.release-rpc-session`                | 1–3, when a release throws                                     |

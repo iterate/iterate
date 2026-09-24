@@ -13,7 +13,9 @@
 // and the opt-in perf/context-residency.perf.test.ts times how long the platform keeps such a facet
 // running. A reset is an abort and a start (facet-host.ts FACET_START_WATCHDOG_MS), of the facets
 // called since their last start only; why the start, and the birth's before its first write, is a
-// deployed fact too: e2e/facet-abort-storage-reset.e2e.test.ts.
+// deployed fact too: e2e/facet-abort-storage-reset.e2e.test.ts. An incarnation only the sweep's
+// alarm woke writes nothing, so it starts nothing: it only stops what the last one left running,
+// and its first call's birth, or the next incarnation's, starts the facets.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -149,6 +151,78 @@ test("a context still resident a quiet period after it materialized a loaded fac
   const { events } = (await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
   expect(events.filter((event) => event.type === "events.iterate.com/stream/woken").length).toBe(1);
   await s.invoke(["itx", "processors", ["claim", "busy", null]]);
+});
+
+test("an incarnation only the sweep's alarm woke starts no facet and writes nothing; its first call's birth starts them before that call's wake record", async () => {
+  const ctx = "prj_facet_alarm_only_birth";
+  const s = stub(ctx);
+  const t0 = Date.now();
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  const log = vi.spyOn(console, "log");
+  onTestFinished(() => {
+    vi.useRealTimers();
+    log.mockRestore();
+  });
+  await s.invoke(["itx", "facets", ["get", "plain", spec], ["hello"]]); // its row, and the sweep armed
+  const incarnation = await incarnationOf(s);
+  const before = await durableEvents(s);
+  await releasePins(ctx);
+  await evictDurableObject(s);
+  log.mockClear();
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  // The alarm's incarnation stopped the loaded facet and started nothing: its facet-ran row (a start
+  // deletes it) still owes the start, the incarnation is not counted, and no alarm is left.
+  expect(loggedEvents(log)).toEqual([
+    { event: "context.facets-stopped-at-alarm-birth", facets: ["plain"] },
+  ]);
+  expect(await ranRow(s, "plain")).toBe(true);
+  expect(await incarnationOf(s)).toBe(incarnation);
+  expect(await alarmOf(s)).toBeNull();
+  // The same incarnation's first call is its birth: the facet is started, then the incarnation
+  // counted, then the call's wake record names the reset.
+  log.mockClear();
+  expect(await s.invoke(["itx", "facets", ["get", "plain"], ["hello"]])).toEqual(
+    expect.any(String),
+  );
+  expect(loggedEvents(log)).toEqual([
+    { event: "context.facets-reset-at-birth", facets: ["plain"] },
+  ]);
+  expect(await ranRow(s, "plain")).toBe(true); // written again by this call's own use of the facet
+  expect((await durableEvents(s)).slice(before.length).map((event) => event.payload)).toEqual([
+    { incarnation: incarnation + 1, reason: "request", facetsReset: ["plain"] },
+  ]);
+});
+
+test("an incarnation only the sweep's alarm woke, evicted with no call: the next incarnation's call starts the facets at its birth", async () => {
+  const ctx = "prj_facet_alarm_only_birth_then_evicted";
+  const s = stub(ctx);
+  const t0 = Date.now();
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  const log = vi.spyOn(console, "log");
+  onTestFinished(() => {
+    vi.useRealTimers();
+    log.mockRestore();
+  });
+  await s.invoke(["itx", "facets", ["get", "plain", spec], ["hello"]]);
+  const incarnation = await incarnationOf(s);
+  await releasePins(ctx);
+  await evictDurableObject(s);
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  await evictDurableObject(s);
+  log.mockClear();
+  await s.invoke(["itx", ["whoami"]]); // a call that never reaches the facet
+  expect(loggedEvents(log)).toEqual([
+    { event: "context.facets-reset-at-birth", facets: ["plain"] },
+  ]);
+  expect(await ranRow(s, "plain")).toBeUndefined(); // started, and not called since
+  const woken = (await durableEvents(s)).filter(
+    (event) => event.type === "events.iterate.com/stream/woken",
+  );
+  expect(woken.at(-1)).toMatchObject({
+    payload: { incarnation: incarnation + 1, reason: "request", facetsReset: ["plain"] },
+  });
 });
 
 test("the sweep's alarm an evicted incarnation left wakes a fresh one that appends nothing, and re-derives only the durable deadlines", async () => {
@@ -303,4 +377,22 @@ function incarnationOf(s: ReturnType<typeof stub>): Promise<number> {
       state.storage.sql.exec("SELECT value FROM stream_meta WHERE key = 'incarnation'").one().value,
     ),
   );
+}
+
+function ranRow(s: ReturnType<typeof stub>, name: string): Promise<unknown> {
+  return runInDurableObject(s, (_instance, state) => state.storage.kv.get(`facet-ran:${name}`));
+}
+
+/** The birth's and the alarm birth's own log lines, as `{ event, facets }`. */
+function loggedEvents(log: {
+  mock: { calls: unknown[][] };
+}): { event: string; facets: string[] }[] {
+  return log.mock.calls
+    .map(([line]) => line as { event?: string; facets?: string[] })
+    .filter(
+      (line) =>
+        line?.event === "context.facets-reset-at-birth" ||
+        line?.event === "context.facets-stopped-at-alarm-birth",
+    )
+    .map(({ event, facets }) => ({ event: event!, facets: facets! }));
 }

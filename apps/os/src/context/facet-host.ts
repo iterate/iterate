@@ -76,7 +76,10 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  other event (`#restart`); after an eviction, a start in the next incarnation's birth before its
  *  first write (`startFacetsTheLastIncarnationRan`) — a start after that write does not. So the
  *  platform never stops a facet without starting it again: every abort of its own is a `#restart`,
- *  and a birth starts every facet the last incarnation ran (`facet-ran:<name>` rows). A start is
+ *  and a birth starts every facet the last incarnation ran (`facet-ran:<name>` rows) before that
+ *  incarnation's first write. The one abort with no start after it is the birth of an incarnation
+ *  the sweep's alarm alone woke, which writes nothing
+ *  (`stopUnclaimedLoadedFacetsTheLastIncarnationRan`): its starts wait for its first write. A start is
  *  one call, `listPublicMethods`, under its own watchdog (a birth waits on it, and a birth that
  *  outlasts 30 s resets the object); a start that fails is logged, never thrown, and its row stays
  *  for the next birth or sweep. Remove when that file's pin, a `createFailing` tagged `slow`,
@@ -373,6 +376,25 @@ export class FacetHost {
         this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
     });
     return reset;
+  }
+
+  /** THE BIRTH OF AN INCARNATION ONLY THE SWEEP'S ALARM WOKE, which writes nothing (the DO's
+   *  `#runAlarmPass`): every LOADED facet the last incarnation called that holds no claim is
+   *  stopped — one that kept a value from its `env.ITX` runs on after its context's eviction,
+   *  billed, until then — and nothing is started. A start loads the facet's code (1.2–2.6 s on prd,
+   *  2026-09-24), and it is owed only before this context commits again: every `facet-ran:<name>`
+   *  row stays, so the birth before this incarnation's first write, or the next incarnation's,
+   *  starts them all (`startFacetsTheLastIncarnationRan`). Returns the names stopped. */
+  stopUnclaimedLoadedFacetsTheLastIncarnationRan(): string[] {
+    const stopped = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
+      key.slice("facet-ran:".length),
+    ).filter((name) => !firstPartyFacetClassOf(name) && !this.#facetClaims.has(name));
+    for (const name of stopped)
+      this.#abortFacetIfRunning(
+        name,
+        "reset: loaded, unclaimed, and its context woken by its alarm",
+      );
+    return stopped;
   }
 
   /** THE SWEEP'S RESET, in place, when a context that materialized a loaded facet has been quiet for

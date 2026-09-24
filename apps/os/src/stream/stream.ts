@@ -106,7 +106,8 @@ interface StreamDeps {
   wakeRecordDetail?: () => Record<string, unknown>;
   /** The DO counts the incarnation itself (`storage.countIncarnation()`), once its birth started
    *  the facets the last incarnation ran: until then the birth writes nothing (FacetHost
-   *  `startFacetsTheLastIncarnationRan`). Absent: counted as the stream is constructed. */
+   *  `startFacetsTheLastIncarnationRan`). An incarnation only the sweep's alarm woke writes nothing
+   *  at all, so it is not counted. Absent: counted as the stream is constructed. */
   incarnationCountedByHost?: boolean;
 }
 
@@ -206,8 +207,8 @@ export class Stream {
 
   #wakeRecorded = false;
 
-  /** THE BIRTH RECORD — the DO constructor calls this before any handler runs, so a probe on a
-   *  never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
+  /** THE BIRTH RECORD — the DO's birth calls this before the first handler that may write does
+   *  anything, so a probe on a never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
    *  gets `stream/created { projectId, path }` at offset 1 and the first incarnation's wake record
    *  in the same batch (a birth is always a request's — nothing has an alarm before it exists). A
    *  store with rows gets nothing here: its wake is recorded by the first handler that runs (an

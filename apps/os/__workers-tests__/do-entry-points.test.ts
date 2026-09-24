@@ -13,7 +13,7 @@
 // literal; no event-builder helper stands between the caller and the event. The pins:
 //
 //   • the alarm serves durable obligations only: a probe (`itx.facets.get('core').snapshot()`) on a
-//     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
+//     never-touched ctx MATERIALIZES it (the birth's `Stream.appendBirthRecord()` writes
 //     created + woken before the first request is served) yet OWES no alarm (support.ts
 //     `owedAlarm`) — a pin (a borrowed rpc stub, an open socket) is
 //     released by a timer, never the alarm; only storage.getAlarm() can see that (the deployed e2e

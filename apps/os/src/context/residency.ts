@@ -10,8 +10,10 @@
 //   - THE UNCLAIMED-FACET SWEEP: a loaded facet left running without a claim is reset once the
 //     context has been quiet from OUTSIDE its loaded code (FacetHost `resetUnclaimedLoadedFacets`).
 //   - THE BIRTH RESET: the same reset, run as an incarnation is born, for the facets the last one
-//     left running — and a start of every facet it called, before the birth writes anything
-//     (FacetHost `startFacetsTheLastIncarnationRan`).
+//     left running — and a start of every facet it called, before the incarnation writes anything
+//     (FacetHost `startFacetsTheLastIncarnationRan`). An incarnation only the sweep's alarm woke
+//     writes nothing, so it only stops them (`stopUnclaimedLoadedFacetsTheLastIncarnationRan`) and
+//     leaves the starts to its first write.
 // The sweep's deadline is decided by one pure rule (`decideQuietDeadline`). How these three relate to
 // the three session-release mechanisms in the SDK and the step walk: apps/os/docs/residency.md.
 
@@ -58,7 +60,10 @@ type ResidencyDeps = {
   /** The facets' work in flight; the reset the sweep and the birth run. */
   facetHost: Pick<
     FacetHost,
-    "snapshot" | "resetUnclaimedLoadedFacets" | "startFacetsTheLastIncarnationRan"
+    | "snapshot"
+    | "resetUnclaimedLoadedFacets"
+    | "startFacetsTheLastIncarnationRan"
+    | "stopUnclaimedLoadedFacetsTheLastIncarnationRan"
   >;
   /** The borrowed stubs: a pin, and what the release returns. */
   rpcStubs: Pick<RpcStubDirectory, "hasBorrowedRpcStubs" | "returnBorrowedRpcStubs">;
@@ -234,10 +239,11 @@ export class Residency {
   /** The loaded facets this incarnation's birth reset — named on its wake record. */
   #facetsResetAtBirth: string[] = [];
 
-  /** THE BIRTH RESET, run once in the DO's constructor before it serves anything or writes
-   *  anything: every facet the last incarnation called is started, and a loaded one it left
-   *  running without a claim is reset first — it ends here, before this incarnation reaches it.
-   *  Named on this incarnation's wake record, and logged: the sweep's own wake writes no record. */
+  /** THE BIRTH RESET, run once per incarnation before it writes anything (the DO's `#birth`, which
+   *  the first entry point that may write awaits): every facet the last incarnation called is
+   *  started, and a loaded one it left running without a claim is reset first — it ends here,
+   *  before this incarnation reaches it. Named on this incarnation's wake record, and logged: the
+   *  sweep's own wake writes no record. */
   async resetUnclaimedFacetsAtBirth(): Promise<void> {
     this.#facetsResetAtBirth = await this.#deps.facetHost.startFacetsTheLastIncarnationRan();
     if (this.#facetsResetAtBirth.length > 0)
@@ -246,6 +252,21 @@ export class Residency {
         namespace: "iterate-context",
         name: this.#deps.name,
         facets: this.#facetsResetAtBirth,
+      });
+  }
+
+  /** THE BIRTH OF AN INCARNATION ONLY THE SWEEP'S ALARM WOKE, which writes nothing: the loaded
+   *  facets the last incarnation left running without a claim are stopped, none is started — the
+   *  birth reset above still runs before this incarnation's first write, if it makes one, and
+   *  starts them. Logged; no record, as the sweep's wake writes none. */
+  stopUnclaimedFacetsAtAlarmBirth(): void {
+    const facets = this.#deps.facetHost.stopUnclaimedLoadedFacetsTheLastIncarnationRan();
+    if (facets.length > 0)
+      console.log({
+        event: "context.facets-stopped-at-alarm-birth",
+        namespace: "iterate-context",
+        name: this.#deps.name,
+        facets,
       });
   }
 
