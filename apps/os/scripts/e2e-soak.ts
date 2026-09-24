@@ -13,6 +13,10 @@
 // the suite, never beside it, since beside it a budget measures the suite's contention. The tally is
 // output/soak/summary.json plus the table below, both projects' rows together. Runs are sequential —
 // the point is to see the suite as CI sees it, not to load the worker a hundredfold.
+//
+// E2E_SOAK=1 is set for every run: a row that spends a shared paid budget runs once per CI run and
+// never here (agents-deployed.e2e.test.ts: the preview AI Gateway's $30-a-day spend limit, which
+// back-to-back soak runs spent on 2026-09-24 and every CI run's model rows then hit).
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -84,7 +88,7 @@ function soakRun(project: "e2e" | "perf", file: string): number | undefined {
       // a filter that names only e2e files leaves the perf project nothing to run
       ...(filter ? [filter, "--passWithNoTests"] : []),
     ],
-    { cwd: ROOT, env: process.env, stdio: ["ignore", "ignore", "inherit"] },
+    { cwd: ROOT, env: { ...process.env, E2E_SOAK: "1" }, stdio: ["ignore", "ignore", "inherit"] },
   );
   if (!existsSync(file)) {
     console.error(`${path.basename(file)}: vitest wrote no report (exit ${result.status})`);
