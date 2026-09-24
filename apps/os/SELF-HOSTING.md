@@ -2,81 +2,39 @@
 
 One Cloudflare Worker is the whole platform: the sign-in and consent pages, the OAuth server,
 `/api`, `/mcp`, and the Durable Objects your projects live in. It deploys into your own Cloudflare
-account with `wrangler deploy` and two secrets. No domain is needed; a **Workers Paid** plan is
-(the Worker declares paid-plan limits and binds Browser Run and the Worker Loader).
+account; no domain is needed.
 
-```bash
-git clone https://github.com/iterate/iterate && cd iterate
-pnpm install
-CLOUDFLARE_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
-npx wrangler login                             # opens the browser; pick the account to deploy into
+Setting it up is a recipe for your coding agent, [`public/setup-prompt.md`](public/setup-prompt.md),
+served at https://os.iterate.com/setup-prompt.md. Tell Claude Code, Codex or opencode:
 
-# The two secrets: APP_CONFIG holds the sign-in password (choose one), the key encrypts your
-# projects' secrets at rest. Keep the key somewhere safe: losing it loses that material.
-cat > .secrets <<EOF
-APP_CONFIG={"login":{"password":"choose-a-password"}}
-APP_CONFIG_SECRETS__KEY=$(openssl rand -hex 32)
-EOF
-npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .secrets
-rm .secrets
-```
+> follow https://os.iterate.com/setup-prompt.md to set up self-hosted iterate
 
-The first deploy creates the two KV namespaces and the R2 bucket by name in your
-account and prints the Worker's URL, `https://iterate.<your-subdomain>.workers.dev`. Everything
-below is on that origin.
+From an empty folder it builds and deploys into the Cloudflare account you pick, creates your first
+project, checks it, connects itself over MCP, and hands you the dash and voice links. Its
+requirements are at the top: Workers Paid, R2, and access to Cloudflare Artifacts (a closed beta).
+You can follow it by hand too.
 
-## With an agent
+The rest of this page is what the recipe leaves out.
 
-Your platform serves the recipe above as a prompt an agent follows: point Claude, Codex or Cursor at
-`https://iterate.<your-subdomain>.workers.dev/setup-prompt.md` (the repository's copy is
-`apps/os/public/setup-prompt.md`) and it deploys, asks you for the password, connects over MCP
-and hands you the dash.
+## Project apps
 
-## Using it
+`https://iterate.<your-subdomain>.workers.dev/projects/<project>/<app>/`, and `/projects/<project>/`
+for the project's own config worker (`urls.ingressRouting: { type: "paths" }`). Every document
+served there runs sandboxed in the browser (an opaque origin: no cookies, no storage), so an app
+that needs the person's identity authenticates in-band rather than by cookie.
 
-- **Sign in:** open the URL. Enter any email and the password you chose. Anyone who knows the
-  password can sign in as the email they type, so the password is the membership and the email is
-  the name tag — hand it to the people who should be in. The first sign-in creates an organization
-  and a project on the consent page.
-- **MCP:** `https://iterate.<your-subdomain>.workers.dev/mcp` — add it to Claude, Codex or Cursor as
-  a remote MCP server; it signs in through the same page and exposes one tool, `run`.
-- **The dash:** projects, organizations, sessions and personal access tokens live at
-  https://dash.iterate.com, an app we host that connects to any iterate platform: your platform's
-  landing page links to its connect page, which names your platform's host and asks before binding
-  the browser to it (a plain link never signs you in anywhere). The dash then shows
-  "Connected to <your host>".
-- **Project apps:** `https://iterate.<your-subdomain>.workers.dev/projects/<project>/<app>/`, and
-  `/projects/<project>/` for the project's own config worker (`urls.ingressRouting: { type: "paths" }`).
-  Every document served there runs sandboxed in the browser (an opaque origin: no cookies, no
-  storage), so an app that needs the person's identity authenticates in-band rather than by cookie.
-
-## Configuration
+## Other sign-in methods and configuration
 
 The whole configuration is one JSON object, the `APP_CONFIG` secret (`apps/os/src/app-config.ts`
-documents every key). Any key can also be set alone as a var, the path joined by `__`; the generated
-Vite build sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way. To add Google or Cloudflare
-sign-in or mailed codes later, put `login.google`, `login.cloudflare` or `login.emailCode` in the
-object and deploy again. Cloudflare takes `{ clientId, clientSecret }` from your own OAuth client;
-register `<your-origin>/.auth/identity/cloudflare/callback` and configure the client for
+documents every key). Any key can also be set alone as a var, the path joined by `__`; the Vite build
+sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way.
+
+The recipe signs people in with one password (`login.password`). To add Google or Cloudflare
+sign-in, or mailed codes, add `login.google`, `login.cloudflare` or `login.emailCode` to the
+`APP_CONFIG` line in the `.secrets` file the recipe kept, and deploy again with `--secrets-file`.
+Cloudflare takes `{ clientId, clientSecret }` from your own OAuth client; register
+`<your-origin>/.auth/identity/cloudflare/callback` and configure the client for
 `response_types: ["code", "id_token"]` and the `user-details.read` scope.
-
-```bash
-printf 'APP_CONFIG=%s\n' '{"login":{"password":"…","google":{"clientId":"…","clientSecret":"…"}}}' > .secrets
-npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .secrets && rm .secrets
-```
-
-## Updating
-
-```bash
-git pull
-pnpm install
-CLOUDFLARE_ENV=self-host pnpm --filter os build
-npx wrangler deploy --config apps/os/dist/server/wrangler.json
-```
-
-A deploy without `--secrets-file` keeps the secrets already on the Worker. There is no migration
-step: the catalog (users, orgs, projects) is the `CONTROL_PLANE` Durable Object's own SQLite,
-which the object migrates itself.
 
 ## Custom domain (optional)
 
