@@ -417,7 +417,7 @@ test("the project facet's collection refuses a creation whose creator is not an 
 /** The same for the workspace's own facts. */
 const workspaceTypes = (log: { type: string }[]) =>
   log
-    .filter((e) => e.type.startsWith("events.iterate.com/workspace"))
+    .filter((e) => e.type.startsWith("events.iterate.com/workspace/"))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 
 /** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.cfArtifacts` lent to

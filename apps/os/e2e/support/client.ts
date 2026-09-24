@@ -271,7 +271,7 @@ export const readAll = async (itx: any): Promise<any[]> => {
  *  `itx/…` fact is not one). */
 export const repoFactTypes = (log: { type: string }[]): string[] =>
   log
-    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
+    .filter((e) => e.type.startsWith("events.iterate.com/repo/"))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 
 /** What the `tally` fixture (support/sources.ts) has reduced so far. */
