@@ -28,8 +28,8 @@ import {
   type ProcessEventArgs,
   type ReduceArgs,
   StreamProcessor,
-} from "iterate/next/stream/processor";
-import type { WithItx } from "iterate/next/sdk";
+} from "iterate/stream/processor";
+import type { WithItx } from "iterate/sdk";
 import { defaultFiles } from "../generated/config-templates.js";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";

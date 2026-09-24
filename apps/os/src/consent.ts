@@ -7,14 +7,14 @@ import {
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
-import { codedError } from "iterate/next/lib";
+import { codedError } from "iterate/lib";
 import {
   OAuthScope,
   OAuthScopeDescriptions,
   OAuthScopes,
   type ConsentScope,
-} from "iterate/next/oauth-scopes";
-import type { IngressRouting } from "iterate/next/project-ingress";
+} from "iterate/oauth-scopes";
+import type { IngressRouting } from "iterate/project-ingress";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";
@@ -279,7 +279,7 @@ export class ConsentRpcTarget extends RpcTarget {
    *  `testLinkResponse`) approves, without the Allow page, a sibling app preview the link signed —
    *  an authorization that returns to the app's own `/.auth/callback` at one of the grant's
    *  `testLink.clients` (the redirect, not the client id: an app previewed on https is its CIMD
-   *  client, one on localhost registers itself — iterate/next/app-session.ts — and either way the
+   *  client, one on localhost registers itself — iterate/app-session.ts — and either way the
    *  code can only land at that app) — once the test person's project (`pr<N>`, CI's seed) exists,
    *  with the scopes the app asked for and "All my projects": the person is a throwaway preview
    *  identity, and a grant narrowed to named projects could not create another in the Dash.

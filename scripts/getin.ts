@@ -91,7 +91,7 @@ export default async function getin(
 async function createProject(baseUrl: string, input: { email: string; project: string }) {
   const url = new URL("/api", baseUrl);
   url.protocol = "ws:";
-  // The one call it makes, typed here: `iterate/next/api`'s types need the worker's lib (preview.ts
+  // The one call it makes, typed here: `iterate/api`'s types need the worker's lib (preview.ts
   // `previewSignIn` does the same).
   using rpc = newWebSocketRpcSession<{
     authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {
@@ -108,7 +108,7 @@ async function createProject(baseUrl: string, input: { email: string; project: s
     .projects.create({ project: input.project });
 }
 
-/** `origin` when a Dash answers there as a client of `issuer` (iterate/next/app-server.ts serves
+/** `origin` when a Dash answers there as a client of `issuer` (iterate/app-server.ts serves
  *  every app's `/.auth/client.json` and `/.auth/session.json`), else null. */
 async function localDash(origin: string, issuer: string) {
   const json = (path: string) =>

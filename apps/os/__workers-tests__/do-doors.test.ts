@@ -35,7 +35,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { parse, print, type ItxExpression } from "iterate/next/expression";
+import { parse, print, type ItxExpression } from "iterate/expression";
 import { adminCredentials, openSession, owedAlarm, stub, until } from "./support.ts";
 
 test("a core-snapshot probe materializes only created and woken, without subscriptions or an alarm", async () => {

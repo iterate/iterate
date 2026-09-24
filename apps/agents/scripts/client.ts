@@ -1,6 +1,6 @@
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
-import type { SessionCredentials } from "iterate/next/api";
+import type { SessionCredentials } from "iterate/api";
 
 const connections: { socket: WebSocket; rpc: Disposable }[] = [];
 

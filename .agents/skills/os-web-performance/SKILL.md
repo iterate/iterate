@@ -27,7 +27,7 @@ fingerprinted `/assets/*`.
 - **The clients.** Each client is its own Worker (`scripts/lib/start-app.ts`). Its signed-in
   layout (`src/routes/_auth.tsx`) is `ssr: false`, because the browser authenticates through
   `createIterateClient`. The HTML is the pending shell, and every page's data comes over the
-  app origin's `/api` capnweb WebSocket (`useLiveState` and friends in `iterate/next/react`).
+  app origin's `/api` capnweb WebSocket (`useLiveState` and friends in `iterate/react`).
   Most time-to-content is therefore JS graph, then auth, then socket, then the first read.
 - **Assets.** Each app serves assets from `env.ASSETS` in `src/server.ts`. Check the headers
   a real deployment sends before you assume they are cached (see the playbook).

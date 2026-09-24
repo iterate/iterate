@@ -6,7 +6,7 @@
 // moment; the deployed rows are e2e/context-abort.e2e.test.ts.
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import { RESIDENCY_WATCHDOG_WINDOW_MS as W } from "../src/context/residency-watchdog.ts";
 import { stub } from "./support.ts";
 

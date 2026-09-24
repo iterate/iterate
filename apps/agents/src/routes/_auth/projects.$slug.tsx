@@ -1,10 +1,10 @@
-import type { IterateContextApi } from "iterate/next/api";
+import type { IterateContextApi } from "iterate/api";
 import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/next/app";
-import { useIterateContext, useLiveState } from "iterate/next/react";
+import type { AuthenticatedApp } from "iterate/app";
+import { useIterateContext, useLiveState } from "iterate/react";
 import {
   Conversation,
   ConversationContent,

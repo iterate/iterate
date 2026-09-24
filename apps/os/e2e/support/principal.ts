@@ -1,7 +1,7 @@
 // Real issuer login, consent and code exchange. The identity proof is the sign-in page's own password
 // step (`POST /login` with the email and the deployment's password — the same post the page makes).
 import { newHttpBatchRpcSession } from "capnweb";
-import { authorizationCodeRequest } from "iterate/next/oauth";
+import { authorizationCodeRequest } from "iterate/oauth";
 import type { IterateRpcTarget } from "../../src/session.ts";
 import { loginPassword, publicSession, workerUrl } from "./client.ts";
 

@@ -12,7 +12,7 @@ end and the relay's live state on screen.
 - `src/server.ts` — the same server entry as Notes and Dash (only the client name and the
   landing-redirect comment differ): `appAuth` (the OAuth client in a
   `BrowserSession` durable object), static assets, then TanStack Start.
-- `src/routes/_auth/projects.$slug.tsx` — the one page. `useLiveState` from `iterate/next/react` subscribes to the
+- `src/routes/_auth/projects.$slug.tsx` — the one page. `useLiveState` from `iterate/react` subscribes to the
   relay's `voice-agent` live view (phase, answering, transcript, last end) on the call's context.
 - `src/call.ts` — one call: `itx.voice.setupVoiceAgent({streamPath, activation})` on a fresh
   context, a subscription for `spk-frame` and the call facts, ephemeral `mic-frame` appends twenty a

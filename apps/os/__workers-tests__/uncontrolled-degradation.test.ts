@@ -31,8 +31,8 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import type { ItxExpression } from "iterate/next/expression";
-import { errorCode } from "iterate/next/lib";
+import type { ItxExpression } from "iterate/expression";
+import { errorCode } from "iterate/lib";
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;

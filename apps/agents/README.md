@@ -5,7 +5,7 @@ and storage; this app owns the agent catalog, lifecycle, model loop, sandbox set
 `itx.agents` is a durable rewrite to the installed collection facet, not a platform built-in.
 
 - `src/` — the web app: chat, attachments, live state, events and traces.
-- `runtime/` — the collection and agent processors, loaded through the public `iterate/next/sdk`.
+- `runtime/` — the collection and agent processors, loaded through the public `iterate/sdk`.
 - `voice/` — the voice relay, delegate, screen renderer and their tests.
 - `scripts/` — runtime bundling and voice call/device tools.
 - `e2e/` and `__workers-tests__/` — integration tests using apps/os's generic worker harness.

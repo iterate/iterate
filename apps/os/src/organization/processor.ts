@@ -4,11 +4,7 @@
 // effect: a PURE FOLD. The facts are landed by the session on the context
 // (session.ts `foldPlatformFacts`) after the control-plane database writes them. Pure, so a
 // unit test constructs it with `new` and reduces rows (processor.test.ts).
-import {
-  type ConsumedEvent,
-  type ReduceArgs,
-  StreamProcessor,
-} from "iterate/next/stream/processor";
+import { type ConsumedEvent, type ReduceArgs, StreamProcessor } from "iterate/stream/processor";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import {
   dropMembership,

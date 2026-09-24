@@ -6,10 +6,10 @@ import { build, type Plugin } from "esbuild";
 export const injectedSdk: Plugin = {
   name: "injected-sdk",
   setup(builder) {
-    builder.onResolve(
-      { filter: /^(zod|iterate\/next\/(sdk|stream\/processor|stream\/run))$/ },
-      () => ({ path: "./processor.js", external: true }),
-    );
+    builder.onResolve({ filter: /^(zod|iterate\/(sdk|stream\/processor|stream\/run))$/ }, () => ({
+      path: "./processor.js",
+      external: true,
+    }));
   },
 };
 

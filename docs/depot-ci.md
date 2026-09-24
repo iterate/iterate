@@ -55,9 +55,9 @@ replays.
 - Non-secret variables are managed with `depot ci vars`.
 
 The only GitHub Actions workflow left is `.github/workflows/pkg-pr-new.yml`. It
-is not CI; it publishes the `iterate` SDK package to
+is not CI; it publishes the `iterate` SDK and the `@iterate-com/cli` packages to
 [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes
-the SDK's inputs (`packages/iterate`, the root manifests and lockfile, or the
+their inputs (`packages/iterate`, `packages/cli`, the root manifests and lockfile, or the
 workflow itself): the **publish** and **Continuous Releases** checks. Anything else that needs GitHub-only triggers,
 such as `issues`, `issue_comment`, or PR review comment events, which Depot CI
 does not support, belongs there too.
@@ -471,8 +471,9 @@ The Preview OS workflow (`.depot/workflows/preview-os.yml`, cribbed from
 cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
 `configs`, the five hosted clients (`apps/dash`, `apps/agents`,
 `apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `specs` and
-`playwright.config.ts`, `packages/iterate`, `packages/shared`, `packages/ui`,
-the root manifests and lockfile, `envs.ts`, `scripts/lib`, `scripts/depot-ci`,
+`playwright.config.ts`, `packages/cli` (the e2e drives the built CLI),
+`packages/iterate`, `packages/shared`, `packages/ui`, the root manifests and lockfile,
+`envs.ts`, `scripts/lib`, `scripts/depot-ci`,
 and its own and the six production deploy workflows (OS, Dash, Agents, Notes,
 Voice, Kit: a production-workflow change must exercise the isolated
 deployment). A PR that

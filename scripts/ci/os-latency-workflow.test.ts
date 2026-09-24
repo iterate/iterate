@@ -39,7 +39,7 @@ test("runs on a schedule, on every main push that could change the platform's sp
     "apps/os/src/worker.ts",
     "apps/os/src/control-plane/catalog.ts",
     "configs/default/AGENTS.md",
-    "packages/iterate/src/next/stream/processor.ts",
+    "packages/iterate/src/stream/processor.ts",
     "packages/ui/src/button.tsx",
     "envs.ts",
     "pnpm-lock.yaml",

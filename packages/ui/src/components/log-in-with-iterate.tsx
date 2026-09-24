@@ -7,7 +7,7 @@ import { IterateLogo } from "./iterate-logo.tsx";
  *  dark grey. Fixed colours on purpose (no theme tokens): it must look the same on a page that is
  *  not ours.
  *
- *  It starts the OAuth flow: an anchor to the app's login door (`iterate/next/app-server` serves
+ *  It starts the OAuth flow: an anchor to the app's login door (`iterate/app-server` serves
  *  `/.auth/login` on every app), which sends the browser to the issuer and back to `next`. The
  *  defaults are what most apps want — `next` the app's root, the `iterate` scope alone; an app that
  *  needs more (the dash: `account`, `organizations:write`) says so. */

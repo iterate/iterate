@@ -19,7 +19,7 @@ import {
   type ProcessorEngine,
   type ProcessorStream,
   ReduceCheckpointTable,
-} from "iterate/next/stream/processor";
+} from "iterate/stream/processor";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine

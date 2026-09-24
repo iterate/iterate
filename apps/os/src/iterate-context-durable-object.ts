@@ -22,9 +22,9 @@
 // requested runs.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { errorCode, reportIssue, resolveContextPath } from "iterate/next/lib";
+import { errorCode, reportIssue, resolveContextPath } from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   canonicalItxExpressionPrefix,
   itxExpressionStepName,
@@ -36,7 +36,7 @@ import {
   RpcStubHandle,
   itxAnswerDetachedFromSession,
   normalizedItxExpression,
-} from "iterate/next/expression";
+} from "iterate/expression";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -45,10 +45,10 @@ import {
   stampCaller,
   type Caller,
   type Principal,
-} from "iterate/next/principal";
-import type { RewriteRuleListEntry, StreamPage } from "iterate/next/api";
-import { projectUrlOf } from "iterate/next/project-ingress";
-import { RunRequested, type RunSettlement } from "iterate/next/stream/run";
+} from "iterate/principal";
+import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
+import { projectUrlOf } from "iterate/project-ingress";
+import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,

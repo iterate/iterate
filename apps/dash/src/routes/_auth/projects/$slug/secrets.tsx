@@ -16,8 +16,8 @@ import { useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/next/app";
-import type { SecretCatalogEntry, SecretMaterial } from "iterate/next/api";
+import type { AuthenticatedApp } from "iterate/app";
+import type { SecretCatalogEntry, SecretMaterial } from "iterate/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -316,7 +316,7 @@ function ProjectSecrets() {
 
 /** The typed value as material: text that parses as a JSON object is that object (its fields are
  *  what `{ field }` picks); anything else is the one string, as typed. The platform never parses a
- *  string (iterate/next/api `SecretMaterial`), so this form is where pasted JSON becomes fields. */
+ *  string (iterate/api `SecretMaterial`), so this form is where pasted JSON becomes fields. */
 function secretMaterialOf(value: string): SecretMaterial {
   let parsed: unknown;
   try {

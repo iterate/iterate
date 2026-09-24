@@ -1,4 +1,4 @@
-// next/expression.test.ts — executable spec for the expression codec (parse ⇄ print over one table,
+// expression.test.ts — executable spec for the expression codec (parse ⇄ print over one table,
 // the canonical spelling, comments in args, the char limit), the step walk's pipelining contract and
 // the prototype hop's dotted invoke. The resolver over it (apps/os
 // src/context/itx-expression-rewriting.ts) is tested in apps/os src/context/expression.test.ts.

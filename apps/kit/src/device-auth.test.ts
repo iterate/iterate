@@ -1,6 +1,6 @@
 // The Kit HTTP boundary with stored session doubles. Real issuer consent is verified on a deployed preview.
 import { expect, test, vi } from "vitest";
-import type { BrowserHost, BrowserSession } from "iterate/next/app-session";
+import type { BrowserHost, BrowserSession } from "iterate/app-session";
 import { deviceAuth } from "./device-auth.ts";
 
 const origin = "https://kit-preview.example";

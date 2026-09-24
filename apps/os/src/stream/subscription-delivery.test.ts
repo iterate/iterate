@@ -31,9 +31,9 @@ import {
   registerPipelinedRpcBrand,
   type ItxExpression,
   FacetHandle,
-} from "iterate/next/expression";
-import { codedError } from "iterate/next/lib";
-import type { StreamEvent, ScannedRange } from "iterate/next/stream/processor";
+} from "iterate/expression";
+import { codedError } from "iterate/lib";
+import type { StreamEvent, ScannedRange } from "iterate/stream/processor";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import {

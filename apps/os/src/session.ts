@@ -13,11 +13,11 @@ import {
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
 import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
-import type { IterateApi } from "iterate/next/api";
-import { codedError, reportIssue } from "iterate/next/lib";
-import { OAuthScope } from "iterate/next/oauth-scopes";
-import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import type { IterateApi } from "iterate/api";
+import { codedError, reportIssue } from "iterate/lib";
+import { OAuthScope } from "iterate/oauth-scopes";
+import { verifyAdminSecret, type Caller, type Principal } from "iterate/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { SessionTeardown } from "./session-teardown.ts";
@@ -1014,7 +1014,7 @@ class UserCollectionRpcTarget extends RpcTarget {
   }
 }
 
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): this root satisfies it, checked here.
+// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): this root satisfies it, checked here.
 const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
 void _iterateApi;
 

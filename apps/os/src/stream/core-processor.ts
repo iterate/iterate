@@ -36,12 +36,12 @@ import {
   parseItxExpressionPrefix,
   type ItxExpression,
   print,
-} from "iterate/next/expression";
-import { jsonEqual } from "iterate/next/lib";
+} from "iterate/expression";
+import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
-import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
-import type { RewriteRuleConfigured } from "iterate/next/api";
-import { RunRequested, RunSettled } from "iterate/next/stream/run";
+import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
+import type { RewriteRuleConfigured } from "iterate/api";
+import { RunRequested, RunSettled } from "iterate/stream/run";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   BUILT_IN_ROOTS,
@@ -291,7 +291,7 @@ export const CoreContract = {
   slug: "core",
   version: "13.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas:
-   *  iterate/next/stream/run). A processor that consumes them names the contract in its
+   *  iterate/stream/run). A processor that consumes them names the contract in its
    *  `processorDeps` (the agent); the runner and `itx.run` read them here. */
   events: {
     "events.iterate.com/context/run-requested": {

@@ -11,10 +11,10 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
+import { codedError, jsonEqual, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
-import { stampCaller, type Caller } from "iterate/next/principal";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import { stampCaller, type Caller } from "iterate/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   print,
   type ItxExpression,
@@ -24,7 +24,7 @@ import {
   InvokeHandle,
   RpcStubHandle,
   materializeItxHandleReference,
-} from "iterate/next/expression";
+} from "iterate/expression";
 import type {
   CollectSecretInput,
   CollectSecretLink,
@@ -34,8 +34,8 @@ import type {
   SecretRefresh,
   StreamPage,
   WaitForEventFilter,
-} from "iterate/next/api";
-import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
+} from "iterate/api";
+import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -125,7 +125,7 @@ export interface BuiltInScope extends LibraryRoots {
   whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   /** THE PUBLIC URL of this project over HTTP — the apex (the config worker's `fetch`) or `app`'s
    *  (`itx.apps.<app>`), at `path` (default "/") — composed from the deployment's ingress routing
-   *  (iterate/next/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
+   *  (iterate/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
    *  `<origin>/<slug>/<app>/…` under paths). Refused on a deployment with no project ingress, and on
    *  a call carrying no platform origin (a processor's own turn, a loaded worker: hold the URL a
    *  session handed you instead). Only a project's context has one. */

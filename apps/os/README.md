@@ -2,7 +2,7 @@
 
 `apps/os` is the Iterate platform at https://os.iterate.com. One Cloudflare Worker provides
 the OAuth issuer, `/api`, `/mcp`, project ingress, and the Durable Objects that hold project
-contexts. First-party clients authenticate through this issuer and use `iterate/next/*`.
+contexts. First-party clients authenticate through this issuer and use `iterate/*`.
 
 For selected-project backups and recovery after a deliberate erase, see
 [project recovery seeds](docs/project-seeds.md).
@@ -103,7 +103,7 @@ repository; commits to `/repos/config` publish the pinned `worker.ts` revision. 
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or
 a processor's row). A caller reaches a facet by itx expression only through the methods its class
 lists in `static publicMethods`: extend `FacetDurableObject` or `StreamProcessorDurableObject` from
-`iterate/next/sdk` and add your own (`[...super.publicMethods, "send"]`); the platform's own calls
+`iterate/sdk` and add your own (`[...super.publicMethods, "send"]`); the platform's own calls
 go around the list (`src/context/facet-public-methods.ts`).
 
 Anything a caller or a facet keeps can hold a context resident and billed after its last call.

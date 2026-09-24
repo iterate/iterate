@@ -142,10 +142,8 @@ let voiceDelegateProcessor: Promise<any> | undefined;
  */
 function loadVoiceDelegateProcessor(): Promise<any> {
   voiceDelegateProcessor ||= (async () => {
-    const processor = new URL(
-      "../../../packages/iterate/src/next/stream/processor.ts",
-      import.meta.url,
-    ).pathname;
+    const processor = new URL("../../../packages/iterate/src/stream/processor.ts", import.meta.url)
+      .pathname;
     const bundle = await build({
       entryPoints: [new URL("./voice-delegate.ts", import.meta.url).pathname],
       bundle: true,

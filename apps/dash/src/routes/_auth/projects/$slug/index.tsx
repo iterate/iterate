@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { ArrowUpRight, CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/next/app";
+import type { AuthenticatedApp } from "iterate/app";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";

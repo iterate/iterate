@@ -13,7 +13,7 @@
 // or relative, after which a row reads as absent (purged on the next write); a key-ordered,
 // prefix-scoped, cursor-paged list. No `await` in this file: a unit test drives it over node:sqlite
 // (oauth-grants.test.ts).
-import type { SqlStorageHandle } from "iterate/next/stream/processor";
+import type { SqlStorageHandle } from "iterate/stream/processor";
 
 /** KV's page size cap: `list` answers at most this many keys. */
 const LIST_LIMIT_MAX = 1000;

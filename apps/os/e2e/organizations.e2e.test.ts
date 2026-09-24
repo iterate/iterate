@@ -9,7 +9,7 @@
 // person's reach, and the two folds. Every row mints its own person, organization and project; the
 // files run in parallel.
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { adminCredentials, rejection, session, until } from "./support/client.ts";
 import { freshDnsSafeProjectSlug } from "./support/project-host.ts";
 

@@ -1,6 +1,6 @@
 import { useId, useState, type Ref } from "react";
 import { Button } from "@iterate-com/ui/components/button";
-import type { ConsentScope } from "iterate/next/oauth-scopes";
+import type { ConsentScope } from "iterate/oauth-scopes";
 import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx";
 import type { ProjectRow } from "./project-choices.tsx";
 import { PermissionChoices, SelectedProjects } from "./review-summary.tsx";

@@ -9,22 +9,16 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
-import {
-  claudeMcpArgs,
-  oauthResourceForOsBaseUrl,
-  preflightMcp,
-  refreshOAuthSession,
-  shellCommand,
-} from "./cli.ts";
-import { connectIterate } from "./next-node.ts";
-import { Config } from "./config.ts";
+import { connectIterate } from "iterate/node";
+import { claudeMcpArgs, preflightMcp, shellCommand } from "./cli.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
 const bin = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
@@ -41,47 +35,6 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
   ]) {
     const { stdout } = await runCli(config.directory, args);
     expect(stdout).toContain("iterate");
-  }
-});
-
-test("OAuth uses the platform's API audience including the local port", () => {
-  expect(Config.parse({})).toMatchObject({ osBaseUrl: "https://os.iterate.com" });
-  expect(oauthResourceForOsBaseUrl("http://localhost:54896/")).toBe("http://localhost:54896/api");
-  expect(oauthResourceForOsBaseUrl("https://os.iterate.com")).toBe("https://os.iterate.com/api");
-});
-
-test("refresh goes to the same issuer and rejects malformed tokens", async () => {
-  const fetch = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(JSON.stringify({ access_token: "new-token", expires_in: 3600 })),
-    );
-  vi.stubGlobal("fetch", fetch);
-  try {
-    const input = {
-      config: Config.parse({ osBaseUrl: "http://localhost:54896" }),
-      session: { token: "old-token", clientId: "client", refreshToken: "refresh" },
-    };
-    expect(await refreshOAuthSession(input)).toMatchObject({
-      token: "new-token",
-      refreshToken: "refresh",
-    });
-    expect(fetch.mock.calls[0][0]).toBe("http://localhost:54896/oauth2/token");
-    expect(fetch.mock.calls[0][1].body.get("resource")).toBe("http://localhost:54896/api");
-    fetch.mockResolvedValueOnce(new Response("{}"));
-    await expect(refreshOAuthSession(input)).rejects.toThrow();
-    // A refused refresh names the provider's error, so invalid_grant reads apart from any other 400.
-    fetch.mockResolvedValueOnce(
-      Response.json(
-        { error: "invalid_grant", error_description: "Invalid refresh token" },
-        { status: 400 },
-      ),
-    );
-    await expect(refreshOAuthSession(input)).rejects.toThrow(
-      'OAuth refresh failed (400): {"error":"invalid_grant","error_description":"Invalid refresh token"}',
-    );
-  } finally {
-    vi.unstubAllGlobals();
   }
 });
 
@@ -296,7 +249,7 @@ test(
 test("a pnpm shim for this package does not redirect source development to stale dist", async () => {
   const directory = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
   try {
-    for (const path of ["bin", "src", "dist", "node_modules/.bin"])
+    for (const path of ["bin", "src", "dist", "node_modules/.bin", "node_modules/@iterate-com"])
       mkdirSync(join(directory, path), { recursive: true });
     copyFileSync(bin, join(directory, "bin/iterate.js"));
     writeFileSync(join(directory, "package.json"), '{"type":"module"}');
@@ -309,7 +262,7 @@ test("a pnpm shim for this package does not redirect source development to stale
       'export async function runCli() { console.log("build"); }',
     );
     writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");
-    symlinkSync(directory, join(directory, "node_modules/iterate"));
+    symlinkSync(directory, join(directory, "node_modules/@iterate-com/cli"));
     for (const [force, expected] of [
       ["0", "source"],
       ["1", "build"],
@@ -415,7 +368,7 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No port");
   const source = `
-    import { connectIterate } from ${JSON.stringify(new URL("./next-node.ts", import.meta.url).href)};
+    import { connectIterate } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("iterate/node")).href)};
     import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
     using connection = await connectIterate({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
     await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });

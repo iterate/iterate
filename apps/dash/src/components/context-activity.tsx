@@ -4,7 +4,7 @@
 // visit (the account's, the organization's) when the context has none yet: the facts are on the
 // log either way; the fold is what the panel shows folded.
 import { useEffect, useRef, type ReactNode } from "react";
-import { useIterateContext, type IterateContextHandle } from "iterate/next/react";
+import { useIterateContext, type IterateContextHandle } from "iterate/react";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import type { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";

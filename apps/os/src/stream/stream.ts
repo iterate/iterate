@@ -20,10 +20,10 @@
 // its last RECENT_EPHEMERALS_BUDGET_CHARS of them, and `read(…, { includeEphemeral: true })` merges
 // them into a page — under the same proof, which never names one.
 
-import { codedError, errorCode, reportIssue } from "iterate/next/lib";
-import type { ItxExpressionInput } from "iterate/next/expression";
-import type { Caller } from "iterate/next/principal";
-import type { StreamPage, WaitForEventFilter } from "iterate/next/api";
+import { codedError, errorCode, reportIssue } from "iterate/lib";
+import type { ItxExpressionInput } from "iterate/expression";
+import type { Caller } from "iterate/principal";
+import type { StreamPage, WaitForEventFilter } from "iterate/api";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -31,7 +31,7 @@ import {
   type StreamEventInput,
   ReduceCheckpointTable,
   type SqlStorageHandle,
-} from "iterate/next/stream/processor";
+} from "iterate/stream/processor";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,

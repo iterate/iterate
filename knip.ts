@@ -39,6 +39,8 @@ export default {
         "eslint-plugin-import",
         // The .depot/workflows steps run this bin from the root.
         "trpc-cli",
+        // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
+        "@iterate-com/cli",
         // `cloudflare:workers` parses as the "cloudflare" package.
         "cloudflare",
       ],
@@ -150,10 +152,15 @@ export default {
       entry: ["src/**/*.test.{ts,tsx}"],
       project: ["src/**/*.{ts,tsx}"],
     },
+    "packages/cli": {
+      // The `iterate` bin (package.json `bin`).
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "bin/**/*.js", "tsdown*.ts"],
+    },
     "packages/iterate": {
-      // The `iterate/next/*` SDK is the package.json export map; the CLI is the bin.
+      // The `iterate/*` SDK is the package.json export map.
       entry: ["src/**/*.test.{ts,tsx}"],
-      project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "tsdown*.ts"],
+      project: ["src/**/*.{ts,tsx}", "tsdown*.ts"],
       // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
       // the "cloudflare" package — same posture as the app workspaces.
       ignoreDependencies: ["cloudflare"],

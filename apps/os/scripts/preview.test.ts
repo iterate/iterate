@@ -450,7 +450,7 @@ test.each<[string, string[], string[]]>([
   ["nothing", ["apps/os/src/worker.ts", "docs/x.md"], []],
   ["one app", ["apps/dash/src/routes/index.tsx"], ["dash"]],
   ["two apps", ["apps/notes/src/server.ts", "apps/voice/README.md"], ["notes", "voice"]],
-  ["the SDK: every app", ["packages/iterate/src/next/app.ts"], APPS.map((app) => app.name)],
+  ["the SDK: every app", ["packages/iterate/src/app.ts"], APPS.map((app) => app.name)],
   ["the shared UI: every app", ["packages/ui/src/button.tsx"], APPS.map((app) => app.name)],
   ["envs.ts: every app", ["envs.ts"], APPS.map((app) => app.name)],
   ["shared utilities: every app", ["packages/shared/src/slugify.ts"], APPS.map((app) => app.name)],

@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
@@ -10,10 +8,11 @@ import * as prompts from "@clack/prompts";
 import { os } from "@orpc/server";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import { connectIterate } from "./next-node.ts";
+import { connectIterate } from "iterate/node";
+import type { SessionCredentials } from "iterate/api";
 import { isCodingAgent } from "./coding-agent.ts";
-import type { SessionCredentials } from "./next/api.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
+import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
 import {
   CONFIG_PATH,
@@ -116,8 +115,11 @@ const storedCredentials = async (
   if (!session) {
     throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
   }
-  if (sessionNeedsRefresh(session))
-    session = await refreshOAuthSession({ config, configName, session });
+  if (sessionNeedsRefresh(session)) {
+    session = await refreshOAuthSession({ issuer: config.osBaseUrl, session });
+    config.session = session;
+    updateConfigSession(configName, session);
+  }
   if (session.token) {
     return { type: "bearer", token: session.token };
   }
@@ -156,28 +158,6 @@ const selectProject = async (
     `Pass --project or set defaultProject in ${CONFIG_PATH}. Accessible projects: ${projects.map((p) => `${p.slug} (${p.id})`).join(", ") || "none"}.`,
   );
 };
-const OAUTH_SCOPE = "iterate";
-const LOOPBACK_HOST = "localhost";
-const LOOPBACK_CALLBACK_PATH = "/callback";
-const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
-
-const OAuthTokenResponse = z.object({
-  access_token: z.string().min(1),
-  refresh_token: z.string().optional(),
-  expires_in: z.number().positive().optional(),
-  expires_at: z.number().positive().optional(),
-  scope: z.string().optional(),
-});
-type OAuthTokenResponse = z.infer<typeof OAuthTokenResponse>;
-
-const base64Url = (buffer: Buffer) => buffer.toString("base64url");
-
-const randomBase64Url = (byteLength = 32) => base64Url(randomBytes(byteLength));
-
-export const oauthResourceForOsBaseUrl = (osBaseUrl: string) => {
-  return new URL("/api", osBaseUrl).href;
-};
-
 const openUrlInBrowser = async (url: string) => {
   const { execFile } = await import("node:child_process");
   const { command, args } =
@@ -197,288 +177,19 @@ const readErrorBody = async (response: Response) => {
   return text.length > 300 ? `${text.slice(0, 300)}...` : text;
 };
 
-const registerOAuthClient = async (input: { authBaseUrl: string; redirectUri: string }) => {
-  const response = await fetch(`${input.authBaseUrl}/oauth2/register`, {
-    method: "POST",
-    signal: AbortSignal.timeout(30_000),
-    headers: { "content-type": "application/json", origin: input.authBaseUrl },
-    body: JSON.stringify({
-      client_name: "iterate CLI",
-      redirect_uris: [input.redirectUri],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      scope: OAUTH_SCOPE,
-      type: "native",
-      require_pkce: true,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `OAuth client registration failed (${response.status}): ${await readErrorBody(response)}`,
-    );
-  }
-
-  const client = z.object({ client_id: z.string().min(1) }).parse(await response.json());
-  if (!client.client_id) throw new Error("OAuth client registration did not return client_id.");
-  return client.client_id;
-};
-
-const startOAuthCallbackServer = async (): Promise<{
-  redirectUri: string;
-  wait: () => Promise<{ code: string; state: string; redirectUri: string }>;
-  close: () => Promise<void>;
-}> => {
-  let settled = false;
-  let resolveCallback:
-    | ((value: { code: string; state: string; redirectUri: string }) => void)
-    | undefined;
-  let rejectCallback: ((reason: unknown) => void) | undefined;
-
-  const callbackPromise = new Promise<{
-    code: string;
-    state: string;
-    redirectUri: string;
-  }>((resolve, reject) => {
-    resolveCallback = resolve;
-    rejectCallback = reject;
-  });
-
-  void callbackPromise.catch(() => {});
-
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    if (settled) {
-      response.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-      response.end("OAuth callback already received.");
-      return;
-    }
-
-    const url = new URL(request.url || "/", `http://${LOOPBACK_HOST}`);
-    if (url.pathname !== LOOPBACK_CALLBACK_PATH) {
-      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      response.end("Not found.");
-      return;
-    }
-
-    const error = url.searchParams.get("error");
-    if (error) {
-      settled = true;
-      response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
-      response.end("<h1>Iterate login failed</h1><p>You can return to the terminal.</p>");
-      rejectCallback?.(
-        new Error(
-          `OAuth authorization failed: ${error}${
-            url.searchParams.get("error_description")
-              ? ` (${url.searchParams.get("error_description")})`
-              : ""
-          }`,
-        ),
-      );
-      return;
-    }
-
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code || !state) {
-      settled = true;
-      response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
-      response.end("<h1>Iterate login failed</h1><p>Missing code or state.</p>");
-      rejectCallback?.(new Error("OAuth callback was missing code or state."));
-      return;
-    }
-
-    settled = true;
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end("<h1>Iterate login complete</h1><p>You can close this tab.</p>");
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    resolveCallback?.({
-      code,
-      state,
-      redirectUri: `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`,
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, LOOPBACK_HOST, () => resolve());
-  });
-
-  const timeout = setTimeout(() => {
-    if (!settled) {
-      settled = true;
-      rejectCallback?.(new Error("Timed out waiting for OAuth callback."));
-    }
-  }, OAUTH_CALLBACK_TIMEOUT_MS);
-  timeout.unref();
-
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-
-  return {
-    redirectUri: `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`,
-    wait: () => callbackPromise.finally(() => clearTimeout(timeout)),
-    close: () => {
-      clearTimeout(timeout);
-      return new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
-};
-
-const exchangeOAuthCode = async (input: {
-  authBaseUrl: string;
-  clientId: string;
-  code: string;
-  codeVerifier: string;
-  redirectUri: string;
-  resource: string;
-}) => {
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    client_id: input.clientId,
-    code: input.code,
-    redirect_uri: input.redirectUri,
-    code_verifier: input.codeVerifier,
-    resource: input.resource,
-  });
-
-  const response = await fetch(`${input.authBaseUrl}/oauth2/token`, {
-    method: "POST",
-    signal: AbortSignal.timeout(30_000),
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      origin: input.authBaseUrl,
-    },
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `OAuth token exchange failed (${response.status}): ${await readErrorBody(response)}`,
-    );
-  }
-
-  const token = OAuthTokenResponse.parse(await response.json());
-  if (!token.access_token) throw new Error("OAuth token exchange did not return access_token.");
-  return token;
-};
-
-const oauthTokenToSession = (
-  token: OAuthTokenResponse,
-  existing: Pick<StoredSession, "clientId" | "refreshToken"> | undefined,
-): StoredSession => {
-  const expiresAtMs = token.expires_at
-    ? token.expires_at * 1000
-    : token.expires_in
-      ? Date.now() + token.expires_in * 1000
-      : undefined;
-  return {
-    token: token.access_token,
-    refreshToken: token.refresh_token || existing?.refreshToken,
-    clientId: existing?.clientId,
-    scope: token.scope,
-    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : undefined,
-  };
-};
-
-export const refreshOAuthSession = async (input: {
-  config: Config;
-  configName?: string;
-  session: StoredSession;
-}): Promise<StoredSession> => {
-  if (!input.session.refreshToken || !input.session.clientId) {
-    throw new Error(`Session expired for ${input.config.osBaseUrl}. Run \`iterate login\` again.`);
-  }
-
-  const authBaseUrl = input.config.osBaseUrl;
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    client_id: input.session.clientId,
-    refresh_token: input.session.refreshToken,
-    resource: oauthResourceForOsBaseUrl(input.config.osBaseUrl),
-  });
-  if (input.session.scope) body.set("scope", input.session.scope);
-
-  const response = await fetch(`${authBaseUrl}/oauth2/token`, {
-    method: "POST",
-    signal: AbortSignal.timeout(30_000),
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      origin: authBaseUrl,
-    },
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `OAuth refresh failed (${response.status}): ${await readErrorBody(response)}. Run \`iterate login\` again.`,
-    );
-  }
-
-  const token = OAuthTokenResponse.parse(await response.json());
-  const refreshedSession = oauthTokenToSession(token, input.session);
-  refreshedSession.clientId = input.session.clientId;
-  input.config.session = refreshedSession;
-  if (input.configName) updateConfigSession(input.configName, refreshedSession);
-  return refreshedSession;
-};
-
-const oauthLogin = async (config: Config): Promise<StoredSession> => {
-  const authBaseUrl = config.osBaseUrl;
-  const resource = oauthResourceForOsBaseUrl(config.osBaseUrl);
-  const codeVerifier = randomBase64Url(48);
-  const state = randomBase64Url(32);
-  const callback = await startOAuthCallbackServer();
-  try {
-    const clientId = await registerOAuthClient({ authBaseUrl, redirectUri: callback.redirectUri });
-
-    const authorizeUrl = new URL(`${authBaseUrl}/oauth2/auth`);
-    authorizeUrl.searchParams.set("response_type", "code");
-    authorizeUrl.searchParams.set("client_id", clientId);
-    authorizeUrl.searchParams.set("redirect_uri", callback.redirectUri);
-    authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
-    authorizeUrl.searchParams.set("resource", resource);
-    authorizeUrl.searchParams.set("state", state);
-    authorizeUrl.searchParams.set(
-      "code_challenge",
-      base64Url(createHash("sha256").update(codeVerifier).digest()),
-    );
-    authorizeUrl.searchParams.set("code_challenge_method", "S256");
-
-    console.error(`\nOpening browser to authenticate with Iterate:\n`);
-    console.error(`  ${authorizeUrl.href}\n`);
-    if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") {
-      await openUrlInBrowser(authorizeUrl.href);
-    }
-
-    const callbackResult = await callback.wait();
-
-    if (callbackResult.state !== state) {
-      throw new Error("OAuth callback state did not match. Please try again.");
-    }
-
-    const token = await exchangeOAuthCode({
-      authBaseUrl,
-      clientId,
-      code: callbackResult.code,
-      codeVerifier,
-      redirectUri: callbackResult.redirectUri,
-      resource,
-    });
-    const session = oauthTokenToSession(token, { clientId, refreshToken: undefined });
-    session.clientId = clientId;
-    return session;
-  } finally {
-    await callback.close();
-  }
-};
-
 const loginToResolvedConfig = async (resolved: { name: string; config: Config }) => {
   const { config } = resolved;
 
   console.error(`Logging in to ${config.osBaseUrl}...`);
-  const oauthResult = await oauthLogin(config);
+  const oauthResult = await oauthLogin({
+    issuer: config.osBaseUrl,
+    openBrowser: async (url) => {
+      console.error(`\nOpening browser to authenticate with Iterate:\n`);
+      console.error(`  ${url.href}\n`);
+      if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1")
+        await openUrlInBrowser(url.href);
+    },
+  });
 
   // Update in-memory config so subsequent verification and calls see the token.
   config.session = oauthResult;

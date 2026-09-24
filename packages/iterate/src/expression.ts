@@ -1,4 +1,4 @@
-// next/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
+// expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
 // STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar, comments included
 // (no hand-rolled number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting
 // one IS revocation. The rewrite rules (match, rank, rewrite) are

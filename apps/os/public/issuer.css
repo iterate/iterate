@@ -1,4 +1,4 @@
-/* The stylesheet an app's own sign-in pages (iterate/next/app-server) link from the
+/* The stylesheet an app's own sign-in pages (iterate/app-server) link from the
    deployment's issuer. The issuer's pages are Tailwind (src/styles.css) and do not use it. */
 :root {
   color-scheme: light;

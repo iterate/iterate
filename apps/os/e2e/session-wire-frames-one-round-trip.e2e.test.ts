@@ -12,7 +12,7 @@
 // dotted chains through a live provider cost one push, and the disposal contract.
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import {
   adminCredentials,
   freshCtx,

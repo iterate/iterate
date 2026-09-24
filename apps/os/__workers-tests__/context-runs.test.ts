@@ -8,7 +8,7 @@
 // src/library.test.ts: inside workerd a test cannot fake the loaded isolate's clock.
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import { adminCredentials, openSession, releasePins, stub, until } from "./support.ts";
 
 const PROJECT = "prj_context_runs";

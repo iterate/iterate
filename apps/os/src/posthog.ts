@@ -1,4 +1,4 @@
-// posthog.ts — every `reportIssue` (iterate/next/lib) also becomes a `$exception` in PostHog Error
+// posthog.ts — every `reportIssue` (iterate/lib) also becomes a `$exception` in PostHog Error
 // Tracking, from the edge and from every Durable Object alike: worker.ts installs it with
 // `forwardIssues` at module load, the one module graph both run in. PostHog's Workers recipe
 // (posthog.com/docs/libraries/cloudflare-workers): a client per capture, `flushAt: 1` and
@@ -7,7 +7,7 @@
 // Object resident past its one request.
 
 import { env, waitUntil } from "cloudflare:workers";
-import type { Issue } from "iterate/next/lib";
+import type { Issue } from "iterate/lib";
 import { PostHog } from "posthog-node";
 import { appConfigOf } from "./app-config.ts";
 import type { Env } from "./env.ts";

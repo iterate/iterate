@@ -1,8 +1,8 @@
 import { hostname } from "node:os";
 import * as prompts from "@clack/prompts";
 import { RpcTarget } from "capnweb";
+import type { connectIterate } from "iterate/node";
 import { run } from "./run-command.ts";
-import type { connectIterate } from "./next-node.ts";
 
 type ComputerEvent =
   | { type: "status"; loggedIn: true; name: string }

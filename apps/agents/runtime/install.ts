@@ -1,4 +1,4 @@
-import type { IterateContextApi } from "iterate/next/api";
+import type { IterateContextApi } from "iterate/api";
 
 /** Install the app into a project root. Its code and catalog remain project-owned userspace. */
 export async function installAgents(

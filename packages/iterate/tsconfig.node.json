@@ -1,5 +1,5 @@
 {
-  "files": ["src/next-node.ts"],
+  "files": ["src/node.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

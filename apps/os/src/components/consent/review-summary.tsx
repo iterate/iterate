@@ -1,7 +1,7 @@
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Label } from "@iterate-com/ui/components/label";
-import type { ConsentScope } from "iterate/next/oauth-scopes";
+import type { ConsentScope } from "iterate/oauth-scopes";
 import type { ProjectRow } from "./project-choices.tsx";
 
 /** The projects chosen on the first step, with the way back to change them. */

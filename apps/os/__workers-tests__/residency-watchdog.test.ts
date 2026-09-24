@@ -5,7 +5,7 @@
 // neither eviction nor hibernation, and a real pin is recorded — is e2e/context-watchdog.e2e.test.ts.
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import { RESIDENCY_WATCHDOG_WINDOW_MS as W } from "../src/context/residency-watchdog.ts";
 import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
 import { releasePins, stub } from "./support.ts";

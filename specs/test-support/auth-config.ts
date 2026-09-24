@@ -1,4 +1,4 @@
-import type { IngressRouting } from "iterate/next/project-ingress";
+import type { IngressRouting } from "iterate/project-ingress";
 import { z } from "zod";
 
 export const OsPlaywrightAuthEnv = z.object({

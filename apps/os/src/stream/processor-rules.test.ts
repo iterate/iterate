@@ -1,5 +1,5 @@
 // The processor engine's concurrency contract, rule by rule (the header of
-// packages/iterate/src/next/stream/processor.ts): the per-event barrier under slow and nested
+// packages/iterate/src/stream/processor.ts): the per-event barrier under slow and nested
 // blockers (rule 2), background work that never blocks the commit (rule 3), one durable commit per
 // batch — all or nothing (rule 4), exactly one caughtUp per at-head batch (rule 5),
 // waitUntilProcessed under gap repair and concurrent timeouts, the version-bump re-reduce's edges, a flaky live-state projection, and ephemeral windows across a stale
@@ -16,7 +16,7 @@ import {
   StreamProcessor,
   type ProcessEventArgs,
   type ReduceArgs,
-} from "iterate/next/stream/processor";
+} from "iterate/stream/processor";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 // ── rule 2 — per-event barrier under slow blockers ──

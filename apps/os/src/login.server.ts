@@ -1,7 +1,7 @@
 // The sign-in page's server side: what /login shows for this browser, and what its plain form posts
 // do. The route (routes/login.tsx) renders the first and hands POST /login to the second.
 
-import { errorCode, sameOriginPath } from "iterate/next/lib";
+import { errorCode, sameOriginPath } from "iterate/lib";
 import { startIssuerSession } from "./issuer-session.ts";
 import {
   clearLoginCookie,

@@ -7,7 +7,7 @@ try {
 
 // Stricter checks for coding agents. The one list of agent markers is the iterate CLI's; Node loads
 // the .ts file with its built-in type stripping.
-const { isCodingAgent } = require("./packages/iterate/src/coding-agent.ts");
+const { isCodingAgent } = require("./packages/cli/src/coding-agent.ts");
 const isAgent = isCodingAgent(process.env);
 
 /** @type {import('lint-staged').Configuration} */

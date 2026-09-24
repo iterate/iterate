@@ -1,8 +1,8 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/next/app";
-import { useLiveState } from "iterate/next/react";
+import type { AuthenticatedApp } from "iterate/app";
+import { useLiveState } from "iterate/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,

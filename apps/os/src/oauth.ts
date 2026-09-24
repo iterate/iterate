@@ -7,9 +7,9 @@ import {
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
-import { reportIssue } from "iterate/next/lib";
-import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
-import { verifyAdminSecret, type Principal } from "iterate/next/principal";
+import { reportIssue } from "iterate/lib";
+import { OAuthScope, OAuthScopes } from "iterate/oauth-scopes";
+import { verifyAdminSecret, type Principal } from "iterate/principal";
 import type { Env, Handler } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
@@ -180,7 +180,7 @@ function providerOptions(
     authorizeEndpoint: `${issuer}/oauth2/auth`,
     tokenEndpoint: `${issuer}/oauth2/token`,
     // DCR is served on every deployment (not just local http): CIMD stays the apps' own path
-    // (iterate/next/app-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
+    // (iterate/app-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
     clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,

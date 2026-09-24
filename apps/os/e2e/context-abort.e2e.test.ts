@@ -15,7 +15,7 @@
 //     with its storage, and the context's incarnation is the same
 //   • a rewrite rule masks `abort` like any name; a jail's bare null takes both verbs away
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, readAll, rejection, sleep, until } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";

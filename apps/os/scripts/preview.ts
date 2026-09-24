@@ -692,7 +692,7 @@ async function previewSignIn(
     socketUrl.protocol = "wss:";
     const socket = new WebSocket(socketUrl);
     // Undici implements the WebSocket transport; Workers' ambient type has extra unrelated members.
-    // The one call it makes, typed here: `iterate/next/api`'s types need the worker's lib, which
+    // The one call it makes, typed here: `iterate/api`'s types need the worker's lib, which
     // tsconfig.scripts.json does not load.
     using rpc = newWebSocketRpcSession<{
       authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {

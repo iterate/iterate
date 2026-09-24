@@ -3,7 +3,7 @@
 // may be hosted there. The refusal end to end, through a person who signed in, is
 // __workers-tests__/first-party-facet-placement.test.ts.
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 

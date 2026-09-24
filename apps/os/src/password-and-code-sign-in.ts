@@ -11,8 +11,8 @@
 //   The reserved test domains (example.com, .test, …) are never mailed, on any deployment — mail to
 //   them bounces, and a bounce costs the sender's reputation.
 import { z } from "zod";
-import { codedError, reportIssue } from "iterate/next/lib";
-import { cookieValueOf } from "iterate/next/principal";
+import { codedError, reportIssue } from "iterate/lib";
+import { cookieValueOf } from "iterate/principal";
 import type { Env } from "./env.ts";
 import { appConfigOf } from "./app-config.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";

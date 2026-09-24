@@ -1,10 +1,10 @@
 // The installed catalog delegates project capabilities to each agent and its script context.
 import { RpcTarget } from "cloudflare:workers";
-import type { WithItx } from "iterate/next/sdk";
-import type { StreamEvent } from "iterate/next/stream/processor";
-import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
-import { codedError, resolveContextPath } from "iterate/next/lib";
-import type { FacetSpec } from "iterate/next/api";
+import type { WithItx } from "iterate/sdk";
+import type { StreamEvent } from "iterate/stream/processor";
+import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
+import { codedError, resolveContextPath } from "iterate/lib";
+import type { FacetSpec } from "iterate/api";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 
@@ -221,7 +221,7 @@ class AgentReference extends RpcTarget {
       itx.cd(this.path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]]),
     );
   }
-  append(...events: import("iterate/next/stream/processor").StreamEventInput[]) {
+  append(...events: import("iterate/stream/processor").StreamEventInput[]) {
     return this.withItx((itx) => itx.cd(this.path).append(...events));
   }
 }

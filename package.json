@@ -21,6 +21,7 @@
     "test": "pnpm -r --parallel test"
   },
   "devDependencies": {
+    "@iterate-com/cli": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@playwright/test": "1.60.0",
     "@tanstack/eslint-plugin-router": "^1.139.0",

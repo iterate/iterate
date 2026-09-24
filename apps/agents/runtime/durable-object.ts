@@ -1,7 +1,7 @@
 // App-owned agent facet, loaded into a project through the public SDK.
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
-import type { StreamEvent } from "iterate/next/stream/processor";
-import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import type { StreamEvent } from "iterate/stream/processor";
+import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import type { AgentState, FileAttachment } from "./contract.ts";
 import { AgentProcessor, STREAM_IDLE_BUDGET_MS } from "./processor.ts";
 import { AgentAiSink } from "./ai-transport.ts";

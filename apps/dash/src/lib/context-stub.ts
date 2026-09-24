@@ -4,7 +4,7 @@
 // when it arrives after the component has already moved on.
 import { useEffect, useState, type DependencyList } from "react";
 import { z } from "zod";
-import { useLiveState, type IterateContextHandle } from "iterate/next/react";
+import { useLiveState, type IterateContextHandle } from "iterate/react";
 
 type ContextStubState<S> = { stub?: S; error?: string; pending: boolean };
 

@@ -18,7 +18,7 @@
 // the SUBSCRIPTIONS table, never a rewrite rule.
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import {
   adminCredentials,
   freshCtx,

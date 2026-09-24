@@ -1,6 +1,6 @@
-import { appSession, startAppSession } from "iterate/next/app-server";
-import type { BrowserSession } from "iterate/next/app-session";
-import { isLocalOrigin, sameOriginPath } from "iterate/next/lib";
+import { appSession, startAppSession } from "iterate/app-server";
+import type { BrowserSession } from "iterate/app-session";
+import { isLocalOrigin, sameOriginPath } from "iterate/lib";
 import { kitEnvs } from "../../../envs.ts";
 import { DEFAULT_FIRMWARE_VERSION, findFirmwareDevice } from "./firmware/catalog.ts";
 import { deviceVendors } from "./firmware/device-client.ts";

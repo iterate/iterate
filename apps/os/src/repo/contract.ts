@@ -11,7 +11,7 @@
 //   ConsumedEvent<typeof RepoContract>                                       what reduce and processEvent see
 //   EventInput<typeof RepoContract>                                          what `itx.repos.get(path).append(…)` takes
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 
 /** `repo/commit-completed`'s payload: the commit that landed on main and the paths it changed. */

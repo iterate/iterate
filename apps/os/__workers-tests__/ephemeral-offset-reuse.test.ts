@@ -8,7 +8,7 @@
 // read-verb cases below are also the pin for that fix: they evict at once after ONE release.)
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import type { ItxExpression } from "iterate/next/expression";
+import type { ItxExpression } from "iterate/expression";
 import { releasePins, stub } from "./support.ts";
 
 const COUNTER_MODULES = {

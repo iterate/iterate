@@ -31,7 +31,7 @@
 //      through) — runs only inside a project, any of its contexts, and never in the global
 //      namespace: a person's account, an organization and the global root run the platform's code
 //      alone.
-import { codedError } from "iterate/next/lib";
+import { codedError } from "iterate/lib";
 import type { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
 import { SECRET_PATH } from "../secrets.ts";
 import { GLOBAL_PROJECT_ID, pathUnderOwner, resourceScope } from "./paths.ts";

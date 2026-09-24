@@ -195,7 +195,7 @@ acts as that user's session (the projects of their organizations). The e2e
 lane's `adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly
 this.
 
-The `iterate` CLI (`packages/iterate`) takes the bearer from
+The `iterate` CLI (`packages/cli`) takes the bearer from
 `APP_CONFIG_ADMIN_API_SECRET`, ahead of any stored login:
 
 ```bash

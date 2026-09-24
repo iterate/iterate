@@ -1,4 +1,4 @@
-import { appAuth, appSession } from "iterate/next/app-server";
+import { appAuth, appSession } from "iterate/app-server";
 import { platformAddressesOf } from "./app-config.ts";
 import { oauthResponse } from "./api.ts";
 import type { Env } from "./env.ts";

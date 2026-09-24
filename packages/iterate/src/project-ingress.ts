@@ -1,4 +1,4 @@
-// next/project-ingress.ts — HOW PROJECTS ARE REACHED OVER HTTP, both directions in ONE pure file. A
+// project-ingress.ts — HOW PROJECTS ARE REACHED OVER HTTP, both directions in ONE pure file. A
 // deployment's `urls.ingressRouting` (apps/os app-config.ts) names the mechanism; `projectAddressOf`
 // parses a request's URL into the project and app it names, `projectUrlOf` composes the URL of an
 // app in a project. The platform's edge parses; the platform, the dash and an app compose — one

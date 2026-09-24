@@ -6,7 +6,7 @@
 
 import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
-import type { SecretMaterial } from "iterate/next/api";
+import type { SecretMaterial } from "iterate/api";
 import {
   beginSecretOAuth,
   completeSecretOAuth,

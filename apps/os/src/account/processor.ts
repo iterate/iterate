@@ -5,11 +5,7 @@
 // projects it to live state, exactly as a project processor. No effect lives here: a PURE FOLD.
 // Imports only the pure kernel, so a unit test constructs it with `new` and reduces rows
 // (processor.test.ts, in node).
-import {
-  type ConsumedEvent,
-  type ReduceArgs,
-  StreamProcessor,
-} from "iterate/next/stream/processor";
+import { type ConsumedEvent, type ReduceArgs, StreamProcessor } from "iterate/stream/processor";
 import { dropMembership, reduceMembership } from "../organization/contract.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { AccountContract, type AccountState } from "./contract.ts";

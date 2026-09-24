@@ -6,7 +6,7 @@
 // access is kept five seconds — dropped at once here for the person a command was made by or for —
 // and a refusal is never memoized: a project not in a memoized access set is re-read once before it
 // is refused, so a creation is reachable at once.
-import type { Caller } from "iterate/next/principal";
+import type { Caller } from "iterate/principal";
 import type { OrganizationRole } from "../organization/contract.ts";
 import { isRetryableTransportError } from "../retryable-error.ts";
 import type { ControlPlaneDurableObject } from "./durable-object.ts";

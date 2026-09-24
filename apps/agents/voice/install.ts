@@ -1,4 +1,4 @@
-import type { IterateContextApi } from "iterate/next/api";
+import type { IterateContextApi } from "iterate/api";
 import { z } from "zod";
 import { installAgents } from "../runtime/install.ts";
 

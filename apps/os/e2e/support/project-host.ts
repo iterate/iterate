@@ -6,7 +6,7 @@
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
-import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
+import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
@@ -48,7 +48,7 @@ export function ingressRouting(): IngressRouting {
  *  issuer's). Everything else composes its address with `projectUrl` and runs under both routings. */
 export const subdomainsOnly = test.skipIf(ingressRouting()?.type !== "subdomains");
 
-/** THE ONE COMPOSER a row addresses a project with — `projectUrlOf` (iterate/next/project-ingress)
+/** THE ONE COMPOSER a row addresses a project with — `projectUrlOf` (iterate/project-ingress)
  *  under the worker's routing and origin: `<app>--<project>.<hostname>` (the apex `<project>.<hostname>`)
  *  under subdomains, `<worker>/projects/<project>[/<app>]<path>` under paths. The rows never spell a
  *  host; the platform's own `whoami().projectUrl`, a signed file URL and `itx.url` compose the same way. */

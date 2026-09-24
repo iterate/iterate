@@ -5,8 +5,8 @@ import {
   type ConsumedEvent,
   type ReduceArgs,
   type ProcessorState,
-} from "iterate/next/stream/processor";
-import { StreamProcessorDurableObject } from "iterate/next/sdk";
+} from "iterate/stream/processor";
+import { StreamProcessorDurableObject } from "iterate/sdk";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
 
