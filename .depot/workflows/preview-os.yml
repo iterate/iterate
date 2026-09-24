@@ -37,7 +37,8 @@
 # its preview by pull-request-number or, without one, by preview-name (`pr3035-ttg-deploy-overlap`,
 # or CI's own `main`), and runs the suite from the dispatched ref. A dispatch posts its checks on the
 # ref's head commit, replacing that commit's checks of the same name, and a job it skips counts as
-# passing there: dispatch e2e or specs alone with `--ref main`, never on a PR's branch.
+# passing there: dispatch e2e or specs alone from a scratch branch cut from main, never on a PR's
+# branch or main, whose head would carry the result (docs/depot-ci.md#run-ci-without-a-pr).
 # slow-rows = run | skip overrides what the PR's paths and label say about the rows tagged `slow`:
 # `--input action=e2e --input slow-rows=run` runs them against the live preview.
 # apps = all | auto | none (the apps on top: dash, agents, notes, voice, kit). Pull-request runs use
