@@ -7,9 +7,7 @@
 // scripts/slow-rows.ts, or the Playwright specs, against the live preview; the suite's line under the
 // status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
-// top), delete-superseded (the per-run previews this CI workflow's preview replaced: `main-<sha>`,
-// `latency-<run>-<attempt>`, `real-model-<run>-<attempt>`), sweep
-// (the stale previews and the resources that outlived theirs — the rules are
+// top), sweep (the stale previews and the resources that outlived theirs — the rules are
 // scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -87,7 +85,6 @@ import {
 import {
   planPreviewSweep,
   previewNameOfSweptResource,
-  supersededMainPreviews,
   type PullRequestState,
   type SweptResource,
 } from "./preview-sweep.ts";
@@ -105,16 +102,7 @@ const OUTPUT_DIR = path.join(ROOT, "output");
  *  mentions preview auto-provisioning. */
 const WRANGLER_PACKAGE = "https://pkg.pr.new/wrangler@14416";
 
-const Command = z.enum([
-  "config",
-  "deploy",
-  "e2e",
-  "specs",
-  "reset",
-  "delete",
-  "delete-superseded",
-  "sweep",
-]);
+const Command = z.enum(["config", "deploy", "e2e", "specs", "reset", "delete", "sweep"]);
 type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
@@ -167,7 +155,7 @@ function run(
 
 /** The wrangler a run uses: the pinned draft build (WRANGLER_PACKAGE) installed into a tmpdir the
  *  way cloudflare-os does it (pnpm, exotic subdeps allowed for the pkg.pr.new workspace packages). */
-export function preparePreviewWrangler() {
+function preparePreviewWrangler() {
   const installDir = mkdtempSync(path.join(tmpdir(), "os-preview-wrangler-"));
   writeFileSync(
     path.join(installDir, "package.json"),
@@ -1142,27 +1130,6 @@ async function listSweptResources(cf: Cf): Promise<SweptResource[]> {
 
 type ListedPreview = { name: string; created_on?: string; deployed_on?: string };
 
-/** The per-run previews this CI workflow's preview replaced (preview-sweep.ts `supersededMainPreviews`),
- *  each deleted with everything it owns and the apps on top. */
-async function deleteSupersededMainPreviews(cf: Cf, current: string, dryRun: boolean) {
-  const listed = await listAll<ListedPreview>(
-    cf,
-    `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
-  ).catch((error) => {
-    if (!isMissingWorkerError(describe(error))) throw error;
-    return [] as ListedPreview[]; // a parent not yet deployed holds no previews
-  });
-  const superseded = supersededMainPreviews(
-    listed.map((preview) => preview.name),
-    current,
-  );
-  console.log(
-    `superseded per-run previews on ${PREVIEW_PARENT.workerName}: ${superseded.join(", ") || "none"}`,
-  );
-  if (dryRun) return;
-  for (const name of superseded) await deleteAll(cf, name);
-}
-
 const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
   kv: "KV namespace",
   r2: "R2 bucket",
@@ -1387,8 +1354,6 @@ async function main(argv: string[]) {
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });
   console.log(`preview ${previewName} → ${previewUrl(previewName)}`);
-  if (parsed.command === "delete-superseded")
-    return deleteSupersededMainPreviews((await parentContext()).cf, previewName, parsed.dryRun);
   if (parsed.command === "config" || parsed.dryRun) {
     await buildOs("preview");
     console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);

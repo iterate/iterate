@@ -651,17 +651,14 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
     "slow-e2e": ".depot/workflows/os-slow-e2e.yml",
   });
   expect(ownPreviews.map(({ preview }) => preview).toSorted()).toEqual(
-    [...CI_WORKFLOW_PREVIEWS.keys()].toSorted(),
+    [...CI_WORKFLOW_PREVIEWS].toSorted(),
   );
-  for (const { file, preview, workflow } of ownPreviews) {
+  for (const { file, workflow } of ownPreviews) {
     expect(workflow.concurrency, file).toMatchObject({ "cancel-in-progress": false });
     const steps = Object.values(workflow.jobs).flatMap((job) => job.steps || []);
     const runs = steps.map((step) => step.run || "");
     // the gate holds past the window an in-place redeploy's old version still answers in
     expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview deploy --settle \d{3}$/));
-    // the per-run previews it made before it kept one
-    if (CI_WORKFLOW_PREVIEWS.get(preview))
-      expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview delete-superseded$/));
     expect(runs, file).not.toContainEqual(expect.stringMatching(/pnpm preview (delete|reset)$/));
     expect(
       steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),

@@ -409,8 +409,7 @@ async function readRun(depot: (method: string, body: object) => Promise<unknown>
 }
 
 /** The suite summary of the Preview OS e2e job's first attempt (preview-os.yml uploads it as
- *  `flake-records-preview-e2e-attempt-<id>`, and as `flake-records-preview-e2e` before 2026-09-24),
- *  or undefined when it uploaded none. */
+ *  `flake-records-preview-e2e-attempt-<id>`), or undefined when it uploaded none. */
 async function readE2eSummary(
   depot: (method: string, body: object) => Promise<unknown>,
   runId: string,

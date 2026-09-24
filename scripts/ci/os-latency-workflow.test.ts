@@ -59,7 +59,6 @@ test("runs on a schedule, on every main push that could change the platform's sp
 test("measures a preview of its own, redeployed in place, never deleted", () => {
   const measure = runs("measure").join("\n");
   const order = [
-    "doppler run -- pnpm preview delete-superseded",
     "doppler run -- pnpm preview deploy",
     "pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json",
     "pnpm tsx scripts/ci/os-latency-guard.ts previous-state",
