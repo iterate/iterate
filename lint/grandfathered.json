@@ -1305,8 +1305,7 @@
     "apps/os/e2e/push-delivery.e2e.test.ts": [
       "expect(c.invocations[0].range.through).toBe(committed[899].offset);",
       "expect(d2.range.after).toBe(d1.range.through);",
-      "expect(d2.range.through).toBe(hit2.offset);",
-      "expect(new Set(received.map((r) => r.seq)).size).toBe(TOTAL); // every seq exactly once"
+      "expect(d2.range.through).toBe(hit2.offset);"
     ],
     "apps/os/e2e/repos.e2e.test.ts": [
       "expect((await itx.cfArtifacts.list()).repos).toEqual([{ path: \"/repos/config\" }]);",
