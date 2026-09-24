@@ -1,10 +1,10 @@
 /**
- * The GraphQL session-login door (the username/password → session-token
+ * The GraphQL session-login endpoint (the username/password → session-token
  * archetype): one more way to authenticate against petshop's ONE pets API,
  * alongside OAuth, the legacy JSON login, MCP, and the WebSocket gateways. Some real-world vendors authenticate exactly like
  * this — a GraphQL `NewSession` mutation trading email+password for a
  * short-lived bearer with no refresh grant — and the OS side carries a named
- * refresh strategy speaking this wire shape; this door is what that strategy
+ * refresh strategy speaking this wire shape; this endpoint is what that strategy
  * is exercised against end to end.
  *
  * - `NewSession` — login. Any username, password "correct-horse" (the same
@@ -16,7 +16,7 @@
  *   `{ clientId: graphqlSessionAccountClientId(username) }` only that
  *   account's — what a test that forces a 401 wants, since this ONE shop
  *   serves every concurrent CI run.
- * - Anything else on the GraphQL door is a loud `errors` answer: the door
+ * - Anything else on the GraphQL endpoint is a loud `errors` answer: it
  *   logs you in; the API it unlocks is `/api/*`.
  */
 import { nowSeconds, seal, unseal } from "./seal.ts";
@@ -30,7 +30,7 @@ import { nowSeconds, seal, unseal } from "./seal.ts";
 export const GRAPHQL_SESSION_TTL_SECONDS = 120;
 
 /** The client every GraphQL-minted session belongs to (`/api/me`'s `clientId`)
- * — its revocation epoch is the whole door's. */
+ * — its revocation epoch is the whole endpoint's. */
 export const GRAPHQL_SESSION_CLIENT_ID = "graphql-session-login";
 
 /** The revocation key of ONE account's GraphQL sessions: expire-tokens with
@@ -42,8 +42,8 @@ export const graphqlSessionAccountClientId = (username: string) =>
  * petshop's legacy-login endpoint. */
 export const GRAPHQL_LOGIN_PASSWORD = "correct-horse";
 
-/** What the door needs from the shop: the sealing key and a per-call read of
- * the revocation epochs a session of `username` is bound to — the door's and
+/** What the endpoint needs from the shop: the sealing key and a per-call read of
+ * the revocation epochs a session of `username` is bound to — the endpoint's and
  * the account's — so targeted expiry invalidates outstanding sessions exactly
  * like every other petshop token. */
 export interface GraphqlLoginDeps {
@@ -58,7 +58,7 @@ export interface GraphqlSessionPayload {
   t: "graphql-session";
   /** The login username — the grant's subject on the pets API. */
   sub: string;
-  /** The door's revocation epoch at mint. */
+  /** The endpoint's revocation epoch at mint. */
   epoch: number;
   /** The account's revocation epoch at mint (absent on a session minted
    * before accounts had one: epoch 0). */
@@ -126,7 +126,7 @@ async function mintSession(
 
 /**
  * Resolve a bearer token to a live GraphQL-minted session, or null — how the
- * pets API accepts this door's sessions as grants (worker.ts accessGrant).
+ * pets API accepts this endpoint's sessions as grants (worker.ts accessGrant).
  */
 export async function graphqlSessionFromBearer(
   token: string,
@@ -141,7 +141,7 @@ export async function graphqlSessionFromBearer(
 }
 
 /**
- * The GraphQL login door. `NewSession` is the ONLY operation — this door
+ * The GraphQL login endpoint. `NewSession` is the ONLY operation — this endpoint
  * authenticates; the API it unlocks is `/api/*`. Anything else answers a
  * GraphQL-style `errors` body so a drifted client fails loudly rather than
  * quietly getting an empty `data`.
@@ -161,7 +161,7 @@ export async function handleGraphqlLogin(
   return json({
     errors: [
       {
-        message: `unsupported operation ${JSON.stringify(operation)} — this door only logs in (NewSession); the API is /api/*`,
+        message: `unsupported operation ${JSON.stringify(operation)} — this endpoint only logs in (NewSession); the API is /api/*`,
       },
     ],
   });

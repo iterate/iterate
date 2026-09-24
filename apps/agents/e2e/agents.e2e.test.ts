@@ -7,7 +7,7 @@
 // on the path, so the stories read the log: request → settled + assistant → script requested →
 // script settled → developer result → request → settled + assistant prose → idle. The model is `itx.ai`
 // under the agent's rules, so a test LENDS a scripted fake there (Misha's shadow, ai-root-shadow); the
-// deployed lane runs ONE real turn through Workers AI.
+// deployed suite runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
@@ -700,7 +700,7 @@ jailFlake(
       expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
       expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
       expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
-      expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the lane found no `itx.fetch` row
+      expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
       expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
       expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
       expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked

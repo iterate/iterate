@@ -1,5 +1,5 @@
 /**
- * Unit tests for the GraphQL session-login door (graphql-login.ts), run in
+ * Unit tests for the GraphQL session-login endpoint (graphql-login.ts), run in
  * plain Node through the whole HTTP surface like worker.test.ts: the real
  * route handler and the real PetshopStateDurableObject over an in-memory
  * storage fake.
@@ -72,7 +72,7 @@ test("sessions die at the TTL and on an epoch bump — the strategy's cues to re
   expect(await api(shop, "/api/me", fresh)).toMatchObject({ status: 401 });
 });
 
-test("an account's epoch bump kills that account's sessions and no one else's — the whole door's kills all", async () => {
+test("an account's epoch bump kills that account's sessions and no one else's — the whole endpoint's kills all", async () => {
   const shop = makeShop();
   const expire = (clientId: string) =>
     shop.call("/__backdoor/expire-tokens", {
@@ -93,7 +93,7 @@ test("an account's epoch bump kills that account's sessions and no one else's �
   expect(await api(shop, "/api/me", theirs)).toMatchObject({ status: 401 });
 });
 
-test("any operation other than NewSession is a loud error — the door only logs in", async () => {
+test("any operation other than NewSession is a loud error — the endpoint only logs in", async () => {
   const shop = makeShop();
   const response = await graphql(shop, {
     query: "query GetShoppingContext { shoppingContext { customerId } }",

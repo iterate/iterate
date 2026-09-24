@@ -470,7 +470,7 @@ test("webhooks: reports unreachable targets instead of throwing, and rejects bad
 });
 
 // The socket path (WebSocketPair + 101) only exists in workerd, so the Node
-// unit lane can only assert the 426 guard; the live e2e drives the sockets.
+// unit tests can only assert the 426 guard; the live e2e drives the sockets.
 test.each(["/gateway", "/gateway-header", "/gateway-subprotocol"])(
   "gateway routes: GET %s without an Upgrade header is 426, not a socket",
   async (path) => {
