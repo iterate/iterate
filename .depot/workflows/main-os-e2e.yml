@@ -80,9 +80,6 @@ env:
   PREVIEW_NAME: main
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
-  # TEST EVIDENCE IN R2 (docs/test-evidence.md): `r2` puts each test job attempt's test-results/
-  # folder in the iterate-ci bucket; `off` skips that step.
-  TEST_EVIDENCE_UPLOAD: r2
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
   # lifecycle records, as `@@ci-trace` lines in the Depot logs the trace job reads.
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
@@ -228,45 +225,49 @@ jobs:
         env:
           TEST_EVIDENCE_STEPS: e2e=${{ steps.e2e.outcome }}
         run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
-      # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys. A
-      # cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/ copy.
-      # A failure is a warning and a line of the job's summary, never the job's result.
-      - name: Upload the test evidence to R2
-        id: evidence-upload
-        if: ${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
-        continue-on-error: true
-        timeout-minutes: 3
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+      # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
+      # one finish whatever another does (docs/depot-ci.md#parallel-steps).
+      - fail-fast: false
+        parallel:
+          # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
+          # A cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/
+          # copy. A failure is a warning and a line of the job's summary, never the job's result.
+          - name: Upload the test evidence to R2
+            id: evidence-upload
+            if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
+            continue-on-error: true
+            timeout-minutes: 3
+            env:
+              DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+            run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+          - name: Upload preview e2e flake records
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: flake-records-preview-e2e-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results/flake-records/preview-e2e
+              if-no-files-found: ignore
+          - name: Upload test telemetry artifacts
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results/ci-telemetry
+              include-hidden-files: true
+              if-no-files-found: error
+          - name: Upload results
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results
+              include-hidden-files: true
+              if-no-files-found: error
       # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
-      - name: Upload preview e2e flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-preview-e2e-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/flake-records/preview-e2e
-          if-no-files-found: ignore
-      - name: Upload test telemetry artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/ci-telemetry
-          include-hidden-files: true
-          if-no-files-found: error
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results
-          include-hidden-files: true
-          if-no-files-found: error
 
   specs:
     name: Browser specs
@@ -330,55 +331,60 @@ jobs:
         env:
           TEST_EVIDENCE_STEPS: specs=${{ steps.specs.outcome }}
         run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
-      # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys. A
-      # cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/ copy.
-      # A failure is a warning and a line of the job's summary, never the job's result.
-      - name: Upload the test evidence to R2
-        id: evidence-upload
-        if: ${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
-        continue-on-error: true
-        timeout-minutes: 3
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+      # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
+      # one finish whatever another does (docs/depot-ci.md#parallel-steps).
+      - fail-fast: false
+        parallel:
+          # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
+          # A cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/
+          # copy. A failure is a warning and a line of the job's summary, never the job's result.
+          - name: Upload the test evidence to R2
+            id: evidence-upload
+            if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
+            continue-on-error: true
+            timeout-minutes: 3
+            env:
+              DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+            run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+          - name: Upload specs flake records
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results/flake-records/specs
+              if-no-files-found: ignore
+          - name: Upload test telemetry artifacts
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results/ci-telemetry
+              include-hidden-files: true
+              if-no-files-found: error
+          # THE BROWSER EVIDENCE, as a PR preview's Browser specs job keeps it
+          # (docs/depot-ci.md#browser-reports-from-artifacts).
+          - name: Upload results
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results
+              include-hidden-files: true
+              if-no-files-found: error
+          - name: Upload public Playwright HTML report
+            if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+            uses: actions/upload-artifact@v4
+            with:
+              name: public-playwright-report
+              path: test-results/playwright-html
+              if-no-files-found: error
+              retention-days: 30
+              overwrite: true
       # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
-      - name: Upload specs flake records
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/flake-records/specs
-          if-no-files-found: ignore
-      - name: Upload test telemetry artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results/ci-telemetry
-          include-hidden-files: true
-          if-no-files-found: error
-      # THE BROWSER EVIDENCE, as a PR preview's Browser specs job keeps it (docs/depot-ci.md#browser-reports-from-artifacts).
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
-          path: test-results
-          include-hidden-files: true
-          if-no-files-found: error
-      - name: Upload public Playwright HTML report
-        if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: public-playwright-report
-          path: test-results/playwright-html
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
 
   # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the parent, deploy and two
   # test jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on

@@ -20,9 +20,8 @@ trusted run already proved.
 
 **Status.** This PR implements the first part: the folder layout, the
 manifest with the run's result, the deployed target of the e2e jobs, Kit's
-CTest results as JUnit XML, the per-test Parquet rows, and the upload to R2,
-which is on (`TEST_EVIDENCE_UPLOAD: r2`) in the Test, Preview OS and Main OS
-e2e workflows. The bucket exists ([setup](#setup)), and CI writes it with the
+CTest results as JUnit XML, the per-test Parquet rows, and the upload to R2
+from the Test, Preview OS and Main OS e2e workflows. The bucket exists ([setup](#setup)), and CI writes it with the
 Cloudflare API token it already holds, so no secret was added. Sections
 marked _next_ are design only.
 
@@ -127,22 +126,23 @@ In each of the three jobs, after the telemetry finalizer:
    records, then hashes every file in the folder and writes `manifest.json`.
    On real artifacts it takes about half a second (37 files, 3.5 MB).
 2. **Upload the test evidence to R2**
-   (`pnpm tsx scripts/ci/test-evidence.ts upload`), `if: always()` when the
-   workflow's `TEST_EVIDENCE_UPLOAD` is `r2` (all three are) and a manifest
-   exists (`continue-on-error`, three minutes at most; Doppler
+   (`pnpm tsx scripts/ci/test-evidence.ts upload`), `if: always()` when a
+   manifest exists (`continue-on-error`, three minutes at most; Doppler
    `_shared/preview` supplies `CLOUDFLARE_API_TOKEN`). A cancelled or
    timed-out job's folder goes too, when the runner gives `always()` steps
    the time: its manifest says `cancelled`, and it gets no copy under
    `tables/`, since its rows stop part way and would skew durations. The
    step prints the run's prefix
    (`[test-evidence] r2://iterate-ci/evidence/ci/trust=pr/date=…/job=…/testrun_…/`)
-   and writes it as a line of the job's summary.
+   and writes it as a line of the job's summary. It runs in one `parallel:`
+   block beside the Depot artifact uploads, since each only reads the folder
+   ([parallel steps](depot-ci.md#parallel-steps)). The e2e jobs' artifacts
+   keep the whole folder as `{preview,main}-os-test-artifacts-attempt-<id>`;
+   the Test job's keep its telemetry and flake records, and its manifest
+   reaches only R2.
 3. **Report a test evidence step that could not**
-   (`scripts/ci/test-evidence-unreported.sh`), when either step's outcome is
-   `failure` ([below](#a-failed-step)).
-4. The Depot artifacts as before. The e2e jobs already keep the whole folder
-   as `{preview,main}-os-test-artifacts-attempt-<id>`; the Test job keeps its
-   telemetry and flake records, and its manifest reaches only R2.
+   (`scripts/ci/test-evidence-unreported.sh`), after that block, when either
+   step's outcome is `failure` ([below](#a-failed-step)).
 
 The write step fails when the job has no Depot job attempt to name the run
 after, when git cannot record the source (`testEvidenceSource`), or when a
@@ -1013,8 +1013,8 @@ have yet.
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lock add iterate-ci tables-locked-30-days tables/ --retention-days 30 --force
    ```
 
-2. **The upload.** On in `test.yml`, `preview-os.yml` and `main-os-e2e.yml`
-   (`TEST_EVIDENCE_UPLOAD: r2`), with no new secret. Check a run
+2. **The upload.** A step of `test.yml`, `preview-os.yml` and `main-os-e2e.yml`,
+   with no new secret. Check a run
    ([reading it back](#reading-it-back)).
 
 3. **The catalog, for the loader** (with the PR that adds it). Add
@@ -1064,8 +1064,7 @@ No queue, event notification, stream, sink or pipeline is needed; the
 ## Decisions to confirm
 
 - The names: the bucket `iterate-ci` and its prefixes `evidence/`, `tables/`
-  and `state/`, `ciBucketEnvs` in `envs.ts`, and the workflow switch
-  `TEST_EVIDENCE_UPLOAD` (`off` | `r2`).
+  and `state/`, and `ciBucketEnvs` in `envs.ts`.
 - [One bucket](#one-bucket), written with CI's existing Cloudflare token,
   until jobs get scoped credentials.
 - The key layout: `trust=main|pr` first, then the manifest's day and Depot's

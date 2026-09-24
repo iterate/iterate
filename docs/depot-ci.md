@@ -357,6 +357,17 @@ Use Depot-specific features where they make the workflow clearer:
 - independent checks can use Depot `parallel:` blocks with `fail-fast: false`;
 - workflow runtime logic belongs in `scripts/ci`, not in long YAML strings.
 
+### Parallel steps
+
+A step inside a `parallel:` block behaves as it would in the list: its `id`,
+`if` (`always()`, `hashFiles`), `continue-on-error`, `timeout-minutes`, `env`,
+`uses` and `with` all hold. Later steps read its `steps.<id>.outcome` and
+outputs, its `$GITHUB_STEP_SUMMARY` lines reach the job's summary, and it shares
+`$RUNNER_TEMP` and the workspace. After a failed step, only the block's steps
+with `always()` run. Two probe runs on 2026-09-24 showed all of this
+(`jtzl92m9nc`, `dzz78f72kg`). The test jobs run their evidence uploads in one
+such block, and the report step after the block reads the R2 upload's outcome.
+
 ### Reliability defaults
 
 Mainline workflows deliberately separate deployment safety from validation

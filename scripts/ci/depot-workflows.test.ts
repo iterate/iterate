@@ -21,6 +21,7 @@ const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
 type WorkflowStep = {
   "continue-on-error"?: boolean;
   env?: Record<string, string>;
+  "fail-fast"?: boolean;
   id?: string;
   name?: string;
   if?: string;
@@ -402,9 +403,7 @@ test("the CI telemetry sync runs hourly with the Depot token from Doppler _share
 
 test("the flake dashboard lists every workflow that uploads flake records", () => {
   const uploaders = depotWorkflowFiles.flatMap((file) => {
-    const workflow = parseYaml(readFileSync(resolve(repoRoot, file), "utf8")) as Workflow & {
-      name: string;
-    };
+    const workflow = loadWorkflow(file) as Workflow & { name: string };
     return Object.values(workflow.jobs).some((job) =>
       (job.steps || []).some((step) => String(step.with?.name || "").startsWith("flake-records-")),
     )
@@ -709,9 +708,7 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
 
 test("the Lint check runs the root lint script that local runs use", () => {
   const steps = loadWorkflow(".depot/workflows/lint-typecheck.yml").jobs["lint-typecheck"].steps;
-  const lint = steps
-    ?.flatMap((step) => step.parallel || [step])
-    .find((step) => step.name === "Run Lint");
+  const lint = steps?.find((step) => step.name === "Run Lint");
   const scripts = readPackageJson(".").scripts;
 
   expect(lint?.run).toBe("pnpm lint");
@@ -882,7 +879,6 @@ test.each([
     const upload = steps[index("scripts/ci/test-evidence.ts upload")];
     const report = steps[index("scripts/ci/test-evidence-unreported.sh")];
 
-    expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("r2");
     // always, a cancelled job's folder saying so; bounded, so a hang cannot reach the job's timeout.
     // A preview test job's once its suite started: one whose guard found no preview has no folder.
     expect(write).toMatchObject({
@@ -905,7 +901,7 @@ test.each([
     // a cancelled or timed-out job's folder too, with CI's Cloudflare token from Doppler
     expect(upload).toMatchObject({
       id: "evidence-upload",
-      if: "${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}",
+      if: "${{ always() && hashFiles('test-results/manifest.json') != '' }}",
       "continue-on-error": true,
       "timeout-minutes": 3,
       env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
@@ -916,13 +912,17 @@ test.each([
       if: "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
       run: 'bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"',
     });
-    // after every runner and the finalizer, and before the artifacts that keep the folder
+    // after every runner and the finalizer; then the R2 upload beside every artifact that keeps
+    // the folder, each only reading it (docs/depot-ci.md#parallel-steps); then the report
     expect(index("scripts/ci/upload-test-telemetry.ts")).toBeLessThan(steps.indexOf(write!));
-    expect(steps.indexOf(write!)).toBeLessThan(steps.indexOf(upload!));
-    expect(steps.indexOf(upload!)).toBeLessThan(steps.indexOf(report!));
-    expect(steps.indexOf(report!)).toBeLessThan(
-      steps.findIndex((step) => step.uses === "actions/upload-artifact@v4"),
+    const artifacts = steps.filter((step) => step.uses === "actions/upload-artifact@v4");
+    const block = readWorkflow(file).jobs[jobId]?.steps?.find((step) => step.parallel);
+    expect(block?.["fail-fast"]).toBe(false);
+    expect(block?.parallel?.map((step) => step.name)).toEqual(
+      [upload, ...artifacts].map((step) => step?.name),
     );
+    expect(steps.indexOf(write!)).toBeLessThan(steps.indexOf(upload!));
+    expect(steps.indexOf(report!)).toBe(steps.indexOf(artifacts.at(-1)!) + 1);
     // the runners write into the folder
     const telemetryDirectories = [
       job.env?.TEST_TELEMETRY_ARTIFACT_DIR,
@@ -1121,7 +1121,15 @@ test("labels unit artifacts with the pull-request head, whose merge commit the j
   });
 });
 
+/** A workflow as its jobs run it: each `parallel:` block's steps stand where the block does. */
 function loadWorkflow(file: string): Workflow {
+  const workflow = readWorkflow(file);
+  for (const job of Object.values(workflow.jobs))
+    job.steps = job.steps?.flatMap((step) => step.parallel || [step]);
+  return workflow;
+}
+
+function readWorkflow(file: string): Workflow {
   return parseYaml(readFileSync(resolve(repoRoot, file), "utf8")) as Workflow;
 }
 

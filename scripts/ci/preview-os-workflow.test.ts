@@ -3,6 +3,17 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 
+type PreviewStep = {
+  id?: string;
+  if?: string;
+  name?: string;
+  parallel?: PreviewStep[];
+  run?: string;
+  uses?: string;
+  with?: { ref?: string; name?: string };
+  env?: Record<string, string>;
+};
+
 /** The parts of .depot/workflows/preview-os.yml these tests read. */
 type PreviewWorkflow = {
   env?: Record<string, string>;
@@ -14,15 +25,7 @@ type PreviewWorkflow = {
       name?: string;
       needs?: string | string[];
       outputs?: Record<string, string>;
-      steps?: Array<{
-        id?: string;
-        if?: string;
-        name?: string;
-        run?: string;
-        uses?: string;
-        with?: { ref?: string; name?: string };
-        env?: Record<string, string>;
-      }>;
+      steps?: PreviewStep[];
     }
   >;
 };
@@ -30,6 +33,9 @@ type PreviewWorkflow = {
 const preview = parseYaml(
   readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/preview-os.yml"), "utf8"),
 ) as PreviewWorkflow;
+// As the jobs run: each `parallel:` block's steps stand where the block does.
+for (const job of Object.values(preview.jobs))
+  job.steps = job.steps?.flatMap((step) => step.parallel || [step]);
 const suites = [
   { job: "e2e", name: "E2E tests", run: "doppler run -- pnpm preview e2e" },
   { job: "specs", name: "Browser specs", run: "doppler run -- pnpm preview specs" },
@@ -262,11 +268,11 @@ test("a test job keeps its evidence whenever its suite started, and only then", 
         if: `always() && steps.${suite.job}.outcome != 'skipped'`,
       });
     expect(followers.map((step) => step.if)).toEqual([
-      "${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}",
-      "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
+      "${{ always() && hashFiles('test-results/manifest.json') != '' }}",
       ...(suite.job === "specs"
         ? ["${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}"]
         : []),
+      "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
     ]);
   }
 });
