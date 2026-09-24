@@ -266,15 +266,12 @@ async function foldPlatformFacts(
 }
 
 /** A project creation that answers this late logs where it waited (`session.project-create-slow`).
- *  Across 2026-09-24's 19 latency runs (1, 10 and 25 people creating at once) a creation answered in
- *  1.9 s at the median and 5.5 s at p99; Cloudflare's stalls on a brand-new object held one for
- *  6.5–22.7 s. */
+ *  p50 1.9 s, p99 5.5 s with 1, 10 and 25 people creating at once (os-latency, 2026-09-24). */
 const SLOW_CREATE_MS = 5_000;
 
 /** How long each call a project creation waits on took, by step: logged once when the creation
  *  took SLOW_CREATE_MS or longer, answered or thrown, so the log names the Durable Object that held
- *  it. Cloudflare's stalls on a brand-new object's first call or first write leave no line of their
- *  own, and until this one the only witness was the trace. */
+ *  it. A platform stall on a brand-new object's first call or first write logs nothing of its own. */
 class CreateWaits {
   readonly #started = Date.now();
   readonly #steps: Record<string, number> = {};
@@ -311,10 +308,10 @@ class CreateWaits {
  *  is one this creation minted (a person's first project, catalog.ts): its creation and its members
  *  come first, in one ordered append, so the fold sees the organization before its project. Each
  *  of those memberships also lands on the member's account, in the BACKGROUND
- *  (`publishPlatformFacts`): the answer never waits on a person's account. On 2026-09-24 Cloudflare
- *  held the first write of a new account's Durable Object for 21.9 s, and a first project that
- *  waited on its fold answered 22.7 s late. Nothing before the answer needs it: the dash reads the
- *  account through live state, and every access check reads the control plane. Landing late, the
+ *  (`publishPlatformFacts`): the answer never waits on a person's account. A brand-new account's
+ *  first write can take Cloudflare seconds to confirm (21.9 s on 2026-09-24), and its output gate
+ *  holds every answer until then. Nothing before the answer needs the account: the dash reads it
+ *  through live state, and every access check reads the control plane. Landing late, the
  *  membership may arrive after a later membership fact of the same organization, so it is marked
  *  `mint` and the account never lets it override one (account/processor.ts). The deployment's own
  *  organization (the operator's projects with no `orgId`) has no members and no page: nothing

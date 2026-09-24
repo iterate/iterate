@@ -113,9 +113,8 @@ export const AccountContract = defineProcessorContract({
     memberships: z
       .record(z.string(), z.object({ role: OrganizationRole, since: z.string() }))
       .default({}),
-    /** Every organization whose membership ended, by organization id: when. What keeps a minted
-     *  organization's first membership, which lands in the background (`member-added` with `mint`),
-     *  from reviving a membership that ended before it arrived. Re-joining clears it. */
+    /** Every organization whose membership ended, by organization id: when. A late `mint` never
+     *  revives one (processor.ts); re-joining clears it. */
     endedMemberships: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
     secrets: SecretCatalog.default({}),

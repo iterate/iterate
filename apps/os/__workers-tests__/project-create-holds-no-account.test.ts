@@ -1,11 +1,9 @@
 // __workers-tests__/project-create-holds-no-account.test.ts — A PERSON'S FIRST PROJECT NEVER WAITS ON
-// THEIR ACCOUNT. On 2026-09-24 (os-latency run 91m54ckl1f, trace f8279dfb) Cloudflare took 21.9 s to
-// confirm the first write of a person's brand-new account context (`/users/<id>`, born a moment
-// earlier by their sign-in's fact), and its output gate held every answer meanwhile: the
-// `projects.create` that awaited the minted organization's membership on that account answered 22.7 s
-// late. Here the account is held with the one control a test has inside an object,
-// `blockConcurrencyWhile`: the creation answers while it is held, the organization's own record
-// holds the owner and the project, and the membership reaches the account once it is released.
+// THEIR ACCOUNT (src/session.ts `landProjectOnOrganization`: a brand-new account can hold every
+// answer while Cloudflare confirms its first write). Here the account is held with the one control
+// a test has inside an object, `blockConcurrencyWhile`: the creation answers while it is held, the
+// organization's own record holds the owner and the project, and the membership reaches the
+// account once it is released.
 import { runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test } from "vitest";
 import type { AccountState } from "../src/account/contract.ts";
@@ -13,8 +11,8 @@ import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.
 import type { OrganizationState } from "../src/organization/contract.ts";
 import { adminSession, stub, until } from "./support.ts";
 
-/** How long the held creation may take: it answers in well under a second here, and before the
- *  membership left the answer it waited for the release, which never came. */
+/** How long the held creation may take. It answers in well under a second here; one that waits on
+ *  the account waits for the release, which comes only after this. */
 const ANSWER_MS = 5_000;
 
 test("a person's first projects.create answers while their account context is held, and the minted organization's membership reaches the account once it is released", async () => {

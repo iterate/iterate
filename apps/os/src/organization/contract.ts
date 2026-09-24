@@ -29,9 +29,8 @@ const MemberAdded = z.object({
   userId: z.string().min(1),
   role: OrganizationRole,
   /** The organization's FIRST membership, landed by the project creation that minted the
-   *  organization (session.ts `landProjectOnOrganization`). The member's account gets it in the
-   *  background, after the creation answered, so it can arrive after a later membership fact: the
-   *  account never lets it override one (account/processor.ts). */
+   *  organization (session.ts `landProjectOnOrganization`). The account folds it by its own rule
+   *  (account/processor.ts). */
   mint: z.literal(true).optional(),
 });
 /** `organization/member-removed` — the mirror, on both logs. */
