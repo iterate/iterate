@@ -19,7 +19,7 @@
 //     BEFORE the terminal fetch, naming the placeholder and where it sat to US, never to the destination
 //   • DYNAMIC WORKER ⇄ DYNAMIC WORKER over a lent fetch-shaped stub, every hop native Workers RPC /
 //     native fetch: within the provider's invocation a dyn-provided stub serves PLAIN fetch through
-//     env.ITX (a real Fetcher, the ItxEntrypoint loopback); RED (`test.fails`): its WebSocket upgrade
+//     env.ITX (a real Fetcher, the ItxEntrypoint loopback); RED (`createFailing`): its WebSocket upgrade
 //     dies on the Workers-RPC return leg, and a dyn-provided stub dies with the providing invocation
 //     (the detached-provider question)
 // (The workerd-provider half of the upgrade lane is __workers-tests__/ws-fetch-live-101.test.ts; a
@@ -27,6 +27,8 @@
 
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./support/client.ts";
 import {
   appSeesUrl,
@@ -294,45 +296,66 @@ test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fe
 // NATIVE provider (a dynamic worker providing over env.ITX.get(), where the lent stub is a
 // plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
 // provider's genuine 101 dies there:
-//   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialRpcStubFetch)
+//   500 'fetch lane error: Could not serialize object of type "WebSocket". …' (at dialRpcStubFetch)
 // EXPECTED: parity with capnweb providers — 101 + echo. Fix directions: the
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
-test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
+createFailing(
+  test,
+  /answered 500: fetch lane error: Could not serialize object of type "WebSocket"/,
+  {
+    timeoutMs: 60_000,
+    retries: process.env.CI ? E2E_CI_RETRIES : 0,
+  },
+)("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
   const itx = openItx(freshCtx("dynlivewsself"));
   const out = (await runProvider(itx, "self-ws")) as {
     status: number;
     echo?: string;
     body?: string;
   };
-  expect(out).toEqual({ status: 101, echo: "dyn-echo:hi-self" });
+  expect(
+    out,
+    `a native provider's 101 should cross the Workers-RPC return leg; it answered ${out.status}: ${out.body}`,
+  ).toEqual({ status: 101, echo: "dyn-echo:hi-self" });
 });
 
 // BUG-OR-CONTRACT (VERIFIED, re-measured 2026-09-01): a dyn-provided lent STUB DIES WITH THE
 // PROVIDING INVOCATION. The IterateContext scope a dynamic worker gets from env.ITX.get() lives in the
 // ItxEntrypoint loopback's request context; the lend relay + pager socket holding the provider
 // transport die when that context ends (the run() call chain completing), so the DO drops the
-// stub from its `itx.rpcStubs` registry. The REWRITE RULE at itx.wsdyn is pure data and STAYS
-// (only a disposed handle or a dying capnweb SESSION un-sets a provided stub's rule, and a dyn
-// worker's env.ITX.get() scope has neither) — worker B rewrites through it and hits the offline
-// registry entry, which the fetch lane reports as
-//   500 "fetch lane error: … rpc stub \"itx.wsdyn\" is offline" (RPC_STUB_OFFLINE)
-// — a rule with no stub lent, not default-deny; measured here as `expected 500 to be 200`.
+// stub from its `itx.rpcStubs` registry and un-sets its rewrite rule when the key's last pager
+// closes (src/context/rpc-stubs.ts). Worker B then finds no rule and gets
+//   404 'fetch lane error: no rewrite rule matches "itx.wsdyn.fetch({})" (default-deny; …)'
+// (re-measured 2026-09-24), or, if B arrives before the un-set lands, the offline registry entry's
+//   500 'fetch lane error: … rpc stub "itx.wsdyn" is offline' (RPC_STUB_OFFLINE).
 // (holding the itx stub on the provider's globalThis does NOT keep the remote context alive).
 // EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.
 // Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
 // doctrine ruling ("lent stubs are invocation-scoped; detached fetch-shaped things must be LOADED
 // code — itx.workers.get({ source: ... }) / a named durable facet, both of which already serve WS")
 // is an owner call.
-test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
-  const itx = openItx(freshCtx("dynlivex"));
-  expect(await runProvider(itx, "provide")).toBe("provided");
-  const out = (await itx.invoke([
-    "itx",
-    "workers",
-    ["get", { source: SRC_CONSUMER }],
-    ["run", "plain"],
-  ])) as { status: number; body: string };
-  expect(out.status).toBe(200);
-  expect(out.body).toBe("dyn live site");
-});
+createFailing(
+  test,
+  /answered (?:404: fetch lane error: no rewrite rule matches "itx\.wsdyn|500: .*rpc stub "itx\.wsdyn" is offline)/,
+  {
+    timeoutMs: 60_000,
+    retries: process.env.CI ? E2E_CI_RETRIES : 0,
+  },
+)(
+  "ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)",
+  async () => {
+    const itx = openItx(freshCtx("dynlivex"));
+    expect(await runProvider(itx, "provide")).toBe("provided");
+    const out = (await itx.invoke([
+      "itx",
+      "workers",
+      ["get", { source: SRC_CONSUMER }],
+      ["run", "plain"],
+    ])) as { status: number; body: string };
+    expect(
+      out,
+      `worker B should reach the stub A provided in an earlier invocation; it answered ${out.status}: ${out.body}`,
+    ).toEqual({ status: 200, body: "dyn live site" });
+  },
+);

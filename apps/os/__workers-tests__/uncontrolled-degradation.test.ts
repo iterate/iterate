@@ -7,15 +7,12 @@
 // storage, evictDurableObject for a fresh incarnation, runDurableObjectAlarm for the ladder) and
 // pins EXACTLY what it dies of today: the observed message, verbatim.
 //
-// THE CONVENTION. Every red row is `test.fails` (the house convention for a known-red proof — the
-// lane stays green; flipping a row back to `test` is how a fix is proved), and every one opens with
-// the PIN GUARD `stillDiesOf` / `stillRed`: the failure the row dies of TODAY, as a pattern on the
-// observed message. While it still matches, the row goes on to assert the behavior it WANTS and
-// fails there (an expected failure, green). The moment the observed failure MOVES — fixed, or broken
-// some other way — the guard returns false, the row `return`s early and COMPLETES, and `test.fails`
-// turns it RED with the guard's own line in the output: the one signal that says "look at this pin
-// again". A bare `test.fails` cannot tell a fix from a different breakage; the guard can. To flip a
-// fixed row to `test`, delete its guard line and keep its assertions.
+// THE CONVENTION. Every red row is a `createFailing` pin (docs/testing.md, "Pinned bugs"): the body
+// asserts the behavior the row WANTS, and that assertion's message quotes what the row dies of
+// TODAY, which is the pin's pattern. While both hold, the row fails as pinned (green). The moment the
+// observed failure MOVES — fixed, or broken some other way — the body passes or fails differently,
+// and the row turns RED with a `[failing-test]` line saying which. To flip a fixed row to `test`,
+// drop the `createFailing` wrapper and the quoted observation, and keep its assertions.
 //
 // Two cell-cap facts these rows lean on: a SQLite-backed DO's
 // storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH: 4 MiB in local
@@ -33,32 +30,14 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterAll, expect, test, vi } from "vitest";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import type { ItxExpression } from "iterate/next/expression";
 import { errorCode } from "iterate/next/lib";
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
-
-// ── THE PIN GUARD (see the header) ──
-
-/** `holds` is whether the row's pinned failure is still what happens; `observed` describes what was
- *  seen. True ⇒ still red for the stated reason, carry on to the WANTED assertions. False ⇒ the pin
- *  MOVED: the caller returns early, the row completes, `test.fails` turns it red, and this line says why. */
-function stillRed(pinnedReason: string, holds: boolean, observed: string): boolean {
-  if (holds) return true;
-  console.warn(`PIN MOVED — pinned: ${pinnedReason} — observed: ${observed}`);
-  return false;
-}
-/** The pin guard for a row whose failure is an ERROR: still red while `observed` is an Error whose
- *  message matches `reason`. */
-function stillDiesOf(observed: unknown, reason: RegExp): boolean {
-  const message = observed instanceof Error ? observed.message : undefined;
-  return stillRed(
-    `dies of ${reason}`,
-    !!message && reason.test(message),
-    observed === undefined ? "no failure at all" : `${String(observed)}`,
-  );
-}
+/** The workers project's own test timeout (vitest.config.ts): a pin gets the same budget. */
+const PIN_TIMEOUT_MS = 120_000;
 
 // ── the observation plumbing ──
 
@@ -244,22 +223,28 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
 // with no memo, every push takes the recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
 // and re-parses the 4.5 MiB event out of SQLite, and dies at the same put. `snapshot()` rejects with
 // the same raw text. Production's cell is 2 MB, so a 2–8 MiB processor bundle is exactly this row.
-test.fails("A3 — a hosting spec whose source is over the cell cap but under the append ceiling LANDS, then can never materialize: every push re-reads the event and dies of the raw SQLITE_TOOBIG at the facet memo", async () => {
-  const ctx = "prj_ud_facetmemo_cap";
-  const s = stub(ctx);
-  drainIssues();
-  const source = FINE_SRC + "\n// " + "x".repeat(4.5 * MiB) + "\n";
-  const enableErr = await rejectionOf(() =>
-    enableProcessorByEvent(ctx, "big", source, "FineDurableObject"),
-  );
-  await untilIssue("subscription-delivery.configured", /SQLITE_TOOBIG/);
-  await s.append({ type: "work" });
-  await untilIssue("subscription-delivery.deliver", /SQLITE_TOOBIG/);
-  const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "big"));
-  if (!stillDiesOf(snapshotErr, /^string or blob too big: SQLITE_TOOBIG$/)) return; // the pin MOVED
-  // WANTED: refused AT THE DOOR — a hosting spec that cannot be memoized never becomes a row.
-  expect(enableErr && errorCode(enableErr)).toBeDefined();
-});
+createFailing(test, /snapshot\(\) dies of "string or blob too big: SQLITE_TOOBIG"/, {
+  timeoutMs: PIN_TIMEOUT_MS,
+})(
+  "A3 — a hosting spec whose source is over the cell cap but under the append ceiling LANDS, then can never materialize: every push re-reads the event and dies of the raw SQLITE_TOOBIG at the facet memo",
+  async () => {
+    const ctx = "prj_ud_facetmemo_cap";
+    const s = stub(ctx);
+    drainIssues();
+    const source = FINE_SRC + "\n// " + "x".repeat(4.5 * MiB) + "\n";
+    const enableErr = await rejectionOf(() =>
+      enableProcessorByEvent(ctx, "big", source, "FineDurableObject"),
+    );
+    await untilIssue("subscription-delivery.configured", /SQLITE_TOOBIG/);
+    await s.append({ type: "work" });
+    await untilIssue("subscription-delivery.deliver", /SQLITE_TOOBIG/);
+    const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "big"));
+    expect(
+      enableErr && errorCode(enableErr),
+      `a hosting spec that cannot be memoized should be refused on append; snapshot() dies of "${snapshotErr?.message}"`,
+    ).toBeDefined();
+  },
+);
 
 /** A processor whose reduce HOARDS every payload: the checkpoint cell grows with the log. */
 const HOARDER_SRC = /* js */ `
@@ -272,42 +257,35 @@ class HoarderProcessor extends StreamProcessor {
 export class HoarderDurableObject extends StreamProcessorDurableObject { processor = new HoarderProcessor(); }
 `;
 
-// WHAT IT DIES OF: a facet whose reduce keeps every payload outgrows the checkpoint cell at its
-// 3rd MiB; the write is refused CODED (REDUCE_CHECKPOINT_TOO_LARGE, before anything lands — born red
-// as the platform's raw `string or blob too big: SQLITE_TOOBIG` from inside the write) — and then
-// RETRIED: every later commit gap-repairs from the checkpoint, re-reduces the same blobs, dies of the
-// same refusal (one `subscription-delivery.deliver` line per commit); `snapshot()` and
-// `waitUntilProcessed()` reject with it. No halt, and disable + re-enable would rebuild from the log
-// into the same wall. A processor whose state grows with its history hits this eventually.
-test.fails("A4 — a facet whose checkpoint outgrows the cell ceiling is refused coded, then WEDGED at that batch forever: the same refusal on every commit and every wake, never a halt", async () => {
+// A facet whose reduce keeps every payload outgrows the checkpoint cell at its 3rd MiB: the write is
+// refused CODED (REDUCE_CHECKPOINT_TOO_LARGE, before anything lands), and the refusal is stamped
+// non-retryable, so the delivery loop halts the row at its first attempt; `snapshot()` answers with
+// the same coded refusal. BORN RED twice: as the platform's raw `string or blob too big:
+// SQLITE_TOOBIG` from inside the write, then as a wedge that re-reduced and re-refused on every
+// commit and every wake, never a halt.
+test("A4 — a facet whose checkpoint outgrows the cell ceiling is refused coded and its row halts at once: no retry per commit", async () => {
   const ctx = "prj_ud_facetcheckpoint_cap";
   const s = stub(ctx);
+  drainIssues();
   await enableProcessorByEvent(ctx, "hoarder", HOARDER_SRC, "HoarderDurableObject", ["blob"]);
-  let last = 0;
   for (let i = 0; i < 4; i++) {
-    last = offsetOf(await s.append({ type: "blob", payload: { blob: `${i}:` + "x".repeat(MiB) } }));
+    await s.append({ type: "blob", payload: { blob: `${i}:` + "x".repeat(MiB) } });
     await sleep(200);
   }
   const ceiling = /over the \d+-char ceiling of one storage cell/;
-  await untilIssue("subscription-delivery.deliver", ceiling);
-  drainIssues();
-  const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "hoarder"));
-  const waitErr = await rejectionOf(() =>
-    s.invoke([
-      "itx",
-      "facets",
-      ["get", "hoarder"],
-      ["waitUntilProcessed", { offset: last, timeoutMs: 5_000 }],
-    ]),
+  const halted = await until(
+    "the hoarder row halts",
+    async () => (await subscriptionRow(ctx, "hoarder"))?.halted,
   );
-  expect(errorCode(snapshotErr)).toBe("REDUCE_CHECKPOINT_TOO_LARGE"); // coded, in our words
-  expect(errorCode(waitErr)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
-  // …and the NEXT commit, tiny, dies the same way: the wedge is permanent.
+  expect(halted).toMatchObject({ attempts: 1, error: expect.stringMatching(ceiling) });
+  expect(errorCode(await rejectionOf(() => snapshotOf(ctx, "hoarder")))).toBe(
+    "REDUCE_CHECKPOINT_TOO_LARGE",
+  );
+  // …and the NEXT commit, tiny, is not pushed into the same wall: the row stays halted where it was.
   await s.append({ type: "blob", payload: { blob: "small" } });
-  const again = await untilIssue("subscription-delivery.deliver", ceiling);
-  if (!stillRed("the next commit dies again", !!again, "no repeat")) return; // the pin MOVED
-  // WANTED: a halt — the processor stops being pushed and re-reduced after a deterministic refusal.
-  expect(again).toBeUndefined();
+  await sleep(500);
+  expect((await subscriptionRow(ctx, "hoarder"))?.halted).toEqual(halted);
+  expect(drainIssues()).toEqual([]);
 });
 
 // ═══════════════════════ B. A SOURCE THAT CANNOT START ═══════════════════════
@@ -330,12 +308,18 @@ async function facetThatCannotStart(
 // 'loaded worker does not export class …')` is DEAD CODE: `getDurableObjectClass` never returns
 // falsy — it hands back a handle that fails inside the runtime when the facet starts. Every push
 // (one `subscription-delivery.deliver` line per commit) and every read dies of it, until disabled.
-test.fails("B1 — className not exported: every push and every read dies of workerd's OPAQUE `internal error; reference = <id>` — the door's own `does not export class` check is dead code", async () => {
-  const err = await facetThatCannotStart("prj_ud_start_noclass", FINE_SRC, "Nope");
-  if (!stillDiesOf(err, /^internal error; reference = [a-z0-9]+$/)) return; // the pin MOVED
-  // WANTED: the message names the missing class.
-  expect(err?.message).toContain("Nope");
-});
+createFailing(test, /it dies of "internal error; reference = [a-z0-9]+"/, {
+  timeoutMs: PIN_TIMEOUT_MS,
+})(
+  "B1 — className not exported: every push and every read dies of workerd's OPAQUE `internal error; reference = <id>` — the door's own `does not export class` check is dead code",
+  async () => {
+    const err = await facetThatCannotStart("prj_ud_start_noclass", FINE_SRC, "Nope");
+    expect(
+      err?.message,
+      `a facet whose class is not exported should fail naming the class; it dies of "${err?.message}"`,
+    ).toContain("Nope");
+  },
+);
 
 const EVAL_THROWS_SRC = /* js */ `
 import { DurableObject } from "cloudflare:workers";
@@ -348,17 +332,26 @@ throw new Error("boom at module evaluation");
 // isolate under its loader id for the process's life (the worker-loader.ts WORKAROUND covers a
 // PRODUCER that threw, not code that fails to start), so every push re-hits it — one
 // `subscription-delivery.deliver` line per commit — and every read rejects the same way.
-test.fails("B2 — a module that throws at evaluation: every push and read dies of the platform's `Failed to start Worker: Uncaught Error: …` envelope, replayed per commit", async () => {
-  const err = await facetThatCannotStart(
-    "prj_ud_start_evalthrows",
-    EVAL_THROWS_SRC,
-    "EvalBoomDurableObject",
-  );
-  if (!stillDiesOf(err, /^Failed to start Worker:\nUncaught Error: boom at module evaluation/))
-    return; // the pin MOVED
-  // WANTED: a coded error in our words, wrapping the author's.
-  expect(errorCode(err)).toBeDefined();
-});
+createFailing(
+  test,
+  /it dies of "Failed to start Worker:\nUncaught Error: boom at module evaluation/,
+  {
+    timeoutMs: PIN_TIMEOUT_MS,
+  },
+)(
+  "B2 — a module that throws at evaluation: every push and read dies of the platform's `Failed to start Worker: Uncaught Error: …` envelope, replayed per commit",
+  async () => {
+    const err = await facetThatCannotStart(
+      "prj_ud_start_evalthrows",
+      EVAL_THROWS_SRC,
+      "EvalBoomDurableObject",
+    );
+    expect(
+      errorCode(err),
+      `a module that throws at evaluation should fail coded, in our words; it dies of "${err?.message}"`,
+    ).toBeDefined();
+  },
+);
 
 const CTOR_THROWS_SRC = /* js */ `
 import { DurableObject } from "cloudflare:workers";
@@ -373,20 +366,22 @@ export class CtorBoomDurableObject extends DurableObject {
 // it), so it arrives stamped `durableObjectReset: true` with no code, and the container is torn down
 // and rebuilt on EVERY call: the constructor throws again per push (one `subscription-delivery.deliver`
 // line per commit, one "Annotating with brokenness" runtime line each) and per read.
-test.fails("B3 — a class whose constructor throws: `broken.constructorFailed` — the author's message arrives stamped durableObjectReset, no code, the constructor re-run on every push and read", async () => {
-  const err = await facetThatCannotStart(
-    "prj_ud_start_ctorthrows",
-    CTOR_THROWS_SRC,
-    "CtorBoomDurableObject",
-  );
-  if (
-    !stillDiesOf(err, /^boom in the facet constructor$/) ||
-    !stillRed("stamped durableObjectReset", err?.durableObjectReset === true, JSON.stringify(err))
-  )
-    return; // the pin MOVED
-  // WANTED: a coded error in our words, wrapping the author's.
-  expect(errorCode(err)).toBeDefined();
-});
+createFailing(test, /it dies of "boom in the facet constructor" \(durableObjectReset: true\)/, {
+  timeoutMs: PIN_TIMEOUT_MS,
+})(
+  "B3 — a class whose constructor throws: `broken.constructorFailed` — the author's message arrives stamped durableObjectReset, no code, the constructor re-run on every push and read",
+  async () => {
+    const err = await facetThatCannotStart(
+      "prj_ud_start_ctorthrows",
+      CTOR_THROWS_SRC,
+      "CtorBoomDurableObject",
+    );
+    expect(
+      errorCode(err),
+      `a constructor that throws should fail coded, in our words; it dies of "${err?.message}" (durableObjectReset: ${err?.durableObjectReset})`,
+    ).toBeDefined();
+  },
+);
 
 // CONTROL: none of the three is a wedge — `processors.disable` (the null row) still lands, and takes
 // the row, the facet and its startup memo with it, so the operator door out exists.
@@ -426,36 +421,41 @@ export class PoisonDurableObject extends StreamProcessorDurableObject { processo
 // one event per commit), re-throws at the same event (one `subscription-delivery.deliver` line per
 // commit), and `snapshot()` — which catches up first — rejects with it. Disable + re-enable rebuilds
 // from the log and hits the same event again. The only way out is to change the code.
-test.fails("C1 — a processEvent that throws on ONE event wedges the facet at that offset forever: every commit re-reads the gap and re-throws, snapshot() rejects, disable + re-enable rebuilds into the same wedge", async () => {
-  const ctx = "prj_ud_poison_effect";
-  const s = stub(ctx);
-  await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
-  await s.append({ type: "work" });
-  await until(
-    "n = 1",
-    async () => ((await snapshotOf(ctx, "poison")) as { state: { n: number } }).state.n === 1,
-  );
-  drainIssues();
-  const poison = offsetOf(await s.append({ type: "work", payload: { poison: true } }));
-  await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
-  drainIssues();
-  await s.append({ type: "work" }); // a clean commit after it: dies again (the gap repair re-reads the poison)
-  await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
-  const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
-  // The rebuild: the same log, the same event, the same wall.
-  await disableProcessorByEvent(ctx, "poison");
-  await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
-  drainIssues();
-  const rebuiltErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
-  if (
-    !stillDiesOf(snapshotErr, new RegExp(`^poison: refusing offset ${poison}$`)) ||
-    !stillDiesOf(rebuiltErr, new RegExp(`^poison: refusing offset ${poison}$`))
-  )
-    return; // the pin MOVED
-  // WANTED: a throwing effect is reported and skipped like a throwing reduce, so the facet stays
-  // readable — `snapshot()` answers as of its checkpoint.
-  expect(snapshotErr).toBeUndefined();
-});
+createFailing(
+  test,
+  /at offset (\d+); it dies of "poison: refusing offset \1", and after a rebuild of "poison: refusing offset \1"/,
+  { timeoutMs: PIN_TIMEOUT_MS },
+)(
+  "C1 — a processEvent that throws on ONE event wedges the facet at that offset forever: every commit re-reads the gap and re-throws, snapshot() rejects, disable + re-enable rebuilds into the same wedge",
+  async () => {
+    const ctx = "prj_ud_poison_effect";
+    const s = stub(ctx);
+    await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
+    await s.append({ type: "work" });
+    await until(
+      "n = 1",
+      async () => ((await snapshotOf(ctx, "poison")) as { state: { n: number } }).state.n === 1,
+    );
+    drainIssues();
+    const poison = offsetOf(await s.append({ type: "work", payload: { poison: true } }));
+    await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
+    drainIssues();
+    await s.append({ type: "work" }); // a clean commit after it: dies again (the gap repair re-reads the poison)
+    await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
+    const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
+    // The rebuild: the same log, the same event, the same wall.
+    await disableProcessorByEvent(ctx, "poison");
+    await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
+    drainIssues();
+    const rebuiltErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
+    // WANTED: a throwing effect is reported and skipped like a throwing reduce, so the facet stays
+    // readable — `snapshot()` answers as of its checkpoint.
+    expect(
+      snapshotErr,
+      `snapshot() should answer past the poison at offset ${poison}; it dies of "${snapshotErr?.message}", and after a rebuild of "${rebuiltErr?.message}"`,
+    ).toBeUndefined();
+  },
+);
 
 /** Overwrite one row's body with something JSON.parse refuses — the shape of a corrupted cell. */
 const corruptRow = (ctx: string, offset: number) =>
@@ -667,33 +667,34 @@ test("E3 — on a PAUSED stream the halt fact still lands (pause-exempt) and the
 // only on a store with no `incarnation` cell). Every append and every read dies raw until the
 // actor is evicted — and this DO has no abort door, so nothing but the platform's idle eviction
 // ends it. The core snapshot keeps answering from memory, describing a log that is gone.
-test.fails("F1 — deleteAll() under a live incarnation: the tables are gone, the memory is not — every append and read dies of `no such table: events` until an eviction nobody can force", async () => {
-  const ctx = "prj_ud_deleteall_live";
-  const s = stub(ctx);
-  const errs = await runInDurableObject(s, async (instance, state) => {
-    await instance.append({ type: "before" });
-    await state.storage.deleteAll();
-    return {
-      append: await rejectionOf(() => instance.append({ type: "after" })),
-      read: await rejectionOf(() => Promise.resolve(instance.read(0))),
-      snapshot: await rejectionOf(() => instance.invoke("itx.facets.get('core').snapshot()")),
-    };
-  });
-  const viaStub = await rejectionOf(() => s.append({ type: "after, via the stub" }));
-  const noSuchTable = /^no such table: events: SQLITE_ERROR$/;
-  if (
-    !stillDiesOf(errs.append, noSuchTable) ||
-    !stillDiesOf(errs.read, noSuchTable) ||
-    !stillDiesOf(viaStub, noSuchTable) ||
-    !stillRed(
-      "the core snapshot still answers from memory",
-      errs.snapshot === undefined,
-      String(errs.snapshot),
-    )
-  )
-    return; // the pin MOVED
-  // WANTED: the stream notices its store was reset and starts over, or refuses in its own words.
-  expect(errs.append).toBeUndefined();
-});
+createFailing(
+  test,
+  /append dies of "no such table: events: SQLITE_ERROR", read of "no such table: events: SQLITE_ERROR", the stub's append of "no such table: events: SQLITE_ERROR", and the core snapshot still answers from memory/,
+  { timeoutMs: PIN_TIMEOUT_MS },
+)(
+  "F1 — deleteAll() under a live incarnation: the tables are gone, the memory is not — every append and read dies of `no such table: events` until an eviction nobody can force",
+  async () => {
+    const ctx = "prj_ud_deleteall_live";
+    const s = stub(ctx);
+    const errs = await runInDurableObject(s, async (instance, state) => {
+      await instance.append({ type: "before" });
+      await state.storage.deleteAll();
+      return {
+        append: await rejectionOf(() => instance.append({ type: "after" })),
+        read: await rejectionOf(() => Promise.resolve(instance.read(0))),
+        snapshot: await rejectionOf(() => instance.invoke("itx.facets.get('core').snapshot()")),
+      };
+    });
+    const viaStub = await rejectionOf(() => s.append({ type: "after, via the stub" }));
+    const snapshot = errs.snapshot
+      ? `dies of "${errs.snapshot.message}"`
+      : "still answers from memory";
+    // WANTED: the stream notices its store was reset and starts over, or refuses in its own words.
+    expect(
+      errs.append,
+      `after deleteAll() the stream should start over; append dies of "${errs.append?.message}", read of "${errs.read?.message}", the stub's append of "${viaStub?.message}", and the core snapshot ${snapshot}`,
+    ).toBeUndefined();
+  },
+);
 
 const sleep = (ms = 150) => new Promise((r) => setTimeout(r, ms));

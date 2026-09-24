@@ -9,6 +9,8 @@
 // what an app forwards — an app fetching its own host with a FRESH Request is not stopped by it.
 
 import { expect, test } from "vitest";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { openItx } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
@@ -224,20 +226,22 @@ export default class Loop extends WorkerEntrypoint {
 // REAL self-nesting chain on the deployed worker that runs until the eyeball's 10 s abort — never
 // in a routine deployed run.
 const SELF_LOOP_OPT_IN = process.env.RUN_SELF_LOOP_PROBE === "1";
-test
-  .skipIf(projectHostsAreLocal() || !SELF_LOOP_OPT_IN)
-  .fails(
-    "an app that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
-    async () => {
-      const slug = freshDnsSafeProjectSlug("ingress-loop");
-      const itx = openItx(await registerProject(slug));
-      await itx.provide("itx.apps.loop", ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
-      const answer = await fetch(projectUrl({ project: slug, app: "loop", path: "/" }), {
-        signal: AbortSignal.timeout(10_000),
-      });
-      expect(answer.status).toBe(508);
-    },
-  );
+createFailing(
+  test.skipIf(projectHostsAreLocal() || !SELF_LOOP_OPT_IN),
+  /TimeoutError: The operation was aborted due to timeout/,
+  { timeoutMs: 60_000, retries: process.env.CI ? E2E_CI_RETRIES : 0 },
+)(
+  "an app that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("ingress-loop");
+    const itx = openItx(await registerProject(slug));
+    await itx.provide("itx.apps.loop", ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
+    const answer = await fetch(projectUrl({ project: slug, app: "loop", path: "/" }), {
+      signal: AbortSignal.timeout(10_000),
+    });
+    expect(answer).toMatchObject({ status: 508 });
+  },
+);
 
 deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app", async () => {
   const slug = freshDnsSafeProjectSlug("ingress-ws");

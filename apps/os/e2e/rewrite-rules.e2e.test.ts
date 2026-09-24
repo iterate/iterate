@@ -18,7 +18,7 @@
 //   • the door refuses a match at `itx.builtins` or at a proxy verb; the platform never spells a short
 //     name, so a row at `itx.rpcStubs` or `itx.facets` redirects nothing the platform relies on
 //   • an EXPRESSION handle's dispose removes the row it wrote (compare-and-set on the printed target);
-//     RED (`test.fails`): while the stream is paused the removal is refused and forgotten
+//     RED (`createFailing`): while the stream is paused the removal is refused and forgotten
 //   • a match may PIN literal args on a call step: `itx.llm.run('special')` beats `itx.llm.run`, the
 //     pinned args are consumed, a client's stub can sit behind a pinned match, un-set by that spelling
 //   • the table under concurrency: 5 re-sets of ONE match leave one row, the last committed; a
@@ -27,6 +27,8 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { errorCode } from "iterate/next/lib";
 import {
   adminCredentials,
@@ -292,23 +294,29 @@ test("the door: a whole-context override may not name its OWN context (every cal
   sibling[Symbol.dispose]();
 });
 
-// RED (`test.fails` — a known defect, too costly to fix now): an EXPRESSION handle's undo is a
+// RED (a `createFailing` pin — a known defect, too costly to fix now): an EXPRESSION handle's undo is a
 // compare-and-set that runs in the edge's waitUntil and DISCARDS its failure; while the stream is
 // paused the removal is refused (STREAM_PAUSED) and forgotten, so the session-scoped row outlives its
 // handle forever. The fix is a retained, observable removal (retry after resume) — a new mechanism.
-test.fails("disposing an EXPRESSION provide handle while the stream is paused removes the rule once the stream resumes", async () => {
-  const itx = openItx(freshCtx("expression-dispose-paused"));
-  const handle = await itx.provide("itx.paused", "itx.builtins.whoami");
-  await itx.append({ type: "events.iterate.com/stream/paused" });
-  handle[Symbol.dispose]();
-  await sleep(500);
-  await itx.append({ type: "events.iterate.com/stream/resumed" });
-  await until(
-    "the row is gone",
-    async () => ((await itx.rewriteRules.get("itx.paused")) === null ? true : undefined),
-    3_000,
-  );
-});
+createFailing(test, /until\(the rule disposed while paused is gone after resume\): timed out/, {
+  timeoutMs: 60_000,
+  retries: process.env.CI ? E2E_CI_RETRIES : 0,
+})(
+  "disposing an EXPRESSION provide handle while the stream is paused removes the rule once the stream resumes",
+  async () => {
+    const itx = openItx(freshCtx("expression-dispose-paused"));
+    const handle = await itx.provide("itx.paused", "itx.builtins.whoami");
+    await itx.append({ type: "events.iterate.com/stream/paused" });
+    handle[Symbol.dispose]();
+    await sleep(500);
+    await itx.append({ type: "events.iterate.com/stream/resumed" });
+    await until(
+      "the rule disposed while paused is gone after resume",
+      async () => ((await itx.rewriteRules.get("itx.paused")) === null ? true : undefined),
+      3_000,
+    );
+  },
+);
 
 // ── a match with PINNED arguments (rules 1–3; `llm` is no built-in root, so nothing lies beneath these
 // rows — `itx.ai` would fall to its platform row): `itx.llm.run('special')` is a more specific rule

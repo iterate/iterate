@@ -13,7 +13,7 @@
 //     drops the row and recalls the stub — no callback under that name receives anything afterwards
 //   • THE LEASE IS THE HANDLE: disposing a STALE provide handle leaves its replacement serving; an
 //     EXPRESSION handle disposed after a live provider took its match over un-sets nothing
-//   • RED (`test.fails`): two sessions providing the IDENTICAL rule share one identity — disposing the
+//   • RED (`createFailing`): two sessions providing the IDENTICAL rule share one identity — disposing the
 //     first removes the second's row
 //   • the rule / the row is appended INSIDE the pager attach: its offset is BELOW the key's ephemeral
 //     `rpc-stub/attached` (the presence fact)
@@ -22,6 +22,8 @@
 //     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
 
 import { expect, test } from "vitest";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { errorCode } from "iterate/next/lib";
 import {
   collector,
@@ -150,21 +152,34 @@ test("an EXPRESSION rule's handle disposed after a live provider took its match 
   expect(await observer.invoke("itx.m.echo('b')")).toBe("echo-live:b");
 });
 
-// RED (`test.fails` — a known defect, too costly to fix now): an EXPRESSION handle's undo compares the
+// RED (a `createFailing` pin — a known defect, too costly to fix now): an EXPRESSION handle's undo compares the
 // row's TARGET, not the handle's own generation, so two sessions providing the IDENTICAL rule share
 // one identity — disposing the first removes the second's row. The fix is a per-configure generation
 // compared inside ONE DO commit — a new mechanism.
-test.fails("an EXPRESSION handle disposed after another session provided the IDENTICAL rule leaves that session's row standing", async () => {
-  const ctx = freshCtx("identical-expression-handles");
-  const first = await openItx(ctx).provide("itx.same", "itx.builtins.whoami");
-  await openItx(ctx).provide("itx.same", "itx.builtins.whoami"); // the second session, the same rule
-  first[Symbol.dispose]();
-  await sleep(1_000);
-  expect(await openItx(ctx).rewriteRules.get("itx.same")).toMatchObject({
-    target: "itx.builtins.whoami",
-    context: "/",
-  });
-});
+createFailing(
+  test,
+  /the second session's identical rule should outlive the first handle: expected null/,
+  {
+    timeoutMs: 60_000,
+    retries: process.env.CI ? E2E_CI_RETRIES : 0,
+  },
+)(
+  "an EXPRESSION handle disposed after another session provided the IDENTICAL rule leaves that session's row standing",
+  async () => {
+    const ctx = freshCtx("identical-expression-handles");
+    const first = await openItx(ctx).provide("itx.same", "itx.builtins.whoami");
+    await openItx(ctx).provide("itx.same", "itx.builtins.whoami"); // the second session, the same rule
+    first[Symbol.dispose]();
+    await sleep(1_000);
+    expect(
+      await openItx(ctx).rewriteRules.get("itx.same"),
+      "the second session's identical rule should outlive the first handle",
+    ).toMatchObject({
+      target: "itx.builtins.whoami",
+      context: "/",
+    });
+  },
+);
 
 // ── the attach carries the rule: the ORDER of two events on the shared offset sequence.
 // `rpc-stub/attached` (the ephemeral presence fact) is appended AFTER the events the attach carried,

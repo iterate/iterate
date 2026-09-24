@@ -497,7 +497,7 @@ only on genuine infra wedges).
    extends it — up to ~30s — only while the
    app visibly reports progress. An app that goes blank fails fast instead
    of being slept through: this exact tightness caught a real blank-render
-   product bug (flake 21). Don't widen budgets to paper over a missing
+   product bug (flake 21, [flake hunt](preview-e2e-flake-hunt.md)). Don't widen budgets to paper over a missing
    loading state. In Vitest, poll for a condition (`expect.poll`, `until`)
    instead of sleeping.
 5. **Retries are measured, never silent.** With one retry, a
@@ -698,8 +698,8 @@ and **fails on any `revisit by` date in the past**, printing the file and the
 parked reason. An expired date is a decision point, not a nag to bump: fix and
 un-park the test, or renew the date with the reason re-argued. Undated markers
 must be allowlisted in that guard with a note; the allowlist holds structural
-gates only and never grows to excuse a parked bug. `test.fails` is not a
-marker: it runs, and turns red once the bug it pins is fixed.
+gates only and never grows to excuse a parked bug. A `createFailing` pin is
+not a marker: it runs, and turns red once the bug it pins is fixed.
 
 The Depot Test workflow runs workspace tests and keeps their normalized
 telemetry as a job artifact. Production's deploy runs only its readiness

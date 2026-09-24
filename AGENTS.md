@@ -2,7 +2,7 @@
 
 Cloudflare Workers monorepo. The platform is `apps/os`; production issuer: `https://os.iterate.com`.
 
-- Read scoped `AGENTS.md` files and matching `rules/**/*.md`, honoring exclusions.
+- Read scoped `AGENTS.md` files. Follow every `rules/**/*.md` whose `files` globs match what you change, honoring exclusions: they are review rules, and no bot enforces them today.
 - Expected outcomes must be modeled; recovery must be bounded and observable. Operational changes require preview, state, and telemetry evidence. [Engineering invariant](docs/engineering-invariants.md).
 - `envs.ts` owns deployment configuration; Doppler supplies secrets. Workers are never deleted as part of source cleanup.
 - Browser testing uses isolated Playwriter sessions. Personal Chrome requires explicit authorization. [Browser testing](docs/browser-testing.md).

@@ -9,8 +9,8 @@ import { expect, test } from "vitest";
 // fails on any `revisit by` date in the past, printing the file and the
 // parked reason, so parked tests get re-decided instead of rotting. Undated
 // markers are for structural (platform-/env-gated) gates only, allowlisted
-// below with a note. `test.fails` is not a marker: it runs, and turns red
-// the moment the bug it pins is fixed. Deliberately dumb and fast — git
+// below with a note. A `createFailing` pin is not a marker: it runs, and
+// turns red the moment the bug it pins is fixed. Deliberately dumb and fast — git
 // ls-files plus a regex window, no AST.
 
 const repoRoot = resolve(import.meta.dirname, "..");
