@@ -594,6 +594,13 @@ be diagnosed, even though the same test outcome remains green in normal CI.
   budget or regresses sharply two runs in a row; a new perf row records its
   metrics with `recordLatency` (`apps/os/perf/record.ts`) and names them, with
   a calibrated budget, in `apps/os/perf/latency.ts`.
+- **Neither is how long Cloudflare keeps an actor**: when the platform evicts
+  a context or stops a facet is its decision, not the product's. An e2e row
+  asserts what the platform code decided (a wake, a reset named on a wake
+  record, a facet no longer running once its window is up) and may print how
+  long the actor lived. The timing itself is an opt-in perf file
+  (`apps/os/perf/context-residency.perf.test.ts`, `RUN_RESIDENCY_TIMING=1`,
+  or the soak's `residency-timing` input), which the latency guard never runs.
 
 When telemetry trends up without failures, investigate it. If the test is
 repeatedly flaky or adds disproportionate tail latency, use the quarantine

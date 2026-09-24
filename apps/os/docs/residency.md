@@ -109,5 +109,15 @@ pages on 5xx, platform-failure heals and errors.
 - Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
   `__workers-tests__/facet-birth-reset.test.ts` (5, 6),
   `__workers-tests__/residency-watchdog.test.ts` and `context-abort-and-the-watchdog.test.ts` (7).
-- Deployed: `e2e/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6;
-  `e2e/context-watchdog.e2e.test.ts` waits out a real watchdog window.
+- Workers suite, the sweep's clock: `facet-birth-reset.test.ts` also decides that loaded code's
+  calls never restart it and a project host's HTTP always does.
+- Deployed: `e2e/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6, the
+  resets a birth names on its wake record, and that a careless facet is no longer running once its
+  quiet minute is up; `e2e/context-watchdog.e2e.test.ts` waits out a real watchdog window.
+- Timed, opt-in: `perf/context-residency.perf.test.ts` (`RUN_RESIDENCY_TIMING=1`, or the soak's
+  `residency-timing` input) measures what Cloudflare decides and the e2e rows only print: a facet
+  the context no longer holds runs on past the context's eviction until the sweep, a context under
+  5 s of project-host traffic keeps one instance, and a claimed attempt finishes on the instance
+  that started it. Under the e2e run these sampled the platform: it stopped facets 0–25 s after
+  their call and evicted a context mid-traffic while the control plane stalled (#2899, #2921,
+  #2939). The latency guard never runs them.

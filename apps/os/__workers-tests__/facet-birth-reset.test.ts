@@ -9,7 +9,9 @@
 //
 // What the reset ENDS — a careless facet still running after its context was evicted, billed — is a
 // deployed fact (workerd's harness cannot evict a context whose facet is live, workerd#6800): the
-// careless rows of e2e/context-residency.e2e.test.ts read the facet's own start across incarnations.
+// careless rows of e2e/context-residency.e2e.test.ts read the facet's own start across incarnations,
+// and the opt-in perf/context-residency.perf.test.ts times how long the platform keeps such a facet
+// running.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -28,6 +30,18 @@ export class PlainDurableObject extends FacetDurableObject {
 }`,
   },
   className: "PlainDurableObject",
+};
+
+/** A loaded class serving plain HTTP; its page names the instance. */
+const site = {
+  source: {
+    "cap.js": /* js */ `import { FacetDurableObject } from "./processor.js";
+export class SiteDurableObject extends FacetDurableObject {
+  id = crypto.randomUUID();
+  fetch() { return new Response(this.id); }
+}`,
+  },
+  className: "SiteDurableObject",
 };
 
 test("a context's birth resets its loaded facets that hold no claim, names them on its wake record, and spares a claimed one", async () => {
@@ -94,6 +108,39 @@ test("a call from loaded code counts while in flight but never restarts the swee
   vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
   expect(await runDurableObjectAlarm(s)).toBe(true);
   expect(await s.invoke(["itx", "facets", ["get", "chatty"], ["hello"]])).not.toBe(before);
+});
+
+test("an outside HTTP request restarts the sweep's quiet clock: a loaded facet a project host keeps reaching is reset only a quiet period after the last request", async () => {
+  const ctx = "prj_facet_sweep_http_clock";
+  const s = stub(ctx);
+  const t0 = Date.now();
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  // What the edge sends a context for a project host's request (worker.ts): a plain fetch naming
+  // the facet by itx expression, no loaded-code marker — outside activity.
+  const page = async () =>
+    (
+      await s.fetch(
+        new Request("https://site.test/", {
+          headers: { "x-itx-expression": JSON.stringify(["itx", "facets", ["get", "site", site]]) },
+        }),
+      )
+    ).text();
+  const first = await page();
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS / 2);
+  expect(await page()).toBe(first);
+  // The deadline the materialization armed comes due, but the request half a period in restarted
+  // the clock: the pass re-arms a quiet period after that request, and resets nothing.
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  expect(await runInDurableObject(s, (_instance, state) => state.storage.getAlarm())).toBe(
+    t0 + (UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS * 3) / 2,
+  );
+  vi.setSystemTime(t0 + (UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS * 3) / 2);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  expect(await page()).not.toBe(first);
 });
 
 test("a claim's release arms the sweep again: a facet the sweep spared while it was claimed is reset a quiet period after the release", async () => {
