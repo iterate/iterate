@@ -290,14 +290,18 @@ export class ConsentRpcTarget extends RpcTarget {
     const returnsTo = new URL(request.redirectUri);
     if (returnsTo.pathname !== "/.auth/callback" || !testLink.clients.includes(returnsTo.origin))
       return null;
+    const project = await new ControlPlane(this.#env.CONTROL_PLANE).getProject(testLink.project);
+    if (!project) return null;
+    // `expected`: CI may have seeded the project on another isolate moments ago (the specs do)
     const { projects, projectBound } = await projectsForClient(
       this.#env,
       this.#addresses.platformOrigin,
       request.clientId,
       this.#grant.userId,
+      [project.id],
     );
     // a project host's own client is bound to its one project: never "All my projects"
-    if (projectBound || !projects.some((project) => project.slug === testLink.project)) return null;
+    if (projectBound || !projects.some((reachable) => reachable.id === project.id)) return null;
     return this.#complete(request, client, null, request.scope);
   }
 }
