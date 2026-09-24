@@ -1,7 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, onTestFinished, test } from "vitest";
 import {
   APPS,
   appPreviewOrigins,
+  assertFreshInstall,
   changedApps,
   isDurableObjectClassNotExportedError,
   MAX_PREVIEW_NAME_LENGTH,
@@ -276,3 +280,50 @@ test.each([
     expect(isDurableObjectClassNotExportedError(output)).toBe(recreate);
   },
 );
+
+// Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then
+// the merge commit's, rewrote pnpm-lock.yaml over node_modules baked from that same content.
+test("the fresh-install check: a lockfile rewritten after the install, byte-identical to the one installed, passes", () => {
+  expect(
+    freshInstallCheck({ lockfile: ["main", later], installed: ["main", earlier] }),
+  ).not.toThrow();
+});
+
+test("the fresh-install check: a lockfile changed since the install fails", () => {
+  expect(freshInstallCheck({ lockfile: ["main", later], installed: ["pr", earlier] })).toThrow(
+    "pnpm-lock.yaml is newer than node_modules and differs from node_modules/.pnpm/lock.yaml",
+  );
+});
+
+test("the fresh-install check: no install fails", () => {
+  expect(freshInstallCheck({ lockfile: ["main", earlier] })).toThrow("has no copy in");
+});
+
+// pnpm's installed lockfile can differ benignly (a filtered install): the mtime rule decides.
+test("the fresh-install check: an install newer than a differing lockfile passes, as it always has on a laptop", () => {
+  expect(
+    freshInstallCheck({
+      lockfile: ["main", earlier],
+      installed: ["filtered", later],
+    }),
+  ).not.toThrow();
+});
+
+const earlier = new Date("2026-09-24T00:00:00Z");
+const later = new Date("2026-09-24T00:42:00Z");
+/** A checkout: its lockfile, and node_modules as pnpm leaves it (`.modules.yaml`, and the
+ *  lockfile it installed from as `.pnpm/lock.yaml`), each file with its mtime. */
+function freshInstallCheck(input: { lockfile: [string, Date]; installed?: [string, Date] }) {
+  const root = mkdtempSync(path.join(tmpdir(), "preview-fresh-install-"));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(path.join(root, "pnpm-lock.yaml"), input.lockfile[0]);
+  utimesSync(path.join(root, "pnpm-lock.yaml"), input.lockfile[1], input.lockfile[1]);
+  if (input.installed) {
+    mkdirSync(path.join(root, "node_modules", ".pnpm"), { recursive: true });
+    for (const file of ["node_modules/.modules.yaml", "node_modules/.pnpm/lock.yaml"]) {
+      writeFileSync(path.join(root, file), input.installed[0]);
+      utimesSync(path.join(root, file), input.installed[1], input.installed[1]);
+    }
+  }
+  return () => assertFreshInstall(root);
+}
