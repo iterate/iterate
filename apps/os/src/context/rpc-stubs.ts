@@ -594,11 +594,13 @@ export async function lendRpcStubOverPager(
   };
   /** The leg dropped under a live lend: dial again and take the new pager into service. Bounded:
    *  five tries over ~30 s (a deploy's reset answers 503 for seconds; on 2026-09-24 14:06 all four
-   *  voice boards gave up inside four), each dial given 10 s — a dial the DO never answers must
-   *  not hold the loop. A 5xx is the DO not ready yet and is tried again; any other non-101 is its
-   *  refusal (a paused stream) and ends it. A lend recalled meanwhile ends it too. Giving up is an
-   *  ERROR: the client is still connected but unreachable through its key, and the prd fault alarm
-   *  pages on errors. */
+   *  voice boards gave up inside four), all inside 60 s of the drop — a dial the DO never answers
+   *  must not hold the loop. Tries are sequential and a dial is abandoned only when the whole
+   *  re-dial gives up: an abandoned dial the DO accepts later would otherwise REPLACE a pager a
+   *  later try brought back (the DO closes the older one with 1000, which ends the lend). A 5xx is
+   *  the DO not ready yet and is tried again; any other non-101 is its refusal (a paused stream)
+   *  and ends it. A lend recalled meanwhile ends it too. Giving up is an ERROR: the client is still
+   *  connected but unreachable through its key, and the prd fault alarm pages on errors. */
   const redialPager = async (dropped: CloseEvent): Promise<void> => {
     const droppedAt = Date.now();
     console.warn({
@@ -621,7 +623,10 @@ export async function lendRpcStubOverPager(
       try {
         redialed = await Promise.race([
           dial,
-          new Promise<null>((resolve) => (deadline = setTimeout(() => resolve(null), 10_000))),
+          new Promise<null>(
+            (resolve) =>
+              (deadline = setTimeout(() => resolve(null), droppedAt + 60_000 - Date.now())),
+          ),
         ]);
       } catch (error) {
         // the DO did not answer (a reset in progress): the next try
@@ -631,16 +636,17 @@ export async function lendRpcStubOverPager(
         clearTimeout(deadline);
       }
       if (!redialed) {
-        lastFailure = "the dial did not answer within 10 s";
-        // a pager that arrives after its deadline is never taken into service
+        lastFailure = "no answer within 60 s of the drop";
+        // The lend ends below, so a pager this dial brings later is closed, never taken into
+        // service: the DO un-sets what named the key when its last pager closes.
         void dial.then(
           (late) => {
             late.webSocket?.accept();
-            late.webSocket?.close(1000, "dial timed out");
+            late.webSocket?.close(1000, "re-dial gave up");
           },
           () => undefined,
         );
-        continue;
+        break;
       }
       lastFailure = `the DO answered ${redialed.status}`;
       if (redialed.status === 101 && redialed.webSocket) {

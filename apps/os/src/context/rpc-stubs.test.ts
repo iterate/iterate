@@ -174,7 +174,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 // fault on the hop between colos; a DO reset kills every hibernatable socket). What a close MEANS is
 // its code: 1000 is deliberate — this side's dispose, the DO replacing the pager with a newer one —
 // and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: five
-// tries over ~30 s, 10 s each) while the session's dup stays lent.
+// tries over ~30 s, all within 60 s of the drop) while the session's dup stays lent.
 
 test.each([
   {
@@ -257,10 +257,11 @@ test.each([
   },
 );
 
-test("a re-dial the DO never answers times out after 10 s and is tried again; the late pager is closed, never taken into service", async () => {
+test("a re-dial the DO never answers is given up 60 s after the drop, never dialed again beside it: the late pager is closed, never taken into service", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
   let answerLate: (pager: FakePagerWebSocket) => void = () => {};
   const late = new FakePagerWebSocket();
   const closed = vi.spyOn(late, "close");
@@ -271,15 +272,19 @@ test("a re-dial the DO never answers times out after 10 s and is tried again; th
   );
 
   fake.pagers[0].close(1006);
-  await vi.advanceTimersByTimeAsync(12_000); // the 10 s deadline, then the 2 s wait
+  await vi.advanceTimersByTimeAsync(60_000);
   await fake.waitedUntil[0];
+  expect(fake).toMatchObject({ dials: 2, disposed: 1 }); // one re-dial, never a second beside it
+  expect(error).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "rpc-stub-pager-redial-failed",
+      lastFailure: "no answer within 60 s of the drop",
+      downMs: 60_000,
+    }),
+  );
   answerLate(late);
   await vi.advanceTimersByTimeAsync(0);
-  expect(fake).toMatchObject({ dials: 3, disposed: 0 });
-  expect(closed).toHaveBeenCalledWith(1000, "dial timed out");
-  expect(warn).toHaveBeenCalledWith(
-    expect.objectContaining({ event: "rpc-stub-pager-redialed", attempt: 2, downMs: 12_000 }),
-  );
+  expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
 });
 
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
