@@ -49,8 +49,7 @@ window.** It commits the archived config tree again (deleting files added since 
 reverting later edits), sets every archived secret back to its archived value
 (reverting a rotated key or a refreshed OAuth token), and adds the archive's members,
 or the `--owners` given. Rerun it with the same `--organization` and `--owners` as the
-first run. To land projects on their organization's record long after a restore, use
-`land-projects` (below), which changes nothing else.
+first run.
 
 A slug with a different ID, an archived
 ID held by another project, existing projects in another organization, ambiguous organization names
@@ -64,17 +63,6 @@ a person's or the operator's, lands `organization/project-created` on the
 organization's record (the `organization` fold the dash lists an organization's
 projects from) unless the record already has it, under an idempotency key. So a
 rerun, or two creations at once, write no second event.
-
-Projects restored before 2026-09-24 never landed on their organization's record, so
-the dash lists none of them. `land-projects` lands every such project and nothing
-else: for each project in a named organization that the record lacks, and whose
-creation has finished, it calls `projects.create` again and checks the record. It
-writes no config, secret or membership, so it is safe on a live deployment:
-
-```sh
-pnpm --dir apps/os project-seed land-projects --env prd --dry-run
-pnpm --dir apps/os project-seed land-projects --env prd --yes-i-mean-prd
-```
 
 `--organization` changes the destination organization. `--owners` replaces the
 archive's requested member list with explicit owners. Without these flags, the
