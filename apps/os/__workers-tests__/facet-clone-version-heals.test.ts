@@ -62,8 +62,10 @@ for (const [label, message] of Object.entries(platformFailures)) {
       s,
       (_i, state) => state.storage.kv.get("facet:flaky:loader-id") as string,
     );
-    expect(loaderIdAfter).not.toBe(loaderIdBefore); // the loaded identity was retired: a fresh isolate
-    expect(loaderIdAfter).toMatch(/#1$/);
+    // The loaded identity was retired once: a fresh isolate. `loaderIdBefore` may already be the
+    // retry's (`…#1`): the configure batch is pushed, rejected and retried while `until` polls, and
+    // on a loaded machine the first read lands after the retry (2026-09-24, 1 of 17 local runs).
+    expect(loaderIdAfter).toBe(`${loaderIdBefore.replace(/#1$/, "")}#1`);
     const rows = (await s.invoke("itx.processors.list()")) as {
       hostedFacet: { restarts: number };
     }[];
