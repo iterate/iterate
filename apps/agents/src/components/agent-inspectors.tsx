@@ -1,8 +1,7 @@
-// The traces, the platform's inspector sheets rebuilt over the page's own event array: the LLM request
-// (what the model was sent, what it answered, what the loop derived), the script execution (the
-// code, its settlement, what the agent was told), and a raw event with Prev/Next paging. One Sheet,
-// URL-backed by the route's search params, so any trace is a shareable link. The Events view is
-// the raw log: one row per event, click to inspect.
+// The traces, inspector sheets built over the page's own event array: the LLM request (what the
+// model was sent, what it answered, what the loop derived) and the script execution (the code, its
+// settlement, what the agent was told). One Sheet, URL-backed by the route's search params, so any
+// trace is a shareable link. The Events view is the raw log: one row per event, click to inspect.
 import { useState } from "react";
 import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
@@ -21,14 +20,15 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { Event } from "@iterate-com/ui/components/events/types";
-import type {
-  AgentUiActivity,
-  AgentUiLlmStep,
+import {
+  formatAgentUiDuration,
+  type AgentUiActivity,
+  type AgentUiLlmStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
+import { parseCodemodeResponse } from "../../runtime/codemode-format.ts";
 import {
   formatDateTime,
-  formatSeconds,
   isRecord,
   llmTrace,
   scriptTrace,
@@ -100,9 +100,6 @@ function LlmTraceContent({
   onInspect: (next: Inspected) => void;
 }) {
   const trace = llmTrace(events, llmRequestOffset);
-  const derivedScriptCode = trace?.derived.scriptExecutionId
-    ? scriptTrace(events, trace.derived.scriptExecutionId)?.code
-    : undefined;
   const [renderMode, setRenderMode] = useState<"markdown" | "plain">("markdown");
   const [copied, setCopied] = useState(false);
   if (!trace)
@@ -178,7 +175,6 @@ function LlmTraceContent({
           outcome={trace.outcome}
           onInspect={onInspect}
           scriptExecutionId={trace.derived.scriptExecutionId}
-          derivedScriptCode={derivedScriptCode}
         />
         {trace.derived.prose || trace.derived.scriptExecutionId ? (
           <section className="px-5 py-3">
@@ -225,14 +221,6 @@ function LlmTraceContent({
   );
 }
 
-/** The `<codemode>` body of a raw model answer — the script the loop extracts and runs. Slices the
- *  streamed text live too, so the parsed script forms as the answer arrives. */
-const CODEMODE_BLOCK = /<codemode[^>]*>[ \t]*\n?([\s\S]*?)\n?[ \t]*<\/codemode>/;
-function extractScript(raw: string): string | null {
-  const code = CODEMODE_BLOCK.exec(raw)?.[1]?.trim();
-  return code ? code : null;
-}
-
 /** The trace's response half: the model's RAW output (streamed live from the chunk windows, or the
  *  settled text after the fact) syntax-highlighted, and the parsed script highlighted as TypeScript
  *  beside it — the two a person debugging a turn reads. Reasoning ("thinking") streams above while it
@@ -242,15 +230,11 @@ function ResponseView({
   outcome,
   onInspect,
   scriptExecutionId,
-  derivedScriptCode,
 }: {
   liveStep: AgentUiLlmStep | undefined;
   outcome: LlmTrace["outcome"];
   onInspect: (next: Inspected) => void;
   scriptExecutionId: string | undefined;
-  /** The script the loop ran from this response — a codemode action. Shown when the raw text carries
-   *  no tag of its own (a bare reply is appended directly by the loop and runs nothing). */
-  derivedScriptCode: string | undefined;
 }) {
   const streaming = Boolean(liveStep);
   const thinking: StreamText | null =
@@ -261,7 +245,10 @@ function ResponseView({
       ? outcome.text
       : null;
   const hasRaw = Boolean(raw);
-  const script = (raw ? extractScript(raw) : null) || derivedScriptCode || null;
+  // The loop's own parser, so the pane shows exactly the script the loop runs; a streaming answer
+  // shows none until its closing `</codemode>` line arrives.
+  const parsed = raw ? parseCodemodeResponse(raw) : null;
+  const script = parsed?.kind === "script" ? parsed.code : null;
   return (
     <section className="flex flex-col gap-3 border-b border-border/60 bg-muted/20 px-5 py-3">
       <div className="flex items-baseline gap-2">
@@ -348,7 +335,7 @@ function Outcome({ outcome }: { outcome: LlmTrace["outcome"] }) {
   if (outcome.status === "in flight") return <> · in flight</>;
   const duration =
     "durationMs" in outcome && outcome.durationMs != null
-      ? ` in ${formatSeconds(outcome.durationMs)}`
+      ? ` in ${formatAgentUiDuration(outcome.durationMs)}`
       : "";
   return (
     <>
@@ -433,7 +420,7 @@ function ScriptTraceContent({
                 className={failed ? "text-destructive" : "text-emerald-600 dark:text-emerald-500"}
               >
                 {failed ? "failed" : "succeeded"} in{" "}
-                {formatSeconds(trace.settlement.atMs - trace.requestedAtMs)}
+                {formatAgentUiDuration(trace.settlement.atMs - trace.requestedAtMs)}
               </span>
             </>
           ) : (

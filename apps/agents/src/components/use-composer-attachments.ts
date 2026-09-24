@@ -1,12 +1,12 @@
-// the platform's one file-attachment state machine every composer shares: size limits, the oversize
-// warning, stable chip identity, and the hidden picker input (render `AttachmentFileInput` from
+// The composer's file-attachment state machine: size limits, the oversize warning, stable chip
+// identity, and the hidden picker input (render `AttachmentFileInput` from
 // composer-attachments.tsx once next to the composer).
 import { useRef, useState } from "react";
 import { formatFileSize } from "../lib/agent-events.ts";
 
-export const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
-export function partitionFilesBySize(files: readonly File[]): {
+function partitionFilesBySize(files: readonly File[]): {
   accepted: File[];
   rejected: File[];
 } {
@@ -19,7 +19,7 @@ export function partitionFilesBySize(files: readonly File[]): {
   return { accepted, rejected };
 }
 
-export function fileSizeErrorMessage(rejected: readonly File[]): string | undefined {
+function fileSizeErrorMessage(rejected: readonly File[]): string | undefined {
   if (rejected.length === 0) return undefined;
   const label = rejected.length === 1 ? rejected[0]!.name : `${String(rejected.length)} files`;
   return `${label} must be ${formatFileSize(MAX_MESSAGE_FILE_SIZE_BYTES)} or smaller.`;

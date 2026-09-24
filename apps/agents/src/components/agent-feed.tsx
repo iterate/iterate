@@ -1,7 +1,7 @@
-// The feed rows, the platform's agent-feed.tsx at the size this page needs: a person's message, the
-// assistant's prose, and the quiet "Ran code 2× · 3 requests · 7.4 s" activity row that opens into
-// rounds — the LLM step that wrote a script and the code step that ran it, each a `Script | Result |
-// Meta` tab group. Items come from the shared reducer (packages/ui); this file owns only their look.
+// The feed rows: a person's message, the assistant's prose, and the quiet "Ran code 2× · 3
+// requests · 7.4 s" activity row that opens into rounds — the LLM step that wrote a script and the
+// code step that ran it, each a `Script | Result | Meta` tab group. Items come from the shared
+// reducer (packages/ui); this file owns only their look.
 import { useCallback, useEffect, useState } from "react";
 import {
   BanIcon,
@@ -46,7 +46,6 @@ import {
   formatDateTime,
   formatElapsedSeconds,
   formatFileSize,
-  formatSeconds,
   liveActivityLabel,
   looksLikeCode,
 } from "../lib/agent-events.ts";
@@ -143,7 +142,7 @@ export function AgentFeedItemRow({
       );
     }
     case "stream-woken":
-      // An os-next actor quiesces after a short idle and wakes on the next request, so wakes
+      // An apps/os actor quiesces after a short idle and wakes on the next request, so wakes
       // are a fact of every turn, not a signal — the Events view lists them; the chat does not.
       return null;
   }
@@ -218,7 +217,7 @@ function AgentActivityRow({
 
 // ── rounds: the llm step that wrote a script and the code step that ran it ──
 
-export function AgentActivityRounds({
+function AgentActivityRounds({
   rounds,
   inspect,
 }: {
@@ -293,8 +292,10 @@ function roundHeaderMeta(round: AgentUiActivityRound): string {
   const parts: string[] = [];
   if (round.code?.activitySummary) parts.push(round.code.activitySummary);
   else if (round.llm) parts.push(formatClockTime(round.llm.startedAtMs));
-  if (round.llm?.durationMs != null) parts.push(`model ${formatSeconds(round.llm.durationMs)}`);
-  if (round.code?.durationMs != null) parts.push(`script ${formatSeconds(round.code.durationMs)}`);
+  if (round.llm?.durationMs != null)
+    parts.push(`model ${formatAgentUiDuration(round.llm.durationMs)}`);
+  if (round.code?.durationMs != null)
+    parts.push(`script ${formatAgentUiDuration(round.code.durationMs)}`);
   return parts.join(" · ");
 }
 
@@ -313,7 +314,7 @@ function llmStepLabel(llm: AgentUiLlmStep): string {
 
 function llmStepMeta(llm: AgentUiLlmStep): string {
   const parts = [formatClockTime(llm.startedAtMs)];
-  if (llm.durationMs != null) parts.push(formatSeconds(llm.durationMs));
+  if (llm.durationMs != null) parts.push(formatAgentUiDuration(llm.durationMs));
   return parts.join(" · ");
 }
 
@@ -452,14 +453,14 @@ function RoundTabs({
               <dd>{formatDateTime(llm.startedAtMs)}</dd>
               <dt className="text-muted-foreground">response</dt>
               <dd>
-                {llm.durationMs == null ? "—" : formatSeconds(llm.durationMs)}
+                {llm.durationMs == null ? "—" : formatAgentUiDuration(llm.durationMs)}
                 {llm.outcome && llm.outcome !== "completed" ? ` · ${llm.outcome}` : ""}
               </dd>
             </>
           ) : null}
           <dt className="text-muted-foreground">script</dt>
           <dd>
-            {code.durationMs == null ? "running" : formatSeconds(code.durationMs)}
+            {code.durationMs == null ? "running" : formatAgentUiDuration(code.durationMs)}
             {code.success === false ? " · failed" : ""}
           </dd>
           <dt className="text-muted-foreground">execution</dt>
@@ -472,7 +473,7 @@ function RoundTabs({
 }
 
 /** The script's returned value: a string as itself, anything else as YAML with a JSON toggle. */
-export function ScriptResult({ code }: { code: AgentUiCodeStep }) {
+function ScriptResult({ code }: { code: AgentUiCodeStep }) {
   return (
     <>
       {code.errorMessage ? (
@@ -507,7 +508,7 @@ export function ScriptResult({ code }: { code: AgentUiCodeStep }) {
   );
 }
 
-// ── the live tail: what the agent is doing right now (the platform's AgentLiveActivity) ──
+// ── the live tail: what the agent is doing right now ──
 
 /** The feed's trailing row whenever work is in flight. Receives the live reduced state on every
  *  chunk: finished steps collapse upward into quiet rows while the current request or script keeps
@@ -701,7 +702,7 @@ function useLivePhaseClock(
   startedAtMs: number,
   deadlineMs: number | null,
 ): { deadlineExceeded: boolean; elapsedLabel: string } {
-  const nowMs = useTickingNowMs(100, true, deadlineMs);
+  const nowMs = useTickingNowMs(100, deadlineMs);
   const deadlineExceeded = typeof deadlineMs === "number" && nowMs >= deadlineMs;
   return {
     deadlineExceeded,

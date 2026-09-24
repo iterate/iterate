@@ -1,6 +1,6 @@
-// the platform's ticking clock: a wall-clock subscribed via `useSyncExternalStore`, not `useState` +
-// `setInterval` in an effect — the snapshot is a stable scalar between ticks, and the interval
-// only runs while something is subscribed.
+// A ticking clock: a wall-clock subscribed via `useSyncExternalStore`, not `useState` + `setInterval`
+// in an effect — the snapshot is a stable scalar between ticks, and the interval only runs while
+// something is subscribed.
 import { useCallback, useState, useSyncExternalStore } from "react";
 
 function createTickingClock(intervalMs: number) {
@@ -27,7 +27,7 @@ function createTickingClock(intervalMs: number) {
       listeners.add(onStoreChange);
       now = Date.now();
       ensureTimer();
-      // Notify after subscribe returns so a remount/re-enable re-reads getSnapshot. Skip if
+      // Notify after subscribe returns so a remount re-reads getSnapshot. Skip if
       // already unsubscribed (Strict Mode remount).
       queueMicrotask(() => {
         if (listeners.has(onStoreChange)) onStoreChange();
@@ -59,15 +59,10 @@ const boundary = (stopAtMs: number | null) =>
   typeof stopAtMs === "number" ? stopAtMs : Number.POSITIVE_INFINITY;
 
 /**
- * Live wall-clock milliseconds. Ticks every `intervalMs` while `enabled` is true. When `stopAtMs`
- * is reached, the returned value freezes at that boundary and this subscriber detaches from the
- * shared timer. When disabled, returns a frozen snapshot and holds no timer.
+ * Live wall-clock milliseconds, ticking every `intervalMs`. When `stopAtMs` is reached, the
+ * returned value freezes at that boundary and this subscriber detaches from the shared timer.
  */
-export function useTickingNowMs(
-  intervalMs: number,
-  enabled = true,
-  stopAtMs: number | null = null,
-): number {
+export function useTickingNowMs(intervalMs: number, stopAtMs: number | null = null): number {
   const clock = clockFor(intervalMs);
   const snapshot = useCallback(
     () => Math.min(clock.getSnapshot(), boundary(stopAtMs)),
@@ -84,7 +79,6 @@ export function useTickingNowMs(
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
-      if (!enabled) return () => {};
       let unsubscribe = () => {};
       const pastBoundary = () => typeof stopAtMs === "number" && clock.getSnapshot() >= stopAtMs;
       const notifyUntilBoundary = () => {
@@ -95,10 +89,10 @@ export function useTickingNowMs(
       if (pastBoundary()) unsubscribe();
       return unsubscribe;
     },
-    [clock, enabled, stopAtMs],
+    [clock, stopAtMs],
   );
 
   // The clock snapshot is mutated only by the external store. With no live subscription it
-  // remains stable, so disabled consumers freeze without a render-time ref write.
+  // remains stable, so a consumer past its boundary freezes without a render-time ref write.
   return useSyncExternalStore(subscribe, snapshot, serverSnapshot);
 }
