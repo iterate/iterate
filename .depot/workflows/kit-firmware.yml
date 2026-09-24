@@ -55,6 +55,9 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
+      # THE RUN'S OWN COMMIT, the tree this workflow file was read from: on a pull request, its head
+      # merged into main, so it builds the firmware main would build after the merge
+      # (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests). The build job checks out the same.
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -62,7 +65,7 @@ jobs:
           # The version counts main's first-parent commits; diffs reach each device's last release.
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Show the publish job's tools
         run: gh --version && jq --version
       - id: plan
@@ -90,7 +93,7 @@ jobs:
         with:
           clean: false
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       # The image carries ESP-IDF (scripts/depot-ci/esp-idf.sh, the pin); a leg downloads it only
       # while that file differs from the image's, and then says so in a warning.
       - name: ESP-IDF (baked)

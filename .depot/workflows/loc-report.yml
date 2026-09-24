@@ -16,12 +16,16 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
+      # THE RUN'S OWN COMMIT, the tree this workflow file was read from. The report still diffs the
+      # event's head against its base by sha (scripts/ci/loc-report.ts); only the script, its
+      # dependencies and .gitattributes come from this checkout
+      # (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           clean: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Post LOC report

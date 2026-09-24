@@ -23,11 +23,13 @@ jobs:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
+      # THE RUN'S OWN COMMIT, the tree this workflow file was read from: the scripts read GitHub and
+      # Slack, never the pull request's code (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Notify PR update
