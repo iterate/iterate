@@ -12,10 +12,13 @@ import {
 import { AwsClient } from "aws4fetch";
 import { expect, test, vi } from "vitest";
 import {
+  reportStepFailure,
   testEvidencePrefix,
   testEvidenceSource,
   testEvidenceTableKey,
+  testEvidenceUploadedPrefix,
   uploadTestEvidence,
+  uploadedSummaryLine,
   writeTestEvidence,
 } from "./test-evidence.ts";
 
@@ -237,20 +240,48 @@ test("keys a run's folder by trust, the day its manifest was written and its Dep
     "tables/tests/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh.parquet",
   );
 
-  const mainPush = await write(folder.path, {
-    environment: { ...environment, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" },
-  });
+  const onMain = {
+    ...environment,
+    GITHUB_EVENT_NAME: "push",
+    GITHUB_REF: "refs/heads/main",
+    TEST_TELEMETRY_HEAD_SHA: commit,
+  };
+  const mainPush = await write(folder.path, { environment: onMain });
   expect(testEvidencePrefix(mainPush)).toMatch(/^evidence\/ci\/trust=main\//u);
   // a dispatch on main can be told to test anything (Preview OS's pull-request-number)
   const dispatch = await write(folder.path, {
-    environment: {
-      ...environment,
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      GITHUB_REF: "refs/heads/main",
-    },
+    environment: { ...onMain, GITHUB_EVENT_NAME: "workflow_dispatch" },
   });
   expect(testEvidencePrefix(dispatch)).toMatch(/^evidence\/ci\/trust=pr\//u);
 });
+
+test.for([
+  { name: "files changed on disk", source: { ...source, dirty: true }, headSha: commit },
+  { name: "another commit checked out", source, headSha: "d".repeat(40) },
+])(
+  "a push to main whose tested tree is not the pushed commit's ($name, as `depot ci run` patches a laptop's changes in) is filed as pr, and the manifest says why",
+  async ({ source: tested, headSha }) => {
+    using folder = evidenceFolder({ artifacts: [] });
+    const manifest = await write(folder.path, {
+      source: tested,
+      environment: {
+        ...environment,
+        GITHUB_EVENT_NAME: "push",
+        GITHUB_REF: "refs/heads/main",
+        TEST_TELEMETRY_HEAD_SHA: headSha,
+      },
+    });
+    expect(manifest).toMatchObject({ runner: { trust: "pr" } });
+    expect(manifest.diagnostics).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^filed as trust=pr: a push on refs/heads/main, but the tested tree is not commit ${headSha}'s`,
+          "u",
+        ),
+      ),
+    );
+  },
+);
 
 test("a job with no Depot job attempt has no test run to file evidence under", async () => {
   using folder = evidenceFolder({ artifacts: [] });
@@ -282,13 +313,21 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
     new Set(["376ef7ed81b0573f93524de763666c15.r2.cloudflarestorage.com"]),
   );
   const keys = urls.map((url) => decodeURIComponent(url.pathname));
-  // the files in parallel, in any order; the manifest alone; the table's copy last
+  // the files in parallel, in any order; the table's copy for the loader; the manifest last, the
+  // commit point for both
   expect(keys.slice(0, -2).sort()).toEqual(
     manifest.files.map((file) => `/iterate-ci/${prefix}${file.path}`),
   );
-  expect(keys.slice(-2)).toEqual([`/iterate-ci/${prefix}manifest.json`, `/iterate-ci/${tableKey}`]);
+  expect(keys.slice(-2)).toEqual([`/iterate-ci/${tableKey}`, `/iterate-ci/${prefix}manifest.json`]);
   expect(prefix).toBe("evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/");
-  expect(uploaded).toMatchObject({ files: manifest.files.length + 1, retries: 0 });
+  const table = manifest.files.find((file) => file.path === "tables/tests.parquet")!;
+  const manifestBytes = readFileSync(join(folder.path, testEvidencePaths.manifest)).byteLength;
+  expect(uploaded).toMatchObject({
+    objects: manifest.files.length + 2,
+    bytes:
+      manifest.files.reduce((total, file) => total + file.bytes, 0) + table.bytes + manifestBytes,
+    retries: 0,
+  });
   // `=` is sent percent-encoded, as S3 clients sign it; R2 stores it decoded (measured 2026-09-24)
   expect(urls[0]!.pathname).toContain("/trust%3Dpr/date%3D2026-09-24/");
   const trace = requests.find((request) => request.url.endsWith("trace.zip"))!;
@@ -320,8 +359,25 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
   expect(trace.headers.get("authorization")).toMatch(
     new RegExp(`^AWS4-HMAC-SHA256 Credential=${apiTokenId}/\\d{8}/auto/s3/aws4_request, `),
   );
-  expect(requests.at(-2)!.headers.get("content-type")).toBe("application/json");
-  expect(requests.at(-1)!.headers.get("content-type")).toBe("application/vnd.apache.parquet");
+  expect(requests.at(-2)!.headers.get("content-type")).toBe("application/vnd.apache.parquet");
+  expect(requests.at(-1)!.headers.get("content-type")).toBe("application/json");
+});
+
+test("a cancelled run's folder is uploaded without a copy of its tests table, whose rows stop part way", async () => {
+  using folder = evidenceFolder({
+    artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
+    check: completeCheck,
+  });
+  const manifest = await write(folder.path, { cancelled: true });
+  const api = cloudflare();
+
+  const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
+
+  expect(manifest).toMatchObject({ result: "cancelled" });
+  expect(uploaded).toMatchObject({ tableKey: undefined, objects: manifest.files.length + 1 });
+  const keys = api.r2Requests().map((request) => decodeURIComponent(new URL(request.url).pathname));
+  expect(keys.filter((key) => key.includes("/tables/tests/"))).toEqual([]);
+  expect(keys.at(-1)).toBe(`/iterate-ci/${uploaded.prefix}manifest.json`);
 });
 
 test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platform-failure warn, and the upload completes", async () => {
@@ -329,7 +385,7 @@ test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platf
   await write(folder.path);
   const failures = [
     new Response("<Error><Code>InternalError</Code></Error>", { status: 503 }),
-    new Response("slow down", { status: 429, headers: { "retry-after": "5" } }),
+    new Response("slow down", { status: 429, headers: { "retry-after": "60" } }),
     new TypeError("fetch failed", { cause: new Error("ECONNRESET") }),
   ];
   const api = cloudflare((request) => {
@@ -344,6 +400,7 @@ test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platf
 
   expect(uploaded).toMatchObject({ retries: 3 });
   expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
+  // 1 s, then the 429's Retry-After capped at 5 s, then 4 s
   expect(api).toMatchObject({ waits: [1000, 5000, 4000] });
   expect(warn.mock.calls.map(([entry]) => entry)).toEqual([
     expect.objectContaining({
@@ -375,6 +432,32 @@ test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, 
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
   warn.mockRestore();
+});
+
+test("no retry starts after the upload's deadline, and the manifest never lands", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  await write(folder.path);
+  const deadline = new AbortController();
+  const api = cloudflare((request) => {
+    if (!request.url.endsWith("trace.zip")) return ok();
+    // the deadline passes while R2 answers the first try
+    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    return new Response("down", { status: 503 });
+  });
+
+  await expect(
+    uploadTestEvidence({
+      repoRoot: folder.path,
+      ...bucket,
+      apiToken,
+      ...api,
+      deadline: deadline.signal,
+    }),
+  ).rejects.toThrow(/trace\.zip: 503 down \(after 0 retries\)$/u);
+  expect(api).toMatchObject({ waits: [] });
+  expect(
+    api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
+  ).toBe(false);
 });
 
 test("a key that exists (412) is this upload's own when it holds the same bytes, and a refusal otherwise; a 4xx is never retried", async () => {
@@ -446,6 +529,114 @@ test("a file that changed after the manifest listed it is never sent, and the ma
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
+});
+
+test("a failed step says why in a warning annotation and a line of the job's summary, and leaves the marker the fallback report looks for", () => {
+  using runner = temporaryDirectory("test-evidence-runner-");
+  const summary = join(runner.path, "summary.md");
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  reportStepFailure({
+    command: "upload",
+    error: new Error("R2 PUT iterate-ci/evidence/…/trace.zip: 500 down\n100% of tries failed"),
+    environment: { GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: runner.path },
+  });
+
+  // `%` and line breaks escaped, as the workflow command syntax asks
+  expect(log.mock).toMatchObject({
+    calls: [
+      [
+        "::warning title=Test evidence not in R2::R2 PUT iterate-ci/evidence/…/trace.zip: 500 down%0A100%25 of tries failed",
+      ],
+    ],
+  });
+  expect(readFileSync(summary, "utf8")).toBe(
+    "**Test evidence not in R2**: R2 PUT iterate-ci/evidence/…/trace.zip: 500 down\n100% of tries failed. The tests' result is unaffected.\n",
+  );
+  expect(existsSync(join(runner.path, "test-evidence-upload.reported"))).toBe(true);
+  expect(existsSync(join(runner.path, "test-evidence-write.reported"))).toBe(false);
+  log.mockRestore();
+});
+
+test("nothing the upload logs or reports carries the API token or the S3 secret derived from it", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using runner = temporaryDirectory("test-evidence-runner-");
+  await write(folder.path);
+  const output: unknown[] = [];
+  const spies = (["log", "warn", "error"] as const).map((level) =>
+    vi.spyOn(console, level).mockImplementation((...args) => output.push(...args)),
+  );
+  const runnerEnvironment = {
+    GITHUB_STEP_SUMMARY: join(runner.path, "summary.md"),
+    RUNNER_TEMP: runner.path,
+  };
+  const fails = [
+    // retried, then refused
+    cloudflare((request) =>
+      request.url.endsWith("trace.zip") ? new Response("down", { status: 502 }) : ok(),
+    ),
+    // a token Cloudflare does not verify
+    { ...cloudflare(), fetch: async () => new Response(null, { status: 401 }) },
+    // an existing key holding other bytes
+    cloudflare((request) =>
+      request.url.endsWith("trace.zip")
+        ? new Response(null, { status: request.method === "HEAD" ? 200 : 412 })
+        : ok(),
+    ),
+    // no answer at all
+    cloudflare((request) => {
+      if (request.url.endsWith("trace.zip")) throw new TypeError("fetch failed");
+      return ok();
+    }),
+  ];
+
+  for (const api of fails) {
+    const error = await uploadTestEvidence({
+      repoRoot: folder.path,
+      ...bucket,
+      apiToken,
+      ...api,
+    }).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(Error);
+    reportStepFailure({ command: "upload", error, environment: runnerEnvironment });
+    console.error(error);
+  }
+
+  const secret = createHash("sha256").update(apiToken).digest("hex");
+  const printed = [
+    ...output.map((entry) =>
+      entry instanceof Error ? `${entry.stack} ${String(entry.cause)}` : JSON.stringify(entry),
+    ),
+    readFileSync(runnerEnvironment.GITHUB_STEP_SUMMARY, "utf8"),
+  ].join("\n");
+  expect(printed).toContain("Test evidence not in R2");
+  expect(printed).not.toContain(apiToken);
+  expect(printed).not.toContain(secret);
+  for (const spy of spies) spy.mockRestore();
+});
+
+test("the summary line of an uploaded folder names its prefix, which the CI telemetry sync reads back from the job's summary", () => {
+  const prefix = "evidence/ci/trust=main/date=2026-09-24/job=7xwfmnl68l/testrun_73zz670w57/";
+  const line = uploadedSummaryLine({
+    bucketName: "iterate-ci",
+    prefix,
+    objects: 20,
+    bytes: 3_300_000,
+    retries: 1,
+  });
+  expect(line).toBe(
+    `Test evidence: \`r2://iterate-ci/${prefix}\` (20 objects, 3300000 bytes, after 1 platform-failure retries)`,
+  );
+  // Depot joins the job's step summaries in step order
+  expect(testEvidenceUploadedPrefix(`## Unit tests\n\n${line}\n`)).toBe(prefix);
+  expect(
+    testEvidenceUploadedPrefix(
+      "**Test evidence not in R2**: R2 PUT iterate-ci/evidence/ci/…: 500. The tests' result is unaffected.\n",
+    ),
+  ).toBeUndefined();
 });
 
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {

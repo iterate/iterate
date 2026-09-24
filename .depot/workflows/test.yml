@@ -97,8 +97,10 @@ jobs:
       # tree, the job attempt and every file's sha256. Neither this nor the upload decides the job;
       # the tests did.
       - name: Write the test evidence manifest
+        id: evidence-write
         if: always()
         continue-on-error: true
+        timeout-minutes: 2
         env:
           TEST_EVIDENCE_STEPS: tests=${{ steps.tests.outcome }} kit-host-tests=${{ steps.kit-host-tests.outcome }}
           TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -106,13 +108,21 @@ jobs:
           TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
       # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys. A
-      # failure is a warning and a line of the job's summary, never the job's result.
+      # cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/ copy.
+      # A failure is a warning and a line of the job's summary, never the job's result.
       - name: Upload the test evidence to R2
-        if: ${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
+        id: evidence-upload
+        if: ${{ always() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
         continue-on-error: true
+        timeout-minutes: 3
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+      # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
+      # warning and summary line here; one that reported itself is left alone.
+      - name: Report a test evidence step that could not
+        if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
+        run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow
       # artifact for the flake dashboard to pull, one per job attempt

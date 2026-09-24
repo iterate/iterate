@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
@@ -27,7 +27,9 @@ import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
  *
  * `upload` runs where a workflow sets TEST_EVIDENCE_UPLOAD to `r2`, with Doppler `_shared/preview`'s
  * CLOUDFLARE_API_TOKEN. Neither step decides the job (both are `continue-on-error`): the tests did.
- * A step that fails says so in a warning annotation and a line of the job's summary.
+ * A step that fails says so in a warning annotation and a line of the job's summary
+ * (reportStepFailure); one that fails before it can, the workflow's next step reports
+ * (scripts/ci/test-evidence-unreported.sh).
  */
 export async function writeTestEvidence(input: {
   repoRoot: string;
@@ -147,11 +149,7 @@ export async function writeTestEvidence(input: {
     },
     runner: {
       provider: "depot",
-      trust:
-        environment.GITHUB_REF === "refs/heads/main" &&
-        ["push", "schedule"].includes(environment.GITHUB_EVENT_NAME || "")
-          ? "main"
-          : "pr",
+      trust: runnerTrust({ environment, source: input.source, headSha: job.headSha, diagnostics }),
       ref: environment.GITHUB_REF || undefined,
       workflowName: job.workflowName,
       workflowRunId: job.workflowRunId,
@@ -183,6 +181,29 @@ export async function writeTestEvidence(input: {
   });
   await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
+}
+
+/**
+ * `main` for a push or schedule on refs/heads/main that tested that very commit: the files on disk
+ * are its tree, unchanged. `depot ci run` applies a laptop's changes to the checkout as a patch, so a
+ * run whose tree is not the pushed commit's is filed as `pr`, with a diagnostic saying why. Everything
+ * else is `pr`, dispatches included, since a dispatch can be told to test a pull request.
+ */
+function runnerTrust(input: {
+  environment: NodeJS.ProcessEnv;
+  source: { commit: string; dirty: boolean };
+  headSha: string | undefined;
+  diagnostics: string[];
+}): TestEvidenceManifest["runner"]["trust"] {
+  const { environment, source } = input;
+  const event = environment.GITHUB_EVENT_NAME || "";
+  if (environment.GITHUB_REF !== "refs/heads/main" || !["push", "schedule"].includes(event))
+    return "pr";
+  if (!source.dirty && source.commit === input.headSha) return "main";
+  input.diagnostics.push(
+    `filed as trust=pr: a ${event} on refs/heads/main, but the tested tree is not commit ${input.headSha}'s (checked out ${source.commit}${source.dirty ? ", changed on disk" : ""})`,
+  );
+  return "pr";
 }
 
 /**
@@ -260,14 +281,19 @@ function testEvidencePartition(manifest: TestEvidenceManifest) {
 const PLATFORM_FAILURE_RETRIES = 3;
 /** One request's ceiling: a folder's largest file, a failed spec's trace, is a few megabytes. */
 const REQUEST_TIMEOUT_MS = 60_000;
-/** The whole upload's: no retry starts after it, so a Cloudflare outage costs the job minutes, not
- *  its timeout. */
-const UPLOAD_DEADLINE_MS = 4 * 60_000;
+/** The whole upload's: no retry starts after it and the request in flight is aborted, so a Cloudflare
+ *  outage costs the job a minute and a half. The e2e job is a pull request's slowest check, and this
+ *  evidence decides nothing. */
+const UPLOAD_DEADLINE_MS = 90_000;
+/** The longest wait before a retry, whatever a 429's Retry-After asks. */
+const RETRY_WAIT_CEILING_MS = 5_000;
 
 /**
  * PUTs the folder into the CI bucket through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/):
- * every file the manifest lists, eight at a time, then the manifest, so a folder whose manifest is
- * in R2 is complete, then a copy of `tables/tests.parquet` under `tables/` for the loader.
+ * every file the manifest lists, eight at a time, then a copy of `tables/tests.parquet` under
+ * `tables/` for the loader (not for a cancelled run, whose rows stop part way), then the manifest.
+ * The manifest is the commit point: a folder, or a table's copy, whose manifest is in R2 is complete,
+ * and the loader skips a copy whose manifest is not.
  *
  * The credentials are the Cloudflare API token CI already holds (Doppler `_shared/preview`'s
  * CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
@@ -294,11 +320,13 @@ export async function uploadTestEvidence(input: {
   apiToken: string;
   fetch: typeof fetch;
   wait?: (ms: number) => Promise<void>;
+  /** Aborts the upload: the request in flight, and any retry after it. UPLOAD_DEADLINE_MS by default. */
+  deadline?: AbortSignal;
 }) {
   const context: RequestContext = {
     fetch: input.fetch,
     wait: input.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-    deadline: AbortSignal.timeout(UPLOAD_DEADLINE_MS),
+    deadline: input.deadline || AbortSignal.timeout(UPLOAD_DEADLINE_MS),
     retries: 0,
   };
   const client = new AwsClient({
@@ -359,18 +387,23 @@ export async function uploadTestEvidence(input: {
       manifest.files.slice(start, start + 8).map((file) => putFile(`${prefix}${file.path}`, file)),
     );
   }
+  const testsTable =
+    manifest.result === "cancelled"
+      ? undefined
+      : manifest.files.find(
+          (file) => file.path === relative(testEvidencePaths.root, testEvidencePaths.testsTable),
+        );
+  const tableKey = testsTable && testEvidenceTableKey(manifest);
+  if (testsTable && tableKey) await putFile(tableKey, testsTable);
   const manifestPath = relative(testEvidencePaths.root, testEvidencePaths.manifest);
   await put(`${prefix}${manifestPath}`, manifestPath, manifestBytes, sha256(manifestBytes));
-  const testsTable = manifest.files.find(
-    (file) => file.path === relative(testEvidencePaths.root, testEvidencePaths.testsTable),
-  );
-  const tableKey = testsTable ? testEvidenceTableKey(manifest) : undefined;
-  if (testsTable && tableKey) await putFile(tableKey, testsTable);
+  const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
   return {
     prefix,
     tableKey,
-    files: manifest.files.length + 1,
-    bytes: manifest.files.reduce((total, file) => total + file.bytes, manifestBytes.byteLength),
+    /** Every PUT: the listed files, the table's copy when there is one, and the manifest. */
+    objects: manifest.files.length + (testsTable ? 1 : 0) + 1,
+    bytes: bytes + (testsTable?.bytes ?? 0) + manifestBytes.byteLength,
     retries: context.retries,
   };
 }
@@ -378,7 +411,7 @@ export async function uploadTestEvidence(input: {
 type RequestContext = {
   fetch: typeof fetch;
   wait: (ms: number) => Promise<void>;
-  /** Aborts at UPLOAD_DEADLINE_MS: the request in flight, and any retry after it. */
+  /** The upload's deadline: aborts the request in flight, and no retry starts after it. */
   deadline: AbortSignal;
   /** Platform-failure retries so far, for the step summary. */
   retries: number;
@@ -412,8 +445,9 @@ const TokenVerification = z.object({ result: z.object({ id: z.string().min(1) })
  * One request to Cloudflare, sent again when the failure is Cloudflare's: a 5xx, a 429, or no
  * answer (a reset connection, REQUEST_TIMEOUT_MS). Each retry is a warn whose `event` is
  * `test-evidence.platform-failure-retry` (docs/engineering-invariants.md), after a wait of 1, 2 and
- * then 4 seconds, or what a 429's Retry-After asks, up to 30. After PLATFORM_FAILURE_RETRIES, or at
- * the upload's deadline, the failure is thrown. Every other answer, a 4xx included, is the caller's.
+ * then 4 seconds, or what a 429's Retry-After asks, up to RETRY_WAIT_CEILING_MS. After
+ * PLATFORM_FAILURE_RETRIES, or at the upload's deadline, the failure is thrown. Every other answer, a
+ * 4xx included, is the caller's.
  */
 async function sendRetryingPlatformFailures(
   what: string,
@@ -439,7 +473,10 @@ async function sendRetryingPlatformFailures(
       throw new Error(
         `${what}: ${failure.status ?? "no answer"} ${failure.answer} (after ${attempt - 1} retries)`,
       );
-    const waitMs = Math.min((failure.retryAfterSeconds ?? 2 ** (attempt - 1)) * 1000, 30_000);
+    const waitMs = Math.min(
+      (failure.retryAfterSeconds ?? 2 ** (attempt - 1)) * 1000,
+      RETRY_WAIT_CEILING_MS,
+    );
     context.retries++;
     console.warn({
       event: "test-evidence.platform-failure-retry",
@@ -525,22 +562,77 @@ async function loadFlakeRecords(directory: string) {
   return lines.flat();
 }
 
-/** A line on the job's summary page (GITHUB_STEP_SUMMARY, which Depot CI provides). */
-function stepSummary(line: string) {
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
+/**
+ * The job summary's line for a folder that reached R2. The hourly CI telemetry sync reads it back
+ * from each job attempt's summary (testEvidenceUploadedPrefix), so the attempts whose folder never
+ * arrived add up in PostHog.
+ */
+export function uploadedSummaryLine(input: {
+  bucketName: string;
+  prefix: string;
+  objects: number;
+  bytes: number;
+  retries: number;
+}) {
+  const retries = input.retries > 0 ? `, after ${input.retries} platform-failure retries` : "";
+  return `Test evidence: \`r2://${input.bucketName}/${input.prefix}\` (${input.objects} objects, ${input.bytes} bytes${retries})`;
 }
 
-/** A warning annotation on the job (GitHub's workflow command syntax, which Depot CI reads). */
-function warningAnnotation(title: string, message: string) {
+/** The prefix an uploadedSummaryLine in a job attempt's summary names; undefined when it has none. */
+export function testEvidenceUploadedPrefix(summary: string) {
+  return /^Test evidence: `r2:\/\/[^/`]+\/(evidence\/[^`]+)`/mu.exec(summary)?.[1];
+}
+
+/**
+ * The CI jobs that write and upload a test evidence folder, as Depot keys them (`<file>:<job>`).
+ * scripts/ci/depot-workflows.test.ts holds this to the workflows.
+ */
+export const testEvidenceJobs = ["test.yml:test", "preview-os.yml:e2e", "main-os-e2e.yml:e2e"];
+
+/** A failed step's warning title, which its summary line and the fallback report's repeat. */
+export const stepFailureTitles = {
+  write: "No test evidence manifest",
+  upload: "Test evidence not in R2",
+};
+
+/**
+ * A failed step's report. The step is `continue-on-error`, so the job's result stays the tests';
+ * this makes the missing evidence visible on the run's page: a warning annotation and a line of the
+ * job's summary saying why. Then a marker in the runner's temporary directory says it reported, so
+ * the workflow's next step (scripts/ci/test-evidence-unreported.sh), which reports a step that
+ * failed before it got here (Doppler, pnpm, the step's timeout), does not report it twice.
+ */
+export function reportStepFailure(input: {
+  command: keyof typeof stepFailureTitles;
+  error: unknown;
+  /** The step's: GITHUB_STEP_SUMMARY and RUNNER_TEMP. */
+  environment: NodeJS.ProcessEnv;
+}) {
+  const title = stepFailureTitles[input.command];
+  const message = describeError(input.error);
   // a message's own `%` and line breaks, escaped as the workflow command syntax asks
   const data = message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
   console.log(`::warning title=${title}::${data}`);
+  stepSummary(input.environment, `**${title}**: ${message}. The tests' result is unaffected.`);
+  writeFileSync(
+    join(input.environment.RUNNER_TEMP || tmpdir(), `test-evidence-${input.command}.reported`),
+    `${message}\n`,
+  );
+}
+
+/** A line on the job's summary page (GITHUB_STEP_SUMMARY, which Depot CI provides). */
+function stepSummary(environment: NodeJS.ProcessEnv, line: string) {
+  if (environment.GITHUB_STEP_SUMMARY) appendFileSync(environment.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
 
 if (isMainModule(import.meta.url)) {
   const repoRoot = process.cwd();
   const command = process.argv[2];
   const bucket = ciBucketEnvs.ci;
+  if (command !== "write" && command !== "upload") {
+    console.error("Usage: pnpm tsx scripts/ci/test-evidence.ts write [--cancelled] | upload");
+    process.exit(2);
+  }
   try {
     if (command === "write") {
       const manifest = await writeTestEvidence({
@@ -556,7 +648,7 @@ if (isMainModule(import.meta.url)) {
         `[test-evidence] ${manifest.testRunId} ${manifest.result}: ${manifest.files.length} files, ${bytes} bytes, tree ${manifest.source.tree}${manifest.source.dirty ? " (not the commit's)" : ""}`,
       );
       for (const diagnostic of manifest.diagnostics) console.log(`[test-evidence] ${diagnostic}`);
-    } else if (command === "upload") {
+    } else {
       const { CLOUDFLARE_API_TOKEN } = process.env;
       if (!CLOUDFLARE_API_TOKEN)
         throw new Error("upload needs CLOUDFLARE_API_TOKEN (Doppler _shared/preview)");
@@ -567,23 +659,11 @@ if (isMainModule(import.meta.url)) {
         apiToken: CLOUDFLARE_API_TOKEN,
         fetch,
       });
-      const where = `r2://${bucket.bucketName}/${uploaded.prefix}`;
-      const retries =
-        uploaded.retries > 0 ? `, after ${uploaded.retries} platform-failure retries` : "";
-      console.log(`[test-evidence] ${where}`);
-      stepSummary(
-        `Test evidence: \`${where}\` (${uploaded.files} files, ${uploaded.bytes} bytes${retries})`,
-      );
-    } else {
-      throw new Error("Usage: pnpm tsx scripts/ci/test-evidence.ts write [--cancelled] | upload");
+      console.log(`[test-evidence] r2://${bucket.bucketName}/${uploaded.prefix}`);
+      stepSummary(process.env, uploadedSummaryLine({ bucketName: bucket.bucketName, ...uploaded }));
     }
   } catch (error) {
-    // The step is `continue-on-error`, so the job's result stays the tests'; this makes the
-    // missing evidence visible on the run's page as well as in the log.
-    const title = command === "upload" ? "Test evidence not in R2" : "No test evidence manifest";
-    const message = describeError(error);
-    warningAnnotation(title, message);
-    stepSummary(`**${title}**: ${message}. The tests' result is unaffected.`);
+    reportStepFailure({ command, error, environment: process.env });
     console.error(error);
     process.exitCode = 1;
   }

@@ -9,6 +9,10 @@
  * workflow's own outcome or duration, a cancelled workflow skips it, and it would boot one more
  * runner per workflow run. One hourly job reads everything that settled from Depot's API instead.
  *
+ * The attempts of the jobs that upload a test evidence folder (docs/test-evidence.md) also say
+ * whether it reached R2: the upload step's line in the attempt's summary names its prefix, so an
+ * attempt whose folder never arrived, for whatever reason, is `test_evidence_uploaded: false`.
+ *
  * A sync reports what finished in [the previous successful scheduled sync's creation, its own
  * creation), both less `settleMs`, so successful syncs tile time with no stored cursor and a failed
  * sync leaves its window to the next one. Event UUIDs derive from Depot's execution and attempt IDs, so PostHog
@@ -26,6 +30,7 @@ import { osEnvs } from "../../envs.ts";
 import { DEPOT_ORG, depotCiApi, mapConcurrent } from "./depot.ts";
 import { createOctokit } from "./github.ts";
 import { durationMs, sendPostHogEvents, systemEvent } from "./posthog-events.ts";
+import { testEvidenceJobs, testEvidenceUploadedPrefix } from "./test-evidence.ts";
 
 const repository = "iterate/iterate";
 /** Room for a Depot record that becomes visible after the finish time it carries. */
@@ -119,7 +124,14 @@ async function main() {
     }),
   );
 
-  const events = ciTelemetryEvents({ window, runs, workflows, sources, runners });
+  const evidence = new Map(
+    await mapConcurrent(testEvidenceAttemptIds(runs, window), 8, async (attemptId) => {
+      const summary = JobSummary.parse(await depot("GetJobSummary", { attemptId }));
+      return [attemptId, { prefix: testEvidenceUploadedPrefix(summary.markdown) }] as const;
+    }),
+  );
+
+  const events = ciTelemetryEvents({ window, runs, workflows, sources, runners, evidence });
   const counts = Object.fromEntries(
     [...new Set(events.map(({ event }) => event))].map((name) => [
       name,
@@ -154,11 +166,10 @@ export function ciTelemetryEvents(input: {
   workflows: WorkflowDetail[];
   sources: Map<string, RunSource>;
   runners: Map<string, Map<string, string>>;
+  /** Each test evidence job attempt's (testEvidenceAttemptIds): the prefix its summary names. */
+  evidence?: Map<string, { prefix: string | undefined }>;
 }) {
-  const inWindow = (time: string) => {
-    const at = Date.parse(time);
-    return at >= input.window.start && at < input.window.end;
-  };
+  const inWindow = (time: string) => finishedIn(input.window, time);
   const context = (
     run: RunMetrics["run"],
     workflow: { workflowId: string; workflowPath: string; name: string },
@@ -217,6 +228,7 @@ export function ciTelemetryEvents(input: {
           // `test.yml:test`, `kit-firmware.yml:build-firmware:matrix-5`, and `_inline_0.yaml:e2e`
           // for a workflow file run with `depot ci run`, which has no workflow path
           const jobName = job.jobKey.slice(job.jobKey.indexOf(":") + 1);
+          const evidence = input.evidence?.get(attempt.attemptId);
           return [
             systemEvent(
               "ci job attempt finished",
@@ -238,6 +250,11 @@ export function ciTelemetryEvents(input: {
                 queue_duration_ms: durationMs(attempt.createdAt, attempt.startedAt),
                 duration_ms: durationMs(attempt.startedAt, attempt.finishedAt),
                 url: `https://depot.dev/orgs/${DEPOT_ORG}/workflows/${workflow.workflowId}?job=${job.jobId}&attempt=${attempt.attemptId}`,
+                ...(evidence && {
+                  test_run_id: `testrun_${attempt.attemptId}`,
+                  test_evidence_uploaded: !!evidence.prefix,
+                  test_evidence_prefix: evidence.prefix,
+                }),
               },
               attempt.finishedAt,
             ),
@@ -247,6 +264,29 @@ export function ciTelemetryEvents(input: {
     ),
   );
   return [...workflowRuns, ...jobAttempts];
+}
+
+/**
+ * The attempts that finished in the window of the jobs that upload a test evidence folder
+ * (testEvidenceJobs), whose summaries the sync reads.
+ */
+export function testEvidenceAttemptIds(runs: RunMetrics[], window: { start: number; end: number }) {
+  return runs.flatMap(({ workflows }) =>
+    workflows.flatMap(({ jobs }) =>
+      jobs
+        .filter(({ job }) => testEvidenceJobs.includes(job.jobKey))
+        .flatMap(({ attempts }) =>
+          attempts
+            .filter(({ attempt }) => finishedIn(window, attempt.finishedAt))
+            .map(({ attempt }) => attempt.attemptId),
+        ),
+    ),
+  );
+}
+
+function finishedIn(window: { start: number; end: number }, time: string) {
+  const at = Date.parse(time);
+  return at >= window.start && at < window.end;
 }
 
 /** Depot's settled workflow statuses in the conclusion words its job attempts use. */
@@ -493,5 +533,8 @@ const WorkflowDetail = z.object({
   ),
 });
 type WorkflowDetail = z.infer<typeof WorkflowDetail>;
+
+/** GetJobSummary's answer for one attempt: its steps' summaries joined, empty when none wrote one. */
+const JobSummary = z.object({ markdown: z.string().default("") });
 
 if (isMainModule(import.meta.url)) await main();
