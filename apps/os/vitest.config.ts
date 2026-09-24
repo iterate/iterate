@@ -1,5 +1,6 @@
-// THE vitest config — the ONE way to run everything (`pnpm test`); pick a lane with `--project`.
-// Five PROJECTS (vitest's own word), each a genuinely different execution context:
+// THE vitest config; pick a lane with `--project` (`pnpm test` runs unit + workers, `pnpm e2e` and
+// `pnpm bench` the other two). Four PROJECTS (vitest's own word), each a genuinely different
+// execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker

@@ -1,5 +1,5 @@
 // rpc-stubs-lend-recall-and-offline.e2e.test.ts — the two-layer stub machinery LIVE
-// (src/context/rpc-stubs.ts + rpc-stubs.ts + iterate-context.ts). TWO different
+// (src/context/rpc-stubs.ts + iterate-context.ts). TWO different
 // things, two lifetimes: an RPC STUB is physical — `itx.provide(match, stub)` LENDS a client's rpc
 // stub to the `itx.rpcStubs` built-in under the key = the canonical match (it lives until the handle
 // is disposed or its session ends); an ITX-EXPRESSION REWRITE RULE is pure data —
@@ -64,7 +64,7 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
   ]);
 
   // Second LIVE session, same key → the newest transport wins (when its pager opens,
-  // rpc-stub-directory drops every OTHER same-key pager with reason "replaced"), and the provide
+  // `RpcStubDirectory` drops every OTHER same-key pager with reason "replaced"), and the provide
   // appends its rule event like any other — NO dedupe: the log grows by exactly one
   // rewrite-rule-configured, and the MAP still holds exactly one rule at the match.
   await openItx(ctx).provide("itx.dupTool", new Tools("two"));
@@ -124,7 +124,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
     "the stub gone from presence",
     async () => !(await presence(observer)).includes("itx.ghosttool"),
   );
-  // THE RULE IS SESSION-SCOPED: capnweb disposed the ProvidedRpcStub handle with the session, and
+  // THE RULE IS SESSION-SCOPED: capnweb disposed the `RewriteRuleHandleRpcTarget` with the session, and
   // its recall appended `rewrite-rule-configured { match, target: itx.builtins.<match…> }` — the
   // removal spelling, restoring the row to the platform default beneath (none here). Calls on the
   // match are default-deny again — NO_ITX_EXPRESSION_MATCH, never a lingering offline row.
@@ -307,7 +307,7 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
 });
 
 // Concurrent provides at one key collapse to ONE live transport. The reconciliation happens when
-// each pager opens (rpc-stub-directory drops every OTHER same-key pager then, reason "replaced"),
+// each pager opens (`RpcStubDirectory` drops every OTHER same-key pager then, reason "replaced"),
 // so at any settled moment exactly one transport carries the key. The rule table is a MAP: four
 // provides append four identical rule events, and the map holds exactly ONE rule at the match.
 test("concurrent provides at one key collapse to ONE live transport; the map holds ONE rule at the match and the survivor serves", async () => {
@@ -355,13 +355,13 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
   await until("the lent subscriber has a transport", async () =>
     (await presence(observer)).includes(rpcStubKey),
   );
-  // the ROW landed (awaited configure); a subscription is NOT a rewrite rule (config-funnel row first)
+  // the ROW landed (awaited configure); a subscription is NOT a rewrite rule
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([subscriptionName]);
   expect(await rpcStubRewriteRuleMatches(observer)).toEqual([]);
 
   await observer.subscribe({ name: subscriptionName, target: null });
 
-  // `target: null` = remove the row (awaited — the table is back to the config baseline on return)
+  // `target: null` = remove the row (awaited — the table is empty again on return)
   // + recall this session's stub under it (the relay's dispose closes the pager; the DO drops the
   // transport a beat later — poll presence). Two lifetimes, one explicit exit.
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
@@ -387,7 +387,6 @@ test("disposing a SubscriptionHandleRpcTarget removes its row and recalls its st
   await until("the scoped subscriber delivered", () => c.delivered === 1);
 
   subscription[Symbol.dispose](); // a wire release: the server disposes the handle → row removed, stub recalled
-  // the scoped row gone = the table back to the config baseline (the config-funnel row is permanent)
   await until("the scoped row gone", async () => (await subscriptions(observer)).length === 0);
   await until("the stub gone from presence", async () => (await presence(observer)).length === 0);
   await observer.append({ type: "mark" });

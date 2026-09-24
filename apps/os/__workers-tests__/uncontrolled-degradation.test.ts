@@ -165,8 +165,8 @@ export class FineDurableObject extends FacetDurableObject {
 
 // ═══════════════════════════════ A. THE CELL CAP ═══════════════════════════════
 
-/** A rewrite-rule target that carries a `workers.get({ source })` spec inline: post-M1 a HOSTED facet's
- *  source is elided from core state, but a `workers.get` source is not (oom-audit.md item 6) — so
+/** A rewrite-rule target that carries a `workers.get({ source })` spec inline: a HOSTED facet's
+ *  source is elided from core state, but a `workers.get` source is not — so
  *  each such rule adds its whole source to the core checkpoint's state cell. */
 const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
   "itx",
@@ -179,7 +179,7 @@ const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
 // (REDUCE_CHECKPOINT_TOO_LARGE — ReduceCheckpointTable measures the state BEFORE the write), naming
 // the cell, the size, the ceiling and "nothing was written". BORN RED: SQLite's own `string or blob
 // too big: SQLITE_TOOBIG` crossed the hop with no code, no cap named, from a write already inside
-// the transaction (flipped with the one-row checkpoint, BUILD-LOG 2026-09-04). The ceiling is the
+// the transaction (flipped with the one-row checkpoint). The ceiling is the
 // documented production cell (2 MB), so local workerd (4 MiB) and the edge now refuse alike.
 test("A1 — core state over the checkpoint ceiling: the configure is refused coded, REDUCE_CHECKPOINT_TOO_LARGE, in our words", async () => {
   const ctx = "prj_ud_corecap_message";
@@ -490,7 +490,7 @@ test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its off
 });
 
 // WHAT IT DIES OF: the same SyntaxError — from the CONSTRUCTOR. A core contract version bump
-// discards the checkpoint (`readReduceCheckpoint` gates the state on `reducerVersion`) and
+// discards the checkpoint (src/stream/stream.ts gates the state on `reducerVersion`) and
 // re-reduces the log from offset 0 in `new Stream(…)`; the re-reduce pages `read`, `read` dies at the
 // bad cell, the constructor throws, and it throws again on every wake — `runInDurableObject`
 // included, so there is no door left to repair the row through. Staged here by writing a foreign
@@ -523,7 +523,7 @@ test("C3 — that row under a core version bump: the constructor's re-reduce ski
 // line — never fatal. BORN RED: the constructor read mark 0, decided the store was VIRGIN,
 // re-appended `stream/created` over offset 1 and died of `UNIQUE constraint failed: events.offset`
 // on EVERY wake, every door, `runInDurableObject` included — bricked, no operator door. Flipped
-// with the SQL storage module (BUILD-LOG 2026-09-04).
+// with the SQL storage module.
 test("D1 — the core checkpoint row lost: the constructor re-derives the mark from the rows, re-reduces the log, and the context wakes", async () => {
   const ctx = "prj_ud_cursor_lost";
   const s = stub(ctx);

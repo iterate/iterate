@@ -295,7 +295,7 @@ test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fe
 // plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
 // provider's genuine 101 dies there:
 //   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialRpcStubFetch)
-// EXPECTED: parity with capnweb providers — 101 + echo. Fix directions in the session notes: the
+// EXPECTED: parity with capnweb providers — 101 + echo. Fix directions: the
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
 test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
@@ -323,7 +323,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
 // doctrine ruling ("lent stubs are invocation-scoped; detached fetch-shaped things must be LOADED
 // code — itx.workers.get({ source: ... }) / a named durable facet, both of which already serve WS")
-// is an owner call — see the session notes.
+// is an owner call.
 test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
   const itx = openItx(freshCtx("dynlivex"));
   expect(await runProvider(itx, "provide")).toBe("provided");

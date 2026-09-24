@@ -318,8 +318,8 @@ test("a cold context SUPERSEDES a stale physical alarm nothing durable wants: it
   });
   await evictDurableObject(s);
   await s.invoke("itx.schedules.list()");
-  // The stale time is gone at once (the constructor's reconcile); what may stand is the wake
-  // record's delivery claim, 20 s out, until the config row acks it, and the residency watchdog's.
+  // The stale time is gone at once (the constructor's reconcile); what may stand is a later one, the
+  // residency watchdog's.
   const alarm = await runInDurableObject(s, async (_instance, state) => state.storage.getAlarm());
   expect(alarm === null || alarm > deadline).toBe(true);
   await until(

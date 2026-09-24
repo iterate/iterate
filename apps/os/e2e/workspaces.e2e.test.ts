@@ -14,9 +14,8 @@
 // (support/fake-git-server.ts) behind a FAKE `itx.cfArtifacts` proxy lent to each repo's context
 // (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
 // the real wire codec to it. Those rows are `localOnly` — the fake remote listens on THIS machine's
-// loopback, which a deployed worker's egress cannot reach (403); against the deployed worker the
-// last test runs the same story on real Artifacts (`WORKER_BASE_URL=https://os.iterate.com pnpm e2e
-// workspaces`).
+// loopback, which a deployed worker's egress cannot reach (403). The "against real Artifacts" row runs
+// the same story on the real binding in every lane (the local worker binds Artifacts too).
 
 import { expect, test } from "vitest";
 import {

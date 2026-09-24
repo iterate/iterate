@@ -23,7 +23,7 @@ const memberships = async (api: any) =>
 const record = async (organization: any) =>
   (await organization.facets.get("organization").liveSnapshot()).state;
 
-/** A person's reach as the edge memoizes it (src/control-plane/edge.ts `REACH_MEMO_MS`): a request
+/** A person's reach as the edge memoizes it (src/control-plane/edge.ts, five seconds): a request
  *  drops the memo on the isolate it was made on, so ANOTHER person's socket — possibly on another
  *  isolate of a deployed worker — may answer from a memo up to five seconds old. A cross-session
  *  observation is bounded by that plus the landing, well under the default twenty. */

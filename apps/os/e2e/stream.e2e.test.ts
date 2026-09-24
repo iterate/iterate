@@ -21,8 +21,8 @@
 //     boundary survives (the JSON is sliced by UTF-16 code units)
 //   • `waitForEvent` through a LOADED worker's `env.ITX.get()` — the scope's door waits on the DO and
 //     returns the committed event (the Workers-RPC lane no other suite drives)
-//   • OPT-IN, deployed only (RUN_WAKE_LOOP_PROBE=1): the self-wake billing control — a stuck cursor
-//     delivery on a dormant context self-wakes on the DO's alarm and the circuit breaker halts it
+//   • OPT-IN, deployed only (RUN_WAKE_LOOP_PROBE=1): the self-wake trace — a stuck cursor delivery on
+//     a dormant context self-wakes on the DO's alarm, and the probe prints each wake's story
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";

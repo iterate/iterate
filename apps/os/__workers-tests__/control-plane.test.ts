@@ -76,7 +76,7 @@ const organizationState = async (session: Session, orgId: string) =>
   ).state;
 /** `thunk` is REFUSED with `code`: an entity's refusal crosses its own log as
  *  `request-failed { code }` and is rethrown coded at the edge; the edge's own refusal is coded
- *  before anything lands. try/catch, not `.rejects`: a capnweb stub is a custom thenable. */
+ *  before anything lands. */
 async function refused(
   thunk: () => Promise<unknown>,
   code: string,

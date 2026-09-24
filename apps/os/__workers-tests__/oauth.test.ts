@@ -238,7 +238,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
 }
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
-  // CIMD is the console's own path (browser-session.ts), but standard MCP clients (the MCP Inspector,
+  // CIMD is the apps' own path (iterate/next/app-server.ts), but standard MCP clients (the MCP Inspector,
   // Claude's connector) require dynamic registration — so both are advertised, on every deployment.
   const metadata = await (
     await call("/.well-known/oauth-authorization-server")

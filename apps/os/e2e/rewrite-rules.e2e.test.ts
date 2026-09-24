@@ -23,7 +23,7 @@
 //     pinned args are consumed, a client's stub can sit behind a pinned match, un-set by that spelling
 //   • the table under concurrency: 5 re-sets of ONE match leave one row, the last committed; a
 //     NON-CANONICAL match is stored CANONICAL; 300 rules keep the newest rule and a built-in root under
-//     150 ms; malformed rule events are skipped without wedging later rules
+//     150 ms; malformed rule events are refused at the append boundary
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";

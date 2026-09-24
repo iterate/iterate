@@ -138,8 +138,7 @@ localSequential(
     // ours: every push to that stub is an RPC call whose arguments live in the DO until it settles,
     // and a stalled reader never settles one — so the DO's in-flight ledger (DELIVERY_IN_FLIGHT_BUDGET_CHARS,
     // 32 MiB) DROPS the pushes past it with a `delivery.push.dropped` warn naming the budget, keeping
-    // the DO's memory bounded whatever the edge and the socket absorb (BUILD-LOG 2026-09-04; before the
-    // ledger this row pinned "no warn at all" — 60 MiB silently in flight). And the close half (close →
+    // the DO's memory bounded whatever the edge and the socket absorb. And the close half (close →
     // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing the
     // key; capnweb disposes the session's SubscriptionHandleRpcTarget → the ROW is removed) is proven live below.
     const ctx = freshCtx("overflow");

@@ -16,7 +16,7 @@
 //     remote never pins the context DO) — behind a rewrite rule by name; the remote is THIS worker's own
 //     /api (another project; the admin bearer on the POST), so the proof runs identically locally and deployed
 //   • DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining: `facets.get(name, spec).demo.timer
-//     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (context/expression.ts),
+//     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (iterate/next/expression.ts),
 //     never a bare Proxy (NonPipelinable over Workers RPC, workerd#6873) — and the callback fires back
 //     inside the caller, on the capnweb lane AND from worker B via env.ITX.get()
 //   • Kenton's persistent-stub machinery IN USE: a hosted DO stores its live itx handle (the

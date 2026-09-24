@@ -32,9 +32,8 @@ async function userSession(email: string) {
 }
 
 /** Assert `thunk` is REFUSED with the FORBIDDEN code (the code the refusal must carry, so a broken
- *  pipeline or a typo never passes as a refusal). Explicit try/catch, not `expect().rejects`,
- *  because a capnweb stub is a custom thenable `.rejects` doesn't handle. Under a `test.fails` the
- *  thunk resolving is what keeps the expected-fail passing while that gap is open. */
+ *  pipeline or a typo never passes as a refusal). Under a `test.fails` the thunk resolving is what
+ *  keeps the expected-fail passing while that gap is open. */
 async function refuses(thunk: () => Promise<unknown>): Promise<void> {
   let refusal: unknown;
   try {
@@ -337,7 +336,7 @@ describe("security requirements — the global namespace is not navigable", () =
     await refuses(() => a.user.invoke("itx.rootSpy()"));
   });
 
-  test("a subscription written into your own context cannot append into another user's: the kernel's delivery runs under no principal, but its one hop is the config funnel — the row HALTS", async () => {
+  test("a subscription written into your own context cannot append into another user's: the kernel's delivery runs under no principal, so the append is refused — the row HALTS", async () => {
     const a = await userSession("launder-a@sec.test");
     const b = await userSession("launder-b@sec.test");
     const bId = (await b.whoami()).actor;

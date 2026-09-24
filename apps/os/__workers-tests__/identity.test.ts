@@ -201,7 +201,7 @@ test("an email alone never makes a session: a code follows it; only the administ
 });
 
 test("verified Google identity adopts a fixture account once and cannot take another linked identity", async () => {
-  // the rules are the control-plane processor's (src/control-plane/processor.ts `#linkIdentity`)
+  // the rules are the control plane's (src/control-plane/catalog.ts `linkIdentity`)
   const registry = controlPlane();
   const fixture = await registry.ensureUser("fixture@identity.test");
   expect(fixture).toEqual({ id: expect.stringMatching(/^user_/), email: "fixture@identity.test" });

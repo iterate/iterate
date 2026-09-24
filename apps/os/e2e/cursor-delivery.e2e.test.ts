@@ -347,9 +347,7 @@ test("the view: a push target's row has NO cursor; a resumed fact for an unknown
   expect(before.find((r: { name: string }) => r.name === "conny").cursor).toBeUndefined(); // push target: no cursor
   const [fact] = await append(itx, { type: RESUMED, payload: { name: "never-was" } });
   expect(fact.offset).toBeGreaterThan(0); // not refused — a fact nobody reduces into a row
-  // the reduce ignored never-was: no row was created for it and conny's row is untouched. (config,
-  // the funnel's '*'-consuming birth subscription, legitimately advances its own cursor as this very
-  // fact commits — that is not part of "changes nothing".)
+  // the reduce ignored never-was: no row was created for it and conny's row is untouched.
   const after = await subscriptions(itx);
   expect(after.map((r: { name: string }) => r.name).sort()).toEqual(
     before.map((r: { name: string }) => r.name).sort(),

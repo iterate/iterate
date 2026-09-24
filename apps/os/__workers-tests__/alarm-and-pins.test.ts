@@ -351,7 +351,7 @@ test(
     await s.append({ type: "a/1" }); // the push materializes the facet
     await new Promise((r) => setTimeout(r, 300));
     await snapCounter(ctx); // and a direct facet call
-    await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
+    await until("no alarm owed", async () => (await owedAlarmAt(ctx)) === null);
     expect(await owedAlarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: nothing owed
     // A borrowed stub DOES pin the actor — and still arms nothing: a pin is memory, released by a
     // timer that is memory too (the stub keeps the actor resident until it fires).
@@ -391,7 +391,7 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   await enableCounter(ctx); // a "*" facet: every incarnation's wake record is pushed to it
   await s.append({ type: "a/1" });
   await new Promise((r) => setTimeout(r, 300));
-  await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
+  await until("no alarm owed", async () => (await owedAlarmAt(ctx)) === null);
   expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet is owed nothing: it is not a pin
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
@@ -424,10 +424,10 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   expect((await snapCounter(ctx)).state.n).toBe(await durableCount(ctx)); // the wake record reached the "*" facet exactly once
 });
 
-test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake record to the config row, acks, and ends with no alarm — one woken per incarnation, never a second", async () => {
+test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm — one woken per incarnation, never a second", async () => {
   const ctx = "prj_q_wake_no_loop";
   const s = stub(ctx);
-  await s.invoke("itx.schedules.list()"); // born: created, woken, the config row
+  await s.invoke("itx.schedules.list()"); // born: created, woken
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
@@ -447,7 +447,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
   const woken = await wokens();
   expect(woken).toHaveLength(before + 1);
   expect(woken.at(-1)!.payload).toMatchObject({ reason: "alarm" });
-  // Its own wake record delivered and acked, nothing pinned: no alarm — and none appears.
+  // Nothing pinned: no alarm — and none appears.
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   await new Promise((r) => setTimeout(r, 1_500));
   expect(await owedAlarmAt(ctx)).toBeNull();
@@ -460,8 +460,8 @@ test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscr
   await clientItx.provide("itx.p0", new Echo(0));
   const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   // The first borrow through a PUSH: a live "*" subscriber's callback is lent, and the commit that
-  // pushes to it acks the config row meanwhile — a reconcile lands while the stub's first call is
-  // still in flight, with the borrow already counted.
+  // pushes to it lands a reconcile while the stub's first call is still in flight, with the borrow
+  // already counted.
   const seen: unknown[] = [];
   await clientItx.subscribe({
     name: "live",
@@ -471,7 +471,7 @@ test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscr
   await stub(ctx).append({ type: "mark" });
   expect(await caller.invoke("itx.p0.echo('first')")).toBe("echo-0:first"); // and a direct borrow
   await new Promise((r) => setTimeout(r, 800)); // an alarm armed for the borrow would show by now
-  await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
+  await until("no alarm owed", async () => (await owedAlarmAt(ctx)) === null);
   expect(await owedAlarmAt(ctx)).toBeNull();
   const ring = (
     (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {

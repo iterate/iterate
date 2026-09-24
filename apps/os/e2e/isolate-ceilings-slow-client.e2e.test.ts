@@ -8,9 +8,8 @@ import { deployedOnly } from "./support/project-host.ts";
 
 // A stalled live subscriber (a callback that never returns) no longer resets the PRODUCER: past the
 // DO's in-flight budget (subscription-delivery.ts DELIVERY_IN_FLIGHT_BUDGET_CHARS) its pushes are
-// DROPPED with a warn (the client heals by read), so the producer floods on. BORN RED: each
-// fire-and-forget push stayed in flight, retaining its bytes on the DO until it reset at ~125 × 1 MiB
-// (flipped 2026-09-04, the per-context ledger).
+// DROPPED with a warn (the client heals by read), so the producer floods on. Without that budget each
+// fire-and-forget push stays in flight, retaining its bytes on the DO until it resets at ~125 × 1 MiB.
 deployedOnly(
   "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
   { timeout: 300_000 },
