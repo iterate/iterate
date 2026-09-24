@@ -89,6 +89,8 @@ export async function serveDepotArtifact(
   const reader = new Reader(result.url);
   reader.size = result.artifact.sizeBytes;
   reader.readUint8Array = async (offset, length) => {
+    // Entry data arrives in `chunkSize` reads (configured below), so only a ZIP directory this
+    // large, read in one piece, reaches the cap.
     if (length > 8 * 1024 * 1024) throw new Error("Artifact ZIP directory exceeds 8 MiB");
     const end = Math.min(offset + length, reader.size) - 1;
     const response = await fetchArtifact(result.url, {

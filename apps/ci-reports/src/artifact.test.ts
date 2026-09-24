@@ -111,6 +111,18 @@ test("reading one file in a large report only downloads ZIP metadata and that fi
   ).toBeLessThan(20);
 });
 
+test("an entry larger than the 8 MiB single-read cap streams whole in chunked reads", async () => {
+  const video = randomBytes(12 * 1024 * 1024);
+  await using depot = await depotServer({ "video.webm": video });
+  depot.data.artifact.name = "public-report";
+  const response = await serveDepotArtifact(new Request(`${reportUrl}/video.webm`), {
+    token: "secret",
+    fetch: depot.fetch,
+  });
+  expect(response).toMatchObject({ status: 200 });
+  expect(Buffer.from(await response.arrayBuffer()).equals(video)).toBe(true);
+});
+
 test("nested reports, binary attachments, HEAD and explicit downloads retain file semantics", async () => {
   const binary = new Uint8Array([137, 80, 78, 71, 0, 255, 128]);
   await using depot = await depotServer({
