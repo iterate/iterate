@@ -582,16 +582,15 @@ every PR wait for it. The numbers live in `e2e-policy/budgets.ts`.
 | `E2E_SLOW_ROW_TIMEOUT_MS`    | 300s  | The timeout of a row tagged `slow`.                                                                                                                                                |
 | `UNIT_ROW_WARN_MS`           | 10s   | The Test job's telemetry finalizer prints each unit or Workers row that ran longer and is not in `UNIT_ROW_WARN_EXEMPTIONS`, and each entry no row needs any more. A warning only. |
 
-`scripts/ci/e2e-policy.test.ts`, in the Test job, reads every e2e row with
-the TypeScript parser and fails when a row that runs on PRs declares a timeout
-over the ceiling or waits a fixed time over 30s. A run the preview script
-starts holds every row to the same ceiling at runtime too
-(`e2e/support/setup.ts`): a row whose timeout is over it fails before it
-starts, which catches a timeout the parser cannot read. A row gated on an opt-in
-variable (`RUN_*`, `E2E_REAL_MODELS`) or on a local worker (`localOnly`) is
-out of its scope: the PR's E2E tests job, against the preview, never starts it. The
-same file pins the run's parallelism (`--sequence.concurrent`, `maxWorkers` 16
-in CI, `maxConcurrency` 32) and `E2E_CI_RETRIES` as the only retry setting.
+A run the preview script starts holds every row to its timeout ceiling
+(`e2e/support/setup.ts`): a row whose resolved timeout is over it fails before
+it starts, in the E2E tests job. A row gated on an opt-in variable (`RUN_*`,
+`E2E_REAL_MODELS`) or on a local worker (`localOnly`) never starts there, so
+the ceiling does not apply to it. `scripts/ci/e2e-policy.test.ts`, in the Test
+job, regex-matches the e2e files for a `sleep`, `delay` or `setTimeout` whose
+literal is over 30s, and fails unless the wait is listed in its
+`ALLOWED_WAITS` (the slow rows' waits). A wait written with a named constant
+passes unseen. The same file keeps `E2E_CI_RETRIES` as the only retry setting.
 
 A row over the budget has two ways out:
 
