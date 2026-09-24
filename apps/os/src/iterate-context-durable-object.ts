@@ -64,7 +64,12 @@ import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from ".
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
+import {
+  ancestorPathsOf,
+  DurableObjectNameCodec,
+  GLOBAL_PROJECT_ID,
+  resourceScope,
+} from "./context/paths.ts";
 import { secretPathsReferenced } from "./secrets.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
@@ -331,9 +336,33 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
+      if (events.some((event) => event.type === "events.iterate.com/stream/woken"))
+        this.#announceToAncestors();
       this.#alarmCoordinator.reconcile();
     },
   });
+
+  /** Tell every ancestor up to the owner's root (`ancestorPathsOf`) that this context exists. On
+   *  EVERY wake, not only the birth: the appends are keyed per child, so once landed a repeat is a
+   *  no-op, and one lost in flight heals on the next wake. Fire-and-forget: a parent may be mid-call
+   *  into this child, so waiting on its answer here could deadlock. */
+  #announceToAncestors(): void {
+    const { path } = this.#durableObjectAddress;
+    const ancestorPaths = ancestorPathsOf(this.#durableObjectAddress.projectId, path);
+    if (ancestorPaths.length === 0) return;
+    const announced = Promise.all(
+      ancestorPaths.map((ancestorPath) =>
+        this.#sibling(ancestorPath).append({
+          type: "events.iterate.com/context/child-created",
+          idempotencyKey: `context/child-created:${path}`,
+          payload: { childPath: path },
+        }),
+      ),
+    ).catch((error: unknown) => {
+      console.error({ event: "context.announce-to-ancestors-failed", path, error: String(error) });
+    });
+    this.ctx.waitUntil(announced);
+  }
 
   /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event
    *  effects. */

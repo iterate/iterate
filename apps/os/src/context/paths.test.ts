@@ -1,7 +1,7 @@
 // context/paths.test.ts — the path law, pure: the durable-object name codec and the resource owner.
 
 import { expect, test } from "vitest";
-import { DurableObjectNameCodec, resourceScope } from "./paths.ts";
+import { ancestorPathsOf, DurableObjectNameCodec, resourceScope } from "./paths.ts";
 
 // ── durable object names ── the codec's projectId charset gate, applied at parse:
 // `[A-Za-z0-9_-]` only, because a ":" in a projectId would breach the `${projectId}:` kv/secret
@@ -135,4 +135,20 @@ test("a global owner's id keeps the codec's charset (the `:`/`.` delimiters cann
   }
   expect(() => resourceScope("global", "/users/a:b")).toThrow(/only \[A-Za-z0-9_-\]/);
   expect(() => resourceScope("global", "/organizations/o.1")).toThrow(/only \[A-Za-z0-9_-\]/);
+});
+
+// ── ancestors ── who a new context announces itself to (`context/child-created`): its owner's root
+// down to its parent. An owner's root, and the kernel's own global contexts, announce to nobody.
+test.each([
+  ["prj_x", "/", []],
+  ["prj_x", "/a", ["/"]],
+  ["prj_x", "/a/b/c", ["/", "/a", "/a/b"]],
+  ["prj_x", "a/b/", ["/", "/a"]],
+  ["global", "/", []],
+  ["global", "/users", []],
+  ["global", "/users/u1", []],
+  ["global", "/users/u1/x", ["/users/u1"]],
+  ["global", "/organizations/o1/a/b", ["/organizations/o1", "/organizations/o1/a"]],
+])("ancestorPathsOf(%s, %s) → %j", (projectId, path, ancestors) => {
+  expect(ancestorPathsOf(projectId, path)).toEqual(ancestors);
 });

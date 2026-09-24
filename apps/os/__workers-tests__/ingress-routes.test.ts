@@ -118,10 +118,17 @@ test("itx.ingressRoutes.set validates the route before it appends and is idempot
     target: "itx.api",
     priority: 3,
   };
+  // the root's own route events (other contexts' announcements land on the root too)
+  const lastRouteEvent = async () =>
+    (await itx.readEvents()).events
+      .filter((event: { type: string }) =>
+        event.type.startsWith("events.iterate.com/ingress-route/"),
+      )
+      .at(-1);
   await itx.ingressRoutes.set("api", route);
-  const { offset } = (await itx.readEvents()).events.at(-1)!;
+  const { offset } = (await lastRouteEvent())!;
   await itx.ingressRoutes.set("api", route); // the same route again appends nothing
-  expect((await itx.readEvents()).events.at(-1)).toMatchObject({ offset });
+  expect(await lastRouteEvent()).toMatchObject({ offset });
   expect(await itx.ingressRoutes.list()).toEqual([
     {
       ingressRouteName: "api",
