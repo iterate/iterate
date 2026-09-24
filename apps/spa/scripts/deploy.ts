@@ -1,7 +1,7 @@
 import "./build.ts";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { spaEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, spaEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { smokeResponse } from "../../../scripts/lib/deploy-helpers.ts";
 import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
@@ -9,7 +9,7 @@ import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 const selected = process.argv.indexOf("--env");
 const ctx = await resolveEnvContext({
   envs: spaEnvs,
-  dopplerProject: "project-worker",
+  dopplerProject: OS_DOPPLER_PROJECT,
   env: selected === -1 ? undefined : process.argv[selected + 1],
 });
 const config = new URL("../dist/wrangler.json", import.meta.url);

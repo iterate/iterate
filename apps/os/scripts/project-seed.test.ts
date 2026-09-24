@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import { encryptSecretMaterial } from "../src/secret-at-rest.ts";
-import { configTree, openProjectSeed } from "./project-seed-format.ts";
+import {
+  compareStructure,
+  configTree,
+  openProjectSeed,
+  type DeploymentStructure,
+} from "./project-seed-format.ts";
 
 const keys = { current: "seed-encryption-key" };
 test("current encrypted cells open with the deployment key without plaintext in the archive", async () => {
@@ -46,6 +51,48 @@ test("duplicate file or secret paths cannot silently shadow an archived entry", 
   seed.secrets.push(seed.secrets[0]!);
   await expect(openProjectSeed(seed, keys)).rejects.toThrow("Duplicate secret");
 });
+test("a recreation with fresh user and organization IDs matches; the empty admin org is a note", () => {
+  expect(compareStructure(captured, recreated())).toEqual({
+    problems: [],
+    notes: ['empty organization "admin" was not recreated'],
+  });
+});
+test("a missing member, a changed role, a project in another org and a missing org are problems", () => {
+  const live = recreated();
+  live.memberships.new_org_g = [
+    { userId: "new_user_a", email: "jonas@nustom.com", role: "member" },
+  ];
+  live.projects[0]!.orgId = "new_org_l";
+  expect(compareStructure(captured, live)).toMatchObject({
+    problems: [
+      'organization "garple" lacks member jonas@nustom.com owner',
+      'organization "garple" lacks member misha@nustom.com owner',
+      'project garple is in "Lupa\'s Organization", not "garple"',
+    ],
+  });
+  live.organizations = live.organizations.filter((org) => org.name !== "Lupa's Organization");
+  live.projects = live.projects.filter((project) => project.slug !== "lupa-s-organization");
+  expect(compareStructure(captured, live)).toMatchObject({
+    problems: expect.arrayContaining([
+      `organization "Lupa's Organization" is missing`,
+      "project lupa-s-organization (prj_l) is missing",
+    ]),
+  });
+});
+test("two organizations of one name are a problem; uncaptured rows and a user not back yet are notes", () => {
+  const live = recreated();
+  live.organizations.push({ id: "org_dupe", name: "garple", projects: 0 });
+  live.users = live.users.filter((user) => user.email !== "lupa@example.com");
+  live.users.push({ id: "user_new", email: "new@example.com" });
+  const { problems, notes } = compareStructure(captured, live);
+  expect(problems).toEqual(['organization "garple" exists 2 times']);
+  expect(notes).toEqual(
+    expect.arrayContaining([
+      "user lupa@example.com has not signed in again yet",
+      "user new@example.com was not captured",
+    ]),
+  );
+});
 
 async function archive() {
   const files = [
@@ -73,3 +120,49 @@ async function archive() {
     ],
   };
 }
+
+/** prd on 2026-09-24, cut down: two owners of garple, an org of one, the empty admin org. */
+const captured: DeploymentStructure = {
+  capturedAt: "2026-09-24T05:21:06.954Z",
+  platform: "https://os.iterate.com",
+  users: [
+    { id: "user_a", email: "jonas@nustom.com" },
+    { id: "user_b", email: "misha@nustom.com" },
+    { id: "user_c", email: "lupa@example.com" },
+  ],
+  organizations: [
+    { id: "org_admin", name: "admin", projects: 0 },
+    { id: "org_g", name: "garple", projects: 1 },
+    { id: "org_l", name: "Lupa's Organization", projects: 1 },
+  ],
+  memberships: {
+    org_admin: [],
+    org_g: [
+      { userId: "user_a", email: "jonas@nustom.com", role: "owner" },
+      { userId: "user_b", email: "misha@nustom.com", role: "owner" },
+    ],
+    org_l: [{ userId: "user_c", email: "lupa@example.com", role: "owner" }],
+  },
+  projects: [
+    { id: "prj_g", slug: "garple", orgId: "org_g" },
+    { id: "prj_l", slug: "lupa-s-organization", orgId: "org_l" },
+  ],
+};
+/** The same people, organizations and projects after a recreation: every user and organization
+ *  ID minted afresh, the project IDs kept, the admin org not yet created. */
+const recreated = (): DeploymentStructure => ({
+  ...captured,
+  users: captured.users.map((user) => ({ ...user, id: `new_${user.id}` })),
+  organizations: captured.organizations
+    .filter((org) => org.id !== "org_admin")
+    .map((org) => ({ ...org, id: `new_${org.id}` })),
+  memberships: Object.fromEntries(
+    Object.entries(captured.memberships)
+      .filter(([orgId]) => orgId !== "org_admin")
+      .map(([orgId, members]) => [
+        `new_${orgId}`,
+        members.map((member) => ({ ...member, userId: `new_${member.userId}` })),
+      ]),
+  ),
+  projects: captured.projects.map((project) => ({ ...project, orgId: `new_${project.orgId}` })),
+});

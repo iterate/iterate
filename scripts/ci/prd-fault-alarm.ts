@@ -1,4 +1,4 @@
-// Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the last half hour of os-next-prd's
+// Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the last half hour of os-prd's
 // Workers Logs and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
 // On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for ~2.5 hours:
 // ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and garple.com —
@@ -8,7 +8,7 @@
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed.
 //
-//   doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+//   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay a window, post nothing
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
@@ -24,11 +24,10 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
 /** One window's rows per signal: [label, count], biggest first. */
 export type FaultReading = Record<"serverErrors" | "heals" | "errors", [string, number][]>;
 
-/** Reads the last half hour of os-next-prd's Workers Logs and pages #error-pulse on a fault. */
+/** Reads the last half hour of os-prd's Workers Logs and pages #error-pulse on a fault. */
 export async function run(options: { at?: string; dryRun?: boolean } = {}) {
   const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
-  if (!accountId || !apiToken)
-    throw new Error("run under doppler --project project-worker --config prd");
+  if (!accountId || !apiToken) throw new Error("run under doppler --project os --config prd");
   const now = new Date();
   return alarm({
     now,

@@ -12,7 +12,7 @@
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-delete.yml --ref main --input pull-request-number=<pr>
 # Depot registers the `closed` trigger once this file is on the default branch. The only Depot
-# secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare credentials.
+# secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials.
 
 name: Preview delete
 
@@ -91,7 +91,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Delete the preview

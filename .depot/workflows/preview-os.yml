@@ -4,7 +4,7 @@
 #   deploy              every push: deploys the PR merged into main (GitHub's test merge commit;
 #                       the head alone when the PR conflicts, scripts/ci/preview-tested-commit.ts)
 #                       as a preview named `pr<n>-<branch slug>` of the parent worker
-#                       os-next-preview, and writes the URL, the tested commit and the operations
+#                       os-preview, and writes the URL, the tested commit and the operations
 #                       into the PR body
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       then their test telemetry and flake records as artifacts
@@ -28,7 +28,7 @@
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
 # preview-delete.yml takes the same group, so a PR's delete waits for its deploy and e2e to settle.
-# The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
+# The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
 name: Preview OS
@@ -144,7 +144,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # `deploy` redeploys in place; `reset` deletes the preview first. Either way the
@@ -216,7 +216,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run the e2e suite against the preview

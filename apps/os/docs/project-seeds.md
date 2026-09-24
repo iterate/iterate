@@ -56,11 +56,58 @@ there before capture. The current repository API supports regular UTF-8 files;
 capture refuses binary files, executable modes, symlinks and submodules it could
 not restore exactly.
 
+## Users and organizations
+
+A project seed carries its organization's name and members. The deployment's whole
+user and organization structure — members of every organization, users and
+organizations with no project, the deployment's own `admin` organization — is a
+separate file:
+
+```sh
+pnpm --dir apps/os project-seed structure \
+  --env prd --file ~/.iterate/backups/structure-2026-09-22.json
+pnpm --dir apps/os project-seed verify-structure \
+  --env prd --file ~/.iterate/backups/structure-2026-09-22.json
+```
+
+`structure` writes a new mode-0600 file (emails, no secrets) and refuses to
+overwrite one. `verify-structure` compares the deployment with it by what a
+recreation keeps: organizations by name, members by email and role, projects by
+ID, slug and organization name. It prints every difference and fails on a missing
+organization, membership or project. A captured user who has not signed in again,
+an empty organization and anything new are printed as notes.
+
+Only project IDs survive a recreation. `apply` recreates each member through
+sign-in's find-or-create by email and each organization under a fresh ID; a
+person's identity links (Google, Cloudflare) re-attach by email at their next
+sign-in. Nothing outside the control plane names a user or organization ID —
+grants, sessions and the `/users/<id>` and `/organizations/<id>` contexts are
+erased with the deployment — so apply every project seed, then run
+`verify-structure`.
+
 Seeds intentionally omit stream histories, derived state, user/org secrets,
 OAuth sessions and grants, other repositories, files in R2, agents and workspaces.
 Routes and deployment configuration remain owned by `envs.ts`. This is a selected
 project recovery mechanism, not a complete database snapshot. Verify the restored
 websites and external integrations separately before declaring recovery complete.
+
+## Moving a deployment to a new Worker
+
+A recreation onto a new Worker (a renamed `workerName` in `envs.ts`, fresh
+resources from `ensure-resources`) needs no erase: the new Worker starts empty
+and the old one keeps its data until its owner deletes it. Deploy the new Worker
+beside the old one, restore onto it, then move the routes:
+
+```sh
+pnpm --dir apps/os ensure-resources --env prd   # KV, R2 and Artifacts namespace; commit the ids
+pnpm --dir apps/os run deploy --env prd --without-routes
+```
+
+`--without-routes` deploys code, bindings and secrets with no routes: Cloudflare
+refuses a route pattern another Worker holds (10020), so the operator moves each
+route to the new Worker with the zone's route API, platform hostnames first. The
+next ordinary deploy finds the routes already its own. Moving a route back is the
+rollback.
 
 For an erase, inventory first:
 

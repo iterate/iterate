@@ -9,12 +9,14 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import type { IterateSessionApi, SessionCredentials } from "iterate/next/api";
 import type { ItxExpression } from "iterate/next/expression";
-import { osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { atRestKeysOf, parseAppConfig } from "../src/app-config.ts";
 import {
+  DeploymentStructure,
   EncryptedSecretSeed,
   ProjectSeed,
+  compareStructure,
   configTree,
   openProjectSeed,
 } from "./project-seed-format.ts";
@@ -23,13 +25,15 @@ type SeedApi = {
   authenticate(credentials: SessionCredentials): Promise<
     IterateSessionApi & {
       exportProjectSecretForSeed(project: string, path: string): Promise<unknown>;
+      /** operator-only (src/session.ts UserCollectionRpcTarget) */
+      users: { list(): Promise<{ id: string; email: string }[]> };
     }
   >;
 };
 async function target(env: string) {
   const context = await resolveEnvContext({
     envs: osEnvs,
-    dopplerProject: "project-worker",
+    dopplerProject: OS_DOPPLER_PROJECT,
     env,
   });
   // Match deploy.ts: only these two secrets are shipped, not legacy Doppler overrides.
@@ -228,6 +232,50 @@ export async function check(options: { env: string; file: string }) {
   console.log(
     `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members.`,
   );
+}
+
+/** Capture the deployment's users, organizations, memberships and projects to a NEW private file
+ * (DeploymentStructure). No secrets; mode 0600 all the same, since it lists people's emails. */
+export async function structure(options: { env: string; file: string }) {
+  const context = await target(options.env);
+  const file = resolve(options.file);
+  const captured = await withApi(context, (rpc) => readStructure(context, rpc));
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify(captured, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+  console.log(
+    `Captured ${captured.users.length} users, ${captured.organizations.length} organizations and ${captured.projects.length} projects of ${captured.platform} → ${file}`,
+  );
+}
+
+/** Compare the deployment with a captured structure (compareStructure): prints every difference,
+ * and fails on a missing organization, membership or project. Run after every `apply`. */
+export async function verifyStructure(options: { env: string; file: string }) {
+  const context = await target(options.env);
+  const captured = DeploymentStructure.parse(JSON.parse(readFileSync(options.file, "utf8")));
+  const live = await withApi(context, (rpc) => readStructure(context, rpc));
+  const { problems, notes } = compareStructure(captured, live);
+  for (const note of notes) console.log(`note: ${note}`);
+  for (const problem of problems) console.log(`MISMATCH: ${problem}`);
+  if (problems.length)
+    throw new Error(`${problems.length} structural differences from ${options.file}.`);
+  console.log(
+    `Structure matches ${options.file}: ${captured.organizations.length} organizations, ${captured.projects.length} projects, every captured membership present.`,
+  );
+}
+
+async function readStructure(context: Awaited<ReturnType<typeof target>>, rpc: RpcStub<SeedApi>) {
+  const admin = rpc.authenticate({ type: "admin-secret", secret: context.adminSecret });
+  const organizations = await admin.organizations.list();
+  const memberships: DeploymentStructure["memberships"] = {};
+  for (const org of organizations) memberships[org.id] = await admin.organizations.members(org.id);
+  return DeploymentStructure.parse({
+    capturedAt: new Date().toISOString(),
+    platform: context.env.baseUrl,
+    users: await admin.users.list(),
+    organizations: organizations.map(({ id, name, projects }) => ({ id, name, projects })),
+    memberships,
+    projects: (await admin.projects.list()).map(({ id, slug, orgId }) => ({ id, slug, orgId })),
+  });
 }
 
 /** Restore current configuration through normal project/repository/secret commands. Owners may

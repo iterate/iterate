@@ -18,7 +18,7 @@ export function deployedTarget(workerBaseUrl: string): {
   // secrets scripts/deploy.ts ships, nothing else in the environment.
   if (!process.env.APP_CONFIG)
     throw new Error(
-      "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer and the sign-in password the e2e sessions use (run under `doppler run --project project-worker --config <preview|prd>`)",
+      "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer and the sign-in password the e2e sessions use (run under `doppler run --project os --config <preview|prd>`)",
     );
   const appConfig = parseAppConfig({
     APP_CONFIG: process.env.APP_CONFIG,
@@ -31,7 +31,7 @@ export function deployedTarget(workerBaseUrl: string): {
       "The deployment's APP_CONFIG sets no secrets.adminBearer or no login.password — every e2e session authenticates with the one and signs in with the other",
     );
   // The envs.ts entry the worker falls under, by host suffix: `os.iterate.com` is prd's; a preview,
-  // `pr<n>-<slug>-os-next-preview.<subdomain>.workers.dev`, hangs under its parent's host and
+  // `pr<n>-<slug>-os-preview.<subdomain>.workers.dev`, hangs under its parent's host and
   // inherits the parent's routing.
   const host = new URL(workerBaseUrl).host;
   const env = Object.values(osEnvs).find((candidate) =>

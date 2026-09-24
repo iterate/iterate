@@ -28,7 +28,7 @@ shrink the fixture.
 ## 2. Dump the log
 
 Use the deployment's operator bearer: `secrets.adminBearer` in the `APP_CONFIG` of Doppler
-`project-worker/prd`, or `project-worker/preview` for any preview. It reaches every project, so
+`os/prd`, or `os/preview` for any preview. It reaches every project, so
 keep it in the command's environment and never print it
 ([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
 
@@ -47,7 +47,7 @@ return JSON.stringify(events);
 ```
 
 ```sh
-APP_CONFIG_ADMIN_API_SECRET="$(doppler secrets get APP_CONFIG --project project-worker --config prd --plain | jq -r .secrets.adminBearer)" \
+APP_CONFIG_ADMIN_API_SECRET="$(doppler secrets get APP_CONFIG --project os --config prd --plain | jq -r .secrets.adminBearer)" \
   pnpm exec iterate --config prd itx run --project <slug> --file dump-agent.js > agent.json
 ```
 

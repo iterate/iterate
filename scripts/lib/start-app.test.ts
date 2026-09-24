@@ -23,7 +23,7 @@ test("the preview's own block: the session class, observability, and the worker'
     observability: { enabled: true },
     durable_objects: built.durable_objects,
     vars: {
-      ITERATE_ORIGIN: "https://pr123-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      ITERATE_ORIGIN: "https://pr123-foo-os-preview.iterate-dev-preview.workers.dev",
       ITERATE_DENY_ZONES: "iterate.app,iterate.com",
       ITERATE_APP_ORIGINS: JSON.stringify({
         dash: "https://pr123-foo-dash-preview.iterate-dev-preview.workers.dev",
@@ -42,7 +42,7 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
     "kit-preview.iterate-dev-preview.workers.dev",
     "notes-preview.iterate-dev-preview.workers.dev",
     "notes.iterate.workers.dev",
-    "os-next-preview.iterate-dev-preview.workers.dev",
+    "os-preview.iterate-dev-preview.workers.dev",
     "voice-preview.iterate-dev-preview.workers.dev",
   ]);
   // elsewhere, still the whole zone: our origins' and our project wildcard's
@@ -85,7 +85,7 @@ function previewConfig() {
     no_bundle: true,
   };
   const config = startAppPreviewConfig(built, {
-    issuer: "https://pr123-foo-os-next-preview.iterate-dev-preview.workers.dev",
+    issuer: "https://pr123-foo-os-preview.iterate-dev-preview.workers.dev",
     appOrigins: { dash: "https://pr123-foo-dash-preview.iterate-dev-preview.workers.dev" },
   });
 

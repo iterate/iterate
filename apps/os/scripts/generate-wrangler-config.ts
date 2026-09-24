@@ -87,7 +87,7 @@ function wranglerConfig() {
     // The account a LOCAL worker (`pnpm dev`, the local e2e run) reaches Cloudflare on: wrangler's
     // local runtime has no simulator for Artifacts, AI or Browser and proxies those three bindings
     // to the real products on this account under the developer's `wrangler login` — so a local
-    // run's repos land in the dev/preview account's `os-next-dev-repos` (wrangler.base.jsonc),
+    // run's repos land in the dev/preview account's `os-dev-repos` (wrangler.base.jsonc),
     // never in a deployment's namespace.
     account_id: PREVIEW_AND_DEV_ACCOUNT_ID,
     routes: [],

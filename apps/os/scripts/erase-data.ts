@@ -8,7 +8,7 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
-import { osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { fetchCloudflareWith429Retry } from "../../../scripts/lib/cloudflare-429-retry.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
@@ -63,7 +63,7 @@ async function eraseDataWith(
     throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
   const context = await services.resolveEnvContext({
     envs: osEnvs,
-    dopplerProject: "project-worker",
+    dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
   });
   const { env, cf } = context;

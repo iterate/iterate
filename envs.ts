@@ -28,6 +28,11 @@ export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].clou
  */
 export const UNPROVISIONED = "UNPROVISIONED";
 
+/** The Doppler project holding apps/os's secrets (and apps/spa's deploy credentials): one config per
+ *  `osEnvs` deployment, each inheriting `_shared/<config>`. Every script that deploys, provisions,
+ *  previews, erases or seeds an OS deployment reads its secrets from here. */
+export const OS_DOPPLER_PROJECT = "os";
+
 /** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
@@ -84,10 +89,14 @@ export interface OsEnv {
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
    *  serves `<baseUrl>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
   ingressRouting?: NonNullable<IngressRouting>;
+  /** The Artifacts namespace the `ARTIFACTS` binding names, `<workerName>-…`; ensure-resources
+   *  creates it. A namespace cannot be renamed, and no other Worker may bind it: erase-data refuses a
+   *  shared store, and another Worker would read every project's repos. */
   artifactsNamespace: string;
-  /** The name the Cloudflare resources were CREATED under (KV `<prefix>-oauth|-itx`, R2 `<prefix>-files`) —
-   *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
-   *  the wrangler generator derive names from this, never from the worker name. */
+  /** The prefix of the deployment's named Cloudflare resources (KV `<prefix>-oauth|-itx`, R2
+   *  `<prefix>-files`). Today it is the worker name; it is its own field so a worker can be renamed
+   *  without renaming the data it binds. `ensure-resources`, erase-data and the wrangler generator
+   *  derive the names from this, never from the worker name. */
   resourceNamePrefix: string;
   /** TEMPORARY (`APP_CONFIG urls.temporaryCustomHostnames`) — hostnames of this deployment's own that
    *  ARE a project's apex: `{ "iterate.com": "iterate" }` lands a request on that project's config
@@ -113,28 +122,28 @@ export interface OsEnv {
 export const osEnvs: Record<string, OsEnv> = {
   // THE PARENT OF EVERY PER-PR PREVIEW (apps/os/scripts/preview.ts, the cloudflare-os recipe): a
   // Worker Preview is a branch of an existing worker, and this is that worker on the dev/preview
-  // account — `pr<n>-<branch>-os-next-preview.<subdomain>.workers.dev`. Each preview has resources of
+  // account — `pr<n>-<branch>-os-preview.<subdomain>.workers.dev`. Each preview has resources of
   // its own; nothing reads this worker's data, and nobody browses to it. workers.dev only.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
-    workerName: "os-next-preview",
-    baseUrl: "https://os-next-preview.iterate-dev-preview.workers.dev",
-    mcpBaseUrl: "https://os-next-preview.iterate-dev-preview.workers.dev/mcp",
+    workerName: "os-preview",
+    baseUrl: "https://os-preview.iterate-dev-preview.workers.dev",
+    mcpBaseUrl: "https://os-preview.iterate-dev-preview.workers.dev/mcp",
     // Projects as paths on the one origin (`/projects/<slug>/<app>/…`): workers.dev has no wildcard
     // subdomains, and every preview inherits this.
     ingressRouting: { type: "paths" },
-    artifactsNamespace: "os-next-preview-repos",
-    resourceNamePrefix: "os-next-preview",
+    artifactsNamespace: "os-preview-repos",
+    resourceNamePrefix: "os-preview",
     resources: {
-      oauthKvId: "f032a76654144557b48de0f86563a1db",
-      itxKvId: "82406b38cf9949048097dde599a0087c",
+      oauthKvId: "1abac70698334cae90f861869042f53f",
+      itxKvId: "c4ff804bf3fe48fbbbf99a73fe31d4a5",
     },
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
-    workerName: "os-next-prd",
+    workerName: "os-prd",
     // THE HEADLESS PLATFORM: sign-in, consent, `/api`, the OAuth endpoints — two no-build pages and
     // the OAuth endpoints, nothing else a person looks at. `dash.iterate.com` is the dash (apps/dash): sessions,
     // projects and organizations — an ordinary OAuth client of this issuer, like every other app.
@@ -170,11 +179,13 @@ export const osEnvs: Record<string, OsEnv> = {
     },
     ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
-    artifactsNamespace: "project-worker-prd-repos",
-    resourceNamePrefix: "project-worker-prd",
+    // Not `os-prd-repos`: the legacy platform's namespace of that name (2026-05-18) is still bound
+    // by its artifact viewer, cf-artifact-viewer-prd (artifacts.iterate.com).
+    artifactsNamespace: "os-prd-project-repos",
+    resourceNamePrefix: "os-prd",
     resources: {
-      oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
-      itxKvId: "02d9483f71b84a9f9fae588f0ad9b3bd",
+      oauthKvId: "5d23b869bff94a32a8f8049edc7de122",
+      itxKvId: "c8432f0a49c94ae3984040c4f503b8c2",
     },
   },
 };

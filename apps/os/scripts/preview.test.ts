@@ -56,7 +56,7 @@ test("the preview name (cloudflare-os: pr<n>-<branch slug>): the number reads ba
 
 const section = renderPullRequestSection({
   previewName: "pr123-feature-foo",
-  url: "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+  url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
   deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
   dashboardUrl: "https://dash.cloudflare.com/x",
   apps: [
@@ -68,9 +68,7 @@ const section = renderPullRequestSection({
 });
 
 test("the PR body's managed section: names the URL, the deployment, the apps on top, and where the operations are", () => {
-  expect(section).toContain(
-    "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
-  );
+  expect(section).toContain("https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev");
   expect(section).toContain("deployment `bd68a9bb`");
   expect(section).toContain(
     "| dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev |",
@@ -83,7 +81,7 @@ test("the PR body's managed section: names the URL, the deployment, the apps on 
 test("the PR body's managed section: names the commit the run tested when the workflow resolved one", () => {
   const withCommit = renderPullRequestSection({
     previewName: "pr123-feature-foo",
-    url: "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+    url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
     deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [],
@@ -98,7 +96,7 @@ test("the PR body's managed section: names the commit the run tested when the wo
 test("the PR body's managed section: on a PR the heading and every app carry a one-click `Sign in ↗`, and the section says as whom", () => {
   const dash = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
   const notes = "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev";
-  const os = "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev";
+  const os = "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev";
   const signIn = {
     heading: `${os}/.auth/test-link?t=heading`,
     apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
@@ -121,12 +119,12 @@ test("the PR body's managed section: on a PR the heading and every app carry a o
   expect(render(true)).toMatchInlineSnapshot(`
     "### OS preview: \`pr123-feature-foo\`
 
-    **https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
+    **https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
 
     | App on top, signed in against this preview | | |
     | --- | --- | --- |
-    | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
-    | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+    | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
+    | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
 
     \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
 
@@ -140,22 +138,22 @@ test("the PR body's managed section: on a PR the heading and every app carry a o
 
 test("the PR body's managed section: appends to a body without one, keeping the author's text", () => {
   const body = splicePullRequestBody("What this PR does.\n", section);
-  expect(body.startsWith("What this PR does.\n\n<!-- os-next-preview:begin -->\n")).toBe(true);
-  expect(body.endsWith("\n<!-- os-next-preview:end -->\n")).toBe(true);
+  expect(body.startsWith("What this PR does.\n\n<!-- os-preview:begin -->\n")).toBe(true);
+  expect(body.endsWith("\n<!-- os-preview:end -->\n")).toBe(true);
 });
 
 test("the PR body's managed section: replaces an existing section in place, and only that", () => {
-  const before = `Intro.\n\n<!-- os-next-preview:begin -->\nold\n<!-- os-next-preview:end -->\n\nOutro.\n`;
+  const before = `Intro.\n\n<!-- os-preview:begin -->\nold\n<!-- os-preview:end -->\n\nOutro.\n`;
   const after = splicePullRequestBody(before, "new");
   expect(after).toBe(
-    `Intro.\n\n<!-- os-next-preview:begin -->\nnew\n<!-- os-next-preview:end -->\n\nOutro.\n`,
+    `Intro.\n\n<!-- os-preview:begin -->\nnew\n<!-- os-preview:end -->\n\nOutro.\n`,
   );
   expect(splicePullRequestBody(after, "newer")).not.toContain("new\n<!--");
 });
 
 test("the PR body's managed section: an empty body becomes just the section", () => {
   expect(splicePullRequestBody("", "s")).toBe(
-    "<!-- os-next-preview:begin -->\ns\n<!-- os-next-preview:end -->\n",
+    "<!-- os-preview:begin -->\ns\n<!-- os-preview:end -->\n",
   );
 });
 
@@ -180,7 +178,7 @@ const template = {
     AgentDurableObject: { type: "durable-object", state: "deleted" },
   },
   r2_buckets: [{ binding: "FILES", bucket_name: "os-files" }],
-  artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-dev-repos" }],
+  artifacts: [{ binding: "ARTIFACTS", namespace: "os-dev-repos" }],
   kv_namespaces: [
     { binding: "ITX_KV", id: "1" },
     { binding: "OAUTH_KV", id: "2" },
@@ -190,7 +188,7 @@ const config = previewWranglerConfig({ template, previewName: "pr123-feature-foo
 
 test("the preview's wrangler config (a pure transform of Vite's built config): the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
   expect(config).toMatchObject({
-    name: "os-next-preview",
+    name: "os-preview",
     main: "index.js",
     no_bundle: true,
     assets: template.assets,
@@ -210,22 +208,19 @@ test("the preview's wrangler config (a pure transform of Vite's built config): K
   expect(config.previews.r2_buckets).toEqual([{ binding: "FILES" }]);
   expect(config.previews).not.toHaveProperty("d1_databases");
   expect(config.previews).toMatchObject({
-    artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-preview-pr123-feature-foo-repos" }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: "os-preview-pr123-feature-foo-repos" }],
   });
 });
 
 test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths and the one-click sign-in links on; the secrets are the parent's Previews settings", () => {
   expect(config.previews).toMatchObject({
     vars: {
-      APP_CONFIG_URLS__OS:
-        "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      APP_CONFIG_URLS__OS: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
     },
   });
-  expect(previewResourceName("pr123-feature-foo", "db")).toBe(
-    "os-next-preview-pr123-feature-foo-db",
-  );
+  expect(previewResourceName("pr123-feature-foo", "db")).toBe("os-preview-pr123-feature-foo-db");
 });
 
 test("the preview's wrangler config (a pure transform of Vite's built config): a deployed Dash is available to secret collection link generation", () => {
@@ -278,19 +273,22 @@ test.each<[string, string[], string[]]>([
 });
 
 test.each<[string, string, string | undefined]>([
-  ["os-next-preview-pr123-feature-foo-repos", "repos", "pr123-feature-foo"],
-  ["os-next-preview-pr123-feature-foo-db", "db", "pr123-feature-foo"],
-  ["os-next-preview-soak-repos", "repos", "soak"],
+  ["os-preview-pr123-feature-foo-repos", "repos", "pr123-feature-foo"],
+  ["os-preview-pr123-feature-foo-db", "db", "pr123-feature-foo"],
+  ["os-preview-soak-repos", "repos", "soak"],
   // the parent's own namespace is nobody's preview
-  ["os-next-preview-repos", "repos", undefined],
+  ["os-preview-repos", "repos", undefined],
   // another binding's resource
-  ["os-next-preview-pr123-feature-foo-db", "repos", undefined],
-  // another worker's
-  ["os-preview-1-repos", "repos", undefined],
-  ["project-worker-prd-repos", "repos", undefined],
+  ["os-preview-pr123-feature-foo-db", "repos", undefined],
+  // another worker's: the former parent's, prd's
+  ["os-next-preview-repos", "repos", undefined],
+  ["os-prd-project-repos", "repos", undefined],
+  // a legacy platform preview slot's reads as preview `1`; the sweep leaves it for being older
+  // than the parent (preview-sweep.ts rule 7)
+  ["os-preview-1-repos", "repos", "1"],
   // a former parent's: it reads as a preview name; the sweep leaves it while a worker of that name
   // exists (preview-sweep.ts rule 4)
-  ["os-next-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
+  ["os-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
 ])(
   "the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes): %s as %s → %s",
   (resourceName, binding, expected) => {
@@ -307,7 +305,7 @@ test.each([
   // #2895's deploy after #2888 added ControlPlaneDurableObject (2026-09-23)
   {
     output:
-      "A request to the Cloudflare API (/accounts/x/workers/workers/os-next-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",
+      "A request to the Cloudflare API (/accounts/x/workers/workers/os-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",
     recreate: true,
   },
   {

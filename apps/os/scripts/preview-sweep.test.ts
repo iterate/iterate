@@ -59,6 +59,8 @@ test.each<{
   },
 );
 
+// Which resources are orphans (rules 4–7): previews soak and pr2847-x are listed, a worker
+// os-preview-2 exists, and the parent is 1000 h old.
 test.each<{
   rule: string;
   kind: PreviewResourceKind;
@@ -69,46 +71,84 @@ test.each<{
 }>(
   // prettier-ignore
   [
-    { rule: "5: a listed preview's KV", kind: "kv", resource: "os-next-preview-soak-itx-kv", orphanOf: false },
-    { rule: "5: a listed preview's R2", kind: "r2", resource: "os-next-preview-pr2847-x-files", orphanOf: false },
-    { rule: "5: a listed preview's D1, a week old", kind: "d1", resource: "os-next-preview-soak-db", createdHoursAgo: 168, orphanOf: false },
-    { rule: "4+5: a gone PR preview's KV", kind: "kv", resource: "os-next-preview-pr2753-os-next-worker-24fdd3-itx-kv", orphanOf: "pr2753-os-next-worker-24fdd3" },
-    { rule: "4+5: a gone hand-named preview's KV", kind: "kv", resource: "os-next-preview-exp-final-oauth-kv", orphanOf: "exp-final" },
-    { rule: "4+5: a gone preview's R2", kind: "r2", resource: "os-next-preview-dopin-exp-fix-files", orphanOf: "dopin-exp-fix" },
-    { rule: "4: the parent's own KV", kind: "kv", resource: "os-next-preview-itx", orphanOf: false },
-    { rule: "4: the parent's own KV", kind: "kv", resource: "os-next-preview-oauth", orphanOf: false },
-    { rule: "4: the parent's own R2", kind: "r2", resource: "os-next-preview-files", orphanOf: false },
-    { rule: "4: the parent's own D1", kind: "d1", resource: "os-next-preview-directory", createdHoursAgo: 999, orphanOf: false },
-    { rule: "4: the parent's own Artifacts namespace", kind: "artifacts", resource: "os-next-preview-repos", createdHoursAgo: 999, orphanOf: false },
-    { rule: "4: a legacy slot's KV", kind: "kv", resource: "os-preview-3-project-directory", orphanOf: false },
-    { rule: "4: a legacy slot's KV", kind: "kv", resource: "IterateDataResources-ProjectDirectory-preqef6upaz5pndf6rhwazvkkd", orphanOf: false },
-    { rule: "4: a legacy slot's R2", kind: "r2", resource: "os-preview-3-files", orphanOf: false },
-    { rule: "4: another worker's, whose name begins with the parent's", kind: "r2", resource: "os-next-preview-2-files", orphanOf: false },
-    { rule: "4: another worker's, whose name begins with the parent's", kind: "kv", resource: "os-next-preview-2-pr1-x-itx-kv", orphanOf: false },
-    { rule: "4: a KV with the R2 suffix", kind: "kv", resource: "os-next-preview-exp-final-files", orphanOf: false },
-    { rule: "4: an R2 with a KV suffix", kind: "r2", resource: "os-next-preview-exp-final-itx-kv", orphanOf: false },
-    { rule: "4: not a preview name (uppercase)", kind: "r2", resource: "os-next-preview-Exp-files", orphanOf: false },
-    { rule: "4: not a preview name (double hyphen)", kind: "r2", resource: "os-next-preview-exp--x-files", orphanOf: false },
-    { rule: "4: not a preview name (29 characters)", kind: "r2", resource: `os-next-preview-${"a".repeat(29)}-files`, orphanOf: false },
-    { rule: "6: a D1 of a closed PR, an hour old", kind: "d1", resource: "os-next-preview-pr2846-x-db", createdHoursAgo: 1, pullRequest: "closed", orphanOf: "pr2846-x" },
-    { rule: "6: a D1 of a missing PR, an hour old", kind: "d1", resource: "os-next-preview-pr2846-x-db", createdHoursAgo: 1, pullRequest: "missing", orphanOf: "pr2846-x" },
-    { rule: "6: a D1 of an open PR, an hour old (a deploy in flight)", kind: "d1", resource: "os-next-preview-pr2846-x-db", createdHoursAgo: 1, pullRequest: "open", orphanOf: false },
-    { rule: "6: a D1 of an open PR, 25 h old", kind: "d1", resource: "os-next-preview-pr2846-x-db", createdHoursAgo: 25, pullRequest: "open", orphanOf: "pr2846-x" },
-    { rule: "6: a hand-named preview's D1, an hour old", kind: "d1", resource: "os-next-preview-exp-x-db", createdHoursAgo: 1, orphanOf: false },
-    { rule: "6: a hand-named preview's D1, 25 h old", kind: "d1", resource: "os-next-preview-exp-x-db", createdHoursAgo: 25, orphanOf: "exp-x" },
-    { rule: "6: an Artifacts namespace of a closed PR", kind: "artifacts", resource: "os-next-preview-pr2817-x-repos", createdHoursAgo: 1, pullRequest: "closed", orphanOf: "pr2817-x" },
-    { rule: "6: an Artifacts namespace, PR lookup failed, no creation stamp", kind: "artifacts", resource: "os-next-preview-pr2817-x-repos", pullRequest: "unknown", orphanOf: false },
+      { rule: "5: a listed preview's KV", kind: "kv", resource: "os-preview-soak-itx-kv", orphanOf: false },
+      { rule: "5: a listed preview's R2", kind: "r2", resource: "os-preview-pr2847-x-files", orphanOf: false },
+      { rule: "5: a listed preview's D1, a week old", kind: "d1", resource: "os-preview-soak-db", createdHoursAgo: 168, orphanOf: false },
+      { rule: "4+5: a gone PR preview's KV", kind: "kv", resource: "os-preview-pr2753-os-next-worker-24fdd3-itx-kv", orphanOf: "pr2753-os-next-worker-24fdd3" },
+      { rule: "4+5: a gone hand-named preview's KV", kind: "kv", resource: "os-preview-exp-final-oauth-kv", orphanOf: "exp-final" },
+      { rule: "4+5: a gone preview's R2", kind: "r2", resource: "os-preview-dopin-exp-fix-files", orphanOf: "dopin-exp-fix" },
+      { rule: "4: the parent's own KV", kind: "kv", resource: "os-preview-itx", orphanOf: false },
+      { rule: "4: the parent's own KV", kind: "kv", resource: "os-preview-oauth", orphanOf: false },
+      { rule: "4: the parent's own R2", kind: "r2", resource: "os-preview-files", orphanOf: false },
+      { rule: "4: the parent's own D1", kind: "d1", resource: "os-preview-directory", createdHoursAgo: 999, orphanOf: false },
+      { rule: "4: the parent's own Artifacts namespace", kind: "artifacts", resource: "os-preview-repos", createdHoursAgo: 999, orphanOf: false },
+      { rule: "4: a legacy slot's KV, no preview suffix", kind: "kv", resource: "os-preview-3-project-directory", orphanOf: false },
+      { rule: "4: a legacy slot's KV", kind: "kv", resource: "IterateDataResources-ProjectDirectory-preqef6upaz5pndf6rhwazvkkd", orphanOf: false },
+      { rule: "7: a legacy slot's Artifacts namespace, older than the parent", kind: "artifacts", resource: "os-preview-3-repos", createdHoursAgo: 3000, orphanOf: false },
+      { rule: "7: a legacy slot's R2, older than the parent", kind: "r2", resource: "os-preview-3-files", createdHoursAgo: 3000, orphanOf: false },
+      { rule: "7: a preview named 3's Artifacts namespace, younger than the parent", kind: "artifacts", resource: "os-preview-3-repos", createdHoursAgo: 25, orphanOf: "3" },
+      { rule: "4: another worker's, whose name begins with the parent's", kind: "r2", resource: "os-preview-2-files", orphanOf: false },
+      { rule: "4: another worker's, whose name begins with the parent's", kind: "kv", resource: "os-preview-2-pr1-x-itx-kv", orphanOf: false },
+      { rule: "4: a KV with the R2 suffix", kind: "kv", resource: "os-preview-exp-final-files", orphanOf: false },
+      { rule: "4: an R2 with a KV suffix", kind: "r2", resource: "os-preview-exp-final-itx-kv", orphanOf: false },
+      { rule: "4: not a preview name (uppercase)", kind: "r2", resource: "os-preview-Exp-files", orphanOf: false },
+      { rule: "4: not a preview name (double hyphen)", kind: "r2", resource: "os-preview-exp--x-files", orphanOf: false },
+      { rule: "4: not a preview name (29 characters)", kind: "r2", resource: `os-preview-${"a".repeat(29)}-files`, orphanOf: false },
+      { rule: "6: a D1 of a closed PR, an hour old", kind: "d1", resource: "os-preview-pr2846-x-db", createdHoursAgo: 1, pullRequest: "closed", orphanOf: "pr2846-x" },
+      { rule: "6: a D1 of a missing PR, an hour old", kind: "d1", resource: "os-preview-pr2846-x-db", createdHoursAgo: 1, pullRequest: "missing", orphanOf: "pr2846-x" },
+      { rule: "6: a D1 of an open PR, an hour old (a deploy in flight)", kind: "d1", resource: "os-preview-pr2846-x-db", createdHoursAgo: 1, pullRequest: "open", orphanOf: false },
+      { rule: "6: a D1 of an open PR, 25 h old", kind: "d1", resource: "os-preview-pr2846-x-db", createdHoursAgo: 25, pullRequest: "open", orphanOf: "pr2846-x" },
+      { rule: "6: a hand-named preview's D1, an hour old", kind: "d1", resource: "os-preview-exp-x-db", createdHoursAgo: 1, orphanOf: false },
+      { rule: "6: a hand-named preview's D1, 25 h old", kind: "d1", resource: "os-preview-exp-x-db", createdHoursAgo: 25, orphanOf: "exp-x" },
+      { rule: "6: an Artifacts namespace of a closed PR", kind: "artifacts", resource: "os-preview-pr2817-x-repos", createdHoursAgo: 1, pullRequest: "closed", orphanOf: "pr2817-x" },
+      { rule: "6: an Artifacts namespace, PR lookup failed, no creation stamp", kind: "artifacts", resource: "os-preview-pr2817-x-repos", pullRequest: "unknown", orphanOf: false },
+    ],
+)("$rule: $resource ⇒ $orphanOf", ({ kind, resource, createdHoursAgo, pullRequest, orphanOf }) => {
+  const plan = planPreviewSweep(
+    input({
+      workerNames: ["os-preview", "os-preview-2"],
+      previews: [
+        { name: "soak", lastDeployedAt: hoursAgo(1) },
+        { name: "pr2847-x", lastDeployedAt: hoursAgo(1) },
+      ],
+      resources: [
+        {
+          kind,
+          name: resource,
+          id: "id",
+          createdAt: createdHoursAgo === undefined ? undefined : hoursAgo(createdHoursAgo),
+        },
+      ],
+      pullRequestStates: new Map<number, PullRequestState>([
+        [2847, "open"],
+        [2846, pullRequest || "unknown"],
+        [2817, pullRequest || "unknown"],
+      ]),
+    }),
+  );
+  expect(plan.orphans.map((orphan) => orphan.previewName)).toEqual(orphanOf ? [orphanOf] : []);
+});
+
+test.each<{
+  label: string;
+  kind: PreviewResourceKind;
+  resource: string;
+  createdHoursAgo?: number;
+  orphanOf: string | false;
+}>(
+  // prettier-ignore
+  [
+    { label: "a legacy slot's Artifacts namespace", kind: "artifacts", resource: "os-preview-3-repos", createdHoursAgo: 3000, orphanOf: false },
+    { label: "a legacy slot's R2", kind: "r2", resource: "os-preview-3-files", createdHoursAgo: 3000, orphanOf: false },
+    { label: "a gone preview's day-old D1", kind: "d1", resource: "os-preview-exp-x-db", createdHoursAgo: 25, orphanOf: false },
+    { label: "a gone preview's KV, which has no stamp (rules 4–6 alone)", kind: "kv", resource: "os-preview-exp-final-itx-kv", orphanOf: "exp-final" },
   ],
 )(
-  "which resources are orphans (rules 4–6); previews soak and pr2847-x are listed, and a worker os-next-preview-2 exists: $rule: $resource ⇒ $orphanOf",
-  ({ kind, resource, createdHoursAgo, pullRequest, orphanOf }) => {
+  "7: the parent's creation time unknown keeps every stamped resource: $label",
+  ({ kind, resource, createdHoursAgo, orphanOf }) => {
     const plan = planPreviewSweep(
       input({
-        workerNames: ["os-next-preview", "os-next-preview-2", "os-preview-3"],
-        previews: [
-          { name: "soak", lastDeployedAt: hoursAgo(1) },
-          { name: "pr2847-x", lastDeployedAt: hoursAgo(1) },
-        ],
+        parentCreatedAt: undefined,
         resources: [
           {
             kind,
@@ -117,24 +157,19 @@ test.each<{
             createdAt: createdHoursAgo === undefined ? undefined : hoursAgo(createdHoursAgo),
           },
         ],
-        pullRequestStates: new Map<number, PullRequestState>([
-          [2847, "open"],
-          [2846, pullRequest || "unknown"],
-          [2817, pullRequest || "unknown"],
-        ]),
       }),
     );
     expect(plan.orphans.map((orphan) => orphan.previewName)).toEqual(orphanOf ? [orphanOf] : []);
   },
 );
 
-test("which resources are orphans (rules 4–6); previews soak and pr2847-x are listed, and a worker os-next-preview-2 exists: 5: a stale preview's resources are not orphans — deletePreview takes them with it", () => {
+test("5: a stale preview's resources are not orphans — deletePreview takes them with it", () => {
   const plan = planPreviewSweep(
     input({
       previews: [{ name: "pr7-x", lastDeployedAt: hoursAgo(1) }],
       resources: [
-        { kind: "kv", name: "os-next-preview-pr7-x-itx-kv", id: "k" },
-        { kind: "r2", name: "os-next-preview-pr7-x-files", id: "os-next-preview-pr7-x-files" },
+        { kind: "kv", name: "os-preview-pr7-x-itx-kv", id: "k" },
+        { kind: "r2", name: "os-preview-pr7-x-files", id: "os-preview-pr7-x-files" },
       ],
       pullRequestStates: new Map([[7, "closed"]]),
     }),
@@ -165,7 +200,9 @@ const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOStrin
 
 const input = (overrides: Partial<PreviewSweepInput>): PreviewSweepInput => ({
   now: NOW,
-  workerNames: ["os-next-preview", "os-preview-3", "dash-preview"],
+  workerNames: ["os-preview", "dash-preview"],
+  // older than every resource the tables below stamp, but the legacy slots' (rule 7)
+  parentCreatedAt: hoursAgo(1000),
   resourceSuffixes: { kv: ["itx-kv", "oauth-kv"], r2: ["files"], d1: ["db"], artifacts: ["repos"] },
   previews: [],
   resources: [],
