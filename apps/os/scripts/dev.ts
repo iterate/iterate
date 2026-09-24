@@ -106,10 +106,15 @@ await (command && command in commands ? commands[command]!(rest) : serve(process
 async function serve(argv: string[]) {
   const args = argv.filter((argument) => argument !== "--");
   if (process.send) {
-    // detached: ask `startDetached` for the lock (asking, so its answer cannot beat our listener)
+    // detached: ask `startDetached` for the lock (asking, so its answer cannot beat our listener).
+    // A launcher that dies first (`pnpm dev kill` signals the lock's pid — until the handover, the
+    // launcher's) closes the channel: go with it, rather than wait forever unlocked.
+    const orphaned = () => process.exit(1);
+    process.once("disconnect", orphaned);
     const handed = new Promise((resolve) => process.once("message", resolve));
     process.send("lock?");
     await handed;
+    process.off("disconnect", orphaned);
   } else {
     const held = acquire();
     if (held)
@@ -221,7 +226,11 @@ function acquire(): number | null {
 function holder(): number | null {
   const pid = lockPid();
   if (pid === null) return null;
-  const command = spawnSync("ps", ["-o", "command=", "-p", `${pid}`], { encoding: "utf8" }).stdout;
+  // -ww: the full command line — a detached server's (node, tsx's loader flags, then this file's
+  // absolute path) runs past the terminal's width, to which ps (macOS's, with COLUMNS) truncates
+  const command = spawnSync("ps", ["-ww", "-o", "command=", "-p", `${pid}`], {
+    encoding: "utf8",
+  }).stdout;
   if (command.includes(path.join("scripts", "dev.ts"))) return pid;
   const aside = `${lockPath}.stale-${process.pid}`;
   try {
