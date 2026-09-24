@@ -13,10 +13,9 @@ localOnly(
     const slug = freshDnsSafeProjectSlug("website");
     const root = session().authenticate(adminCredentials()).projects.create({ project: slug });
     const identity = await root.cd("/agents/website-test").whoami();
-    expect(identity.projectSlug).toBe(slug);
     // the project's URL as the platform composes it — the apex under the worker's routing
     const apex = projectUrl({ project: slug, path: "/" });
-    expect(identity.projectUrl).toBe(apex.href);
+    expect(identity).toMatchObject({ projectSlug: slug, projectUrl: apex.href });
     // The project's own saga seeded `/repos/config` (the homepage worker) and published its commit;
     // this story's commits land on top of it (the local worker binds Artifacts for real).
     await until("the project's certificate", async () =>
@@ -71,12 +70,14 @@ localOnly(
         second.commitOid,
         third.commitOid,
       ]);
-      expect(published.at(-1)!.payload.target[2][1].source).toEqual([
-        "itx",
-        "repos",
-        ["get", "/repos/config"],
-        ["modules", { commitOid: third.commitOid }],
-      ]);
+      expect(published.at(-1)!.payload.target[2][1]).toMatchObject({
+        source: [
+          "itx",
+          "repos",
+          ["get", "/repos/config"],
+          ["modules", { commitOid: third.commitOid }],
+        ],
+      });
       // First cold load happens AFTER main advanced: the cache key still loads its exact commit.
       expect(await repo.readFile("worker.ts", { commitOid: first.commitOid })).toBe(
         source("Elephants fear the mouse."),
@@ -105,8 +106,7 @@ localOnly(
         },
       });
       const live = await fetchProjectUrl(apex);
-      expect(live.status).toBe(200);
-      expect(live.text).toBe("Elephants fear the mouse.");
+      expect(live).toMatchObject({ status: 200, text: "Elephants fear the mouse." });
     }
   },
 );

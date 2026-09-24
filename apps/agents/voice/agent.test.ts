@@ -1,43 +1,12 @@
 import { build } from "esbuild";
-import { beforeAll, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { DelegationMessage } from "./delegation-turn.ts";
 import fixtures from "./screen-context-repro.json";
 
-let VoiceDelegateProcessor: any;
-
-beforeAll(async () => {
-  const processor = new URL(
-    "../../../packages/iterate/src/next/stream/processor.ts",
-    import.meta.url,
-  ).pathname;
-  const bundle = await build({
-    entryPoints: [new URL("./voice-delegate.ts", import.meta.url).pathname],
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "node",
-    loader: { ".md": "text" },
-    plugins: [
-      {
-        name: "processor-runtime",
-        setup(builder) {
-          builder.onResolve({ filter: /^\.\/processor\.js$/ }, () => ({
-            path: "processor",
-            namespace: "test-runtime",
-          }));
-          builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
-            // Real contract and processor; only the Cloudflare host is absent in Node.
-            contents: `export * from ${JSON.stringify(processor)}; export { z } from "zod"; export class StreamProcessorDurableObject {}`,
-            resolveDir: new URL(".", import.meta.url).pathname,
-          }));
-        },
-      },
-    ],
-  });
-  ({ VoiceDelegateProcessor } = await import(
-    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0]!.text).toString("base64")}`
-  ));
-});
+// Whichever row runs first pays for bundling the processor with esbuild
+// (`loadVoiceDelegateProcessor()`), which used to run under the hook budget; every row gets that
+// budget.
+vi.setConfig({ testTimeout: 10_000 });
 
 // September 21 calls: the supplied Markdown was dropped and the agent edited the
 // project website. Fixture keeps context + first concrete maths request verbatim;
@@ -62,6 +31,7 @@ test.each([
 ])(
   "$device: supplied context reaches the model and updates the device",
   async ({ device, events }) => {
+    const VoiceDelegateProcessor = await loadVoiceDelegateProcessor();
     const instruction = events[0]!.payload;
     const runScript = vi.fn(async () => '{"shown":true}');
     const complete = vi.fn(async (messages: DelegationMessage[]) => {
@@ -107,6 +77,7 @@ test.each([
 );
 
 test("a later request remembers the exercise it displayed, including after recovery", async () => {
+  const VoiceDelegateProcessor = await loadVoiceDelegateProcessor();
   const complete = vi.fn(async (messages: DelegationMessage[]) => {
     if (messages.at(-1)!.content === "Is seven correct for the first question?") {
       return messages.some((message) => message.content.includes("49 / 7"))
@@ -155,10 +126,54 @@ test("a later request remembers the exercise it displayed, including after recov
     await Promise.all(work);
   }
   expect(deps.runScript).toHaveBeenCalledTimes(1);
-  expect(emitted.at(-1).payload.content).toBe("Yes, 49 divided by 7 is 7.");
+  expect(emitted.at(-1).payload).toMatchObject({ content: "Yes, 49 divided by 7 is 7." });
   expect(
     emitted
       .filter((event) => event.type.endsWith("/context-added"))
       .map((event) => event.payload.role),
   ).toEqual(["assistant", "user"]);
 });
+
+let voiceDelegateProcessor: Promise<any> | undefined;
+
+/**
+ * The real voice-delegate processor, bundled against the real processor contract with only the
+ * Cloudflare host stubbed out, built once per file on first use.
+ */
+function loadVoiceDelegateProcessor(): Promise<any> {
+  voiceDelegateProcessor ||= (async () => {
+    const processor = new URL(
+      "../../../packages/iterate/src/next/stream/processor.ts",
+      import.meta.url,
+    ).pathname;
+    const bundle = await build({
+      entryPoints: [new URL("./voice-delegate.ts", import.meta.url).pathname],
+      bundle: true,
+      write: false,
+      format: "esm",
+      platform: "node",
+      loader: { ".md": "text" },
+      plugins: [
+        {
+          name: "processor-runtime",
+          setup(builder) {
+            builder.onResolve({ filter: /^\.\/processor\.js$/ }, () => ({
+              path: "processor",
+              namespace: "test-runtime",
+            }));
+            builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
+              // Real contract and processor; only the Cloudflare host is absent in Node.
+              contents: `export * from ${JSON.stringify(processor)}; export { z } from "zod"; export class StreamProcessorDurableObject {}`,
+              resolveDir: new URL(".", import.meta.url).pathname,
+            }));
+          },
+        },
+      ],
+    });
+    const { VoiceDelegateProcessor } = await import(
+      `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0]!.text).toString("base64")}`
+    );
+    return VoiceDelegateProcessor;
+  })();
+  return voiceDelegateProcessor;
+}

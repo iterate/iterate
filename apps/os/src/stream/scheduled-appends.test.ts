@@ -4,45 +4,6 @@ import { CoreContract, normalizeControlEvent, reduceCoreEventBatch } from "./cor
 import { Stream } from "./stream.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 
-const scheduled = (key = "reminder", at = "2030-01-01T00:00:00Z") =>
-  normalizeControlEvent(
-    {
-      type: "events.iterate.com/stream/append-scheduled",
-      payload: {
-        key,
-        when: { at },
-        events: [{ type: "reminder", payload: { n: 1 } }, { type: "audit" }],
-      },
-    },
-    "/",
-  );
-/** A Stream wired to its own coordinator as the DO wires them — every commit reconciles against
- *  the schedules' deadline plus `otherDeadlines` (a stand-in for delivery and idle). `alarms` and
- *  `deletes` record every write the coordinator issued; `create()` is the next incarnation over
- *  the same store. */
-function setup() {
-  const storage = nodeSqliteDurableObjectStorage();
-  const alarms: number[] = [];
-  const deletes: number[] = [];
-  const otherDeadlines: (number | null)[] = [];
-  const create = () => {
-    let stream!: Stream;
-    const coordinator = new AlarmCoordinator({
-      setAlarm: async (at) => void alarms.push(at),
-      deleteAlarm: async () => void deletes.push(1),
-      deadlines: () => [stream.nextScheduledAppendAt(), ...otherDeadlines],
-    });
-    stream = new Stream({
-      storage,
-      path: "/",
-      projectId: "prj_schedule",
-      onCommit: () => coordinator.reconcile(),
-    });
-    return { stream, coordinator };
-  };
-  return { ...create(), create, alarms, deletes, otherDeadlines, storage };
-}
-
 test("a schedule, replacement, stale cancellation and atomic completion reconstruct from the log", () => {
   const { stream, create } = setup();
   const [first] = stream.append(scheduled());
@@ -51,7 +12,9 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
     type: "events.iterate.com/stream/append-schedule-cancelled",
     payload: { key: "reminder", ifScheduledAtOffset: first.offset },
   });
-  expect(create().stream.coreReducedState.schedules.reminder.scheduledAtOffset).toBe(second.offset);
+  expect(create().stream.coreReducedState.schedules).toMatchObject({
+    reminder: { scheduledAtOffset: second.offset },
+  });
   stream.append(
     { type: "reminder", payload: { n: 1 } },
     { type: "audit" },
@@ -60,13 +23,16 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
       payload: { key: "reminder", scheduledAtOffset: second.offset },
     },
   );
-  expect(create().stream.coreReducedState.schedules).toEqual({});
+  // objectContaining compares each key it names with full equality: `{}` is an EMPTY table (toMatchObject's `{}` matches any)
+  expect(create().stream).toMatchObject({
+    coreReducedState: expect.objectContaining({ schedules: {} }),
+  });
   const log = stream.read(0, 100).events;
   expect(
     reduceCoreEventBatch(log, CoreContract.initialState(), (error) => {
       throw error;
-    }).schedules,
-  ).toEqual({});
+    }),
+  ).toEqual(expect.objectContaining({ schedules: {} }));
   expect(log.filter((event) => event.type === "reminder")).toHaveLength(1);
 });
 
@@ -103,7 +69,7 @@ test("cancellation works while paused; idempotent retries do not resurrect a com
     payload: { key: "reminder" },
   });
   stream.append(input);
-  expect(stream.coreReducedState.schedules).toEqual({});
+  expect(stream).toMatchObject({ coreReducedState: expect.objectContaining({ schedules: {} }) });
 });
 
 test.each([
@@ -128,7 +94,7 @@ test("schedule capacity rejects the whole batch without committing a partial pre
     "100 schedules",
   );
   expect(stream.highestDurableOffset()).toBe(0);
-  expect(stream.coreReducedState.schedules).toEqual({});
+  expect(stream).toMatchObject({ coreReducedState: expect.objectContaining({ schedules: {} }) });
 });
 
 test("a failing SQL write rolls back both occurrence events and completion", () => {
@@ -147,9 +113,9 @@ test("a failing SQL write rolls back both occurrence events and completion", () 
       },
     ),
   ).toThrow("injected failure");
-  expect(create().stream.coreReducedState.schedules.reminder.scheduledAtOffset).toBe(
-    definition.offset,
-  );
+  expect(create().stream.coreReducedState.schedules).toMatchObject({
+    reminder: { scheduledAtOffset: definition.offset },
+  });
   expect(stream.read().events.filter((event) => event.type === "reminder")).toEqual([]);
 });
 
@@ -220,7 +186,7 @@ test("aggregate definition size is bounded before the batch commits", () => {
     ),
   );
   expect(() => stream.append(...definitions)).toThrow("1,048,576 serialized characters");
-  expect(stream.coreReducedState.schedules).toEqual({});
+  expect(stream).toMatchObject({ coreReducedState: expect.objectContaining({ schedules: {} }) });
   expect(stream.highestDurableOffset()).toBe(0);
 });
 
@@ -271,14 +237,14 @@ test("relative deadlines resolve once from the committed definition, including r
   const [definition] = stream.append(input);
   const key = JSON.stringify(["facet-a", "deadline"]);
   const expected = new Date(Date.parse(definition.createdAt) + 30_000).toISOString();
-  expect(stream.coreReducedState.schedules[key].nextAt).toBe(expected);
-  expect(stream.append(input)[0].offset).toBe(definition.offset);
-  expect(create().stream.coreReducedState.schedules[key].nextAt).toBe(expected);
+  expect(stream.coreReducedState.schedules).toMatchObject({ [key]: { nextAt: expected } });
+  expect(stream.append(input)[0]).toMatchObject({ offset: definition.offset });
+  expect(create().stream.coreReducedState.schedules).toMatchObject({ [key]: { nextAt: expected } });
   expect(
     reduceCoreEventBatch(stream.read().events, CoreContract.initialState(), (error) => {
       throw error;
-    }).schedules[key].nextAt,
-  ).toBe(expected);
+    }).schedules,
+  ).toMatchObject({ [key]: { nextAt: expected } });
 });
 
 test("interval completion coalesces missed ticks, retains cadence and ignores duplicate occurrences", () => {
@@ -292,7 +258,7 @@ test("interval completion coalesces missed ticks, retains cadence and ignores du
   let state = reduceCoreEventBatch([input], CoreContract.initialState(), (error) => {
     throw error;
   });
-  expect(state.schedules.tick.nextAt).toBe("2030-01-01T00:00:01.000Z");
+  expect(state.schedules).toMatchObject({ tick: { nextAt: "2030-01-01T00:00:01.000Z" } });
   const completed = {
     type: "events.iterate.com/stream/append-schedule-completed",
     payload: { key: "tick", scheduledAtOffset: 1, at: state.schedules.tick.nextAt },
@@ -303,11 +269,11 @@ test("interval completion coalesces missed ticks, retains cadence and ignores du
   state = reduceCoreEventBatch([completed], state, (error) => {
     throw error;
   });
-  expect(state.schedules.tick.nextAt).toBe("2030-01-01T01:00:01.000Z");
+  expect(state.schedules).toMatchObject({ tick: { nextAt: "2030-01-01T01:00:01.000Z" } });
   const repeated = reduceCoreEventBatch([{ ...completed, offset: 4 }], state, (error) => {
     throw error;
   });
-  expect(repeated.schedules).toEqual(state.schedules);
+  expect(repeated).toEqual(expect.objectContaining({ schedules: state.schedules }));
 });
 
 test.each([
@@ -391,3 +357,44 @@ test("a batch can replace a full schedule set without transient capacity failure
   expect(stream.coreReducedState.schedules.old0).toBeUndefined();
   expect(stream.coreReducedState.schedules.new).toBeDefined();
 });
+
+function scheduled(key = "reminder", at = "2030-01-01T00:00:00Z") {
+  return normalizeControlEvent(
+    {
+      type: "events.iterate.com/stream/append-scheduled",
+      payload: {
+        key,
+        when: { at },
+        events: [{ type: "reminder", payload: { n: 1 } }, { type: "audit" }],
+      },
+    },
+    "/",
+  );
+}
+
+/** A Stream wired to its own coordinator as the DO wires them — every commit reconciles against
+ *  the schedules' deadline plus `otherDeadlines` (a stand-in for delivery and idle). `alarms` and
+ *  `deletes` record every write the coordinator issued; `create()` is the next incarnation over
+ *  the same store. */
+function setup() {
+  const storage = nodeSqliteDurableObjectStorage();
+  const alarms: number[] = [];
+  const deletes: number[] = [];
+  const otherDeadlines: (number | null)[] = [];
+  const create = () => {
+    let stream!: Stream;
+    const coordinator = new AlarmCoordinator({
+      setAlarm: async (at) => void alarms.push(at),
+      deleteAlarm: async () => void deletes.push(1),
+      deadlines: () => [stream.nextScheduledAppendAt(), ...otherDeadlines],
+    });
+    stream = new Stream({
+      storage,
+      path: "/",
+      projectId: "prj_schedule",
+      onCommit: () => coordinator.reconcile(),
+    });
+    return { stream, coordinator };
+  };
+  return { ...create(), create, alarms, deletes, otherDeadlines, storage };
+}

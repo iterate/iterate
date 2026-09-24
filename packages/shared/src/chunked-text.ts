@@ -25,7 +25,7 @@ export const ChunkedText = z
     }
     for (let index = 0; index < text.blockCount; index++) {
       const block = text.groups[Math.floor(index / textGroupSize)]?.[index];
-      if (block === undefined || (index < text.blockCount - 1 && block.length < textBlockSize)) {
+      if (!block || (index < text.blockCount - 1 && block.length < textBlockSize)) {
         ctx.addIssue({
           code: "custom",
           message: "Text blocks must be contiguous and full before the tail",

@@ -5,32 +5,10 @@ import websiteSteps from "./website-steps-repro.json";
 
 const transcript = [{ role: "listener" as const, text: "what is two plus two" }];
 
-async function turn(replies: string[], scriptResults: string[] = []) {
-  const completions: { role: string; content: string }[][] = [];
-  const scripts: string[] = [];
-  const notes: string[] = [];
-  const result = await runDelegationTurn(transcript, {
-    complete: async (messages) => {
-      completions.push(messages.map((m) => ({ ...m })));
-      const reply = replies.shift();
-      if (!reply) throw new Error("no more replies");
-      return reply;
-    },
-    runScript: async (script) => {
-      scripts.push(script);
-      return scriptResults.shift() || "null";
-    },
-    progress: async (note) => {
-      notes.push(note);
-    },
-  });
-  return { result, completions, scripts, notes };
-}
-
 test("a plain reply is the spoken answer", async () => {
   const { result, completions } = await turn(["Two plus two is four."]);
   expect(completions).toHaveLength(1);
-  expect(completions[0]![0]!.role).toBe("system");
+  expect(completions[0]![0]).toMatchObject({ role: "system" });
   expect(completions[0]![0]!.content).toMatch(
     `${DEFAULT_AGENT_SYSTEM_PROMPT}\nINSTRUCTIONS FOR SPOKEN CONVERSATIONS:`,
   );
@@ -76,7 +54,7 @@ test("a speculative failure beside the clock script is not spoken before its suc
     ['"12:00"'],
   );
   expect(notes).toEqual(["Checking London time"]);
-  expect(result.content).toBe("The current time in London is 12:00.");
+  expect(result).toMatchObject({ content: "The current time in London is 12:00." });
 });
 
 test("the script bound reports unfinished work instead of claiming success", async () => {
@@ -99,7 +77,9 @@ test("budget exhaustion gives the model a final non-executing turn to explain pa
     role: "system",
     content: expect.stringContaining("No script attempts remain"),
   });
-  expect(result.content).toBe("The change was saved, but I haven't verified the live website yet.");
+  expect(result).toMatchObject({
+    content: "The change was saved, but I haven't verified the live website yet.",
+  });
 });
 
 // Satellite1, 2026-09-22 12:14 UTC: six scripts published the horse joke, then the
@@ -137,5 +117,27 @@ test("a goodbye with the hang-up token hangs up without saying the token", async
 test("a model failure is spoken, not thrown", async () => {
   const { result } = await turn([]);
   expect(result.content).toMatch(/^Sorry, that did not work: no more replies/);
-  expect(result.hangUp).toBe(false);
+  expect(result).toMatchObject({ hangUp: false });
 });
+
+async function turn(replies: string[], scriptResults: string[] = []) {
+  const completions: { role: string; content: string }[][] = [];
+  const scripts: string[] = [];
+  const notes: string[] = [];
+  const result = await runDelegationTurn(transcript, {
+    complete: async (messages) => {
+      completions.push(messages.map((m) => ({ ...m })));
+      const reply = replies.shift();
+      if (!reply) throw new Error("no more replies");
+      return reply;
+    },
+    runScript: async (script) => {
+      scripts.push(script);
+      return scriptResults.shift() || "null";
+    },
+    progress: async (note) => {
+      notes.push(note);
+    },
+  });
+  return { result, completions, scripts, notes };
+}

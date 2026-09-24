@@ -3,44 +3,214 @@ import { URL } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
-import { beforeAll, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { admitLoadedCodeRow } from "../../os/src/context/itx-expression-rewriting.ts";
 
-let VoiceWorker: any;
+// Whichever row runs first pays for bundling the worker with esbuild (`loadVoiceWorker()`), which
+// used to run under the hook budget; every row gets that budget.
+vi.setConfig({ testTimeout: 10_000 });
 
-beforeAll(async () => {
-  // Deployed facets receive processor.js from the runtime. Supply just the
-  // ConfigWorker environment and the SDK's `z` here and exercise the actual
-  // bundled worker.
-  const bundle = await build({
-    entryPoints: [new URL("./worker.ts", import.meta.url).pathname],
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "node",
-    loader: { ".md": "text" },
-    plugins: [
-      {
-        name: "processor-runtime",
-        setup(builder) {
-          builder.onResolve({ filter: /^\.\/processor\.js$/ }, () => ({
-            path: "processor",
-            namespace: "test-runtime",
-          }));
-          builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
-            contents:
-              'export class ConfigWorker { constructor(env) { this.env = env; } } export { z } from "zod";',
-            resolveDir: new URL(".", import.meta.url).pathname,
-          }));
-        },
-      },
-    ],
+test.each([0, 1, 2, 3, 4])(
+  "RGBA PNG row filter %i reaches the panel as 15000 black bytes",
+  async (filter) => {
+    const { worker, quickAction, setImage } = await harness(png(4, filter));
+    const result = await worker.setImage({
+      device: "waveshare_rlcd_4_2",
+      image: { html: "hello" },
+    });
+    expect(result).toMatchObject({ shown: true, bytes: 15000 });
+    expect(quickAction).toHaveBeenCalledWith(
+      "screenshot",
+      expect.objectContaining({
+        viewport: { width: 400, height: 300, deviceScaleFactor: 1 },
+      }),
+    );
+    const chunks = setImage.mock.calls.map(([chunk]) => chunk);
+    expect(chunks.map((chunk) => chunk.offset)).toEqual([0, 4096, 8192, 12288]);
+    expect(new Set(chunks.map((chunk) => chunk.uploadId))).toMatchObject({ size: 1 });
+    expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk.data, "base64")))).toEqual(
+      Buffer.alloc(15000, 255),
+    );
+  },
+);
+
+test("a null image uses the same setter without rendering", async () => {
+  const { worker, quickAction, setImage } = await harness();
+  expect(await worker.setImage({ device: "waveshare_rlcd_4_2", image: null })).toMatchObject({
+    shown: false,
+    bytes: 0,
   });
-  ({ default: VoiceWorker } = await import(
-    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0]!.text).toString("base64")}`
-  ));
+  expect(quickAction).not.toHaveBeenCalled();
+  expect(setImage).toHaveBeenCalledExactlyOnceWith(null);
 });
+
+test("an incorrect device acknowledgment stops the upload", async () => {
+  const { worker, setImage } = await harness();
+  setImage.mockResolvedValueOnce(0);
+  await expect(
+    worker.setImage({ device: "waveshare_rlcd_4_2", image: { html: "hello" } }),
+  ).rejects.toThrow("expected 4096");
+  expect(setImage).toHaveBeenCalledTimes(1);
+});
+
+test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
+  "%s receives only its own screen context",
+  async (device) => {
+    const { worker, append, create, disable } = await harness();
+    await worker.setupVoiceAgent({
+      streamPath: `/agents/voice/v23/${device}/test`,
+      activation: "test",
+      screen: device !== "havpe",
+    });
+    expect(create).toHaveBeenCalledExactlyOnceWith(`/agents/voice/v23/${device}/test`);
+    expect(disable).toHaveBeenCalledExactlyOnceWith("agent");
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(disable.mock.invocationCallOrder[0]!);
+    expect(disable.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
+    const events = append.mock.calls[0]!;
+    const contextType = "events.iterate.com/agent/context-added";
+    const subscription = events.find((event) => event.payload?.name === "voice-delegate");
+    expect(subscription).toBeDefined();
+    expect(events.some((event) => event.type === contextType)).toBe(device !== "havpe");
+    if (device !== "havpe") {
+      expect(events.find((event) => event.type === contextType).payload).toMatchObject({
+        content: readFileSync(new URL("./screen-context.md", import.meta.url), "utf8").replaceAll(
+          "{{DEVICE}}",
+          device.replaceAll("-", "_"),
+        ),
+      });
+    }
+    expect(subscription.payload.consumes).toContain(contextType);
+  },
+);
+
+// Regression: a photo URL in the September 21 voice stream returned HTTP 404.
+// Chromium still produced a valid PNG containing the broken-image icon.
+test.each([true, false])(
+  "image decode success=%s controls whether pixels reach the device",
+  async (loaded) => {
+    const { worker, quickAction, setImage } = await harness();
+    quickAction.mockImplementationOnce(async (...args: any[]) => {
+      const options = args[1];
+      const attrs = new Map<string, string>();
+      const document = {
+        images: [{ decode: () => (loaded ? Promise.resolve() : Promise.reject(new Error("404"))) }],
+        fonts: { ready: Promise.resolve() },
+        documentElement: {
+          removeAttribute: (key: string) => attrs.delete(key),
+          setAttribute: (key: string, value: string) => attrs.set(key, value),
+        },
+      };
+      // Run the actual browser guard, including its rejected-decode path.
+      await runInNewContext(options.addScriptTag[0].content, { document, Promise });
+      expect(options.waitForSelector).toMatchObject({
+        selector: '[data-iterate-screen-assets="ready"]',
+        timeout: 5000,
+      });
+      if (attrs.get("data-iterate-screen-assets") !== "ready")
+        throw new Error("asset readiness timeout");
+      return new Uint8Array(png(3, 0));
+    });
+    const render = worker.setImage({
+      device: "waveshare_rlcd_4_2",
+      image: { html: '<img src="https://example.com/missing.jpg">' },
+    });
+    if (loaded) {
+      await expect(render).resolves.toMatchObject({ shown: true });
+      expect(setImage).toHaveBeenCalledTimes(4);
+    } else {
+      await expect(render).rejects.toThrow("asset readiness timeout");
+      expect(setImage).not.toHaveBeenCalled();
+    }
+  },
+);
+
+test("NOTE4 grayscale uses the same transfer and sends 60000 bytes", async () => {
+  const { worker, setImage } = await harness(png(3, 0), { formats: ["mono1", "gray4"] });
+  expect(
+    await worker.setImage({ device: "zectrix_note4", image: { html: "grey", format: "gray4" } }),
+  ).toMatchObject({ shown: true, bytes: 60000, format: "gray4" });
+  expect(setImage.mock.calls.every(([chunk]) => chunk.format === "gray4")).toBe(true);
+});
+
+test("an unsupported format fails before rendering or transfer", async () => {
+  const { worker, quickAction, setImage } = await harness();
+  await expect(
+    worker.setImage({ device: "waveshare_rlcd_4_2", image: { html: "x", format: "rgb565" } }),
+  ).rejects.toThrow("does not support");
+  expect(quickAction).not.toHaveBeenCalled();
+  expect(setImage).not.toHaveBeenCalled();
+});
+
+test("an accepted e-paper upload waits for refresh completion", async () => {
+  const { worker, status } = await harness();
+  status.mockImplementationOnce(async () => ({ ...(await status()), state: "pending" }));
+  expect(await worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).toMatchObject({
+    shown: true,
+  });
+  expect(status.mock.calls.length).toBeGreaterThan(1);
+});
+
+test.each(["failed", "idle"])("a %s refresh never reports shown", async (state) => {
+  const { worker, status } = await harness();
+  status.mockImplementationOnce(async () => ({ ...(await status()), state }));
+  await expect(worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).rejects.toThrow(
+    `refresh ${state}`,
+  );
+});
+
+test("an abandoned refresh times out", async () => {
+  const { worker, status } = await harness(png(3, 0), { refreshTimeoutMs: 1 });
+  status.mockImplementationOnce(async () => {
+    const result = await status();
+    status.mockResolvedValue({ ...result, state: "pending" });
+    return { ...result, state: "pending" };
+  });
+  await expect(worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).rejects.toThrow(
+    "timed out",
+  );
+});
+
+let voiceWorker: Promise<any> | undefined;
+
+/**
+ * Deployed facets receive processor.js from the runtime. Supply just the
+ * ConfigWorker environment and the SDK's `z` here and exercise the actual
+ * bundled worker, built once per file on first use.
+ */
+function loadVoiceWorker(): Promise<any> {
+  voiceWorker ||= (async () => {
+    const bundle = await build({
+      entryPoints: [new URL("./worker.ts", import.meta.url).pathname],
+      bundle: true,
+      write: false,
+      format: "esm",
+      platform: "node",
+      loader: { ".md": "text" },
+      plugins: [
+        {
+          name: "processor-runtime",
+          setup(builder) {
+            builder.onResolve({ filter: /^\.\/processor\.js$/ }, () => ({
+              path: "processor",
+              namespace: "test-runtime",
+            }));
+            builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
+              contents:
+                'export class ConfigWorker { constructor(env) { this.env = env; } } export { z } from "zod";',
+              resolveDir: new URL(".", import.meta.url).pathname,
+            }));
+          },
+        },
+      ],
+    });
+    const { default: VoiceWorker } = await import(
+      `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0]!.text).toString("base64")}`
+    );
+    return VoiceWorker;
+  })();
+  return voiceWorker;
+}
 
 function png(channels: 3 | 4, filter: number) {
   const width = 400;
@@ -90,7 +260,8 @@ function png(channels: 3 | 4, filter: number) {
   ]);
 }
 
-function harness(image = png(3, 0), infoOverride = {}) {
+async function harness(image = png(3, 0), infoOverride = {}) {
+  const VoiceWorker = await loadVoiceWorker();
   const info = {
     width: 400,
     height: 300,
@@ -131,161 +302,3 @@ function harness(image = png(3, 0), infoOverride = {}) {
     disable,
   };
 }
-
-test.each([0, 1, 2, 3, 4])(
-  "RGBA PNG row filter %i reaches the panel as 15000 black bytes",
-  async (filter) => {
-    const { worker, quickAction, setImage } = harness(png(4, filter));
-    const result = await worker.setImage({
-      device: "waveshare_rlcd_4_2",
-      image: { html: "hello" },
-    });
-    expect(result).toMatchObject({ shown: true, bytes: 15000 });
-    expect(quickAction).toHaveBeenCalledWith(
-      "screenshot",
-      expect.objectContaining({
-        viewport: { width: 400, height: 300, deviceScaleFactor: 1 },
-      }),
-    );
-    const chunks = setImage.mock.calls.map(([chunk]) => chunk);
-    expect(chunks.map((chunk) => chunk.offset)).toEqual([0, 4096, 8192, 12288]);
-    expect(new Set(chunks.map((chunk) => chunk.uploadId)).size).toBe(1);
-    expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk.data, "base64")))).toEqual(
-      Buffer.alloc(15000, 255),
-    );
-  },
-);
-
-test("a null image uses the same setter without rendering", async () => {
-  const { worker, quickAction, setImage } = harness();
-  expect(await worker.setImage({ device: "waveshare_rlcd_4_2", image: null })).toMatchObject({
-    shown: false,
-    bytes: 0,
-  });
-  expect(quickAction).not.toHaveBeenCalled();
-  expect(setImage).toHaveBeenCalledExactlyOnceWith(null);
-});
-
-test("an incorrect device acknowledgment stops the upload", async () => {
-  const { worker, setImage } = harness();
-  setImage.mockResolvedValueOnce(0);
-  await expect(
-    worker.setImage({ device: "waveshare_rlcd_4_2", image: { html: "hello" } }),
-  ).rejects.toThrow("expected 4096");
-  expect(setImage).toHaveBeenCalledTimes(1);
-});
-
-test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
-  "%s receives only its own screen context",
-  async (device) => {
-    const { worker, append, create, disable } = harness();
-    await worker.setupVoiceAgent({
-      streamPath: `/agents/voice/v23/${device}/test`,
-      activation: "test",
-      screen: device !== "havpe",
-    });
-    expect(create).toHaveBeenCalledExactlyOnceWith(`/agents/voice/v23/${device}/test`);
-    expect(disable).toHaveBeenCalledExactlyOnceWith("agent");
-    expect(create.mock.invocationCallOrder[0]).toBeLessThan(disable.mock.invocationCallOrder[0]!);
-    expect(disable.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
-    const events = append.mock.calls[0]!;
-    const contextType = "events.iterate.com/agent/context-added";
-    const subscription = events.find((event) => event.payload?.name === "voice-delegate");
-    expect(subscription).toBeDefined();
-    expect(events.some((event) => event.type === contextType)).toBe(device !== "havpe");
-    if (device !== "havpe") {
-      expect(events.find((event) => event.type === contextType).payload.content).toBe(
-        readFileSync(new URL("./screen-context.md", import.meta.url), "utf8").replaceAll(
-          "{{DEVICE}}",
-          device.replaceAll("-", "_"),
-        ),
-      );
-    }
-    expect(subscription.payload.consumes).toContain(contextType);
-  },
-);
-
-// Regression: a photo URL in the September 21 voice stream returned HTTP 404.
-// Chromium still produced a valid PNG containing the broken-image icon.
-test.each([true, false])(
-  "image decode success=%s controls whether pixels reach the device",
-  async (loaded) => {
-    const { worker, quickAction, setImage } = harness();
-    quickAction.mockImplementationOnce(async (...args: any[]) => {
-      const options = args[1];
-      const attrs = new Map<string, string>();
-      const document = {
-        images: [{ decode: () => (loaded ? Promise.resolve() : Promise.reject(new Error("404"))) }],
-        fonts: { ready: Promise.resolve() },
-        documentElement: {
-          removeAttribute: (key: string) => attrs.delete(key),
-          setAttribute: (key: string, value: string) => attrs.set(key, value),
-        },
-      };
-      // Run the actual browser guard, including its rejected-decode path.
-      await runInNewContext(options.addScriptTag[0].content, { document, Promise });
-      expect(options.waitForSelector.selector).toBe('[data-iterate-screen-assets="ready"]');
-      expect(options.waitForSelector.timeout).toBe(5000);
-      if (attrs.get("data-iterate-screen-assets") !== "ready")
-        throw new Error("asset readiness timeout");
-      return new Uint8Array(png(3, 0));
-    });
-    const render = worker.setImage({
-      device: "waveshare_rlcd_4_2",
-      image: { html: '<img src="https://example.com/missing.jpg">' },
-    });
-    if (loaded) {
-      await expect(render).resolves.toMatchObject({ shown: true });
-      expect(setImage).toHaveBeenCalledTimes(4);
-    } else {
-      await expect(render).rejects.toThrow("asset readiness timeout");
-      expect(setImage).not.toHaveBeenCalled();
-    }
-  },
-);
-
-test("NOTE4 grayscale uses the same transfer and sends 60000 bytes", async () => {
-  const { worker, setImage } = harness(png(3, 0), { formats: ["mono1", "gray4"] });
-  expect(
-    await worker.setImage({ device: "zectrix_note4", image: { html: "grey", format: "gray4" } }),
-  ).toMatchObject({ shown: true, bytes: 60000, format: "gray4" });
-  expect(setImage.mock.calls.every(([chunk]) => chunk.format === "gray4")).toBe(true);
-});
-
-test("an unsupported format fails before rendering or transfer", async () => {
-  const { worker, quickAction, setImage } = harness();
-  await expect(
-    worker.setImage({ device: "waveshare_rlcd_4_2", image: { html: "x", format: "rgb565" } }),
-  ).rejects.toThrow("does not support");
-  expect(quickAction).not.toHaveBeenCalled();
-  expect(setImage).not.toHaveBeenCalled();
-});
-
-test("an accepted e-paper upload waits for refresh completion", async () => {
-  const { worker, status } = harness();
-  status.mockImplementationOnce(async () => ({ ...(await status()), state: "pending" }));
-  expect(await worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).toMatchObject({
-    shown: true,
-  });
-  expect(status.mock.calls.length).toBeGreaterThan(1);
-});
-
-test.each(["failed", "idle"])("a %s refresh never reports shown", async (state) => {
-  const { worker, status } = harness();
-  status.mockImplementationOnce(async () => ({ ...(await status()), state }));
-  await expect(worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).rejects.toThrow(
-    `refresh ${state}`,
-  );
-});
-
-test("an abandoned refresh times out", async () => {
-  const { worker, status } = harness(png(3, 0), { refreshTimeoutMs: 1 });
-  status.mockImplementationOnce(async () => {
-    const result = await status();
-    status.mockResolvedValue({ ...result, state: "pending" });
-    return { ...result, state: "pending" };
-  });
-  await expect(worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).rejects.toThrow(
-    "timed out",
-  );
-});

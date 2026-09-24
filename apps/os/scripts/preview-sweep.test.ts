@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { previewResourceSuffixes, type PreviewResourceKind } from "./preview-config.ts";
 import {
   planPreviewSweep,
@@ -8,20 +8,6 @@ import {
 } from "./preview-sweep.ts";
 
 const NOW = Date.parse("2026-09-23T12:00:00Z");
-const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();
-
-const input = (overrides: Partial<PreviewSweepInput>): PreviewSweepInput => ({
-  now: NOW,
-  workerNames: ["os-preview", "dash-preview"],
-  // older than every resource the tables below stamp, but the legacy slots' (rule 7)
-  parentCreatedAt: hoursAgo(1000),
-  resourceSuffixes: { kv: ["itx-kv", "oauth-kv"], r2: ["files"], d1: ["db"], artifacts: ["repos"] },
-  previews: [],
-  resources: [],
-  pullRequestStates: new Map(),
-  openPullRequestBranches: [],
-  ...overrides,
-});
 
 test("the suffixes are wrangler's names for the template's KV and R2 bindings, then the D1's and the Artifacts namespace's", () => {
   expect(previewResourceSuffixes()).toEqual({
@@ -32,30 +18,31 @@ test("the suffixes are wrangler's names for the template's KV and R2 bindings, t
   });
 });
 
-describe("which previews are stale (rules 1–3)", () => {
-  test.each<{
-    rule: string;
-    preview: string;
-    deployedHoursAgo?: number;
-    pullRequest?: PullRequestState;
-    openBranches?: string[] | "unknown";
-    verdict: "stale" | "keep";
-  }>(
-    // prettier-ignore
-    [
-      { rule: "1: deployed 8 days ago, PR open", preview: "pr7-x", deployedHoursAgo: 192, pullRequest: "open", verdict: "stale" },
-      { rule: "1: deployed 8 days ago, its branch's PR open", preview: "fix-foo", deployedHoursAgo: 192, openBranches: ["fix/foo"], verdict: "stale" },
-      { rule: "2: PR closed, deployed an hour ago", preview: "pr7-x", deployedHoursAgo: 1, pullRequest: "closed", verdict: "stale" },
-      { rule: "2: PR does not exist", preview: "pr7-x", deployedHoursAgo: 1, pullRequest: "missing", verdict: "stale" },
-      { rule: "PR open, deployed 6 days ago", preview: "pr7-x", deployedHoursAgo: 144, pullRequest: "open", verdict: "keep" },
-      { rule: "PR lookup failed, deployed 6 days ago", preview: "pr7-x", deployedHoursAgo: 144, pullRequest: "unknown", verdict: "keep" },
-      { rule: "3: no PR, deployed 25 h ago, no open branch of that name", preview: "exp-watchdog", deployedHoursAgo: 25, openBranches: ["fix/foo"], verdict: "stale" },
-      { rule: "3: no PR, deployed 23 h ago", preview: "exp-watchdog", deployedHoursAgo: 23, verdict: "keep" },
-      { rule: "3: no PR, deployed 2 days ago, an open PR's branch slugifies to it", preview: "fix-foo", deployedHoursAgo: 48, openBranches: ["fix/foo"], verdict: "keep" },
-      { rule: "3: no PR, deployed 2 days ago, open branches unknown", preview: "fix-foo", deployedHoursAgo: 48, openBranches: "unknown", verdict: "keep" },
-      { rule: "no deploy stamp", preview: "exp-watchdog", verdict: "keep" },
-    ],
-  )("$rule ⇒ $verdict", ({ preview, deployedHoursAgo, pullRequest, openBranches, verdict }) => {
+test.each<{
+  rule: string;
+  preview: string;
+  deployedHoursAgo?: number;
+  pullRequest?: PullRequestState;
+  openBranches?: string[] | "unknown";
+  verdict: "stale" | "keep";
+}>(
+  // prettier-ignore
+  [
+    { rule: "1: deployed 8 days ago, PR open", preview: "pr7-x", deployedHoursAgo: 192, pullRequest: "open", verdict: "stale" },
+    { rule: "1: deployed 8 days ago, its branch's PR open", preview: "fix-foo", deployedHoursAgo: 192, openBranches: ["fix/foo"], verdict: "stale" },
+    { rule: "2: PR closed, deployed an hour ago", preview: "pr7-x", deployedHoursAgo: 1, pullRequest: "closed", verdict: "stale" },
+    { rule: "2: PR does not exist", preview: "pr7-x", deployedHoursAgo: 1, pullRequest: "missing", verdict: "stale" },
+    { rule: "PR open, deployed 6 days ago", preview: "pr7-x", deployedHoursAgo: 144, pullRequest: "open", verdict: "keep" },
+    { rule: "PR lookup failed, deployed 6 days ago", preview: "pr7-x", deployedHoursAgo: 144, pullRequest: "unknown", verdict: "keep" },
+    { rule: "3: no PR, deployed 25 h ago, no open branch of that name", preview: "exp-watchdog", deployedHoursAgo: 25, openBranches: ["fix/foo"], verdict: "stale" },
+    { rule: "3: no PR, deployed 23 h ago", preview: "exp-watchdog", deployedHoursAgo: 23, verdict: "keep" },
+    { rule: "3: no PR, deployed 2 days ago, an open PR's branch slugifies to it", preview: "fix-foo", deployedHoursAgo: 48, openBranches: ["fix/foo"], verdict: "keep" },
+    { rule: "3: no PR, deployed 2 days ago, open branches unknown", preview: "fix-foo", deployedHoursAgo: 48, openBranches: "unknown", verdict: "keep" },
+    { rule: "no deploy stamp", preview: "exp-watchdog", verdict: "keep" },
+  ],
+)(
+  "which previews are stale (rules 1–3): $rule ⇒ $verdict",
+  ({ preview, deployedHoursAgo, pullRequest, openBranches, verdict }) => {
     const plan = planPreviewSweep(
       input({
         previews: [
@@ -68,9 +55,9 @@ describe("which previews are stale (rules 1–3)", () => {
         openPullRequestBranches: openBranches === "unknown" ? undefined : openBranches || [],
       }),
     );
-    expect(plan.previews).toEqual([expect.objectContaining({ name: preview, verdict })]);
-  });
-});
+    expect(plan).toMatchObject({ previews: [expect.objectContaining({ name: preview, verdict })] });
+  },
+);
 
 // Which resources are orphans (rules 4–7): previews soak and pr2847-x are listed, a worker
 // os-preview-2 exists, and the parent is 1000 h old.
@@ -207,4 +194,19 @@ test.each<[string, string[], string, string[]]>([
   ["only the run's own", ["main-7ea6741"], "main-7ea6741", []],
 ])("main's superseded throwaway previews: %s", (_label, names, current, superseded) => {
   expect(supersededMainPreviews(names, current)).toEqual(superseded);
+});
+
+const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();
+
+const input = (overrides: Partial<PreviewSweepInput>): PreviewSweepInput => ({
+  now: NOW,
+  workerNames: ["os-preview", "dash-preview"],
+  // older than every resource the tables below stamp, but the legacy slots' (rule 7)
+  parentCreatedAt: hoursAgo(1000),
+  resourceSuffixes: { kv: ["itx-kv", "oauth-kv"], r2: ["files"], d1: ["db"], artifacts: ["repos"] },
+  previews: [],
+  resources: [],
+  pullRequestStates: new Map(),
+  openPullRequestBranches: [],
+  ...overrides,
 });

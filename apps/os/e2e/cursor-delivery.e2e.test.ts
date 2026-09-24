@@ -43,72 +43,7 @@ import { SOURCES } from "./support/sources.ts";
 const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
 
 type Range = { after: number; through: number };
-const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
-  (await readAll(itx)).filter(
-    (e) =>
-      e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
-      e.payload?.name === name,
-  );
-
 // ── the HOOKED rig: a stateless project worker whose deliveries land in this process ──
-
-/** The stateless "project worker" shape whose progress THE STREAM must keep (a Worker-Loader
- *  entrypoint cannot own it): its `processEventBatch(events, range)` hands the batch to a LIVE hook
- *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor lane delivered
- *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
- *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). */
-const HOOKED_SOURCE = (hook: string) => ({
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Hooked extends WorkerEntrypoint {
-  async processEventBatch(events, range) {
-    const itx = await this.env.ITX.get();
-    return await itx.${hook}.deliver(events, range);
-  }
-}`,
-});
-class Hook extends RpcTarget {
-  readonly #fn: (events: any[], range: Range) => unknown;
-  constructor(fn: (events: any[], range: Range) => unknown) {
-    super();
-    this.#fn = fn;
-  }
-  deliver(events: any[], range: Range): unknown {
-    return this.#fn(events, range);
-  }
-}
-/** Subscribe `name` on the CURSOR lane: lend the live hook behind the rule `itx.<name>Hook`, hand the
- *  hooked worker's source over INLINE and rewrite `itx.<name>Worker` onto its entrypoint, subscribe
- *  its `processEventBatch` BY EXPRESSION (an entrypoint handle ⇒ the stream keeps the cursor). Names
- *  are one JS identifier. */
-async function cursorSubscribe(
-  itx: any,
-  name: string,
-  fn: (events: any[], range: Range) => unknown,
-  consumes?: string[],
-): Promise<void> {
-  const hook = `${name}Hook`;
-  await itx.provide(`itx.${hook}`, new Hook(fn));
-  await itx.provide(
-    `itx.${name}Worker`,
-    `itx.workers.get({ source: ${JSON.stringify(HOOKED_SOURCE(hook))} })`,
-  );
-  await itx.subscribe({
-    name,
-    target: `itx.${name}Worker.processEventBatch`,
-    consumes,
-  });
-}
-/** The `digest` fixture (e2e/support/sources.ts) on the cursor lane: counts delivered events into
- *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
-async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
-  await itx.provide("itx.digest", ["itx", "workers", ["get", { source: SOURCES.digest }]]);
-  await itx.subscribe({
-    name,
-    target: "itx.digest.processEventBatch",
-    consumes,
-  });
-}
-const digested = async (itx: any): Promise<number> => Number((await itx.kv.get("digested")) ?? 0);
 
 // ── the LEDGER rig: a stateless worker that ledgers every delivery into the project's kv ──
 
@@ -132,21 +67,6 @@ export class Ledger extends WorkerEntrypoint {
 }`,
 };
 type LedgerEntry = { range: Range; offsets: number[] };
-const ledgerLog = async (itx: any): Promise<LedgerEntry[]> =>
-  JSON.parse(((await itx.kv.get("ledger:log")) as string | null) ?? "[]") as LedgerEntry[];
-const ledgerSubscribe = async (itx: any, firstCall: "throw" | "hold"): Promise<void> => {
-  await itx.provide("itx.ledger", [
-    "itx",
-    "workers",
-    ["get", { source: SRC_LEDGER, className: "Ledger", props: { firstCall } }],
-  ]);
-  await itx.subscribe({
-    name: "ledger",
-    target: "itx.ledger.processEventBatch",
-    consumes: ["mark"],
-  });
-};
-
 // ─────────────────────────────── the halt / resume story ───────────────────────────────
 
 test("the digest worker is delivered from a stream-kept cursor; retryable:false halts with the fact; a resumed event un-halts and seeks past the poison", async () => {
@@ -174,9 +94,9 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
     const r = await itx.subscriptions.get("digest");
     return r?.cursor && r.cursor.confirmedOffset >= marks[2].offset ? r : undefined;
   });
-  expect(row3.cursor.attempt).toBe(0);
+  expect(row3.cursor).toMatchObject({ attempt: 0 });
   expect(row3.halted).toBeUndefined();
-  expect(row3.target).toBe("itx.digest.processEventBatch"); // stored as written — the loop classifies the target by what it EVALUATES to
+  expect(row3).toMatchObject({ target: "itx.digest.processEventBatch" }); // stored as written — the loop classifies the target by what it EVALUATES to
   expect((await itx.subscriptions.get("tab")).cursor).toBeUndefined(); // push target: the client owns its offset
   expect((await subscriptions(itx)).map((r: { name: string }) => r.name).sort()).toEqual([
     "digest",
@@ -193,7 +113,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
     async () => (await itx.subscriptions.get("digest"))?.halted,
     30_000,
   );
-  expect(halted.attempts).toBe(1); // retryable: false → one attempt, not fifteen
+  expect(halted).toMatchObject({ attempts: 1 }); // retryable: false → one attempt, not fifteen
   expect(halted.afterOffset).toBeGreaterThanOrEqual(marks[2].offset); // the cursor stood after the good marks…
   expect(halted.afterOffset).toBeLessThan(poisoned.offset); // …and before the poison
   expect(halted.error).toMatch(/poison/);
@@ -225,7 +145,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   );
   const rowAfter = await itx.subscriptions.get("digest");
   expect(rowAfter.halted).toBeUndefined();
-  expect(rowAfter.cursor.attempt).toBe(0);
+  expect(rowAfter.cursor).toMatchObject({ attempt: 0 });
   expect(rowAfter.cursor.confirmedOffset).toBeGreaterThanOrEqual(fresh.offset);
   expect(stuck.offset).toBeGreaterThan(poisoned.offset); // the seek landed between the two
   // …and the lane keeps flowing afterwards.
@@ -295,7 +215,7 @@ test("a resumed event appended MID-DELIVERY wins — m1 redelivers from the seek
   );
   const r = await itx.subscriptions.get("ledger");
   expect(r.halted).toBeUndefined();
-  expect(r.cursor.attempt).toBe(0);
+  expect(r.cursor).toMatchObject({ attempt: 0 });
   expect(r.cursor.confirmedOffset).toBeGreaterThanOrEqual(m2.offset);
 });
 
@@ -319,7 +239,7 @@ test("a resumed { afterOffset } while HEALTHY redelivers exactly the events afte
   const redelivered = c.invocations.slice(before).flatMap((i) => i.events.map((e) => e.offset));
   // exactly-from-afterOffset: m2 and m3 once more, then m4; m1 (== afterOffset) NEVER redelivered
   expect(redelivered).toEqual([m2.offset, m3.offset, m4.offset]);
-  expect(c.invocations[before].range.after).toBe(m1.offset); // the range starts surgically at the cursor
+  expect(c.invocations[before].range).toMatchObject({ after: m1.offset }); // the range starts surgically at the cursor
   const r = await itx.subscriptions.get("replay");
   expect(r.cursor.confirmedOffset).toBeGreaterThanOrEqual(m4.offset);
   expect(r.halted).toBeUndefined();
@@ -388,7 +308,7 @@ test("consumes ['*'] delivers every durable event; the row carries a cursor at `
       },
       8_000,
     );
-    expect(r.cursor.attempt).toBe(0);
+    expect(r.cursor).toMatchObject({ attempt: 0 });
     expect(r.cursor.nextAttemptAtMs).toBeUndefined();
     expect(r.halted).toBeUndefined();
   }
@@ -410,7 +330,7 @@ test("ephemerals DO reach a caught-up cursor target (read back from the stream's
   await sleep(400);
   expect(c.offsets()).toEqual([eph.offset, durable.offset]); // both, once each, in order
   // ranges chain across the two deliveries exactly like a push subscriber's
-  expect(c.invocations[1].range.after).toBe(c.invocations[0].range.through);
+  expect(c.invocations[1].range).toMatchObject({ after: c.invocations[0].range.through });
   // the cursor stands at the durable head (an ephemeral-only batch advances it in memory only)
   expect((await itx.subscriptions.get("ephcur")).cursor).toMatchObject({
     confirmedOffset: durable.offset,
@@ -633,7 +553,92 @@ test("subscribe({ afterOffset: 0 }) delivers the marks that landed BEFORE the su
     return row?.cursor && row.cursor.confirmedOffset >= fourth.offset ? row : undefined;
   });
   expect(fromHistory.configuredAtOffset).toBeGreaterThan(fromNow.configuredAtOffset); // a new row
-  expect(fromHistory.cursor.attempt).toBe(0);
+  expect(fromHistory.cursor).toMatchObject({ attempt: 0 });
   expect(fromHistory.halted).toBeUndefined();
   expect(await digested(itx)).toBe(5); // exactly the four, once each
 });
+
+const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
+  (await readAll(itx)).filter(
+    (e) =>
+      e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+      e.payload?.name === name,
+  );
+
+/** The stateless "project worker" shape whose progress THE STREAM must keep (a Worker-Loader
+ *  entrypoint cannot own it): its `processEventBatch(events, range)` hands the batch to a LIVE hook
+ *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor lane delivered
+ *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
+ *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). */
+const HOOKED_SOURCE = (hook: string) => ({
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Hooked extends WorkerEntrypoint {
+  async processEventBatch(events, range) {
+    const itx = await this.env.ITX.get();
+    return await itx.${hook}.deliver(events, range);
+  }
+}`,
+});
+
+class Hook extends RpcTarget {
+  readonly #fn: (events: any[], range: Range) => unknown;
+  constructor(fn: (events: any[], range: Range) => unknown) {
+    super();
+    this.#fn = fn;
+  }
+  deliver(events: any[], range: Range): unknown {
+    return this.#fn(events, range);
+  }
+}
+
+/** Subscribe `name` on the CURSOR lane: lend the live hook behind the rule `itx.<name>Hook`, hand the
+ *  hooked worker's source over INLINE and rewrite `itx.<name>Worker` onto its entrypoint, subscribe
+ *  its `processEventBatch` BY EXPRESSION (an entrypoint handle ⇒ the stream keeps the cursor). Names
+ *  are one JS identifier. */
+async function cursorSubscribe(
+  itx: any,
+  name: string,
+  fn: (events: any[], range: Range) => unknown,
+  consumes?: string[],
+): Promise<void> {
+  const hook = `${name}Hook`;
+  await itx.provide(`itx.${hook}`, new Hook(fn));
+  await itx.provide(
+    `itx.${name}Worker`,
+    `itx.workers.get({ source: ${JSON.stringify(HOOKED_SOURCE(hook))} })`,
+  );
+  await itx.subscribe({
+    name,
+    target: `itx.${name}Worker.processEventBatch`,
+    consumes,
+  });
+}
+
+/** The `digest` fixture (e2e/support/sources.ts) on the cursor lane: counts delivered events into
+ *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
+async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
+  await itx.provide("itx.digest", ["itx", "workers", ["get", { source: SOURCES.digest }]]);
+  await itx.subscribe({
+    name,
+    target: "itx.digest.processEventBatch",
+    consumes,
+  });
+}
+
+const digested = async (itx: any): Promise<number> => Number((await itx.kv.get("digested")) ?? 0);
+
+const ledgerLog = async (itx: any): Promise<LedgerEntry[]> =>
+  JSON.parse(((await itx.kv.get("ledger:log")) as string | null) ?? "[]") as LedgerEntry[];
+
+const ledgerSubscribe = async (itx: any, firstCall: "throw" | "hold"): Promise<void> => {
+  await itx.provide("itx.ledger", [
+    "itx",
+    "workers",
+    ["get", { source: SRC_LEDGER, className: "Ledger", props: { firstCall } }],
+  ]);
+  await itx.subscribe({
+    name: "ledger",
+    target: "itx.ledger.processEventBatch",
+    consumes: ["mark"],
+  });
+};

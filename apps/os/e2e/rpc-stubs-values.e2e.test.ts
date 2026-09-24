@@ -39,22 +39,6 @@ test("client A: provide('itx.runOnMyComputer', async fn) · client B: await itx.
   expect(ran).toEqual([["ls", ["-la"]]]);
 });
 
-// ── the provider: get demo → Timer with callLater(timeoutMs, cb) ──
-class Timer extends RpcTarget {
-  callLater(timeoutMs: number, cb: (() => void) & { dup(): () => void }) {
-    const run = cb.dup(); // retain past this call (a param stub is disposed when the call returns)
-    setTimeout(() => {
-      run();
-      (run as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-    }, timeoutMs);
-  }
-}
-class Demo extends RpcTarget {
-  get timer() {
-    return new Timer();
-  }
-}
-
 test("callLater(cb) fires back in the caller — capnweb client AND dynamic worker lanes", async () => {
   const ctx = freshCtx("calllater");
 
@@ -100,46 +84,6 @@ export default class Consumer extends WorkerEntrypoint {
 });
 
 // ── rich values: anything Workers RPC and capnweb serialise passes through a lent stub and invoke ──
-
-class ToolsA extends RpcTarget {
-  async transform(x: number, cb: (n: number) => Promise<number> | number) {
-    const y = await cb(x * 2);
-    return `A:${y}`;
-  }
-  probe(v: unknown) {
-    return {
-      ctor: (v as { constructor?: { name?: string } })?.constructor?.name ?? typeof v,
-      isoIfDate: v instanceof Date ? v.toISOString() : null,
-      byteLen: v instanceof Uint8Array ? v.byteLength : null,
-    };
-  }
-}
-
-// A tiny RpcTarget WITH METHODS, handed as an arg so the provider calls back onto it.
-class Notebook extends RpcTarget {
-  #lines: string[] = [];
-  write(s: string) {
-    this.#lines.push(s);
-    return this.#lines.length;
-  }
-  dump() {
-    return this.#lines.join("|");
-  }
-}
-
-class ToolsRich extends RpcTarget {
-  async useNotebook(nb: {
-    write(s: string): Promise<number> | number;
-    dump(): Promise<string> | string;
-  }) {
-    await nb.write("one");
-    await nb.write("two");
-    return await nb.dump();
-  }
-  async handleRequest(req: Request) {
-    return new Response(`saw:${new URL(req.url).pathname}:${await req.text()}`, { status: 201 });
-  }
-}
 
 test("rich values through the longest path: Date, bytes, callbacks, RpcTarget args, Request/Response", async () => {
   const ctx = freshCtx("rich");
@@ -193,17 +137,6 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
 
 // ── the Slack bridge ──
 
-/** THE ZERO-DECLARATION SHAPE, pushed to the client: a Proxy
- *  over a bare RpcTarget forwards every unknown property straight to the LITERAL SDK instance —
- *  no per-method table, no getters; `new WebClient(token)` drops in as `sdk` unchanged. (capnweb
- *  only passes RpcTargets/functions by reference, so the bare-RpcTarget core is what crosses;
- *  the Proxy fills its property surface from the SDK.) */
-const replayOnto = (sdk: Record<PropertyKey, unknown>) =>
-  new Proxy(new (class extends RpcTarget {})(), {
-    get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : sdk[prop]),
-    has: (target, prop) => prop in target || prop in sdk,
-  });
-
 test("itx.slack — a live bridge replays the natural dotted spelling onto the SDK end to end", async () => {
   // ── bridge session (the provider) + a second ordinary client — both on ONE ctx ──
   const ctx = freshCtx("slack");
@@ -240,9 +173,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 2. the same thing through the GENERIC expression door (the string half)
   const listed = await itx.invoke(`itx.slack.conversations.list({ limit: 10 })`);
-  expect(listed?.ok).toBe(true);
-  expect(listed?.channels?.length).toBe(2);
-  expect(listed.channels[0].name).toBe("general");
+  expect(listed).toMatchObject({ ok: true, channels: [{ name: "general" }, expect.anything()] });
 
   // 3. a pure rewrite rule can target the live bridge like any other expression
   await itx.provide("itx.notify", "itx.slack.chat.postMessage");
@@ -286,3 +217,71 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   });
   expect(errorCode(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
 });
+
+// ── the provider: get demo → Timer with callLater(timeoutMs, cb) ──
+class Timer extends RpcTarget {
+  callLater(timeoutMs: number, cb: (() => void) & { dup(): () => void }) {
+    const run = cb.dup(); // retain past this call (a param stub is disposed when the call returns)
+    setTimeout(() => {
+      run();
+      (run as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    }, timeoutMs);
+  }
+}
+
+class Demo extends RpcTarget {
+  get timer() {
+    return new Timer();
+  }
+}
+
+class ToolsA extends RpcTarget {
+  async transform(x: number, cb: (n: number) => Promise<number> | number) {
+    const y = await cb(x * 2);
+    return `A:${y}`;
+  }
+  probe(v: unknown) {
+    return {
+      ctor: (v as { constructor?: { name?: string } })?.constructor?.name ?? typeof v,
+      isoIfDate: v instanceof Date ? v.toISOString() : null,
+      byteLen: v instanceof Uint8Array ? v.byteLength : null,
+    };
+  }
+}
+
+// A tiny RpcTarget WITH METHODS, handed as an arg so the provider calls back onto it.
+class Notebook extends RpcTarget {
+  #lines: string[] = [];
+  write(s: string) {
+    this.#lines.push(s);
+    return this.#lines.length;
+  }
+  dump() {
+    return this.#lines.join("|");
+  }
+}
+
+class ToolsRich extends RpcTarget {
+  async useNotebook(nb: {
+    write(s: string): Promise<number> | number;
+    dump(): Promise<string> | string;
+  }) {
+    await nb.write("one");
+    await nb.write("two");
+    return await nb.dump();
+  }
+  async handleRequest(req: Request) {
+    return new Response(`saw:${new URL(req.url).pathname}:${await req.text()}`, { status: 201 });
+  }
+}
+
+/** THE ZERO-DECLARATION SHAPE, pushed to the client: a Proxy
+ *  over a bare RpcTarget forwards every unknown property straight to the LITERAL SDK instance —
+ *  no per-method table, no getters; `new WebClient(token)` drops in as `sdk` unchanged. (capnweb
+ *  only passes RpcTargets/functions by reference, so the bare-RpcTarget core is what crosses;
+ *  the Proxy fills its property surface from the SDK.) */
+const replayOnto = (sdk: Record<PropertyKey, unknown>) =>
+  new Proxy(new (class extends RpcTarget {})(), {
+    get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : sdk[prop]),
+    has: (target, prop) => prop in target || prop in sdk,
+  });

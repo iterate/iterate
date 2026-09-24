@@ -26,20 +26,6 @@ import { repoArtifactName } from "../src/context/cf-artifacts.ts";
 import type { RepoLogEntry } from "../src/repo/git-wire.ts";
 import { freshCtx, freshRepoPath, openItx } from "./support/client.ts";
 
-/** Every repo path this project can see, following the namespace-wide cursor to exhaustion — the
- *  binding pages, and `cfArtifacts.list` filters one page locally, so a project's repos can straddle
- *  pages (or a page can hold none of them yet still precede one that does). */
-async function allRepoPaths(itx: ReturnType<typeof openItx>): Promise<string[]> {
-  const paths: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await itx.cfArtifacts.list(cursor ? { cursor } : undefined);
-    paths.push(...page.repos.map((r: { path: string }) => r.path));
-    cursor = page.cursor;
-  } while (cursor);
-  return paths;
-}
-
 test("cfArtifacts create/get/list/delete against the real binding, by path, project-scoped", async () => {
   const a = openItx(freshCtx("cfa"));
   const path = freshRepoPath("smoke");
@@ -121,8 +107,8 @@ test("the repo facet round-trips files through the real remote: create, an unbor
       ],
     });
     expect(second.commitOid).toMatch(/^[0-9a-f]{40}$/);
-    expect(second.commitOid).not.toBe(first.commitOid);
-    expect(second.changedPaths).toEqual(["worker.ts", "notes/log.md"]); // deletes land first
+    expect(second).not.toMatchObject({ commitOid: first.commitOid });
+    expect(second).toMatchObject({ changedPaths: ["worker.ts", "notes/log.md"] }); // deletes land first
     expect(await repo.readFile("worker.ts")).toBeNull();
     expect(await repo.readFile("notes/log.md")).toBe("# log\n");
     expect(await repo.listFiles()).toEqual({
@@ -147,3 +133,17 @@ test("the repo facet round-trips files through the real remote: create, an unbor
     await itx.cfArtifacts.delete(path); // teardown — the repo, by its path
   }
 }, 120_000);
+
+/** Every repo path this project can see, following the namespace-wide cursor to exhaustion — the
+ *  binding pages, and `cfArtifacts.list` filters one page locally, so a project's repos can straddle
+ *  pages (or a page can hold none of them yet still precede one that does). */
+async function allRepoPaths(itx: ReturnType<typeof openItx>): Promise<string[]> {
+  const paths: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await itx.cfArtifacts.list(cursor ? { cursor } : undefined);
+    paths.push(...page.repos.map((r: { path: string }) => r.path));
+    cursor = page.cursor;
+  } while (cursor);
+  return paths;
+}

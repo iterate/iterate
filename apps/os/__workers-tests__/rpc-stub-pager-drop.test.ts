@@ -17,9 +17,6 @@ import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import { adminCredentials, Echo, openSession, stub, until } from "./support.ts";
 
-const rpcStubPagers = async (ctx: string) =>
-  ((await stub(ctx).rpcStubTransportState()) as unknown as { rpcStubPagers: number }).rpcStubPagers;
-
 test("the DO's end of the pager closes (1001) under a live session: the relay re-dials, the rule stands, and a call answers", async () => {
   const ctx = "prj_pager_leg_drop";
   const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
@@ -61,3 +58,8 @@ test("a DO reset kills every pager with no close handler run: the relay re-dials
   await until("the relay re-dialed the pager", async () => (await rpcStubPagers(ctx)) === 1, 6_000);
   expect(await caller.invoke("itx.reset.echo('after')")).toBe("echo-4:after");
 });
+
+async function rpcStubPagers(ctx: string) {
+  return ((await stub(ctx).rpcStubTransportState()) as unknown as { rpcStubPagers: number })
+    .rpcStubPagers;
+}

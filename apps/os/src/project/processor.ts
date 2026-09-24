@@ -11,14 +11,17 @@
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
 // the seed is skipped once `main` has a tip, every ingress append is keyed by the commit it points
-// at, the certificate is keyed. The host's `withItx` is its one constructor argument; a unit test
-// constructs it with `new` and reduces rows (processor.test.ts, in node); the effects are proven on
+// at, the certificate is keyed. The host's `withItx` and the template download are its constructor
+// arguments; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or
+// hands it a fake download (templates.test.ts); the effects are proven on
 // the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
 // e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { z } from "zod";
-import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
-import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
+import {
+  parseConfigRepoTemplateReference,
+  type ConfigRepoTemplateReference,
+} from "@iterate-com/shared/config-repo-template/reference";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -51,6 +54,12 @@ function configRepoIngressTarget(commitOid: string) {
   ];
 }
 
+/** The files of a config-repo template, which seed a project created from one: the host passes
+ *  `downloadPublicGithubTemplate` (@iterate-com/shared/config-repo-template/github). */
+type TemplateDownload = (
+  reference: ConfigRepoTemplateReference,
+) => Promise<Array<{ content: string; path: string }>>;
+
 export class ProjectProcessor extends StreamProcessor<
   ProjectState,
   ConsumedEvent<typeof ProjectContract>
@@ -58,10 +67,12 @@ export class ProjectProcessor extends StreamProcessor<
   readonly contract = ProjectContract;
 
   private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly downloadTemplate: TemplateDownload;
 
-  constructor(withItx: WithItx<ItxEntrypointScope>) {
+  constructor(withItx: WithItx<ItxEntrypointScope>, downloadTemplate: TemplateDownload) {
     super();
     this.withItx = withItx;
+    this.downloadTemplate = downloadTemplate;
   }
 
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
@@ -199,7 +210,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (!commitOid) {
           const reference = state.creation?.configRepoTemplate;
           const changes = reference
-            ? await downloadPublicGithubTemplate(parseConfigRepoTemplateReference(reference))
+            ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
             : defaultFiles;
           if (!changes.some((file) => file.path === "worker.ts"))
             throw new Error("The config template needs a worker.ts entrypoint");

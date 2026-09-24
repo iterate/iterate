@@ -95,7 +95,7 @@ export class RetryTelemetryReporter {
   constructor(defaults: ReporterDefaults = {}) {
     this.defaults = defaults;
     this.workspace =
-      process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? process.cwd();
+      process.env.TEST_TELEMETRY_WORKSPACE || process.env.npm_package_name || process.cwd();
     this.context = testTelemetryContextFromEnvironment("vitest", {
       testKind: this.defaults.testKind ?? "unit",
       lane: this.defaults.lane ?? "unit",
@@ -251,7 +251,7 @@ export class RetryTelemetryReporter {
           const annotations = test.annotations?.() ?? [];
           const hooks = this.hookDurations.get(test) ?? { beforeEach: 0, afterEach: 0 };
           const durationMs = Math.round(diagnostic?.duration ?? 0);
-          const errors = (result.errors ?? []).map((error) =>
+          const errors = (result.errors || []).map((error) =>
             normalizeTestTelemetryError(error, "Unknown test-attempt error"),
           );
           const firstFailure = compactRetryFailure(errors[0]);
@@ -263,7 +263,7 @@ export class RetryTelemetryReporter {
               testLine: test.location.line,
               testColumn: test.location.column,
             }),
-            ...(test.id && { runnerTestId: test.id }),
+            runnerTestId: test.id || undefined,
             ...(test.options && {
               expectedState:
                 test.options.mode === "skip" || test.options.mode === "todo"
@@ -275,10 +275,10 @@ export class RetryTelemetryReporter {
             ...(test.options?.timeout === undefined
               ? {}
               : { configuredTimeoutMs: test.options.timeout }),
-            tags: [...(test.tags ?? [])],
+            tags: [...(test.tags || [])],
             annotations: annotations.map(({ type, message }) => ({
               type,
-              ...(message && { description: message }),
+              description: message || undefined,
             })),
             ...(diagnostic?.repeatCount === undefined
               ? {}
@@ -313,7 +313,7 @@ export class RetryTelemetryReporter {
             attempts: [],
             phases: [],
             errors,
-            ...(firstFailure && { firstFailure }),
+            firstFailure,
           });
         }
       }
@@ -417,7 +417,7 @@ function optionalIsoTime<Key extends string>(key: Key, value: number | undefined
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
 export function compactRetryFailure(error: unknown): string | undefined {
   let value: unknown = error;
-  if (typeof error === "object" && error !== null) {
+  if (typeof error === "object" && error) {
     const record = error as Record<string, unknown>;
     value = record.message ?? record.stack ?? record.name;
   }

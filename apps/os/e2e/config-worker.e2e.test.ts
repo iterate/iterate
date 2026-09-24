@@ -7,17 +7,6 @@ import { freshCtx, openItx, readAll, until } from "./support/client.ts";
 
 const PING = "events.iterate.com/config-ping";
 const PONG = "events.iterate.com/config-pong";
-const source = (version: string) => `import { ConfigWorker } from "./processor.js";
-export default class extends ConfigWorker {
-  async processEvent({ event, itx }) {
-    if (event.type === ${JSON.stringify(PING)}) await itx.append({
-      type: ${JSON.stringify(PONG)},
-      payload: { version: ${JSON.stringify(version)}, from: event.path, pinged: event.offset },
-      idempotencyKey: "pong:" + event.path + ":" + event.offset
-    });
-  }
-}`;
-
 test("a fresh context has no implicit worker subscription; an explicit cross-context target delivers", async () => {
   const root = openItx(freshCtx("config-explicit"));
   const child = root.cd("/child");
@@ -105,3 +94,14 @@ test("a repo-backed worker changes when its explicit subscription spec is update
     ),
   );
 });
+
+const source = (version: string) => `import { ConfigWorker } from "./processor.js";
+export default class extends ConfigWorker {
+  async processEvent({ event, itx }) {
+    if (event.type === ${JSON.stringify(PING)}) await itx.append({
+      type: ${JSON.stringify(PONG)},
+      payload: { version: ${JSON.stringify(version)}, from: event.path, pinged: event.offset },
+      idempotencyKey: "pong:" + event.path + ":" + event.offset
+    });
+  }
+}`;

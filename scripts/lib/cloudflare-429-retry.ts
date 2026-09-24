@@ -24,7 +24,6 @@
  */
 
 const DEFAULT_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000] as const;
-const DEFAULT_MAX_RETRY_AFTER_MS = 120_000;
 
 export async function fetchCloudflareWith429Retry(
   /** Call description for the retry log lines, e.g. "GET /d1/database". */
@@ -46,9 +45,9 @@ export async function fetchCloudflareWith429Retry(
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   } = {},
 ): Promise<Response> {
-  const backoffMs = opts.backoffMs ?? DEFAULT_BACKOFF_MS;
-  const maxRetryAfterMs = opts.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
-  const sleep = opts.sleep ?? abortableSleep;
+  const backoffMs = opts.backoffMs || DEFAULT_BACKOFF_MS;
+  const maxRetryAfterMs = opts.maxRetryAfterMs ?? 120_000;
+  const sleep = opts.sleep || abortableSleep;
 
   let response = await doFetch();
   for (const [index, fallbackMs] of backoffMs.entries()) {

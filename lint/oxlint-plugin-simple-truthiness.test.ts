@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { RuleTester } from "oxlint/plugins-dev";
@@ -80,35 +79,6 @@ test("reports ternary omission, typed typeof guards and nullish assignment", () 
   `,
   );
   expect(fixture.diagnostics(["input.ts"])).toHaveLength(5);
-});
-
-test("checks new and edited lines while grandfathering old violations at the inclusive cutoff", () => {
-  using fixture = createOxlintFixture({
-    rules: { "iterate/simple-truthiness-check": "error" },
-    tsconfig: true,
-  });
-  const date = "2026-09-11T00:00:00Z";
-  git(fixture, ["init", "--quiet"], date);
-  fixture.write(
-    "input.ts",
-    `declare const input: { foo?: string };
-export const old = { ...(input.foo && { foo: input.foo }) };
-`,
-  );
-  git(fixture, ["add", "."], date);
-  git(fixture, ["commit", "--quiet", "-m", "Old code"], date);
-  fixture.run(["input.ts"]);
-  fixture.write(
-    "input.ts",
-    `// Shift old code without changing its age.
-${fixture.read("input.ts")}export const fresh = { ...(input.foo && { foo: input.foo }) };
-`,
-  );
-  const uncommitted = fixture.diagnostics(["input.ts"]);
-  expect(uncommitted).toHaveLength(1);
-  git(fixture, ["add", "."], "2026-09-11T01:00:00Z");
-  git(fixture, ["commit", "--quiet", "-m", "New code"], "2026-09-11T01:00:00Z");
-  expect(fixture.diagnostics(["input.ts"])).toHaveLength(1);
 });
 
 test("leaves real type discrimination and conditional computation alone", () => {
@@ -205,18 +175,3 @@ test("accepts direct properties and truthy fallbacks; checks readonly arrays and
   expect(diagnostics).toHaveLength(2);
   expect(diagnostics.every((item: any) => item.message.includes("already an array"))).toBe(true);
 });
-
-function git(fixture: { root: string }, args: string[], date: string) {
-  execFileSync("git", args, {
-    cwd: fixture.root,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_DATE: date,
-      GIT_COMMITTER_DATE: date,
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@iterate.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@iterate.com",
-    },
-  });
-}

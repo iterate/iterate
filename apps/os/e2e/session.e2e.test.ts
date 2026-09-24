@@ -33,7 +33,7 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
   const member = { email: `${slug}@example.com` };
   const projectId = await registerProject(slug, member);
   const { api, token, principal } = await oauthSession(projectId, member);
-  expect(principal.email).toBe(member.email);
+  expect(principal).toMatchObject({ email: member.email });
   const itx = api.projects.get(projectId);
   await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
   await itx.provide("itx.demo", "itx.builtins.kv");
@@ -61,14 +61,14 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
     method: "POST",
     headers: { Authorization: `Bearer ${token}x` },
   });
-  expect(bad.status).toBe(401);
+  expect(bad).toMatchObject({ status: 401 });
   await bad.body?.cancel();
   await api.logout();
   const revoked = await fetch(workerUrl("/api"), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
-  expect(revoked.status).toBe(401);
+  expect(revoked).toMatchObject({ status: 401 });
   await revoked.body?.cancel();
 });
 
@@ -95,7 +95,7 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   const [whoami, projects] = await Promise.all([api.whoami(), api.projects.list()]); // pipelined
   expect(whoami).toEqual(principal);
   expect(projects.map((row) => row.id)).toContain(project);
-  expect((await api.projects.get(project).whoami()).projectId).toBe(project);
+  expect(await api.projects.get(project).whoami()).toMatchObject({ projectId: project });
   // one transport, one grant — a later token, and a token racing the first, are both refused
   await expect(bare.authenticate({ type: "bearer", token })).rejects.toThrow(
     /already carries a session/,
@@ -122,7 +122,7 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   expect(await bareWithCookie.authenticate({ type: "bearer", token }).whoami()).toEqual(principal);
   // the HTTP form stays behind the gate: the console's sign-in probe reads this 401
   const probe = await fetch(workerUrl("/api"), { method: "POST", body: "" });
-  expect(probe.status).toBe(401);
+  expect(probe).toMatchObject({ status: 401 });
   await probe.body?.cancel();
 });
 
@@ -141,7 +141,7 @@ test("revoking a grant closes its live public socket and held capability within 
   socket.addEventListener("close", onClose, { once: true });
   using held = newWebSocketRpcSession<IterateRpcTarget>(socket as unknown as WebSocket);
   using itx = await held.authenticate({ type: "from-server-cookie" }).projects.get(project);
-  expect((await itx.whoami()).projectId).toBe(project);
+  expect(await itx.whoami()).toMatchObject({ projectId: project });
   await api.logout();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -186,17 +186,17 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   ]);
   // the request's facts, as the edge spelled them: the slug, and the organization it landed in —
   // the deployment's own for the admin secret
-  expect(requested.payload).toEqual({ slug, orgId: "org_admin" });
+  expect(requested).toMatchObject({ payload: { slug, orgId: "org_admin" } });
   // appended by the edge UNDER THE ASKER (the request's own stamp), not the platform's
   expect(requested.source?.principal).toEqual({ actor: "admin" });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: the created fact carries nothing but its existence
   expect(created.payload).toEqual({}); // existence only
   expect(await processorNames(itx)).toContain("project");
   // the seed: the config repo in the catalog (its certificate crossed to /), its two files on main
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
-  expect((await itx.repos.get("/repos/config").listFiles()).paths).toEqual([
-    "AGENTS.md",
-    "worker.ts",
-  ]);
+  expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
+    paths: ["AGENTS.md", "worker.ts"],
+  });
   // published: the apex answers the seeded homepage worker (subdomain routing under the test's base)
   expect((await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim()).toBe(
     `Homepage of project ${slug}`,
@@ -216,7 +216,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
       .map((e) => ({ offset: e.offset, type: e.type }));
   const before = await rows();
   using again = await api.projects.create({ project: slug });
-  expect((await again.whoami()).projectId).toBe(projectId);
+  expect(await again.whoami()).toMatchObject({ projectId });
   const after = await rows();
   expect(after.slice(0, before.length)).toEqual(before);
   expect(after.slice(before.length).map((row) => row.type)).toEqual([
@@ -293,9 +293,9 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const echoOf = (project: string) => projectUrl({ project, app: "echo", path: "/" });
   const bearer = { Authorization: `Bearer ${token}` };
   const covered = await fetchProjectUrl(echoOf(slug), bearer);
-  expect(covered.status, covered.text).toBe(200);
+  expect(covered, covered.text).toMatchObject({ status: 200 });
   expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
-  expect((await fetchProjectUrl(echoOf(otherSlug), bearer)).status).toBe(403);
+  expect(await fetchProjectUrl(echoOf(otherSlug), bearer)).toMatchObject({ status: 403 });
 
   // the account lists it as what it is …
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
@@ -313,12 +313,14 @@ test("a personal access token — one OAuth grant the account mints — is the u
     "events.iterate.com/context/run-requested",
     "events.iterate.com/context/run-settled",
   ]);
-  expect(runPair[0].source).toEqual({ principal, grant: grant!.id });
-  expect(runPair[1].payload).toEqual({
-    requestOffset: runPair[0].offset,
-    settlement: {
-      status: "succeeded",
-      result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
+  expect(runPair[0]).toMatchObject({ source: { principal, grant: grant!.id } });
+  expect(runPair[1]).toMatchObject({
+    payload: {
+      requestOffset: runPair[0].offset,
+      settlement: {
+        status: "succeeded",
+        result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
+      },
     },
   });
   // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
@@ -335,18 +337,22 @@ test("a personal access token — one OAuth grant the account mints — is the u
         e.type === "events.iterate.com/account/grant-minted" && e.payload.grantId === grant!.id,
     ),
   );
-  expect(minted.payload).toEqual({
-    grantId: grant!.id,
-    name: "E2E personal access token",
-    projects: [projectId],
-    expiresAt,
+  expect(minted).toMatchObject({
+    payload: {
+      grantId: grant!.id,
+      name: "E2E personal access token",
+      projects: [projectId],
+      expiresAt,
+    },
   });
   // stamped with the CONNECTION that minted it — the browser session's grant, the provider's 16
   // characters — and as the platform's own fact, the only kind the account folds
-  expect(minted.source).toEqual({
-    principal,
-    grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
-    platform: true,
+  expect(minted).toMatchObject({
+    source: {
+      principal,
+      grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+      platform: true,
+    },
   });
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
@@ -355,20 +361,22 @@ test("a personal access token — one OAuth grant the account mints — is the u
   // clean up later, so nothing to return
   await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id);
   const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
-  expect(endedApi.status).toBe(401);
+  expect(endedApi).toMatchObject({ status: 401 });
   await endedApi.body?.cancel();
   await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
-  expect((await fetchProjectUrl(echoOf(slug), bearer)).status).toBe(401);
+  expect(await fetchProjectUrl(echoOf(slug), bearer)).toMatchObject({ status: 401 });
   // … and the end is the account's fact too
   const ended = await until("the end is on the account context", async () =>
     (await accountEvents()).find(
       (e) => e.type === "events.iterate.com/account/grant-ended" && e.payload.grantId === grant!.id,
     ),
   );
-  expect(ended.source).toEqual({
-    principal,
-    grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
-    platform: true,
+  expect(ended).toMatchObject({
+    source: {
+      principal,
+      grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+      platform: true,
+    },
   });
 });
 
@@ -418,7 +426,7 @@ export default class Mine extends WorkerEntrypoint {
   const resp = await itx.site.fetch(new Request("https://itx.site/"));
   const html = await resp.text();
   // the Response rides back over capnweb
-  expect(resp.status).toBe(200);
+  expect(resp).toMatchObject({ status: 200 });
   expect(html).toContain("dynamic web capability");
 });
 
@@ -428,7 +436,7 @@ test("/version answers `<deployId> <platformOrigin>` — the deploy stamp a smok
   // the issuer (src/app-config.ts `urls.os`, or the request's own origin where a deployment leaves
   // it blank) — the one thing that names a deployment, local or deployed.
   const versionRes = await fetch(workerUrl("/version"));
-  expect(versionRes.status).toBe(200);
+  expect(versionRes).toMatchObject({ status: 200 });
   const [deployId, platformOrigin, ...rest] = (await versionRes.text()).trim().split(" ");
   expect(rest).toEqual([]);
   expect(deployId).toMatch(/^(?:[0-9a-f-]{36}|unversioned)$/);

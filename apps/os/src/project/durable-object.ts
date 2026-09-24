@@ -7,6 +7,7 @@
 // dispatch on this facet: `repos().list()`). Hosted from `ctx.exports` (first-party-facets.ts):
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
+import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
@@ -21,7 +22,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   /** The processor's reads, and the two collections `itx.repos` / `itx.workspaces` reach (library.ts). */
   static override publicMethods = [...super.publicMethods, "repos", "workspaces"];
 
-  processor = new ProjectProcessor((call) => this.withItx(call));
+  processor = new ProjectProcessor((call) => this.withItx(call), downloadPublicGithubTemplate);
 
   // THE COLLECTIONS are METHODS, not fields: Workers RPC reaches only what the PROTOTYPE declares,
   // and an RpcTarget a METHOD returns is the shape it hands back as a stub — so the library spells

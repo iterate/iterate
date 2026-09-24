@@ -7,18 +7,6 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
-class FakeBrowser extends RpcTarget {
-  readonly calls: { action: string; options: unknown }[] = [];
-  async quickAction(action: string, options: unknown) {
-    this.calls.push({ action, options });
-    if (action === "markdown") return "# fake";
-    return { action, options };
-  }
-  fetch() {
-    return new Response("fake-browser-fetch");
-  }
-}
-
 test("provide('itx.browser', fake) shadows the binding; resolve ends at the stub; dispose restores the platform row", async () => {
   const ctx = freshCtx("browser-shadow");
   const itx = openItx(ctx);
@@ -30,7 +18,9 @@ test("provide('itx.browser', fake) shadows the binding; resolve ends at the stub
   const fake = new FakeBrowser();
   const handle = await itx.provide("itx.browser", fake);
   expect(await itx.browser.quickAction("markdown", { url: "https://example.com" })).toBe("# fake");
-  expect(fake.calls).toEqual([{ action: "markdown", options: { url: "https://example.com" } }]);
+  expect(fake).toMatchObject({
+    calls: [{ action: "markdown", options: { url: "https://example.com" } }],
+  });
   expect(await itx.rewriteRules.resolve("itx.browser.quickAction")).toEqual([
     "itx.browser.quickAction",
     "itx.builtins.rpcStubs.get('itx.browser').quickAction",
@@ -62,3 +52,15 @@ deployedOnly(
   },
   90_000,
 );
+
+class FakeBrowser extends RpcTarget {
+  readonly calls: { action: string; options: unknown }[] = [];
+  async quickAction(action: string, options: unknown) {
+    this.calls.push({ action, options });
+    if (action === "markdown") return "# fake";
+    return { action, options };
+  }
+  fetch() {
+    return new Response("fake-browser-fetch");
+  }
+}

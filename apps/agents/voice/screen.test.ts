@@ -2,41 +2,6 @@ import { crc32, deflateSync } from "node:zlib";
 import { expect, test } from "vitest";
 import { ScreenInfo, renderScreenPixels } from "./screen.js";
 
-function rgbaPng(width: number, height: number, rgba: number[]) {
-  const chunk = (type: string, data: Uint8Array) => {
-    const body = Buffer.concat([Buffer.from(type), data]);
-    const result = Buffer.alloc(body.length + 8);
-    result.writeUInt32BE(data.length);
-    body.copy(result, 4);
-    result.writeUInt32BE(crc32(body), body.length + 4);
-    return result;
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 6;
-  const rows = Buffer.alloc(height * (width * 4 + 1));
-  for (let y = 0; y < height; y++)
-    Buffer.from(rgba.slice(y * width * 4, (y + 1) * width * 4)).copy(rows, y * (width * 4 + 1) + 1);
-  return Buffer.concat([
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk("IHDR", header),
-    chunk("IDAT", deflateSync(rows)),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-const info = (width: number, height: number) =>
-  ScreenInfo.parse({
-    width,
-    height,
-    formats: ["mono1", "gray4", "rgb565"],
-    preferredFormat: "mono1",
-    maxChunkBytes: 4096,
-    refreshTimeoutMs: 1000,
-    partialRefresh: false,
-  });
-
 test("nine-pixel monochrome rows keep padding independent and composite alpha on white", () => {
   const pixels = Array.from({ length: 18 }, (_, i) =>
     i === 8 || i === 9 ? [0, 0, 0, 255] : [0, 0, 0, 0],
@@ -68,3 +33,39 @@ test("unbounded device metadata and unsupported preferred formats are rejected",
     ScreenInfo.parse({ ...info(1, 1), formats: ["mono1"], preferredFormat: "rgb565" }),
   ).toThrow("Preferred format");
 });
+
+function rgbaPng(width: number, height: number, rgba: number[]) {
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const result = Buffer.alloc(body.length + 8);
+    result.writeUInt32BE(data.length);
+    body.copy(result, 4);
+    result.writeUInt32BE(crc32(body), body.length + 4);
+    return result;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const rows = Buffer.alloc(height * (width * 4 + 1));
+  for (let y = 0; y < height; y++)
+    Buffer.from(rgba.slice(y * width * 4, (y + 1) * width * 4)).copy(rows, y * (width * 4 + 1) + 1);
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(rows)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const info = (width: number, height: number) =>
+  ScreenInfo.parse({
+    width,
+    height,
+    formats: ["mono1", "gray4", "rgb565"],
+    preferredFormat: "mono1",
+    maxChunkBytes: 4096,
+    refreshTimeoutMs: 1000,
+    partialRefresh: false,
+  });

@@ -8,16 +8,6 @@ import { AlarmCoordinator } from "./alarm-coordinator.ts";
 
 const T = Date.parse("2030-01-01T00:00:00Z");
 
-function setup(deadlines: (number | null)[] = []) {
-  const writes: (number | "delete")[] = [];
-  const alarms = new AlarmCoordinator({
-    setAlarm: async (at) => void writes.push(at),
-    deleteAlarm: async () => void writes.push("delete"),
-    deadlines: () => deadlines,
-  });
-  return { alarms, writes, deadlines };
-}
-
 test("arms the earliest deadline, moves later or earlier exactly, writes only on change", () => {
   const { alarms, writes, deadlines } = setup([T + 60_000, null, T + 30_000]);
   alarms.reconcile();
@@ -66,7 +56,7 @@ test("nothing is written during a pass; the pass's own time can be armed again a
   await alarms.pass(async () => {
     deadlines.push(T - 1);
     alarms.reconcile();
-    expect(alarms.snapshot().passInProgress).toBe(true);
+    expect(alarms.snapshot()).toMatchObject({ passInProgress: true });
     expect(writes).toEqual([T]);
     deadlines.splice(0, deadlines.length, T);
   });
@@ -83,3 +73,13 @@ test("a pass that throws writes nothing (the runtime retries it) and forgets the
   alarms.reconcile();
   expect(writes).toEqual([T + 50_000]);
 });
+
+function setup(deadlines: (number | null)[] = []) {
+  const writes: (number | "delete")[] = [];
+  const alarms = new AlarmCoordinator({
+    setAlarm: async (at) => void writes.push(at),
+    deleteAlarm: async () => void writes.push("delete"),
+    deadlines: () => deadlines,
+  });
+  return { alarms, writes, deadlines };
+}

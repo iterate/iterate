@@ -40,7 +40,7 @@ export function runAsync(
       else {
         reject(
           new Error(
-            `${command} ${args.join(" ")} exited with ${code ?? `signal ${signal ?? "unknown"}`}`,
+            `${command} ${args.join(" ")} exited with ${code ?? `signal ${signal || "unknown"}`}`,
           ),
         );
       }
@@ -85,9 +85,9 @@ export async function runCloudflareCommandWith429Retry(
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<void> {
-  const backoffMs = retryOpts.backoffMs ?? CLOUDFLARE_COMMAND_429_BACKOFF_MS;
+  const backoffMs = retryOpts.backoffMs || CLOUDFLARE_COMMAND_429_BACKOFF_MS;
   const sleep =
-    retryOpts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    retryOpts.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
 
   for (let attempt = 1; attempt <= backoffMs.length + 1; attempt++) {
     const result = await runStreamingCaptured(command, args, opts);
@@ -96,7 +96,7 @@ export async function runCloudflareCommandWith429Retry(
     }
 
     const failure = new Error(
-      `${command} ${args.join(" ")} exited with ${result.code ?? `signal ${result.signal ?? "unknown"}`}`,
+      `${command} ${args.join(" ")} exited with ${result.code ?? `signal ${result.signal || "unknown"}`}`,
     );
     const rateLimitIndex = result.output.lastIndexOf("429 Too Many Requests");
     const terminalErrorIndex = result.output.lastIndexOf("ERROR");
@@ -245,7 +245,7 @@ export function collectSecrets(
   const missing: string[] = [];
   for (const key of required) {
     const value = ctx.secrets[key];
-    if (value === undefined || value === "") missing.push(key);
+    if (!value) missing.push(key);
     else secretValues[key] = value;
   }
   if (missing.length > 0) {

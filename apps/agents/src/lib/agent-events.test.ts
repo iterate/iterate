@@ -3,10 +3,91 @@
 // script vocabulary the shared reducer folds (`capability-host/script-run-*`, an executionId the
 // reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
 // turn renders as one activity with its code step.
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { adaptContextRuns, reduceAgentFeed, scriptTrace, toAgentEvent } from "./agent-events.ts";
 
 const PATH = "/agents/support";
+
+test("a request the agent appended while processing the assistant's item becomes script-run-requested with the id the reducer links to that item; its settlement takes the same id; a run nobody's processor asked for is its own offset", () => {
+  const adapted = adaptContextRuns(turn());
+  const byOffset = (offset: number) => adapted.find((e) => e.offset === offset)!;
+  expect(byOffset(8)).toMatchObject({
+    type: "events.iterate.com/capability-host/script-run-requested",
+    payload: {
+      executionId: "agent-output:6",
+      requestOffset: 8,
+      code: expect.stringContaining("itx.kv.put"),
+      expiresAt: Date.parse(byOffset(8).createdAt) + 10 * 60_000,
+    },
+  });
+  expect(byOffset(10)).toMatchObject({
+    type: "events.iterate.com/capability-host/script-run-settled",
+    payload: {
+      executionId: "agent-output:6",
+      requestOffset: 8,
+      settlement: { status: "succeeded", result: { stored: true } },
+    },
+  });
+  expect(adapted.filter((e) => e.type.startsWith("events.iterate.com/context/"))).toEqual([]);
+  const [unasked] = adaptContextRuns([
+    at(20, "events.iterate.com/context/run-requested", { code: "async () => 1" }),
+  ]);
+  expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
+});
+
+test("a failed settlement reaches the shared reducer exactly as the platform wrote it", () => {
+  const [, settled] = adaptContextRuns([
+    at(
+      8,
+      "events.iterate.com/context/run-requested",
+      { code: "async () => 1" },
+      {
+        idempotencyKey: "agent/run-requested@6",
+        source: byAgentWhile(6),
+      },
+    ),
+    at(9, "events.iterate.com/context/run-settled", {
+      requestOffset: 8,
+      settlement: {
+        status: "failed",
+        error: "the context restarted",
+        failureKind: "interrupted",
+      },
+    }),
+  ]);
+  expect(settled!.payload).toMatchObject({
+    executionId: "agent-output:6",
+  });
+  expect(settled!.payload).toHaveProperty("settlement", {
+    status: "failed",
+    error: "the context restarted",
+    failureKind: "interrupted",
+  });
+});
+
+test("through the reducer: the person's message, then one activity whose code step is the run, settled with its result; the trace finds code and settlement by the same id", () => {
+  const adapted = adaptContextRuns(turn());
+  const { items } = reduceAgentFeed(adapted, true);
+  const activity = items.find((item) => item.kind === "activity");
+  if (activity?.kind !== "activity") throw new Error("the turn folded to no activity");
+  expect(activity).toMatchObject({
+    steps: [
+      expect.objectContaining({ kind: "llm", llmRequestOffset: 4, status: "done" }),
+      expect.objectContaining({
+        kind: "code",
+        executionId: "agent-output:6",
+        status: "done",
+        success: true,
+        result: { stored: true },
+      }),
+    ],
+  });
+  expect(scriptTrace(adapted, "agent-output:6")).toMatchObject({
+    code: expect.stringContaining("itx.kv.put"),
+    settlement: { value: { status: "succeeded", result: { stored: true } } },
+  });
+});
+
 const at = (
   offset: number,
   type: string,
@@ -23,6 +104,7 @@ const at = (
     },
     PATH,
   )!;
+
 /** The engine's stamp on an event the agent processor appended while processing offset 6. */
 const byAgentWhile = (offset: number) => ({
   processor: { slug: "agent", whileProcessing: { offset, type: "x" } },
@@ -72,83 +154,3 @@ const turn = () => [
     actor: { type: "script", requestOffset: 8 },
   }),
 ];
-
-describe("adaptContextRuns — the context's runs in the reducer's vocabulary", () => {
-  test("a request the agent appended while processing the assistant's item becomes script-run-requested with the id the reducer links to that item; its settlement takes the same id; a run nobody's processor asked for is its own offset", () => {
-    const adapted = adaptContextRuns(turn());
-    const byOffset = (offset: number) => adapted.find((e) => e.offset === offset)!;
-    expect(byOffset(8)).toMatchObject({
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "agent-output:6",
-        requestOffset: 8,
-        code: expect.stringContaining("itx.kv.put"),
-        expiresAt: Date.parse(byOffset(8).createdAt) + 10 * 60_000,
-      },
-    });
-    expect(byOffset(10)).toMatchObject({
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: {
-        executionId: "agent-output:6",
-        requestOffset: 8,
-        settlement: { status: "succeeded", result: { stored: true } },
-      },
-    });
-    expect(adapted.filter((e) => e.type.startsWith("events.iterate.com/context/"))).toEqual([]);
-    const [unasked] = adaptContextRuns([
-      at(20, "events.iterate.com/context/run-requested", { code: "async () => 1" }),
-    ]);
-    expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
-  });
-
-  test("a failed settlement reaches the shared reducer exactly as the platform wrote it", () => {
-    const [, settled] = adaptContextRuns([
-      at(
-        8,
-        "events.iterate.com/context/run-requested",
-        { code: "async () => 1" },
-        {
-          idempotencyKey: "agent/run-requested@6",
-          source: byAgentWhile(6),
-        },
-      ),
-      at(9, "events.iterate.com/context/run-settled", {
-        requestOffset: 8,
-        settlement: {
-          status: "failed",
-          error: "the context restarted",
-          failureKind: "interrupted",
-        },
-      }),
-    ]);
-    expect(settled!.payload).toMatchObject({
-      executionId: "agent-output:6",
-    });
-    expect(settled!.payload).toHaveProperty("settlement", {
-      status: "failed",
-      error: "the context restarted",
-      failureKind: "interrupted",
-    });
-  });
-
-  test("through the reducer: the person's message, then one activity whose code step is the run, settled with its result; the trace finds code and settlement by the same id", () => {
-    const adapted = adaptContextRuns(turn());
-    const { items } = reduceAgentFeed(adapted, true);
-    const activity = items.find((item) => item.kind === "activity");
-    if (activity?.kind !== "activity") throw new Error("the turn folded to no activity");
-    expect(activity.steps).toEqual([
-      expect.objectContaining({ kind: "llm", llmRequestOffset: 4, status: "done" }),
-      expect.objectContaining({
-        kind: "code",
-        executionId: "agent-output:6",
-        status: "done",
-        success: true,
-        result: { stored: true },
-      }),
-    ]);
-    expect(scriptTrace(adapted, "agent-output:6")).toMatchObject({
-      code: expect.stringContaining("itx.kv.put"),
-      settlement: { value: { status: "succeeded", result: { stored: true } } },
-    });
-  });
-});

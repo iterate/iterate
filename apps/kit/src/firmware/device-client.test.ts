@@ -10,7 +10,7 @@ test.each(firmwareCatalog)(
       ids.map(async (id) => {
         const url = new URL(`https://k.iterate.com/devices/${device.id}/clients/${id}.json`);
         const response = deviceClientMetadata(url)!;
-        expect(response.status).toBe(200);
+        expect(response).toMatchObject({ status: 200 });
         const metadata = (await response.json()) as { client_id: string };
         expect(metadata).toMatchObject({
           client_id: url.href,
@@ -22,7 +22,7 @@ test.each(firmwareCatalog)(
         return metadata;
       }),
     );
-    expect(clients[0].client_id).not.toBe(clients[1].client_id);
+    expect(clients[0]).not.toMatchObject({ client_id: clients[1].client_id });
   },
 );
 

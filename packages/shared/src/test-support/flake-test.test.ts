@@ -55,7 +55,7 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
   );
 
   // The fixture's unexpected-error case must turn the whole child run red.
-  expect(result.status).toBe(1);
+  expect(result).toMatchObject({ status: 1 });
   const results = JSON.parse(readFileSync(outputFile, "utf8")) as any;
   const statuses = Object.fromEntries(
     results.testResults.flatMap((file: any) =>

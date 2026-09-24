@@ -16,7 +16,7 @@ test("small appends only change the tail block", () => {
   const next = appendText(first, " world");
   expect(next.groups[0]?.[0]).toBe(first.groups[0]?.[0]);
   expect(next.groups[0]?.[1]).toBe("hello world");
-  expect(next.tailOffset).toBe(5);
+  expect(next).toMatchObject({ tailOffset: 5 });
   expect(first.groups[0]?.[1]).toBe("hello");
 });
 
@@ -28,7 +28,7 @@ test.for([
   let text = appendText("", prefix);
   for (const chunk of chunks) text = appendText(text, chunk);
   expect(sliceText(text)).toBe(expected);
-  expect(ChunkedText.safeParse(text).success).toBe(true);
+  expect(ChunkedText.safeParse(text)).toMatchObject({ success: true });
   const blocks = Object.values(text.groups).flatMap((group) => Object.values(group));
   expect(blocks.some((block) => /[\uD800-\uDBFF]$/.test(block))).toBe(false);
 });
@@ -40,21 +40,21 @@ test.for([0, 1, 1023, 1024, 1025, 32768, 32769, 65536])(
     const text = appendText("", source);
     const bounded = takeText(text, limit);
     expect(sliceText(bounded)).toBe(source.slice(0, limit).replace(/[\uD800-\uDBFF]$/, ""));
-    expect(ChunkedText.safeParse(bounded).success).toBe(true);
+    expect(ChunkedText.safeParse(bounded)).toMatchObject({ success: true });
     expect(text.length).toBe(source.length);
   },
 );
 
 test("rejects impossible metadata without traversing the claimed block count", () => {
   expect(
-    ChunkedText.safeParse({ length: 1, blockCount: 1e12, tailOffset: 0, groups: {} }).success,
-  ).toBe(false);
+    ChunkedText.safeParse({ length: 1, blockCount: 1e12, tailOffset: 0, groups: {} }),
+  ).toMatchObject({ success: false });
   expect(
     ChunkedText.safeParse({
       length: 99,
       blockCount: 1,
       tailOffset: 0,
       groups: { 0: { 0: "x" } },
-    }).success,
-  ).toBe(false);
+    }),
+  ).toMatchObject({ success: false });
 });

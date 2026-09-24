@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AccountState } from "../src/account/contract.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
@@ -13,52 +13,8 @@ import { adminSession, controlPlaneStub, ORIGIN, refused, SRC_ECHO_APP, stub } f
 
 const secret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const password = env.APP_CONFIG_LOGIN__PASSWORD!;
-const sessions: Disposable[] = [];
-/** The sign-in page's own post — same-ORIGIN, a form — with or without a browser's cookie. */
-const postLogin = (form: Record<string, string>, cookie?: string) =>
-  exports.default.fetch(`${ORIGIN}/login`, {
-    method: "POST",
-    redirect: "manual",
-    headers: cookie ? { Origin: ORIGIN, cookie } : { Origin: ORIGIN },
-    body: new URLSearchParams(form),
-  });
-afterEach(() => {
-  for (const session of sessions.splice(0)) session[Symbol.dispose]();
-  vi.restoreAllMocks();
-});
-
 type Session = Awaited<ReturnType<typeof operator>>;
 
-/** A read of the control-plane database — the `CONTROL_PLANE` singleton Durable Object's tables
- *  (src/control-plane/) — with no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
-const catalog = (method: string, ...args: unknown[]) =>
-  (controlPlaneStub() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(
-    ...args,
-  );
-/** A global context's log, whole — the root's (the control plane's record), an organization's. */
-const globalLog = async (path: string) =>
-  (
-    (await stub(DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path })).invoke([
-      "itx",
-      ["readEvents", 0, 1000],
-    ])) as { events: StreamEvent[] }
-  ).events;
-/** The person's account, folded (src/account/contract.ts) — read through their own context. */
-const accountState = async (session: Session) =>
-  (
-    (await session.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]])) as {
-      state: AccountState;
-    }
-  ).state;
-/** The organization's record, folded (src/organization/contract.ts) — read by membership. */
-const organizationState = async (session: Session, orgId: string) =>
-  (
-    (await (
-      await session.organizations.get(orgId)
-    ).invoke(["itx", "facets", ["get", "organization"], ["snapshot"]])) as {
-      state: OrganizationState;
-    }
-  ).state;
 // Public OAuth lifecycle and browser clients are covered by oauth.test.ts.
 test("the directory keeps creation, listing, membership and event attribution coherent", async () => {
   const ada = await operator("Ada@directory.test");
@@ -133,13 +89,12 @@ test("organizations.create writes the catalog row and lands the facts on the org
   });
   expect(await ada.organizations.list()).toEqual([org]);
   // the membership is folded on the person's account; the name and the members on the organization
-  expect((await accountState(ada)).memberships).toEqual({
-    [org.id]: { role: "owner", since: expect.any(String) },
+  expect(await accountState(ada)).toMatchObject({
+    memberships: { [org.id]: { role: "owner", since: expect.any(String) } },
   });
-  const record = await organizationState(ada, org.id);
-  expect(record.name).toBe("Ada's organization");
-  expect(record.members).toEqual({
-    [principal.actor]: { role: "owner", since: expect.any(String) },
+  expect(await organizationState(ada, org.id)).toMatchObject({
+    name: "Ada's organization",
+    members: { [principal.actor]: { role: "owner", since: expect.any(String) } },
   });
   // the facts on the organization's own log, stamped with who asked
   const facts = (await globalLog(`/organizations/${org.id}`)).filter((event) =>
@@ -293,9 +248,7 @@ test("concurrent restores through the control plane: one slug never answers a di
 });
 
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    exports.default.fetch(new Request(input, init)),
-  );
+  fetchReachesThisWorker();
   // the bearer signs nobody in: the operator door is `/api` and `/mcp`, not the sign-in page
   const bearerLogin = await exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
@@ -303,28 +256,26 @@ test("a bare /api socket carries no session until a credential is verified in-ba
     headers: { Authorization: `Bearer ${secret}`, Origin: ORIGIN },
     body: new URLSearchParams({ email: "fixture@directory.test", next: "/" }),
   });
-  expect(bearerLogin.status).not.toBe(302);
+  expect(bearerLogin).not.toMatchObject({ status: 302 });
   expect(bearerLogin.headers.get("set-cookie") ?? "").not.toMatch(/__Host-itx-session=/);
   const login = await postLogin({
     email: "fixture@directory.test",
     password,
     next: "https://elsewhere.test", // another ORIGIN is not a place to continue to: the page's own
   });
-  expect(login.status).toBe(302);
+  expect(login).toMatchObject({ status: 302 });
   expect(login.headers.get("location")).toBe("/");
   const cookie = login.headers
     .getSetCookie()
     .find((value) => value.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
   expect(
-    (
-      await exports.default.fetch(`${ORIGIN}/api`, {
-        method: "POST",
-        body: "",
-        headers: { cookie, Origin: ORIGIN },
-      })
-    ).status,
-  ).toBe(200);
+    await exports.default.fetch(`${ORIGIN}/api`, {
+      method: "POST",
+      body: "",
+      headers: { cookie, Origin: ORIGIN },
+    }),
+  ).toMatchObject({ status: 200 });
   // a bare socket — no cookie, no bearer on the upgrade — holds nothing until a credential is verified
   const response = await exports.default.fetch(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket" },
@@ -338,39 +289,32 @@ test("a bare /api socket carries no session until a credential is verified in-ba
     /did not match/,
   );
   expect(
-    (
-      await exports.default.fetch(`${ORIGIN}/login`, {
-        method: "POST",
-        headers: { Origin: "https://evil.test" },
-        body: new URLSearchParams({ email: "attacker@directory.test" }),
-      })
-    ).status,
-  ).toBe(403);
+    await exports.default.fetch(`${ORIGIN}/login`, {
+      method: "POST",
+      headers: { Origin: "https://evil.test" },
+      body: new URLSearchParams({ email: "attacker@directory.test" }),
+    }),
+  ).toMatchObject({ status: 403 });
   expect(
-    (await exports.default.fetch(`${ORIGIN}/.auth/logout`, { method: "GET", redirect: "manual" }))
-      .status,
-  ).toBe(405);
+    await exports.default.fetch(`${ORIGIN}/.auth/logout`, { method: "GET", redirect: "manual" }),
+  ).toMatchObject({ status: 405 });
   expect(
-    (
-      await exports.default.fetch(`${ORIGIN}/.auth/logout`, {
-        method: "POST",
-        headers: { Origin: "https://evil.test" },
-      })
-    ).status,
-  ).toBe(403);
+    await exports.default.fetch(`${ORIGIN}/.auth/logout`, {
+      method: "POST",
+      headers: { Origin: "https://evil.test" },
+    }),
+  ).toMatchObject({ status: 403 });
 });
 
 test("password sign-in: the email and the password make an ordinary user session; a wrong password is refused in place; without a mailbox there is no email sign-in", async () => {
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    exports.default.fetch(new Request(input, init)),
-  );
+  fetchReachesThisWorker();
   // no mailbox binding: the deployment offers no email sign-in at all (the password stays)
   await expect(
     startLoginCode({ ...env, EMAIL: undefined }, "someone@directory.test", null),
   ).rejects.toThrow();
   // The page renders the offered sign-ins in its initial HTML.
   const page = await exports.default.fetch(`${ORIGIN}/login?next=/sessions`);
-  expect(page.status).toBe(200);
+  expect(page).toMatchObject({ status: 200 });
   const html = await page.text();
   expect(html).toContain("Use password instead");
   expect(html).toContain("Send me a code");
@@ -382,9 +326,9 @@ test("password sign-in: the email and the password make an ordinary user session
     password: "not-the-password",
     next: "/sessions",
   });
-  expect(wrong.status).toBe(303);
+  expect(wrong).toMatchObject({ status: 303 });
   const bounced = new URL(wrong.headers.get("location")!, ORIGIN);
-  expect(bounced.pathname).toBe("/login");
+  expect(bounced).toMatchObject({ pathname: "/login" });
   expect(bounced.searchParams.get("next")).toBe("/sessions");
   expect(bounced.searchParams.get("error")).toBeTruthy();
   expect(bounced.searchParams.get("method")).toBe("password");
@@ -400,7 +344,7 @@ test("password sign-in: the email and the password make an ordinary user session
     password,
     next: "/sessions",
   });
-  expect(login.status).toBe(302);
+  expect(login).toMatchObject({ status: 302 });
   expect(login.headers.get("location")).toBe("/sessions");
   const session = login.headers
     .getSetCookie()
@@ -408,7 +352,7 @@ test("password sign-in: the email and the password make an ordinary user session
   const response = await exports.default.fetch(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: session.split(";")[0]! },
   });
-  expect(response.status).toBe(101);
+  expect(response).toMatchObject({ status: 101 });
   response.webSocket!.accept();
   using apiTransport = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
@@ -421,26 +365,26 @@ test("password sign-in: the email and the password make an ordinary user session
 });
 
 test("password sign-in rests an address after five wrong tries: the sixth is refused as too many, right or wrong", async () => {
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
-    exports.default.fetch(new Request(input, init)),
-  );
+  fetchReachesThisWorker();
   const email = "limited@directory.test";
   const errors: string[] = [];
   for (let attempt = 0; attempt < 6; attempt++) {
     const refused = await postLogin({ email, password: "wrong", next: "/" });
-    expect(refused.status).toBe(303);
+    expect(refused).toMatchObject({ status: 303 });
     errors.push(new URL(refused.headers.get("location")!, ORIGIN).searchParams.get("error") ?? "");
   }
   expect(errors.slice(0, 5).every((error) => error && !/too many/i.test(error))).toBe(true);
   expect(errors[5]).toMatch(/too many/i);
   const late = await postLogin({ email, password, next: "/" });
-  expect(late.status).toBe(303);
+  expect(late).toMatchObject({ status: 303 });
   expect(new URL(late.headers.get("location")!, ORIGIN).searchParams.get("error")).toMatch(
     /too many/i,
   );
   // another address is untouched by that one's tries
-  expect((await postLogin({ email: "unlimited@directory.test", password, next: "/" })).status).toBe(
-    302,
+  expect(await postLogin({ email: "unlimited@directory.test", password, next: "/" })).toMatchObject(
+    {
+      status: 302,
+    },
   );
 });
 
@@ -508,12 +452,77 @@ test("project ingress strips forged internal authority and never exposes platfor
     app: "echo",
   });
   expect(
-    (await exports.default.fetch(host, { headers: { Authorization: "Bearer unrecognized" } }))
-      .status,
-  ).toBe(401);
+    await exports.default.fetch(host, { headers: { Authorization: "Bearer unrecognized" } }),
+  ).toMatchObject({ status: 401 });
   expect(await exports.default.fetch("https://unknown.projects.test/")).toMatchObject({
     status: 421,
   });
 });
 
-const operator = (email?: string) => adminSession(sessions, email);
+/** An admin session — `as` the person `email` names, when given — disposed when the test finishes. */
+function operator(email?: string) {
+  const sessions: Disposable[] = [];
+  onTestFinished(() => {
+    for (const session of sessions) session[Symbol.dispose]();
+  });
+  return adminSession(sessions, email);
+}
+
+/** `fetch` reaches this worker until the test finishes: the issuer fetches its own client metadata
+ *  while it signs someone in, and the network is out of reach here. */
+function fetchReachesThisWorker() {
+  const spy = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
+  onTestFinished(() => {
+    spy.mockRestore();
+  });
+}
+
+/** The sign-in page's own post — same-ORIGIN, a form — with or without a browser's cookie. */
+function postLogin(form: Record<string, string>, cookie?: string) {
+  return exports.default.fetch(`${ORIGIN}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: cookie ? { Origin: ORIGIN, cookie } : { Origin: ORIGIN },
+    body: new URLSearchParams(form),
+  });
+}
+
+/** A read of the control-plane database — the `CONTROL_PLANE` singleton Durable Object's tables
+ *  (src/control-plane/) — with no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
+function catalog(method: string, ...args: unknown[]) {
+  return (controlPlaneStub() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[
+    method
+  ]!(...args);
+}
+
+/** A global context's log, whole — the root's (the control plane's record), an organization's. */
+async function globalLog(path: string) {
+  return (
+    (await stub(DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path })).invoke([
+      "itx",
+      ["readEvents", 0, 1000],
+    ])) as { events: StreamEvent[] }
+  ).events;
+}
+
+/** The person's account, folded (src/account/contract.ts) — read through their own context. */
+async function accountState(session: Session) {
+  return (
+    (await session.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]])) as {
+      state: AccountState;
+    }
+  ).state;
+}
+
+/** The organization's record, folded (src/organization/contract.ts) — read by membership. */
+async function organizationState(session: Session, orgId: string) {
+  return (
+    (await (
+      await session.organizations.get(orgId)
+    ).invoke(["itx", "facets", ["get", "organization"], ["snapshot"]])) as {
+      state: OrganizationState;
+    }
+  ).state;
+}

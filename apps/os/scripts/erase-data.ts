@@ -38,9 +38,30 @@ export default async function eraseData(options: {
   /** Inventory only: no data, objects, bindings or worker code are changed. */
   dryRun?: boolean;
 }) {
+  await eraseDataWith(options, {
+    resolveEnvContext,
+    getWorkerDoNamespaces,
+    resetWorkerDurableObjects,
+  });
+}
+
+/** The services an erase resolves its environment and retires Durable Objects through: the real
+ *  ones from the CLI, controllable fakes in erase-data.test.ts. */
+type EraseDataServices = {
+  resolveEnvContext: typeof resolveEnvContext;
+  getWorkerDoNamespaces: typeof getWorkerDoNamespaces;
+  resetWorkerDurableObjects: typeof resetWorkerDurableObjects;
+};
+
+/** The erase itself, over `services`. Exported in a list, not as a declaration, so the CLI (which
+ *  derives its commands from exported declarations) offers only `eraseData`. */
+async function eraseDataWith(
+  options: Parameters<typeof eraseData>[0],
+  services: EraseDataServices,
+) {
   if (options.env === "prd" && !options.yesIMeanPrd)
     throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
-  const context = await resolveEnvContext({
+  const context = await services.resolveEnvContext({
     envs: osEnvs,
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
@@ -49,7 +70,7 @@ export default async function eraseData(options: {
   console.log(
     `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}`,
   );
-  const namespaces = await getWorkerDoNamespaces(context, env.workerName);
+  const namespaces = await services.getWorkerDoNamespaces(context, env.workerName);
   console.log(
     `Durable Objects: ${namespaces.length} namespaces (${namespaces.map((n) => n.className).join(", ")})`,
   );
@@ -164,7 +185,7 @@ export default async function eraseData(options: {
     .object({ compatibility_date: z.string() })
     .parse(readWranglerBase());
 
-  await resetWorkerDurableObjects({
+  await services.resetWorkerDurableObjects({
     ctx: context,
     workerName: env.workerName,
     cwd: fileURLToPath(new URL("..", import.meta.url)),
@@ -175,7 +196,7 @@ export default async function eraseData(options: {
     compatibilityDate,
     containerClassNames: [],
   });
-  if ((await getWorkerDoNamespaces(context, env.workerName)).length)
+  if ((await services.getWorkerDoNamespaces(context, env.workerName)).length)
     throw new Error(
       "Durable Object namespaces remain after retirement; refusing to erase while writers may survive.",
     );
@@ -237,5 +258,7 @@ export default async function eraseData(options: {
     `✅ ${context.name}: all Durable Objects retired; both KV namespaces, R2 and Artifacts verified empty. Deploy to restore service.`,
   );
 }
+export { eraseDataWith };
+
 if (process.argv[1]?.endsWith("erase-data.ts"))
   void createCli({ ...import.meta, name: "erase-data" }).run();

@@ -11,14 +11,10 @@ import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
-import { grandfatherRule } from "./grandfather-rule.ts";
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
-/** The test-style rules (no-describe … prefer-test-over-it) check every line authored after
- * 2026-09-23 UTC, when they were armed on every retained test file: lint/test-style-rules.md. */
-const testStyleRulesAllowedUpTo = new Date("2026-09-23T23:59:59Z");
 const getExpectedName = (name: string) => {
   const acronyms = ["API", "HTML", "JSON", "ORPC", "MCP"];
   const acronymStart = acronyms.find(
@@ -796,8 +792,7 @@ const plugin: StrictPlugin = {
         };
       },
     },
-    "no-lifecycle-hooks": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    "no-lifecycle-hooks": {
       meta: {
         type: "problem",
         docs: {
@@ -819,9 +814,8 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
-    "no-describe": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    },
+    "no-describe": {
       meta: {
         type: "suggestion",
         docs: {
@@ -841,9 +835,8 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
-    "no-vi-mock": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    },
+    "no-vi-mock": {
       meta: {
         type: "suggestion",
         docs: {
@@ -863,7 +856,7 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
+    },
     "no-single-use-helpers": {
       meta: {
         type: "suggestion",
@@ -944,9 +937,7 @@ const plugin: StrictPlugin = {
         };
       },
     },
-    "no-shouting-constants": grandfatherRule({
-      // when the rule landed (#2620): every line committed since is checked
-      allowedUpTo: new Date("2026-09-10T10:04:56Z"),
+    "no-shouting-constants": {
       meta: {
         type: "suggestion",
         docs: {
@@ -994,7 +985,7 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
+    },
     "colocate-single-use-types": {
       meta: {
         type: "suggestion",
@@ -1039,8 +1030,7 @@ const plugin: StrictPlugin = {
         };
       },
     },
-    "helpers-after-tests": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    "helpers-after-tests": {
       meta: {
         type: "suggestion",
         docs: {
@@ -1070,9 +1060,8 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
-    "prefer-object-property-match": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    },
+    "prefer-object-property-match": {
       meta: {
         type: "suggestion",
         docs: {
@@ -1098,7 +1087,7 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
+    },
     "prefer-test-over-it": {
       meta: {
         type: "suggestion",

@@ -5,28 +5,6 @@ import { deviceAuth } from "./device-auth.ts";
 
 const origin = "https://kit-preview.example";
 const cookie = "__Host-itx-session=11111111-1111-4111-8111-111111111111";
-function fixture() {
-  const begin = vi.fn(
-    async (_host: BrowserHost, _next: string) => "https://issuer.example/oauth2/auth",
-  );
-  const end = vi.fn(async () => {});
-  const client = vi.fn(async () => ({
-    id: `${origin}/devices/satellite1/clients/22222222-2222-4222-8222-222222222222.json`,
-    name: "Satellite1",
-    logoUri: `${origin}/vendors/futureproofhomes.png`,
-  }));
-  const bearer = vi.fn(async (): Promise<string | null> => "token");
-  const sessions = {
-    getByName: () => ({ begin, end, client, bearer }),
-  } as unknown as DurableObjectNamespace<BrowserSession>;
-  return {
-    env: { BROWSER_SESSION: sessions, ITERATE_ORIGIN: "https://issuer.example" },
-    begin,
-    end,
-    client,
-    bearer,
-  };
-}
 
 test("choosing a device starts its branded client before consent, with a new identity even for two of the same model", async () => {
   const f = fixture();
@@ -56,7 +34,7 @@ test("choosing a device starts its branded client before consent, with a new ide
     expect(next).toBe(`/devices/${model}/firmware/latest`);
     ids.push(host.client?.id);
   }
-  expect(new Set(ids).size).toBe(3);
+  expect(new Set(ids)).toMatchObject({ size: 3 });
   expect(f.end).toHaveBeenCalledTimes(3);
   expect(f.end.mock.invocationCallOrder[0]).toBeLessThan(f.begin.mock.invocationCallOrder[0]!);
 });
@@ -133,3 +111,26 @@ test("a failed end is observable and does not create another authorization", asy
     log.mockRestore();
   }
 });
+
+function fixture() {
+  const begin = vi.fn(
+    async (_host: BrowserHost, _next: string) => "https://issuer.example/oauth2/auth",
+  );
+  const end = vi.fn(async () => {});
+  const client = vi.fn(async () => ({
+    id: `${origin}/devices/satellite1/clients/22222222-2222-4222-8222-222222222222.json`,
+    name: "Satellite1",
+    logoUri: `${origin}/vendors/futureproofhomes.png`,
+  }));
+  const bearer = vi.fn(async (): Promise<string | null> => "token");
+  const sessions = {
+    getByName: () => ({ begin, end, client, bearer }),
+  } as unknown as DurableObjectNamespace<BrowserSession>;
+  return {
+    env: { BROWSER_SESSION: sessions, ITERATE_ORIGIN: "https://issuer.example" },
+    begin,
+    end,
+    client,
+    bearer,
+  };
+}

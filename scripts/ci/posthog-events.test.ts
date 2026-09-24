@@ -7,8 +7,8 @@ test("uses a stable top-level PostHog UUID for retry and replay deduplication", 
   const replay = systemEvent("ci job attempt finished", "depot-job-attempt:a1", "w:1", {}, at);
   const other = systemEvent("ci job attempt finished", "depot-job-attempt:a2", "w:1", {}, at);
 
-  expect(first.uuid).toBe(replay.uuid);
-  expect(first.uuid).not.toBe(other.uuid);
+  expect(first).toMatchObject({ uuid: replay.uuid });
+  expect(first).not.toMatchObject({ uuid: other.uuid });
   expect(first.uuid).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
   );

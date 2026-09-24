@@ -8,32 +8,6 @@ import {
 } from "./project-seed-format.ts";
 
 const keys = { current: "seed-encryption-key" };
-async function archive() {
-  const files = [
-    { path: "worker.ts", content: "export default {fetch(){return new Response('restored')}}" },
-  ];
-  const binding = {
-    context: "prj_old.iterate/secrets/stripe",
-    urls: ["https://api.stripe.com"],
-    revision: 7,
-  };
-  return {
-    version: 1,
-    capturedAt: "2026-09-22T12:00:00.000Z",
-    source: { platform: "https://os.example.com", projectId: "prj_old" },
-    project: "garple",
-    organization: { name: "garple", members: [{ email: "jonas@nustom.com", role: "owner" }] },
-    config: { files, commit: "a".repeat(40), tree: await configTree(files) },
-    secrets: [
-      {
-        path: "/secrets/stripe",
-        ...binding,
-        refresh: null,
-        material: await encryptSecretMaterial({ apiKey: "sensitive-key" }, binding, keys),
-      },
-    ],
-  };
-}
 test("current encrypted cells open with the deployment key without plaintext in the archive", async () => {
   const seed = await archive();
   expect(JSON.stringify(seed)).not.toContain("sensitive-key");
@@ -77,7 +51,6 @@ test("duplicate file or secret paths cannot silently shadow an archived entry", 
   seed.secrets.push(seed.secrets[0]!);
   await expect(openProjectSeed(seed, keys)).rejects.toThrow("Duplicate secret");
 });
-
 test("a recreation with fresh user and organization IDs matches; the empty admin org is a note", () => {
   expect(compareStructure(captured, recreated())).toEqual({
     problems: [],
@@ -120,6 +93,33 @@ test("two organizations of one name are a problem; uncaptured rows and a user no
     ]),
   );
 });
+
+async function archive() {
+  const files = [
+    { path: "worker.ts", content: "export default {fetch(){return new Response('restored')}}" },
+  ];
+  const binding = {
+    context: "prj_old.iterate/secrets/stripe",
+    urls: ["https://api.stripe.com"],
+    revision: 7,
+  };
+  return {
+    version: 1,
+    capturedAt: "2026-09-22T12:00:00.000Z",
+    source: { platform: "https://os.example.com", projectId: "prj_old" },
+    project: "garple",
+    organization: { name: "garple", members: [{ email: "jonas@nustom.com", role: "owner" }] },
+    config: { files, commit: "a".repeat(40), tree: await configTree(files) },
+    secrets: [
+      {
+        path: "/secrets/stripe",
+        ...binding,
+        refresh: null,
+        material: await encryptSecretMaterial({ apiKey: "sensitive-key" }, binding, keys),
+      },
+    ],
+  };
+}
 
 /** prd on 2026-09-24, cut down: two owners of garple, an org of one, the empty admin org. */
 const captured: DeploymentStructure = {

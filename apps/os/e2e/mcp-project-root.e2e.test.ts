@@ -35,7 +35,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     request("tools/call", { name: "run", arguments: { script, project } });
   const success = async (script: string) => {
     const result = await run(script);
-    expect(result.isError, JSON.stringify(result)).toBe(false);
+    expect(result, JSON.stringify(result)).toMatchObject({ isError: false });
     return result.structuredContent.result;
   };
 
@@ -59,16 +59,20 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   expect(examples).toHaveLength(3);
   const [starter, readWorker, commitNote] = examples;
   const started = await request("tools/call", { name: "run", arguments: starter });
-  expect(started.isError, JSON.stringify(started)).toBe(false);
-  expect(started.structuredContent.result.identity).toMatchObject({ projectId, path: "/" });
-  expect(started.structuredContent.result.capabilities).toEqual(
-    expect.arrayContaining([expect.objectContaining({ match: "itx.repos" })]),
-  );
+  expect(started, JSON.stringify(started)).toMatchObject({
+    isError: false,
+    structuredContent: {
+      result: {
+        identity: { projectId, path: "/" },
+        capabilities: expect.arrayContaining([expect.objectContaining({ match: "itx.repos" })]),
+      },
+    },
+  });
   const read = await request("tools/call", { name: "run", arguments: readWorker });
-  expect(read.isError, JSON.stringify(read)).toBe(false);
-  expect(read.structuredContent.result).toBe(
-    await root.repos.get("/repos/config").readFile("worker.ts"),
-  );
+  expect(read, JSON.stringify(read)).toMatchObject({
+    isError: false,
+    structuredContent: { result: await root.repos.get("/repos/config").readFile("worker.ts") },
+  });
   const probe = description.match(/`(itx\.workers\.get\(.*?)`/)![1];
   expect(
     await success(
@@ -76,8 +80,10 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     ),
   ).toBe(200);
   const noted = await request("tools/call", { name: "run", arguments: commitNote });
-  expect(noted.isError, JSON.stringify(noted)).toBe(false);
-  expect(noted.structuredContent.result.commitOid).toEqual(expect.any(String));
+  expect(noted, JSON.stringify(noted)).toMatchObject({
+    isError: false,
+    structuredContent: { result: { commitOid: expect.any(String) } },
+  });
   expect(await root.repos.get("/repos/config").readFile("notes.txt")).toBe("Hello from MCP");
   expect(
     await success('async (itx) => itx.repos.get("/repos/config").readFile("AGENTS.md")'),
@@ -100,7 +106,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   const commit = await success(
     `async (itx) => itx.repos.get("/repos/config").commitFiles(${JSON.stringify({ message: "MCP root regression", changes })})`,
   );
-  expect(commit.commitOid).toEqual(expect.any(String));
+  expect(commit).toMatchObject({ commitOid: expect.any(String) });
   const published = await until("MCP commit serves the site", async () => {
     const result = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
     return result.status === 200 && result.text === "<h1>MCP config repo publication</h1>"
@@ -142,8 +148,10 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
     second.token,
   );
-  expect(secondRun.isError, JSON.stringify(secondRun)).toBe(false);
-  expect(secondRun.structuredContent.result).toMatchObject({ projectId, path: "/" });
+  expect(secondRun, JSON.stringify(secondRun)).toMatchObject({
+    isError: false,
+    structuredContent: { result: { projectId, path: "/" } },
+  });
   const afterSecond = await readAll(root);
   const secondGrantId = second.token.split(":")[1]!;
   expect(
@@ -155,7 +163,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     'async (itx) => itx.repos.get("/repos/config").readFile("worker.ts")',
     other,
   );
-  expect(denied.isError).toBe(true);
+  expect(denied).toMatchObject({ isError: true });
   expect(denied.content[0].text).toContain("outside this token's grant");
   expect(await readAll(openItx(other))).toEqual(otherEvents);
   // Root policy still applies: MCP does not dispatch directly to the physical repo built-in.
@@ -164,7 +172,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     payload: { match: "itx.repos", target: null },
   });
   const masked = await run('async (itx) => itx.repos.get("/repos/config").readFile("worker.ts")');
-  expect(masked.isError).toBe(true);
+  expect(masked).toMatchObject({ isError: true });
   expect(masked.content[0].text).toContain("masked");
   expect(description).toContain("root `itx` handle");
 });

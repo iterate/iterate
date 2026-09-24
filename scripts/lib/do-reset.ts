@@ -42,8 +42,6 @@ type WorkerSettings = {
   bindings?: WorkerBinding[];
 };
 
-const SETTINGS_SCAN_CONCURRENCY = 10;
-
 const PARKED_WORKER_MODULE = new URL("./parked-worker/worker.js", import.meta.url);
 
 /** Deterministic 8-hex-char suffix so the same input always names the same tag. */
@@ -159,7 +157,7 @@ export async function detachExternalDurableObjectBindings(input: {
     (workerName) => workerName !== input.targetWorkerName,
   );
 
-  await forEachWithConcurrency(candidates, SETTINGS_SCAN_CONCURRENCY, async (workerName) => {
+  await forEachWithConcurrency(candidates, 10, async (workerName) => {
     const path = `/workers/scripts/${encodeURIComponent(workerName)}/settings`;
     const before = await input.ctx.cf<WorkerSettings>(path);
     const bindings = before.bindings || [];

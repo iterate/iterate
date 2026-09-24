@@ -36,39 +36,6 @@ import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { adminCredentials, openSession } from "./support.ts";
 
-/** The live provider: a fetch-shaped value that CAN fabricate a 101 (we are in workerd).
- *  Plain requests get a 200 page; upgrade requests get a WebSocketPair whose server side echoes
- *  every message back prefixed `live-echo:`. Observations recorded so a failure names its hop. */
-class LiveSite extends RpcTarget {
-  observations: string[] = [];
-  fetch(request: Request): Response {
-    const upgrade = (request.headers.get("Upgrade") ?? "").toLowerCase();
-    this.observations.push(`fetch invoked: ${request.method} upgrade=${JSON.stringify(upgrade)}`);
-    if (upgrade !== "websocket")
-      return new Response("live site", { headers: { "content-type": "text/plain" } });
-    const pair = new WebSocketPair();
-    pair[1].accept();
-    pair[1].addEventListener("message", (e) => pair[1].send(`live-echo:${e.data}`));
-    const response = new Response(null, { status: 101, webSocket: pair[0] });
-    this.observations.push("fabricated a genuine 101 with a webSocket"); // provider-side success
-    return response;
-  }
-}
-
-/** The project `project`, created in the directory (a host is admitted by one directory read) —
- *  its root context on the admin session. */
-async function createProject(project: string) {
-  return (await openSession()).authenticate(adminCredentials()).projects.create({ project });
-}
-
-/** Provide a fresh LiveSite over a live capnweb session as the app `wsdev` of `project` — the
- *  rewrite rule at `itx.apps.wsdev`, the ONE door — and hand back its host. */
-async function provideLiveSite(project: string): Promise<{ site: LiveSite; host: string }> {
-  const site = new LiveSite();
-  await (await createProject(project)).provide("itx.apps.wsdev", site);
-  return { site, host: `https://wsdev--${project}.projects.test/` };
-}
-
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
 
 test("plain fetch through a LENT RPC STUB: the eyeball's GET on the project host reaches the workerd provider and its 200 rides back out", async () => {
@@ -76,7 +43,7 @@ test("plain fetch through a LENT RPC STUB: the eyeball's GET on the project host
   const page = await exports.default.fetch(host);
   const body = await page.text();
   console.log("[ws101] plain GET:", page.status, JSON.stringify(body).slice(0, 400));
-  expect(page.status).toBe(200);
+  expect(page).toMatchObject({ status: 200 });
   expect(body).toBe("live site");
   expect(site.observations).toContain('fetch invoked: GET upgrade=""');
 });
@@ -92,7 +59,7 @@ test("lent-stub WebSocket fetch: the eyeball's upgrade on the project host gets 
   const { site, host } = await provideLiveSite("ws101-correct");
   // THE CORRECT BEHAVIOR: a genuine 101 bearing a usable WebSocket…
   const res = await exports.default.fetch(host, { headers: { Upgrade: "websocket" } });
-  expect(res.status).toBe(101);
+  expect(res).toMatchObject({ status: 101 });
   expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
   expect(site.observations).toContain("fabricated a genuine 101 with a webSocket");
   const eyeball = res.webSocket;
@@ -122,25 +89,13 @@ test("lent-stub WebSocket fetch: the eyeball's upgrade on the project host gets 
 // speaks first. The DO must accept the eyeball BEFORE the transport opens its upgrade leg, or the
 // greeting the provider sends the instant it upgrades routes to a not-yet-existent eyeball
 // (#peerOf → null) and is dropped. A regression pin for that accept-order (context/rpc-stubs.ts).
-class GreetingSite extends RpcTarget {
-  fetch(request: Request): Response {
-    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
-      return new Response("greeting site");
-    const pair = new WebSocketPair();
-    pair[1].accept();
-    pair[1].addEventListener("message", (e) => pair[1].send(`greet-echo:${e.data}`));
-    pair[1].send("server-hello"); // GREET first — before any eyeball frame
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-}
-
 test("a lent-stub WebSocket provider that GREETS on connect: the eyeball receives the server's first frame without sending one", async () => {
   const project = "ws101-greet";
   await (await createProject(project)).provide("itx.apps.wsdev", new GreetingSite());
   const res = await exports.default.fetch(`https://wsdev--${project}.projects.test/`, {
     headers: { Upgrade: "websocket" },
   });
-  expect(res.status).toBe(101);
+  expect(res).toMatchObject({ status: 101 });
   const eyeball = res.webSocket;
   if (!eyeball) throw new Error("101 without a webSocket");
   const greeting = await new Promise<string>((resolve, reject) => {
@@ -184,7 +139,7 @@ test("a LOADED worker's 101 through the project host: the SDK's newWorkersRpcRes
   const res = await exports.default.fetch("https://rpc--ws101-capnweb.projects.test/rpc/v1", {
     headers: { Upgrade: "websocket" },
   });
-  expect(res.status).toBe(101);
+  expect(res).toMatchObject({ status: 101 });
   if (!res.webSocket) throw new Error("101 without a webSocket");
   res.webSocket.accept();
   const remote = newWebSocketRpcSession(res.webSocket as unknown as WebSocket) as any;
@@ -192,3 +147,49 @@ test("a LOADED worker's 101 through the project host: the SDK's newWorkersRpcRes
   expect(await remote.path()).toBe("/rpc/v1");
   remote[Symbol.dispose]();
 });
+
+/** The live provider: a fetch-shaped value that CAN fabricate a 101 (we are in workerd).
+ *  Plain requests get a 200 page; upgrade requests get a WebSocketPair whose server side echoes
+ *  every message back prefixed `live-echo:`. Observations recorded so a failure names its hop. */
+class LiveSite extends RpcTarget {
+  observations: string[] = [];
+  fetch(request: Request): Response {
+    const upgrade = (request.headers.get("Upgrade") ?? "").toLowerCase();
+    this.observations.push(`fetch invoked: ${request.method} upgrade=${JSON.stringify(upgrade)}`);
+    if (upgrade !== "websocket")
+      return new Response("live site", { headers: { "content-type": "text/plain" } });
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].addEventListener("message", (e) => pair[1].send(`live-echo:${e.data}`));
+    const response = new Response(null, { status: 101, webSocket: pair[0] });
+    this.observations.push("fabricated a genuine 101 with a webSocket"); // provider-side success
+    return response;
+  }
+}
+
+/** The project `project`, created in the directory (a host is admitted by one directory read) —
+ *  its root context on the admin session. */
+async function createProject(project: string) {
+  return (await openSession()).authenticate(adminCredentials()).projects.create({ project });
+}
+
+/** Provide a fresh LiveSite over a live capnweb session as the app `wsdev` of `project` — the
+ *  rewrite rule at `itx.apps.wsdev`, the ONE door — and hand back its host. */
+async function provideLiveSite(project: string): Promise<{ site: LiveSite; host: string }> {
+  const site = new LiveSite();
+  await (await createProject(project)).provide("itx.apps.wsdev", site);
+  return { site, host: `https://wsdev--${project}.projects.test/` };
+}
+
+/** A provider that GREETS on connect: its first frame goes out the instant it upgrades. */
+class GreetingSite extends RpcTarget {
+  fetch(request: Request): Response {
+    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
+      return new Response("greeting site");
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].addEventListener("message", (e) => pair[1].send(`greet-echo:${e.data}`));
+    pair[1].send("server-hello"); // GREET first — before any eyeball frame
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+}

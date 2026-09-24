@@ -6,9 +6,6 @@ import type { ItxExpression } from "iterate/next/expression";
 import { facetSpecFromHostingTarget } from "./stream/core-processor.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "./first-party-facets.ts";
 
-const target = (getStep: unknown[]): ItxExpression =>
-  ["itx", "builtins", "facets", getStep, "processEventBatch"] as unknown as ItxExpression;
-
 test("a first-party name hosts its exported class with no source; other names need a spec", () => {
   for (const [name, className] of Object.entries(FIRST_PARTY_FACET_CLASSES)) {
     expect(firstPartyFacetClassOf(name)).toBe(className);
@@ -24,3 +21,6 @@ test("a first-party name hosts its exported class with no source; other names ne
     ),
   ).toEqual({ name: "presence", source: { "cap.js": "export {}" }, className: "P" });
 });
+
+const target = (getStep: unknown[]): ItxExpression =>
+  ["itx", "builtins", "facets", getStep, "processEventBatch"] as unknown as ItxExpression;

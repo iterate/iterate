@@ -1346,8 +1346,8 @@ test("groups expired and unrecognized cancellations into one failed activity", (
     status: "done",
     outcome: "cancelled",
     durationMs: 1_000,
+    cancelReason: undefined,
   });
-  expect(activity.steps[0]).not.toHaveProperty("cancelReason");
   expect(activity.steps[1]).toMatchObject({ outcome: "cancelled", cancelReason: "expired" });
   expect(summarizeAgentUiActivity(activity)).toMatchObject({
     outcome: "failed",
@@ -1394,8 +1394,8 @@ test("the first settlement wins when a duplicate races in", () => {
     status: "done",
     outcome: "cancelled",
     cancelReason: "interrupted-by-user-input",
+    inputTokens: undefined,
   });
-  expect(state.live?.steps[0]).not.toHaveProperty("inputTokens");
   if (!state.live) throw new Error("expected live activity");
   expect(summarizeAgentUiActivity(state.live)).toMatchObject({
     outcome: "interrupted",

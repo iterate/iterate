@@ -73,7 +73,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
   allowDopplerConfigFallback?: boolean;
 }): Promise<EnvContext<E>> {
   const name =
-    options.env ?? (options.allowDopplerConfigFallback ? process.env.DOPPLER_CONFIG : undefined);
+    options.env || (options.allowDopplerConfigFallback ? process.env.DOPPLER_CONFIG : undefined);
   if (!name) {
     throw new Error(
       `Pass --env <name>. Known: ${Object.keys(options.envs).join(", ")} (see envs.ts).`,

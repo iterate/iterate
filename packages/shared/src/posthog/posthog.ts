@@ -21,7 +21,7 @@ export async function proxyPosthogRequest(options: {
   const body =
     options.request.method === "GET" || options.request.method === "HEAD"
       ? undefined
-      : (options.request.body ?? undefined);
+      : options.request.body || undefined;
   return fetch(posthogUrl, {
     method: options.request.method,
     headers,

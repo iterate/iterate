@@ -71,65 +71,6 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
 }
 `;
 
-type FacetSnap = { offset: number; state: { n: number } };
-const snapCounter = (ctx: string, name = "counter") =>
-  stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
-// The number of DURABLE events a "*" consumer sees (read is durable-only; every incarnation's wake
-// record is one of them). CounterProcessor consumes "*", so its `n` equals this — the exact-once
-// invariant. (Not `n === offset`: every processor's live-state delta is an ephemeral that consumes
-// an offset, so a durable event's offset exceeds the count of durable events before it.)
-const durableCount = async (ctx: string): Promise<number> =>
-  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
-    .length;
-
-/** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO door: ONE
- *  subscription-configured event — a literal appended through `append` (normalized at the boundary)
- *  — whose target is the facet's `processEventBatch` through the load chain (the facet name = the
- *  subscription name = the `.get(name)` name). */
-async function enableCounter(ctx: string, name = "counter"): Promise<void> {
-  const s = stub(ctx);
-  await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      name,
-      target: [
-        "itx",
-        "facets",
-        ["get", name, { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" }],
-        "processEventBatch",
-      ],
-    },
-  });
-}
-/** The `itx.processors.disable(name)` root: ONE event — `target: null`; the DO deletes the facet the
- *  row hosted, storage included, before the append returns. */
-async function disableCounter(ctx: string, name = "counter"): Promise<void> {
-  await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: { name, target: null },
-  });
-}
-
-// The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the release probes are
-// in-memory socket truths, so they speak rpcStubTransportState(), never the table.
-const stateOf = (ctx: string): Promise<Record<string, any>> =>
-  runInDurableObject(stub(ctx), async (inst) =>
-    (inst as unknown as { rpcStubTransportState(): Record<string, any> }).rpcStubTransportState(),
-  );
-/** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
- *  pager socket's CLOSE lands at the DO — a physical fact that arrives a beat after the edge
- *  disposes its relay, never inside the RPC that triggered it. */
-async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Record<string, any>> {
-  const t0 = Date.now();
-  for (;;) {
-    const s = await stateOf(ctx);
-    if (s.rpcStubPagers === n) return s;
-    if (Date.now() - t0 > timeoutMs)
-      throw new Error(`untilStubs(${ctx}, ${n}): still ${s.rpcStubPagers} after ${timeoutMs}ms`);
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
-
 // ─────────── THE RELEASE (`releasePins`, run directly by these tests), and what survives the eviction it enables ───────────
 
 test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from the startup memo, snapshot is unchanged", async () => {
@@ -143,7 +84,7 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from t
   await s.append({ type: "a/1" }, { type: "a/2" }, { type: "a/3" });
   await new Promise((r) => setTimeout(r, 150));
   const before = await snapCounter(ctx);
-  expect(before.state.n).toBe(await durableCount(ctx)); // every durable event counted, no double/no loss
+  expect(before).toMatchObject({ state: { n: await durableCount(ctx) } }); // every durable event counted, no double/no loss
 
   // Idle 61s → the release aborts the facet (its checkpoint is durable in its OWN storage).
   await releasePins(ctx);
@@ -155,8 +96,8 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from t
   // live-state ephemerals landed after the last push — a head-tracking advance, not a replay. The
   // exact-once invariant is the reduced STATE (below), not the offset number.
   expect(after.offset).toBeGreaterThanOrEqual(before.offset);
-  expect(after.state.n).toBe(before.state.n); // reduced state preserved
-  expect(after.state.n).toBe(await durableCount(ctx)); // still exact (idempotent re-drive, no replay effects)
+  expect(after).toMatchObject({ state: { n: before.state.n } }); // reduced state preserved
+  expect(after).toMatchObject({ state: { n: await durableCount(ctx) } }); // still exact (idempotent re-drive, no replay effects)
 });
 
 test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpoint exactly once (no double, no loss)", async () => {
@@ -182,7 +123,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable checkpoint
   expect(after.state.n).toBeGreaterThanOrEqual(7); // created, the first woken, subscription-configured, b/1..b/4 — and one woken per incarnation since
-  expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction
+  expect(after).toMatchObject({ state: { n: await durableCount(ctx) } }); // EXACTLY one reduce per durable event across the eviction
 });
 
 test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no stale checkpoint, no skipped events)", async () => {
@@ -203,7 +144,7 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
   await enableCounter(ctx); // re-enable the same name
   await new Promise((r) => setTimeout(r, 150));
   const after = await snapCounter(ctx);
-  expect(after.state.n).toBe(await durableCount(ctx)); // rebuilt from the whole log — no stale-checkpoint skip
+  expect(after).toMatchObject({ state: { n: await durableCount(ctx) } }); // rebuilt from the whole log — no stale-checkpoint skip
 });
 
 /** A facet that counts bumps in its OWN kv — state a processor's checkpoint stands in for. */
@@ -262,7 +203,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   await s.append({ type: "a/1" });
   await new Promise((r) => setTimeout(r, 300));
   const before = await snapCounter(ctx);
-  expect(before.state.n).toBe(await durableCount(ctx));
+  expect(before).toMatchObject({ state: { n: await durableCount(ctx) } });
   // The same name and class, NEW source: counts by 10.
   await s.append({
     type: "events.iterate.com/stream/subscription-configured",
@@ -289,7 +230,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   const after = await snapCounter(ctx);
   // The re-configure and a/2 — two durable events — each counted by TEN by the new code, on top of
   // the preserved count (a rebuild from 0 would count the whole log by ten; the old code by one).
-  expect(after.state.n).toBe(before.state.n + 20);
+  expect(after).toMatchObject({ state: { n: before.state.n + 20 } });
 });
 
 // ─────────── THE ONE ALARM: no wake without a reason, and every decision observable ───────────
@@ -382,7 +323,7 @@ test(
     expect(await caller.invoke("itx.p0.echo('again')")).toBe("echo-0:again");
     expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
     await releasePins(ctx);
-    expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);
+    expect(await stateOf(ctx)).toMatchObject({ borrowedRpcStubs: 0 });
     expect(await owedAlarmAt(ctx)).toBeNull();
   },
 );
@@ -422,7 +363,7 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   expect(
     woken.slice(before).filter((e) => (e.payload as { reason: string }).reason === "alarm"),
   ).toHaveLength(1);
-  expect((await snapCounter(ctx)).state.n).toBe(await durableCount(ctx)); // the wake record reached the "*" facet exactly once
+  expect(await snapCounter(ctx)).toMatchObject({ state: { n: await durableCount(ctx) } }); // the wake record reached the "*" facet exactly once
 });
 
 test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm — one woken per incarnation, never a second", async () => {
@@ -515,17 +456,17 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   // (unreachable dotted, rule gone).
   providedRpcStubs[3][Symbol.dispose]();
   const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
-  expect(dropped.rpcStubPagers).toBe(K - 1);
+  expect(dropped).toMatchObject({ rpcStubPagers: K - 1 });
 
   // Warm one stub: that borrow is what the release then has to return — and it arms nothing.
   expect(await caller.invoke("itx.k0.echo('warm')")).toBe("echo-0:warm");
   expect(await owedAlarmAt(ctx)).toBeNull();
   await releasePins(ctx);
   const q = await stateOf(ctx);
-  expect(q.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub (evict precondition)
+  expect(q).toMatchObject({ borrowedRpcStubs: 0 }); // the release returned every borrowed stub (evict precondition)
   await evictDurableObject(stub(ctx));
   const evicted = await stateOf(ctx);
-  expect(evicted.rpcStubPagers).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
+  expect(evicted).toMatchObject({ rpcStubPagers: K - 1 }); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
   // The rule at itx.k3 is gone from the table (the dispose un-set it), and the survivors' rules
   // stayed — the table is data, untouched by the eviction.
@@ -570,28 +511,6 @@ export default class Flaky extends WorkerEntrypoint {
   }
 }
 `;
-/** One `itx.subscriptions.get(name)` row — the reduced table joined with the stream-kept cursor
- *  (present only for a target the stream delivers at-least-once); `null` for an unknown name. */
-type SubscriptionRow = {
-  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
-  halted?: unknown;
-} | null;
-/** Poll `itx.subscriptions.get(name)` (the table ⋈ the cursor) until `ok` (bounded). */
-async function untilRow(
-  ctx: string,
-  name: string,
-  ok: (row: SubscriptionRow) => boolean,
-  timeoutMs = 10_000,
-): Promise<NonNullable<SubscriptionRow>> {
-  const t0 = Date.now();
-  for (;;) {
-    const row = (await stub(ctx).invoke(`itx.subscriptions.get('${name}')`)) as SubscriptionRow;
-    if (row && ok(row)) return row;
-    if (Date.now() - t0 > timeoutMs)
-      throw new Error(`untilRow(${name}): ${JSON.stringify(row)} after ${timeoutMs}ms`);
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
 
 test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried from alarm() — the cursor advances, the ladder resets", async () => {
   // The cursor lane rides THIS DO's alarm (facets have none — workerd#6810 — so a retry can never
@@ -649,3 +568,91 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
  *  alarm, and it is the ONE proof that a release pin above is exercising the alarm instead of firing
  *  into an empty schedule. */
 const owedAlarmAt = async (ctx: string): Promise<number | null> => owedAlarmOf(stub(ctx));
+
+type FacetSnap = { offset: number; state: { n: number } };
+function snapCounter(ctx: string, name = "counter") {
+  return stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
+}
+
+// The number of DURABLE events a "*" consumer sees (read is durable-only; every incarnation's wake
+// record is one of them). CounterProcessor consumes "*", so its `n` equals this — the exact-once
+// invariant. (Not `n === offset`: every processor's live-state delta is an ephemeral that consumes
+// an offset, so a durable event's offset exceeds the count of durable events before it.)
+async function durableCount(ctx: string): Promise<number> {
+  return ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
+    .length;
+}
+
+/** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO door: ONE
+ *  subscription-configured event — a literal appended through `append` (normalized at the boundary)
+ *  — whose target is the facet's `processEventBatch` through the load chain (the facet name = the
+ *  subscription name = the `.get(name)` name). */
+async function enableCounter(ctx: string, name = "counter"): Promise<void> {
+  const s = stub(ctx);
+  await s.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name,
+      target: [
+        "itx",
+        "facets",
+        ["get", name, { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" }],
+        "processEventBatch",
+      ],
+    },
+  });
+}
+
+/** The `itx.processors.disable(name)` root: ONE event — `target: null`; the DO deletes the facet the
+ *  row hosted, storage included, before the append returns. */
+async function disableCounter(ctx: string, name = "counter"): Promise<void> {
+  await stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name, target: null },
+  });
+}
+
+// The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the release probes are
+// in-memory socket truths, so they speak rpcStubTransportState(), never the table.
+function stateOf(ctx: string): Promise<Record<string, any>> {
+  return runInDurableObject(stub(ctx), async (inst) =>
+    (inst as unknown as { rpcStubTransportState(): Record<string, any> }).rpcStubTransportState(),
+  );
+}
+
+/** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
+ *  pager socket's CLOSE lands at the DO — a physical fact that arrives a beat after the edge
+ *  disposes its relay, never inside the RPC that triggered it. */
+async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Record<string, any>> {
+  const t0 = Date.now();
+  for (;;) {
+    const s = await stateOf(ctx);
+    if (s.rpcStubPagers === n) return s;
+    if (Date.now() - t0 > timeoutMs)
+      throw new Error(`untilStubs(${ctx}, ${n}): still ${s.rpcStubPagers} after ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** One `itx.subscriptions.get(name)` row — the reduced table joined with the stream-kept cursor
+ *  (present only for a target the stream delivers at-least-once); `null` for an unknown name. */
+type SubscriptionRow = {
+  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
+  halted?: unknown;
+} | null;
+/** Poll `itx.subscriptions.get(name)` (the table ⋈ the cursor) until `ok` (bounded). */
+async function untilRow(
+  ctx: string,
+  name: string,
+  ok: (row: SubscriptionRow) => boolean,
+  timeoutMs = 10_000,
+): Promise<NonNullable<SubscriptionRow>> {
+  const t0 = Date.now();
+  for (;;) {
+    const row = (await stub(ctx).invoke(`itx.subscriptions.get('${name}')`)) as SubscriptionRow;
+    if (row && ok(row)) return row;
+    if (Date.now() - t0 > timeoutMs)
+      throw new Error(`untilRow(${name}): ${JSON.stringify(row)} after ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}

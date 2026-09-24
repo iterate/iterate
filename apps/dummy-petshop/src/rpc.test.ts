@@ -8,81 +8,75 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import type { petsRouter } from "./rpc.ts";
 import { accessToken, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
 
+test("openapi.json: is served for a valid token and lists the pet operations", async () => {
+  const shop = makeShop();
+  const token = await accessToken(shop);
+  const response = await shop.call("/openapi.json", { headers: bearer(token) });
+  expect(response).toMatchObject({ status: 200 });
+  const doc = await response.json<{
+    openapi: string;
+    paths: Record<string, Record<string, { summary?: string }>>;
+  }>();
+  expect(doc.openapi).toMatch(/^3\.1/);
+  expect(doc.paths["/pets"].get).toMatchObject({ summary: "List the account's pets" });
+  expect(doc.paths["/pets"].post).toMatchObject({ summary: "Add a pet to the account" });
+  expect(doc.paths["/pets/{id}"].get).toMatchObject({ summary: "Fetch one pet by id" });
+});
+
+test("openapi.json: 401 without a bearer token", async () => {
+  const shop = makeShop();
+  expect(await shop.call("/openapi.json")).toMatchObject({ status: 401 });
+});
+
+test("oRPC handler: returns the account's pets for a valid bearer token", async () => {
+  const shop = makeShop();
+  const token = await accessToken(shop);
+  const orpc = client(shop, token);
+  const listed = await orpc.listPets();
+  expect(listed).toMatchObject({ owner: "Jonas" });
+  expect(listed.pets.map((pet) => pet.name)).toEqual(["Biscuit", "Goldie"]);
+
+  const one = await orpc.getPet({ id: "pet-2" });
+  expect(one).toMatchObject({ name: "Goldie", species: "goldfish" });
+
+  const created = await orpc.createPet({ name: "Rex", species: "terrier" });
+  expect(created).toMatchObject({ id: "pet-3", name: "Rex" });
+  expect((await orpc.listPets()).pets).toHaveLength(3);
+});
+
+test("oRPC handler: 401 without a bearer token", async () => {
+  const shop = makeShop();
+  const response = await shop.call("/rpc/listPets", { method: "POST", body: "{}" });
+  expect(response).toMatchObject({ status: 401 });
+});
+
+test("OpenAPI (REST-shaped) handler: GET /api/v2/pets returns pets for a valid token", async () => {
+  const shop = makeShop();
+  const token = await accessToken(shop);
+  const response = await shop.call("/api/v2/pets", { headers: bearer(token) });
+  expect(response).toMatchObject({ status: 200 });
+  const body = await response.json<{ owner: string; pets: { name: string }[] }>();
+  expect(body).toMatchObject({ owner: "Jonas" });
+  expect(body.pets.map((pet) => pet.name)).toEqual(["Biscuit", "Goldie"]);
+});
+
+test("OpenAPI (REST-shaped) handler: 401 without a bearer token", async () => {
+  const shop = makeShop();
+  expect(await shop.call("/api/v2/pets")).toMatchObject({ status: 401 });
+});
+
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
-describe("openapi.json", () => {
-  test("is served for a valid token and lists the pet operations", async () => {
-    const shop = makeShop();
-    const token = await accessToken(shop);
-    const response = await shop.call("/openapi.json", { headers: bearer(token) });
-    expect(response.status).toBe(200);
-    const doc = await response.json<{
-      openapi: string;
-      paths: Record<string, Record<string, { summary?: string }>>;
-    }>();
-    expect(doc.openapi).toMatch(/^3\.1/);
-    expect(doc.paths["/pets"].get.summary).toBe("List the account's pets");
-    expect(doc.paths["/pets"].post.summary).toBe("Add a pet to the account");
-    expect(doc.paths["/pets/{id}"].get.summary).toBe("Fetch one pet by id");
+/** A typed @orpc/client wired to talk to the shop through /rpc, with a bearer header. */
+function client(shop: Shop, token: string): RouterClient<typeof petsRouter> {
+  const link = new RPCLink({
+    url: `${ORIGIN}/rpc`,
+    headers: () => bearer(token),
+    fetch: (request) => shop.fetch(request),
   });
-
-  test("401 without a bearer token", async () => {
-    const shop = makeShop();
-    expect((await shop.call("/openapi.json")).status).toBe(401);
-  });
-});
-
-describe("oRPC handler", () => {
-  /** A typed @orpc/client wired to talk to the shop through /rpc, with a bearer header. */
-  function client(shop: Shop, token: string): RouterClient<typeof petsRouter> {
-    const link = new RPCLink({
-      url: `${ORIGIN}/rpc`,
-      headers: () => bearer(token),
-      fetch: (request) => shop.fetch(request),
-    });
-    return createORPCClient(link);
-  }
-
-  test("returns the account's pets for a valid bearer token", async () => {
-    const shop = makeShop();
-    const token = await accessToken(shop);
-    const orpc = client(shop, token);
-    const listed = await orpc.listPets();
-    expect(listed.owner).toBe("Jonas");
-    expect(listed.pets.map((pet) => pet.name)).toEqual(["Biscuit", "Goldie"]);
-
-    const one = await orpc.getPet({ id: "pet-2" });
-    expect(one).toMatchObject({ name: "Goldie", species: "goldfish" });
-
-    const created = await orpc.createPet({ name: "Rex", species: "terrier" });
-    expect(created).toMatchObject({ id: "pet-3", name: "Rex" });
-    expect((await orpc.listPets()).pets).toHaveLength(3);
-  });
-
-  test("401 without a bearer token", async () => {
-    const shop = makeShop();
-    const response = await shop.call("/rpc/listPets", { method: "POST", body: "{}" });
-    expect(response.status).toBe(401);
-  });
-});
-
-describe("OpenAPI (REST-shaped) handler", () => {
-  test("GET /api/v2/pets returns pets for a valid token", async () => {
-    const shop = makeShop();
-    const token = await accessToken(shop);
-    const response = await shop.call("/api/v2/pets", { headers: bearer(token) });
-    expect(response.status).toBe(200);
-    const body = await response.json<{ owner: string; pets: { name: string }[] }>();
-    expect(body.owner).toBe("Jonas");
-    expect(body.pets.map((pet) => pet.name)).toEqual(["Biscuit", "Goldie"]);
-  });
-
-  test("401 without a bearer token", async () => {
-    const shop = makeShop();
-    expect((await shop.call("/api/v2/pets")).status).toBe(401);
-  });
-});
+  return createORPCClient(link);
+}

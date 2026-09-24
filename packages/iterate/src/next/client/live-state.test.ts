@@ -10,35 +10,6 @@ import { connectLiveState, type LiveStateDelta, type LiveStateSeed } from "./liv
 
 type Seed = LiveStateSeed<{ n: number }>;
 
-/** A fake itx session (its `subscribe` hands the delivery callback to the test) and a `readSeed` whose
- *  every read parks until the test answers it. */
-function harness() {
-  let deliver!: (events: unknown[], range: unknown) => void;
-  const itx = {
-    async subscribe(input: {
-      name?: string;
-      consumes?: string[];
-      target: (events: unknown[], range: unknown) => void;
-    }) {
-      deliver = input.target;
-      return { [Symbol.dispose]() {} };
-    },
-  };
-  const seedReads: ((seed: Seed) => void)[] = [];
-  return {
-    itx,
-    readSeed: () => new Promise<Seed>((resolve) => seedReads.push(resolve)),
-    seedReads,
-    deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
-    deliverRaw: (payload: unknown) => deliver([{ payload }], {}),
-    deliverEvents: (rawEvents: unknown[]) => deliver(rawEvents, {}),
-  };
-}
-
-const settle = async () => {
-  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
-};
-
 test("a delta delivered WHILE a gap heal is in flight re-reads the seed once the heal lands — the store converges on the producer, never sits behind it", async () => {
   const h = harness();
   const connecting = connectLiveState(h.itx, { key: "k", readSeed: h.readSeed });
@@ -202,3 +173,32 @@ test("a patch applyPatch REJECTS heals from a fresh seed instead of escaping the
   expect(connection.store.get()).toEqual({ n: 7 });
   await connection.dispose();
 });
+
+/** A fake itx session (its `subscribe` hands the delivery callback to the test) and a `readSeed` whose
+ *  every read parks until the test answers it. */
+function harness() {
+  let deliver!: (events: unknown[], range: unknown) => void;
+  const itx = {
+    async subscribe(input: {
+      name?: string;
+      consumes?: string[];
+      target: (events: unknown[], range: unknown) => void;
+    }) {
+      deliver = input.target;
+      return { [Symbol.dispose]() {} };
+    },
+  };
+  const seedReads: ((seed: Seed) => void)[] = [];
+  return {
+    itx,
+    readSeed: () => new Promise<Seed>((resolve) => seedReads.push(resolve)),
+    seedReads,
+    deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
+    deliverRaw: (payload: unknown) => deliver([{ payload }], {}),
+    deliverEvents: (rawEvents: unknown[]) => deliver(rawEvents, {}),
+  };
+}
+
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+};

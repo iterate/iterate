@@ -117,7 +117,7 @@ function CodeMirror({
     });
 
     viewRef.current = view;
-    if (preserved !== null && preserved.state.doc.eq(view.state.doc)) {
+    if (preserved && preserved.state.doc.eq(view.state.doc)) {
       view.dispatch({ selection: preserved.state.selection, scrollIntoView: true });
       if (preserved.hadFocus) view.focus();
     }
@@ -155,7 +155,7 @@ function CodeMirror({
     return () => {
       view.dom.removeEventListener("keydown", handleKeyDown);
       const current = viewRef.current;
-      if (current !== null) {
+      if (current) {
         // Stash for the rebuild that may immediately follow (see above).
         preservedViewStateRef.current = { state: current.state, hadFocus: current.hasFocus };
       }
@@ -323,7 +323,7 @@ export function SourceCodeBlock({
             },
           })
         : [],
-      codeMirrorExtensions ?? [],
+      codeMirrorExtensions || [],
     ];
   }, [codeMirrorExtensions, language, plainChrome, showFoldGutter, showLineNumbers, wrapLongLines]);
 
