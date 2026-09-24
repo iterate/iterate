@@ -21,7 +21,6 @@ import { switchAccountHref, type loginSearchOf } from "./login-search.ts";
 export async function loginState(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
   search: ReturnType<typeof loginSearchOf>,
 ) {
   const config = appConfigOf(env);
@@ -29,7 +28,7 @@ export async function loginState(
     search.next || "/login",
     platformAddressesOf(env, request).platformOrigin,
   );
-  const session = await browserAuthorization(env, request, ctx);
+  const session = await browserAuthorization(env, request);
   return {
     next,
     signedInAs: session ? session.principal.email || session.principal.actor : null,

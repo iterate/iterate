@@ -468,10 +468,11 @@ test("the consent page renders on the server, and Authorize posts the choice to 
     issuer: ORIGIN,
     clientId: `${ORIGIN}/.auth/client.json`,
     redirectUri: `${ORIGIN}/.auth/callback`,
-    resources: [`${ORIGIN}/api`, `${ORIGIN}/mcp`],
+    resources: [`${ORIGIN}/api`, `${ORIGIN}/api`],
     scopes: ["iterate", "account"],
   });
-  // Repeated resource keys and a `+` in the state: the router must not canonicalize the query.
+  // Repeated resource keys (one resource twice: a request names one, RFC 8707) and a `+` in the
+  // state: the router must not canonicalize the query.
   const state = `${flow.state} + OAuth state`;
   flow.url.searchParams.set("state", state);
   const page = await exports.default.fetch(flow.url.href, {

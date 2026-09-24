@@ -4,13 +4,8 @@ import type { Env } from "./env.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { GrantsRpcTarget } from "./grants.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
-import {
-  authorizationForToken,
-  authorizationOf,
-  recordGrantUse,
-  type Authorization,
-} from "./oauth.ts";
+import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
+import { authorizationForToken, grantIsLive, recordGrantUse, type Authorization } from "./oauth.ts";
 import {
   IterateRpcTarget,
   SessionTeardown,
@@ -64,7 +59,7 @@ export async function rpcResponse(
       if (bound || binding) throw new Error("This transport already carries a session");
       binding = true;
       try {
-        const authorization = await authorizationForToken(env, ctx, token, addresses);
+        const authorization = await authorizationForToken(env, token, addresses);
         if (!authorization) return null;
         if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
         bound = authorization;
@@ -137,12 +132,12 @@ export async function rpcResponse(
       // socket holding no project has no membership to re-check and reads none.
       const held = [...projects];
       try {
-        const [current, reachable] = await Promise.all([
-          authorizationOf(env, grant),
+        const [live, reachable] = await Promise.all([
+          grantIsLive(env, grant),
           held.length ? input.controlPlane.reachableProjects(authorization.reach, held) : [],
         ]);
         const reachableIds = new Set(reachable.map((project) => project.id));
-        if (!current || held.some((id) => !reachableIds.has(id))) {
+        if (!live || held.some((id) => !reachableIds.has(id))) {
           stop(new Error("Session revoked or project membership removed"));
           return;
         }
@@ -150,13 +145,18 @@ export async function rpcResponse(
         until = Math.min(started + 60_000, grant.expiresAt);
         schedule(authorization, grant);
       } catch (error) {
-        // A RETRYABLE READ is asked again, not a lost session: every deploy resets the control
-        // plane's Durable Object, and the call it cut is a retryable transport error. The
-        // retry is bounded by the deadline above — the grant stays good only until `until`, so a
-        // read that keeps failing ends the session there, "Session authorization expired".
+        // A RETRYABLE READ is asked again, not a lost session: every deploy resets the Durable
+        // Objects the tick reads (the person's account, the control plane), and the call it cut is
+        // a retryable transport error — expected, where any other cut is a platform failure the
+        // prd fault alarm counts. The retry is
+        // bounded by the deadline above — the grant stays good only until `until`, so a read that
+        // keeps failing ends the session there, "Session authorization expired".
         if (isRetryableTransportError(error) && !stopped) {
           console.warn({
-            event: "oauth.live-authorization-retry",
+            event: isDeployReset(error)
+              ? "oauth.deploy-reset-live-authorization-retry"
+              : "oauth.platform-failure-live-authorization-retry",
+            name: "live-authorization",
             grantId: grant.grantId,
             message: String(error),
           });

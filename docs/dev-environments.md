@@ -219,7 +219,8 @@ Read them under `doppler run`, never into a shared channel.
 The deployment's two secrets give you three ways in:
 
 1. **API**: an operator session with the bearer (above), or a user's OAuth
-   access token as `Authorization: Bearer <token>` on `/api` and `/mcp`.
+   access token as `Authorization: Bearer <token>` on the one resource it was
+   issued for: `/api` (and the projects' hosts) or `/mcp`.
 2. **Browser**: `POST /login` with an email and the deployment's password —
    the sign-in page's own form post — sets the issuer session cookie.
    `issuerCookie` in `apps/os/e2e/support/principal.ts` does this for tests;

@@ -1,8 +1,9 @@
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
+import { OAuthAuthorizationServer } from "@cloudflare/workers-oauth-provider";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { appSession } from "iterate/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import type { GrantEnded } from "../src/account/contract.ts";
@@ -44,14 +45,20 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   });
   expect(registered).toMatchObject({ status: 201 });
   expect((await registered.json<{ client_id?: string }>()).client_id).toBeTruthy();
+  // the authorization server declares its two resources (RFC 9728 `protected_resources`), and each
+  // publishes its own metadata naming the issuer and the one scope a client asks for first
+  expect(metadata).toMatchObject({
+    issuer: ORIGIN,
+    protected_resources: [`${ORIGIN}/api`, `${ORIGIN}/mcp`],
+    scopes_supported: ["iterate", "account", "organizations:write"],
+  });
   for (const protocol of ["api", "mcp"]) {
     expect(
       await (await call(`/.well-known/oauth-protected-resource/${protocol}`)).json(),
     ).toMatchObject({
       resource: `${ORIGIN}/${protocol}`,
       authorization_servers: [ORIGIN],
-      scopes_supported:
-        protocol === "mcp" ? ["iterate"] : ["iterate", "account", "organizations:write"],
+      scopes_supported: ["iterate"],
     });
     const challenge = await call(`/${protocol}`);
     expect(challenge).toMatchObject({ status: 401 });
@@ -99,13 +106,43 @@ test("the configured header bearer is the same administrator at both protocols",
   expect(await tool("wrong", "run", { project: "x", script: "async () => 1" })).toMatchObject({
     status: 401,
   });
+  // a bearer too long to be a token is refused unread: the library's lookup key would pass KV's
+  // 512-byte limit, and KV throws (a stranger's 503)
+  const long = `user_${"x".repeat(600)}:grant:secret`;
+  expect(await call("/api", { headers: { Authorization: `Bearer ${long}` } })).toMatchObject({
+    status: 401,
+  });
+  expect(await tool(long, "run", { project: "x", script: "async () => 1" })).toMatchObject({
+    status: 401,
+  });
 });
 
-test("one provider grant can cover MCP and Cap'n Web while retaining membership and its project ceiling", async () => {
+test("a grant is bound to the one resource it asked for: its token opens that alone, within membership and its project ceiling", async () => {
   fetchReachesThisWorker();
-  const flow = await grant([`${ORIGIN}/api`, `${ORIGIN}/mcp`]);
+  const flow = await grant([`${ORIGIN}/api`]);
   expect(flow.token).toBeDefined();
   const token = flow.token!.access_token;
+  const mcpToken = (await grant([`${ORIGIN}/mcp`])).token!.access_token;
+  // an /api token is no /mcp token, nor the reverse (RFC 8707: one audience per token), and the
+  // refusal is logged with the check that failed
+  const warns = vi.spyOn(console, "warn");
+  onTestFinished(() => {
+    warns.mockRestore();
+  });
+  expect(await tool(token, "run", { script: "async () => 1" })).toMatchObject({ status: 401 });
+  expect(warns).toHaveBeenCalledWith({
+    event: "oauth.refusal",
+    category: "protected-resource",
+    reason: "audience_mismatch",
+    resource: `${ORIGIN}/mcp`,
+  });
+  expect(
+    await call("/api", {
+      method: "POST",
+      body: "",
+      headers: { Authorization: `Bearer ${mcpToken}` },
+    }),
+  ).toMatchObject({ status: 401 });
   const { root } = await rpc(token);
   expect(await root.whoami()).toEqual({ actor: flow.user.id, email: flow.user.email });
   expect(
@@ -115,12 +152,12 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
   // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
   using bySlug = await root.projects.get("oauth-a");
   expect(await bySlug.whoami()).toMatchObject({ projectId: flow.oauthA.id });
-  expect(await tool(token, "run", { script: "async () => 1" })).toMatchObject({ status: 200 });
+  expect(await tool(mcpToken, "run", { script: "async () => 1" })).toMatchObject({ status: 200 });
   const org = flow.oauthA.orgId;
   await removeMembership(org, flow.user.id);
   expect(await root.projects.list()).toEqual([]);
   expect(
-    await tool(token, "run", {
+    await tool(mcpToken, "run", {
       project: flow.oauthA.id,
       script: "async (itx) => itx.kv.get('x')",
     }),
@@ -210,6 +247,194 @@ test("a refresh a second after the code exchange reads the grant the exchange wr
     headers: { Authorization: `Bearer ${renewed.access_token}` },
   });
   expect(admitted).not.toMatchObject({ status: 401 });
+});
+
+// THE PINNED BUG the grant store works around (src/oauth-store.ts): the library's OWN grant storage,
+// with no iterate store in front of it, under the same stale-KV model as the row above. Upstream it is
+// cloudflare/workers-oauth-provider#214 (refresh-token rotation on eventually consistent KV), and #312
+// (pluggable storage providers, a Durable Object adapter among them) proposes the fix. The exit: when
+// the library ships storage with strongly consistent grants, give this server that option. It then
+// passes, `createFailing` turns the row red, and src/oauth-store.ts and
+// src/control-plane/oauth-grants.ts are deleted. #312 keeps KV the default, so the row cannot turn
+// red by itself: the `storage` line below is the signal — the day the library has the option, the
+// directive is unused and the typecheck fails, pointing here.
+createFailing(
+  test,
+  /a refresh right after the code exchange should succeed: \{"error":"invalid_grant","error_description":"Invalid refresh token"\}/,
+)(
+  "the library's own grant storage refreshes right after a code exchange served at another location",
+  async () => {
+    kvServesFirstWrites();
+    const server = new OAuthAuthorizationServer({
+      issuer: ORIGIN,
+      resources: [`${ORIGIN}/api`],
+      authorizeEndpoint: "/oauth2/auth",
+      tokenEndpoint: "/oauth2/token",
+      // @ts-expect-error — no storage option yet (upstream #312): set it to the strongly consistent one
+      storage: undefined,
+    });
+    const oauth = server.getOAuthApi(env);
+    const client = await oauth.createClient({
+      clientName: "Library storage",
+      redirectUris: ["https://client.test/callback"],
+      tokenEndpointAuthMethod: "none",
+      grantTypes: ["authorization_code", "refresh_token"],
+      responseTypes: ["code"],
+    });
+    const { query, verifier } = await authorizationRequest(client.clientId, [`${ORIGIN}/api`]);
+    const { redirectTo } = await oauth.completeAuthorization({
+      request: await oauth.parseAuthRequest(new Request(`${ORIGIN}/oauth2/auth?${query}`)),
+      userId: "user_library",
+      scope: ["iterate"],
+      metadata: {},
+      props: {},
+    });
+    const token = (body: Record<string, string>) =>
+      server.fetch(
+        new Request(`${ORIGIN}/oauth2/token`, { method: "POST", body: new URLSearchParams(body) }),
+        env,
+        createExecutionContext(),
+      );
+    const exchange = await token({
+      grant_type: "authorization_code",
+      code: new URL(redirectTo).searchParams.get("code")!,
+      client_id: client.clientId,
+      redirect_uri: "https://client.test/callback",
+      code_verifier: verifier,
+    });
+    expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
+    const refresh = await token({
+      grant_type: "refresh_token",
+      refresh_token: (await exchange.json<{ refresh_token: string }>()).refresh_token,
+      client_id: client.clientId,
+    });
+    expect(
+      refresh,
+      `a refresh right after the code exchange should succeed: ${await refresh.clone().text()}`,
+    ).toMatchObject({ status: 200 });
+  },
+);
+
+test("the library writes no key but a grant twice: what the grant store leaves in KV is written once (src/oauth-store.ts)", async () => {
+  fetchReachesThisWorker();
+  const writes = new Map<string, number>();
+  const put = env.OAUTH_KV.put.bind(env.OAUTH_KV);
+  const puts = vi.spyOn(env.OAUTH_KV, "put").mockImplementation(async (key, value, options) => {
+    writes.set(key, (writes.get(key) ?? 0) + 1);
+    await put(key, value, options);
+  });
+  onTestFinished(() => {
+    puts.mockRestore();
+  });
+  // every write the library makes: a registration, an issuer sign-in and a consent, a code
+  // exchange, two refreshes and a revocation
+  const registered = await call("/oauth2/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "a registered MCP client",
+      redirect_uris: ["https://client.example/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }),
+  });
+  expect(registered).toMatchObject({ status: 201 });
+  const flow = await grant([`${ORIGIN}/api`]);
+  let refreshToken = flow.token!.refresh_token;
+  for (let refreshes = 0; refreshes < 2; refreshes++) {
+    const refresh = await call("/oauth2/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: flow.clientId,
+      }),
+    });
+    expect(refresh, await refresh.clone().text()).toMatchObject({ status: 200 });
+    refreshToken = (await refresh.json<{ refresh_token: string }>()).refresh_token;
+  }
+  const revoked = await call("/oauth2/token", {
+    method: "POST",
+    body: new URLSearchParams({ token: refreshToken, client_id: flow.clientId }),
+  });
+  expect(revoked).toMatchObject({ status: 200 });
+  // the sign-in's own counters (password-and-code-sign-in.ts) are the platform's, not the library's
+  const library = [...writes].filter(([key]) => !key.startsWith("login-"));
+  expect(library.map(([key]) => key.split(":")[0]).sort()).toEqual(
+    expect.arrayContaining(["client", "token"]),
+  );
+  expect(library.filter(([key]) => key.startsWith("grant:"))).toEqual([]);
+  expect(library.filter(([, count]) => count > 1)).toEqual([]);
+});
+
+test("an interactive grant lives a week unused: each refresh moves the week on, and its deadline caps it", async () => {
+  fetchReachesThisWorker();
+  const week = 7 * 24 * 3600;
+  const now = () => Math.floor(Date.now() / 1000);
+  const user = await controlPlane().ensureUser("idle-expiry@example.com");
+  const client = await helpers().createClient({
+    clientName: "Idle expiry",
+    redirectUris: ["https://client.test/callback"],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code", "refresh_token"],
+    responseTypes: ["code"],
+  });
+  /** A consented grant whose deadline is `days` away, exchanged: its tokens and its expiry. */
+  const session = async (days: number) => {
+    const { query, verifier } = await authorizationRequest(client.clientId, [`${ORIGIN}/api`]);
+    const deadline = Date.now() + days * 24 * 3600_000;
+    const { redirectTo } = await helpers().completeAuthorization({
+      request: await helpers().parseAuthRequest(new Request(`${ORIGIN}/oauth2/auth?${query}`)),
+      userId: user.id,
+      scope: ["iterate"],
+      metadata: {},
+      revokeExistingGrants: false,
+      props: { kind: "app", userId: user.id, email: user.email, projects: null, deadline },
+    });
+    const exchange = await call("/oauth2/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: new URL(redirectTo).searchParams.get("code")!,
+        client_id: client.clientId,
+        redirect_uri: "https://client.test/callback",
+        code_verifier: verifier,
+      }),
+    });
+    expect(exchange, await exchange.clone().text()).toMatchObject({ status: 200 });
+    const tokens = await exchange.json<{ access_token: string; refresh_token: string }>();
+    const grantId = tokens.access_token.split(":")[1];
+    const expiry = async () =>
+      (await helpers().listUserGrants(user.id)).items.find((item) => item.id === grantId)!
+        .expiresAt!;
+    const refresh = async () => {
+      const refreshed = await call("/oauth2/token", {
+        method: "POST",
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: tokens.refresh_token,
+          client_id: client.clientId,
+        }),
+      });
+      expect(refreshed, await refreshed.clone().text()).toMatchObject({ status: 200 });
+      return refreshed.json<{ expires_in: number }>();
+    };
+    return { deadline: Math.floor(deadline / 1000), expiry, refresh };
+  };
+  // thirty days to its deadline: a week from the exchange, then a week from each refresh
+  const month = await session(30);
+  expect((await month.expiry()) - now()).toBeGreaterThan(week - 60);
+  expect((await month.expiry()) - now()).toBeLessThanOrEqual(week);
+  const before = await month.expiry();
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  expect(await month.refresh()).toMatchObject({ expires_in: 3600 });
+  expect(await month.expiry()).toBeGreaterThan(before);
+  // two days to its deadline: the deadline is the expiry, at the exchange and after a refresh
+  const short = await session(2);
+  expect(Math.abs((await short.expiry()) - short.deadline)).toBeLessThanOrEqual(2);
+  await short.refresh();
+  expect(Math.abs((await short.expiry()) - short.deadline)).toBeLessThanOrEqual(2);
 });
 
 test("issuer login uses the same revocable API session and has no independent identity cookie", async () => {
@@ -322,7 +547,6 @@ test("a live session rides out a deploy's Durable Object reset during its re-che
   const executionContext = createExecutionContext();
   const authorization = await authorizationForToken(
     env,
-    executionContext,
     flow.token!.access_token,
     platformAddressesOf(env, request),
   );
@@ -350,14 +574,23 @@ test("a live session rides out a deploy's Durable Object reset during its re-che
         }),
       ),
     );
+  const warns = vi.spyOn(console, "warn");
   onTestFinished(() => {
     membershipReads.mockRestore();
+    warns.mockRestore();
   });
   // Real elapsed time: the 30 s tick meets the reset, and its retry 2 s later reads through.
   await new Promise((resolve) => setTimeout(resolve, 34_000));
   const reads = membershipReads.mock.calls.length; // mockRestore clears the record
   membershipReads.mockRestore();
   expect(reads).toBeGreaterThanOrEqual(2);
+  // a deploy's reset is expected, never a platform failure the prd fault alarm counts
+  expect(warns).toHaveBeenCalledWith({
+    event: "oauth.deploy-reset-live-authorization-retry",
+    name: "live-authorization",
+    grantId: flow.token!.access_token.split(":")[1],
+    message: "Error: Durable Object reset because its code was updated.",
+  });
   expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
   await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers
 });
@@ -506,10 +739,27 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect(storedPersonal!.expiresAt * 1000 - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
     // The provider rounds TTLs to seconds; the displayed deadline must agree with its actual token.
     expect(Math.abs(storedPersonal!.expiresAt * 1000 - personal.expiresAt)).toBeLessThan(2000);
+    // A token is for one resource: the default `api` token is refused at /mcp, where a token minted
+    // for `mcp` runs as the person, on the project it covers.
+    expect(
+      await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" }),
+    ).toMatchObject({ status: 401 });
+    const personalMcp = await consoleLogin.root.grants.mint({
+      name: "My MCP client",
+      projects: [browserA.id],
+      resource: "mcp",
+    });
+    expect(
+      await call("/api", {
+        method: "POST",
+        body: "",
+        headers: { Authorization: `Bearer ${personalMcp.token}` },
+      }),
+    ).toMatchObject({ status: 401 });
     expect(
       JSON.parse(
-        (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
-          .content[0].text,
+        (await tool(personalMcp.token, "run", { script: "async (itx) => itx.whoami()" })).body
+          .result.content[0].text,
       ),
     ).toEqual({
       projectId: browserA.id,
@@ -581,6 +831,10 @@ test("console and project browsers use the same CIMD flow and independent grants
     await expect(
       consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
     ).rejects.toThrow(/at least a minute/);
+    const refusals = vi.spyOn(console, "warn");
+    onTestFinished(() => {
+      refusals.mockRestore();
+    });
     expect(
       await call("/oauth2/token", {
         method: "POST",
@@ -591,6 +845,17 @@ test("console and project browsers use the same CIMD flow and independent grants
         }),
       }),
     ).toMatchObject({ status: 400 });
+    // the token is an access token, which the library refuses as a refresh token before any
+    // lifetime policy runs (the mint discards the grant's refresh token): logged as that refusal
+    expect(refusals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "oauth.refusal",
+        status: 400,
+        category: "refresh-token-grant",
+        reason: "refresh_token_mismatch",
+      }),
+    );
+    refusals.mockRestore();
     const inventory = await consoleLogin.root.grants.list();
     const [, personalId] = personal.token.split(":");
     expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({
@@ -613,22 +878,19 @@ test("console and project browsers use the same CIMD flow and independent grants
       (await consoleLogin.root.grants.list()).items.find((item) => item.id === personalId),
     ).toBeUndefined();
     expect(
-      await tool(personal.token, "run", { project: browserA.id, script: "async () => 1" }),
+      await call("/api", { headers: { Authorization: `Bearer ${personal.token}` } }),
     ).toMatchObject({ status: 401 });
     const cookieRequest = new Request(`${ORIGIN}/`, { headers: { cookie: consoleLogin.cookie } });
     const heldSession = appSession(env.BROWSER_SESSION, cookieRequest)!;
     const bearerBefore = await heldSession.bearer();
+    // a validation that could not answer (its store unavailable) is no refusal: the session stays
     const providerFailure = vi
-      .spyOn(OAuthProvider.prototype, "fetch")
-      .mockResolvedValueOnce(new Response("Unavailable", { status: 503 }));
+      .spyOn(OAuthAuthorizationServer.prototype, "validateToken")
+      .mockRejectedValueOnce(new Error("OAUTH_KV unavailable"));
     onTestFinished(() => {
       providerFailure.mockRestore();
     });
-    const failedAdmissionContext = createExecutionContext();
-    await expect(browserAuthorization(env, cookieRequest, failedAdmissionContext)).rejects.toThrow(
-      /Token admission failed \(503\)/,
-    );
-    await waitOnExecutionContext(failedAdmissionContext);
+    await expect(browserAuthorization(env, cookieRequest)).rejects.toThrow(/OAUTH_KV unavailable/);
     providerFailure.mockRestore();
     expect(await heldSession.bearer()).toBe(bearerBefore);
     logoutUnavailable = true;
@@ -667,10 +929,15 @@ test("console and project browsers use the same CIMD flow and independent grants
   }
 });
 
-test("malformed and foreign resources are expected authorization refusals", async () => {
+test("malformed, foreign and several resources are expected authorization refusals", async () => {
   fetchReachesThisWorker();
-  for (const resource of ["not a URL", "https://foreign.test/api"])
-    expect(await grant([resource])).toMatchObject({ error: "invalid_target" });
+  for (const resources of [
+    ["not a URL"],
+    ["https://foreign.test/api"],
+    // one grant, one resource (RFC 8707): a request naming both is refused, never split
+    [`${ORIGIN}/api`, `${ORIGIN}/mcp`],
+  ])
+    expect(await grant(resources)).toMatchObject({ error: "invalid_target" });
 });
 
 // THE ACCESS MEMO (control-plane/edge.ts): an isolate keeps a person's access five seconds, and a

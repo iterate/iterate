@@ -10,11 +10,12 @@ import type { Env } from "./env.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import {
   accountStateOf,
-  authorizationOf,
+  authorizationServerFetch,
+  grantIsLive,
   oauthHelpers,
   parseAuthorization,
-  providerFetch,
   revokeGrant,
+  TOKEN_ENDPOINT,
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
@@ -35,6 +36,9 @@ const MintInput = z.object({
   /** Epoch ms. Default 30 days; at most ten years — a device that can neither refresh nor
    *  reflash itself is retired by revocation from the sessions list, not by a clock. */
   expiresAt: z.number().int().positive().optional(),
+  /** The one resource the token is for (RFC 8707: the provider binds each grant to one): `api`,
+   *  Cap'n Web at `/api` and the covered projects' hosts, or `mcp`. */
+  resource: z.enum(["api", "mcp"]).default("api"),
 });
 
 /** Whether this deployment mints personal access tokens: a bearer that acts as a person must only
@@ -100,6 +104,11 @@ export class GrantsRpcTarget extends RpcTarget {
       oauthHelpers(env, this.#addresses).listUserGrants(session.sub, { limit: 50, cursor }),
       accountStateOf(env, session.sub),
     ]);
+    const { api, mcp } = this.#addresses;
+    const resourceNames = new Map<string, GrantRecord["resource"]>([
+      [api, "api"],
+      [mcp, "mcp"],
+    ]);
     const items = page.items.flatMap((grant): GrantRecord[] => {
       if (account.endedGrants[grant.id]) return [];
       const metadata = DisplayMetadata.parse(grant.metadata ?? {});
@@ -119,6 +128,7 @@ export class GrantsRpcTarget extends RpcTarget {
               : metadata.tokenKind === "personal"
                 ? "personal"
                 : "session",
+          resource: resourceNames.get(String(grant.resource)),
           createdAt: grant.createdAt * 1000,
           expiresAt,
           lastUsedAt: account.grantUses[grant.id]?.at ?? null,
@@ -185,17 +195,18 @@ export class GrantsRpcTarget extends RpcTarget {
    * says longer (up to ten years, for a device that holds it), scoped to the `projects` named (each
    * one the user reaches), revocable from `list`/`end` like any grant — whose
    * access token is answered ONCE and never stored readable; it carries no refresh credential
-   * (`tokenExchangeCallback`, oauth.ts, refuses a refresh of a personal grant). The bearer opens
-   * `/api`, `/mcp` and a project host of a covered project as the user (`authorizationForToken`).
-   * The console's client, or the device's public CIMD client, performs the exchange in process. */
+   * (oauth.ts `grantLifetime` refuses a refresh of a personal grant). The bearer acts as the user at
+   * its one `resource`: `api` opens `/api` and a project host of a covered project
+   * (`authorizationForToken`), `mcp` opens `/mcp`. The console's client, or the device's public
+   * CIMD client, performs the exchange in process. */
   async mint(input: unknown) {
     const env = this.#env;
     const ctx = this.#ctx;
     const session = this.#account();
-    if (!(await authorizationOf(env, session.grant)))
+    if (!(await grantIsLive(env, session.grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
-    const { platformOrigin: issuer, api, mcp } = this.#addresses;
+    const { platformOrigin: issuer } = this.#addresses;
     if (!mintsPersonalAccessTokens(issuer))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
     const projects = (
@@ -223,7 +234,7 @@ export class GrantsRpcTarget extends RpcTarget {
       issuer,
       clientId,
       redirectUri,
-      resources: [api, mcp],
+      resources: [this.#addresses[data.resource]],
     });
     const auth = await parseAuthorization(env, new Request(flow.url));
     const expiresAt = Math.min(
@@ -254,10 +265,10 @@ export class GrantsRpcTarget extends RpcTarget {
     if (!code) throw new Error("The token authorization did not produce a code.");
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
-    const response = await providerFetch(
+    const response = await authorizationServerFetch(
       env,
       this.#addresses,
-      new Request(`${issuer}/oauth2/token`, {
+      new Request(`${issuer}${TOKEN_ENDPOINT}`, {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "authorization_code",
@@ -280,10 +291,14 @@ export class GrantsRpcTarget extends RpcTarget {
       })
       .parse(await response.json());
     // The provider's access token is `<userId>:<grantId>:<secret>` (oauth-provider.ts): the grant's
-    // id is its middle — the only place the mint learns it. The fact of the mint, on the account.
+    // id is its middle — the only place the mint learns it. (`unwrapToken` would read the token
+    // back from KV, where a write is only usually visible at once.) A token of any other shape fails
+    // the mint rather than record the grant under a wrong id. The fact of the mint, on the account.
     // Best-effort and async (session.ts `publishPlatformFacts`): the provider is the truth for the
     // grant, this is the person's record of it.
-    const [, grantId = ""] = tokens.access_token.split(":");
+    const [tokenUserId, grantId] = tokens.access_token.split(":");
+    if (tokenUserId !== session.sub || !grantId)
+      throw new Error("The provider's access token is not `<userId>:<grantId>:<secret>`.");
     publishPlatformFacts(
       {
         contextNamespace: this.#env.ITERATE_CONTEXT,

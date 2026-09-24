@@ -1,8 +1,9 @@
 // /sessions: every OAuth grant the signed-in user holds (browsers, connected apps, personal access
-// tokens), each endable on its own, and the one place a personal access token is minted: a name and
-// the projects it may reach → `api.grants.mint` → the token, shown ONCE (it is a finite provider
-// access token, never stored readable). The list is one page of `grants.list(cursor)` — the route's
-// loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it.
+// tokens), each endable on its own, and the one place a personal access token is minted: a name,
+// the projects it may reach and the one resource it is for → `api.grants.mint` → the token, shown
+// ONCE (it is a finite provider access token, never stored readable). The list is one page of
+// `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end invalidates
+// the router, which reloads it.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
@@ -21,6 +22,7 @@ import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import {
   Table,
   TableBody,
@@ -61,6 +63,7 @@ function SessionsPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [tokenName, setTokenName] = useState("");
+  const [tokenResource, setTokenResource] = useState<"api" | "mcp">("api");
   const [excludedProjectIds, setExcludedProjectIds] = useState<Set<string>>(new Set());
   const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
@@ -88,7 +91,11 @@ function SessionsPage() {
     setError(null);
     setMinting(true);
     try {
-      const { token, expiresAt } = await api.grants.mint({ name, projects: selectedProjectIds });
+      const { token, expiresAt } = await api.grants.mint({
+        name,
+        projects: selectedProjectIds,
+        resource: tokenResource,
+      });
       setMinted({ name, token, expiresAt });
       setCopied(false);
       setTokenName("");
@@ -174,7 +181,15 @@ function SessionsPage() {
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>{GRANT_KIND_LABELS[item.kind]}</TableCell>
+                <TableCell>
+                  {GRANT_KIND_LABELS[item.kind]}
+                  {item.resource && (
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {item.resource === "mcp" ? "MCP" : "API"}
+                    </span>
+                  )}
+                </TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
                 </TableCell>
@@ -236,8 +251,9 @@ function SessionsPage() {
           <CardTitle>Personal access tokens</CardTitle>
           <CardDescription>
             A personal access token is one OAuth grant: it acts as you, for the projects you choose,
-            for 30 days, and is shown once. Send it as <code>Authorization: Bearer</code> on{" "}
-            <code>/api</code>, <code>/mcp</code> or a project host; revoke it from the list above.
+            for 30 days, and is shown once. It is for one place: <code>/api</code> and your
+            projects' hosts, or <code>/mcp</code>. Send it as <code>Authorization: Bearer</code>;
+            revoke it from the list above.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -273,6 +289,20 @@ function SessionsPage() {
                   required
                   className="max-w-sm"
                 />
+              </Label>
+              <Label className="flex flex-col items-start gap-2">
+                For
+                <NativeSelect
+                  aria-label="Token resource"
+                  value={tokenResource}
+                  disabled={minting}
+                  onChange={(event) =>
+                    setTokenResource(event.target.value === "mcp" ? "mcp" : "api")
+                  }
+                >
+                  <NativeSelectOption value="api">The API and project hosts</NativeSelectOption>
+                  <NativeSelectOption value="mcp">MCP</NativeSelectOption>
+                </NativeSelect>
               </Label>
               <div
                 aria-label="Projects the token may reach"

@@ -320,6 +320,9 @@ export interface GrantRecord {
   clientDomain?: string;
   name: string;
   kind: GrantKind;
+  /** The one platform resource its tokens are for: Cap'n Web at `/api` (and the projects' hosts),
+   *  or `/mcp`. */
+  resource?: "api" | "mcp";
   createdAt: number;
   expiresAt: number | null;
   lastUsedAt: number | null;
