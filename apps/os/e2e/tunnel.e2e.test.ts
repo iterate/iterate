@@ -5,6 +5,7 @@
 //   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401;
 //     refused outright where projects are served under paths (a per-PR preview)
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
+//   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
 //   • a tunnel killed outright leaves its route standing and answering 502, "not connected", with
 //     `x-iterate-ingress-route-offline` naming the route
@@ -21,12 +22,13 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
-import { adminCredentials, session, untilValue, workerUrl } from "./support/client.ts";
+import { adminCredentials, session, until, untilValue, workerUrl } from "./support/client.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   ingressRouting,
   navigateProjectUrl,
+  projectUrlSocket,
   registerProject,
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";
@@ -97,6 +99,15 @@ test(
       closeCode: 1000,
     });
 
+    // a context reset — what every deploy does to every Durable Object — cuts the context's sockets;
+    // the visitor's socket outlives it (context/fetch-upgrade-splice.ts)
+    expect(
+      await echoesAcrossContextReset(publicUrl, () => itx.abort("a deploy's reset, on demand")),
+    ).toEqual({
+      echoes: ["local-echo:before", "local-echo:across", "local-echo:after"],
+      closeCode: null,
+    });
+
     // killed outright: nothing deletes the route, and its target is not connected
     await publicTunnel.stop("SIGKILL");
     expect(
@@ -127,6 +138,33 @@ test(
     expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
   },
 );
+
+/** A WebSocket held open on `url`: one echo, then `reset()`, then two more sent across it — the
+ *  echoes it saw, and the close code if the socket closed before it was done. */
+async function echoesAcrossContextReset(url: URL, reset: () => Promise<unknown>) {
+  const socket = projectUrlSocket(url);
+  const echoes: string[] = [];
+  let closeCode: number | null = null;
+  socket.addEventListener("message", (event) => echoes.push(String(event.data)));
+  socket.addEventListener("close", (event) => (closeCode = event.code));
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => resolve());
+    socket.addEventListener("error", () => reject(new Error("the WebSocket did not open")));
+  });
+  socket.send("before");
+  await until("the echo before the reset", () => echoes.length === 1 || closeCode !== null);
+  await reset();
+  socket.send("across");
+  socket.send("after");
+  await until(
+    "the echoes after the reset",
+    () => echoes.length === 3 || closeCode !== null,
+    // the ends re-dial the reset context and resume: a second or two on a preview
+    20_000,
+  );
+  socket.close(1000, "done");
+  return { echoes, closeCode };
+}
 
 /** The local server a tunnel serves: `local <path>` over HTTP, and a WebSocket choosing `vite-hmr`
  *  that echoes. */
