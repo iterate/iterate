@@ -25,22 +25,29 @@ type PreviewWorkflow = {
       if?: string;
       name?: string;
       needs?: string | string[];
+      "runs-on"?: { size: string; image: string };
+      "timeout-minutes"?: number;
+      env?: Record<string, string>;
       outputs?: Record<string, string>;
       steps?: PreviewStep[];
     }
   >;
 };
 
-const preview = parseYaml(
-  readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/preview-os.yml"), "utf8"),
-) as PreviewWorkflow;
+const source = readFileSync(
+  resolve(import.meta.dirname, "../../.depot/workflows/preview-os.yml"),
+  "utf8",
+);
+const preview = parseYaml(source) as PreviewWorkflow;
 // As the jobs run: each `parallel:` block's steps stand where the block does.
 for (const job of Object.values(preview.jobs))
   job.steps = job.steps?.flatMap((step) => step.parallel || [step]);
+// Both suite jobs run one step list; the job's SUITE picks what it runs.
 const suites = [
-  { job: "e2e", name: "E2E tests", run: "doppler run -- pnpm preview e2e" },
-  { job: "specs", name: "Browser specs", run: "doppler run -- pnpm preview specs" },
+  { job: "e2e", name: "E2E tests", suite: "e2e" },
+  { job: "specs", name: "Browser specs", suite: "specs" },
 ] as const;
+const suiteRun = 'doppler run -- pnpm preview "$SUITE"';
 
 test("Preview OS names each job for the check it is: deploy, then the two suites side by side, then the trace", () => {
   expect(
@@ -55,12 +62,41 @@ test("Preview OS names each job for the check it is: deploy, then the two suites
   expect(runs("deploy")).toContain('doppler run -- pnpm preview "$ACTION"');
   for (const suite of suites) {
     expect([preview.jobs[suite.job]!.needs].flat()).toEqual(["deploy"]);
-    // one suite per job: specs no longer share a runner's CPU with vitest
-    expect(runs(suite.job)).toContain(suite.run);
-    for (const other of suites.filter((other) => other !== suite))
-      expect(runs(suite.job)).not.toContain(other.run);
-    expect(runs("deploy")).not.toContain(suite.run);
+    // one suite per job: specs share no runner's CPU with vitest
+    expect(preview.jobs[suite.job]!.env?.SUITE).toBe(suite.suite);
+    expect(runs(suite.job)).toContain(suiteRun);
   }
+  expect(runs("deploy")).not.toContain(suiteRun);
+});
+
+// ONE DEFINITION: Browser specs is E2E tests' runner and steps (YAML aliases), and the two jobs
+// differ only in the suite their env names and in the dispatch that skips them.
+test("Preview OS's two suite jobs are one definition, differing only in the suite they name", () => {
+  const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
+  expect(specs).toMatchObject({
+    steps: e2e.steps,
+    "runs-on": e2e["runs-on"],
+    "timeout-minutes": e2e["timeout-minutes"],
+  });
+  // written once: the second job aliases the first's
+  expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
+  expect(source.match(/^ {4}runs-on: \*suite-runner$/gmu)).toHaveLength(1);
+  const suiteEnv = ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"];
+  const shared = (env: Record<string, string> = {}) =>
+    Object.fromEntries(Object.entries(env).filter(([name]) => !suiteEnv.includes(name)));
+  expect(shared(specs.env)).toEqual(shared(e2e.env));
+  expect([e2e.env, specs.env]).toMatchObject([
+    { SUITE: "e2e", FLAKE_SUITE: "preview-e2e", TEST_TELEMETRY_EXPECTED_WORKSPACES: "os" },
+    { SUITE: "specs", FLAKE_SUITE: "specs", TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root" },
+  ]);
+  // each skips on a dispatch of the other suite alone, and that is the only difference
+  expect(specs.if?.replace("inputs.action != 'e2e'", "inputs.action != 'specs'")).toBe(e2e.if);
+});
+
+// Both suites wait on a remote preview: on 4x16 they peaked at 53 % of four vCPUs and 20 % of 16 GB
+// (measured 2026-09-24; docs/depot-ci.md#reliability-defaults).
+test("Preview OS's suites run on the smallest runner", () => {
+  expect(preview.jobs.e2e!["runs-on"]?.size).toBe("2x8");
 });
 
 // A required check has to report on every pull request: GitHub leaves one "Pending" when a `paths`
@@ -224,7 +260,9 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
     // first after naming the attempt: nothing is checked out or installed for a job that fails
     expect(steps.indexOf(guard!)).toBe(1);
     if (!evaluate(preview.jobs[job]!.if, context)) return "skipped";
-    return evaluate(guard!.if, context) ? "fails" : "tests";
+    // the job's own suite, from its env
+    const jobContext = { ...context, "env.SUITE": preview.jobs[job]!.env!.SUITE! };
+    return evaluate(guard!.if, jobContext) ? "fails" : "tests";
   };
   const e2e = outcome("e2e");
   const specs = outcome("specs");
@@ -240,7 +278,7 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
 // A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts resolvePreviewName).
 test("a test job names its preview by the PR's number, or by preview-name without one", () => {
   for (const suite of suites) {
-    const step = preview.jobs[suite.job]!.steps?.find((step) => step.id === suite.job);
+    const step = preview.jobs[suite.job]!.steps?.find((step) => step.id === "suite");
     expect(step?.env).toMatchObject({
       PREVIEW_NAME: "${{ inputs.preview-name }}",
       PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
@@ -255,7 +293,7 @@ test("a test job names its preview by the PR's number, or by preview-name withou
 test("a test job keeps its evidence whenever its suite started, and only then", () => {
   for (const suite of suites) {
     const steps = preview.jobs[suite.job]!.steps || [];
-    const evidence = steps.slice(steps.findIndex((step) => step.id === suite.job) + 1);
+    const evidence = steps.slice(steps.findIndex((step) => step.id === "suite") + 1);
     const followers = evidence.filter(
       (step) =>
         step.id === "evidence-upload" ||
@@ -265,13 +303,12 @@ test("a test job keeps its evidence whenever its suite started, and only then", 
     expect(evidence.length - followers.length).toBeGreaterThan(0);
     for (const step of evidence.filter((step) => !followers.includes(step)))
       expect(step, step.name).toMatchObject({
-        if: `always() && steps.${suite.job}.outcome != 'skipped'`,
+        if: "always() && steps.suite.outcome != 'skipped'",
       });
+    // the Playwright report only the specs write
     expect(followers.map((step) => step.if)).toEqual([
       "${{ always() && hashFiles('test-results/manifest.json') != '' }}",
-      ...(suite.job === "specs"
-        ? ["${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}"]
-        : []),
+      "${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}",
       "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
     ]);
   }
@@ -286,7 +323,7 @@ test("a test job keeps its evidence whenever its suite started, and only then", 
 function evaluate(condition: string | undefined, context: Record<string, string>) {
   const javascript = (condition || "true")
     .replaceAll("always()", "true")
-    .replace(/[a-z_]+(?:\.[a-z0-9_-]+)+/g, (path) => {
+    .replace(/[a-z_]+(?:\.[A-Za-z0-9_-]+)+/g, (path) => {
       expect(context, `${path} is not in the test's context`).toHaveProperty([path]);
       return JSON.stringify(context[path]);
     });

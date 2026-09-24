@@ -474,6 +474,11 @@ Prefer small YAML wrappers around scripts. For example:
 Use Depot-specific features where they make the workflow clearer:
 
 - custom-image jobs declare both `runs-on.size` and `runs-on.image`;
+- jobs that differ only in a value share one definition through YAML anchors
+  (`&suite-steps`, then `*suite-steps`), as the suite jobs of Preview OS and
+  Main OS e2e do, each job's `env` holding what differs. Depot CI resolves them
+  as GitHub Actions does (run `tf9txcvrp2`). Merge keys (`<<:`) are not GitHub
+  Actions syntax, so each job still spells out its own `name`, `if` and `env`;
 - `actions/checkout` uses `clean: false` when consuming the baked image;
 - independent checks can use Depot `parallel:` blocks with `fail-fast: false`;
 - workflow runtime logic belongs in `scripts/ci`, not in long YAML strings.
@@ -524,13 +529,16 @@ freshness:
   2026; a retry passed), so watch main's Test job for that. Deploy OS uses `4x16`; the client
   deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports),
   the trace jobs, Main OS e2e's delete and alert jobs, and the jobs that only call APIs (LOC report, PR
-  dashboard, Release) use `2x8`. Re-check with `depot ci metrics --run <run-id>`
-  before increasing a size.
+  dashboard, Release) use `2x8`. So do the E2E tests and Browser specs jobs of Preview OS and
+  Main OS e2e, which wait on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at
+  1.7 vCPUs and 2.9 GB (E2E tests) and 2.1 vCPUs and 3.2 GB (Browser specs), and on `2x8` nine
+  runs of each took as long at the p50 (67 s and 70 s, against 67 s and 76 s on `4x16`) for half
+  the price. Re-check with `depot ci metrics --run <run-id>` before increasing a size.
 
 These defaults keep a normal all-app main push to 42 requested vCPUs (lint 8,
-test 8, Deploy OS 4, 2 for each of the seven client deploys, and 8
-for Main OS e2e, whose parent and deploy jobs run one after another, then its
-E2E tests and Browser specs side by side; its trace and alert jobs follow
+test 8, Deploy OS 4, 2 for each of the seven client deploys, 4 for the preview
+parents, and 4 for Main OS e2e, whose deploy job runs first, then its E2E tests
+and Browser specs side by side on 2 each; its trace and alert jobs follow
 them), without reducing the parallel lint job that
 uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
@@ -568,8 +576,8 @@ The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI and the preview
 browser; Kit Firmware's ESP-IDF has an image of its own ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
-`8x32`, or `16x64` from measured workload demand. Deploy preview, E2E tests
-and Browser specs each run on `4x16`, the two suites on runners of their own.
+`8x32`, or `16x64` from measured workload demand. Deploy preview runs on `4x16`,
+and E2E tests and Browser specs each on a `2x8` of its own.
 The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
 rebuild as drift repair. A push's run first checks the live image on `2x8`:
@@ -805,9 +813,12 @@ Preview OS runs four jobs, each a check named for what it proves:
   ([the trace's spans](ci-traces.md#steps-and-phases)).
 - **E2E tests** (the Vitest e2e suite, `pnpm preview e2e`) and **Browser specs**
   (the Playwright specs, `pnpm preview specs`) then start side by side, each on
-  a `4x16` runner of its own, so neither shares CPU with the other. The Vitest
-  rows tagged `slow` run only when the PR changes their code or carries the
-  `slow-e2e` label ([slow rows](testing.md#slow-rows)).
+  a `2x8` runner of its own, so neither shares CPU with the other. They are one
+  job definition: Browser specs aliases E2E tests' runner and steps (YAML
+  anchors, [Editing Workflows](#editing-workflows)), and each job's env names
+  its suite (`SUITE`, `FLAKE_SUITE`, the workspace its telemetry names). The
+  Vitest rows tagged `slow` run only when the PR changes their code or carries
+  the `slow-e2e` label ([slow rows](testing.md#slow-rows)).
 - **CI trace** runs after the three, whatever their outcome, and reports only
   ([Interactive trace reports](#interactive-trace-reports)).
 
