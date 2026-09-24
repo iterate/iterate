@@ -789,7 +789,7 @@ export class FacetHost {
       } catch {
         return result;
       }
-      (result as Disposable)[Symbol.dispose]();
+      (result as Disposable)[Symbol.dispose](); // `Symbol.dispose in result`, checked above
       return copy;
     }
     return result;
@@ -802,6 +802,7 @@ export class FacetHost {
   #facetStartupMemoFor(name: string, spec: FacetSpec | undefined): FacetSpec {
     let facetStartupMemo =
       this.#facetStartupMemoByName.get(name) ??
+      // kv answers `unknown`; this method is the only writer of `facet:<name>`.
       (this.#deps.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined);
     if (spec) {
       assertFacetSourceWithinCeiling(spec, `facet "${name}"`);

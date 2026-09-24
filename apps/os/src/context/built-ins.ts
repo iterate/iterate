@@ -8,7 +8,7 @@
 // unless the context's own table says otherwise (itx-expression-rewriting.ts `implicitRootsAt`) — so a
 // test may shadow `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` always reaches the
 // physical scope.
-// Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
+// Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
@@ -81,7 +81,11 @@ import {
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
-import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./cf-artifacts.ts";
+import {
+  projectScopedArtifacts,
+  type ArtifactsNamespace,
+  type ArtifactsScope,
+} from "./cf-artifacts.ts";
 
 /** One row of `itx.subscriptions.list()`. */
 export type SubscriptionListEntry = {
@@ -89,7 +93,7 @@ export type SubscriptionListEntry = {
   target: string;
   consumes?: string[];
   configuredAtOffset: number;
-  /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
+  /** Where the cursor started (0 = the whole log); absent = at the configure. */
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
    *  lives in the log + the facet's kv memo, never here — a hosting row is source-less). Address-only
@@ -229,12 +233,12 @@ export interface BuiltInScope extends LibraryRoots {
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
-    /** THE VERIFY LANE — a webhook's signature checked against a secret WITHOUT revealing it: is
+    /** VERIFY — a webhook's signature checked against a secret WITHOUT revealing it: is
      *  `signature` (hex, either case) the HMAC-SHA256 of `payload` (a string is its UTF-8 bytes)
      *  under the secret's material — the whole value, or the string at `field` of a JSON value?
      *  Runs in the secret's facet on its own context; one bit comes back. Constant-time, and a
      *  secret never set (or a material with no key at the field) answers false, never a description
-     *  — the candidate comes from an unauthenticated door. The caller assembles the signed bytes the
+     *  — the candidate comes from an unauthenticated request. The caller assembles the signed bytes the
      *  provider's scheme names (Stripe `${t}.${body}` with its own tolerance check on `t`, GitHub the
      *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
@@ -243,10 +247,10 @@ export interface BuiltInScope extends LibraryRoots {
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
    *  `autorag(id)` — no wrapper, so `itx.ai` reads exactly like `env.AI` and a rewrite rule can pin a
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
-   *  fake)`; the physical door stays `itx.builtins.ai`. */
+   *  fake)`; the physical binding stays `itx.builtins.ai`. */
   ai: Ai;
   /** Cloudflare Browser Run: `.quickAction(action, options)` returns the
-   *  action's RESULT; `.fetch(input, init)` is the raw CDP door. */
+   *  action's RESULT; `.fetch(input, init)` is the raw CDP endpoint. */
   browser: ReturnType<typeof cfBrowser>;
   /** THE ARTIFACTS PROXY (cf-artifacts.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
    *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
@@ -300,8 +304,8 @@ export interface BuiltInScope extends LibraryRoots {
   /** Another context of THIS project, every call routed through ITS table (`resolveContextPath`
    *  resolves the path, as the edge `cd` does). */
   cd(path: string): InvokeHandle;
-  /** Egress: `getSecret("/secrets/NAME")` placeholders substituted, then the terminal `fetch` — the
-   *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
+  /** Egress: `getSecret("/secrets/NAME")` placeholders substituted, then the terminal `fetch` — where
+   *  a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land too. */
   fetch(request: Request): Promise<Response>;
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
@@ -363,7 +367,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
    *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
    *  so loaded code (`env.ITX.get().processors.enable(…)`) and a sibling (`itx.cd(p).processors…`) do
-   *  it through the same door as a client. */
+   *  it through the same built-in as a client. */
   processors: {
     enable(
       name: string,
@@ -435,14 +439,14 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
   return parsed.data;
 }
 
-/** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
+/** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
 interface BuildBuiltInsDeps {
   projectInfo: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach (the workers lane binds neither AI, Browser Run, nor Artifacts;
+  /** The bindings the built-ins reach (the workers test project binds neither AI, Browser Run, nor Artifacts;
    *  nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
@@ -479,7 +483,7 @@ interface BuildBuiltInsDeps {
   context: (path: string) => ReachableContext;
   /** The context's egress terminal (secret substitution → `fetch`). */
   egress: (request: Request) => Promise<Response>;
-  /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
+  /** WHO is calling right now — the `Caller` the DO runs this call under (an `x-itx-expression` fetch's headers,
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
    *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
@@ -493,7 +497,7 @@ interface BuildBuiltInsDeps {
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
-  /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream), and the
+  /** The facet host's entry, verbatim (accepted trade: a busy stateful facet pins its stream), and the
    *  host's synchronous reset of one facet (facet-host.ts `abort`). */
   facets: {
     get: BuiltInScope["facets"]["get"];
@@ -583,13 +587,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     );
   };
   /** The `secret` processor row on the secret's context — the facet hosted with a row, so the
-   *  engine pushes it every fact (idempotent at the door: a second enable of the same row is a no-op). */
+   *  engine pushes it every fact (idempotent: a second enable of the same row is a no-op). */
   const enableSecretRow = (secret: ReachableContext) =>
     secret.invoke(["itx", "builtins", "processors", ["enable", "secret"]], [], hopCaller());
   /** The secret's facet on its own context — `write`, `clear`, `beginOAuth`, `completeOAuth`,
    *  `verifyHmac`, `snapshot` (secret/durable-object.ts) — reached through the platform's own call:
    *  a caller's itx expression reaches its reads alone. Hosted on its first call. Every verb runs it
    *  inside `onSecretContext`'s `here`, which runs on the secret's own context. */
+  /** One call on the context's first-party `secret` facet. A facet call answers `unknown`; the casts
+   *  below are that facet's own return shapes (secret/durable-object.ts). */
   const secretFacet = (call: ItxExpressionStep) => deps.callFacetAsPlatform("secret", [call]);
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
    *  caller, then cross-posted to the owner's root for the catalog — stamped `source.platform`, which
@@ -604,6 +610,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   };
   /** The `secret` processor rows on the secret's context — one while the secret lives. */
   const secretRows = (secret: ReachableContext) =>
+    // `invoke` is untyped across the DO hop; `processors.list` answers its rows.
     secret.invoke(["itx", "builtins", "processors", ["list"]], [], hopCaller()) as Promise<
       { name: string }[]
     >;
@@ -794,6 +801,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // The owner root's catalog — strongly consistent with `set` and `delete`, which cross-post
       // their facts there before they answer.
       list: async () => {
+        // `invoke` is untyped across the DO hop; the owner root facet's snapshot is its contract's state.
         const { state } = (await deps
           .context(owner.rootPath)
           .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
@@ -1011,7 +1019,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
         assertFacetPlacement(name, { projectId, path });
-        // IDEMPOTENT AT THE DOOR (the rule `provide` follows): a row already hosting this facet under
+        // IDEMPOTENT (the rule `provide` follows): a row already hosting this facet under
         // the same spec appends nothing — every entity's `create()` enables its row on every call.
         const existing = deps.subscriptions.get(name)?.hostedFacet;
         if (
@@ -1049,7 +1057,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       claim: async (name, at) => deps.claimFacetAlarm(name, at),
     },
     rewriteRules: deps.rewriteRules,
-    // A genuine InvokeHandle so `workers.get(spec).run()` pipelines on every lane (workerd#6873). A
+    // A genuine InvokeHandle so `workers.get(spec).run()` pipelines over every transport (workerd#6873). A
     // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
     // fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine, point 4).
     // Re-resolves per call; the loader caches by key, so a warm isolate is reused and a producer
@@ -1086,6 +1094,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const entrypoint = load().getEntrypoint(
             spec.className,
             spec.props === undefined ? undefined : { props: spec.props },
+            // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
           ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
           const fn = entrypoint[method];
           if (typeof fn !== "function")

@@ -17,7 +17,7 @@
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
 // is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
 // no client-side wrapper. A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
-// `DurableObject` class): there is NO host-injected wrapper and no bare-lambda door — the code the
+// `DurableObject` class): there is NO host-injected wrapper and no bare-lambda entry point — the code the
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
 import { codedError } from "iterate/next/lib";
@@ -48,8 +48,8 @@ export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; class
  *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
  *  producer EXPRESSION is small by nature and is not measured. */
 export const FACET_SOURCE_MAX_CHARS = 1 << 20;
-/** Refuse a spec whose literal source is over the ceiling — the one check both doors
- *  (`itx.processors.enable`, the DO's facet door) make, so the refusal is atomic: nothing appended, no memo. */
+/** Refuse a spec whose literal source is over the ceiling — the one check both entry points
+ *  (`itx.processors.enable`, the DO's `itx.facets.get`) make, so the refusal is atomic: nothing appended, no memo. */
 export function assertFacetSourceWithinCeiling(spec: FacetSpec, where: string): void {
   if (typeof spec.source === "string" || Array.isArray(spec.source)) return; // a producer expression
   const chars = JSON.stringify(spec.source).length;
@@ -129,7 +129,7 @@ type PrepareConfinedWorkerOptions = {
   kind: "worker" | "facet";
   /** The owning context's name — for a facet, the pair (context name, className). Either way it is
    *  ONE element of the JSON-array loader id, so a ":" in either half cannot alias another owner:
-   *  context "/x:y" + class "Door" and context "/x" + class "y:Door" stay two identities
+   *  context "/x:y" + class "Tally" and context "/x" + class "y:Tally" stay two identities
    *  (worker-loader.test.ts). */
   owner: string | readonly [iterateContextName: string, className: string];
   source: WorkerSource;

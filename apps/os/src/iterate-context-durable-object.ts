@@ -80,10 +80,7 @@ import type { ControlPlaneDurableObject } from "./control-plane/durable-object.t
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { FacetHost, UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "./context/facet-host.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
-import {
-  RESIDENCY_WATCHDOG_WINDOW_MS,
-  decideQuietDeadline,
-} from "./context/residency-watchdog.ts";
+import { RESIDENCY_WATCHDOG_WINDOW_MS, decideQuietDeadline } from "./context/residency-watchdog.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -434,16 +431,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  event a library verb appends (`itx.run`'s request, a creation) is attributed to whoever called,
    *  and a relative path means the caller's; NOT its `app` bit: the library's own hops (`cd('/')` for
    *  the catalog, the fixed point for a mint) are the platform's act, and what a context may reach OF
-   *  the library its table already says (a naked child has no `itx.repos` row to get here through). */
+   *  the library its table already says (a naked child has no `itx.repos` row to get here through).
+   *  The handle's dotted surface IS the library's itx — `itx.append(...)`, `itx.workers.get(...)`
+   *  reduce into steps (the prototype fallback, iterate-context.ts) and land in the callback — which
+   *  is why it is cast: InvokeHandle's declared type has none of those members. */
   readonly #libraryItx = new InvokeHandle((steps) => {
     // Every call the library makes (a connection opening, a call through it) is a use of the
     // library's pin: the quiet period runs from the call's end.
     this.#pinCallStarted();
     const { app: _loadedCode, ...caller } = this.#caller;
     return this.#invokeInProcess(["itx", ...steps], [], caller).finally(() => this.#pinCallEnded());
-    // The cast: the handle's dotted surface IS the library's itx — `itx.append(...)`,
-    // `itx.workers.get(...)` reduce into steps (the prototype fallback, iterate-context.ts) and land
-    // in the callback above — but InvokeHandle's declared type has none of those members.
   }) as unknown as LibraryItx;
   /** THE LIBRARY: its verbs closed over `#libraryItx`. An open capnweb socket it holds pins this
    *  actor awake; the pins' timer closes it. */
@@ -1235,7 +1232,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           itxExpressionHeader === ""
             ? this.#stream.coreReducedState.ingressTarget!
             : itxExpressionHeader.trimStart().startsWith("[")
-              ? (JSON.parse(itxExpressionHeader) as ItxExpression)
+              ? // JSON a session's terminal fetch wrote; the resolver's `normalizedItxExpression`
+                // shape-checks it before anything runs.
+                (JSON.parse(itxExpressionHeader) as ItxExpression)
               : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
@@ -1363,6 +1362,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // This context IS the secret's: its facet dials. Hosted on demand, row or no row — a secret
     // never set refuses inside the facet ("no stored project secret"), the same 502 as before.
     if (secretPath === path)
+      // A facet call answers `unknown`; the secret facet's `fetch` answers its Response.
       return this.#facetHost.callFacetAsPlatform("secret", [
         ["fetch", outbound],
       ]) as Promise<Response>;
@@ -1398,7 +1398,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.appendWakeRecord("request");
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,
-      stub: input.stub as BorrowedRpcStub,
+      stub: input.stub as BorrowedRpcStub, // unvalidatable by design (the docstring above)
     });
   }
 }

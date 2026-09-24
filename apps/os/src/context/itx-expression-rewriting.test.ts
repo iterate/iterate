@@ -616,49 +616,48 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
     });
 
   // …and what the append boundary ACCEPTS: both halves the PARSED form (either codec half in), `{ match, target, payload }`.
-  const accepted: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] =
-    [
-      {
-        match: "itx.db",
-        target: "itx.builtins.kv",
-        payload: { match: ["itx", "db"], target: ["itx", "builtins", "kv"] },
-      }, // a target may name the physical spelling
-      {
-        match: "itx.archive",
-        target: "itx.cd('/archive')",
-        payload: { match: ["itx", "archive"], target: ["itx", ["cd", "/archive"]] },
-      }, // …and a proxy verb (a built-in root in an expression)
-      {
-        match: "itx.ai.run('gpt-5')",
-        target: "itx.kv",
-        payload: { match: ["itx", "ai", ["run", "gpt-5"]], target: ["itx", "kv"] },
-      }, // pinned args in the match, parsed once at the append boundary
-      {
-        match: ["itx", "ok", ["get", 1]],
-        target: "itx.kv",
-        payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
-      }, // the ARRAY half of a match passes through as the parsed form
-      // The physical spelling of the match itself is an ordinary target at the append boundary — the
-      // REDUCE decides: a deletion where it restates the implicit row, a grant where it does not.
-      {
-        match: "itx.kv",
-        target: "itx.builtins.kv",
-        payload: { match: ["itx", "kv"], target: ["itx", "builtins", "kv"] },
+  const accepted: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] = [
+    {
+      match: "itx.db",
+      target: "itx.builtins.kv",
+      payload: { match: ["itx", "db"], target: ["itx", "builtins", "kv"] },
+    }, // a target may name the physical spelling
+    {
+      match: "itx.archive",
+      target: "itx.cd('/archive')",
+      payload: { match: ["itx", "archive"], target: ["itx", ["cd", "/archive"]] },
+    }, // …and a proxy verb (a built-in root in an expression)
+    {
+      match: "itx.ai.run('gpt-5')",
+      target: "itx.kv",
+      payload: { match: ["itx", "ai", ["run", "gpt-5"]], target: ["itx", "kv"] },
+    }, // pinned args in the match, parsed once at the append boundary
+    {
+      match: ["itx", "ok", ["get", 1]],
+      target: "itx.kv",
+      payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
+    }, // the ARRAY half of a match passes through as the parsed form
+    // The physical spelling of the match itself is an ordinary target at the append boundary — the
+    // REDUCE decides: a deletion where it restates the implicit row, a grant where it does not.
+    {
+      match: "itx.kv",
+      target: "itx.builtins.kv",
+      payload: { match: ["itx", "kv"], target: ["itx", "builtins", "kv"] },
+    },
+    {
+      match: "itx.ai.run('gpt-5')",
+      target: "itx.builtins.ai.run('gpt-5')",
+      payload: {
+        match: ["itx", "ai", ["run", "gpt-5"]],
+        target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
       },
-      {
-        match: "itx.ai.run('gpt-5')",
-        target: "itx.builtins.ai.run('gpt-5')",
-        payload: {
-          match: ["itx", "ai", ["run", "gpt-5"]],
-          target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
-        },
-      },
-      {
-        match: "itx",
-        target: "itx.builtins",
-        payload: { match: ["itx"], target: ["itx", "builtins"] },
-      },
-    ];
+    },
+    {
+      match: "itx",
+      target: "itx.builtins",
+      payload: { match: ["itx"], target: ["itx", "builtins"] },
+    },
+  ];
   for (const { match, target, payload } of accepted)
     test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
       expect(
@@ -683,7 +682,9 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       ...base,
       ifTarget: ["itx", "tab1"],
     });
-    expect(normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: ["itx", "tab1"] })).toEqual({
+    expect(
+      normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: ["itx", "tab1"] }),
+    ).toEqual({
       ...base,
       ifTarget: ["itx", "tab1"],
     });
@@ -692,10 +693,12 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       ifTarget: null,
     });
     expect("ifTarget" in normalized({ match: "itx.x", target: "itx.builtins.x" })).toBe(false);
-    expect(() => normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: undefined })).toThrow(
-      /never undefined/,
-    );
-    expect(() => normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.(" })).toThrow();
+    expect(() =>
+      normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: undefined }),
+    ).toThrow(/never undefined/);
+    expect(() =>
+      normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.(" }),
+    ).toThrow();
   });
 
   test("REFUSED against the path the row LANDS on, whichever caller appends: a bare `itx` row whose target is `cd` of that context; a bare link elsewhere, a longer match, a mask and a foreign event pass; a schedule's batch is checked as it is scheduled", () => {

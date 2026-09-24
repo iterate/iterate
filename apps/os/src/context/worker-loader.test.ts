@@ -4,7 +4,7 @@
 // mints the JSON array `[kind, deploy, platformOrigin, owner, sourceVersion]` (the caller's cacheKey,
 // else the modules' content hash) WITHOUT asking the loader — `load()` is the one call that does (the
 // last-but-one row). A facet's owner is the pair (context name, class name), and either half may
-// contain ":" (a context path is any string; ES2022 allows `export { X as "y:Door" }`); as one JSON
+// contain ":" (a context path is any string; ES2022 allows `export { X as "y:Tally" }`); as one JSON
 // element of the id, the pair is unambiguous whatever either half contains. The second
 // half pins Cloudflare's `get(id, getCode)` contract as we use it: a PRODUCER expression runs inside
 // `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
@@ -90,12 +90,12 @@ test("an owner and a caller's cacheKey that concatenate alike never share one Wo
 });
 
 test("two DIFFERENT facet identities never share one Worker Loader cacheKey", async () => {
-  // context "/x:y" + class "Door" vs context "/x" + class "y:Door": a naive `${context}:${class}`
-  // owner composes the IDENTICAL "prj_u.iterate/x:y:Door" — the second caller would reuse the
+  // context "/x:y" + class "Tally" vs context "/x" + class "y:Tally": a naive `${context}:${class}`
+  // owner composes the IDENTICAL "prj_u.iterate/x:y:Tally" — the second caller would reuse the
   // first's isolate, a silent cross-context authority transfer. Same shared source (identical
   // contentHash), as in prod.
   const { env, keys } = fakeLoaderEnv();
-  const modules = { "cap.js": "export default class Door {}" };
+  const modules = { "cap.js": "export default class Tally {}" };
   const load = (iterateContextName: string, className: string) =>
     loadConfined({
       env,
@@ -108,10 +108,12 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
       invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
       where: `facet "${className}"`,
     });
-  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" }), "Door");
-  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x" }), "y:Door");
+  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" }), "Tally");
+  await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x" }), "y:Tally");
+  // distinct — each half is its own JSON string in the id
+  const [first, second] = keys;
   expect(keys).toHaveLength(2);
-  expect(new Set(keys).size).toBe(2); // distinct — each half is its own JSON string in the id
+  expect(first).not.toBe(second);
 });
 
 test("a producer source runs INSIDE getCode — once per cold isolate, never on a warm key — and needs a cacheKey", async () => {

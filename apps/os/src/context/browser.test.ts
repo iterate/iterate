@@ -3,7 +3,7 @@ import { unwrapBrowserRunQuickAction } from "./browser.ts";
 
 // The unwrap contract behind itx.browser.quickAction: callers get the
 // action's RESULT, never the binding's Response envelope. The binding is an
-// external service (local dev cannot dial it), so this pure seam carries the
+// external service (local dev cannot dial it), so this pure function carries the
 // contract.
 describe("unwrapBrowserRunQuickAction", () => {
   const json = (body: unknown) =>
