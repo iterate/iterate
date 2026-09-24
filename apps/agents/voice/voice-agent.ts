@@ -1257,12 +1257,16 @@ async function dialProviderSocket(): Promise<WebSocket> {
 
 /** The class the loader hosts: `facets.get("voice-agent", { source, className: "VoiceAgentDurableObject" })`. */
 export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceState> {
+  /** `itx.whoami()`, read once per incarnation: every dial's `session.start` names the project. */
+  #identity?: string;
+
   processor = new VoiceAgentProcessor({
     nowAtFacetMs: () => Date.now(),
     /* A bare setTimeout is safe because every wait happens inside a background closure the host
      * keeps alive. */
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     dialProvider: dialProviderSocket,
-    projectContext: async () => JSON.stringify(await this.withItx((itx) => itx.whoami())),
+    projectContext: async () =>
+      (this.#identity ??= JSON.stringify(await this.withItx((itx) => itx.whoami()))),
   });
 }

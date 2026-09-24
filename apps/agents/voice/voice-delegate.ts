@@ -199,13 +199,16 @@ export class VoiceDelegateProcessor extends StreamProcessor<
 
 /** The class the loader hosts: `facets.get("voice-delegate", { source, className: "VoiceDelegateDurableObject" })`. */
 export class VoiceDelegateDurableObject extends StreamProcessorDurableObject<VoiceDelegateState> {
+  /** `itx.whoami()`, read once per incarnation: every model step of every turn names the project. */
+  #identity?: string;
+
   processor = new VoiceDelegateProcessor({
     complete: async (messages) => {
-      const identity = await this.withItx((itx) => itx.whoami());
+      this.#identity ??= JSON.stringify(await this.withItx((itx) => itx.whoami()));
       return completeWithOpenAi([
         {
           role: "system",
-          content: `CURRENT PROJECT: ${JSON.stringify(identity)}. Use projectUrl for website requests and verification.`,
+          content: `CURRENT PROJECT: ${this.#identity}. Use projectUrl for website requests and verification.`,
         },
         ...messages,
       ]);

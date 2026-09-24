@@ -9,7 +9,7 @@
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
@@ -129,7 +129,11 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
       ...(env?.posthogProjectKey && { POSTHOG_PROJECT_KEY: env.posthogProjectKey }),
     },
     observability: OBSERVABILITY,
-    assets: { binding: "ASSETS", not_found_handling: "none" as const, run_worker_first: true },
+    assets: {
+      binding: "ASSETS",
+      not_found_handling: "none" as const,
+      run_worker_first: workerFirstRoutes(app),
+    },
     ...(env && {
       account_id: env.cloudflareAccountId,
       workers_dev: true,
@@ -146,6 +150,24 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
         ],
       }),
   };
+}
+
+/** THE REQUESTS THAT START THE APP'S WORKER (`assets.run_worker_first`): every one — /healthz, the
+ *  PostHog proxy, the auth gate and /api, Kit's firmware proxy, then TanStack Start's pages — but
+ *  the static files, which the asset worker answers without starting an isolate: vite's hashed
+ *  build output under /assets/, and each top-level entry of the app's public/ directory, which
+ *  vite copies to the build's root. A cold isolate cost a static file 68–274 ms on prd
+ *  (2026-09-24). A negative rule routes straight to the asset worker, so a missing file under one
+ *  answers that worker's bare 404, not the app's 404 page.
+ *  https://developers.cloudflare.com/workers/static-assets/binding/#run_worker_first */
+function workerFirstRoutes(app: StartApp) {
+  const publicDir = new URL("public/", app.root);
+  const publicFiles = existsSync(publicDir)
+    ? readdirSync(publicDir, { withFileTypes: true }).map((entry) =>
+        entry.isDirectory() ? `!/${entry.name}/*` : `!/${entry.name}`,
+      )
+    : [];
+  return ["/*", "!/assets/*", ...publicFiles];
 }
 
 async function deploy(app: StartApp, options: { env?: string }) {
