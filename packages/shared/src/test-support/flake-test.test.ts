@@ -7,84 +7,94 @@ import { fileURLToPath } from "node:url";
 import { expect, test, vi } from "vitest";
 import { createFlake } from "./flake-test.ts";
 
+const CHILD_VITEST_MS = 30_000;
+
 // The integration proof runs vitest itself on the fixture in
 // ./flake-test-fixture — one case per outcome — and asserts vitest's OWN
 // verdicts. A child process (rather than registering flake tests here
 // directly) keeps the main suite's expected-fail metrics clean: the sentinel
 // is the one deliberate expected-fail row, and this stays a plain test that
 // goes red deterministically if the wrapper stops satisfying the machinery.
-test("vitest's real expected-fail machinery produces the contracted verdicts", async () => {
-  const require = createRequire(import.meta.url);
-  const vitestPackagePath = require.resolve("vitest/package.json");
-  const vitestBin = join(
-    dirname(vitestPackagePath),
-    (JSON.parse(readFileSync(vitestPackagePath, "utf8")) as any).bin.vitest,
-  );
-  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "flake-test-fixture");
-  const scratchDir = mkdtempSync(join(tmpdir(), "flake-fixture-"));
-  const outputFile = join(scratchDir, "results.json");
-  const recordDir = join(scratchDir, "records");
+// The body is one whole child Vitest run, bounded by its spawnSync timeout, so the row gets that
+// bound too: Vitest's 5 s default is not a budget for it. In CI's Test job, where ten workspaces'
+// runners share 4 cores, this row took up to 2.5 s; on a loaded 4-core machine it passed 5 s with
+// a green child (2026-09-24).
+test(
+  "vitest's real expected-fail machinery produces the contracted verdicts",
+  async () => {
+    const require = createRequire(import.meta.url);
+    const vitestPackagePath = require.resolve("vitest/package.json");
+    const vitestBin = join(
+      dirname(vitestPackagePath),
+      (JSON.parse(readFileSync(vitestPackagePath, "utf8")) as any).bin.vitest,
+    );
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "flake-test-fixture");
+    const scratchDir = mkdtempSync(join(tmpdir(), "flake-fixture-"));
+    const outputFile = join(scratchDir, "results.json");
+    const recordDir = join(scratchDir, "records");
 
-  const result = spawnSync(
-    process.execPath,
-    [
-      vitestBin,
-      "run",
-      "--config",
-      join(fixtureDir, "vitest.config.ts"),
-      "--reporter=json",
-      `--outputFile=${outputFile}`,
-    ],
-    {
-      cwd: fixtureDir,
-      encoding: "utf8",
-      timeout: 30_000,
-      // Strip the parent runner's own variables: nested VITEST_* can make the
-      // child collect no tests, and an inherited FLAKE_RECORD_DIR would leak
-      // the fixture's synthetic outcomes into real flake telemetry — the
-      // child records into its own scratch dir instead.
-      env: {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) => !key.startsWith("VITEST") && key !== "GITHUB_WORKSPACE" && key !== "TEST",
+    const result = spawnSync(
+      process.execPath,
+      [
+        vitestBin,
+        "run",
+        "--config",
+        join(fixtureDir, "vitest.config.ts"),
+        "--reporter=json",
+        `--outputFile=${outputFile}`,
+      ],
+      {
+        cwd: fixtureDir,
+        encoding: "utf8",
+        timeout: CHILD_VITEST_MS,
+        // Strip the parent runner's own variables: nested VITEST_* can make the
+        // child collect no tests, and an inherited FLAKE_RECORD_DIR would leak
+        // the fixture's synthetic outcomes into real flake telemetry — the
+        // child records into its own scratch dir instead.
+        env: {
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) => !key.startsWith("VITEST") && key !== "GITHUB_WORKSPACE" && key !== "TEST",
+            ),
           ),
-        ),
-        FLAKE_RECORD_DIR: recordDir,
+          FLAKE_RECORD_DIR: recordDir,
+        },
       },
-    },
-  );
+    );
 
-  // The fixture's unexpected-error case must turn the whole child run red.
-  expect(result).toMatchObject({ status: 1 });
-  const results = JSON.parse(readFileSync(outputFile, "utf8")) as any;
-  const statuses = Object.fromEntries(
-    results.testResults.flatMap((file: any) =>
-      file.assertionResults.map((a: any) => [a.title, a.status]),
-    ),
-  );
-  expect(statuses).toEqual({
-    "matched flake failure is green": "passed",
-    "a pass is green": "passed",
-    "an unexpected error is red": "failed",
-    "a pinned failure is green (createFailing)": "passed",
-  });
+    // The fixture's unexpected-error case must turn the whole child run red.
+    expect(result).toMatchObject({ status: 1 });
+    const results = JSON.parse(readFileSync(outputFile, "utf8")) as any;
+    const statuses = Object.fromEntries(
+      results.testResults.flatMap((file: any) =>
+        file.assertionResults.map((a: any) => [a.title, a.status]),
+      ),
+    );
+    expect(statuses).toEqual({
+      "matched flake failure is green": "passed",
+      "a pass is green": "passed",
+      "an unexpected error is red": "failed",
+      "a pinned failure is green (createFailing)": "passed",
+    });
 
-  // Exactly one record per case: the fixture config sets a suite-level
-  // `retry` (like the CI e2e suites), and without the wrapper's per-test
-  // retry pin each green case would execute — and record — twice.
-  const recorded = readdirSync(recordDir).flatMap((file) =>
-    readFileSync(join(recordDir, file), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as any).name),
-  );
-  expect(recorded.toSorted()).toEqual([
-    "a pass is green",
-    "a pinned failure is green (createFailing)",
-    "an unexpected error is red",
-    "matched flake failure is green",
-  ]);
-});
+    // Exactly one record per case: the fixture config sets a suite-level
+    // `retry` (like the CI e2e suites), and without the wrapper's per-test
+    // retry pin each green case would execute — and record — twice.
+    const recorded = readdirSync(recordDir).flatMap((file) =>
+      readFileSync(join(recordDir, file), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => (JSON.parse(line) as any).name),
+    );
+    expect(recorded.toSorted()).toEqual([
+      "a pass is green",
+      "a pinned failure is green (createFailing)",
+      "an unexpected error is red",
+      "matched flake failure is green",
+    ]);
+  },
+  CHILD_VITEST_MS,
+);
 
 test("registration lands on the runner's own expected-fail variant", async () => {
   // Scoped record dir: this test executes a wrapped body, and without the
