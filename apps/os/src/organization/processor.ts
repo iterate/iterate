@@ -1,5 +1,5 @@
 // src/organization/processor.ts — THE ORGANIZATION PROCESSOR: the reduce of the organization's
-// facts into its record — its name, its members, its projects — and of its own secrets'
+// facts into its record — its name, its members, its open invitation links, its projects — and of its own secrets'
 // certificates (cross-posted from `/organizations/<orgId>/secrets/<name>`) into their catalog. No
 // effect: a PURE FOLD. The facts are landed by the session on the context
 // (session.ts `foldPlatformFacts`) after the control-plane database writes them. Pure, so a
@@ -47,6 +47,23 @@ export class OrganizationProcessor extends StreamProcessor<
       case "events.iterate.com/organization/member-removed": {
         const members = dropMembership(state.members, event.payload.userId);
         return members && { ...state, members };
+      }
+      case "events.iterate.com/organization/invitation-created": {
+        const { invitationId, ...invitation } = event.payload;
+        if (state.invitations[invitationId]) return undefined;
+        return {
+          ...state,
+          invitations: {
+            ...state.invitations,
+            [invitationId]: { ...invitation, createdAt: event.createdAt },
+          },
+        };
+      }
+      // used or withdrawn, the link is no longer open: its row goes (the log keeps the history)
+      case "events.iterate.com/organization/invitation-accepted":
+      case "events.iterate.com/organization/invitation-revoked": {
+        const { [event.payload.invitationId]: gone, ...invitations } = state.invitations;
+        return gone && { ...state, invitations };
       }
       case "events.iterate.com/organization/project-created": {
         const { projectId, slug } = event.payload;

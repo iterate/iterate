@@ -229,6 +229,105 @@ test("organizations.addMember gives a second person the organization — their l
   expect((await memberships(owner))[org.id]).toEqual({ role: "owner", since: expect.any(String) });
 });
 
+test("organizations.createInvitation hands an owner a single-use link: a second person previews it, accepts it, and lists the organization as a member; a third person is refused; the record's pending link goes with the acceptance", async () => {
+  const slug = freshDnsSafeProjectSlug("org-invite");
+  const owner = person(`${slug}@example.com`);
+  const guest = person(`${slug}-guest@example.com`);
+  const late = person(`${slug}-late@example.com`);
+  const [{ actor: ownerId }, { actor: guestId }] = await Promise.all([
+    owner.whoami(),
+    guest.whoami(),
+  ]);
+  const name = `Organization ${slug}`;
+  const org = await owner.organizations.create({ name });
+  const invitation = await owner.organizations.createInvitation(org.id, {
+    emailHint: `${slug}-guest@example.com`,
+  });
+  expect(invitation).toEqual({
+    id: expect.stringMatching(/^inv_[0-9a-f]{32}$/),
+    orgId: org.id,
+    role: "member",
+    emailHint: `${slug}-guest@example.com`,
+    expiresAt: expect.any(String),
+    token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+  });
+  // the owner's record lists it as pending the moment the verb answers — the link's secret is
+  // nowhere in it
+  using organization = await owner.organizations.get(org.id);
+  expect((await record(organization)).invitations[invitation.id]).toEqual({
+    role: "member",
+    emailHint: `${slug}-guest@example.com`,
+    expiresAt: invitation.expiresAt,
+    createdAt: expect.any(String),
+  });
+  expect(JSON.stringify(await record(organization))).not.toContain(invitation.token);
+  // a member cannot mint one; neither can a stranger
+  expect(
+    errorCode(
+      await rejection(guest.organizations.createInvitation(org.id), "a stranger inviting", 30_000),
+    ),
+  ).toBe("FORBIDDEN");
+  // THE GUEST holding the link sees what it opens, before joining
+  expect(await guest.organizations.invitation(invitation.token)).toEqual({
+    id: invitation.id,
+    orgId: org.id,
+    orgName: name,
+    role: "member",
+    emailHint: `${slug}-guest@example.com`,
+    expiresAt: invitation.expiresAt,
+    status: "pending",
+    member: false,
+    acceptedByYou: false,
+  });
+  expect(await guest.organizations.invitation(`${invitation.token}x`)).toBeNull();
+  // … accepts it, and lists the organization at once — the answer is the row they now read
+  const joined = { id: org.id, name, role: "member", projects: 0 };
+  expect(await guest.organizations.acceptInvitation(invitation.token)).toEqual(joined);
+  expect(await guest.organizations.acceptInvitation(invitation.token)).toEqual(joined);
+  expect(
+    (await guest.organizations.list()).find((row: { id: string }) => row.id === org.id),
+  ).toEqual(joined);
+  // both folds hold it by the time accept answers: the guest's account, and the record — the guest
+  // a member, the link no longer pending
+  expect((await memberships(guest))[org.id]).toEqual({
+    role: "member",
+    since: expect.any(String),
+  });
+  const joinedRecord = await record(organization);
+  expect(joinedRecord).toMatchObject({
+    members: {
+      [ownerId]: { role: "owner", since: expect.any(String) },
+      [guestId]: { role: "member", since: expect.any(String) },
+    },
+  });
+  expect(Object.keys(joinedRecord.invitations)).toEqual([]);
+  // SINGLE USE: a third person is refused and joins nothing
+  expect((await late.organizations.invitation(invitation.token))?.status).toBe("accepted");
+  const refused = await rejection(
+    late.organizations.acceptInvitation(invitation.token),
+    "a second person reusing the link",
+    30_000,
+  );
+  expect(errorCode(refused)).toBe("INVALID_INPUT");
+  expect(refused.message).toMatch(/already used/);
+  expect(await late.organizations.list()).toEqual([]);
+  // a revoked link opens nothing
+  const withdrawn = await owner.organizations.createInvitation(org.id, { role: "owner" });
+  expect((await record(organization)).invitations).toHaveProperty(withdrawn.id);
+  await owner.organizations.revokeInvitation(org.id, { invitationId: withdrawn.id });
+  expect(Object.keys((await record(organization)).invitations)).toEqual([]);
+  expect((await late.organizations.invitation(withdrawn.token))?.status).toBe("revoked");
+  expect(
+    errorCode(
+      await rejection(
+        late.organizations.acceptInvitation(withdrawn.token),
+        "accepting a revoked link",
+        30_000,
+      ),
+    ),
+  ).toBe("INVALID_INPUT");
+});
+
 test("a person's first projects.create without orgId makes their organization — named after the email's local part, them its owner — and lands the project in it; their next lands in the same one", async () => {
   const slug = freshDnsSafeProjectSlug("org-first");
   const api = person(`${slug}@example.com`);

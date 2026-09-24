@@ -15,6 +15,14 @@ const created = (name: string) => ({
   payload: { name },
   source: platform,
 });
+const invitation = (
+  verb: "created" | "accepted" | "revoked",
+  payload: Record<string, unknown>,
+) => ({
+  type: `events.iterate.com/organization/invitation-${verb}`,
+  payload,
+  source: platform,
+});
 const projectCreated = (projectId: string, slug: string) => ({
   type: "events.iterate.com/organization/project-created",
   payload: { projectId, slug },
@@ -29,7 +37,7 @@ const rows: {
   {
     name: "the empty record",
     events: [],
-    state: { name: null, deletedAt: null, members: {}, projects: {}, secrets: {} },
+    state: { name: null, deletedAt: null, members: {}, invitations: {}, projects: {}, secrets: {} },
   },
   {
     name: "created sets the name, renamed replaces it; a project created in it is a row by id, stamped with the event's time; the same project again is ignored",
@@ -48,6 +56,7 @@ const rows: {
       name: "Booper Inc",
       deletedAt: null,
       members: {},
+      invitations: {},
       projects: {
         prj_1: { slug: "monkey", createdAt: expect.any(String) },
         prj_2: { slug: "voice", createdAt: expect.any(String) },
@@ -94,6 +103,55 @@ const rows: {
       name: "Booper",
       deletedAt: null,
       members: { user_b: { role: "owner", since: new Date(4000).toISOString() } },
+      invitations: {},
+      projects: {},
+      secrets: {},
+    },
+  },
+  {
+    name: "an invitation link created is a pending row by id, stamped with the event's time; the same id again is ignored; accepted or revoked, the row goes; one never created is nothing to drop",
+    events: [
+      created("Booper"),
+      invitation("created", {
+        invitationId: "inv_a",
+        role: "member",
+        emailHint: "ada@example.com",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      }),
+      invitation("created", {
+        invitationId: "inv_a",
+        role: "owner",
+        emailHint: null,
+        expiresAt: "2031-01-01T00:00:00.000Z",
+      }),
+      invitation("created", {
+        invitationId: "inv_b",
+        role: "owner",
+        emailHint: null,
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      }),
+      invitation("created", {
+        invitationId: "inv_c",
+        role: "member",
+        emailHint: null,
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      }),
+      invitation("accepted", { invitationId: "inv_b", userId: "user_b" }),
+      invitation("revoked", { invitationId: "inv_c" }),
+      invitation("revoked", { invitationId: "inv_zzz" }),
+    ],
+    state: {
+      name: "Booper",
+      deletedAt: null,
+      members: {},
+      invitations: {
+        inv_a: {
+          role: "member",
+          emailHint: "ada@example.com",
+          expiresAt: "2030-01-01T00:00:00.000Z",
+          createdAt: new Date(2000).toISOString(),
+        },
+      },
       projects: {},
       secrets: {},
     },
@@ -110,6 +168,7 @@ const rows: {
       name: "Booper",
       deletedAt: expect.any(String),
       members: {},
+      invitations: {},
       projects: {},
       secrets: {},
     },
@@ -129,7 +188,14 @@ const rows: {
       },
       created("Booper"),
     ],
-    state: { name: "Booper", deletedAt: null, members: {}, projects: {}, secrets: {} },
+    state: {
+      name: "Booper",
+      deletedAt: null,
+      members: {},
+      invitations: {},
+      projects: {},
+      secrets: {},
+    },
   },
   {
     name: "a fact the platform did not write — a member appended it to the organization's context — is folded by nothing",
@@ -145,8 +211,19 @@ const rows: {
         type: "events.iterate.com/organization/project-created",
         payload: { projectId: "prj_f", slug: "forged" },
       },
+      {
+        type: "events.iterate.com/organization/invitation-created",
+        payload: { invitationId: "inv_f", role: "owner", emailHint: null, expiresAt: "2030" },
+      },
     ],
-    state: { name: "Booper", deletedAt: null, members: {}, projects: {}, secrets: {} },
+    state: {
+      name: "Booper",
+      deletedAt: null,
+      members: {},
+      invitations: {},
+      projects: {},
+      secrets: {},
+    },
   },
 ];
 for (const { name, events, state } of rows)

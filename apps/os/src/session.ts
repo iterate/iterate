@@ -30,6 +30,8 @@ import {
 } from "./iterate-context.ts";
 import {
   isOperator,
+  type InvitationPreview,
+  type InvitationRecord,
   type MemberRecord,
   type OrganizationRecord,
   type ProjectRecord,
@@ -323,6 +325,23 @@ const memberRemovedFact = (orgId: string, userId: string): StreamEventInput => (
   type: "events.iterate.com/organization/member-removed",
   payload: { orgId, userId },
 });
+const invitationCreatedFact = (invitation: InvitationRecord): StreamEventInput => ({
+  type: "events.iterate.com/organization/invitation-created",
+  payload: {
+    invitationId: invitation.id,
+    role: invitation.role,
+    emailHint: invitation.emailHint,
+    expiresAt: invitation.expiresAt,
+  },
+});
+const invitationAcceptedFact = (invitationId: string, userId: string): StreamEventInput => ({
+  type: "events.iterate.com/organization/invitation-accepted",
+  payload: { invitationId, userId },
+});
+const invitationRevokedFact = (invitationId: string): StreamEventInput => ({
+  type: "events.iterate.com/organization/invitation-revoked",
+  payload: { invitationId },
+});
 const projectCreatedFact = (projectId: string, slug: string): StreamEventInput => ({
   type: "events.iterate.com/organization/project-created",
   payload: { projectId, slug },
@@ -517,9 +536,10 @@ type SessionOf = {
  *  narrowed to projects sees only the organizations those projects belong to — unless it holds
  *  `organizations:write`, which is the organizations themselves); `get(orgId)` vends the
  *  organization's context BY MEMBERSHIP (an org the session does not reach is FORBIDDEN, exactly as
- *  `projects.get` outside its reach); `create`, `rename`, `delete`, `addMember`, `removeMember` are
- *  each one call on the control plane under this caller, which checks the rest (an owner? the last
- *  owner? projects still held?) against its catalog. */
+ *  `projects.get` outside its reach); `create`, `rename`, `delete`, `addMember`, `removeMember`,
+ *  `createInvitation`, `revokeInvitation` and `acceptInvitation` are each one call on the control
+ *  plane under this caller, which checks the rest (an owner? the last owner? projects still held?
+ *  a link still open?) against its catalog. */
 class OrganizationCollectionRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   constructor(session: SessionOf) {
@@ -699,6 +719,110 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       ],
       caller,
     );
+  }
+
+  /** A new INVITATION LINK to an organization the caller owns: whoever signs in and accepts it
+   *  first joins in `role` (default member), until it expires (`expiresInDays`, default 7, at most
+   *  30). Answers the invitation with its `token` — the link's secret, shown this once (the
+   *  control plane keeps only its SHA-256); the dash puts it in `/invitations/<token>`. The
+   *  organization's record lists it as pending until it is accepted or revoked. `emailHint` is who
+   *  it is meant for, a note for the owners — never checked against who accepts. */
+  async createInvitation(
+    orgId: string,
+    input: { role?: OrganizationRole; emailHint?: string; expiresInDays?: number } = {},
+  ): Promise<InvitationRecord & { token: string }> {
+    this.#session.organizationsWriter("invite people to");
+    const data = z
+      .object({
+        role: OrganizationRole.default("member"),
+        emailHint: z
+          .string()
+          .trim()
+          .max(200)
+          .optional()
+          .transform((hint) => hint || undefined),
+        expiresInDays: z.number().int().min(1).max(30).default(7),
+      })
+      .parse(input);
+    const { input: sessionInput, caller } = this.#session;
+    const organizationId = z.string().min(1).parse(orgId);
+    const token = mintInvitationToken();
+    const invitation = await sessionInput.controlPlane.createInvitation(caller, organizationId, {
+      tokenHash: await hashInvitationToken(token),
+      role: data.role,
+      emailHint: data.emailHint,
+      expiresAt: Date.now() + data.expiresInDays * 86_400_000,
+    });
+    await foldPlatformFacts(
+      sessionInput,
+      [[{ organization: organizationId }, invitationCreatedFact(invitation)]],
+      caller,
+    );
+    return { ...invitation, token };
+  }
+
+  /** Withdraw an open invitation link of an organization the caller owns, by its id; again is a
+   *  no-op. */
+  async revokeInvitation(orgId: string, input: { invitationId: string }): Promise<void> {
+    this.#session.organizationsWriter("revoke an invitation to");
+    const data = z.object({ invitationId: z.string().min(1) }).parse(input);
+    const { input: sessionInput, caller } = this.#session;
+    const organizationId = z.string().min(1).parse(orgId);
+    await sessionInput.controlPlane.revokeInvitation(caller, organizationId, data.invitationId);
+    await foldPlatformFacts(
+      sessionInput,
+      [[{ organization: organizationId }, invitationRevokedFact(data.invitationId)]],
+      caller,
+    );
+  }
+
+  /** What an invitation link opens, for the signed-in person holding it — the organization's name
+   *  and id, the role, whether it can still be accepted (`status`), and whether they already
+   *  belong (`member`). Null for a link that names no invitation. The token IS the permission: no
+   *  membership is needed to read it. */
+  async invitation(token: string): Promise<InvitationPreview | null> {
+    const { reach } = this.#session.authority;
+    if (reach !== "every" && !("userId" in reach))
+      throw codedError("FORBIDDEN", "A user session is required to read an invitation.");
+    return this.#session.input.controlPlane.getInvitation(
+      await hashInvitationToken(z.string().min(1).parse(token)),
+      reach === "every" ? null : reach.userId,
+    );
+  }
+
+  /** Join the organization an invitation link opens, as the signed-in person, in the link's role.
+   *  Single use: the first person to accept consumes it — accepting again answers the same, anyone
+   *  after is refused (INVALID_INPUT), as is a revoked or expired link. A person already a member
+   *  keeps their role and the link stays open. Answers the organization's row as the person now
+   *  reads it. */
+  async acceptInvitation(token: string): Promise<OrganizationRecord> {
+    this.#session.organizationsWriter("join");
+    const { input: sessionInput, caller } = this.#session;
+    const { invitation, userId, role, accepted } = await sessionInput.controlPlane.acceptInvitation(
+      caller,
+      await hashInvitationToken(z.string().min(1).parse(token)),
+    );
+    // landed again on a retry by the same person: the fold absorbs both, and `role` is the
+    // membership as it stands, so a promotion since is never rewound
+    if (accepted) {
+      const membership = memberAddedFact(invitation.orgId, userId, role);
+      await foldPlatformFacts(
+        sessionInput,
+        [
+          [
+            { organization: invitation.orgId },
+            [invitationAcceptedFact(invitation.id, userId), membership],
+          ],
+          [{ account: userId }, membership],
+        ],
+        caller,
+      );
+    }
+    const row = (await sessionInput.controlPlane.accessibleTo(userId, true)).organizations.find(
+      (organization) => organization.id === invitation.orgId,
+    );
+    if (!row) throw new Error(`accepted ${invitation.id} but ${userId} is no member`);
+    return row;
   }
 }
 
@@ -893,3 +1017,20 @@ class UserCollectionRpcTarget extends RpcTarget {
 // THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): this root satisfies it, checked here.
 const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
 void _iterateApi;
+
+/** An invitation link's secret: 32 random bytes, base64url — the one path segment of
+ *  `/invitations/<token>`, unguessable. The control plane keeps only `hashInvitationToken`'s
+ *  digest, so a read of its database opens no organization. */
+function mintInvitationToken(): string {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+/** The SHA-256 of an invitation token, hex: the control plane's lookup key (`token_hash`). A
+ *  plain digest suffices — the token is 256 random bits, nothing to stretch. */
+async function hashInvitationToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}

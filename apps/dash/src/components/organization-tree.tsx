@@ -36,6 +36,9 @@ export type TreeOrganization = {
   role?: OrganizationRole;
   /** who belongs, by user id — the organization's record; empty in the listed tree */
   members: Record<string, { role: OrganizationRole; since: string }>;
+  /** the invitation links still open, by invitation id — the organization's record; empty in the
+   *  listed tree */
+  invitations: Record<string, z.infer<typeof Invitation>>;
   /** in creation order */
   projects: TreeProject[];
   /** the organization's live state: connecting, live, or failed — `error` says how */
@@ -122,10 +125,17 @@ type Api = AuthenticatedApp["api"];
 const Membership = z.object({ role: z.enum(["owner", "member"]), since: z.string() });
 /** The account fold, the one field the tree reads. */
 const AccountLive = z.looseObject({ memberships: z.record(z.string(), Membership).default({}) });
+const Invitation = z.object({
+  role: z.enum(["owner", "member"]),
+  emailHint: z.string().nullable(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+});
 /** The organization fold, the fields the tree reads. */
 const OrganizationLive = z.looseObject({
   name: z.string().nullable().default(null),
   members: z.record(z.string(), Membership).default({}),
+  invitations: z.record(z.string(), Invitation).default({}),
   projects: z.record(z.string(), z.object({ slug: z.string(), createdAt: z.string() })).default({}),
 });
 
@@ -183,6 +193,7 @@ function LiveTree({ api, user }: { api: Api; user: GlobalContext }) {
         name: record?.name || id,
         role: memberships[id]?.role,
         members: record?.members ?? {},
+        invitations: record?.invitations ?? {},
         projects: Object.entries(record?.projects ?? {})
           .sort(
             ([idA, a], [idB, b]) =>
@@ -273,6 +284,7 @@ function ListedTree({ api }: { api: Api }) {
             name: org?.name || id,
             role: org?.role,
             members: {},
+            invitations: {},
             projects: projects
               .filter((project) => project.orgId === id)
               .map((project) => ({ ...project, createdAt: null })),

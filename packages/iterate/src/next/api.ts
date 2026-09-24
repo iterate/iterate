@@ -349,6 +349,15 @@ export type ConsentAnswer =
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
+/** An organization's invitation link as its owners see it (`expiresAt` ISO). */
+export interface InvitationRecord {
+  id: string;
+  orgId: string;
+  role: "owner" | "member";
+  emailHint: string | null;
+  expiresAt: string;
+}
+
 /** An organization as the session lists it: its minted id, its free-text name, the person's role
  *  in it, and how many projects it holds (every one of them, not only those this grant lists). */
 export interface OrgRecord {
@@ -434,6 +443,31 @@ export interface IterateSessionApi {
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
     /** the members with their emails — the operator's alone (the project-seed CLI) */
     members(orgId: string): Promise<{ userId: string; email: string; role: "owner" | "member" }[]>;
+    /** an owner's invitation link: whoever accepts it first joins in `role` (default member),
+     *  until it expires (`expiresInDays`, default 7, 1–30). `token` is the link's secret, answered
+     *  this once — the dash's `/invitations/<token>`. */
+    createInvitation(
+      orgId: string,
+      input?: { role?: "owner" | "member"; emailHint?: string; expiresInDays?: number },
+    ): Promise<InvitationRecord & { token: string }>;
+    /** an owner withdraws an open link by its id */
+    revokeInvitation(orgId: string, input: { invitationId: string }): Promise<void>;
+    /** what a link opens, for the signed-in person holding it; null when it names nothing */
+    invitation(token: string): Promise<
+      | (InvitationRecord & {
+          orgName: string;
+          status: "pending" | "accepted" | "revoked" | "expired";
+          /** the reader already belongs */
+          member: boolean;
+          /** the reader is the one who accepted it — accepting again answers the same and lands
+           *  the membership's facts again */
+          acceptedByYou: boolean;
+        })
+      | null
+    >;
+    /** join the organization a link opens, in its role — single use: the first person to accept
+     *  consumes it (again by them answers the same; anyone after is refused INVALID_INPUT) */
+    acceptInvitation(token: string): Promise<OrgRecord>;
   };
   user: IterateContextApi;
   logout(): unknown;
