@@ -3,7 +3,35 @@ import { URL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
-import { buildAgentRuntime } from "./build-runtime.ts";
+import { buildAgentRuntime, injectedSdk } from "./build-runtime.ts";
+
+/** The three voice bundles as the installer ships them; the deployed voice e2e test loads the same. */
+export async function bundleVoiceSources(): Promise<{
+  voiceAgent: string;
+  voiceDelegate: string;
+  worker: string;
+}> {
+  const [voiceAgent, voiceDelegate, worker] = await Promise.all(
+    ["voice-agent.ts", "voice-delegate.ts", "worker.ts"].map(async (file) => {
+      const result = await build({
+        entryPoints: [new URL(`../voice/${file}`, import.meta.url).pathname],
+        bundle: true,
+        write: false,
+        format: "esm",
+        platform: "neutral",
+        target: "es2022",
+        loader: { ".md": "text" },
+        external: ["./processor.js", "cloudflare:workers"],
+        plugins: [injectedSdk],
+        logLevel: "silent",
+      });
+      const code = result.outputFiles[0]?.text;
+      if (!code) throw new Error(`No voice bundle produced for ${file}`);
+      return code;
+    }),
+  );
+  return { voiceAgent: voiceAgent!, voiceDelegate: voiceDelegate!, worker: worker! };
+}
 
 /** Build the same hosted processors the devices call, with immutable project KV keys. */
 export async function buildVoiceInstall() {
@@ -16,28 +44,8 @@ export async function buildVoiceInstall() {
     fontUrl,
     `url("data:font/woff2;base64,${Buffer.from(font).toString("base64")}")`,
   );
-  const bundles = await Promise.all(
-    ["voice-agent.ts", "voice-delegate.ts", "worker.ts"].map(async (file) => {
-      const result = await build({
-        entryPoints: [new URL(`../voice/${file}`, import.meta.url).pathname],
-        bundle: true,
-        write: false,
-        format: "esm",
-        platform: "neutral",
-        target: "es2022",
-        loader: { ".md": "text" },
-        external: ["./processor.js", "cloudflare:workers"],
-        logLevel: "silent",
-      });
-      const code = result.outputFiles[0]?.text;
-      if (!code) throw new Error(`No voice bundle produced for ${file}`);
-      return code;
-    }),
-  );
   return createVoiceInstall({
-    voiceAgent: bundles[0]!,
-    voiceDelegate: bundles[1]!,
-    worker: bundles[2]!,
+    ...(await bundleVoiceSources()),
     fontCss,
     agentsRuntime: await buildAgentRuntime(),
   });

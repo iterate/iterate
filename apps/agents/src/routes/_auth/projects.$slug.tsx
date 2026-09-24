@@ -24,6 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
@@ -32,7 +33,6 @@ import { installAgents } from "../../../runtime/install.ts";
 import agentRuntime from "../../../../../configs-next/with-agents/agents.js?raw";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
-import { LiveStateValue } from "../../components/live-state-value.tsx";
 import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
@@ -46,12 +46,12 @@ import {
 import { newWebAgentPath } from "../../lib/web-agent.ts";
 
 // An agent is a conversation on its own path (`/agents/...`); everything it does is an event
-// there. This page is a window onto that log — the platform's agent view at the size os-next carries:
-// the CHAT (the shared agent-UI reducer's items: messages, and the activities that open into
-// rounds of script + result), the EVENTS (the raw log), and the TRACES (one sheet, URL-backed: an
-// LLM request, a script execution, a raw event). The project stub is held for the page's life; the
-// agent's context is `project.cd(path)`, subscribed for every committed event and caught up with
-// `readEvents`. The header's status is the agent facet's LIVE STATE.
+// there. This page is a window onto that log: the CHAT (the shared agent-UI reducer's items:
+// messages, and the activities that open into rounds of script + result), the EVENTS (the raw
+// log), and the TRACES (one sheet, URL-backed: an LLM request or a script execution). The project
+// stub is held for the page's life; the agent's context is `project.cd(path)`, subscribed for
+// every committed event and caught up with `readEvents`. The header's status is the agent facet's
+// LIVE STATE.
 type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 type Context = Awaited<ReturnType<Project["cd"]>>;
 
@@ -164,7 +164,6 @@ function AgentsPage() {
 
 // ── the agent's log, live ──
 
-/** The agent's context, its log so far, and whether the catch-up read has reached the head. */
 /** The agent's context — `project.cd(path)` — held for the page's life: the stub every call
  *  (the composer's `message`, the live states) goes through. Released on unmount AND again after
  *  the connect settles, since an unmount mid-await comes before the handle that await returns. */
@@ -232,7 +231,7 @@ function useAgentLog(context: Context | undefined, path: string) {
   };
 }
 
-/** the platform's interrupt affordance for the running turn, shared by the composer and the queued
+/** The interrupt affordance for the running turn, shared by the composer and the queued
  *  panel. Null while nothing is running, so consumers gate on existence. */
 function useAgentInterrupt(args: {
   onInterrupt: (() => Promise<void>) | undefined;
@@ -267,7 +266,7 @@ function useAgentInterrupt(args: {
   };
 }
 
-/** The agent facet's live state, the fields the header reads (src/agent/contract.ts `stateSchema`):
+/** The agent facet's live state, the fields the header reads (runtime/contract.ts `stateSchema`):
  *  a pause, the one open request, the one pending trigger. A script the agent asked for is the
  *  CONTEXT's obligation, not in this state — the feed's running code step says so. */
 const AgentLive = z.object({
@@ -351,7 +350,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
     [context],
   );
   const view = search.view || "chat";
-  // THE INTERRUPT (the platform's): cancellation is a property of new input, never a command — a
+  // THE INTERRUPT: cancellation is a property of new input, never a command — a
   // developer item that tells the model why its answer stopped, marked as the person's so it
   // counts as external input; the agent settles the open request as cancelled when it lands.
   const runningLlmRequestId = feed.state.live?.steps.findLast(

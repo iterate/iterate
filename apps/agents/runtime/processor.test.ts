@@ -1,8 +1,8 @@
-// src/agent/processor.test.ts — the AgentProcessor's executable spec: the reduce as declarative
-// `{ events → state }` rows on the shared harness (stream/test-support.ts `reduceProcessor`), and the
-// assistant-output parser's rows. The effects — the birth saga, the model call, the script run, the
-// breakers as appends — are proven end to end on the worker (e2e/agents.e2e.test.ts, a fake `itx.ai`
-// lent by rule).
+// runtime/processor.test.ts — the AgentProcessor's executable spec: the reduce as declarative
+// `{ events → state }` rows on the shared harness (apps/os/src/stream/test-support.ts
+// `reduceProcessor`), and the assistant-output parser's rows. The effects — the birth saga, the
+// model call, the script run, the breakers as appends — are proven end to end on the worker
+// (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../../os/src/stream/test-support.ts";
@@ -221,7 +221,7 @@ describe("AgentProcessor — the reduce", () => {
       },
     },
     {
-      name: "a script is an obligation until settled; its result is agent-loop input that counts an autonomous turn",
+      name: "a script's result is agent-loop input: the next request records an agent-loop trigger and counts an autonomous turn",
       events: [
         ...born,
         system,
@@ -238,7 +238,7 @@ describe("AgentProcessor — the reduce", () => {
             settlement: { status: "succeeded", result: 1 },
           },
         },
-        settled(5, { status: "succeeded", text: "```ts\nasync (itx) => 1\n```" }),
+        settled(5, { status: "succeeded", text: "<codemode>\nreturn 1\n</codemode>" }),
         scriptResult(6),
         llmRequested(9),
       ],

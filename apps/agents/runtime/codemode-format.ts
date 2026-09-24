@@ -1,8 +1,6 @@
-// src/agent/codemode-format.ts — THE RESPONSE FORMAT: markdown prose the person sees, plus at most
+// runtime/codemode-format.ts — THE RESPONSE FORMAT: markdown prose the person sees, plus at most
 // one `<codemode status="…">` block on its own lines holding JavaScript statements to run. mmkal's
-// codemode-tag grammar, vendored from configs/codemode-tag/codemode-format.ts on the
-// codemode-tag-rendering branch (PR #2568) — the settled parse only; its streaming partial parser
-// waits for a token stream this loop does not have. Line-anchored tags mean a mid-line mention
+// codemode-tag grammar from PR #2568 — the settled parse only. Line-anchored tags mean a mid-line mention
 // ("use a <codemode> tag") never opens anything, and the body ends at the LAST closing line so a
 // `</codemode>` inside a template literal cannot cut the script short.
 //
@@ -15,12 +13,6 @@
 //
 //   Optional trailing prose, also delivered.
 
-export type CodemodeParseOutcome =
-  | { kind: "script"; code: string; status?: string; prose?: string }
-  | { kind: "multiple"; feedback: string }
-  | { kind: "malformed"; feedback: string }
-  | { kind: "none"; prose?: string };
-
 /** A line that OPENS a codemode tag: `<codemode>` or `<codemode status="...">` alone on its line. */
 const OPEN_LINE_RE = /^[ \t]*<codemode(\s[^>]*)?>[ \t]*$/;
 const CLOSE_LINE_RE = /^[ \t]*<\/codemode>[ \t]*$/;
@@ -31,6 +23,12 @@ const ASYNC_FUNCTION_BODY_RE = /^(?:async\s*(?:function|\()|\(?async\s*\()/;
 
 const GRAMMAR_REMINDER =
   'Format reminder — `<codemode status="...">` on its own line, JavaScript statements (top-level `await`/`return` allowed), then `</codemode>` on its own line. Markdown outside the tag is sent to the user; the status attribute is shown while the code runs.';
+
+type CodemodeParseOutcome =
+  | { kind: "script"; code: string; status?: string; prose?: string }
+  | { kind: "multiple"; feedback: string }
+  | { kind: "malformed"; feedback: string }
+  | { kind: "none"; prose?: string };
 
 export function parseCodemodeResponse(content: string): CodemodeParseOutcome {
   const lines = content.split("\n");

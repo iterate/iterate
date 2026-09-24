@@ -4,7 +4,7 @@
 import { expect } from "vitest";
 import { collector, freshCtx, readAll, until } from "../../os/e2e/support/client.ts";
 import { deployedOnly } from "../../os/e2e/support/project-host.ts";
-import { RED_PNG_BASE64, assistantWords, onWorkersAi } from "./fixtures.ts";
+import { RED_PNG_BASE64, assistantWords, configureModel } from "./fixtures.ts";
 import { openAgentItx } from "./support.ts";
 
 deployedOnly(
@@ -88,7 +88,7 @@ deployedOnly(
     const support = itx.cd("/agents/support");
     await itx.agents.create("/agents/support");
     const agent = itx.agents.get("/agents/support");
-    await onWorkersAi(support);
+    await configureModel(support);
     await agent.message({
       message: "What colour is this image? Answer with one word, no code block.",
       files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],

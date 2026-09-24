@@ -1,7 +1,7 @@
-// the platform's pill composer, at this page's size: a `+` menu (Message / Raw event, and Attach files),
-// the CodeMirror message editor that grows with the draft, a raw-event editor that appends YAML or
-// JSON to the agent's log, attachment chips with drag-and-drop, and one round button that sends —
-// or, while a turn runs, STOPS it (an interruption is a property of the person's next input).
+// The pill composer: a `+` menu (Message / Raw event, and Attach files), the CodeMirror message
+// editor that grows with the draft, a raw-event editor that appends YAML or JSON to the agent's
+// log, attachment chips with drag-and-drop, and one round button that sends — or, while a turn
+// runs, STOPS it (an interruption is a property of the person's next input).
 import { useState, type DragEvent, type ReactNode } from "react";
 import { parse as parseYaml } from "yaml";
 import {
@@ -29,7 +29,7 @@ import { AttachmentChips, AttachmentFileInput } from "./composer-attachments.tsx
 import { ComposerTextarea } from "./composer-textarea.tsx";
 import { useComposerAttachments } from "./use-composer-attachments.ts";
 
-export type AgentComposerMode = "message" | "raw";
+type AgentComposerMode = "message" | "raw";
 
 type AgentComposerMessageConfig = {
   value: string;
@@ -50,13 +50,12 @@ type AgentComposerRawConfig = {
   onSubmit: () => Promise<void> | void;
 };
 
-/** The pill itself — the platform's `AgentPillComposer` without its examples mode. */
-export function AgentPillComposer({
+/** The pill itself. */
+function AgentPillComposer({
   mode,
   onModeChange,
   message,
   raw,
-  disabled = false,
   isSubmitting = false,
   error,
   autoFocusMessage = false,
@@ -67,7 +66,6 @@ export function AgentPillComposer({
   onModeChange: (mode: AgentComposerMode) => void;
   message: AgentComposerMessageConfig;
   raw: AgentComposerRawConfig;
-  disabled?: boolean;
   isSubmitting?: boolean;
   error?: string;
   autoFocusMessage?: boolean;
@@ -76,9 +74,7 @@ export function AgentPillComposer({
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const canSubmit =
-    !disabled &&
-    !isSubmitting &&
-    (mode === "message" ? message.canSubmit : raw.value.trim() !== "");
+    !isSubmitting && (mode === "message" ? message.canSubmit : raw.value.trim() !== "");
   const showInterrupt = mode === "message" && !!onInterrupt;
   const acceptsFileDrop = !isSubmitting;
 
@@ -89,7 +85,7 @@ export function AgentPillComposer({
   }
 
   function interrupt() {
-    if (disabled || isSubmitting || isInterrupting || !onInterrupt) return;
+    if (isSubmitting || isInterrupting || !onInterrupt) return;
     void onInterrupt();
   }
 
@@ -230,7 +226,7 @@ export function AgentPillComposer({
                 : "Send message"
           }
           onClick={showInterrupt ? interrupt : submit}
-          disabled={showInterrupt ? disabled || isSubmitting || isInterrupting : !canSubmit}
+          disabled={showInterrupt ? isSubmitting || isInterrupting : !canSubmit}
           className="relative overflow-hidden rounded-full"
         >
           {showInterrupt ? (
@@ -265,7 +261,7 @@ export type StreamInterrupt = {
 };
 
 /** A file as the agent's `message()` takes it: a data URL for `data`. */
-export type OutgoingFile = { contentType: string; filename: string; data: string };
+type OutgoingFile = { contentType: string; filename: string; data: string };
 
 /** Browser files as the agent's `message()` takes them. */
 function filesToPayload(files: readonly File[]): Promise<OutgoingFile[]> {
@@ -293,14 +289,12 @@ export function AgentComposer({
   onSubmit,
   onAppendRaw,
   interrupt,
-  disabled = false,
   autoFocusMessage = false,
 }: {
   onSubmit: (input: { message: string; files: OutgoingFile[] }) => Promise<void>;
   onAppendRaw: (events: unknown[]) => Promise<void>;
   /** Null while no turn is running. */
   interrupt: StreamInterrupt | null;
-  disabled?: boolean;
   autoFocusMessage?: boolean;
 }) {
   const [mode, setMode] = useState<AgentComposerMode>("message");
@@ -377,7 +371,6 @@ export function AgentComposer({
         }}
         raw={{ value: rawText, onValueChange: setRawText, onSubmit: submitRawEvents }}
         isSubmitting={isSubmitting}
-        disabled={disabled}
         error={error}
         isInterrupting={interrupt?.isInterrupting}
         onInterrupt={interrupt?.run}

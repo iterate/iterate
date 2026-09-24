@@ -3,7 +3,7 @@ import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
 import type { AgentState, FileAttachment } from "./contract.ts";
-import { AgentProcessor } from "./processor.ts";
+import { AgentProcessor, STREAM_IDLE_BUDGET_MS } from "./processor.ts";
 import { AgentAiSink } from "./ai-transport.ts";
 import { AI_TRANSPORT_SOURCE } from "./ai-transport-source.ts";
 
@@ -39,7 +39,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       async (itx) =>
         await itx.workers
           .get({ source: AI_TRANSPORT_SOURCE })
-          .invoke([["run", path, model, input, options, sink, 45_000]]),
+          .invoke([["run", path, model, input, options, sink, STREAM_IDLE_BUDGET_MS]]),
     );
     let locallyAborted = false;
     const finished = remote.then(
@@ -90,7 +90,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
   }
 
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
-   *  each stored first under this agent's path (`itx.files`, the platform's `<path>/<8 of a uuid>-<name>`)
+   *  each stored first under this agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. The event is answered
    *  so a caller can wait for what follows it. */
   async message(

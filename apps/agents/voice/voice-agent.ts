@@ -1,9 +1,11 @@
 /**
- * One GPT-Live voice call as an os-next facet processor, one facet per
- * conversation context: it holds the provider socket, forwards microphone
- * frames in and speaker frames out, folds the transcript, and answers the live
- * model's delegations with one chat-model turn (delegation-turn.ts).
+ * One GPT-Live voice call as a facet processor, one facet per conversation
+ * context: it holds the provider socket, forwards microphone frames in and
+ * speaker frames out, folds the transcript, and emits the live model's
+ * delegations as `delegation-requested`, which voice-delegate.ts answers with
+ * one chat-model turn (delegation-turn.ts).
  */
+import { bytesToBase64 } from "@iterate-com/shared/base64";
 import {
   StreamProcessor,
   StreamProcessorDurableObject,
@@ -13,6 +15,12 @@ import {
   type ProcessEventArgs,
   type ReduceArgs,
 } from "./processor.js";
+import {
+  Activation,
+  DelegationRequestedPayload,
+  commentaryEvent,
+  thinkingEvent,
+} from "./events.ts";
 
 /** Fixed GPT-Live session configuration. */
 const LIVE = {
@@ -138,16 +146,6 @@ function* commentaryChunks(text: string): Generator<string> {
 /* Audio crosses this file as base64 strings: the device, the stream and GPT-Live all speak
  * 16 kHz PCM16, so a frame is never re-encoded, only measured. */
 
-/** Bytes to base64, chunked so a long buffer cannot blow the argument list. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
-  }
-  return btoa(binary);
-}
-
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -177,9 +175,6 @@ function peakOfBase64Pcm16(base64: string): number {
   }
   return peak;
 }
-
-/** The device's call identity: the press mints it, the frames carry it. */
-const Activation = z.string().min(1).max(64);
 
 /** Everything that outlives the Durable Object holding the socket. No queues, no byte counts, no
  * "is speaking" flag: reduced state that depends on a buffer no restart can replay is a lie. */
@@ -289,34 +284,12 @@ const VoiceAgentContract = defineProcessorContract({
         key: z.string().optional(),
       }),
     },
-    "events.iterate.com/voice-agent/thinking": {
-      description: "A backend note for the live model to use quietly.",
-      payloadSchema: z.object({
-        activation: Activation,
-        delegationId: z.string().nullable(),
-        content: z.string().min(1).max(8_000),
-      }),
-    },
-    "events.iterate.com/voice-agent/commentary": {
-      description: "The backend's answer for the live model to paraphrase aloud.",
-      payloadSchema: z.object({
-        activation: Activation,
-        delegationId: z.string().nullable(),
-        content: z.string().min(1).max(8_000),
-        hangUp: z.boolean().optional(),
-      }),
-    },
+    "events.iterate.com/voice-agent/thinking": thinkingEvent,
+    "events.iterate.com/voice-agent/commentary": commentaryEvent,
     "events.iterate.com/voice-agent/delegation-requested": {
       description:
         "The live model handed a request to the backend, with the words said so far; the answer is a commentary naming the same delegationId.",
-      payloadSchema: z.looseObject({
-        activation: Activation,
-        conversationId: z.string(),
-        delegationId: z.string(),
-        transcript: z.array(
-          z.object({ role: z.enum(["listener", "assistant"]), text: z.string() }),
-        ),
-      }),
+      payloadSchema: DelegationRequestedPayload,
     },
     "events.iterate.com/voice-agent/spk-frame": {
       description: "One chunk of the answer, forwarded as it arrived.",
@@ -467,12 +440,12 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
 });
 
 /** What the host injects; every wait and every clock in this file comes from here. */
-export type VoiceAgentDeps = {
-  projectContext?: () => Promise<string>;
+type VoiceAgentDeps = {
+  projectContext: () => Promise<string>;
   nowAtFacetMs(): number;
   /** The only way this processor waits, injected so tests can use a fake clock. */
   sleep(ms: number): Promise<void>;
-  dialProvider(): Promise<WebSocket | null>;
+  dialProvider(): Promise<WebSocket>;
 };
 
 type VoiceArgs = ProcessEventArgs<VoiceState, ConsumedEvent<VoiceAgentContract>>;
@@ -720,18 +693,14 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
       );
     });
     this.#background(async () => {
-      /* A dial can reject (DNS, TLS), not just refuse; both failures share one exit. */
-      let socket: WebSocket | null = null;
-      let failure = "the provider refused the connection";
+      /* A dial can reject (DNS, TLS) or be refused (no upgrade); both end the call. */
+      let socket: WebSocket;
       try {
         socket = await this.deps.dialProvider();
       } catch (error) {
-        failure = `the provider dial failed: ${String(error).slice(0, 200)}`;
-      }
-      if (!socket) {
         if (this.#dial !== dial) return;
         this.#dial = null;
-        await this.#end(activation, failure);
+        await this.#end(activation, `the provider dial failed: ${String(error).slice(0, 200)}`);
         return;
       }
       if (this.#dial !== dial) {
@@ -828,9 +797,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
           model: LIVE.model,
           instructions:
             LIVE_DELEGATION_POLICY +
-            (this.deps.projectContext
-              ? `\nCURRENT PROJECT: ${await this.deps.projectContext()}. Ingress refers to this project website.`
-              : ""),
+            `\nCURRENT PROJECT: ${await this.deps.projectContext()}. Ingress refers to this project website.`,
           ...(input.length > 0 && { input }),
           audio: {
             format: { type: "audio/pcm", rate: LIVE.rate },
@@ -1264,11 +1231,11 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
 /** Open the provider's WebSocket. No query parameters (the model rides `session.start`), and the
  * bearer is the platform's `getSecret` grammar, substituted at egress so the key never enters this
  * isolate. */
-async function dialProviderSocket(): Promise<WebSocket | null> {
+async function dialProviderSocket(): Promise<WebSocket> {
   const response = await fetch(LIVE.url, {
     headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
   });
-  const socket = response.webSocket || null;
+  const socket = response.webSocket;
   if (!socket) {
     // Provider error bodies can echo credential fragments; only the status belongs in the log.
     throw new Error(`Voice provider upgrade returned HTTP ${response.status}`);

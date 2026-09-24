@@ -1,4 +1,4 @@
-// the platform's attachment chips and the hidden `<input type="file">` behind `openFilePicker`.
+// The attachment chips and the hidden `<input type="file">` behind `openFilePicker`.
 import { XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { formatFileSize } from "../lib/agent-events.ts";

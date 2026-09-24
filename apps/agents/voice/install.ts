@@ -4,7 +4,7 @@ import { installAgents } from "../runtime/install.ts";
 
 // `kit/voice/…`: the prefix Kit first installed under, kept so installed projects keep their keys.
 const VoiceFileKey = z.string().regex(/^kit\/voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
-export const VoiceInstall = z.object({
+const VoiceInstall = z.object({
   agentsRuntime: z.string().min(1),
   files: z.record(VoiceFileKey, z.string().min(1)),
   workerKey: VoiceFileKey,

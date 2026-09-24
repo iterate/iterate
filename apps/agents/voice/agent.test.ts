@@ -1,9 +1,9 @@
 import { build } from "esbuild";
 import { beforeAll, expect, test, vi } from "vitest";
-import type { ChatMessage } from "./delegation-turn.ts";
+import type { DelegationMessage } from "./delegation-turn.ts";
 import fixtures from "./screen-context-repro.json";
 
-let AgentProcessor: any;
+let VoiceDelegateProcessor: any;
 
 beforeAll(async () => {
   const processor = new URL(
@@ -34,7 +34,7 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ AgentProcessor } = await import(
+  ({ VoiceDelegateProcessor } = await import(
     `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0]!.text).toString("base64")}`
   ));
 });
@@ -64,7 +64,7 @@ test.each([
   async ({ device, events }) => {
     const instruction = events[0]!.payload;
     const runScript = vi.fn(async () => '{"shown":true}');
-    const complete = vi.fn(async (messages: ChatMessage[]) => {
+    const complete = vi.fn(async (messages: DelegationMessage[]) => {
       if (messages.at(-1)!.content.startsWith("Script result:"))
         return "The exercises are on your screen.";
       const hasInstructions = messages.some((message) =>
@@ -73,11 +73,11 @@ test.each([
       if (!hasInstructions) return "The website has the exercises.";
       return `<codemode>\nreturn await itx.cd("/").voice.setImage({device: "${device}", image: {html: "<h1>Maths practice</h1>"}})\n</codemode>`;
     });
-    const processor = new AgentProcessor({ complete, runScript });
-    let state = { ...processor.contract.initialState(), created: true };
+    const processor = new VoiceDelegateProcessor({ complete, runScript });
+    let state = processor.contract.initialState();
     for (const event of events) state = processor.reduce({ state, event });
     // A new incarnation answers from durable reduced context, just like recovery.
-    const resumed = new AgentProcessor({ complete, runScript });
+    const resumed = new VoiceDelegateProcessor({ complete, runScript });
     const work: Promise<unknown>[] = [];
     const append = vi.fn(async () => []);
     resumed.processEvent({
@@ -107,7 +107,7 @@ test.each([
 );
 
 test("a later request remembers the exercise it displayed, including after recovery", async () => {
-  const complete = vi.fn(async (messages: ChatMessage[]) => {
+  const complete = vi.fn(async (messages: DelegationMessage[]) => {
     if (messages.at(-1)!.content === "Is seven correct for the first question?") {
       return messages.some((message) => message.content.includes("49 / 7"))
         ? "Yes, 49 divided by 7 is 7."
@@ -117,8 +117,8 @@ test("a later request remembers the exercise it displayed, including after recov
     return '<codemode>\nreturn await itx.cd("/").voice.setImage({ device: "zectrix_note4", image: { html: "<h1>49 / 7 = ?</h1>" } })\n</codemode>';
   });
   const deps = { complete, runScript: vi.fn(async () => '{"shown":true}') };
-  let processor = new AgentProcessor(deps);
-  let state = { ...processor.contract.initialState(), created: true };
+  let processor = new VoiceDelegateProcessor(deps);
+  let state = processor.contract.initialState();
   const emitted: any[] = [];
   const append = async (...events: any[]) => {
     emitted.push(...events);
@@ -130,7 +130,7 @@ test("a later request remembers the exercise it displayed, including after recov
     ["second", "Is seven correct for the first question?"],
   ]) {
     // Reconstruct with only the durable state; no in-memory model history survives.
-    processor = new AgentProcessor(deps);
+    processor = new VoiceDelegateProcessor(deps);
     state = processor.reduce({
       state,
       event: {

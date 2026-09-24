@@ -1,4 +1,4 @@
-// scripts/voice-call.ts — ONE voice conversation on a FRESH os-next context, the shape the ESP32
+// scripts/voice-call.ts — ONE voice conversation on a FRESH context, the shape the ESP32
 // HAVPE has: a warm authenticated capnweb session, then "press the button = a new stream now".
 //
 // It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath, activation })` (the
@@ -183,7 +183,8 @@ async function main(): Promise<void> {
   if (setup.streamPath !== CONTEXT_PATH) throw new Error(`setup answered ${JSON.stringify(setup)}`);
 
   // THE MICROPHONE: 50 ms frames on a wall clock, never awaited one by one (a device's outbox),
-  // then silence until the answer had its say. The first frame mints the call server-side.
+  // then silence until the answer had its say. The call itself was minted by the press's
+  // `call-started` append.
   let pending = 0;
   let failed = 0;
   const sendFrame = (pcm: Uint8Array) => {

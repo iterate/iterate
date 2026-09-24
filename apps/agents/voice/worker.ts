@@ -10,6 +10,8 @@
  * The device carries no source or class name; the bundles live in the project's KV.
  */
 import { z } from "zod";
+import { bytesToBase64 } from "@iterate-com/shared/base64";
+import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ConfigWorker } from "./processor.js";
 import { ScreenInfo, ScreenImageInput, ScreenStatus, renderScreenPixels } from "./screen.js";
 import SCREEN_CONTEXT from "./screen-context.md";
@@ -17,14 +19,6 @@ import SCREEN_CONTEXT from "./screen-context.md";
 /* Replaced by the installer with the bundle's content hash (the voice-delegate facet's key is inlined at its
  * row below): the loader caches an isolate under the key, so a new build must be a new key. */
 const VOICE_AGENT_CACHE_KEY = "voice-agent:dev";
-
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
 
 export default class VoiceWorker extends ConfigWorker {
   async health(): Promise<{ ok: true; projectId: unknown; cacheKey: string }> {
@@ -108,7 +102,9 @@ export default class VoiceWorker extends ConfigWorker {
         uploadId,
         format,
         offset,
-        data: base64(bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length))),
+        data: bytesToBase64(
+          bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length)),
+        ),
       });
       if (acknowledged !== expected) {
         throw new Error(
@@ -195,8 +191,7 @@ export default class VoiceWorker extends ConfigWorker {
       {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          /* Not "agent": first-party facet names (src/first-party-facets.ts) are reserved for the
-           * platform's own classes — that name would host the platform's agent, which ignores voice events. */
+          /* Not "agent": that is the normal agent processor this press disabled above. */
           name: "voice-delegate",
           target: [
             "itx",
@@ -213,15 +208,9 @@ export default class VoiceWorker extends ConfigWorker {
             ],
             "processEventBatch",
           ],
-          /* The press (its first delivery: the birth announced to /), its own certificate, the
-           * relay's delegations, and its own answers (to settle the pending fold). */
-          consumes: [
-            "events.iterate.com/voice-agent/call-started",
-            "events.iterate.com/agent/created",
-            "events.iterate.com/agent/context-added",
-            "events.iterate.com/voice-agent/delegation-requested",
-            "events.iterate.com/voice-agent/commentary",
-          ],
+          /* The delegate contract's own list (events.ts): context, the relay's delegations, and
+           * its own answers (to settle the pending fold). */
+          consumes: [...VOICE_DELEGATE_CONSUMES],
         },
       },
       {

@@ -1,9 +1,9 @@
 // e2e/agents-streamed.e2e.test.ts — the streamed answer, in a file of its own: it waits out whole chunk
 // windows (one of the suite's longest rows) and runs beside the other agent stories.
 import { expect, test } from "vitest";
-import { collector, freshCtx, readAll, until } from "../../os/e2e/support/client.ts";
+import { collector, freshCtx, until } from "../../os/e2e/support/client.ts";
 import { openAgentItx } from "./support.ts";
-import { ScriptedAi, onWorkersAi } from "./fixtures.ts";
+import { ScriptedAi, configureModel, settledLog } from "./fixtures.ts";
 
 test("streamed: the answer reaches a live subscriber as ephemeral chunk windows before it settles — never a stored row", async () => {
   const itx = await openAgentItx(freshCtx("agent-chunks"));
@@ -18,14 +18,9 @@ test("streamed: the answer reaches a live subscriber as ephemeral chunk windows 
   });
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await onWorkersAi(support);
+  await configureModel(support);
   await agent.message("Say four words.");
-  const log = await until("the settled request", async () => {
-    const all = await readAll(support);
-    return all.some((e) => e.type === "events.iterate.com/agent/llm-request-settled")
-      ? all
-      : undefined;
-  });
+  const log = await settledLog(support, "the settled request");
   const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
   await until("the chunk window", () => windows.invocations.length >= 1);
   // The fake answers whole, so its answer is ONE window: the request it belongs to, the provider's

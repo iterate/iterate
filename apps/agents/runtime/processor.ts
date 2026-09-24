@@ -1,25 +1,25 @@
-// src/agent/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation and deletion facts,
+// runtime/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation and deletion facts,
 // the conversation and the loop's obligations, and the effects over that fold — THE SAGAS (the birth
 // `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it;
 // the death `itx.agents.delete(path)` opens: the certificate on `/` and here, after which the loop
-// runs no more turns) and THE LOOP (the platform's turn loop, LLM request and codemode parts folded into
-// one class, lean). The
-// model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the Workers AI binding under
-// THIS context's rules, so a test lends a fake there), anything else through the account's AI
-// Gateway as a Workers AI partner model, streamed from the Responses API. The host
-// (durable-object.ts) is a shell: it hands in `withItx` and its env, nothing else, so a unit test
-// constructs the processor with `new` and reduces rows (processor.test.ts, in node); the saga and
-// the loop are proven on the worker (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// runs no more turns) and THE LOOP (the turn loop, LLM request and codemode parts folded into one
+// class, lean). The model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the
+// Workers AI binding under THIS context's rules, so a test lends a fake there), anything else
+// through the account's AI Gateway as a Workers AI partner model, streamed from the Responses API.
+// The host (durable-object.ts) hands in `withItx` and `runModel`, the byte bridge that runs the
+// model call in a loaded transport worker, so a unit test constructs the processor with `new` and
+// reduces rows (processor.test.ts, in node); the saga and the loop are proven on the worker
+// (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 //
 // A request is debounced by the at-head scheduling below: one window after its trigger,
 // the failure backoff folded in, the delayed append being the intent.
 //
-// Two kinds of effect, chosen at the dispatch site (the platform's rule): a PER-EVENT consequence — the
-// assistant's output parsed into a script request, a script's settlement rendered into the next
-// developer item — is BLOCKED (`blockProcessorWhile`): the event is delivered once, so losing the
-// append would lose the consequence. A STATE-DERIVED consequence — the birth, recording the next
-// request, running the open request, tripping a breaker — runs at head in the BACKGROUND: any later
-// delivery over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
+// Two kinds of effect, chosen at the dispatch site: a PER-EVENT consequence — the assistant's
+// output parsed into a script request, a script's settlement rendered into the next developer item
+// — is BLOCKED (`blockProcessorWhile`): the event is delivered once, so losing the append would
+// lose the consequence. A STATE-DERIVED consequence — the birth, recording the next request,
+// running the open request, tripping a breaker — runs at head in the BACKGROUND: any later delivery
+// over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
 import { z } from "zod";
 import { errorCode } from "iterate/next/lib";
@@ -34,6 +34,7 @@ import type { WithItx } from "iterate/next/sdk";
 import type { RewriteRuleListEntry } from "iterate/next/api";
 import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
 import type { RunSettlement } from "iterate/next/stream/run";
+import { bytesToBase64 } from "@iterate-com/shared/base64";
 import {
   AgentContract,
   type AgentState,
@@ -49,7 +50,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 const AI_GATEWAY_ID = "default";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 
-/** the platform's failure backoff, folded into the debounce window: doubling from the policy's base per
+/** The failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */
 function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "config">): number {
   const { backoffBaseMs, backoffMaxMs } = state.config.llmRequestRetryPolicy;
@@ -59,7 +60,7 @@ function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "conf
 
 /** The conversation as the model reads it. An item's images become image parts (a data: URL of the
  *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
- *  image whose bytes are gone, is a line naming it and how a script reads it (the platform's hint line).
+ *  image whose bytes are gone, is a line naming it and how a script reads it (a hint line).
  *  The developer's notes read as system instructions. */
 export function buildChatMessages(
   items: AgentState["contextItems"],
@@ -122,16 +123,17 @@ function fileHintLine(file: FileAttachment): string {
   return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
 }
 
-/** the platform's chunk-coalescing window: how much streamed output rides one `llm-response-chunks`
+/** The chunk-coalescing window: how much streamed output rides one `llm-response-chunks`
  *  append — ~7 repaints a second, and one commit per window instead of per token. */
 const CHUNK_WINDOW_MS = 150;
 /** A window that grew past this lands early rather than as one oversized append. */
 const CHUNK_WINDOW_MAX_CHARS = 64_000;
-/** the platform's idle watchdog: a stream that carries nothing for this long fails the attempt, so a
- *  stalled provider never wedges a turn until its expiry. */
-const STREAM_IDLE_BUDGET_MS = 45_000;
+/** The idle watchdog: a stream that carries nothing for this long fails the attempt, so a stalled
+ *  provider never wedges a turn until its expiry. The host's byte transport times out on the same
+ *  budget. */
+export const STREAM_IDLE_BUDGET_MS = 45_000;
 
-/** the platform's table, the models this loop names; a conservative floor for the rest. OpenAI's
+/** The context windows of the models this loop names; a conservative floor for the rest. OpenAI's
  *  figures are the operating window (where pricing doubles), not the documented one. */
 function contextWindowTokens(model: string): number {
   if (/^gpt-(6|5)/.test(model)) return 272_000;
@@ -161,15 +163,7 @@ async function appendUnlessLost(
   }
 }
 
-/** Bytes → base64, in chunks (a spread of a large array overflows the call stack). */
-function base64Of(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
-}
-
-// ── the model call's wire shapes (the platform's, verbatim) ──
+// ── the model call's wire shapes ──
 
 /** What Workers AI answers when it does not stream: `{ response }`, or the chat-completions shape. */
 const ChatAnswer = z.union([
@@ -177,7 +171,7 @@ const ChatAnswer = z.union([
   z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }),
 ]);
 
-/** The usage a provider reports, both dialects (the platform's `LlmUsage`): OpenAI Responses
+/** The usage a provider reports, both dialects: OpenAI Responses
  *  (`input_tokens`/`output_tokens`) and chat completions (`prompt_tokens`/`completion_tokens`),
  *  with the cached/reasoning breakdowns when present. Loose: vendors keep adding fields. */
 const ProviderUsage = z.looseObject({
@@ -313,9 +307,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
        *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
       withItx: WithItx<ItxEntrypointScope>;
-      /** The host's bindings: `AI` for a partner model on Cloudflare's billing, and the app config
-       *  the gateway metadata is read from. */
-      /** The Workers AI binding — the partner-model route (an `openai/…` model) goes through it. */
       /** The host bridges raw provider bodies through awaited byte RPC. */
       runModel(
         path: string,
@@ -520,7 +511,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       this.#atHead(args);
       return;
     }
-    // THE INTERRUPT (the platform's): cancellation is a property of new input, never a command. The
+    // THE INTERRUPT: cancellation is a property of new input, never a command. The
     // person's words abort whatever this incarnation is streaming, keep what streamed as an
     // assistant item the next turn can see (no llmRequestOffset: a record, never parsed for a
     // script), and settle the request cancelled — blocked, so an eviction can never leave the
@@ -737,7 +728,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         );
         return;
       }
-      // THE DEBOUNCE (the platform's): wait for more content, plus the failure backoff — one window,
+      // THE DEBOUNCE: wait for more content, plus the failure backoff — one window,
       // anchored at the trigger. The delayed append IS the intent (no wake event): more words inside
       // the window move the trigger; the old trigger's intent then lands as a harmless fact (the
       // reduce opens a request only for the trigger it names) and the moved trigger's own intent, a
@@ -802,8 +793,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   ): Promise<void> {
     const startedAt = this.#now();
     const { controller } = inFlight;
-    // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and the platform's
-    // idle budget since the last provider event.
+    // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and the idle
+    // budget since the last provider event.
     const expiry = setTimeout(
       () => controller.abort(new Error("the model did not finish before the request expired")),
       Math.max(1_000, open.expiresAt - startedAt),
@@ -832,14 +823,16 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           try {
             images.set(file.path, {
               contentType: file.contentType,
-              base64: base64Of(await this.deps.withItx((itx) => itx.files.get(file.path).bytes())),
+              base64: bytesToBase64(
+                await this.deps.withItx((itx) => itx.files.get(file.path).bytes()),
+              ),
             });
           } catch {
             // named by its hint line instead
           }
         }
       const messages = buildChatMessages(items, images, tree);
-      // THE CHUNK WINDOWS (the platform's coalescing): provider events pile into one buffer; a window
+      // THE CHUNK WINDOWS: provider events pile into one buffer; a window
       // closes CHUNK_WINDOW_MS after its first event (or at the size cap) and lands as one
       // ephemeral append, windows in order — each waits for the one before. Nothing is stored:
       // the settlement below carries the durable text.
@@ -1019,15 +1012,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       return { text };
     }
     // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
-    // by Cloudflare through the binding (the platform's `unified` transport) — the Responses API shape,
-    // streamed, the raw Response asked for so the SSE body is ours to read. The gateway option
-    // routes it through the account's AI Gateway; its metadata is what the gateway's spend limits
-    // partition on (the platform's: environment, project, stream), so a runaway agent hits ITS ceiling.
-    // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a partner
-    // model's name (`openai/…`) is not among them though the binding takes any model the account
-    // can reach, and a partner model takes the PROVIDER's request body (here the Responses API's),
-    // which no catalog input type names. Nothing is trusted from either: the answer is a Response
-    // checked for status and parsed event by event below.
+    // by Cloudflare through the binding — the Responses API shape, streamed, the raw Response asked
+    // for so the SSE body is ours to read. The gateway option routes it through the account's AI
+    // Gateway; its metadata (project, stream path, context) is what the gateway's spend limits
+    // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
+    // Response checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
     const raw: unknown = await this.deps.runModel(
       path,

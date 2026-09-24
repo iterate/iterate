@@ -13,7 +13,7 @@ import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
 const MAX_SCRIPT_STEPS = 24;
 const HANG_UP_TOKEN = "HANG_UP";
 
-export const DELEGATION_SYSTEM_PROMPT = [
+const DELEGATION_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "INSTRUCTIONS FOR SPOKEN CONVERSATIONS:",
   "You are the backend of a spoken assistant on the Iterate platform. A live voice model talks to the person and hands you the requests it cannot answer itself; you answer in writing and the voice reads your answer aloud.",
@@ -22,15 +22,18 @@ export const DELEGATION_SYSTEM_PROMPT = [
   `If the person asked to end the call, answer with a short goodbye and end your reply with the token ${HANG_UP_TOKEN}.`,
 ].join("\n");
 
-export type ChatMessage = { role: "system" | "developer" | "user" | "assistant"; content: string };
+export type DelegationMessage = {
+  role: "system" | "developer" | "user" | "assistant";
+  content: string;
+};
 
 export type DelegationTurnDeps = {
   /** One chat turn: the conversation so far → the model's reply text. */
-  complete(messages: ChatMessage[]): Promise<string>;
+  complete(messages: DelegationMessage[]): Promise<string>;
   /** Run `async (itx) => …`; the JSON of what it returned, or the error text. */
   runScript(script: string): Promise<string>;
   /** Preserve tool calls and results as ordinary conversation context for later requests. */
-  remember?(messages: ChatMessage[]): Promise<unknown>;
+  remember?(messages: DelegationMessage[]): Promise<unknown>;
   /** A progress note the voice may use quietly, once per script step. */
   progress(note: string): Promise<unknown>;
 };
@@ -39,12 +42,12 @@ export type DelegationTurnDeps = {
 export async function runDelegationTurn(
   transcript: { role: "listener" | "assistant"; text: string }[],
   deps: DelegationTurnDeps,
-  context: ChatMessage[] = [],
+  context: DelegationMessage[] = [],
 ): Promise<{ content: string; hangUp: boolean; scripts: number }> {
   let scripts = 0;
   let answer = "";
   try {
-    const messages: ChatMessage[] = [
+    const messages: DelegationMessage[] = [
       {
         role: "system",
         content: DELEGATION_SYSTEM_PROMPT,
@@ -82,7 +85,7 @@ export async function runDelegationTurn(
       // Prose beside a tool call can speculate about an outcome the script has not produced yet.
       // Only its activity label is progress; the spoken answer comes after observing the result.
       await deps.progress(parsed.status || "Running a script for your request.");
-      const result: ChatMessage = {
+      const result: DelegationMessage = {
         role: "user",
         content: `Script result:\n${await deps.runScript(parsed.code)}`,
       };
@@ -97,7 +100,7 @@ export async function runDelegationTurn(
 }
 
 /** OpenAI's Responses API, dialled through this context's egress with the project secret. */
-export async function completeWithOpenAi(messages: ChatMessage[]): Promise<string> {
+export async function completeWithOpenAi(messages: DelegationMessage[]): Promise<string> {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {

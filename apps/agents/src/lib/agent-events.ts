@@ -1,20 +1,18 @@
-// The agent's log as the shared agent-UI reducer (packages/ui) reads it. os-next's agent speaks
-// the platform's event vocabulary for the loop, so the feed model IS the platform's: `reduceAgentUi` folds every
-// committed event into messages and activities (an LLM step that wrote a script, the code step that
-// ran it, grouped into rounds). Three differences are adapted here: an attachment carries no `url` on
-// os-next (the page signs one when it renders); a SCRIPT is the CONTEXT's on os-next —
-// `context/run-requested` / `context/run-settled`, identified by the request's offset (os-next
-// src/stream/core-processor.ts) — where the reducer reads the platform's `capability-host/script-run-*`
-// with an `executionId` (`adaptContextRuns`); and a failed settlement carries fewer fields than
-// the platform's strict schema (the missing ones follow from `failureKind`).
+// The agent's log as the shared agent-UI reducer (packages/ui) reads it. The agent speaks the
+// shared reducer's event vocabulary for the loop, so `reduceAgentUi` folds every committed event
+// into messages and activities (an LLM step that wrote a script, the code step that ran it, grouped
+// into rounds). Two differences are adapted here: an attachment carries no `url` on apps/os (the
+// page signs one when it renders); and a SCRIPT is the CONTEXT's on apps/os —
+// `context/run-requested` / `context/run-settled`, identified by the request's offset
+// (apps/os/src/stream/core-processor.ts) — where the shared reducer reads
+// `capability-host/script-run-*` with an `executionId`. `adaptContextRuns` renames the one into the
+// other and fills in the fields a failed settlement lacks under the shared reducer's strict schema.
 import { z } from "zod";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
-import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import {
-  formatAgentUiDuration,
   initialAgentUiState,
   reduceAgentUi,
-  reduceAgentUiRuntime,
+  settleAgentUiAtIdleBoundary,
   type AgentUiItem,
   type AgentUiState,
   type AgentUiStep,
@@ -42,31 +40,16 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
     payload.files = payload.files.map((file: unknown) =>
       isRecord(file) && typeof file.url !== "string" ? { ...file, url: "" } : file,
     );
-  if (
-    event.type === "events.iterate.com/capability-host/script-run-settled" &&
-    isRecord(payload) &&
-    isRecord(payload.settlement) &&
-    payload.settlement.status === "failed"
-  ) {
-    const expired = payload.settlement.failureKind === "expired";
-    payload.settlement = {
-      phase: expired ? "before-execution" : "execution",
-      executionMayHaveOccurred: !expired,
-      cancellation: "not-applicable",
-      ...payload.settlement,
-    };
-  }
   return { ...event, payload, streamPath };
 }
 
-/** os-next's script events as the shared reducer reads them. A `context/run-requested` the agent
+/** apps/os's script events as the shared reducer reads them. A `context/run-requested` the agent
  *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
- *  stamp) is the platform's `script-run-requested` with the ids the reducer keys on — `agent-output:<that
- *  offset>` for a codemode script, `reply:<that offset>` for the plain-response handler (the
- *  processor's idempotency key says which) — and one any other caller asked for (`itx.run` on the
- *  agent's path) is `run:<its offset>`; its `context/run-settled` names the request by offset, so the
- *  settlement takes the same id. `expiresAt` is the run's deadline — os-next's runner settles a
- *  script still running ten minutes after it started as failed (`deadline`, os-next library.ts
+ *  stamp) is the shared reducer's `script-run-requested` with the id it keys on,
+ *  `agent-output:<that offset>`, and one any other caller asked for (`itx.run` on the agent's path)
+ *  is `run:<its offset>`; its `context/run-settled` names the request by offset, so the settlement
+ *  takes the same id. `expiresAt` is the run's deadline — apps/os's runner settles a script
+ *  still running ten minutes after it started as failed (`deadline`, apps/os/src/library.ts
  *  RUN_DEADLINE_MS) — which the reducer's inferred close needs; the request's offset rides along as
  *  `requestOffset`, what a settlement's developer item names (`actor`). */
 export function adaptContextRuns(events: readonly Event[]): Event[] {
@@ -78,7 +61,7 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
       const executionId =
         askedWhile === undefined
           ? `run:${String(event.offset)}`
-          : `${event.idempotencyKey?.includes("plain-response") ? "reply" : "agent-output"}:${String(askedWhile)}`;
+          : `agent-output:${String(askedWhile)}`;
       executionIdByRequestOffset.set(event.offset, executionId);
       return {
         ...event,
@@ -120,8 +103,8 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
 }
 
 /** The whole feed from the log: every event in offset order through the shared reducer, then —
- *  when the agent facet reports itself idle and no step is still running — the turn boundary
- *  the runtime reports its transition, dated at the last fact. */
+ *  when the agent facet reports itself idle and no step is still running — the turn boundary,
+ *  dated at the last fact. */
 export function reduceAgentFeed(
   events: readonly Event[],
   idle: boolean,
@@ -135,31 +118,14 @@ export function reduceAgentFeed(
   }
   const last = events.at(-1);
   if (idle && last && state.live && !state.live.steps.some((step) => step.status === "running")) {
-    const reduced = reduceAgentUiRuntime(state, {
-      runtime: ZERO_AGENT_RUNTIME,
-      sinceOffset: last.offset,
-      since: last.createdAt,
-    });
+    const reduced = settleAgentUiAtIdleBoundary(state, last.createdAt);
     state = reduced.endState;
     items.push(...reduced.items);
   }
-  // A bare reply runs as a `reply:` script (the plain-response handler); its message shows as a
-  // normal bubble, so the redundant activity card is dropped (click the bubble for its trace) —
-  // whether the activity settled on its own or at the turn boundary above.
-  const shown = items.filter(
-    (item) =>
-      item.kind !== "activity" ||
-      !item.steps.some((step) => step.kind === "code") ||
-      item.steps.some((step) => step.kind === "code" && !step.executionId.startsWith("reply:")),
-  );
-  items.length = 0;
-  items.push(...shown);
   return { state, items };
 }
 
-// ── display formatters (the platform's feed-format, the ones this page needs) ──
-
-export const formatSeconds = (durationMs: number): string => formatAgentUiDuration(durationMs);
+// ── display formatters ──
 
 /** CLI-style elapsed clock for the live phase indicator: one decimal, no space (`0.9s`, `12.3s`). */
 export function formatElapsedSeconds(durationMs: number): string {
@@ -204,24 +170,14 @@ export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string 
 }
 
 /** The llm request behind each assistant bubble (its item id → the request offset), so clicking the
- *  message opens its trace: a `web-message-sent` names its request directly, or inherits the nearest
- *  preceding assistant response's (a bare reply's message is sent by a script that carries none). */
+ *  message opens its trace: a `web-message-sent` names its request directly. */
 export function traceOffsetByMessage(events: readonly Event[]): Map<string, number> {
   const map = new Map<string, number>();
-  let lastResponseOffset: number | undefined;
   for (const event of events) {
+    if (event.type !== "events.iterate.com/agent/web-message-sent") continue;
     const p = isRecord(event.payload) ? event.payload : {};
-    if (
-      event.type === "events.iterate.com/agent/context-added" &&
-      p.role === "assistant" &&
-      typeof p.llmRequestOffset === "number"
-    )
-      lastResponseOffset = p.llmRequestOffset;
-    if (event.type === "events.iterate.com/agent/web-message-sent") {
-      const offset =
-        typeof p.llmRequestOffset === "number" ? p.llmRequestOffset : lastResponseOffset;
-      if (offset !== undefined) map.set(`assistant-${String(event.offset)}`, offset);
-    }
+    if (typeof p.llmRequestOffset === "number")
+      map.set(`assistant-${String(event.offset)}`, p.llmRequestOffset);
   }
   return map;
 }
@@ -289,18 +245,17 @@ export function llmTrace(events: readonly Event[], llmRequestOffset: number): Ll
     const p = isRecord(event.payload) ? event.payload : {};
     return p.llmRequestOffset === llmRequestOffset;
   });
-  // The script a response produced: a codemode action (`agent-output:`) or, for a bare reply, the
-  // plain-response handler the platform ran (`reply:`). Both key off the assistant event's offset.
-  const scriptExecutionId = assistant
-    ? [`agent-output:${String(assistant.offset)}`, `reply:${String(assistant.offset)}`].find((id) =>
-        events.some((event) => {
-          if (event.type !== "events.iterate.com/capability-host/script-run-requested")
-            return false;
-          const p = isRecord(event.payload) ? event.payload : {};
-          return p.executionId === id;
-        }),
-      )
-    : undefined;
+  // The script a response produced: its codemode action, keyed off the assistant event's offset.
+  const actionId = assistant ? `agent-output:${String(assistant.offset)}` : undefined;
+  const scriptExecutionId =
+    actionId &&
+    events.some((event) => {
+      if (event.type !== "events.iterate.com/capability-host/script-run-requested") return false;
+      const p = isRecord(event.payload) ? event.payload : {};
+      return p.executionId === actionId;
+    })
+      ? actionId
+      : undefined;
   return {
     llmRequestOffset,
     model: typeof payload.model === "string" ? payload.model : "?",
@@ -317,7 +272,7 @@ export function llmTrace(events: readonly Event[], llmRequestOffset: number): Ll
   };
 }
 
-export type ScriptTrace = {
+type ScriptTrace = {
   executionId: string;
   code: string;
   requestedAtMs: number;
@@ -340,7 +295,7 @@ export function scriptTrace(events: readonly Event[], executionId: string): Scri
     const p = isRecord(event.payload) ? event.payload : {};
     return p.executionId === executionId;
   });
-  // The developer item names the run by its request offset (os-next's actor), the adapted request
+  // The developer item names the run by its request offset (apps/os's actor), the adapted request
   // carries that offset beside its executionId.
   const rendered = events.find((event) => {
     if (event.type !== "events.iterate.com/agent/context-added") return false;

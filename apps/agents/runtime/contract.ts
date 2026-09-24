@@ -1,36 +1,32 @@
-// src/agent/contract.ts — AN AGENT: a domain object on the context at any path (`/agents/<name>` by
+// runtime/contract.ts — AN AGENT: a domain object on the context at any path (`/agents/<name>` by
 // convention) — a conversation driven by a model that acts by writing scripts against that
 // context's `itx`. Its facts live on that path's log, and THIS FILE is the only place they are
 // spelled. The rest of the folder derives from it: processor.ts reduces these events, runs the
 // creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell plus
-// `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`), library.ts hands out the
-// handle (`itx.agents.get(path)`: the host's verbs plus the typed `append`). Deletion is the
-// creation's mirror: `delete-requested` opens it, the processor lands `deleted` — cross-posted to
-// `/` so the catalog drops the entry — and a deleted agent runs no more turns. Every type is derived
-// here, never hand-kept:
+// `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`, and the handle
+// `itx.agents.get(path)`). Deletion is the creation's mirror: `delete-requested` opens it, the
+// processor lands `deleted` — cross-posted to `/` so the catalog drops the entry — and a deleted
+// agent runs no more turns. Every type is derived here, never hand-kept:
 //   AgentState                        = ProcessorState<typeof AgentContract>  the reduced state below
 //   ConsumedEvent<typeof AgentContract>                                        what reduce and processEvent see
 //   EventInput<typeof AgentContract>                                           what `itx.agents.get(path).append(…)` takes
 //
-// the platform's agent brought over LEAN — the same loop, nothing else. Its birth is the saga
-// `itx.agents.create(path)` opens: `create-requested`, then `created` — the certificate,
-// cross-posted to `/` for the project catalog (src/project/) — with the default system prompt
-// beside it; an operator's instructions are their own `context-added` after. From then on
-// everything is THE LOOP: a `context-added` from outside (a person) or from a script's result
-// raises the ONE pending trigger; the loop records the request (`llm-request-requested`), runs the
-// model, settles it (`llm-request-settled`) with the assistant's words as the next `context-added`.
-// The answer is markdown prose plus at most one `<codemode status="…">` block (codemode-format.ts,
-// mmkal's grammar): the prose is `web-message-sent` — what a person is shown — the status
-// `summary-updated`, the body a script: the CONTEXT's own `context/run-requested` (the context runs
-// it, iterate-context-durable-object.ts; a restart settles it `interrupted`, never re-run), whose
-// `run-settled` result is the next developer `context-added`, which triggers the next turn; prose
-// alone ends the turn. Bounded: an open request expires, N consecutive model failures pause, N
-// consecutive self-triggered turns pause, and a person's next words resume. A request is DEBOUNCED
-// as one window after the trigger (more words inside it move the trigger; one request
-// answers them all), with a failure's backoff folded into the same window. This runtime intentionally omits
-// purpose: streaming chunks, interrupts, compaction, token accounting, summaries, mentions, and the
-// capability host with its typecheck and preambles — the script runs against this context's `itx`
-// as it is.
+// Its birth is the saga `itx.agents.create(path)` opens: `create-requested`, then `created` — the
+// certificate, cross-posted to `/` for the project catalog (apps/os/src/project/) — with the
+// default system prompt beside it; an operator's instructions are their own `context-added` after.
+// From then on everything is THE LOOP: a `context-added` from outside (a person) or from a script's
+// result raises the ONE pending trigger; the loop records the request (`llm-request-requested`),
+// runs the model, settles it (`llm-request-settled`) with the assistant's words as the next
+// `context-added`. The answer is markdown prose plus at most one `<codemode status="…">` block
+// (codemode-format.ts, mmkal's grammar): the prose is `web-message-sent` — what a person is shown —
+// the status `summary-updated`, the body a script: the CONTEXT's own `context/run-requested` (the
+// context runs it; a restart settles it `interrupted`, never re-run), whose `run-settled` result is
+// the next developer `context-added`, which triggers the next turn; prose alone ends the turn.
+// Bounded: an open request expires, N consecutive model failures pause, N consecutive
+// self-triggered turns pause, and a person's next words resume. A request is DEBOUNCED as one
+// window after the trigger (more words inside it move the trigger; one request answers them all),
+// with a failure's backoff folded into the same window. The script runs against this context's
+// `itx` as it is: no capability host, typecheck or preamble.
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
 import { RunContract } from "iterate/next/stream/run";
@@ -55,7 +51,7 @@ export type ChatMessage = {
     | ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[];
 };
 
-/** A file attached to a context item (the platform's attachment record, minus its signed URL): the
+/** A file attached to a context item (an attachment record, minus its signed URL): the
  *  project file it was stored as (`itx.files`), its content type, original name and size. */
 const FileAttachment = z.object({
   contentType: z.string().min(1),
@@ -68,8 +64,8 @@ export type FileAttachment = z.infer<typeof FileAttachment>;
 /** Where a request's trigger came from: a person (`external`) or the loop's own consequences. */
 const TriggerSource = z.enum(["external", "agent-loop"]);
 
-/** What a model call cost, normalized (the platform's `AgentLlmUsage`): the provider's totals, and the
- *  cached/reasoning breakdowns when it reports them. */
+/** What a model call cost, normalized: the provider's totals, and the cached/reasoning breakdowns
+ *  when it reports them. */
 const LlmUsage = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -80,8 +76,6 @@ export type LlmUsage = z.infer<typeof LlmUsage>;
 
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  // 2: the script obligation moved to the context (core state `runs`); the state lost its slot.
-  // 3: `path` became `creation` (the saga's offset); `agents/…` events became `agent/…`.
   version: "5",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
@@ -127,15 +121,10 @@ export const AgentContract = defineProcessorContract({
           .int()
           .positive()
           .default(10 * 60_000),
-        /** the platform's window: a request waits this long after its trigger for more content — a second
+        /** The debounce window: a request waits this long after its trigger for more content — a second
          *  message inside the window moves the trigger and ONE request answers both. */
         llmRequestDebounceMs: z.number().int().nonnegative().default(250),
-        /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
-         *  that carries no `<codemode>` block — the whole point being that the agent only ever writes
-         *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
-         *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
-         *  reply instead. Blank drops a bare reply (an agent that only acts). */
-        /** Consecutive model failures before the loop pauses; between attempts, the platform's backoff —
+        /** Consecutive model failures before the loop pauses; between attempts, the backoff —
          *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
         llmRequestRetryPolicy: z
           .object({
@@ -235,7 +224,7 @@ export const AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
-        /** the platform's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
+        /** The policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next). */
         llmRequestPolicy: z

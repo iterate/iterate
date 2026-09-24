@@ -1,7 +1,7 @@
-// e2e/support/agents.ts — the agent stories' shared fixtures (agents*.e2e.test.ts): a model that answers
-// from a script, the Workers AI model a local story pins, the log readers and a 1×1 PNG.
+// e2e/fixtures.ts — the agent stories' shared fixtures (agents*.e2e.test.ts): a model that answers
+// from a script, the model a story configures, the operator's prompt, the log readers and a 1×1 PNG.
 import { RpcTarget } from "capnweb";
-import { sleep } from "../../os/e2e/support/client.ts";
+import { readAll, sleep, until } from "../../os/e2e/support/client.ts";
 
 /** A model that answers from a script of replies, in order, recording what it was asked. A reply
  *  may take its time (`{ text, afterMs }`): the request stays in flight that long — what an
@@ -28,13 +28,31 @@ export const short = (log: { type: string }[]) =>
     .map((e) => e.type.replace("events.iterate.com/", ""));
 /** The default model is OpenAI's astra; a local story pins Workers AI so the fake `itx.ai` answers. */
 export const WORKERS_AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
-export const onWorkersAi = (
+/** Configure the agent's model: Workers AI by default, or a partner model by name. */
+export const configureModel = (
   support: { append: (event: unknown) => Promise<unknown> },
   model = WORKERS_AI_MODEL,
 ) =>
   support.append({
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model } } },
+  });
+
+/** The operator's instructions, their own keyed system item after the birth. */
+export const operatorPrompt = (agent: { append: (event: unknown) => Promise<unknown> }) =>
+  agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
+
+/** The context's log once a request has settled. */
+export const settledLog = (context: unknown, label: string) =>
+  until(label, async () => {
+    const all = await readAll(context);
+    return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
+      ? all
+      : undefined;
   });
 
 export const assistantWords = (log: { type: string; payload?: unknown }[]) =>

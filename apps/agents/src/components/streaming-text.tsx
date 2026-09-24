@@ -1,11 +1,8 @@
-// the platform's streaming-text: the live text of a step as it streams — sealed groups keep their React
-// subtree and only the small append tail changes; code stays plain (no highlighting) while it is
-// still being written; a blinking caret marks the tail.
+// The live text of a step as it streams — sealed groups keep their React subtree and only the small
+// append tail changes; code stays plain (no highlighting) while it is still being written; a
+// blinking caret marks the tail.
 import { memo, useLayoutEffect, useRef } from "react";
-import { CopyIcon } from "lucide-react";
-import { sliceText, textGroupSize, type StreamText } from "@iterate-com/shared/chunked-text";
-import { Button } from "@iterate-com/ui/components/button";
-import { toast } from "@iterate-com/ui/components/sonner";
+import { textGroupSize, type StreamText } from "@iterate-com/shared/chunked-text";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { FullTextSnapshot } from "./full-text-snapshot.tsx";
 
@@ -89,7 +86,7 @@ const TextBlock = memo(function TextBlock({
 });
 
 /** Plain text while code is changing; syntax highlighting belongs to settled output. */
-export function StreamingCodeBlock({ code, copy = false }: { code: StreamText; copy?: boolean }) {
+export function StreamingCodeBlock({ code }: { code: StreamText }) {
   const preRef = useRef<HTMLPreElement>(null);
   const pinnedRef = useRef(true);
   useLayoutEffect(() => {
@@ -97,35 +94,17 @@ export function StreamingCodeBlock({ code, copy = false }: { code: StreamText; c
     if (element && pinnedRef.current) element.scrollTop = element.scrollHeight;
   }, [code]);
   return (
-    <div className="relative">
-      {copy ? (
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          className="absolute right-2 top-2 z-10"
-          aria-label="Copy code"
-          onClick={() => {
-            void navigator.clipboard.writeText(sliceText(code)).then(
-              () => toast.success("Copied"),
-              () => toast.error("Failed to copy to clipboard"),
-            );
-          }}
-        >
-          <CopyIcon />
-        </Button>
-      ) : null}
-      <pre
-        ref={preRef}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
-        }}
-        className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
-      >
-        <StreamingText text={code} />
-        <StreamingCursor className="bg-amber-600" />
-      </pre>
-    </div>
+    <pre
+      ref={preRef}
+      onScroll={(event) => {
+        const element = event.currentTarget;
+        pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+      }}
+      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
+    >
+      <StreamingText text={code} />
+      <StreamingCursor className="bg-amber-600" />
+    </pre>
   );
 }
 
