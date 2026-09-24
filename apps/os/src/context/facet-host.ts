@@ -404,6 +404,8 @@ export class FacetHost {
    *  its `facet-ran` row stays for the next birth or sweep to start it. Never throws. */
   async #start(name: string): Promise<boolean> {
     const steps: ItxExpression = [["listPublicMethods"]];
+    // A start's call never restarts the facet it starts: a timeout ends it, as a failure does.
+    const watchdog = { watchdogMs: FACET_START_WATCHDOG_MS, restartOnTimeout: false };
     const startedIfRefused = (error: unknown) => {
       if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
         throw error;
@@ -417,20 +419,21 @@ export class FacetHost {
         platformStart: true,
       });
       try {
-        await this.#call(started, name, steps, {
-          watchdogMs: FACET_START_WATCHDOG_MS,
-          restartOnTimeout: false,
-        }).catch(startedIfRefused);
+        await this.#call(started, name, steps, watchdog).catch(startedIfRefused);
         started.recordLoadedIdentity?.();
       } catch (error) {
         // The platform defect at facet start (an alarm-woken incarnation's loaded facet, above all)
         // is recovered as a call's is: a fresh loaded identity and one more start.
         if (!this.#isRecoverableFacetFailure(name, error, started)) throw error;
         await this.#afterEarlierRecoveries(name, () =>
-          this.#recover(name, firstPartyClassName, facetStartupMemo, steps, {
-            failedOn: started,
-            error,
-          }).catch(startedIfRefused),
+          this.#recover(
+            name,
+            firstPartyClassName,
+            facetStartupMemo,
+            steps,
+            { failedOn: started, error },
+            watchdog,
+          ).catch(startedIfRefused),
         );
       }
     };
@@ -659,10 +662,14 @@ export class FacetHost {
         // The platform failure (the predicate's doc), or a restart for one: recovered below, one
         // recovery of this facet at a time.
         return await this.#afterEarlierRecoveries(name, () =>
-          this.#recover(name, firstPartyClassName, facetStartupMemo, itxExpressionSteps, {
-            failedOn: materialized,
-            error,
-          }),
+          this.#recover(
+            name,
+            firstPartyClassName,
+            facetStartupMemo,
+            itxExpressionSteps,
+            { failedOn: materialized, error },
+            FACET_CALL_WATCHDOG,
+          ),
         );
       }
     } finally {
@@ -711,6 +718,7 @@ export class FacetHost {
     facetStartupMemo: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
     failure: { failedOn: MaterializedFacet; error: unknown },
+    watchdog: { watchdogMs: number; restartOnTimeout: boolean },
   ): Promise<unknown> {
     let { failedOn, error } = failure;
     let retriedOnReplacement = false;
@@ -753,7 +761,7 @@ export class FacetHost {
         platformStart: true,
       });
       try {
-        return await this.#call(attempt, name, itxExpressionSteps, FACET_CALL_WATCHDOG);
+        return await this.#call(attempt, name, itxExpressionSteps, watchdog);
       } catch (attemptError) {
         if (!this.#isRecoverableFacetFailure(name, attemptError, attempt)) throw attemptError;
         failedOn = attempt;
