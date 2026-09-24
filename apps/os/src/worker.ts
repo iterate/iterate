@@ -25,7 +25,12 @@ import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import {
+  FETCH_UPGRADE_RESUMABLE_HEADER,
+  ITX_EXPRESSION_FETCH_HEADER,
+  ITX_PLATFORM_ORIGIN_HEADER,
+  spliceEyeballAnswer,
+} from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";
@@ -135,6 +140,9 @@ function projectHostRequestTo(
   if (routing.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(routing.identity.principal));
   if (routing.identity.grant) headers.set(ITX_GRANT_HEADER, routing.identity.grant);
+  // A WebSocket the edge will hold: a lent stub's upgrade answers resumable (spliceEyeballAnswer).
+  if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
+    headers.set(FETCH_UPGRADE_RESUMABLE_HEADER, "1");
   return new Request(withoutBasePath(request, routing.basePath), { headers });
 }
 
@@ -292,9 +300,11 @@ export default {
       const stamped = caller === "member" ? authorization : null;
       if (stamped?.grant) ctx.waitUntil(recordGrantUse(env, stamped.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
-      const answer = await env.ITERATE_CONTEXT.getByName(
-        DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-      ).fetch(
+      const contextOf = (path: string) =>
+        env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path }));
+      // A lent stub's WebSocket (a tunnel's) is held HERE, not by the context: it survives the
+      // context's sockets dropping — every deploy resets them (context/fetch-upgrade-splice.ts).
+      const served = await contextOf("/").fetch(
         projectHostRequestTo(request, {
           routingSlug: projectHost.routingSlug,
           hops,
@@ -308,6 +318,7 @@ export default {
           platformOrigin,
         }),
       );
+      const answer = spliceEyeballAnswer(served, contextOf);
       // The app's `401 Bearer realm="iterate"` becomes the sign-in (project-host-sign-in.ts), at the
       // browser adapter serving this host: the host's own under subdomains, the platform's under paths.
       const signIn = projectHostSignInAnswerOf({

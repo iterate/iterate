@@ -31,6 +31,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-platform-origin",
     "x-itx-rpc-stub-pager",
     "x-itx-fetch-upgrade",
+    "x-itx-fetch-upgrade-eyeball",
   ];
   const forged = () =>
     new Headers([
@@ -51,6 +52,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-platform-origin": "https://os.iterate.com",
     "x-itx-rpc-stub-pager": null,
     "x-itx-fetch-upgrade": null,
+    "x-itx-fetch-upgrade-eyeball": null,
   });
 });
 

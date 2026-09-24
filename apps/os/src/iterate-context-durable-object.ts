@@ -50,6 +50,7 @@ import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.
 import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  FETCH_UPGRADE_RESUMABLE_HEADER,
   ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionFetchCall,
   RpcStubFetchServer,
@@ -192,7 +193,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
   /** context/rpc-stubs.ts — wired to `fetch` and the two WebSocket handlers below. */
-  readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx);
+  readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
+    deployId: this.#appConfig.deployId,
+    path: this.#durableObjectAddress.path,
+  });
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
@@ -1262,6 +1266,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const headers = new Headers(request.headers);
     stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
+    headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);

@@ -5,6 +5,7 @@
 //   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
+import { z } from "zod";
 import { codedError, errorCode } from "iterate/lib";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
@@ -17,6 +18,11 @@ import {
 } from "../caller.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { isRetryableTransportError } from "../retryable-error.ts";
+import {
+  FetchUpgradeSpliceEnd,
+  reportFetchUpgradeSpliceEvent,
+  type SpliceSocket,
+} from "./fetch-upgrade-splice.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers:
@@ -426,16 +432,18 @@ class LentRpcStub extends WorkersRpcTarget {
    *  registering per lent stub would accumulate a listener per page for the session's life. capnweb
    *  fires onRpcBroken BEFORE it rejects the in-flight import, so a caught call sees the reason set. */
   #lendEnded: { reason: string | null };
-  #durableObject: IterateContextDurableObjectStub;
+  /** Minted per dial: the upgrade leg re-dials after a reset (fetch-upgrade-splice.ts), and a stub
+   *  that saw the reset replays it. */
+  #durableObjectStub: () => IterateContextDurableObjectStub;
   constructor(
     clientRpcStub: ClientRpcStub,
     lendEnded: { reason: string | null },
-    durableObject: IterateContextDurableObjectStub,
+    durableObjectStub: () => IterateContextDurableObjectStub,
   ) {
     super();
     this.#clientRpcStub = clientRpcStub;
     this.#lendEnded = lendEnded;
-    this.#durableObject = durableObject;
+    this.#durableObjectStub = durableObjectStub;
   }
 
   /** The lend ended mid-call — the client died, or the lender recalled the stub while the DO still
@@ -464,7 +472,7 @@ class LentRpcStub extends WorkersRpcTarget {
         (r) => receiver.fetch(r),
         request,
         upgradeId,
-        this.#durableObject,
+        this.#durableObjectStub,
       );
     } catch (e) {
       this.#recodeIfLendEnded(e, "mid-fetch");
@@ -571,12 +579,11 @@ export async function lendRpcStubOverPager(
         return;
       }
       if ((page as { type?: string } | null)?.type !== "page") return;
-      const durableObject = durableObjectStub();
       waitUntil(
-        durableObject
+        durableObjectStub()
           .lendRpcStub({
             rpcStubKey,
-            stub: new LentRpcStub(sessionRpcStub, lendEnded, durableObject),
+            stub: new LentRpcStub(sessionRpcStub, lendEnded, durableObjectStub),
           })
           .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
       );
@@ -771,6 +778,7 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     ITX_PLATFORM_ORIGIN_HEADER,
     RPC_STUB_PAGER_WEBSOCKET_HEADER,
     FETCH_UPGRADE_SOCKET_HEADER,
+    FETCH_UPGRADE_EYEBALL_HEADER,
   ])
     headers.delete(name);
   if (!caller) return;
@@ -850,6 +858,12 @@ export function terminalFetchOf(
 //   hop is a real fetch — socket-legal) and forward frames eyeball⇄leg by tag. Both DO-side
 //   sockets are hibernatable, so an open upgrade survives eviction and costs nothing idle.
 //
+//   A PROJECT HOST'S upgrade is RESUMABLE: the edge holds the visitor's socket and the relay the
+//   provider's, and the two DO-side sockets carry the splice's wire (fetch-upgrade-splice.ts), so
+//   a DO reset — every deploy — or a dropped socket is re-dialed and resumed, never seen by the
+//   visitor (`spliceEyeballAnswer` on the edge, `dialRpcStubFetch` on the relay, a re-dialed side
+//   replacing the older socket in `acceptFetchUpgradeLeg`).
+//
 // DELETE-DAY CHECKLIST (all deletions, nothing rewritten): remove this whole fenced section,
 // then delete its call sites —
 //   • the terminal-fetch branch in RpcStubDirectory.invokeRpcStub, the directory's `rpcStubFetch`
@@ -857,24 +871,56 @@ export function terminalFetchOf(
 //     (the directory section);
 //   • LentRpcStub's `fetch` method (the relay section);
 //   • the context DO's `#rpcStubFetch` field, its acceptFetchUpgradeLeg handler, and the
-//     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts).
+//     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts);
+//   • the edge's `spliceEyeballAnswer` and its resumable ask (worker.ts) — unless a socket over RPC
+//     still dies with the DO's reset, in which case the splice moves onto whatever replaces this.
 // Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
 // sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
+/** The transport's upgrade-leg dial: its value is the upgradeId. */
 const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
+/** The edge's re-dial of a resumable upgrade's EYEBALL side after a drop (fetch-upgrade-splice.ts):
+ *  its value is the upgradeId. */
+const FETCH_UPGRADE_EYEBALL_HEADER = "x-itx-fetch-upgrade-eyeball";
+/** THE EDGE ASKS FOR A RESUMABLE UPGRADE (a project host's upgrade, worker.ts): the edge holds the
+ *  visitor's socket and speaks the splice's wire on the eyeball side (fetch-upgrade-splice.ts). Rides
+ *  the Request through the config worker to the serving context; the transport strips it before the
+ *  provider sees the Request. */
+export const FETCH_UPGRADE_RESUMABLE_HEADER = "x-itx-fetch-upgrade-resumable";
+/** THE ANSWER THAT IT IS: on the eyeball's 101, JSON `FetchUpgradeResume` — what the edge re-dials
+ *  (the upgradeId, the context that serves it) and the deploy that answered. Absent: the socket is
+ *  the provider's raw frames (the transport cannot resume: a relay on an older deploy). */
+const FETCH_UPGRADE_RESUME_HEADER = "x-itx-fetch-upgrade-resume";
+const FetchUpgradeResume = z.object({
+  upgradeId: z.string().min(1),
+  path: z.string().startsWith("/"),
+  deployId: z.string(),
+});
+type FetchUpgradeResume = z.infer<typeof FetchUpgradeResume>;
+/** On a dialed upgrade socket's 101 (a leg, a re-dialed eyeball): the deploy that answered it, so a
+ *  re-dialing end can tell a deploy's reset from a platform failure. */
+const FETCH_UPGRADE_DEPLOY_ID_HEADER = "x-itx-deploy-id";
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the
- *  transport's dedicated socket). The peer is the same upgradeId on the other side. */
-type FetchUpgradeAttachment = { fetchUpgrade: { upgradeId: string; side: "eyeball" | "leg" } };
+ *  transport's dedicated socket). The peer is the same upgradeId on the other side. `replaced`: a
+ *  re-dial of the same side took over, so this socket is neither a peer nor closes one. */
+type FetchUpgradeAttachment = {
+  fetchUpgrade: { upgradeId: string; side: "eyeball" | "leg"; replaced?: true };
+};
 const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
   `itx-fetch-upgrade-${side}:${upgradeId}`;
 
 /** The transport's answer when the provider upgraded: the socket already rides the dedicated
  *  leg, so only this marker crosses the RPC hop — with the provider's 101 headers the eyeball's 101
- *  must repeat (`FETCH_UPGRADE_RESPONSE_HEADERS`). */
-type FetchUpgradeMarker = { webSocketUpgrade: true; headers: [name: string, value: string][] };
+ *  must repeat (`FETCH_UPGRADE_RESPONSE_HEADERS`). `resumable`: the leg speaks the splice's wire
+ *  (the Request asked for it, and this transport knows it — one on an older deploy answers without). */
+type FetchUpgradeMarker = {
+  webSocketUpgrade: true;
+  headers: [name: string, value: string][];
+  resumable?: true;
+};
 
 /** The provider's 101 response headers the eyeball's 101 carries: the subprotocol it chose. A browser
  *  that asked for one (Vite's HMR client asks for `vite-hmr`) fails the handshake on a 101 that names
@@ -926,13 +972,23 @@ type ClientWebSocket = {
  *  upgrade-leg handler). Dials the provider's real fetch and branches ONLY on the answer:
  *    • socketless Response → returned as-is (crosses the RPC leg fine);
  *    • socket-bearing Response → accept the socket HERE, open the dedicated upgrade leg into the
- *      DO, wire the frames, and return the marker instead. */
+ *      DO, wire the frames, and return the marker instead. A Request that asked for a resumable
+ *      upgrade (`FETCH_UPGRADE_RESUMABLE_HEADER`, the edge's) gets the leg side of the splice
+ *      (fetch-upgrade-splice.ts): the leg re-dials after a drop, and nothing the provider sent is
+ *      lost. */
 async function dialRpcStubFetch(
   providerFetch: (request: Request) => Promise<unknown>,
   request: Request,
   upgradeId: string,
-  durableObject: { fetch(url: string, init?: RequestInit): Promise<Response> },
+  durableObjectStub: () => { fetch(url: string, init?: RequestInit): Promise<Response> },
 ): Promise<Response | FetchUpgradeMarker> {
+  const resumable = request.headers.has(FETCH_UPGRADE_RESUMABLE_HEADER);
+  if (resumable) {
+    // the platform's own protocol: never the provider's to see
+    const headers = new Headers(request.headers);
+    headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER);
+    request = new Request(request, { headers });
+  }
   const response = (await providerFetch(request)) as {
     status?: number;
     headers?: Headers;
@@ -943,38 +999,109 @@ async function dialRpcStubFetch(
   // Leg first, listeners second, accept LAST — accepting before the awaited leg round-trip would
   // drop any frame the provider sends immediately after upgrading (a server hello). The leg is a
   // plain fetch upgrade into the DO, opened mid-dial: the DO is awaiting the dial RPC and serves
-  // this upgrade concurrently (no deadlock, probed); frames ride it RAW.
-  const legResponse = await durableObject.fetch("https://fetch-upgrade.internal/", {
-    headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
-  });
+  // this upgrade concurrently (no deadlock, probed); frames ride it RAW, or on the splice's wire.
+  const dialLeg = () =>
+    durableObjectStub().fetch("https://fetch-upgrade.internal/", {
+      headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
+    });
+  const legResponse = await dialLeg();
   const leg = legResponse.webSocket;
   if (!leg) throw new Error(`fetch-upgrade leg returned ${legResponse.status} without a WebSocket`);
   leg.accept();
-  const wire = (from: ClientWebSocket, to: ClientWebSocket) => {
-    from.addEventListener("message", (ev) => {
-      try {
-        to.send(ev.data as string | ArrayBuffer);
-      } catch {
-        /* peer closing — its close event tears the pair down */
-      }
+  if (resumable) {
+    new FetchUpgradeSpliceEnd({
+      side: "leg",
+      upgradeId,
+      // capnweb's TunneledWebSocket dispatches the runtime's own events (MessageEvent, CloseEvent)
+      local: providerSocket as unknown as SpliceSocket,
+      socket: leg,
+      deployId: legResponse.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+      redial: async () => {
+        const redialed = await dialLeg();
+        if (!redialed.webSocket) {
+          await redialed.body?.cancel();
+          return null;
+        }
+        redialed.webSocket.accept();
+        return {
+          socket: redialed.webSocket,
+          deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+        };
+      },
+      report: reportFetchUpgradeSpliceEvent,
     });
-    from.addEventListener("close", (ev) => {
-      try {
-        to.close(clampCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
-      } catch {
-        /* already closing */
-      }
-    });
-  };
-  wire(providerSocket, leg as unknown as ClientWebSocket);
-  wire(leg as unknown as ClientWebSocket, providerSocket);
+  } else {
+    const wire = (from: ClientWebSocket, to: ClientWebSocket) => {
+      from.addEventListener("message", (ev) => {
+        try {
+          to.send(ev.data as string | ArrayBuffer);
+        } catch {
+          /* peer closing — its close event tears the pair down */
+        }
+      });
+      from.addEventListener("close", (ev) => {
+        try {
+          to.close(clampCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
+        } catch {
+          /* already closing */
+        }
+      });
+    };
+    wire(providerSocket, leg as unknown as ClientWebSocket);
+    wire(leg as unknown as ClientWebSocket, providerSocket);
+  }
   providerSocket.accept?.();
   const headers: [string, string][] = [];
   for (const name of FETCH_UPGRADE_RESPONSE_HEADERS) {
     const value = response.headers?.get(name);
     if (value) headers.push([name, value]);
   }
-  return { webSocketUpgrade: true, headers };
+  return { webSocketUpgrade: true, headers, ...(resumable && { resumable: true as const }) };
+}
+
+/** EDGE SIDE of a resumable upgrade: a project host's 101 that says it is resumable
+ *  (`FETCH_UPGRADE_RESUME_HEADER`) is answered with the edge's own pair, and the DO's socket becomes
+ *  the eyeball side of the splice (fetch-upgrade-splice.ts), which re-dials the serving context —
+ *  `contextOf(path)`, a context of the project the edge admitted — after a drop. Any other answer
+ *  is returned as it is. The splice's headers never reach the visitor. */
+export function spliceEyeballAnswer(
+  answer: Response,
+  contextOf: (path: string) => { fetch(url: string, init?: RequestInit): Promise<Response> },
+): Response {
+  const header = answer.headers.get(FETCH_UPGRADE_RESUME_HEADER);
+  const eyeball = answer.webSocket;
+  if (answer.status !== 101 || !eyeball || !header) return answer;
+  // checked: it crossed the project's config worker on its way here
+  const resume = FetchUpgradeResume.parse(JSON.parse(header));
+  const headers = new Headers(answer.headers);
+  headers.delete(FETCH_UPGRADE_RESUME_HEADER);
+  const pair = new WebSocketPair();
+  const [visitor, local] = [pair[0], pair[1]];
+  local.accept();
+  eyeball.accept();
+  new FetchUpgradeSpliceEnd({
+    side: "eyeball",
+    upgradeId: resume.upgradeId,
+    local,
+    socket: eyeball,
+    deployId: resume.deployId,
+    redial: async () => {
+      const redialed = await contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
+        headers: { Upgrade: "websocket", [FETCH_UPGRADE_EYEBALL_HEADER]: resume.upgradeId },
+      });
+      if (!redialed.webSocket) {
+        await redialed.body?.cancel();
+        return null;
+      }
+      redialed.webSocket.accept();
+      return {
+        socket: redialed.webSocket,
+        deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+      };
+    },
+    report: reportFetchUpgradeSpliceEvent,
+  });
+  return new Response(null, { status: 101, webSocket: visitor, headers });
 }
 
 /** DO SIDE of an rpc-stub fetch: the upgrade leg, the eyeball pair, and the frame/close forwarding
@@ -982,15 +1109,24 @@ async function dialRpcStubFetch(
  *  alongside the other handlers. */
 export class RpcStubFetchServer {
   readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
+  /** This DO's deploy and path: what a resumable upgrade's 101 says (`FetchUpgradeResume`). */
+  readonly #deployId: string;
+  readonly #path: string;
 
-  constructor(ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">) {
+  constructor(
+    ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">,
+    context: { deployId: string; path: string },
+  ) {
     this.#ctx = ctx;
+    this.#deployId = context.deployId;
+    this.#path = context.path;
   }
 
   /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
    *  Response straight through; on the upgrade marker, mint the eyeball's pair (the leg arrived
    *  during the dial — the dial awaits its 101) — a real 101 only after the provider actually
-   *  upgraded. Provider failures throw through with their own words (the itx-expression fetch answers non-101). */
+   *  upgraded, saying it is resumable when the transport's leg speaks the splice's wire. Provider
+   *  failures throw through with their own words (the itx-expression fetch answers non-101). */
   async serve(
     transport: RpcStubFetchTransport,
     itxExpressionSteps: ItxExpression,
@@ -1000,12 +1136,22 @@ export class RpcStubFetchServer {
     const result = await transport.fetch(upgradeId, itxExpressionSteps, request);
     const marker = result as Partial<FetchUpgradeMarker> | null;
     if (marker?.webSocketUpgrade !== true) return result;
-    return this.#acceptUpgradeSocket("eyeball", upgradeId, marker.headers || []);
+    const headers = [...(marker.headers || [])];
+    if (marker.resumable === true && request.headers.has(FETCH_UPGRADE_RESUMABLE_HEADER))
+      headers.push([
+        FETCH_UPGRADE_RESUME_HEADER,
+        JSON.stringify({
+          upgradeId,
+          path: this.#path,
+          deployId: this.#deployId,
+        } satisfies FetchUpgradeResume),
+      ]);
+    return this.#acceptUpgradeSocket("eyeball", upgradeId, headers);
   }
 
   /** Mint + hibernatably accept ONE side of an upgrade (tagged and attached for peer routing),
    *  answering a real 101 carrying the other half of the pair and `headers` (the eyeball's: the
-   *  provider's subprotocol). */
+   *  provider's subprotocol; a dialed side's: this DO's deploy). */
   #acceptUpgradeSocket(
     side: "eyeball" | "leg",
     upgradeId: string,
@@ -1020,12 +1166,30 @@ export class RpcStubFetchServer {
   }
 
   /** PARTIAL FETCH: accept the transport's dedicated upgrade leg (opened mid-dial, carrying the
-   *  dial's upgradeId — the tag is the correlation). */
+   *  dial's upgradeId — the tag is the correlation), or a resumable upgrade's side dialed again
+   *  after a drop (the leg by the transport, the eyeball by the edge). The newest socket of a side
+   *  wins: an older one still open is replaced, closed without closing its peer. */
   acceptFetchUpgradeLeg(request: Request): Response | null {
-    const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- an ABSENT header (null) means "not this request"; a present-but-empty one is malformed input that must fall through to the parse/tag below and be refused, never quietly treated as absent (the same present-vs-absent distinction the DO's `fetch` keeps)
-    if (upgradeId === null) return null;
-    return this.#acceptUpgradeSocket("leg", upgradeId, []);
+    const legUpgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
+    const eyeballUpgradeId = request.headers.get(FETCH_UPGRADE_EYEBALL_HEADER);
+    if (!legUpgradeId && !eyeballUpgradeId) return null;
+    const [side, upgradeId] = legUpgradeId
+      ? ["leg" as const, legUpgradeId]
+      : ["eyeball" as const, eyeballUpgradeId!];
+    for (const older of this.#ctx.getWebSockets(upgradeTag(side, upgradeId))) {
+      const attachment = older.deserializeAttachment() as FetchUpgradeAttachment;
+      older.serializeAttachment({
+        fetchUpgrade: { ...attachment.fetchUpgrade, replaced: true },
+      } satisfies FetchUpgradeAttachment);
+      try {
+        older.close(1000, "replaced");
+      } catch {
+        /* already closing */
+      }
+    }
+    return this.#acceptUpgradeSocket(side, upgradeId, [
+      [FETCH_UPGRADE_DEPLOY_ID_HEADER, this.#deployId],
+    ]);
   }
 
   /** Route one WebSocket message: TRUE = an upgrade frame, forwarded RAW to its peer socket
@@ -1046,7 +1210,8 @@ export class RpcStubFetchServer {
 
   /** Route one WebSocket close: TRUE = an upgrade socket — its peer is closed with it (each
    *  upgrade dies with its own socket pair; a dying transport closes its legs, which closes the
-   *  eyeballs here, automatically, per socket). FALSE = not ours. */
+   *  eyeballs here, automatically, per socket; a resumable upgrade's ends take the close as a drop
+   *  and re-dial). FALSE = not ours. A replaced socket closes alone. */
   handleWebSocketClose(ws: WebSocket, code = 1000, reason = ""): boolean {
     const peer = this.#peerOf(ws);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- #peerOf three-way: undefined = not ours (bail); null = ours-but-peer-gone (fall through to still close ws below)
@@ -1067,13 +1232,22 @@ export class RpcStubFetchServer {
     return true;
   }
 
-  /** The OTHER side of an upgrade socket, or undefined (not ours) / null (peer gone). */
+  /** The OTHER side of an upgrade socket, or undefined (not ours) / null (peer gone, or this socket
+   *  was replaced: it has no peer). */
   #peerOf(ws: WebSocket): WebSocket | null | undefined {
     const upgrade = (ws.deserializeAttachment() as Partial<FetchUpgradeAttachment> | null)
       ?.fetchUpgrade;
     if (!upgrade) return undefined;
+    if (upgrade.replaced) return null;
     const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
-    return this.#ctx.getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))[0] ?? null;
+    return (
+      this.#ctx
+        .getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))
+        .find(
+          (socket) =>
+            !(socket.deserializeAttachment() as FetchUpgradeAttachment).fetchUpgrade.replaced,
+        ) ?? null
+    );
   }
 }
 
