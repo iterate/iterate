@@ -23,7 +23,6 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   closeSync,
   existsSync,
-  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -129,6 +128,10 @@ async function serve(argv: string[]) {
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : await defaultPort();
   const viteArgs = portIndex >= 0 ? args : [...args, "--port", `${port}`];
   await build();
+  // plain files have no compare-and-swap: a lock taken in the instant another process restored one
+  // it moved aside (`holder`) is gone by now, and its taker stops here, before any workerd
+  if (lockPid() !== process.pid)
+    throw new Error(`another dev server took this worktree's lock (pid ${lockPid()})`);
   const vite = spawn("pnpm", ["exec", "vite", "dev", ...viteArgs], {
     cwd: root,
     env: { ...process.env, CLOUDFLARE_ENV: "", OS_DEV_PORT: `${port}` },
@@ -222,7 +225,8 @@ function acquire(): number | null {
 /** The pid of this worktree's `serve` — starting or running — from the lock, while that process is
  *  still a dev.ts. A lock a killed server left behind (SIGKILL runs no exit handler) is cleared
  *  rather than trusted with a pid the system may have reused — by compare-and-delete: moved aside
- *  atomically, and put back if what moved was a lock another process took meanwhile. */
+ *  atomically, and put back (an atomic replace) if what moved was a lock another process took
+ *  meanwhile. Whoever that put-back displaces finds out in `serve`'s check after the build. */
 function holder(): number | null {
   const pid = lockPid();
   if (pid === null) return null;
@@ -238,8 +242,8 @@ function holder(): number | null {
   } catch {
     return holder(); // another process cleared it first
   }
-  if (Number(readFileSync(aside, "utf8")) !== pid) linkSync(aside, lockPath);
-  rmSync(aside);
+  if (Number(readFileSync(aside, "utf8")) === pid) rmSync(aside);
+  else renameSync(aside, lockPath);
   return holder();
 }
 
