@@ -77,11 +77,16 @@ runner logs. The `e2e` step opens the **Test** phase. The shell hook preserves
 exit codes and ignores nested shells. It requires only the Node already
 installed in the runner image, so it measures `pnpm install` too.
 
-Expand the `pnpm preview deploy` step to see the client apps' parallel
-**Build <app>** spans beside **Build OS**, then **Deploy OS preview** (which
-includes its `/version` smoke), then the parallel **Deploy <app>** spans, each
-including its app's smoke. Overlapping spans must not be added together as wall
-time.
+Expand the `pnpm preview deploy` step to see where its time went. Each span
+starts once what it needs is there. **Write the deploying status**,
+**Install wrangler** (then **Upload the Previews secrets**) and **Ensure the
+Artifacts namespace** run beside **Build OS** and the client apps' parallel
+**Build <app>** spans. **Deploy OS preview** starts once Build OS and those have
+finished, and holds its **Smoke /version** and its **Readiness gate**. Each
+**Deploy <app>**, its app's smoke included, starts once its own build and the
+wrangler install have finished, beside Deploy OS preview. After the gate,
+**Seed sign-in** and **Write the PR section** run side by side. Overlapping
+spans must not be added together as wall time.
 
 `traceOperation()` records these nested operations at their actual start/end
 points, preserving async parents across parallel work. Thrown errors and
