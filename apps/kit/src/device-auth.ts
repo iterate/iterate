@@ -52,17 +52,14 @@ export async function deviceAuth(
     };
     try {
       // A deliberate POST replaces only this browser's installer session, never a flashed token.
-      // Ending it signs out at its platform. When that fails the session is left behind rather than
-      // blocking: a platform that's gone (a torn-down self-host, a deleted PR preview, which can
-      // still serve its discovery document) fails every time, and would block every other board
-      // in this browser. It's only this browser's setup session, never a board's token, and its
-      // grant can still be ended from the sessions list on a platform that's up.
       const previous = appSession(env.BROWSER_SESSION, request);
       await previous?.end().catch(async (error: unknown) => {
-        console.warn("kit.device_login_left_session", {
-          platform: (await previous.host().catch(() => null))?.issuer,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        // Ending it signs out at its platform. A platform that no longer answers as iterate (a
+        // self-host torn down) can't sign anyone out, and would block every other board in this
+        // browser, so the session is left behind instead. One that answers but failed still blocks.
+        const platform = await previous.host();
+        if (!platform || (await deps.issuerAnswersAt(platform.issuer)) === null) throw error;
+        console.warn("kit.device_login_left_session", { platform: platform.issuer });
       });
       const { location, setCookie } = await startAppSession(
         env.BROWSER_SESSION,

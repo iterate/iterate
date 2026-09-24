@@ -99,33 +99,30 @@ test("generic login and old firmware bookmarks return to device selection withou
   expect(f.begin).not.toHaveBeenCalled();
 });
 
-test("a failed sign-out is logged and doesn't block setting up the next board", async () => {
+test("a failed end is observable and does not create another authorization", async () => {
   const f = fixture();
-  f.end.mockRejectedValue(new Error("Sign-out could not reach Iterate (500). Try again."));
-  f.host.mockResolvedValue({
-    issuer: "https://gone.example",
-    resource: "https://gone.example/api",
-  });
-  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  f.end.mockRejectedValue(new Error("issuer unavailable"));
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     const response = await deviceAuth(
-      new Request(`${origin}/devices/satellite1/login?issuer=${encodeURIComponent(selfHost)}`, {
+      new Request(`${origin}/devices/satellite1/login`, {
         method: "POST",
         headers: { origin, cookie },
       }),
       f.env,
       f.deps,
     );
-    expect(response?.status).toBe(303);
-    expect(f.begin).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith("kit.device_login_left_session", {
-      platform: "https://gone.example",
-      error: "Sign-out could not reach Iterate (500). Try again.",
-    });
+    expect(response?.status).toBe(503);
+    expect(f.begin).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "kit.device_login_failed",
+      expect.objectContaining({ deviceId: "satellite1" }),
+    );
   } finally {
     log.mockRestore();
   }
 });
+
 test("a connect link to another iterate platform carries it to device selection, checked", async () => {
   const f = fixture();
   const connect = await deviceAuth(
@@ -187,6 +184,28 @@ test("a platform that doesn't answer as iterate is refused before any session ch
   expect(await response?.text()).toContain("does not answer as an iterate platform");
   expect(f.end).not.toHaveBeenCalled();
   expect(f.begin).not.toHaveBeenCalled();
+});
+
+test("a session whose platform is gone doesn't block setting up another board", async () => {
+  const f = fixture();
+  f.end.mockRejectedValue(new Error("Sign-out could not reach Iterate (522). Try again."));
+  f.host.mockResolvedValue({
+    issuer: "https://gone.example",
+    resource: "https://gone.example/api",
+  });
+  f.deps.issuerAnswersAt.mockImplementation(async (issuer: string) =>
+    issuer === "https://gone.example" ? "gone.example could not be reached." : null,
+  );
+  const response = await deviceAuth(
+    new Request(`${origin}/devices/satellite1/login?issuer=${encodeURIComponent(selfHost)}`, {
+      method: "POST",
+      headers: { origin, cookie },
+    }),
+    f.env,
+    f.deps,
+  );
+  expect(response?.status).toBe(303);
+  expect(f.begin).toHaveBeenCalledOnce();
 });
 
 function fixture() {
