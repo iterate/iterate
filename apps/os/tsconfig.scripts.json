@@ -6,6 +6,8 @@
   },
   "include": [
     "vite.config.ts",
+    "vitest.config.ts",
+    "vitest.global-setup.ts",
     "scripts/build.ts",
     "scripts/dev.ts",
     "scripts/deploy.ts",

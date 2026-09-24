@@ -12,6 +12,7 @@
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- a bench of the one-shot shape (a cron's), on purpose
 import { newHttpBatchRpcSession } from "capnweb";
 import { bench, describe } from "vitest";
+import type { IterateRpcTarget } from "../src/session.ts";
 import { adminCredentials, freshCtx, openItx, session, workerUrl } from "../e2e/support/client.ts";
 import { enableFixtureProcessor } from "../e2e/support/sources.ts";
 
@@ -23,7 +24,7 @@ const invoke = (itx: any, expression: unknown) => itx.invoke(expression);
  *  the ONE POST (a cron's shape). */
 const httpBatch = (ctx: string, itxExpression: string): Promise<unknown> =>
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- see above
-  newHttpBatchRpcSession<any>(workerUrl("/api"))
+  newHttpBatchRpcSession<IterateRpcTarget>(workerUrl("/api"))
     .authenticate(adminCredentials())
     .projects.get(ctx)
     .invoke(itxExpression);

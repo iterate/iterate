@@ -54,11 +54,7 @@ const percentile = (sorted: number[], p: number): number =>
 function laneOf(e: TailEvent): string {
   const model = e.executionModel || "?";
   const url = e.event?.request?.url;
-  if (url) {
-    const u = new URL(url);
-    const itx = u.searchParams.get("itx");
-    return `${model} ${u.pathname}${itx ? ` ${itx.slice(0, 40)}` : ""}`;
-  }
+  if (url) return `${model} ${new URL(url).pathname}`;
   if (e.event?.rpcMethod) return `${model} rpc:${e.event.rpcMethod}`;
   if (e.event?.type) return `${model} ${e.event.type}`;
   return `${model} ${e.entrypoint || "(no request)"}`;
@@ -71,11 +67,11 @@ const lanes = new Map<string, { cpu: number[]; wall: number[]; outcomes: Map<str
 for (const e of events) {
   const lane = laneOf(e);
   if (labelRegex && !new RegExp(labelRegex).test(lane)) continue;
-  const l = lanes.get(lane) ?? { cpu: [], wall: [], outcomes: new Map() };
+  let l = lanes.get(lane);
+  if (!l) lanes.set(lane, (l = { cpu: [], wall: [], outcomes: new Map() }));
   if (typeof e.cpuTime === "number") l.cpu.push(e.cpuTime);
   if (typeof e.wallTime === "number") l.wall.push(e.wallTime);
   l.outcomes.set(e.outcome || "?", (l.outcomes.get(e.outcome || "?") ?? 0) + 1);
-  lanes.set(lane, l);
 }
 const rows = [...lanes.entries()]
   .sort((a, b) => b[1].wall.length - a[1].wall.length)

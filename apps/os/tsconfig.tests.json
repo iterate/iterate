@@ -1,6 +1,6 @@
 {
   // Typecheck for the TEST TREES the base config's `include: ["src"]` never sees: the vitest E2E
-  // lane (e2e/**), the workers suite (__workers-tests__/**) and the
+  // lane (e2e/**) and its benchmarks (bench/**), the workers suite (__workers-tests__/**) and the
   // node scripts (scripts/**). Keeps workers-types (the tests import src, which needs them) and adds
   // node types (the tests run in Node). `pnpm typecheck` runs all three configs.
   "extends": "./tsconfig.json",
@@ -9,13 +9,13 @@
   },
   "include": [
     "e2e",
+    "bench",
     "../agents/e2e",
     "../agents/__workers-tests__",
     "__workers-tests__",
     "scripts/inspect-context.ts",
     "scripts/project-seed*.ts",
-    "scripts/memory-budget-scenarios.ts",
-    "src/sql.d.ts"
+    "scripts/memory-budget-scenarios.ts"
   ],
   "exclude": []
 }
