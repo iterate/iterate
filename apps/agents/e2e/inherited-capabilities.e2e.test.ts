@@ -151,7 +151,7 @@ createFailing(test, /should not reach past the mask/)(
 );
 
 createFailing(test, /voice agent's parent link should be the context that asked/, {
-  timeoutMs: 120_000,
+  timeoutMs: 60_000,
 })(
   "a context linked to the root cannot reach past its own mask through a voice agent it sets up with the root's `itx.voice`",
   async () => {

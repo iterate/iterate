@@ -1,4 +1,5 @@
 import { deflateRawSync } from "node:zlib";
+import { E2E_BUDGET_EXEMPTIONS } from "@iterate-com/shared/test-support/e2e-policy";
 import { expect, test } from "vitest";
 import { FlakeDashboardState, flakeEventTypes, type FlakeDashboardEvent } from "./contract.ts";
 import {
@@ -697,6 +698,89 @@ test("a folded state survives the JSON round trip the writer's state artifact ma
   expect(FlakeDashboardState.parse(JSON.parse(JSON.stringify(state)))).toEqual(state);
 });
 
+test("the Cost section prices each suite's rows: percentiles, marginal wall, retries, PR failures and proposals", async () => {
+  const h = makeHarness();
+  const exempt = Object.keys(E2E_BUDGET_EXEMPTIONS)[0]!;
+  const row = (name: string, startMs: number, durationMs: number, extra = {}) => ({
+    name,
+    outcome: "pass" as const,
+    startMs,
+    durationMs,
+    ...extra,
+  });
+  const incident = (n: number) =>
+    Array.from({ length: 8 }, (_, i) =>
+      row(`quick ${i}`, 0, 2_000, {
+        outcome: "fail",
+        retries: 1,
+        error: `internal error; reference = ${n}f00ba4${i}deadbeef`,
+      }),
+    );
+  await h.append(birth());
+  for (const n of [1, 2, 3, 4])
+    await h.append(
+      runRecorded(n, [], {
+        suite: "preview-e2e",
+        branch: n === 4 ? "main" : "some-pr",
+        tests: [
+          row("a quiet minute", 13_000, 181_000),
+          row(exempt, 13_000, 61_000),
+          row("a slow row", 13_000, 400_000, { tags: ["slow"] }),
+          row("a flaky row", 13_000, 3_000, {
+            outcome: "fail",
+            retries: 1,
+            failed: n === 2,
+            error: "socket closed",
+          }),
+          row("a quick row", 13_000, 9_000),
+          row("a sometimes slow row", 13_000, n === 1 ? 12_000 : 5_000),
+          ...(n === 3 ? incident(n) : []),
+        ],
+      }),
+    );
+
+  const body = renderBody(h.state());
+  expect(body).toContain("## Cost");
+  expect(body).toContain("### preview-e2e: 4 runs since Jan 2, 12:00am UTC · 1 incident");
+  expect(
+    body
+      .split("\n")
+      .filter(
+        (line) =>
+          line.endsWith("proposal") || / \| (—|exempt|make faster.*|tagged `slow`)$/u.test(line),
+      ),
+  ).toEqual([
+    "row | p50 | p95 | marginal | retries | PR failures | proposal",
+    "a slow row | 400.0 s | 400.0 s | 219.0 s | 0 | 0 | tagged `slow`",
+    "a quiet minute | 181.0 s | 181.0 s | — | 0 | 0 | make faster, or tag `slow`",
+    `${exempt} | 61.0 s | 61.0 s | — | 0 | 0 | exempt`,
+    "a sometimes slow row | < 10.0 s | 12.0 s | — | 0 | 0 | —",
+    "a flaky row | 3.0 s | 3.0 s | — | 4 | 1 | —",
+  ]);
+  expect(body).toContain(
+    "- incident, Jan 4, 12:00am UTC: 8 rows failed an attempt with `internal error; reference = …`",
+  );
+  expect(body).not.toContain("a quick row");
+});
+
+test("the Cost window keeps each suite's last 100 complete runs and nothing older", async () => {
+  const h = makeHarness();
+  await h.append(birth());
+  const run = (n: number, name: string) =>
+    runRecorded(n, [], {
+      tests: [{ name, outcome: "pass", startMs: 0, durationMs: 20_000 }],
+    });
+  await h.append(run(1, "an old row"), run(2, "an old row"));
+  for (let n = 3; n <= 102; n++) await h.append(run(n, "a new row"));
+
+  expect(h.state().costs.unit).toMatchObject({ runs: expect.any(Array), incidents: [] });
+  expect(h.state().costs.unit!.runs).toHaveLength(100);
+  expect(Object.keys(h.state().costs.unit!.rows)).toEqual(["a new row"]);
+  // A run without per-row durations (a summary written before them) is not priced.
+  await h.append(runRecorded(103, [], { tests: [{ name: "a new row", outcome: "pass" }] }));
+  expect(h.state().costs.unit!.runs.at(-1)).toBe(Date.parse(day(102)));
+});
+
 // --- helpers ---
 
 /**
@@ -787,7 +871,16 @@ function runRecorded(
     branch?: string;
     suite?: string;
     complete?: boolean;
-    tests?: { name: string; outcome: "pass" | "fail" | "skip" }[];
+    tests?: Array<{
+      name: string;
+      outcome: "pass" | "fail" | "skip";
+      durationMs?: number;
+      startMs?: number;
+      tags?: string[];
+      retries?: number;
+      failed?: boolean;
+      error?: string;
+    }>;
   },
 ) {
   return {

@@ -16,6 +16,15 @@ export const FlakeSuiteSummary = z
         z.object({
           name: z.string().min(1),
           outcome: z.enum(["pass", "fail", "skip"]),
+          // What the dashboard's Cost section reads (scripts/ci/flake-dashboard/fold.ts): how long
+          // the row ran, when it started after the suite did, its tags, its retries, whether it
+          // failed after them, and its first failure's message.
+          durationMs: z.number().int().nonnegative().optional(),
+          startMs: z.number().int().nonnegative().optional(),
+          tags: z.array(z.string()).optional(),
+          retries: z.number().int().nonnegative().optional(),
+          failed: z.boolean().optional(),
+          error: z.string().max(300).optional(),
         }),
       )
       .optional(),

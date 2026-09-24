@@ -87,18 +87,31 @@ export async function writeFlakeSuiteSummaries(input: {
       startedAt,
       finishedAt,
       testCount: tests.length,
-      tests: tests.map((test) => ({
-        name: test.leafName || test.fullName,
-        outcome:
-          test.state === "passed" &&
-          test.retryCount === 0 &&
-          !test.passedAfterRetry &&
-          (!test.expectedState || test.expectedState === "passed")
-            ? "pass"
-            : ["skipped", "pending", "interrupted"].includes(test.state)
-              ? "skip"
-              : "fail",
-      })),
+      tests: tests.map((test) => {
+        const failed = testTelemetryFailed(test);
+        const error =
+          (failed || test.retryCount > 0) && (test.firstFailure || test.errors[0]?.message);
+        return {
+          name: test.leafName || test.fullName,
+          outcome:
+            test.state === "passed" &&
+            test.retryCount === 0 &&
+            !test.passedAfterRetry &&
+            (!test.expectedState || test.expectedState === "passed")
+              ? "pass"
+              : ["skipped", "pending", "interrupted"].includes(test.state)
+                ? "skip"
+                : "fail",
+          durationMs: Math.round(test.durationMs),
+          ...(test.startedAt && {
+            startMs: Math.max(0, Date.parse(test.startedAt) - Date.parse(startedAt)),
+          }),
+          ...(test.tags.length > 0 && { tags: test.tags }),
+          ...(test.retryCount > 0 && { retries: test.retryCount }),
+          failed,
+          ...(error && { error: error.slice(0, 300) }),
+        };
+      }),
       unknownFlakeCount: tests.filter((test) => unknownFlakeRecordFromTelemetry(test) !== null)
         .length,
       failedCount: tests.filter(testTelemetryFailed).length,

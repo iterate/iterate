@@ -57,9 +57,10 @@ const crashHunt = test.skipIf(
 
 const EVENT_COUNT = 24;
 const EVENT_CHARS = 6 * MiB;
-/** The seed's own budget (up to 10 minutes for 144 MiB of appends) on top of a read-driven row's. The
- *  first of those rows to run pays it; `seededLog()` hands the others the same context. */
-const SEEDED_ROW_TIMEOUT = 600_000 + 300_000;
+/** A read-driven row's budget, the seed included: the first of those rows to run pays for the 144 MiB
+ *  of appends (the read row took 13–16 s with it against a preview, 30 runs on 2026-09-24), and
+ *  `seededLog()` hands the others the same context. */
+const SEEDED_ROW_TIMEOUT = 90_000;
 let seed: Promise<{ ctx: string; offsets: number[] }> | undefined;
 
 // ── the memory pins ──
@@ -138,7 +139,7 @@ export default class Oomer extends WorkerEntrypoint {
 // count; it is not a `.fails` pin, because a flip here would signal luck, never a ceiling.
 crashHunt(
   "CONCURRENT READERS (accepted limit): 24 sessions paging one 144 MiB log at once may reset the DO — the per-read byte budget bounds one read, not their sum; the ctx recovers on the next call",
-  { timeout: SEEDED_ROW_TIMEOUT },
+  { timeout: 300_000 },
   async () => {
     const { ctx: seededCtx } = await seededLog();
     const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
@@ -171,7 +172,7 @@ test.sequential(
 
 test.sequential(
   "append: one event past the platform ceiling is refused at append with EVENT_TOO_LARGE, nothing written",
-  { timeout: 120_000 },
+  { timeout: 90_000 },
   async () => {
     const itx = openItx(freshCtx("membudget-append"));
     const [marker] = await itx.append({ type: "marker" });
@@ -313,7 +314,7 @@ crashHunt(
 
 deployedOnly.sequential(
   "LOADED-ISOLATE OOM: a stateless WorkerEntrypoint that allocates unboundedly OOMs its OWN loaded isolate — the caller gets `Worker exceeded memory limit.` (.overloaded, NO .durableObjectReset) and the parent DO is untouched (a ceiling that HOLDS at the loaded-isolate boundary)",
-  { timeout: 120_000 },
+  { timeout: 90_000 },
   async () => {
     const itx = openItx(freshCtx("degrade-loaded"));
     expect(await itx.invoke(["itx", "workers", ["get", { source: OOMER_SOURCE }], ["ping"]])).toBe(

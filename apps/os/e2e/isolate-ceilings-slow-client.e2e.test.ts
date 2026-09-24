@@ -12,7 +12,7 @@ import { deployedOnly } from "./support/project-host.ts";
 // fire-and-forget push stays in flight, retaining its bytes on the DO until it resets at ~125 × 1 MiB.
 deployedOnly(
   "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
-  { timeout: 300_000 },
+  { timeout: 90_000 },
   async () => {
     const ctx = freshCtx("degrade-slow");
     // A live callback lent to the DO; it never returns, so every delivered push is retained in flight.

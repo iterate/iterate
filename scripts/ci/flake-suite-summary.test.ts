@@ -68,6 +68,52 @@ test("per-test evidence uses the retry record's identity and never counts retrie
   });
 });
 
+test("each row carries what the dashboard's Cost section reads", async () => {
+  using output = temporaryDirectory();
+  const artifact = browserResult();
+  const base = artifact.tests[0]!;
+  artifact.tests = [
+    { ...base, startedAt: "2026-09-15T12:00:13.000Z", durationMs: 181_400.4, tags: ["slow"] },
+    {
+      ...base,
+      leafName: "retried",
+      retryCount: 1,
+      passedAfterRetry: true,
+      outcome: "flaky",
+      firstFailure: "socket closed",
+    },
+    {
+      ...base,
+      leafName: "failed",
+      state: "failed",
+      outcome: "unexpected",
+      errors: [{ message: "x".repeat(400) }],
+    },
+  ];
+  await writeFlakeSuiteSummaries({
+    directory: output.path,
+    group: "preview",
+    artifacts: [artifact],
+    expectedWorkspaces: [],
+    cancelled: false,
+    headSha: "abc123",
+  });
+  const summary = JSON.parse(readFileSync(join(output.path, "specs/suite-summary.json"), "utf8"));
+  expect(summary).toMatchObject({
+    tests: [
+      {
+        name: "sends a message",
+        outcome: "pass",
+        durationMs: 181_400,
+        startMs: 13_000,
+        tags: ["slow"],
+      },
+      { name: "retried", outcome: "fail", durationMs: 20, retries: 1, error: "socket closed" },
+      { name: "failed", outcome: "fail", durationMs: 20, failed: true, error: "x".repeat(300) },
+    ],
+  });
+});
+
 test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"])(
   "%s cannot publish a clean complete result",
   async (failure) => {

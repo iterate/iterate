@@ -139,7 +139,7 @@ test("200 push subscribers — one append fans out to all 200, exactly once each
   );
   await sleep(300);
   expect(fan.counts.every((c) => c === 2)).toBe(true); // exactly once per round, no dup fan-out
-}, 120_000);
+}, 90_000);
 
 test("50 userspace processors: one append reaches all 50", async () => {
   const itx = openItx(freshCtx("fan50"));
@@ -154,7 +154,7 @@ test("50 userspace processors: one append reaches all 50", async () => {
   const snap = await itx.invoke(`itx.facets.get('fan7').snapshot()`);
   expect(snap.offset).toBeGreaterThanOrEqual(offset);
   expect((snap.state as { n: number }).n).toBeGreaterThan(0);
-}, 240_000);
+}, 90_000);
 
 test("an append of 900 events in one batch arrives as ONE callback invocation (batch preserved)", async () => {
   const itx = openItx(freshCtx("bigbatch"));
