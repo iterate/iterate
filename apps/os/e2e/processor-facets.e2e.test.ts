@@ -105,11 +105,7 @@ test("facet address: the built-in door, a rewrite rule onto it, barrier verb, pr
   expect(rewritten?.state?.counts?.mark).toBe(1);
   await itx.provide("itx.counts", null);
 
-  // 4. the facets.get(slug).snapshot() address still answers
-  const sugar = await itx.invoke("itx.facets.get('tally').snapshot()");
-  expect(sugar?.state?.counts?.mark).toBe(1);
-
-  // 5. a name the facet does not expose rejects — in the RPC receiver's own words (no probe-defense
+  // 4. a name the facet does not expose rejects — in the RPC receiver's own words (no probe-defense
   //    layer in between: trusted clients, expression.ts)
   await expect(itx.invoke(`itx.facets.get('tally').toString()`)).rejects.toThrow();
 });

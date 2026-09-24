@@ -47,7 +47,12 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
   for (const host of ["echo--routing-shapes", "echo.routing-shapes"]) {
     const seen = await call(`https://${host}.projects.test/`, forged);
     expect(seen.status, await seen.clone().text()).toBe(200);
-    expect(await seen.json()).toEqual({ principal: null, authorization: null, app: "echo" });
+    expect(await seen.json()).toEqual({
+      principal: null,
+      authorization: null,
+      cookie: null,
+      app: "echo",
+    });
   }
   // the apex: the bundled ConfigWorker's fetch — the project's bare homepage
   const apex = await call("https://routing-shapes.projects.test/", forged);

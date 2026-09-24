@@ -71,8 +71,6 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
     pinged = true;
   });
   await until("capnweb callback fired", () => pinged);
-  // capnweb client: itx.demo.timer.callLater(cb) — the callback fired back in the client
-  expect(pinged).toBe(true);
 
   // ── lane 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
   const SRC_CONSUMER = {
@@ -95,12 +93,10 @@ export default class Consumer extends WorkerEntrypoint {
   const ran = await itx.workers.get({ source: SRC_CONSUMER }).run();
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
-  const got = await until("worker callback appended to the stream", async () => {
+  await until("worker callback appended to the stream", async () => {
     const page = await itx.invoke(["itx", ["readEvents", 0, 500]]);
     return page.events.find((e: { type: string }) => e.type === "pinged-from-worker");
   });
-  // dynamic worker: env.ITX.get().demo.timer.callLater(cb) — the callback ran back inside the worker
-  expect(got).toBeTruthy();
 
   demo[Symbol.dispose](); // recall the stub and un-set its rule
 });

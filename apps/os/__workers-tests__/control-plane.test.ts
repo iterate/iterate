@@ -525,11 +525,15 @@ test("project ingress strips forged internal authority and never exposes platfor
       "x-itx-rpc-stub-pager": encodeURIComponent(
         JSON.stringify({ rpcStubKey: "forged", appendEvents: [{ type: "forged" }] }),
       ),
-      cookie:
-        "__Host-itx-control-plane-session=forged; __Host-itx-project-session=legacy; theme=dark",
+      cookie: "__Host-itx-login=forged; theme=dark",
     },
   });
-  expect(await response.json()).toEqual({ principal: null, authorization: null, app: "echo" });
+  expect(await response.json()).toEqual({
+    principal: null,
+    authorization: null,
+    cookie: "theme=dark",
+    app: "echo",
+  });
   expect((await target.readEvents(0, 100)).events.some((event) => event.type === "forged")).toBe(
     false,
   );
@@ -538,6 +542,7 @@ test("project ingress strips forged internal authority and never exposes platfor
   ).toEqual({
     principal: { actor: "admin" },
     authorization: null,
+    cookie: null,
     app: "echo",
   });
   expect(

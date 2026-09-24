@@ -331,8 +331,6 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
       clientPinged = true;
     });
   await until("capnweb client callback fired", () => clientPinged, 30_000);
-  // capnweb client: facets.get('counterA', aRef).demo.timer.callLater(cb) — callback fired back in the client
-  expect(clientPinged).toBe(true);
 
   // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
   const ran = await itx.workers.get({ source: SRC_WORKER_B }).run(aRef);
@@ -340,7 +338,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   expect(ran?.ran).toBe(true);
   expect(ran?.pinged).toBe(true);
 
-  const got = await until(
+  await until(
     "worker B's callback appended to the stream",
     async () => {
       const page = await itx.invoke(["itx", ["readEvents", 0, 500]]);
@@ -348,8 +346,6 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
     },
     30_000,
   );
-  // dynamic worker B: the callback effect (stream append) is observable at the client
-  expect(got).toBeTruthy();
 });
 
 // ── the persistent stub ──

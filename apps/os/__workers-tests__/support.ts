@@ -56,8 +56,8 @@ export const adminCredentials = () => ({ type: "admin-secret" as const, secret: 
 export const loginPassword = (): string =>
   String((env as unknown as { APP_CONFIG_LOGIN__PASSWORD: string }).APP_CONFIG_LOGIN__PASSWORD);
 
-/** An app that answers with what the platform handed it: the principal stamp, the bearer and the
- *  trusted app label — provided as `itx.apps.<label>` and fetched on a project host. */
+/** An app that answers with what the platform handed it: the principal stamp, the bearer, the
+ *  cookies and the trusted app label — provided as `itx.apps.<label>` and fetched on a project host. */
 export const SRC_ECHO_APP = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
@@ -65,6 +65,7 @@ export default class Echo extends WorkerEntrypoint {
     return Response.json({
       principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
       authorization: request.headers.get("authorization"),
+      cookie: request.headers.get("cookie"),
       app: request.headers.get("x-iterate-app"),
     });
   }

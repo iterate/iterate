@@ -181,20 +181,18 @@ test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing
   // A wrong guess at a live provider's surface propagates the RAW capnweb reject — it still ERRORS
   // (that's the contract), just without a re-grammared "did not resolve to a function".
   const { itx } = await slackRig(freshCtx("miss"));
-  const err = await rejection(
+  await rejection(
     itx.slack.api.postMessage({ channel: "#x", text: "y" }),
     "dotted call through an invented namespace",
   );
-  expect(String(err.message || err)).toBeTruthy();
 });
 
 test("a leaf miss through the EXPLICIT door also rejects", async () => {
   const { itx } = await slackRig(freshCtx("leaf"));
-  const err = await rejection(
+  await rejection(
     itx.invoke(["itx", "slack", "chat", ["nosuchMethod", { channel: "#x", text: "y" }]]),
     "explicit-door call on a method the bridge never had",
   );
-  expect(String(err.message || err)).toBeTruthy();
 });
 
 test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
