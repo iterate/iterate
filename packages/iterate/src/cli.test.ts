@@ -70,6 +70,16 @@ test("refresh goes to the same issuer and rejects malformed tokens", async () =>
     expect(fetch.mock.calls[0][1].body.get("resource")).toBe("http://localhost:54896/api");
     fetch.mockResolvedValueOnce(new Response("{}"));
     await expect(refreshOAuthSession(input)).rejects.toThrow();
+    // A refused refresh names the provider's error, so invalid_grant reads apart from any other 400.
+    fetch.mockResolvedValueOnce(
+      Response.json(
+        { error: "invalid_grant", error_description: "Invalid refresh token" },
+        { status: 400 },
+      ),
+    );
+    await expect(refreshOAuthSession(input)).rejects.toThrow(
+      'OAuth refresh failed (400): {"error":"invalid_grant","error_description":"Invalid refresh token"}',
+    );
   } finally {
     vi.unstubAllGlobals();
   }

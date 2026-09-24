@@ -1,6 +1,7 @@
 // src/control-plane/durable-object.ts — THE CONTROL PLANE: the `CONTROL_PLANE` singleton Durable
 // Object (getByName("global")), plain methods over its database (catalog.ts, a normal DO with SQLite,
-// not D1). A read is a query; a write is the database's synchronous block wrapped in one transaction,
+// not D1) and over the OAuth provider's grants (oauth-grants.ts, which need a read that sees the last
+// write). A read is a query; a write is the database's synchronous block wrapped in one transaction,
 // so a refusal partway leaves nothing. Reached by BINDING, not hosted as a facet of any context (so
 // nothing else can host it): control-plane/edge.ts is the worker's typed client. It touches no other
 // context — the session (session.ts) appends a project's saga request and an entity's activity to
@@ -9,9 +10,15 @@ import { DurableObject } from "cloudflare:workers";
 import type { OrganizationRole } from "../organization/contract.ts";
 import { type Caller, ControlPlaneDatabase } from "./catalog.ts";
 import type { IdentityProvider } from "./contract.ts";
+import { OAuthGrantTable } from "./oauth-grants.ts";
+
+/** KV's clock: epoch seconds. */
+const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 export class ControlPlaneDurableObject extends DurableObject {
   readonly #db = new ControlPlaneDatabase(this.ctx.storage.sql);
+  /** The OAuth provider's grants (oauth-grants.ts), read and written through oauth-store.ts. */
+  readonly #grants = new OAuthGrantTable(this.ctx.storage.sql);
 
   /** A write — the database's synchronous check-and-insert — in one transaction: it stands whole or
    *  a refusal leaves nothing. */
@@ -95,5 +102,18 @@ export class ControlPlaneDurableObject extends DurableObject {
     input: { project: string; organizationId?: string; restoreProjectId?: string },
   ) {
     return this.#write(() => this.#db.createProject(caller, input));
+  }
+
+  oauthGrant(key: string) {
+    return this.#grants.get(key, nowSeconds());
+  }
+  listOAuthGrants(prefix: string, options: { cursor?: string; limit?: number }) {
+    return this.#grants.list(prefix, options, nowSeconds());
+  }
+  putOAuthGrant(key: string, value: string, expiresAt: number | null) {
+    this.#write(() => this.#grants.put(key, value, expiresAt, nowSeconds()));
+  }
+  deleteOAuthGrant(key: string) {
+    this.#grants.delete(key);
   }
 }

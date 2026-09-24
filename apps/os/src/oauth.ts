@@ -15,6 +15,7 @@ import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
+import { providerStore } from "./oauth-store.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization, so it has a
  * nonempty, allowed resource audience. */
@@ -162,15 +163,20 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
 /** One provider configuration owns issuance and both resource protocols. No global
  * resource pin: the provider supports audience arrays and downscoping itself.
  * parseAuthorization is the only public consent path and requires allowed resources. */
-export function providerOptions(
+function providerOptions(
   env: Env,
   { platformOrigin: issuer, api, mcp }: PlatformAddresses,
-  apiHandler: Handler = notFound,
-  defaultHandler: Handler = notFound,
+  apiHandler: Handler,
+  defaultHandler: Handler,
 ): OAuthProviderOptions<Env> {
+  // The provider hands its handlers the env it runs over (`providerEnv`); they run over the
+  // worker's own.
+  const onWorkerEnv = (handler: Handler): Handler => ({
+    fetch: (request, _providerEnv, ctx) => handler.fetch(request, env, ctx),
+  });
   return {
-    apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
-    defaultHandler,
+    apiHandlers: { [api]: onWorkerEnv(apiHandler), [mcp]: onWorkerEnv(apiHandler) },
+    defaultHandler: onWorkerEnv(defaultHandler),
     authorizeEndpoint: `${issuer}/oauth2/auth`,
     tokenEndpoint: `${issuer}/oauth2/token`,
     // DCR is served on every deployment (not just local http): CIMD stays the apps' own path
@@ -224,8 +230,31 @@ export function providerOptions(
   };
 }
 
+/** The env the provider runs over: the worker's, with `OAUTH_KV` the provider's store
+ *  (oauth-store.ts), whose grants live in the control plane. */
+const providerEnv = (env: Env): Env => ({ ...env, OAUTH_KV: providerStore(env) });
+
 export function oauthHelpers(env: Env, addresses: PlatformAddresses) {
-  return getOAuthApi(providerOptions(env, addresses), env);
+  return getOAuthApi(providerOptions(env, addresses, notFound, notFound), providerEnv(env));
+}
+
+/** A request through the provider: its endpoints, then `apiHandler` for a request to `/api` or
+ *  `/mcp` bearing a token it admits, and `defaultHandler` for everything else. */
+export function providerFetch(
+  env: Env,
+  addresses: PlatformAddresses,
+  request: Request,
+  ctx: ExecutionContext,
+  {
+    apiHandler = notFound,
+    defaultHandler = notFound,
+  }: { apiHandler?: Handler; defaultHandler?: Handler } = {},
+): Promise<Response> {
+  return new OAuthProvider(providerOptions(env, addresses, apiHandler, defaultHandler)).fetch(
+    request,
+    providerEnv(env),
+    ctx,
+  );
 }
 
 /** The browser adapter asks the same provider gate to admit its server-held token
@@ -246,11 +275,7 @@ export async function authorizationForToken(
   const apiRequest = new Request(addresses.api, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const response = await new OAuthProvider(providerOptions(env, addresses, admission)).fetch(
-    apiRequest,
-    env,
-    ctx,
-  );
+  const response = await providerFetch(env, addresses, apiRequest, ctx, { apiHandler: admission });
   if (response.status !== 204 && response.status !== 401)
     throw new Error(`Token admission failed (${response.status})`);
   return authorization as Authorization | null; // Assigned inside the awaited handler; TS cannot track that closure assignment.

@@ -411,7 +411,9 @@ export const refreshOAuthSession = async (input: {
   });
 
   if (!response.ok) {
-    throw new Error(`OAuth refresh failed (${response.status}). Run \`iterate login\` again.`);
+    throw new Error(
+      `OAuth refresh failed (${response.status}): ${await readErrorBody(response)}. Run \`iterate login\` again.`,
+    );
   }
 
   const token = OAuthTokenResponse.parse(await response.json());

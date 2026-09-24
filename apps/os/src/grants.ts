@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  CimdFetchError,
-  OAuthProvider,
-  type GrantSummary,
-} from "@cloudflare/workers-oauth-provider";
+import { CimdFetchError, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
 import type { GrantRecord } from "iterate/next/api";
@@ -17,7 +13,7 @@ import {
   authorizationOf,
   oauthHelpers,
   parseAuthorization,
-  providerOptions,
+  providerFetch,
   revokeGrant,
   type GrantProps,
   type Authorization,
@@ -258,7 +254,9 @@ export class GrantsRpcTarget extends RpcTarget {
     if (!code) throw new Error("The token authorization did not produce a code.");
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
-    const response = await new OAuthProvider(providerOptions(env, this.#addresses)).fetch(
+    const response = await providerFetch(
+      env,
+      this.#addresses,
       new Request(`${issuer}/oauth2/token`, {
         method: "POST",
         body: new URLSearchParams({
@@ -269,7 +267,6 @@ export class GrantsRpcTarget extends RpcTarget {
           code,
         }),
       }),
-      env,
       ctx,
     );
     if (!response.ok) throw new Error(`Token exchange refused (${response.status}).`);
