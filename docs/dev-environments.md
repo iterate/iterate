@@ -44,7 +44,7 @@ pnpm dev -- --port 8799   # a second worktree, alongside
 ```
 
 OS local dev needs no Doppler. `doppler.yaml` still maps each app directory to
-its Doppler project (`apps/os` → `project-worker`), so `doppler setup` once per
+its Doppler project (`apps/os` → `os`), so `doppler setup` once per
 worktree scopes the monorepo for the deploy, preview and seed commands that do
 read secrets.
 
@@ -136,7 +136,7 @@ read secrets.
   workers.dev or localhost origin, so prd answers 404. Locally, mint one with
   the dev key (`specs/os/test-link.spec.ts` shows how). Anyone can still sign
   in with any email and the preview's password (Doppler
-  `project-worker/preview`, `APP_CONFIG.login.password`).
+  `os/preview`, `APP_CONFIG.login.password`).
 
 - Template-carrying projects: a project can be born from a config template
   still in flight on a PR. `projects.create({ project, configRepoTemplate })`
@@ -186,7 +186,7 @@ APP_CONFIG_ADMIN_API_SECRET=dev-admin-api-secret pnpm exec iterate --config loca
 
 Against a deployment, the bearer and the password are that environment's
 secrets, inside the `APP_CONFIG` of its Doppler config
-(`project-worker/preview` for previews, `project-worker/prd` for production).
+(`os/preview` for previews, `os/prd` for production).
 Read them under `doppler run`, never into a shared channel.
 
 The deployment's two secrets give you three ways in:
@@ -245,7 +245,7 @@ pnpm spec
 
 # deployed preview: the Doppler config supplies the preview's APP_CONFIG
 DEMO_BASE_URL=https://pr<n>-<branch slug>-os-preview.iterate-dev-preview.workers.dev \
-  doppler run --project project-worker --config preview -- pnpm spec
+  doppler run --project os --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
 pnpm spec specs/os/auth.spec.ts --headed
@@ -270,13 +270,13 @@ its people sign in with Google, Cloudflare or the mailed code.)
 
 ```bash
 # an operator session against production (reaches every project); the bearer is
-# secrets.adminBearer in the APP_CONFIG of Doppler project-worker/prd
+# secrets.adminBearer in the APP_CONFIG of Doppler os/prd
 APP_CONFIG_ADMIN_API_SECRET=<prd adminBearer> pnpm exec iterate --config prd \
   itx run --project <slug> --eval 'return await itx.whoami();'
 ```
 
 Production's operator bearer is a **master key**: anyone holding
-`secrets.adminBearer` from `project-worker/prd` can act on every project, and
+`secrets.adminBearer` from `os/prd` can act on every project, and
 as any user. So is a production `login.password`, if one is ever set: it signs
 in as any email. Every run is attributed on the project's root log to the
 principal that made it, but the bearer's principal is the operator, not a
@@ -353,7 +353,7 @@ invariants:
   ```bash
   # What would the nightly sweep delete, and why?
   cd apps/os
-  doppler run --project project-worker --config preview -- pnpm preview sweep --dry-run
+  doppler run --project os --config preview -- pnpm preview sweep --dry-run
   ```
 
 CI and local machines run the **same preview commands**. Doppler/Cloudflare
@@ -423,18 +423,18 @@ one test repeatedly without redeploying (from `apps/os`):
 PREVIEW=https://pr1234-<branch slug>-os-preview.iterate-dev-preview.workers.dev
 
 # one Vitest file, one test (paths are relative to apps/os)
-WORKER_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
+WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
   pnpm e2e e2e/session.e2e.test.ts -t "projects.create"
 
 # the whole suite N times, tallying every row that did not pass every time
-WORKER_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
+WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
   pnpm e2e:soak --runs 25 --filter session
 ```
 
 One spec, repeated, from the repo root (`pnpm spec` is the root's script):
 
 ```bash
-DEMO_BASE_URL=$PREVIEW doppler run --project project-worker --config preview -- \
+DEMO_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
   pnpm spec specs/os/auth.spec.ts --repeat-each 25
 ```
 
@@ -470,17 +470,17 @@ previews from deploying over you and PR cleanups from deleting your work:
 
 ```bash
 cd apps/os
-doppler run --project project-worker --config preview -- pnpm preview deploy --name exp-<you>
+doppler run --project os --config preview -- pnpm preview deploy --name exp-<you>
 # → https://exp-<you>-os-preview.iterate-dev-preview.workers.dev
 
 # sign in there with any email and the preview password, drive it as operator,
 # or run the specs against it:
 DEMO_BASE_URL=https://exp-<you>-os-preview.iterate-dev-preview.workers.dev \
-  doppler run --project project-worker --config preview -- pnpm spec
+  doppler run --project os --config preview -- pnpm spec
 
 # delete it when done; otherwise the sweep takes it 24 h after its last deploy
 # (unless an open PR's head branch slugifies to the same name)
-doppler run --project project-worker --config preview -- pnpm preview delete --name exp-<you>
+doppler run --project os --config preview -- pnpm preview delete --name exp-<you>
 ```
 
 The OS e2e soak uses exactly this with `--name soak`.
@@ -498,9 +498,9 @@ from least to most destructive:
 
 ```bash
 cd apps/os
-doppler run --project project-worker --config preview -- pnpm preview sweep --dry-run  # what is stale, and why
-doppler run --project project-worker --config preview -- pnpm preview reset --pr 1234 --name <branch>
-doppler run --project project-worker --config preview -- pnpm preview sweep            # delete stale previews and orphans
+doppler run --project os --config preview -- pnpm preview sweep --dry-run  # what is stale, and why
+doppler run --project os --config preview -- pnpm preview reset --pr 1234 --name <branch>
+doppler run --project os --config preview -- pnpm preview sweep            # delete stale previews and orphans
 ```
 
 Automation never deletes a preview whose PR is open and recently deployed. A
@@ -512,7 +512,7 @@ deletion is logged in the job that made it.
 A preview's configuration is **inherited, not provisioned**: every preview gets
 the parent's two secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`, the
 `os-preview` Worker's Previews settings, from Doppler
-`project-worker/preview`), and its own `urls` (its origin, projects as paths,
+`os/preview`), and its own `urls` (its origin, projects as paths,
 its Dash when deployed) come from the per-preview Wrangler config
 `preview.ts` writes. Clients need no registration: each identifies itself by
 its client-metadata URL, so the platform preview and its clients need no

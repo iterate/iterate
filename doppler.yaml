@@ -3,7 +3,7 @@ setup:
     path: ./
   - project: _shared
     path: packages/shared/
-  - project: project-worker
+  - project: os
     path: apps/os/
   - project: kit
     path: apps/kit/

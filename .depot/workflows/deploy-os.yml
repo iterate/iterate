@@ -67,7 +67,7 @@ jobs:
       # The Doppler project is envs.ts OS_DOPPLER_PROJECT; the deployed Cloudflare Worker is
       # os-prd.
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project project-worker
+        run: doppler setup --config prd --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # `/version` answers `<version id> <origin>` (apps/os/src/worker.ts): the id prd serves before

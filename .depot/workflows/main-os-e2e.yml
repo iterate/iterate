@@ -18,7 +18,7 @@
 # (preview-sweep.yml) deletes a PR-less preview a day after its last deploy as the backstop.
 #
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
-# The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
+# The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials, _shared/prd the Slack token and the telemetry finalizer's config.
 
 name: Main OS e2e
@@ -101,7 +101,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Deploy os-preview from main
@@ -132,7 +132,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # A cancelled run's queued jobs are cancelled with it, its `always()` delete included
@@ -186,7 +186,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run the e2e suite and the browser specs against the preview
@@ -268,7 +268,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # The name is derived here too: a deploy cancelled before it set its output may still have created resources.

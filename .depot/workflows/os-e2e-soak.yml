@@ -45,7 +45,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project project-worker
+        run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # THE WORKER IS THIS REF'S: the default target, the `soak` preview, is redeployed from the checkout
@@ -58,7 +58,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm preview deploy --name soak --apps none
-      # The preview inherits the parent's secrets (APP_CONFIG in Doppler project-worker/preview), so the
+      # The preview inherits the parent's secrets (APP_CONFIG in Doppler os/preview), so the
       # admin bearer and the sign-in password come from the same object the preview deploy uploads —
       # apps/os/e2e/support/global-setup.ts reads them out of it, and the routing out of the
       # parent's envs.ts entry.

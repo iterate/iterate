@@ -72,7 +72,7 @@ test("a run that cannot read prd fails: no Cloudflare credentials", async () => 
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
   await expect(run({ dryRun: true })).rejects.toThrow(
-    "run under doppler --project project-worker --config prd",
+    "run under doppler --project os --config prd",
   );
   expect(cloudflare.fetch).not.toHaveBeenCalled();
 });

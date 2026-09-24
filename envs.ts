@@ -31,7 +31,7 @@ export const UNPROVISIONED = "UNPROVISIONED";
 /** The Doppler project holding apps/os's secrets (and apps/spa's deploy credentials): one config per
  *  `osEnvs` deployment, each inheriting `_shared/<config>`. Every script that deploys, provisions,
  *  previews, erases or seeds an OS deployment reads its secrets from here. */
-export const OS_DOPPLER_PROJECT = "project-worker";
+export const OS_DOPPLER_PROJECT = "os";
 
 /** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */

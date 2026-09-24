@@ -18,7 +18,7 @@ export function deployedTarget(workerBaseUrl: string): {
   // secrets scripts/deploy.ts ships, nothing else in the environment.
   if (!process.env.APP_CONFIG)
     throw new Error(
-      "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer and the sign-in password the e2e sessions use (run under `doppler run --project project-worker --config <preview|prd>`)",
+      "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer and the sign-in password the e2e sessions use (run under `doppler run --project os --config <preview|prd>`)",
     );
   const appConfig = parseAppConfig({
     APP_CONFIG: process.env.APP_CONFIG,

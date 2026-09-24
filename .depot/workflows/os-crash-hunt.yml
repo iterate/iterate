@@ -40,7 +40,7 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project project-worker
+        run: doppler setup --config prd --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Hunt isolate crashes on os.iterate.com

@@ -9,7 +9,7 @@
 // proven with Date faked (__workers-tests__/residency-watchdog.test.ts), and the opt-in row at
 // the bottom proves it on a deployed worker, on a context its own two-second schedule keeps awake:
 //
-//   RUN_RESIDENCY_WATCHDOG_WINDOW=1 WORKER_BASE_URL=<preview> doppler run --project project-worker \
+//   RUN_RESIDENCY_WATCHDOG_WINDOW=1 WORKER_BASE_URL=<preview> doppler run --project os \
 //     --config preview -- pnpm --dir apps/os e2e context-watchdog
 import { expect, test } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
