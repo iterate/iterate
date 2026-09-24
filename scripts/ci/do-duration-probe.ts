@@ -133,8 +133,8 @@ async function checkAccountActiveTime(input: {
   }>({ apiToken: input.apiToken, query, variables: { accountTag: input.accountTag, start } });
 
   const rows = data.viewer.accounts[0]?.durableObjectsPeriodicGroups ?? [];
-  // An empty series CAN be quiet: since preview slots are erased after every
-  // run (#2585), dev/preview has no DO activity at all overnight, and this
+  // An empty series CAN be quiet: with no preview in use (a closed PR's is
+  // deleted), dev/preview has no DO activity at all overnight, and this
   // dataset drops a deleted namespace's history retroactively. But it can
   // also be a wrong account tag or a broken token, which must not pass as
   // "under the ceiling". Tell them apart with a call that does not depend on

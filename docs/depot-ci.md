@@ -5,8 +5,7 @@ CI workflows live in `.depot/workflows/*.yml` and run on
 YAML syntax, but Depot owns the run lifecycle, check reporting, logs, metrics,
 secrets, and local dispatch.
 
-The old TypeScript workflow generator is gone. Edit the YAML directly, and put
-runtime logic in normal scripts under `scripts/ci` instead of embedding large
+Edit the YAML directly, and put runtime logic in normal scripts under `scripts/ci` instead of embedding large
 `actions/github-script` blocks.
 
 Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
@@ -61,6 +60,32 @@ the SDK's inputs (`packages/iterate`, the root manifests and lockfile, or the
 workflow itself): the **publish** and **Continuous Releases** checks. Anything else that needs GitHub-only triggers,
 such as `issues`, `issue_comment`, or PR review comment events, which Depot CI
 does not support, belongs there too.
+
+## Workflows
+
+| File                         | Runs on                                             | What it does                                                                         |
+| ---------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `lint-typecheck.yml`         | PR, main push, dispatch                             | **Lint and Typecheck** (required): lint, typecheck, format check, knip               |
+| `test.yml`                   | PR, main push                                       | **Test** (required): `pnpm test`, then the Kit firmware host tests                   |
+| `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                         |
+| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                       |
+| `preview-os-next.yml`        | PR touching the preview paths, dispatch             | **Preview OS**: the PR's preview, its e2e job and the CI trace                       |
+| `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                             |
+| `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews and orphaned preview resources                                |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: a throwaway preview of main, e2e and specs, delete, alert           |
+| `deploy-os-next.yml`         | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                               |
+| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Production deploy of Dash, Agents, Notes, Voice, Kit, SPA or dummy-petshop           |
+| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                             |
+| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch | Bakes the CI image ([Custom Image](#custom-image))                                   |
+| `do-duration-probe.yml`      | Hourly, dispatch                                    | Durable Object cost alarm for both Cloudflare accounts                               |
+| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                          | Reads production's Workers Logs and pages #error-pulse on faults                     |
+| `os-next-crash-hunt.yml`     | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                   |
+| `os-next-e2e-soak.yml`       | Dispatch                                            | The e2e suite N times against one deployed worker                                    |
+| `flake-dashboard.yml`        | Hourly, dispatch                                    | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580) |
+| `ci-telemetry.yml`           | Dispatch                                            | GitHub, Depot and review-bot telemetry (delivers nothing while PostHog is off)       |
+| `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                |
+
+Each file's header comment and `on:` block are the details.
 
 ## Commands
 
@@ -457,10 +482,12 @@ find the exact job/attempt id.
 The Preview OS workflow (`.depot/workflows/preview-os-next.yml`, cribbed from
 cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
 `configs-next`, the five hosted clients (`apps/dash`, `apps/agents`,
-`apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `packages/iterate`, `packages/shared`,
-`packages/ui`, the root manifests and lockfile, `envs.ts`, `scripts/lib`,
-`scripts/depot-ci`, and its own and the production OS/Notes deploy workflows
-(a production-workflow change must exercise the isolated deployment). A PR that
+`apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `specs` and
+`playwright.config.ts`, `packages/iterate`, `packages/shared`, `packages/ui`,
+the root manifests and lockfile, `envs.ts`, `scripts/lib`, `scripts/depot-ci`,
+and its own and the six production deploy workflows (OS, Dash, Agents, Notes,
+Voice, Kit: a production-workflow change must exercise the isolated
+deployment). A PR that
 touches none of them, such as docs, lint rules or Kit firmware, gets no preview
 checks at all: they never appear, rather than reporting a skip. The Preview
 delete workflow (`.depot/workflows/preview-delete.yml`) runs on the same list
@@ -503,42 +530,16 @@ there is no commit status to wait for, and a red e2e can run again without a
 redeploy (dispatch `action=e2e`, or retry the job), because the preview persists
 until the PR closes.
 
-The legacy fleet's overlap experiment (PR #2659) went the other way. It started
-preparation, app tests and six Playwright shards together. Test jobs reconciled
-dependencies and browsers before waiting for `preview-ready`. Preparation
-uploaded the immutable deployment plan before publishing that GitHub commit
-status. `scripts/ci/status.ts` scoped the signal to the Depot workflow,
-execution, producer job and attempt, and checked producer liveness on each poll.
-The finalizer needed only preparation; one `wait-for-jobs` call polled all seven
-consumers together, and only a confirmed terminal state for every consumer
-authorized cleanup. `scripts/ci/status.ts` went with that pipeline in #2837.
-
-Its rules still hold for any workflow that overlaps jobs again:
-
-- A terminated producer without its signal fails the wait. Reaching a milestone
-  releases consumers even while the producer continues collecting artifacts.
-- Failed consumers are collected and fail the final result; report
-  download/merge validates the full test result before any early-green update.
-- Coordination reads Depot's API with the existing Doppler-managed
-  `DEPOT_CI_TELEMETRY_TOKEN` from `_shared/preview`; it does not introduce a
-  Depot secret or copy a personal token. GitHub milestones use the job token
-  with `statuses: write`. The organization token has broad scope, as documented
-  above.
-- Validate with a fresh push or workflow dispatch, not retry/rerun, whenever a
-  retry would reuse an erased deployment or accept an old plan artifact. Normal
-  Playwright/Vitest test retries are unchanged.
-
 ## Interactive trace reports
 
 The Preview OS workflow's `trace` job publishes a **CI trace** commit status
 after deploy and e2e, whatever their outcome: the time to green or red, linked
 to the job on Depot, where the `public-ci-trace-<workflow>-<execution>`
 artifact (`trace.html`, `trace.json`) downloads. The report shows workflow →
-jobs → setup/wait/test/finish → shell steps → Playwright attempts and Vitest
-tests. The legacy preview workflows published the same status from webhooks
-and served the report in place; that host went with #2837, so download the
-artifact and open `trace.html`. See [CI traces](./ci-traces.md) for the timing
-model, publishing, replay commands and OTLP JSON export.
+jobs → setup/test phases → shell steps → Playwright attempts and Vitest
+tests. Download the artifact and open `trace.html`. See
+[CI traces](./ci-traces.md) for the timing model, publishing, replay commands
+and OTLP JSON export.
 
 ## Browser reports from artifacts
 
@@ -561,18 +562,3 @@ Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
 `unit-test-telemetry` and `flake-records-unit`.
-
-The legacy preview finalizer uploaded the merged Playwright HTML directory as
-`public-playwright-report`. The legacy platform's `iterate` config project
-handled Depot `check_run.completed` webhooks, added a **Playwright report**
-commit status alongside **CI trace**, and served each artifact at
-`https://depot-<id>--iterate.iterate.app/`: `/foo.xyz` served ZIP entry
-`foo.xyz`, a root `index.html` opened directly, a single-file artifact
-redirected to that file, and other artifacts got a generated index. Relative
-assets and binary attachments were served from the ZIP using range reads. Each
-artifact got a separate origin, so HTML reports could use browser storage and
-service workers without sharing the project's origin. Artifacts opted in with a
-`public-` name prefix, and `?download` downloaded a file instead of displaying
-it. That viewer no longer answers: `*.iterate.app` now routes to the OS
-platform, which has no such app (a request returns 404, "no rewrite rule
-matches").

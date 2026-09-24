@@ -40,9 +40,9 @@ const ACCOUNTS = [
   {
     dopplerConfig: "dev",
     label: "dev/preview",
-    // Healthy is 0–100 DO-hours/hour now that preview slots are erased after
-    // every run (#2585); one slot relit by a finished run is 2,000–4,000. The
-    // incident ran 20,000–57,000. ≈ $2.80/hour.
+    // Healthy is 0–100 DO-hours/hour, measured once previews stopped outliving
+    // their run (#2585); one preview relit by a finished run is 2,000–4,000.
+    // The incident ran 20,000–57,000. ≈ $2.80/hour.
     maxAccountDoHours: 500,
     // ≈ 1,780 DO-hours/hour, 3.6× the ceiling: above every breach between the
     // 09-01 and 09-21 incidents (the worst, 09-04, ran ~1,160 ≈ $6.50/h); the

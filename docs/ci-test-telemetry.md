@@ -6,16 +6,15 @@
 > reaches the PostHog dashboards below. The GitHub, Depot and review-bot
 > collector (`.depot/workflows/ci-telemetry.yml`) runs only when dispatched and
 > delivers nothing today: PostHog is its only output, and it keeps no artifact.
-> Its schedule returns in the change that restores delivery. The legacy
-> preview pipeline described here (`preview-run.yml`, `scripts/preview/*`,
-> six Playwright shards, the agent smoke and TUI lanes, `node:test`) went with
-> #2837. The Preview OS workflow's `e2e` job now runs one Vitest e2e runner and
-> one Playwright runner and finalizes them with
+> Its schedule returns in the change that restores delivery. Where the
+> sections below describe a preview orchestrator, six Playwright shards, agent
+> smoke and TUI lanes or `node:test`, they describe an earlier pipeline that no
+> longer runs. The Preview OS workflow's `e2e` job (and Main OS e2e's) runs one
+> Vitest e2e runner and one Playwright runner and finalizes them with
 > `upload-test-telemetry.ts --flake-suites preview`. The flake dashboard
 > (issue #2580) is written by `.depot/workflows/flake-dashboard.yml`
-> hourly (`scripts/ci/flake-dashboard/`, the legacy starter app's
-> fold), as the iterate GitHub App with a token limited to this repository's
-> issues,
+> hourly (`scripts/ci/flake-dashboard/`), as the iterate GitHub App with a
+> token limited to this repository's issues,
 > following the rules in [Current unknown flakes](#current-unknown-flakes).
 > A suite's run counts as main when its summary names `main` as its branch; a
 > workflow that uploads `flake-records-*` must be listed in the writer's
@@ -868,10 +867,7 @@ Each suite shows its latest complete main commit, run, test count and failure
 count. An incomplete attempt keeps that provenance visible with a warning,
 while any observed retry/failure still adds or resets its unknown-flake row.
 
-`preview-main.yml` calls the same `preview-run.yml` workflow as PR CI:
-one deployment, six browser shards, app tests, then report collection and cleanup.
-The finalizer combines sibling-job telemetry and requires the declared runner
-count before certifying a complete test list. Missing or foreign shards cannot
-retire dashboard entries. Main claims an ordinary preview slot under `main-preview`,
-keeps its renewable 3-hour lease after cleanup, and serializes runs without
-cancelling the active workflow. No slot is reserved.
+Main's preview suites run in Main OS e2e (`main-os-e2e.yml`), on a throwaway
+preview of each main push, and upload the same `flake-records-specs` and
+`flake-records-preview-e2e` artifacts as a PR's Preview OS run; the writer's
+`SUITE_WORKFLOWS` lists Test, Preview OS and Main OS e2e.
