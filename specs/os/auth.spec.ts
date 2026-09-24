@@ -3,29 +3,29 @@
 // scripts/dev.ts's, a deployment's is handed to the run as LOGIN_PASSWORD) is how these sign in.
 import { createServer } from "node:http";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateApi } from "iterate/next/api";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
+import { claudeClient, signInWithPassword } from "../test-support/issuer.ts";
 import { test } from "../test-support/test.ts";
-
-const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
-const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
 
 test("first Claude consent creates the organization and project on the consent page before granting MCP access", async ({
   page,
   context,
   baseURL,
+  operator,
 }) => {
   const origin = new URL(baseURL!).origin;
-  const { adminApiSecret, ingressRouting, mcpBaseUrl: resource } = readOsPlaywrightAuthConfig();
-  const email = `consent-${stamp()}@example.com`;
+  const { ingressRouting, mcpBaseUrl: resource } = readOsPlaywrightAuthConfig();
+  const email = `${uniqueFixtureSlug("consent")}@example.com`;
   // the organization the onboarding step makes with the first project
   const firstOrg = "First consent studio";
-  const project = `consent-${stamp()}`;
-  const otherProject = `unselected-${stamp()}`;
-  const thirdProject = `third-${stamp()}`;
+  const project = uniqueFixtureSlug("consent");
+  const otherProject = uniqueFixtureSlug("unselected");
+  const thirdProject = uniqueFixtureSlug("third");
   const choice = `${project} in ${firstOrg}`;
   const otherChoice = `${otherProject} in Second studio`;
   const thirdChoice = `${thirdProject} in ${firstOrg}`;
@@ -69,17 +69,11 @@ test("first Claude consent creates the organization and project on the consent p
   page.on("websocket", (socket) => sockets.push(socket.url()));
   page.on("pageerror", (error) => errors.push(error.message));
   // a slug the deployment's own organization holds — the onboarding step's refused first try below
-  const takenSlug = `taken-${stamp()}`;
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateApi>(
-    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
-  );
-  using _taken = await operator
-    .authenticate({ type: "admin-secret", secret: adminApiSecret })
-    .projects.create({ project: takenSlug });
+  const takenSlug = uniqueFixtureSlug("taken");
+  using _taken = await operator.projects.create({ project: takenSlug });
   try {
     await page.goto(flow.url.href);
-    await signIn(page, email);
+    await signInWithPassword(page, email);
     await Promise.race([
       page.getByRole("heading", { name: "Create a project", exact: true }).waitFor(),
       callback.then((url) => {
@@ -287,19 +281,6 @@ test("first Claude consent creates the organization and project on the consent p
     );
   }
 });
-/** Sign in on the page the way a person does: the email, the password, Sign in — the password
- *  field is shown immediately only when email-code sign-in is unavailable. */
-async function signIn(page: Page, email: string) {
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
-  const password = page.getByLabel("Password", { exact: true });
-  if (!(await password.isVisible()))
-    await page.getByRole("button", { name: "Use password instead", exact: true }).click();
-  await password.fill(readOsPlaywrightAuthConfig().loginPassword);
-  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
-  // navigation in flight as loading), not the click's tight action timeout
-  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
-}
-
 async function cookieHeaders(context: BrowserContext, origin: string) {
   return {
     Origin: origin,
