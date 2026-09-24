@@ -11,8 +11,8 @@
 #                    deploying, deployed or deploy failed
 #   E2E tests        after Deploy preview: the vitest e2e suite against the preview, its line under
 #                    the status line (passed or failed), then its test telemetry and flake records.
-#                    The rows tagged `slow` run when the PR changes their code (SLOW_ROW_PATHS) or
-#                    carries the `slow-e2e` label, and are skipped otherwise (docs/testing.md#slow-rows)
+#                    The rows tagged `slow` run only when the PR carries the `slow-e2e` label or
+#                    edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs    beside E2E tests: the Playwright specs, the same way, and the Playwright report.
 #                    One job definition, E2E tests', differing only in the suite it names
 #   CI trace         after all three, whatever their outcome, reporting only: the CI trace
@@ -207,8 +207,7 @@ jobs:
     timeout-minutes: 30
     env:
       # THE SUITE: `pnpm preview <suite>`, its flake records' suite, and the workspace its telemetry
-      # names. The rows tagged `slow` run when the PR changes their code (SLOW_ROW_PATHS) or carries
-      # the `slow-e2e` label, and are skipped otherwise (docs/testing.md#slow-rows).
+      # names. Which rows tagged `slow` run: docs/testing.md#slow-rows.
       SUITE: e2e
       FLAKE_SUITE: preview-e2e
       TEST_TELEMETRY_EXPECTED_WORKSPACES: os

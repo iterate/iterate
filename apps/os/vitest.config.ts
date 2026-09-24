@@ -147,14 +147,14 @@ export default defineConfig({
           testTimeout: 60_000,
           hookTimeout: 120_000,
           // THE SLOW ROWS (docs/testing.md#slow-rows): a row that waits out real platform time (a quiet
-          // minute, a sweep, an alarm) is tagged `slow`, and a PR that changes none of its code skips
-          // it: `pnpm preview e2e` picks the rows (scripts/slow-rows.ts). A tag this list does not
-          // define fails its row.
+          // minute, a sweep, an alarm) is tagged `slow`, and a PR skips it unless it turns the slow
+          // rows on or edits one: `pnpm preview e2e` picks the rows (scripts/slow-rows.ts). A tag this
+          // list does not define fails its row.
           tags: [
             {
               name: "slow",
               description:
-                "Waits out real platform time; skipped by PRs that change none of its code",
+                "Waits out real platform time; a PR skips it unless it turns the slow rows on or edits one",
               timeout: E2E_SLOW_ROW_TIMEOUT_MS,
             },
           ],
