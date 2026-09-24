@@ -28,17 +28,19 @@ type Note = { id: string; text: string; at: number };
 
 /** The mini-app's capnweb API — the methods the page calls, backed by the project's itx.kv. */
 class Notes extends RpcTarget {
-  constructor(private readonly itx: Itx) {
+  readonly #itx: Itx;
+  constructor(itx: Itx) {
     super();
+    this.#itx = itx;
   }
   async list(): Promise<Note[]> {
-    const raw = await this.itx.kv.get(KEY);
+    const raw = await this.#itx.kv.get(KEY);
     return raw ? (JSON.parse(raw) as Note[]) : [];
   }
   async add(text: string): Promise<Note[]> {
     const notes = await this.list();
     notes.unshift({ id: crypto.randomUUID(), text: String(text), at: Date.now() });
-    await this.itx.kv.put(KEY, JSON.stringify(notes));
+    await this.#itx.kv.put(KEY, JSON.stringify(notes));
     return notes;
   }
 }

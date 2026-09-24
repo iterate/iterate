@@ -17,7 +17,7 @@ Run commands from the repository root unless stated otherwise.
 
 | Command                                  | Coverage                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------- |
-| `pnpm typecheck`                         | Every retained workspace                                                     |
+| `pnpm typecheck`                         | Every tracked TypeScript file but the configs-next templates (JavaScript)    |
 | `pnpm lint`                              | Source lint and applicable repository rules                                  |
 | `pnpm format:check`                      | Formatting                                                                   |
 | `pnpm knip`                              | Unused files, exports and dependencies (OS, Kit, shared, UI, SDK/CLI)        |

@@ -3,7 +3,6 @@
 // so a request to notes--<project>.<base> reaches this worker with the app slug in the
 // `x-iterate-app` header (the edge derives it from the itx.apps.<label> expression — the platform's
 // header). The platform supplies processor.js.
-// @ts-ignore -- This module exists inside the project worker loader.
 import { ConfigWorker } from "./processor.js";
 
 export default class extends ConfigWorker {
