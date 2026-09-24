@@ -145,45 +145,52 @@ test.each([
   },
 );
 
-// The command the changes job runs, in a scratch repository whose HEAD is a merge commit.
+// The command the changes job runs, in a scratch repository whose HEAD is a merge commit. A rename
+// counts on both sides: moving a file out of apps/os changes apps/os.
 test.each([
-  { changed: "docs/notes.md", preview: "false" },
-  { changed: "apps/os/src/worker.ts", preview: "true" },
-])("changes writes preview=$preview when the merge brings in $changed", ({ changed, preview }) => {
-  const repo = mkdtempSync(join(tmpdir(), "preview-os-gate-"));
-  const output = join(repo, "github-output");
-  try {
-    const git = (...args: string[]) => {
-      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-        cwd: repo,
-        encoding: "utf8",
-        env: { PATH: process.env.PATH, HOME: repo },
-      });
-      expect(result).toMatchObject({ status: 0 });
-    };
-    git("init", "--quiet", "--initial-branch=main");
-    writeFileSync(join(repo, "README.md"), "base\n");
-    git("add", ".");
-    git("commit", "--quiet", "-m", "base");
-    git("checkout", "--quiet", "-b", "head");
-    mkdirSync(dirname(join(repo, changed)), { recursive: true });
-    writeFileSync(join(repo, changed), "change\n");
-    git("add", ".");
-    git("commit", "--quiet", "-m", "head");
-    git("checkout", "--quiet", "main");
-    writeFileSync(join(repo, "MAIN.md"), "main moved on\n");
-    git("add", ".");
-    git("commit", "--quiet", "-m", "main");
-    git("merge", "--quiet", "--no-ff", "-m", "merge", "head");
+  { change: "adds", path: "docs/notes.md", preview: "false" },
+  { change: "adds", path: "apps/os/src/worker.ts", preview: "true" },
+  { change: "moves apps/os/src/moved.ts to", path: "docs/moved.ts", preview: "true" },
+])(
+  "changes writes preview=$preview when the pull request $change $path",
+  ({ change, path, preview }) => {
+    const repo = mkdtempSync(join(tmpdir(), "preview-os-gate-"));
+    const output = join(repo, "github-output");
+    try {
+      const git = (...args: string[]) => {
+        const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+          cwd: repo,
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, HOME: repo },
+        });
+        expect(result).toMatchObject({ status: 0 });
+      };
+      git("init", "--quiet", "--initial-branch=main");
+      mkdirSync(join(repo, "apps/os/src"), { recursive: true });
+      writeFileSync(join(repo, "apps/os/src/moved.ts"), "export const moved = 1;\n");
+      git("add", ".");
+      git("commit", "--quiet", "-m", "base");
+      git("checkout", "--quiet", "-b", "head");
+      mkdirSync(dirname(join(repo, path)), { recursive: true });
+      if (change === "adds") writeFileSync(join(repo, path), "change\n");
+      else git("mv", "apps/os/src/moved.ts", path);
+      git("add", ".");
+      git("commit", "--quiet", "-m", "head");
+      git("checkout", "--quiet", "main");
+      writeFileSync(join(repo, "MAIN.md"), "main moved on\n");
+      git("add", ".");
+      git("commit", "--quiet", "-m", "main");
+      git("merge", "--quiet", "--no-ff", "-m", "merge", "head");
 
-    const run = spawnSync(
-      process.execPath,
-      [resolve(import.meta.dirname, "preview-os-gate.ts"), "changes"],
-      { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, GITHUB_OUTPUT: output } },
-    );
-    expect(run).toMatchObject({ status: 0 });
-    expect(readFileSync(output, "utf8")).toBe(`preview=${preview}\n`);
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
+      const run = spawnSync(
+        process.execPath,
+        [resolve(import.meta.dirname, "preview-os-gate.ts"), "changes"],
+        { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, GITHUB_OUTPUT: output } },
+      );
+      expect(run).toMatchObject({ status: 0 });
+      expect(readFileSync(output, "utf8")).toBe(`preview=${preview}\n`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  },
+);

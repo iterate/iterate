@@ -129,7 +129,11 @@ function main(command: string | undefined) {
     // (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests): its first parent is main as merged.
     const parents = git("rev-list", "--parents", "-n", "1", "HEAD").split(" ");
     if (parents.length !== 3) throw new Error(`HEAD is not a merge commit: ${parents.join(" ")}`);
-    const files = git("diff", "--name-only", "HEAD^1", "HEAD").split("\n").filter(Boolean);
+    // --no-renames lists a rename's old path and its new one: moving a file out of apps/os changes
+    // apps/os.
+    const files = git("diff", "--name-only", "--no-renames", "HEAD^1", "HEAD")
+      .split("\n")
+      .filter(Boolean);
     const preview = touchesPreview(files);
     console.log(
       `${files.length} changed files; ${preview ? "some match" : "none matches"} the preview paths`,
