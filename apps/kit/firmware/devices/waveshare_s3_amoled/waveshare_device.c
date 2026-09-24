@@ -323,7 +323,8 @@ static bool open_codec(void) {
      *
      * So full scale overdrives this amp, and "turn it all the way up" was
      * making the speaker worse rather than louder. 85 keeps the headroom
-     * while staying loud; `itx.kit.waveshare.setVolume(n)` tunes it live.
+     * while staying loud;
+     * `itx.clients.<device>.speaker.setVolume({percent})` tunes it live.
      */
     (void)esp_codec_dev_set_out_vol(codec_dev, WAVESHARE_AUDIO_VOLUME_DEFAULT);
   }

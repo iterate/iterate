@@ -1918,14 +1918,10 @@ static bool initialise_connection(void) {
   options.capability_match = capability_match;
   options.capability = iterate_kit_peer_capability(&runtime.peer);
   /*
-   * THERE IS NO DESCRIPTION TO SEND ANY MORE.
-   *
-   * `projects.connect` took one and journalled it as the provision's
-   * instructions; `provide` takes a match and a stub and nothing else. What a
-   * model discovers about this board is now whatever the project's own rows
-   * say about `clients.<device>` — the device asserts only that the name works.
-   * `facts->peer_description` still documents the surface for people reading
-   * this file.
+   * `provide` takes a match and a stub and nothing else, which is why the
+   * peer's description above is `{}`. What a model discovers about this board
+   * is whatever the project's own rows say about `clients.<device>`; the
+   * device asserts only that the name works.
    */
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
