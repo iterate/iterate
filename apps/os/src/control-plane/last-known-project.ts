@@ -114,6 +114,8 @@ export async function admitProjectHost(
     }
   };
 
+  /** The project's row a hostname's copy held, when that copy stood in: it is the project's copy. */
+  let hostnameRow: z.infer<typeof ProjectRow> | undefined;
   const address =
     projectHostOf(config, url, platformOrigin) ??
     (await readOrCopy(
@@ -126,6 +128,7 @@ export async function admitProjectHost(
           candidates.map((candidate) => lastKnownKey("hostname", candidate.hostname)),
         );
         if (!found) return null;
+        hostnameRow = found.row;
         const { routingSlug } = candidates[found.index]!;
         return { routingSlug, project: found.row.id, basePath: "" };
       },
@@ -134,7 +137,8 @@ export async function admitProjectHost(
   const project = await readOrCopy(
     "project",
     () => controlPlane.getProject(address.project),
-    async () => (await firstCopy([lastKnownKey("project", address.project)]))?.row ?? null,
+    async () =>
+      hostnameRow ?? (await firstCopy([lastKnownKey("project", address.project)]))?.row ?? null,
   );
   return { address, project, stale: stale && { ...stale, copies } };
 }

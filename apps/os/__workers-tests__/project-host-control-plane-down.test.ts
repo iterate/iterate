@@ -51,7 +51,7 @@ test.for(["throws", "is cut", "hangs"] as const)(
   },
 );
 
-test("a project's own hostname: its address and its row both stand in, after ONE 3 s wait", async () => {
+test("a project's own hostname: its copy stands in for its address and its row, after ONE 3 s wait", async () => {
   const { projectId, host } = await catalogOnlyProject("stale-own", { ownHostname: true });
   const outage = await failReads("hangs");
   const warn = vi.spyOn(console, "warn");
@@ -59,7 +59,7 @@ test("a project's own hostname: its address and its row both stand in, after ONE
 
   const started = Date.now();
   const served = await call(host);
-  // one wait (the hostname's read), not two: the row's copy is tried first
+  // one wait (the hostname's read), not two: the hostname's copy holds the row
   expect(Date.now() - started).toBeLessThan(WAIT_MS.hangs);
   expect(served).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
@@ -71,10 +71,7 @@ test("a project's own hostname: its address and its row both stand in, after ONE
       method: "projectByHostname",
       waitedMs: expect.any(Number),
       message: failed("hangs", "projectByHostname"),
-      copies: [
-        lastKnownKey("hostname", new URL(host).hostname),
-        lastKnownKey("project", projectId),
-      ],
+      copies: [lastKnownKey("hostname", new URL(host).hostname)],
     },
   ]);
   expect(outage.reads.project).not.toHaveBeenCalled();
