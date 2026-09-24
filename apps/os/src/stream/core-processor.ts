@@ -45,7 +45,6 @@ import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
 import { RunRequested, RunSettled } from "iterate/stream/run";
-import { CoreEventCatalog } from "./core-events.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   FetchRouteConfiguredPayload,
@@ -62,6 +61,7 @@ import {
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
+import { CoreEventCatalog } from "./core-events.ts";
 import {
   ScheduledAppendInput,
   ScheduledAppendCancelled,
