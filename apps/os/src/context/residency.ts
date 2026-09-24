@@ -52,6 +52,9 @@ type ResidencyDeps = {
   append: (events: StreamEventInput[]) => void;
   /** A deadline here changed: the DO reconciles its alarm, which reads `deadlines()`. */
   reconcileAlarm: () => void;
+  /** The first inbound call began or the last one settled (`holdsResident`): the alarm's overdue
+   *  watch (alarm-coordinator.ts) runs its timer only while one is in flight. */
+  inboundCallsHeldChanged: () => void;
 };
 
 export class Residency {
@@ -80,6 +83,7 @@ export class Residency {
    *  supersedes the alarm its predecessor's watchdog left in one write, not a delete and a set. */
   inboundCallStarted(): void {
     this.#inboundCallsInFlight += 1;
+    if (this.#inboundCallsInFlight === 1) this.#deps.inboundCallsHeldChanged();
     if (this.#residencyWatchdogArmedFor !== null || this.#residencyWatchdogRecorded) return;
     this.#residencyWatchdogArmedFor = Date.now() + RESIDENCY_WATCHDOG_WINDOW_MS;
     this.#deps.reconcileAlarm();
@@ -89,6 +93,12 @@ export class Residency {
     this.#inboundCallsInFlight -= 1;
     this.#lastInboundCallEndedAt = Date.now();
     if (!fromLoadedCode) this.#lastOutsideActivityEndedAt = this.#lastInboundCallEndedAt;
+    if (this.#inboundCallsInFlight === 0) this.#deps.inboundCallsHeldChanged();
+  }
+
+  /** An inbound call is in flight: the actor is held resident whatever else it does. */
+  holdsResident(): boolean {
+    return this.#inboundCallsInFlight > 0;
   }
 
   /** An inbound call that runs in ONE synchronous turn (`append`, `read`, a lend, a socket event):
