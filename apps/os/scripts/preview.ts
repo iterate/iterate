@@ -34,6 +34,13 @@ import {
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { buildOs } from "./build.ts";
 import {
+  deleteArtifactsNamespace,
+  ensureArtifactsNamespace,
+  isCloudflareError,
+  type ArtifactsNamespaceRow,
+  type Cf,
+} from "./preview-artifacts.ts";
+import {
   APPS,
   appPreviewOrigins,
   appPreviewUrl,
@@ -84,10 +91,6 @@ type Command = z.infer<typeof Command>;
 const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
 const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--dry-run]`;
-
-/** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
- *  429s retried, a truncated listing refused). */
-type Cf = EnvContext<OsEnv>["cf"];
 
 /** The parent's Doppler config (project-worker/preview), downloaded — the Cloudflare credentials for
  *  its account and the two secrets every preview inherits — the way ensure-resources and erase-data
@@ -254,98 +257,7 @@ async function deleteDatabase(cf: Cf, name: string) {
   console.log(`deleted D1 ${name}`);
 }
 
-// ── the Artifacts namespace (not auto-provisioned: created here, deleted here) ─────────────────
-
-type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; created_at?: string };
-
-/** Cloudflare's error envelope, the codes only — what a refusal is told apart by. */
-const CloudflareErrors = z.array(z.object({ code: z.number() }));
-
-/** A Cloudflare refusal with this status and error code. Each one used here was measured:
- *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos) and
- *  409/10305 (namespace deletion already in progress); KV
- *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
- *  preview). */
-const isCloudflareError = (error: unknown, status: number, code: number) =>
-  error instanceof CloudflareApiError &&
-  error.status === status &&
-  (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === code);
-
-/** A preview's namespace, by name. The worker's repo create does NOT provision one: on a missing
- *  namespace it fails with "Namespace is not active" (measured 2026-09-22), and the binding names
- *  the namespace only. */
-async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string) {
-  const existing = await cf<ArtifactsNamespaceRow>(
-    `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`,
-  ).catch((error) => {
-    if (isCloudflareError(error, 404, 10200)) return undefined;
-    throw error;
-  });
-  if (!existing)
-    await cf("/artifacts/namespaces", {
-      method: "POST",
-      body: JSON.stringify({ namespace: artifactsNamespaceName }),
-    });
-  console.log(`${existing ? "found" : "created"} Artifacts namespace ${artifactsNamespaceName}`);
-}
-
-/** Delete a preview's Artifacts namespace: every repo first (the API refuses a namespace that is
- *  not empty), then the namespace. A repo delete is ACCEPTED (202) and lands after the answer, so
- *  the list is read again until it is empty and the namespace delete stops answering "not empty";
- *  a ceiling keeps that bounded. A namespace that does not exist — a preview deleted before its
- *  deploy created one, a re-run of the cleanup job, the sweep racing the close job — is the
- *  expected case. */
-async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string) {
-  const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
-  // The namespace itself is what answers "does not exist" (404, code 10200); its repos list answers
-  // an empty page for a missing namespace (measured 2026-09-22), so the check is on the namespace.
-  const existing = await cf<ArtifactsNamespaceRow>(route).catch((error) => {
-    if (isCloudflareError(error, 404, 10200)) return undefined;
-    throw error;
-  });
-  if (!existing)
-    return console.warn(`Artifacts namespace ${artifactsNamespaceName} did not exist; continuing.`);
-  let deletedRepos = 0;
-  for (let round = 1; ; round++) {
-    if (round > 200)
-      throw new Error(
-        `Artifacts namespace ${artifactsNamespaceName} is still not empty after ${deletedRepos} repo deletes`,
-      );
-    // The first page, read again each round until it is empty — that is this loop's pagination, so
-    // `page=1` is named (env-context refuses a truncated listing that names no page).
-    const repos = await cf<{ name: string }[]>(`${route}/repos?limit=200&page=1`);
-    // ten at a time: one delete answers in ~1 s (measured), and a preview's e2e run leaves hundreds
-    for (let i = 0; i < repos.length; i += 10) {
-      await Promise.all(
-        repos.slice(i, i + 10).map((repo) =>
-          // one already gone (a delete accepted on an earlier round) is fine
-          cf(`${route}/repos/${encodeURIComponent(repo.name)}`, { method: "DELETE" }).catch(
-            (error) => {
-              if (!isCloudflareError(error, 404, 10200)) throw error;
-            },
-          ),
-        ),
-      );
-      deletedRepos += Math.min(10, repos.length - i);
-    }
-    if (repos.length > 0) continue;
-    // gone under this run (the sweep and the close job can race) is deleted, and so is one whose
-    // deletion Cloudflare already has in progress (409/10305; one sat there with `repo_count: 1` and
-    // an empty repos list for minutes, 2026-09-23)
-    const deleted = await cf(route, { method: "DELETE" }).then(
-      () => true,
-      (error) => {
-        if (isCloudflareError(error, 404, 10200) || isCloudflareError(error, 409, 10305))
-          return true;
-        if (!isCloudflareError(error, 409, 10202)) throw error;
-        return false;
-      },
-    );
-    if (deleted) break;
-    await new Promise((resolve) => setTimeout(resolve, 2000)); // accepted deletes still landing
-  }
-  console.log(`deleted Artifacts namespace ${artifactsNamespaceName} (${deletedRepos} repos)`);
-}
+// ── the Artifacts namespace: scripts/preview-artifacts.ts ───────────────────────────────────────
 
 // ── the KV namespaces and the R2 bucket (provisioned by `wrangler preview`, deleted here) ──────
 
