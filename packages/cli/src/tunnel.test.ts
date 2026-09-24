@@ -71,6 +71,13 @@ test("HTTP: path, query, method, headers and body reach localhost:<port>, with t
   );
   expect(seen.at(-1)).toMatchObject({ url: "/projects/acme/blog/src/main.ts" });
 
+  // a path that looks like an authority stays a path on localhost
+  await target.fetch(new Request("https://blog--acme.iterate.app//127.0.0.1:1/x"));
+  expect(seen.at(-1)).toMatchObject({
+    url: "//127.0.0.1:1/x",
+    headers: { host: `localhost:${server.port}` },
+  });
+
   const gzipped = await target.fetch(new Request("https://blog--acme.iterate.app/gzipped"));
   expect({
     encoding: gzipped.headers.get("content-encoding"),

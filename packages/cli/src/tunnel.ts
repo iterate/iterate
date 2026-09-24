@@ -19,6 +19,9 @@ const HOP_BY_HOP_HEADERS = [
  *  short enough that `tunnel-<slug>` is a DNS label too. */
 const ROUTING_SLUG = /^[a-z](?:[a-z0-9]|-(?!-))*$/;
 const ROUTING_SLUG_MAX_LENGTH = 50;
+/** Routing slugs the edge answers itself, never the config worker (apps/os
+ *  src/context/file-urls.ts `FILES_ROUTING_SLUG`: signed file URLs). */
+const RESERVED_ROUTING_SLUGS = ["files"];
 
 /** THE TUNNEL'S LENT STUB: every request the project's host routes here, proxied to
  *  `http://localhost:<port>` — path and query, method, headers (plus `x-forwarded-host` and
@@ -43,10 +46,11 @@ export class LocalPortRpcTarget extends RpcTarget {
     // server serves under that base (Vite: `--base`), so the path it sees is the one the visitor
     // asked for.
     const basePath = request.headers.get("x-iterate-base-path") || "";
-    const localUrl = new URL(
-      `${basePath}${visitorUrl.pathname}${visitorUrl.search}`,
-      this.#localOrigin(),
-    );
+    // Set piecewise, never joined as a string: a path of `//other-host/` must stay a path on
+    // localhost, never become a destination.
+    const localUrl = new URL(this.#localOrigin());
+    localUrl.pathname = `${basePath}${visitorUrl.pathname}`;
+    localUrl.search = visitorUrl.search;
     const headers = new Headers(request.headers);
     for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
     headers.set("x-forwarded-host", visitorUrl.host);
@@ -204,6 +208,10 @@ export async function runTunnel(input: {
   json?: boolean;
 }): Promise<void> {
   const routingSlug = input.routingSlug || randomRoutingSlug();
+  if (RESERVED_ROUTING_SLUGS.includes(routingSlug))
+    throw new Error(
+      `--name ${routingSlug} is reserved: the platform serves the ${routingSlug}--<project> host itself`,
+    );
   if (!ROUTING_SLUG.test(routingSlug) || routingSlug.length > ROUTING_SLUG_MAX_LENGTH)
     throw new Error(
       `--name ${JSON.stringify(routingSlug)} is not a routing slug: lowercase letters, digits and single hyphens, starting with a letter, at most ${ROUTING_SLUG_MAX_LENGTH} characters`,
