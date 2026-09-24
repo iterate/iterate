@@ -15,9 +15,13 @@ test("a userspace facet schedules a durable timeout batch, then consumes it with
   expect(await facet.hasAlarmHandler()).toBe(false);
   const at = new Date(Date.now() + 1500).toISOString();
   const definition = await facet.start("invoice", { at });
-  expect(await itx.schedules.get(["deadlines", "invoice"])).toMatchObject({
-    scheduledAtOffset: definition.scheduledAtOffset,
-    when: { at },
+  // The definition as the log holds it — never the live table, which a slow round trip can reach
+  // after the deadline fired and emptied it (soak s034qzv0hg, 2026-09-24: `schedules.get` read null).
+  expect(
+    (await readAll(itx)).find((event) => event.offset === definition.scheduledAtOffset),
+  ).toMatchObject({
+    type: "events.iterate.com/stream/append-scheduled",
+    payload: { key: JSON.stringify(["deadlines", "invoice"]), when: { at } },
   });
   const due = await itx.waitForEvent({
     type: "job/timeout-audit",
@@ -56,7 +60,9 @@ test("a facet owns multiple independent deadlines, cancels finished work and saf
   const old = await facet.start("slow", { at: oldAt });
   const finished = await facet.start("finished", { at: oldAt });
   await facet.finish(finished);
-  const at = new Date(Date.now() + 1500).toISOString();
+  // 8 s: the replacement, the stale finish and the read below must all land before it fires — a
+  // loaded preview can take seconds for two round trips (soak z6s6cfhk8k, 2026-09-24).
+  const at = new Date(Date.now() + 8_000).toISOString();
   const replacement = await facet.start("slow", { at });
   await facet.finish(old); // a stale owner cannot cancel its replacement
   expect(await itx.schedules.get(["deadlines", "slow"])).toMatchObject({
@@ -82,15 +88,16 @@ test("facet-scoped relative deadlines and serializable receipts keep two instanc
       className: "DeadlinesDurableObject",
     });
   }
-  // 5 s: the three round trips below must read the row back before it fires (1.5 s flaked, 2026-09-21)
-  const first = await itx.facets.get("first").start("same-job", { afterMs: 5_000 });
+  // 10 s: the three round trips below must read the row back before it fires (1.5 s flaked,
+  // 2026-09-21; a loaded preview can take seconds for two, soak z6s6cfhk8k, 2026-09-24)
+  const first = await itx.facets.get("first").start("same-job", { afterMs: 10_000 });
   const second = await itx.facets.get("second").start("same-job", { afterMs: 60_000 });
   expect(first).not.toMatchObject({ key: second.key });
   const row = await itx.schedules.get(["first", "same-job"]);
   const definition = (await readAll(itx)).find(
     (event) => event.offset === first.scheduledAtOffset,
   )!;
-  expect(Date.parse(row.nextAt) - Date.parse(definition.createdAt)).toBe(5_000);
+  expect(Date.parse(row.nextAt) - Date.parse(definition.createdAt)).toBe(10_000);
   await itx.facets.get("second").finish(JSON.parse(JSON.stringify(second)));
   expect(await itx.schedules.get(["second", "same-job"])).toBeNull();
   const due = await itx.waitForEvent({
@@ -141,10 +148,11 @@ test("pause holds a deadline until resume; session attribution names the definit
   const itx = openItx(freshCtx("schedule_pause"));
   // Relative to its own commit, as in the replacement row below: an absolute `now + 1.5 s` from
   // before this first call's birth of the project had already passed when it committed, so it
-  // fired before the pause and `schedules.get` read null (2 of 40 runs, 2026-09-24).
+  // fired before the pause and `schedules.get` read null (2 of 40 runs, 2026-09-24). 8 s, not
+  // 2.5: under a loaded preview two round trips can take longer than 2.5 s (soak z6s6cfhk8k).
   const definition = await itx.schedules.set({
     key: "held",
-    when: { afterMs: 2500 },
+    when: { afterMs: 8_000 },
     events: [{ type: "held/due" }],
   });
   const held = await itx.schedules.get("held");
@@ -183,14 +191,16 @@ test("replacing an already-armed deadline with a later instant cannot fire the o
   // The old deadline is relative to its own commit, not to the client's clock: this first call
   // births the project, and a birth slower than an absolute `now + 1.5 s` committed the deadline
   // already past, so it fired at once and there was nothing left to replace (2026-09-24: `at`
-  // 09:16:13.141Z committed at 09:16:13.149Z, 1 of 18 runs of this file on a busy preview).
+  // 09:16:13.141Z committed at 09:16:13.149Z, 1 of 18 runs of this file on a busy preview). 8 s,
+  // not 2.5: under a loaded preview the `get` below landed after 2.5 s and read null (soak
+  // z6s6cfhk8k, 2026-09-24).
   await itx.schedules.set({
     key: "replace",
-    when: { afterMs: 2500 },
+    when: { afterMs: 8_000 },
     events: [{ type: "old/due" }],
   });
   const armed = await itx.schedules.get("replace");
-  const at = new Date(Date.now() + 4500).toISOString();
+  const at = new Date(Date.now() + 10_000).toISOString();
   const replacement = await itx.schedules.set({
     key: "replace",
     when: { at },
