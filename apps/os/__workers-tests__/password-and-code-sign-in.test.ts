@@ -6,12 +6,6 @@ import type { Env } from "../src/env.ts";
 import { finishLoginCode, startLoginCode } from "../src/password-and-code-sign-in.ts";
 import { ORIGIN } from "./support.ts";
 
-const withCookie = (setCookie: string) =>
-  new Request(`${ORIGIN}/login`, {
-    method: "POST",
-    headers: { cookie: setCookie.split(";")[0]! },
-  });
-
 /** What password-and-code-sign-in.ts hands the mailbox: the builder shape of `SendEmail.send`. */
 type Mail = { to: string; from: string; subject: string; text: string; html: string };
 
@@ -27,8 +21,10 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
   const started = await startLoginCode(mailbox, "Person@Real-Mailbox.dev", null);
   expect(send).toHaveBeenCalledTimes(1);
   const message = send.mock.calls[0]![0];
-  expect(message.to).toBe("person@real-mailbox.dev");
-  expect(message.from).toBe("iterate <login@control.test>");
+  expect(message).toMatchObject({
+    to: "person@real-mailbox.dev",
+    from: "iterate <login@control.test>",
+  });
   const code = /^(\d{6}) is your iterate sign-in code$/.exec(message.subject)![1]!;
   expect(message.text).toContain(code);
   // a wrong code (there is no test code any more: the password is a sign-in of its own) costs a try
@@ -73,3 +69,10 @@ test("the mailed code signs in; a wrong code costs a try; five wrong tries end t
     await finishLoginCode(mailbox, new Request(`${ORIGIN}/login`, { method: "POST" }), code),
   ).toMatchObject({ restart: true });
 });
+
+function withCookie(setCookie: string) {
+  return new Request(`${ORIGIN}/login`, {
+    method: "POST",
+    headers: { cookie: setCookie.split(";")[0]! },
+  });
+}

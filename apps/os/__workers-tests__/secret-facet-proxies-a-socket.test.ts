@@ -37,7 +37,7 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
       headers: { upgrade: "websocket", authorization: 'Bearer getSecret("/secrets/shop")' },
     }),
   );
-  expect(response.status).toBe(101);
+  expect(response).toMatchObject({ status: 101 });
   const socket = response.webSocket;
   if (!socket) throw new Error("no webSocket on the 101");
   socket.accept();
@@ -56,7 +56,7 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
     };
     return events.find((event) => event.type === "events.iterate.com/secret/used");
   });
-  expect(used.payload).toEqual({ method: "GET", url: `${SHOP}/capnweb`, status: 101 });
+  expect(used).toMatchObject({ payload: { method: "GET", url: `${SHOP}/capnweb`, status: 101 } });
   expect(JSON.stringify(used)).not.toContain(accessToken);
 
   // The socket lives as long as the facet's dial: abort the facet under it.
@@ -161,7 +161,9 @@ test("an app's fetch expression inherits WebSocket egress through its parent con
       },
     }),
   );
-  expect(response.status, response.status === 101 ? "upgraded" : await response.text()).toBe(101);
+  expect(response, response.status === 101 ? "upgraded" : await response.text()).toMatchObject({
+    status: 101,
+  });
   response.webSocket!.accept();
   response.webSocket!.close();
 });

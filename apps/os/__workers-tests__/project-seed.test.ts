@@ -21,7 +21,7 @@ test("operator exports the current encrypted secret outside rewrites; fresh proj
       orgId: organization.id,
       restoreProjectId: id,
     });
-    expect((await project.whoami()).projectId).toBe(id);
+    expect(await project.whoami()).toMatchObject({ projectId: id });
   }
   const path = "/secrets/stripe";
   const root = stub(oldId);
@@ -44,10 +44,10 @@ test("operator exports the current encrypted secret outside rewrites; fresh proj
   ]);
   const exported = EncryptedSecretSeed.parse(await admin.exportProjectSecretForSeed(oldId, path));
   expect(JSON.stringify(exported)).not.toContain(material.apiKey);
-  expect(exported.context).toBe(`${oldId}.iterate${path}`);
+  expect(exported).toMatchObject({ context: `${oldId}.iterate${path}` });
   const keys = atRestKeysOf(appConfigOf(env));
   const opened = await decryptSecretMaterial(exported.material, exported, keys);
-  expect(opened.material).toEqual(material);
+  expect(opened).toEqual({ material, rotated: false });
   await expect(
     decryptSecretMaterial(
       exported.material,
@@ -61,10 +61,11 @@ test("operator exports the current encrypted secret outside rewrites; fresh proj
     ["set", path, opened.material, { urls: exported.urls, refresh: exported.refresh }],
   ]);
   const restored = EncryptedSecretSeed.parse(await admin.exportProjectSecretForSeed(newId, path));
-  expect(restored.material.ciphertext).not.toBe(exported.material.ciphertext);
-  expect((await decryptSecretMaterial(restored.material, restored, keys)).material).toEqual(
+  expect(restored.material).not.toMatchObject({ ciphertext: exported.material.ciphertext });
+  expect(await decryptSecretMaterial(restored.material, restored, keys)).toEqual({
     material,
-  );
+    rotated: false,
+  });
   const user = session.authenticate({ ...adminCredentials(), as: { email: "owner@example.com" } });
   await expect(user.exportProjectSecretForSeed(oldId, path)).rejects.toMatchObject({
     code: "FORBIDDEN",

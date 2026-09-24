@@ -15,10 +15,6 @@ export default class BodyEcho extends WorkerEntrypoint {
 }`,
 };
 
-/** A streamed body, as a visitor's arrives — not a string the runtime buffers up front. */
-const streamed = (text: string): RequestInit =>
-  ({ method: "POST", body: new Response(text).body, duplex: "half" }) as RequestInit;
-
 test("a project host POST reaches an app that ignores its body (200) and one that streams it back (every byte)", async () => {
   const itx = await (
     await openSession()
@@ -32,7 +28,7 @@ test("a project host POST reaches an app that ignores its body (200) and one tha
     "https://echo--unread-body.projects.test/wp-json/batch/v1",
     streamed('{"requests":[]}'),
   );
-  expect(ignored.status).toBe(200);
+  expect(ignored).toMatchObject({ status: 200 });
   expect(await ignored.json()).toMatchObject({ app: "echo" });
 
   const payload = "x".repeat(256 * 1024);
@@ -40,6 +36,11 @@ test("a project host POST reaches an app that ignores its body (200) and one tha
     "https://body--unread-body.projects.test/upload",
     streamed(payload),
   );
-  expect(echoed.status).toBe(200);
+  expect(echoed).toMatchObject({ status: 200 });
   expect(await echoed.text()).toBe(payload);
 });
+
+/** A streamed body, as a visitor's arrives — not a string the runtime buffers up front. */
+function streamed(text: string): RequestInit {
+  return { method: "POST", body: new Response(text).body, duplex: "half" } as RequestInit;
+}

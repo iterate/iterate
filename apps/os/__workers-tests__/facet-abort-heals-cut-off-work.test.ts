@@ -17,12 +17,8 @@
 // its abort), a hosted processor SDK facet and the alarm on demand.
 
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { stub, until } from "./support.ts";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 /** A userspace processor that HANGS on any batch carrying a `pin/hang` event, on its FIRST revive
  *  and on a catch-up it was armed for — forever, before the engine runs. Each is recorded
@@ -101,6 +97,83 @@ export class HangingCounterDurableObject extends StreamProcessorDurableObject {
 `;
 const name = "hangingcounter";
 
+test("a push hung on a facet that itx.facets.abort resets is caught up by the fresh instance — reduced once, the row live, the context not reset", async () => {
+  const ctx = "prj_facet_abort_heals_its_push";
+  const { probe, read } = await hostedOn(ctx);
+  const [owed] = (await stub(ctx).append({ type: "pin/hang" })) as { offset: number }[];
+  await until("the hanging push is on the facet", async () => (await probe()).seen.length === 2);
+  const wakesBefore = (await read()).filter((e) => e.type === "events.iterate.com/stream/woken");
+
+  const errors = consoleErrors();
+  const aborted = await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick"]]);
+  expect(aborted).toMatchObject({
+    type: "events.iterate.com/context/facet-aborted",
+    payload: { name, reason: "unstick" },
+  });
+  // Seconds, not the 60 s watchdog: the fresh instance reads the owed span from the log.
+  const healed = await until("the fresh instance caught up past the cut-off batch", async () => {
+    const p = await probe();
+    return p.checkpoints.some((c) => c.reduced_through_offset > owed!.offset) ? p : undefined;
+  });
+  expect(healed.seen.filter((row) => Number(row.hung) === 1)).toHaveLength(1); // never re-pushed
+  const events = await read();
+  expect(JSON.parse(healed.checkpoints[0]!.state)).toEqual({ n: events.length }); // each once
+  expect(
+    ((await stub(ctx).invoke(["itx", "subscriptions", ["get", name]])) as { halted?: unknown })
+      .halted,
+  ).toBeUndefined();
+  expect(events.filter((e) => e.type === "events.iterate.com/stream/woken")).toEqual(wakesBefore);
+  expect(issueLines(errors)).toEqual([]);
+});
+
+test("a revive hung on a facet that itx.facets.abort resets is owed again at once — no backoff, no issue — and the fresh instance's revive runs", async () => {
+  const ctx = "prj_facet_abort_owes_its_revive";
+  const { probe } = await hostedOn(ctx);
+  // A due claim, what a processor holds while a `runInBackground` attempt is in flight.
+  await stub(ctx).invoke(["itx", "processors", ["claim", name, Date.now()]]);
+  const errors = consoleErrors();
+  // The pass — the harness's own alarm or this one, whichever runs it first: its revive hangs.
+  const pass = runDurableObjectAlarm(stub(ctx));
+  await until("the revive hangs on the facet", async () => (await probe()).revives.length === 1);
+
+  await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick the revive"]]);
+  await pass;
+  // Owed again and due now: the next pass revives the fresh instance, which answers.
+  const revived = await until("the fresh instance was revived", async () => {
+    await runDurableObjectAlarm(stub(ctx));
+    const p = await probe();
+    return p.revives.length >= 2 ? p : undefined;
+  });
+  expect(revived.revives.map((row) => Number(row.hung))).toEqual([1, 0]);
+  const failures = await runInDurableObject(stub(ctx), (_instance, state) =>
+    state.storage.kv.get(`facet-claim-failures:${name}`),
+  );
+  expect(failures).toBeUndefined(); // no backoff rung
+  expect(issueLines(errors)).toEqual([]);
+});
+
+test("a catch-up hung on a facet that itx.facets.abort resets runs again on the fresh instance, with no issue", async () => {
+  const ctx = "prj_facet_abort_reruns_its_catch_up";
+  const { probe } = await hostedOn(ctx);
+  const before = (await probe()).catchups.length;
+  await stub(ctx).invoke(["itx", "facets", ["get", name], ["armCatchUpHang"]]);
+  const errors = consoleErrors();
+  // An operator's resume: a facet row resumes by catching up from the log (subscription-delivery.ts).
+  await stub(ctx).append({
+    type: "events.iterate.com/stream/subscription-delivery-resumed",
+    payload: { name },
+  });
+  await until("the catch-up hangs", async () => (await probe()).catchups.length === before + 1);
+
+  await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick the catch-up"]]);
+  const caughtUp = await until("the fresh instance caught up", async () => {
+    const p = await probe();
+    return p.catchups.length >= before + 2 ? p : undefined;
+  });
+  expect(caughtUp.catchups.slice(before).map((row) => Number(row.hung))).toEqual([1, 0]);
+  expect(issueLines(errors)).toEqual([]);
+});
+
 /** The processor enabled on `ctx` (`processors.enable` spelled raw, as in
  *  facet-push-timeout-heals.test.ts), its configure batch pushed; its probe and the log. */
 async function hostedOn(ctx: string) {
@@ -134,83 +207,16 @@ async function hostedOn(ctx: string) {
   return { probe, read };
 }
 
+/** `console.error`, spied until the test finishes. */
+function consoleErrors() {
+  const errors = vi.spyOn(console, "error");
+  onTestFinished(() => {
+    errors.mockRestore();
+  });
+  return errors;
+}
+
 /** The `reportIssue` lines the context logged — it runs in this isolate, so they are this console's. */
-const issueLines = (errors: { mock: { calls: unknown[][] } }) =>
-  errors.mock.calls.flat().filter((line) => JSON.stringify(line).includes('"issue"'));
-
-test("a push hung on a facet that itx.facets.abort resets is caught up by the fresh instance — reduced once, the row live, the context not reset", async () => {
-  const ctx = "prj_facet_abort_heals_its_push";
-  const { probe, read } = await hostedOn(ctx);
-  const [owed] = (await stub(ctx).append({ type: "pin/hang" })) as { offset: number }[];
-  await until("the hanging push is on the facet", async () => (await probe()).seen.length === 2);
-  const wakesBefore = (await read()).filter((e) => e.type === "events.iterate.com/stream/woken");
-
-  const errors = vi.spyOn(console, "error");
-  const aborted = await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick"]]);
-  expect(aborted).toMatchObject({
-    type: "events.iterate.com/context/facet-aborted",
-    payload: { name, reason: "unstick" },
-  });
-  // Seconds, not the 60 s watchdog: the fresh instance reads the owed span from the log.
-  const healed = await until("the fresh instance caught up past the cut-off batch", async () => {
-    const p = await probe();
-    return p.checkpoints.some((c) => c.reduced_through_offset > owed!.offset) ? p : undefined;
-  });
-  expect(healed.seen.filter((row) => Number(row.hung) === 1)).toHaveLength(1); // never re-pushed
-  const events = await read();
-  expect(JSON.parse(healed.checkpoints[0]!.state)).toEqual({ n: events.length }); // each once
-  expect(
-    ((await stub(ctx).invoke(["itx", "subscriptions", ["get", name]])) as { halted?: unknown })
-      .halted,
-  ).toBeUndefined();
-  expect(events.filter((e) => e.type === "events.iterate.com/stream/woken")).toEqual(wakesBefore);
-  expect(issueLines(errors)).toEqual([]);
-});
-
-test("a revive hung on a facet that itx.facets.abort resets is owed again at once — no backoff, no issue — and the fresh instance's revive runs", async () => {
-  const ctx = "prj_facet_abort_owes_its_revive";
-  const { probe } = await hostedOn(ctx);
-  // A due claim, what a processor holds while a `runInBackground` attempt is in flight.
-  await stub(ctx).invoke(["itx", "processors", ["claim", name, Date.now()]]);
-  const errors = vi.spyOn(console, "error");
-  // The pass — the harness's own alarm or this one, whichever runs it first: its revive hangs.
-  const pass = runDurableObjectAlarm(stub(ctx));
-  await until("the revive hangs on the facet", async () => (await probe()).revives.length === 1);
-
-  await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick the revive"]]);
-  await pass;
-  // Owed again and due now: the next pass revives the fresh instance, which answers.
-  const revived = await until("the fresh instance was revived", async () => {
-    await runDurableObjectAlarm(stub(ctx));
-    const p = await probe();
-    return p.revives.length >= 2 ? p : undefined;
-  });
-  expect(revived.revives.map((row) => Number(row.hung))).toEqual([1, 0]);
-  const failures = await runInDurableObject(stub(ctx), (_instance, state) =>
-    state.storage.kv.get(`facet-claim-failures:${name}`),
-  );
-  expect(failures).toBeUndefined(); // no backoff rung
-  expect(issueLines(errors)).toEqual([]);
-});
-
-test("a catch-up hung on a facet that itx.facets.abort resets runs again on the fresh instance, with no issue", async () => {
-  const ctx = "prj_facet_abort_reruns_its_catch_up";
-  const { probe } = await hostedOn(ctx);
-  const before = (await probe()).catchups.length;
-  await stub(ctx).invoke(["itx", "facets", ["get", name], ["armCatchUpHang"]]);
-  const errors = vi.spyOn(console, "error");
-  // An operator's resume: a facet row resumes by catching up from the log (subscription-delivery.ts).
-  await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-delivery-resumed",
-    payload: { name },
-  });
-  await until("the catch-up hangs", async () => (await probe()).catchups.length === before + 1);
-
-  await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick the catch-up"]]);
-  const caughtUp = await until("the fresh instance caught up", async () => {
-    const p = await probe();
-    return p.catchups.length >= before + 2 ? p : undefined;
-  });
-  expect(caughtUp.catchups.slice(before).map((row) => Number(row.hung))).toEqual([1, 0]);
-  expect(issueLines(errors)).toEqual([]);
-});
+function issueLines(errors: { mock: { calls: unknown[][] } }) {
+  return errors.mock.calls.flat().filter((line) => JSON.stringify(line).includes('"issue"'));
+}

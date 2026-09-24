@@ -9,40 +9,6 @@ import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import { stub, until } from "./support.ts";
 
-const flakyFacetSource = (message: string) => /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
-const contract = defineProcessorContract({
-  slug: "flaky",
-  version: "1.0.0",
-  description: "counts durable events; its FIRST push ever rejects like a clone-version skew",
-  stateSchema: z.object({ n: z.number().default(0) }),
-  consumes: ["*"],
-  emits: [],
-});
-class FlakyProcessor extends StreamProcessor {
-  contract = contract;
-  reduce({ state }) { return { n: state.n + 1 }; }
-}
-export class FlakyDurableObject extends StreamProcessorDurableObject {
-  static publicMethods = [...super.publicMethods, "tries"];
-  processor = new FlakyProcessor();
-  #tries() {
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS tries (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER)");
-  }
-  async processEventBatch(events, range) {
-    this.#tries();
-    const before = Number(this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM tries").one().n);
-    this.ctx.storage.sql.exec("INSERT INTO tries (at) VALUES (?)", Date.now());
-    if (before === 0) throw new Error(${JSON.stringify(message)});
-    return super.processEventBatch(events, range);
-  }
-  tries() {
-    this.#tries();
-    return this.ctx.storage.sql.exec("SELECT * FROM tries").toArray();
-  }
-}
-`;
-
 const platformFailures = {
   clone_version: "Unable to deserialize cloned data due to invalid or unsupported version.",
   internal_error: "internal error; reference = 4f4r7cgj5qomq11vmhb2gc1f",
@@ -91,7 +57,7 @@ for (const [label, message] of Object.entries(platformFailures)) {
     // landed while the first push was in flight (a pending push folds), or comes as a third push.
     expect(tries.length).toBeGreaterThanOrEqual(2);
     const snap = (await s.invoke("itx.facets.get('flaky').snapshot()")) as { state: { n: number } };
-    expect(snap.state.n).toBe(durable); // every durable event counted once — no double, no loss
+    expect(snap).toMatchObject({ state: { n: durable } }); // every durable event counted once — no double, no loss
     const loaderIdAfter = await runInDurableObject(
       s,
       (_i, state) => state.storage.kv.get("facet:flaky:loader-id") as string,
@@ -266,3 +232,41 @@ export class Steady extends FacetDurableObject {
     await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet:steady:restarts")),
   ).toBe(1);
 });
+
+/** A loaded processor whose FIRST push ever rejects with `message`; every try is recorded in its own
+ *  SQLite, which survives the abort and the new isolate. */
+function flakyFacetSource(message: string) {
+  return /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "flaky",
+  version: "1.0.0",
+  description: "counts durable events; its FIRST push ever rejects like a clone-version skew",
+  stateSchema: z.object({ n: z.number().default(0) }),
+  consumes: ["*"],
+  emits: [],
+});
+class FlakyProcessor extends StreamProcessor {
+  contract = contract;
+  reduce({ state }) { return { n: state.n + 1 }; }
+}
+export class FlakyDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "tries"];
+  processor = new FlakyProcessor();
+  #tries() {
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS tries (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER)");
+  }
+  async processEventBatch(events, range) {
+    this.#tries();
+    const before = Number(this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM tries").one().n);
+    this.ctx.storage.sql.exec("INSERT INTO tries (at) VALUES (?)", Date.now());
+    if (before === 0) throw new Error(${JSON.stringify(message)});
+    return super.processEventBatch(events, range);
+  }
+  tries() {
+    this.#tries();
+    return this.ctx.storage.sql.exec("SELECT * FROM tries").toArray();
+  }
+}
+`;
+}

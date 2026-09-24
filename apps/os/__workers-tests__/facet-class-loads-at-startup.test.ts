@@ -53,80 +53,11 @@ export class Tally extends FacetDurableObject {
 }
 `;
 
-type LoaderTap = {
-  /** Every `LOADER.get` id, in call order — a refused one included. */
-  gets: string[];
-  /** Every `WorkerStub.getDurableObjectClass`. */
-  classGets: number;
-  /** Every `getCode` the REAL loader ran — a cold isolate actually minted. */
-  codeCallbacks: number;
-  /** When set, every `LOADER.get` after the first throws it. */
-  refuseAfterFirst: Error | undefined;
-};
-
-/** Install the counting LOADER on the context DO's live instance (see the header). Returns the tap
- *  `FacetHost#callFacet` writes into from then on — same isolate, same heap. */
-async function tapLoader(ctx: string): Promise<LoaderTap> {
-  const tap: LoaderTap = { gets: [], classGets: 0, codeCallbacks: 0, refuseAfterFirst: undefined };
-  await runInDurableObject(stub(ctx), (instance) => {
-    const inst = instance as unknown as { env: Record<string, unknown> & { LOADER: WorkerLoader } };
-    const real = inst.env.LOADER;
-    const counting = {
-      get(id: string, getCode: Parameters<WorkerLoader["get"]>[1]): WorkerStub {
-        const n = tap.gets.push(id);
-        if (n > 1 && tap.refuseAfterFirst) throw tap.refuseAfterFirst;
-        // Loosely typed on purpose: the stub's generic signatures only get in the way of counting.
-        const worker = real.get(id, async () => {
-          tap.codeCallbacks++;
-          return getCode();
-        }) as unknown as Record<
-          "getEntrypoint" | "getDurableObjectClass",
-          (...a: unknown[]) => unknown
-        >;
-        return {
-          getEntrypoint: (...args: unknown[]) => worker.getEntrypoint(...args),
-          getDurableObjectClass: (...args: unknown[]) => {
-            tap.classGets++;
-            return worker.getDurableObjectClass(...args);
-          },
-        } as unknown as WorkerStub;
-      },
-    } as unknown as WorkerLoader;
-    inst.env = { ...inst.env, LOADER: counting };
-    if (inst.env.LOADER !== counting) throw new Error("instance.env is not patchable this way");
-  });
-  return tap;
-}
-
-type Hello = { calls: number; instance: string };
-const hostHello = (ctx: string) =>
-  stub(ctx).invoke(["itx", "facets", ["get", "x", HELLO_SPEC], ["hello"]]) as Promise<Hello>;
-const warmHello = (ctx: string) =>
-  stub(ctx).invoke("itx.facets.get('x').hello()") as Promise<Hello>;
-
-/** `gets.length` unchanged for `quietMs` — the push path has drained (nothing else calls
- *  `FacetHost#callFacet`). */
-async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000): Promise<void> {
-  let last = tap.gets.length;
-  let quietSince = Date.now();
-  await until(
-    "loader quiet",
-    () => {
-      if (tap.gets.length !== last) {
-        last = tap.gets.length;
-        quietSince = Date.now();
-      }
-      return Date.now() - quietSince >= quietMs;
-    },
-    timeoutMs,
-  );
-}
-
 test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm calls add none; a release costs the next call exactly one more of each", async () => {
   const ctx = "prj_facet_door_warm";
   const tap = await tapLoader(ctx);
   const first = await hostHello(ctx);
-  expect(first.calls).toBe(1);
+  expect(first).toMatchObject({ calls: 1 });
   expect({ gets: tap.gets.length, classGets: tap.classGets, minted: tap.codeCallbacks }).toEqual({
     gets: 1,
     classGets: 1,
@@ -143,8 +74,8 @@ test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm cal
   // the loader's to keep (no cold build) — and the calls after that are warm again.
   await releasePins(ctx);
   const again = await warmHello(ctx);
-  expect(again.calls).toBe(1);
-  expect(again.instance).not.toBe(first.instance);
+  expect(again).toMatchObject({ calls: 1 });
+  expect(again).not.toMatchObject({ instance: first.instance });
   expect({ gets: tap.gets.length, classGets: tap.classGets, minted: tap.codeCallbacks }).toEqual({
     gets: 2,
     classGets: 2,
@@ -219,8 +150,79 @@ test("a RUNNING facet is not coupled to loader availability: with the loader ref
   // Healthy again: the next call re-materializes it.
   tap.refuseAfterFirst = undefined;
   const again = await warmHello(ctx);
-  expect(again.calls).toBe(1);
+  expect(again).toMatchObject({ calls: 1 });
   expect(tap.gets.length).toBe(4);
   for (let i = 0; i < 5; i++) await warmHello(ctx);
   expect(tap.gets.length).toBe(4);
 });
+
+type LoaderTap = {
+  /** Every `LOADER.get` id, in call order — a refused one included. */
+  gets: string[];
+  /** Every `WorkerStub.getDurableObjectClass`. */
+  classGets: number;
+  /** Every `getCode` the REAL loader ran — a cold isolate actually minted. */
+  codeCallbacks: number;
+  /** When set, every `LOADER.get` after the first throws it. */
+  refuseAfterFirst: Error | undefined;
+};
+
+/** Install the counting LOADER on the context DO's live instance (see the header). Returns the tap
+ *  `FacetHost#callFacet` writes into from then on — same isolate, same heap. */
+async function tapLoader(ctx: string): Promise<LoaderTap> {
+  const tap: LoaderTap = { gets: [], classGets: 0, codeCallbacks: 0, refuseAfterFirst: undefined };
+  await runInDurableObject(stub(ctx), (instance) => {
+    const inst = instance as unknown as { env: Record<string, unknown> & { LOADER: WorkerLoader } };
+    const real = inst.env.LOADER;
+    const counting = {
+      get(id: string, getCode: Parameters<WorkerLoader["get"]>[1]): WorkerStub {
+        const n = tap.gets.push(id);
+        if (n > 1 && tap.refuseAfterFirst) throw tap.refuseAfterFirst;
+        // Loosely typed on purpose: the stub's generic signatures only get in the way of counting.
+        const worker = real.get(id, async () => {
+          tap.codeCallbacks++;
+          return getCode();
+        }) as unknown as Record<
+          "getEntrypoint" | "getDurableObjectClass",
+          (...a: unknown[]) => unknown
+        >;
+        return {
+          getEntrypoint: (...args: unknown[]) => worker.getEntrypoint(...args),
+          getDurableObjectClass: (...args: unknown[]) => {
+            tap.classGets++;
+            return worker.getDurableObjectClass(...args);
+          },
+        } as unknown as WorkerStub;
+      },
+    } as unknown as WorkerLoader;
+    inst.env = { ...inst.env, LOADER: counting };
+    if (inst.env.LOADER !== counting) throw new Error("instance.env is not patchable this way");
+  });
+  return tap;
+}
+
+type Hello = { calls: number; instance: string };
+function hostHello(ctx: string) {
+  return stub(ctx).invoke(["itx", "facets", ["get", "x", HELLO_SPEC], ["hello"]]) as Promise<Hello>;
+}
+function warmHello(ctx: string) {
+  return stub(ctx).invoke("itx.facets.get('x').hello()") as Promise<Hello>;
+}
+
+/** `gets.length` unchanged for `quietMs` — the push path has drained (nothing else calls
+ *  `FacetHost#callFacet`). */
+async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000): Promise<void> {
+  let last = tap.gets.length;
+  let quietSince = Date.now();
+  await until(
+    "loader quiet",
+    () => {
+      if (tap.gets.length !== last) {
+        last = tap.gets.length;
+        quietSince = Date.now();
+      }
+      return Date.now() - quietSince >= quietMs;
+    },
+    timeoutMs,
+  );
+}

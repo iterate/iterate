@@ -38,60 +38,21 @@ import { expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "iterate/next/expression";
 import { adminCredentials, openSession, owedAlarm, stub, until } from "./support.ts";
 
-/** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
- *  by canonical match; both halves are the parsed ItxExpression, so `print` them to compare against
- *  the strings the event was built from). */
-type RewriteRuleRow = { match: ItxExpression; target: ItxExpression };
-const rewriteRulesOf = async (ctx: string): Promise<Record<string, RewriteRuleRow>> =>
-  (
-    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
-      state: { itxExpressionRewriteRules: Record<string, RewriteRuleRow> };
-    }
-  ).state.itxExpressionRewriteRules;
-
-/** The `itx/rewrite-rule-configured` rows of the durable log — one per set or un-set, no dedupe. */
-const rewriteRuleEventCount = async (ctx: string): Promise<number> =>
-  (
-    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
-  ).events.filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured").length;
-
-/** The DO's in-memory socket census (a DO-only verb — physical facts, never event-derivable). */
-const rpcStubPagersOf = async (ctx: string): Promise<number> =>
-  ((await stub(ctx).rpcStubTransportState()) as { rpcStubPagers: number }).rpcStubPagers;
-
-/** The code of a call that MUST reject — awaited over the capnweb session, not the raw DO stub: a
- *  rejecting DO call through the vitest-plugin's RPC bridge is echoed by workerd as an "Uncaught (in
- *  promise)" line even when caught; over /api the CODED error simply crosses the hop. */
-async function deniedCode(itx: any, call: string): Promise<string | undefined> {
-  try {
-    await itx.invoke(call);
-  } catch (e) {
-    return (e as { code?: string }).code;
-  }
-  return undefined;
-}
-
-/** The client rpc stub under test — a method receiver, so the registry reach is the documented
- *  pipelinable spelling `itx.rpcStubs.get('<rpcStubKey>').ping()`. */
-class Alive extends RpcTarget {
-  ping(): string {
-    return "alive";
-  }
-}
-
 test("a core-snapshot probe materializes only created and woken, without subscriptions or an alarm", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
       state: { projectId?: string; path?: string; createdAt?: string; incarnation?: number };
     };
-    expect(snap.state).toMatchObject({
-      projectId: "prj_doors_virginprobe",
-      path: "/",
-      incarnation: 1,
+    expect(snap).toMatchObject({
+      offset: 2, // created and woken
+      state: {
+        projectId: "prj_doors_virginprobe",
+        path: "/",
+        createdAt: expect.any(String),
+        incarnation: 1,
+      },
     });
-    expect(typeof snap.state.createdAt).toBe("string");
-    expect(snap.offset).toBe(2); // created and woken
     // Nothing is subscribed, so there is no delivery to schedule.
     await until(
       "no alarm after the probe",
@@ -109,7 +70,7 @@ test("a core-snapshot probe materializes only created and woken, without subscri
     ).toBe(1);
     // A plain append follows created and woken.
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
-    expect(mark.offset).toBe(3);
+    expect(mark).toMatchObject({ offset: 3 });
     // With no subscriptions, the mark creates no delivery claim.
     await until(
       "no alarm after the ack",
@@ -254,7 +215,7 @@ test("a PAUSED context survives an eviction: the constructor's birth-row replay 
   const [afterResume] = (await stub(ctx).append({ type: "after-resume" })) as unknown as {
     type: string;
   }[];
-  expect(afterResume.type).toBe("after-resume");
+  expect(afterResume).toMatchObject({ type: "after-resume" });
 });
 
 test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale removal (naming the target or the offset the handle wrote) is a no-op against a replacement — there is no read-then-append window", async () => {
@@ -309,3 +270,47 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
   });
   expect(await row()).toBeNull();
 });
+
+/** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
+ *  by canonical match; both halves are the parsed ItxExpression, so `print` them to compare against
+ *  the strings the event was built from). */
+type RewriteRuleRow = { match: ItxExpression; target: ItxExpression };
+async function rewriteRulesOf(ctx: string): Promise<Record<string, RewriteRuleRow>> {
+  return (
+    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
+      state: { itxExpressionRewriteRules: Record<string, RewriteRuleRow> };
+    }
+  ).state.itxExpressionRewriteRules;
+}
+
+/** The `itx/rewrite-rule-configured` rows of the durable log — one per set or un-set, no dedupe. */
+async function rewriteRuleEventCount(ctx: string): Promise<number> {
+  return (
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
+  ).events.filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured").length;
+}
+
+/** The DO's in-memory socket census (a DO-only verb — physical facts, never event-derivable). */
+async function rpcStubPagersOf(ctx: string): Promise<number> {
+  return ((await stub(ctx).rpcStubTransportState()) as { rpcStubPagers: number }).rpcStubPagers;
+}
+
+/** The code of a call that MUST reject — awaited over the capnweb session, not the raw DO stub: a
+ *  rejecting DO call through the vitest-plugin's RPC bridge is echoed by workerd as an "Uncaught (in
+ *  promise)" line even when caught; over /api the CODED error simply crosses the hop. */
+async function deniedCode(itx: any, call: string): Promise<string | undefined> {
+  try {
+    await itx.invoke(call);
+  } catch (e) {
+    return (e as { code?: string }).code;
+  }
+  return undefined;
+}
+
+/** The client rpc stub under test — a method receiver, so the registry reach is the documented
+ *  pipelinable spelling `itx.rpcStubs.get('<rpcStubKey>').ping()`. */
+class Alive extends RpcTarget {
+  ping(): string {
+    return "alive";
+  }
+}

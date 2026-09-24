@@ -5,19 +5,6 @@ import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-face
 import { owedAlarm, stub, releasePins, until } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";
-async function fire(ctx: string, now = Date.parse(at)) {
-  vi.useFakeTimers({ now, toFake: ["Date"] });
-  try {
-    return await runDurableObjectAlarm(stub(ctx));
-  } finally {
-    vi.useRealTimers();
-  }
-}
-async function read(ctx: string) {
-  return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as {
-    events: { type: string; offset: number; payload?: Record<string, unknown> }[];
-  };
-}
 
 test.for([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", version: "1" } }])(
   "live and replayed occurrences preserve absent attribution fields: %j",
@@ -325,3 +312,18 @@ test("a cold context SUPERSEDES a stale physical alarm nothing durable wants: it
       ) === null,
   );
 });
+
+async function fire(ctx: string, now = Date.parse(at)) {
+  vi.useFakeTimers({ now, toFake: ["Date"] });
+  try {
+    return await runDurableObjectAlarm(stub(ctx));
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function read(ctx: string) {
+  return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as {
+    events: { type: string; offset: number; payload?: Record<string, unknown> }[];
+  };
+}

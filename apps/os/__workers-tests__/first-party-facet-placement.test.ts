@@ -9,58 +9,10 @@
 // code makes still answers, and a secret path that resolves onto its owner's root (`/secrets/..`) is
 // refused before `itx.secrets.set` can steer the `secret` facet there.
 
-import { exports } from "cloudflare:workers";
-import { newWebSocketRpcSession } from "capnweb";
-import { afterAll, expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import type { ItxExpressionInput } from "iterate/next/expression";
-import type { IterateRpcTarget } from "../src/session.ts";
-import { loginPassword, ORIGIN } from "./support.ts";
-
-const transports: Disposable[] = [];
-afterAll(() => {
-  for (const transport of transports.splice(0)) transport[Symbol.dispose]();
-});
-
-/** A person signed in through the login form (email + the deployment's password), then on `/api`
- *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. The
- *  issuer fetches its own client metadata while it signs someone in; `fetch` reaches this worker for
- *  that one request (as control-plane.test.ts does), the network being out of reach here. */
-async function signedInSession(email: string) {
-  const issuerFetch = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  const login = await exports.default.fetch(`${ORIGIN}/login`, {
-    method: "POST",
-    redirect: "manual",
-    headers: { Origin: ORIGIN },
-    body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
-  });
-  issuerFetch.mockRestore();
-  const sessionCookie = login.headers
-    .getSetCookie()
-    .find((cookie) => cookie.startsWith("__Host-itx-session="))!
-    .split(";")[0]!;
-  const response = await exports.default.fetch(`${ORIGIN}/api`, {
-    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: sessionCookie },
-  });
-  response.webSocket!.accept();
-  const transport = newWebSocketRpcSession<IterateRpcTarget>(
-    response.webSocket! as unknown as WebSocket,
-  );
-  transports.push(transport);
-  return transport.authenticate({ type: "from-server-cookie" });
-}
-
-/** What a call came to: `"answered"`, or the code it was refused with (the message when uncoded). */
-async function outcomeOf(call: () => Promise<unknown>): Promise<string> {
-  try {
-    await call();
-    return "answered";
-  } catch (error) {
-    return errorCode(error) ?? String(error);
-  }
-}
+import { signedInSession } from "./support.ts";
 
 /** One row: the first-party facet named on a context the person holds, and whether the platform
  *  hosts it there. `context` is `session.user` (their own `global:/users/<id>`), `organization` (an
@@ -229,3 +181,13 @@ test("a signed-in person's own code — a facet, a processor, a worker, a script
   const rows = (await session.user.invoke(["itx", "processors", ["list"]])) as { name: string }[];
   expect(rows.map((row) => row.name)).not.toContain("tally-processor");
 });
+
+/** What a call came to: `"answered"`, or the code it was refused with (the message when uncoded). */
+async function outcomeOf(call: () => Promise<unknown>): Promise<string> {
+  try {
+    await call();
+    return "answered";
+  } catch (error) {
+    return errorCode(error) ?? String(error);
+  }
+}
