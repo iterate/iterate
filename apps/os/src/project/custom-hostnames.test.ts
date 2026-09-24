@@ -1,6 +1,6 @@
 // src/project/custom-hostnames.test.ts — which hostnames a project may add (a table), and the
-// Cloudflare for SaaS calls behind one, against a fake API: find-or-create, the DNS records its owner
-// is shown, delete.
+// Cloudflare for SaaS calls behind one, against a fake API: find-or-create, the upgrade of one made
+// before wildcards, the DNS records its owner is shown, delete.
 import { expect, test } from "vitest";
 import type { AppConfig } from "../app-config.ts";
 import {
@@ -66,7 +66,8 @@ test("customHostnameRecords: the hostname and every name under it to the fallbac
 });
 
 test("cloudflareCustomHostnameProvider: provision finds or creates a wildcard custom hostname validated over TXT; remove deletes what exists", async () => {
-  const hostnames: { id: string; hostname: string; status: string }[] = [];
+  const hostnames: { id: string; hostname: string; status: string; ssl: { wildcard: boolean } }[] =
+    [];
   const requests: string[] = [];
   const fetcher = (async (input: string, init?: RequestInit) => {
     const url = new URL(input);
@@ -78,7 +79,12 @@ test("cloudflareCustomHostnameProvider: provision finds or creates a wildcard cu
         hostname: "iterate.shop.test",
         ssl: { method: "txt", type: "dv", wildcard: true, settings: { min_tls_version: "1.2" } },
       });
-      hostnames.push({ id: "ch-1", hostname: "iterate.shop.test", status: "pending" });
+      hostnames.push({
+        id: "ch-1",
+        hostname: "iterate.shop.test",
+        status: "pending",
+        ssl: { wildcard: true },
+      });
       return ok(hostnames[0]);
     }
     if (init?.method === "DELETE") return ok({ id: hostnames.pop()!.id });
@@ -107,7 +113,12 @@ test("cloudflareCustomHostnameProvider: provision finds or creates a wildcard cu
 test("cloudflareCustomHostnameProvider: a create that lost a race to another finds the winner's", async () => {
   let created = false;
   const fetcher = (async (_input: string, init?: RequestInit) => {
-    const winner = { id: "ch-1", hostname: "iterate.shop.test", status: "pending" };
+    const winner = {
+      id: "ch-1",
+      hostname: "iterate.shop.test",
+      status: "pending",
+      ssl: { wildcard: true },
+    };
     if (init?.method === "POST") {
       created = true; // the other attempt's POST landed first
       return Response.json({ success: false, errors: [{ message: "Duplicate custom hostname" }] });
@@ -116,6 +127,40 @@ test("cloudflareCustomHostnameProvider: a create that lost a race to another fin
   }) as typeof fetch;
   const provider = cloudflareCustomHostnameProvider(config("token-1"), fetcher)!;
   expect(await provider.provision("iterate.shop.test")).toMatchObject({ status: "pending" });
+});
+
+test("cloudflareCustomHostnameProvider: provision upgrades a custom hostname made before wildcards, once", async () => {
+  const legacy = {
+    id: "ch-1",
+    hostname: "garple.com",
+    status: "active",
+    ssl: { status: "active", method: "http", type: "dv", wildcard: false },
+  };
+  const requests: string[] = [];
+  const fetcher = (async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    requests.push(`${init?.method || "GET"} ${url.pathname.split("/zone-1/")[1]}${url.search}`);
+    if (init?.method === "PATCH") {
+      expect(JSON.parse(String(init.body))).toEqual({
+        ssl: { method: "txt", type: "dv", wildcard: true, settings: { min_tls_version: "1.2" } },
+      });
+      legacy.ssl = { status: "pending_validation", method: "txt", type: "dv", wildcard: true };
+      return Response.json({ success: true, result: legacy });
+    }
+    return Response.json({ success: true, result: [legacy] });
+  }) as typeof fetch;
+  const provider = cloudflareCustomHostnameProvider(config("token-1"), fetcher)!;
+  expect(await provider.provision("garple.com")).toEqual({
+    status: "active",
+    sslStatus: "pending_validation",
+    records: customHostnameRecords("garple.com", SAAS),
+  });
+  await provider.provision("garple.com");
+  expect(requests).toEqual([
+    "GET custom_hostnames?hostname=garple.com",
+    "PATCH custom_hostnames/ch-1",
+    "GET custom_hostnames?hostname=garple.com",
+  ]);
 });
 
 const SAAS = {

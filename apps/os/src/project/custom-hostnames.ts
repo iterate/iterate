@@ -52,7 +52,7 @@ export function customHostnameRecords(
 }
 
 /** What the project processor needs of Cloudflare, each idempotent: find-or-create (and so re-read)
- *  a custom hostname, and delete one (none is done already). */
+ *  a wildcard custom hostname, upgrading one that is not, and delete one (none is done already). */
 export type CustomHostnameProvider = {
   provision(hostname: string): Promise<CustomHostnameObservation>;
   remove(hostname: string): Promise<void>;
@@ -63,7 +63,15 @@ type CloudflareCustomHostname = {
   id: string;
   hostname: string;
   status: string;
-  ssl?: { status?: string };
+  ssl?: { status?: string; wildcard?: boolean };
+};
+
+/** Every custom hostname's certificate: `<hostname>` and `*.<hostname>`, which takes TXT validation. */
+const WILDCARD_SSL = {
+  method: "txt",
+  type: "dv",
+  wildcard: true,
+  settings: { min_tls_version: "1.2" },
 };
 
 /** The provider over Cloudflare's API with the deployment's token — null when the deployment has no
@@ -103,24 +111,24 @@ export function cloudflareCustomHostnameProvider(
       const create = () =>
         cloudflare<CloudflareCustomHostname>("", {
           method: "POST",
-          body: JSON.stringify({
-            hostname,
-            ssl: {
-              method: "txt",
-              type: "dv",
-              wildcard: true,
-              settings: { min_tls_version: "1.2" },
-            },
-          }),
+          body: JSON.stringify({ hostname, ssl: WILDCARD_SSL }),
         });
       // a create that lost a race to another (a duplicate) finds the winner's
-      const entry =
+      const found =
         (await find(hostname)) ??
         (await create().catch(async (error: unknown) => {
           const winner = await find(hostname);
           if (!winner) throw error;
           return winner;
         }));
+      // one made before hostnames were wildcards (HTTP-validated, the apex alone) becomes one; its
+      // certificate is reissued once the owner's `_acme-challenge` CNAME validates it
+      const entry = found.ssl?.wildcard
+        ? found
+        : await cloudflare<CloudflareCustomHostname>(`/${found.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ ssl: WILDCARD_SSL }),
+          });
       return {
         status: entry.status,
         sslStatus: entry.ssl?.status || "unknown",
