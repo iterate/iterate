@@ -28,6 +28,6 @@
     "pnpm-workspace.yaml",
     "**/components/ai-elements/",
     "apps/browser-extension/capnweb.js",
-    "configs-next/with-agents/agents.js"
+    "configs/with-agents/agents.js"
   ]
 }

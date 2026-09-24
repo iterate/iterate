@@ -17,7 +17,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `packages/iterate`       | `iterate/next/*` SDK                                            |
 | `packages/ui`            | Components used by the apps                                     |
 | `packages/shared`        | Shared configuration, events, and test telemetry                |
-| `configs-next`           | Config repository templates copied into new projects            |
+| `configs`                | Config repository templates copied into new projects            |
 | `specs`                  | Browser specs across the apps (`pnpm spec`)                     |
 | `scripts`                | Deployment helpers and CI support                               |
 | `lint`, `rules`          | Review and lint rules                                           |

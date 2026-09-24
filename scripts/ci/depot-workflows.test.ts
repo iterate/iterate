@@ -163,7 +163,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "apps/os/scripts/generate-wrangler-config.ts",
     "apps/os/vite.config.ts",
     "apps/os/wrangler.base.jsonc",
-    "configs-next/default/AGENTS.md", // build.ts bakes it into the Worker
+    "configs/default/AGENTS.md", // build.ts bakes it into the Worker
     "scripts/lib/deploy-app.ts",
   ]) {
     expect(triggers(paths, file), `${file} deploys`).toBe(true);

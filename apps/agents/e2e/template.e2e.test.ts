@@ -14,7 +14,7 @@ test("the copied agents template installs its collection on project/created thro
     ["worker.ts", "agents.js", "iterate.json", "AGENTS.md"].map(async (path) => ({
       path,
       content: await readFile(
-        new URL(`../../../configs-next/with-agents/${path}`, import.meta.url).pathname,
+        new URL(`../../../configs/with-agents/${path}`, import.meta.url).pathname,
         "utf8",
       ),
     })),

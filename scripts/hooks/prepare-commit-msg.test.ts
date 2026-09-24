@@ -104,7 +104,8 @@ test("lint-staged runs the agent checks for the same markers as the hook", () =>
   expect(lintStagedCommands({ CLAUDE_CODE_CHILD_SESSION: "1" })).toEqual([
     "oxfmt --no-error-on-unmatched-pattern",
     "pnpm typecheck",
-    "pnpm test",
+    // A scratch repository a test builds must not reach the committing worktree's git directory.
+    "env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_AUTHOR_DATE -u GIT_CONFIG_PARAMETERS pnpm test",
     "pnpm lint:fix --deny-warnings --report-unused-disable-directives-severity error",
   ]);
 });

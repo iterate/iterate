@@ -35,6 +35,7 @@
     "@tanstack/react-router": "1.168.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "codemirror": "^6.0.2",
     "codemirror-json5": "^1.0.3",
     "iterate": "workspace:*",
