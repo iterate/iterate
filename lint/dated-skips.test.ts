@@ -44,6 +44,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "email-code sign-in is not configured",
     note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",
   },
+  {
+    file: "specs/os/test-link.spec.ts",
+    match: "test links exist only on a preview or local dev, and minting one needs its key",
+    note: "env-gated: a deployment on its own domain (prd) has login.testLink off by construction (apps/os/src/app-config.ts), and a preview run needs its key from `doppler run`",
+  },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {
     file: "scripts/ci/tracing/vitest.test.ts",
