@@ -264,6 +264,14 @@ export async function runTunnel(input: {
     authRequirement: input.public ? null : { visitors: "project-members" },
   });
   try {
+    // Listening before the URL is out: until a listener is installed the OS's default action ends
+    // the process at once, so a Ctrl-C right after `live` would leave the route standing.
+    let stop: () => void = () => {};
+    const stopped = new Promise<"stopped">((resolve) => {
+      stop = () => resolve("stopped");
+    });
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
     emit({ type: "live", url, routingSlug, ingressRouteName, public: Boolean(input.public) });
     console.error(
       `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
@@ -272,12 +280,6 @@ export async function runTunnel(input: {
       console.error(
         `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
       );
-    let stop: () => void = () => {};
-    const stopped = new Promise<"stopped">((resolve) => {
-      stop = () => resolve("stopped");
-    });
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
     try {
       const outcome = await Promise.race([stopped, input.connection.closed]);
       if (outcome !== "stopped")

@@ -376,31 +376,32 @@ async function readWindow(
   // An ingress route whose target is not connected (`iterate tunnel` killed without Ctrl-C) answers
   // 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
   // "ingress-route.target-offline", … })` (apps/os context/built-ins.ts); a Vite tab left open
-  // re-requests it every second. Each hop of that request (the project host's Worker, the context
-  // DO's fetch, again for the config worker's `env.ITX.fetch`) logs its own 502 summary at error
-  // level under its own requestId, and all of them share the request's traceId with the info line
-  // (prd Workers Logs, 2026-09-24). These filters keep every event EXCEPT a 502 summary in a trace
-  // that logged the info line: another status, another event or another trace still pages. One
-  // `not_in` takes 500 IDs here (2,000 answers "Internal error"). A capped or failed read excludes
-  // nothing: it can only remove noise, never lose an observed fault.
+  // re-requests it every second. Each hop of that request logs its own 502 summary at error level
+  // under its own requestId: the project host's Worker, the context DO's fetch, the ItxEntrypoint of
+  // the config worker's `env.ITX.fetch`, and the DO's fetch again. The loaded config worker starts a
+  // new traceId, so only the edge's rayId joins all four to the info line (a preview's Workers Logs,
+  // 2026-09-24). These filters keep every event EXCEPT a 502 summary in a ray that logged the info
+  // line: another status, another event or another ray still pages. One `not_in` takes 500 IDs here
+  // (2,000 answers "Internal error"). A capped or failed read excludes nothing: it can only remove
+  // noise, never lose an observed fault.
   const notTargetOffline = await rows(
     [{ key: "event", operation: "eq", value: "ingress-route.target-offline", type: "string" }],
-    "$metadata.traceId",
+    "$metadata.rayId",
   ).then(
     (found) => {
-      const traces = found.map(([traceId]) => traceId).filter(Boolean);
-      const capped = traces.length >= 2000;
+      const rays = found.map(([rayId]) => rayId).filter(Boolean);
+      const capped = rays.length >= 2000;
       console.log(
         JSON.stringify({
           event: "prd-fault-alarm.target-offline-evidence",
-          traces: traces.length,
+          rays: rays.length,
           capped,
         }),
       );
       if (capped) return [];
       const chunks: string[][] = [];
-      for (let start = 0; start < traces.length; start += 500)
-        chunks.push(traces.slice(start, start + 500));
+      for (let start = 0; start < rays.length; start += 500)
+        chunks.push(rays.slice(start, start + 500));
       return chunks.map((chunk) => ({
         kind: "group",
         filterCombination: "or",
@@ -409,8 +410,8 @@ async function readWindow(
           { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
           { key: "$workers.event.response.status", operation: "is_null", type: "number" },
           { key: "$workers.event.response.status", operation: "neq", value: 502, type: "number" },
-          { key: "$metadata.traceId", operation: "is_null", type: "string" },
-          { key: "$metadata.traceId", operation: "not_in", value: chunk.join(","), type: "string" },
+          { key: "$metadata.rayId", operation: "is_null", type: "string" },
+          { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
         ],
       }));
     },

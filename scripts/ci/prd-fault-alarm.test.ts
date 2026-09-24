@@ -560,24 +560,20 @@ test.for(["message", "error"])(
 );
 
 // A killed `iterate tunnel` leaves its ingress route answering 502 "<route> is not connected"; every
-// hop logs a 502 summary, all in the trace of the route's `ingress-route.target-offline` info line.
+// hop logs a 502 summary, all in the ray of the route's `ingress-route.target-offline` info line.
 test("a tunnel's not-connected 502s, every hop of them, page nothing", async () => {
   await using _logs = queryableWorkersLogs(targetOfflineRequest("vite-ping"));
   await expect(summary()).resolves.toBe("prd is quiet");
 });
 
 test.for([
+  ["a 500 in the offline request's ray", { status: 500 }, "4 5xx responses: blog--p.iterate.app 4"],
+  ["a 502 in another ray", { rayId: "other" }, "4 5xx responses: blog--p.iterate.app 4"],
+  ["a 502 without a ray", { rayId: undefined }, "4 5xx responses: blog--p.iterate.app 4"],
   [
-    "a 500 in the offline request's trace",
-    { status: 500 },
-    "2 5xx responses: blog--p.iterate.app 2",
-  ],
-  ["a 502 in another trace", { traceId: "other" }, "2 5xx responses: blog--p.iterate.app 2"],
-  ["a 502 without a trace", { traceId: undefined }, "2 5xx responses: blog--p.iterate.app 2"],
-  [
-    "an exception in the offline request's trace",
+    "an exception in the offline request's ray",
     { type: "cf-worker", message: "boom", status: undefined },
-    "2 errors: boom 2",
+    "4 errors: boom 4",
   ],
 ] as const)("%s still pages", async ([, change, line]) => {
   await using _logs = queryableWorkersLogs([
@@ -588,7 +584,7 @@ test.for([
 });
 
 test.for(["capped", "failed"])(
-  "a %s read of the offline traces keeps every 502 paging",
+  "a %s read of the offline rays keeps every 502 paging",
   async (reason) => {
     const events = [
       ...targetOfflineRequest("vite-ping"),
@@ -597,11 +593,11 @@ test.for(["capped", "failed"])(
         : []),
     ];
     await using _logs = queryableWorkersLogs(events, (query) => {
-      if (reason === "failed" && JSON.stringify(query.parameters.groupBys).includes("traceId"))
+      if (reason === "failed" && JSON.stringify(query.parameters.groupBys).includes("rayId"))
         throw new Error("network failed");
     });
     using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await summary()).toContain("2 5xx responses: blog--p.iterate.app 2");
+    expect(await summary()).toContain("4 5xx responses: blog--p.iterate.app 4");
   },
 );
 
@@ -838,28 +834,29 @@ function failedDocsRequest() {
   }));
 }
 
-/** One request to a killed tunnel's host, as prd logs it: the route's info line in the context DO,
- *  then the 502 summaries of the project host's Worker and of the DO, each with its own requestId
- *  and all in `traceId`. `change` alters the two summaries. */
+/** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the route's info line
+ *  in the context DO, then a 502 summary from each hop — the project host's Worker, the DO's fetch,
+ *  the config worker's ItxEntrypoint and the DO's fetch again — each with its own requestId and all
+ *  in `rayId`. `change` alters the four summaries. */
 function targetOfflineRequest(
-  traceId: string,
-  change: { status?: number; traceId?: string; type?: string; message?: string } = {},
+  rayId: string,
+  change: { status?: number; rayId?: string; type?: string; message?: string } = {},
 ) {
   const url = "https://blog--p.iterate.app/__vite_ping";
-  const summaryTraceId = "traceId" in change ? change.traceId : traceId;
+  const summaryRayId = "rayId" in change ? change.rayId : rayId;
   return [
     {
       timestamp: 42,
       event: "ingress-route.target-offline",
-      $metadata: { type: "cf-worker", level: "info", requestId: `${traceId}-do`, traceId },
+      $metadata: { type: "cf-worker", level: "info", requestId: `${rayId}-inner-do`, rayId },
       $workers: { executionModel: "durableObject", event: { request: { url } } },
     },
-    ...["stateless", "durableObject"].map((executionModel) => ({
+    ...["stateless", "durableObject", "stateless", "durableObject"].map((executionModel, hop) => ({
       timestamp: 42,
       $metadata: {
         type: change.type || "cf-worker-event",
-        requestId: `${traceId}-${executionModel}`,
-        traceId: summaryTraceId,
+        requestId: `${rayId}-${hop}`,
+        rayId: summaryRayId,
         message: change.message || `GET ${url}`,
       },
       $workers: {

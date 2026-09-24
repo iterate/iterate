@@ -35,8 +35,9 @@ const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import
 
 test(
   "iterate tunnel: private by default (refused under paths), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
-  // Up to three CLI processes each connect and set a route (a few seconds each against a preview).
-  { timeout: 120_000 },
+  // Each CLI process connects and sets a route (a few seconds each against a preview); under paths
+  // the private one is refused at once, so a preview runs two full ones.
+  { timeout: 90_000 },
   async () => {
     await using local = await localServer();
     const slug = freshDnsSafeProjectSlug("tunnel");
