@@ -11,6 +11,9 @@
 # THE FIRST MINUTES OF A PREVIEW: --input fresh-previews=true deploys a brand-new preview for every
 # run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — main's
 # e2e shape, a `main-<sha>` preview per push. Dispatch several at once for more previews per hour.
+# DISPATCH ON A REF NOTHING WILL PUSH TO: a push to the dispatched branch cancels the running soak
+# (2026-09-24: two 25-run soaks of a PR branch died at run 2 when the PR was rebased) — push the
+# commit to a branch of its own (`git push origin <sha>:refs/heads/soak/<name>`) and dispatch that.
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
 # difference), and CI is the environment whose flakes matter. It never pays for a model: the
 # real-model rows run only in os-real-model.yml (docs/testing.md#real-model-rows).

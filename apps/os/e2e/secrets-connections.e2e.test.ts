@@ -35,6 +35,7 @@ import {
   petshopAuthorizationServer,
   petshopBaseUrl,
   petshopConnect,
+  petshopExpireGraphqlSessions,
   petshopExpireTokens,
   petshopFailTokenEndpoint,
   petshopFireAppWebhook,
@@ -77,11 +78,10 @@ test("waitrose-session: a username/password secret mints its session on first us
     body: { sub: username, clientId: "graphql-session-login" },
   });
 
-  // Force a real 401 (the epoch bump kills the stored session) and call again: re-login IS the
-  // refresh — the object logs in again and the retry wins. `graphql-session-login` is the shop's ONE
-  // client for its login door (apps/dummy-petshop/src/worker.ts), so this bump is deployment-wide:
-  // safe because the account above is this run's alone and no other row in the suite logs in there.
-  await petshopExpireTokens("graphql-session-login");
+  // Force a real 401 (the account's epoch bump kills the stored session) and call again: re-login IS
+  // the refresh — the object logs in again and the retry wins. The bump is this run's account's
+  // alone: the shop serves every concurrent CI run.
+  await petshopExpireGraphqlSessions(username);
   expect(await bearerCall(itx, "/secrets/waitrose", "/api/pets")).toMatchObject({
     status: 200,
     body: { owner: username, pets: expect.any(Array) },
