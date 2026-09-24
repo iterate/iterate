@@ -79,6 +79,9 @@ env:
   PREVIEW_NAME: main
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # TEST EVIDENCE IN R2 (docs/test-evidence.md), off until the bucket and its keys exist: `r2` turns on
+  # the step that puts each test job attempt's test-results/ folder in the evidence bucket.
+  TEST_EVIDENCE_UPLOAD: "off"
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
   # lifecycle records, as `@@ci-trace` lines in the Depot logs the trace job reads.
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
@@ -212,6 +215,20 @@ jobs:
         env:
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
+      # attempt's tests left. This adds one row per test (tables/tests.parquet), then manifest.json:
+      # the tested commit and tree, the job attempt, the runners' timings and every file's sha256.
+      # Neither this nor the upload decides the job; the tests did.
+      - name: Write the test evidence manifest
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: pnpm tsx scripts/ci/test-evidence.ts write
+      - name: Upload the test evidence to R2
+        if: ${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
       - name: Upload specs flake records
         if: always()
         uses: actions/upload-artifact@v4

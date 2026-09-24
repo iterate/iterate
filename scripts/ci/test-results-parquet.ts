@@ -1,45 +1,22 @@
-import { existsSync } from "node:fs";
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
-import { AwsClient } from "aws4fetch";
+import { relative } from "node:path";
 import { parquetWriteBuffer, type BasicType } from "hyparquet-writer";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
-import { testResultsEnvs } from "../../envs.ts";
-import { FlakeRecord } from "./flake-dashboard/contract.ts";
-import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
+import type { FlakeRecord } from "./flake-dashboard/contract.ts";
 
 /**
- * DRAFT (off in CI until `TEST_RESULTS_PARQUET: upload`): one CI job attempt's per-test results as
- * one Parquet file in R2, so test history is a SQL query instead of a Depot artifact download per run.
- * Schema, object keys, a DuckDB query, volume and retention: docs/test-results-parquet.md.
- *
- * Reads what the job already keeps: the runners' raw telemetry artifacts (the finalizer,
- * upload-test-telemetry.ts, has checked them) and the createFlake/createFailing record lines. One row
- * per test; the test's own flake records ride on its row.
+ * One row per test, for the test evidence folder's `tables/tests.parquet`
+ * (docs/test-evidence.md#tables). `scripts/ci/test-evidence.ts write` builds it from what the job
+ * already keeps: the runners' raw telemetry artifacts (the finalizer, upload-test-telemetry.ts, has
+ * checked them) and the createFlake/createFailing record lines. A test's own flake records ride on
+ * its row.
  */
 export function testResultsTable(input: {
+  job: ReturnType<typeof ciJobAttempt>;
   artifacts: readonly TestTelemetryArtifact[];
   flakeRecords: readonly FlakeRecord[];
 }) {
-  const [first] = input.artifacts;
-  if (!first)
-    throw new Error("No test telemetry artifacts: a job attempt with no runner has no rows");
-  const job = CiJob.parse(first.ci);
-  for (const artifact of input.artifacts) {
-    const other = CiJob.parse(artifact.ci);
-    if (other.workflowRunId !== job.workflowRunId || other.depotJobUrl !== job.depotJobUrl) {
-      throw new Error(
-        `${artifact.artifactId} belongs to ${other.depotJobUrl}, not this job attempt (${job.depotJobUrl})`,
-      );
-    }
-  }
-  const jobAttemptId = new URL(job.depotJobUrl).searchParams.get("attempt");
-  if (!jobAttemptId) throw new Error(`DEPOT_JOB_URL names no job attempt: ${job.depotJobUrl}`);
-  const startedAt = input.artifacts.map((artifact) => artifact.run.startedAt).sort()[0]!;
-  const workflow = job.workflowName.toLowerCase().replace(/[^a-z0-9]+/gu, "-");
-
+  const { job } = input;
   const tests = input.artifacts.flatMap((artifact) =>
     artifact.tests.map((test) => {
       const flakeRecords: FlakeRecord[] = [];
@@ -67,12 +44,13 @@ export function testResultsTable(input: {
     const kinds = new Set(flakeRecords.map((record) => record.kind));
     if (kinds.size > 1) throw new Error(`"${test.fullName}" has both flake and failing records`);
     return {
+      test_run_id: job.testRunId,
       repository: job.repository,
       workflow_name: job.workflowName,
       workflow_run_id: job.workflowRunId,
       workflow_run_attempt: job.workflowRunAttempt,
       job_name: job.jobName,
-      job_attempt_id: jobAttemptId,
+      job_attempt_id: job.jobAttemptId,
       depot_job_url: job.depotJobUrl,
       head_sha: job.headSha,
       branch: job.branch,
@@ -114,14 +92,10 @@ export function testResultsTable(input: {
       flake_outcomes: flakeRecords.length > 0 ? flakeRecords.map((record) => record.outcome) : null,
     };
   });
-  return {
-    /** Hive-style partitions, so DuckDB's `hive_partitioning` turns them into `date` and `workflow` columns. */
-    key: `date=${startedAt.slice(0, 10)}/workflow=${workflow}/${job.workflowRunId}-${job.jobName}-${jobAttemptId}.parquet`,
-    rows,
-  };
+  return rows;
 }
 
-type TestResultRow = ReturnType<typeof testResultsTable>["rows"][number];
+type TestResultRow = ReturnType<typeof testResultsTable>[number];
 
 /**
  * Every column's Parquet type, in file order. A `JSON` column takes the value itself; the writer
@@ -130,6 +104,7 @@ type TestResultRow = ReturnType<typeof testResultsTable>["rows"][number];
  * https://github.com/hyparam/hyparquet-writer#column-types
  */
 const columnTypes: Record<keyof TestResultRow, BasicType> = {
+  test_run_id: "STRING",
   repository: "STRING",
   workflow_name: "STRING",
   workflow_run_id: "STRING",
@@ -180,61 +155,29 @@ export function testResultsParquet(rows: readonly TestResultRow[]) {
 }
 
 /**
- * PUT through R2's S3 API with a bucket-scoped R2 API token
- * (https://developers.cloudflare.com/r2/api/s3/api/, https://developers.cloudflare.com/r2/api/tokens/).
- * aws4fetch only signs the request (SigV4, region `auto`): its `AwsClient.fetch` retries a 5xx up to
- * 10 times by default (https://github.com/mhart/aws4fetch#new-awsclientoptions), which would hide
- * R2 trouble inside one slow step. One request, and a failure fails the step.
+ * The CI job attempt every artifact belongs to: the rows' and the manifest's identity. A test run is
+ * one job attempt, so an artifact from another attempt (a stale file, a retry's leftovers) or
+ * telemetry with no Depot job (a local run) is refused rather than mislabelled.
  */
-export async function putTestResultsObject(input: {
-  accountId: string;
-  bucketName: string;
-  key: string;
-  body: Uint8Array;
-  accessKeyId: string;
-  secretAccessKey: string;
-  fetch: typeof fetch;
-}) {
-  const client = new AwsClient({
-    accessKeyId: input.accessKeyId,
-    secretAccessKey: input.secretAccessKey,
-    service: "s3",
-    region: "auto",
-  });
-  const request = await client.sign(
-    `https://${input.accountId}.r2.cloudflarestorage.com/${input.bucketName}/${input.key}`,
-    {
-      method: "PUT",
-      body: input.body,
-      // The IANA media type for Parquet: https://www.iana.org/assignments/media-types/application/vnd.apache.parquet
-      headers: { "content-type": "application/vnd.apache.parquet" },
-    },
-  );
-  const response = await input.fetch(request);
-  if (!response.ok) {
-    throw new Error(
-      `R2 PUT ${input.bucketName}/${input.key}: ${response.status} ${await response.text()}`,
-    );
+export function ciJobAttempt(artifacts: readonly TestTelemetryArtifact[]) {
+  const [first] = artifacts;
+  if (!first)
+    throw new Error("No test telemetry artifacts: a job attempt with no runner has no rows");
+  const job = CiJob.parse(first.ci);
+  for (const artifact of artifacts) {
+    const other = CiJob.parse(artifact.ci);
+    if (other.workflowRunId !== job.workflowRunId || other.depotJobUrl !== job.depotJobUrl) {
+      throw new Error(
+        `${artifact.artifactId} belongs to ${other.depotJobUrl}, not this job attempt (${job.depotJobUrl})`,
+      );
+    }
   }
+  const jobAttemptId = new URL(job.depotJobUrl).searchParams.get("attempt");
+  if (!jobAttemptId) throw new Error(`DEPOT_JOB_URL names no job attempt: ${job.depotJobUrl}`);
+  return { ...job, jobAttemptId, testRunId: `testrun_${jobAttemptId}` };
 }
 
-/** Every `*.jsonl` line below `$FLAKE_RECORD_DIR`; the directory exists only once a test recorded. */
-async function loadFlakeRecords(directory: string) {
-  const files = existsSync(directory) ? await readdir(directory, { recursive: true }) : [];
-  const lines = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".jsonl"))
-      .map(async (file) =>
-        (await readFile(join(directory, file), "utf8"))
-          .split("\n")
-          .filter((line) => line.trim() !== "")
-          .map((line) => FlakeRecord.parse(JSON.parse(line))),
-      ),
-  );
-  return lines.flat();
-}
-
-/** The fields a row and the object key need, which a local run's telemetry may not have. */
+/** The fields a row and the manifest need, which a local run's telemetry may not have. */
 const CiJob = z.object({
   repository: z.string(),
   workflowName: z.string().min(1),
@@ -247,41 +190,3 @@ const CiJob = z.object({
   branch: z.string().min(1),
   pullRequestNumber: z.number().int().optional(),
 });
-
-if (isMainModule(import.meta.url)) {
-  const flag = (name: string) => {
-    const index = process.argv.indexOf(name);
-    const value = index === -1 ? undefined : process.argv[index + 1];
-    if (!value || value.startsWith("--")) throw new Error(`${name} requires a path`);
-    return value;
-  };
-  const artifactRoot = resolve(flag("--artifact-root"));
-  const { key, rows } = testResultsTable({
-    artifacts: (await loadTestTelemetryArtifacts(join(artifactRoot, "raw"))).map(
-      ({ artifact }) => artifact,
-    ),
-    flakeRecords: await loadFlakeRecords(resolve(flag("--flake-records"))),
-  });
-  const body = testResultsParquet(rows);
-  // Beside the raw artifacts, so the job's telemetry upload keeps a queryable copy too.
-  await writeFile(join(artifactRoot, "test-results.parquet"), body);
-  console.log(`[test-results-parquet] ${rows.length} rows, ${body.byteLength} bytes`);
-  if (process.argv.includes("--upload")) {
-    const { TEST_RESULTS_R2_ACCESS_KEY_ID, TEST_RESULTS_R2_SECRET_ACCESS_KEY } = process.env;
-    if (!TEST_RESULTS_R2_ACCESS_KEY_ID || !TEST_RESULTS_R2_SECRET_ACCESS_KEY) {
-      throw new Error(
-        "--upload needs TEST_RESULTS_R2_ACCESS_KEY_ID and TEST_RESULTS_R2_SECRET_ACCESS_KEY (Doppler _shared/preview)",
-      );
-    }
-    await putTestResultsObject({
-      accountId: testResultsEnvs.ci.cloudflareAccountId,
-      bucketName: testResultsEnvs.ci.bucketName,
-      key,
-      body,
-      accessKeyId: TEST_RESULTS_R2_ACCESS_KEY_ID,
-      secretAccessKey: TEST_RESULTS_R2_SECRET_ACCESS_KEY,
-      fetch,
-    });
-    console.log(`[test-results-parquet] r2://${testResultsEnvs.ci.bucketName}/${key}`);
-  }
-}

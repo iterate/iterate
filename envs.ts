@@ -308,14 +308,15 @@ export const ciReportsEnvs: Record<
   },
 };
 
-/** CI test results as Parquet in R2 (docs/test-results-parquet.md; scripts/ci/test-results-parquet.ts
- *  writes one object per CI job attempt). CI tooling, so it lives on the dev/preview account; CI's
- *  credentials are a bucket-scoped R2 API token's S3 keys in Doppler `_shared/preview`
- *  (`TEST_RESULTS_R2_ACCESS_KEY_ID`, `TEST_RESULTS_R2_SECRET_ACCESS_KEY`). Created by hand, not by
- *  ensure-resources: the steps are in the doc. */
-export const testResultsEnvs = {
+/** The test evidence bucket (docs/test-evidence.md): each CI job attempt's `test-results/` folder,
+ *  put there by `scripts/ci/test-evidence.ts upload` once a workflow sets TEST_EVIDENCE_UPLOAD to
+ *  `r2`. CI tooling, so it lives on the dev/preview account; CI's credentials are a bucket-scoped R2
+ *  API token's S3 keys in Doppler `_shared/preview` (`TEST_EVIDENCE_R2_ACCESS_KEY_ID`,
+ *  `TEST_EVIDENCE_R2_SECRET_ACCESS_KEY`). Created by hand, not by ensure-resources:
+ *  docs/test-evidence.md#owner-steps. */
+export const testEvidenceEnvs = {
   ci: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
-    bucketName: "ci-test-results",
+    bucketName: "ci-test-evidence",
   },
 };

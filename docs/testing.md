@@ -379,9 +379,12 @@ for it. The Playwright config additionally honors the Playwright-conventional
   one per job attempt) even when a test fails, next to
   `flake-records-unit-attempt-<id>`. See
   [CI and test telemetry](ci-test-telemetry.md) for downloading and checking one.
-- **Test results as Parquet** (draft, off): one Parquet file per job attempt
-  in an R2 bucket, for SQL across runs.
-  [Test results as Parquet](test-results-parquet.md).
+- **The test evidence folder**: `test-results/` is one test run's evidence.
+  After the finalizer, `scripts/ci/test-evidence.ts write` adds one row per
+  test (`tables/tests.parquet`) and `manifest.json` (the tested commit and
+  tree, the job attempt, timings and every file's sha256). The Test job keeps
+  the whole folder as `unit-test-evidence-attempt-<id>`; the upload to R2 is
+  off until its bucket exists. [Test evidence](test-evidence.md).
 - **The Vitest e2e suite** streams to the job log; the soak writes one JSON
   report per run under `apps/os/output/soak/` plus `summary.json`.
 - **Playwright** writes the repo-level `test-results/`:

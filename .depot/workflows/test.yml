@@ -12,6 +12,9 @@ concurrency:
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # TEST EVIDENCE IN R2 (docs/test-evidence.md), off until the bucket and its keys exist: `r2` turns on
+  # the step that puts each test job attempt's test-results/ folder in the evidence bucket.
+  TEST_EVIDENCE_UPLOAD: "off"
 
 jobs:
   test:
@@ -83,6 +86,20 @@ jobs:
         # --expect-unit-workspaces reads the workspaces from the checkout, so the list has one source:
         # the tree whose tests ran.
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
+      # attempt's tests left. This adds one row per test (tables/tests.parquet), then manifest.json:
+      # the tested commit and tree, the job attempt, the runners' timings and every file's sha256.
+      # Neither this nor the upload decides the job; the tests did.
+      - name: Write the test evidence manifest
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: pnpm tsx scripts/ci/test-evidence.ts write
+      - name: Upload the test evidence to R2
+        if: ${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow
       # artifact for the flake dashboard to pull, one per job attempt
@@ -101,5 +118,14 @@ jobs:
         with:
           name: unit-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/ci-telemetry
+          include-hidden-files: true
+          if-no-files-found: error
+      # The whole folder, manifest and tables included, as R2 would hold it.
+      - name: Upload the test evidence folder
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-evidence-attempt-${{ steps.attempt.outputs.id }}
+          path: test-results
           include-hidden-files: true
           if-no-files-found: error

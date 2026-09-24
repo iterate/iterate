@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
@@ -16,6 +17,7 @@ const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm
 const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
   env?: Record<string, string>;
   id?: string;
   name?: string;
@@ -880,6 +882,65 @@ test.each([
   },
 );
 
+// docs/test-evidence.md: each test job attempt's test-results/ folder, its manifest and, once
+// switched on, its upload to R2.
+test.each([
+  { file: ".depot/workflows/test.yml", jobId: "test" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e" },
+])(
+  "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2 only when switched on, deciding nothing",
+  ({ file, jobId }) => {
+    const workflow = loadWorkflow(file);
+    const job = workflow.jobs[jobId]!;
+    const steps = job.steps || [];
+    const index = (command: string) => steps.findIndex((step) => !!step.run?.includes(command));
+    const write = steps[index("scripts/ci/test-evidence.ts write")];
+    const upload = steps[index("scripts/ci/test-evidence.ts upload")];
+
+    expect(workflow.env?.TEST_EVIDENCE_UPLOAD).toBe("off");
+    expect(write).toMatchObject({ if: "${{ !cancelled() }}", "continue-on-error": true });
+    expect(upload).toMatchObject({
+      if: "${{ !cancelled() && env.TEST_EVIDENCE_UPLOAD == 'r2' && hashFiles('test-results/manifest.json') != '' }}",
+      "continue-on-error": true,
+      run: "doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload",
+    });
+    // after every runner and the finalizer, and before the artifacts that keep the folder
+    expect(index("scripts/ci/upload-test-telemetry.ts")).toBeLessThan(steps.indexOf(write!));
+    expect(steps.indexOf(write!)).toBeLessThan(steps.indexOf(upload!));
+    expect(steps.indexOf(upload!)).toBeLessThan(
+      steps.findIndex((step) => step.uses === "actions/upload-artifact@v4"),
+    );
+    // the runners write into the folder
+    const telemetryDirectories = [
+      job.env?.TEST_TELEMETRY_ARTIFACT_DIR,
+      ...steps.map((step) => step.env?.TEST_TELEMETRY_ARTIFACT_DIR),
+    ].filter(Boolean);
+    expect(telemetryDirectories).toEqual([testEvidencePaths.telemetry]);
+    // and the whole folder is kept as a Depot artifact too
+    expect(
+      steps.find(
+        (step) =>
+          step.uses === "actions/upload-artifact@v4" && step.with?.path === testEvidencePaths.root,
+      ),
+    ).toMatchObject({ if: "always()" });
+  },
+);
+
+test("the test jobs' flake records go into the test evidence folder", () => {
+  const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find(
+    (step) => step.name === "Run Tests",
+  );
+  expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(testEvidencePaths.flakeRecords);
+  // the e2e jobs' suites set their own, one directory per suite
+  expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
+    "FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/",
+  );
+  for (const path of Object.values(testEvidencePaths).filter((path) => path !== "test-results")) {
+    expect(path.startsWith(`${testEvidencePaths.root}/`), path).toBe(true);
+  }
+});
+
 test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
   const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
   const directory = mkdtempSync(join(tmpdir(), "job-attempt-"));
@@ -924,18 +985,18 @@ test.for([
     const report = steps.find((step) => step.with?.name === "public-playwright-report");
 
     // the root config writes per-test output (traces, screenshots, error context) and the HTML
-    // report under the directory the job uploads
-    expect(playwrightConfig).toContain('outputDir: "test-results/playwright-output"');
-    expect(playwrightConfig).toContain('outputFolder: "test-results/playwright-html"');
+    // report into the test evidence folder, which the job uploads
+    expect(playwrightConfig).toContain("outputDir: testEvidencePaths.playwrightOutput");
+    expect(playwrightConfig).toContain("outputFolder: testEvidencePaths.playwrightReport");
     expect(results).toMatchObject({
       if: "always()",
       uses: "actions/upload-artifact@v4",
-      with: expect.objectContaining({ path: "test-results" }),
+      with: expect.objectContaining({ path: testEvidencePaths.root }),
     });
     expect(report).toMatchObject({
       if: expect.stringContaining("always()"),
       uses: "actions/upload-artifact@v4",
-      with: expect.objectContaining({ path: "test-results/playwright-html" }),
+      with: expect.objectContaining({ path: testEvidencePaths.playwrightReport }),
     });
     expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(results!));
     expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(report!));

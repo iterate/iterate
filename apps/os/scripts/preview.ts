@@ -18,6 +18,7 @@ import process from "node:process";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
 import { z } from "zod";
+import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { OS_DOPPLER_PROJECT, osEnvs, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
@@ -907,13 +908,13 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
   ? {
       specs: {
         TEST_TELEMETRY_WORKSPACE: "iterate-root",
-        FLAKE_RECORD_DIR: "test-results/flake-records/specs",
+        FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/specs`,
       },
       "preview-e2e": {
         TEST_TELEMETRY_WORKSPACE: "os",
         TEST_TELEMETRY_KIND: "e2e",
         TEST_TELEMETRY_SUITE: "vitest",
-        FLAKE_RECORD_DIR: "test-results/flake-records/preview-e2e",
+        FLAKE_RECORD_DIR: `${testEvidencePaths.flakeRecords}/preview-e2e`,
       },
     }
   : { specs: {}, "preview-e2e": {} };
