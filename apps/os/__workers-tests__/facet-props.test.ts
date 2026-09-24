@@ -2,7 +2,7 @@
 // started from a Worker-Loader class minted with `getDurableObjectClass(name, { props })` sees those
 // props as `this.ctx.props`. That is how a processor's host (its `StreamProcessorDurableObject`
 // subclass) learns its identity (`{ iterateContextName, name }`) with no configure() side channel — the
-// parent passes props at mint, the only party that knows them. Pinned here in the workers lane
+// parent passes props at mint, the only party that knows them. Pinned here in the Workers suite
 // because it needs a real DurableObjectState (`state.facets`) and a real LOADER: runInDurableObject
 // hands us both.
 
@@ -30,7 +30,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async
     stub("prj_facet_props_probe"),
     async (_instance, state) => {
       const loader = env.LOADER;
-      // A fixed key: low-cardinality by construction (the loader cacheKey rule), test-lane only.
+      // A fixed key: low-cardinality by construction (the loader cacheKey rule), tests only.
       const worker = loader.get("probe:facet-props:v1", () => ({
         compatibilityDate: "2026-09-01",
         mainModule: "probe.js",

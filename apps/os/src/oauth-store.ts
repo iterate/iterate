@@ -1,5 +1,5 @@
 // src/oauth-store.ts — THE PROVIDER'S STORE: `OAUTH_KV` as @cloudflare/workers-oauth-provider sees
-// it. The provider has one storage seam, `env.OAUTH_KV`, and oauth.ts hands it this object there. A
+// it. The provider has one storage interface, `env.OAUTH_KV`, and oauth.ts hands it this object there. A
 // grant (`grant:<userId>:<grantId>`) lives in the control plane (control-plane/oauth-grants.ts),
 // because the provider rewrites it on the code exchange and on every refresh and the next refresh
 // must read that write, which KV does not promise across locations. Every other key the provider

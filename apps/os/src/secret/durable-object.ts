@@ -189,10 +189,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     await this.#bump();
     await this.ctx.storage.delete(["stored", "pending", "completed"]);
   }
-  /** THE VERIFY LANE (for webhooks): is `signature` the HMAC-SHA256
+  /** THE VERIFY OPERATION (for webhooks): is `signature` the HMAC-SHA256
    *  of `payload` under this secret's material? The material is opened HERE and the answer is one
    *  bit — nothing comes out, and no request goes anywhere, so the pin is not consulted. The
-   *  candidate arrives from an unauthenticated door (a webhook): a secret never set, or a material
+   *  candidate arrives from an unauthenticated caller (a webhook): a secret never set, or a material
    *  with no key at the field, answers false rather than describing itself; the comparison is
    *  constant-time. */
   async verifyHmac(input: SecretHmacVerification): Promise<boolean> {

@@ -18,7 +18,7 @@ export const projectHostsAreLocal = (): boolean => LOCAL_HOSTNAMES.has(worker().
  *  the real AI binding, an app's fetch back into its own host). The ONE gate; never copy the regex. */
 export const deployedOnly = test.skipIf(projectHostsAreLocal());
 /** `deployedOnly`, and OPT-IN (`E2E_REAL_MODELS=1`): a row that pays for a real model inference.
- *  Only the daily real-model lane (os-real-model.yml) sets it. PR and main e2e runs, and the soak,
+ *  Only the daily real-model suite (os-real-model.yml) sets it. PR and main e2e runs, and the soak,
  *  answer the model with a fake instead: one AI Gateway spend cap covers the whole preview account,
  *  and on 2026-09-24 a day of soaks spent it and every PR's preview e2e went red
  *  (docs/testing.md#real-model-rows). */
@@ -29,7 +29,7 @@ export const realModelOnly = test.skipIf(
  *  (support/fake-git-server.ts, listening on THIS machine's 127.0.0.1): the repo facet fetches its
  *  remote over the worker's egress, and a deployed worker cannot reach a loopback address (the
  *  platform answers 403). Rows that only touch the proxy (create, its failure) still run deployed —
- *  the fake proxy is called back over the WebSocket; the real binding's rows run in every lane, the
+ *  the fake proxy is called back over the WebSocket; the real binding's rows run in every environment, the
  *  local worker binding Artifacts too. */
 export const localOnly = test.skipIf(!projectHostsAreLocal());
 
@@ -52,7 +52,7 @@ export function ingressRouting(): IngressRouting {
 
 /** `test`, skipped where the worker under test does not route projects by SUBDOMAIN — for what only a
  *  hostname can say: a host label outside the DNS grammar, the dotted `<app>.<project>` shape, an
- *  app's own `/.auth/*` doors (under paths an app shares the platform's origin, whose doors are the
+ *  app's own `/.auth/*` routes (under paths an app shares the platform's origin, whose routes are the
  *  issuer's). Everything else composes its address with `projectUrl` and runs under both routings. */
 export const subdomainsOnly = test.skipIf(ingressRouting()?.type !== "subdomains");
 

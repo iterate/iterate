@@ -1,7 +1,7 @@
 // bench/tail-summary.ts — summarize a `wrangler tail --format json` capture (pretty-printed JSON
-// objects, concatenated) into per-lane CPU and wall-time percentiles: the DEPLOYED worker's own
+// objects, concatenated) into per-group CPU and wall-time percentiles: the DEPLOYED worker's own
 // numbers, the ones that count. Usage: `tsx bench/tail-summary.ts <tail.log> [label-regex]`.
-// Lanes: executionModel (stateless = the /api worker, durableObject = the context DO) × the request's
+// Groups: executionModel (stateless = the /api worker, durableObject = the context DO) × the request's
 // path (or the DO event kind). cpuTime/wallTime are Cloudflare's per-invocation milliseconds.
 
 import { readFileSync } from "node:fs";
@@ -51,7 +51,7 @@ function parseConcatenatedJson(text: string): TailEvent[] {
 const percentile = (sorted: number[], p: number): number =>
   sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))]! : NaN;
 
-function laneOf(e: TailEvent): string {
+function groupOf(e: TailEvent): string {
   const model = e.executionModel || "?";
   const url = e.event?.request?.url;
   if (url) return `${model} ${new URL(url).pathname}`;
@@ -61,25 +61,25 @@ function laneOf(e: TailEvent): string {
 }
 
 const [, , file, labelRegex] = process.argv;
-if (!file) throw new Error("usage: tsx bench/tail-summary.ts <tail.log> [lane-regex]");
+if (!file) throw new Error("usage: tsx bench/tail-summary.ts <tail.log> [group-regex]");
 const events = parseConcatenatedJson(readFileSync(file, "utf8"));
-const lanes = new Map<string, { cpu: number[]; wall: number[]; outcomes: Map<string, number> }>();
+const groups = new Map<string, { cpu: number[]; wall: number[]; outcomes: Map<string, number> }>();
 for (const e of events) {
-  const lane = laneOf(e);
-  if (labelRegex && !new RegExp(labelRegex).test(lane)) continue;
-  let l = lanes.get(lane);
-  if (!l) lanes.set(lane, (l = { cpu: [], wall: [], outcomes: new Map() }));
+  const group = groupOf(e);
+  if (labelRegex && !new RegExp(labelRegex).test(group)) continue;
+  let l = groups.get(group);
+  if (!l) groups.set(group, (l = { cpu: [], wall: [], outcomes: new Map() }));
   if (typeof e.cpuTime === "number") l.cpu.push(e.cpuTime);
   if (typeof e.wallTime === "number") l.wall.push(e.wallTime);
   l.outcomes.set(e.outcome || "?", (l.outcomes.get(e.outcome || "?") ?? 0) + 1);
 }
-const rows = [...lanes.entries()]
+const rows = [...groups.entries()]
   .sort((a, b) => b[1].wall.length - a[1].wall.length)
-  .map(([lane, l]) => {
+  .map(([group, l]) => {
     l.cpu.sort((a, b) => a - b);
     l.wall.sort((a, b) => a - b);
     return {
-      lane,
+      group,
       n: l.wall.length,
       cpu_p50: percentile(l.cpu, 50),
       cpu_p95: percentile(l.cpu, 95),

@@ -4,7 +4,7 @@
 // forwards a placeholder-bearing upgrade to the context at `/secrets/<name>`, whose `#egress` hands it
 // to its facet over `ctx.facets.get("secret").fetch(request)`; the facet substitutes the bearer, dials
 // the pinned host and hands the 101 straight back — it HOLDS no socket. Measured here, 2026-09-21,
-// inside workerd (the workers lane): the 101 crosses every hop (facet → parent → the caller's DO →
+// inside workerd (the Workers suite): the 101 crosses every hop (facet → parent → the caller's DO →
 // the eyeball), the frames round-trip, the use is a fact on the secret's path; and the socket lives
 // exactly as long as the facet's dial — `ctx.facets.abort` on the secret's context closes it, 1006,
 // as an intermediary Durable Object's eviction would have.
@@ -12,7 +12,7 @@
 // THE UPSTREAM IS IN-PROCESS: the facet's terminal `fetch` is the isolate's global fetch, and each
 // test answers the pinned origin (`UPSTREAM`) with a fake shop of its own (`serveShop`, below) —
 // a real capnweb server over a real WebSocketPair that accepts exactly the bearer the test stored,
-// so a 101 is the credential swapped in. This lane dials no deployed service. What it cannot prove
+// so a 101 is the credential swapped in. This suite dials no deployed service. What it cannot prove
 // is the dial over the real network to a real third party; the DEPLOYED row of
 // e2e/secrets.e2e.test.ts does that against apps/dummy-petshop.
 
@@ -23,7 +23,7 @@ import { stub, until } from "./support.ts";
 
 const SHOP = "https://petshop.test";
 
-test("a WebSocket 101 through a secret: the caller's context forwards to /secrets/shop, whose facet dials the shop's capnweb door with the bearer substituted and hands the 101 back; frames round-trip; the use is a fact with status 101; aborting the facet closes the socket 1006", async () => {
+test("a WebSocket 101 through a secret: the caller's context forwards to /secrets/shop, whose facet dials the shop's capnweb endpoint with the bearer substituted and hands the 101 back; frames round-trip; the use is a fact with status 101; aborting the facet closes the socket 1006", async () => {
   const accessToken = serveShop();
 
   const project = "prj_secret_facet_socket";

@@ -6,7 +6,7 @@
 //               session, against the warm-context round trip beneath it
 //   latency   — the steady round trips: built-in, durable append, ephemeral append, read, rule chain
 //   throughput— appends per second, pipelined and batched
-//   delivery  — append → a lent callback's push (the push lane) and → a processor's reduce (the facet lane)
+//   delivery  — append → a lent callback's push (push delivery) and → a processor's reduce (facet delivery)
 //   facet     — a processor's COLD materialization on a fresh context (loader + class + first call)
 
 import { newHttpBatchRpcSession } from "capnweb";

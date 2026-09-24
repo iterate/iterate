@@ -4,7 +4,7 @@
 /** A per-connection subclass whose PROTOTYPE carries one method per name — prototype members are what
  *  Workers RPC and capnweb traverse, so `conn.echo({ … })` works held across calls, not only inside
  *  one dotted expression. A name the base already declares (its own methods, `constructor`, whatever
- *  `RpcTarget` adds) stays reachable through the generic door only; so does a name that is not an
+ *  `RpcTarget` adds) stays reachable through the generic `call` only; so does a name that is not an
  *  identifier, and `then` — a thenable connection would be adopted as a promise by any await and
  *  never settle. */
 export function subclassWithMethods<Base extends abstract new (...args: never[]) => object>(

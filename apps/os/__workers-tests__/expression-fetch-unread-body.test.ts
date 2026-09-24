@@ -1,5 +1,5 @@
-// __workers-tests__/fetch-lane-unread-body.test.ts — the fetch lane streams a visitor's body to the
-// app through a pipe the context DO owns (iterate-context-durable-object.ts `#fetchLaneBody`), so an
+// __workers-tests__/expression-fetch-unread-body.test.ts — the expression fetch streams a visitor's body to the
+// app through a pipe the context DO owns (iterate-context-durable-object.ts `#expressionFetchBody`), so an
 // app that never reads its body leaves no read pending on the DO's request stream
 // (https://github.com/cloudflare/workerd/issues/918). Local workerd does not surface that error, so
 // these rows pin what the pipe must preserve; the error itself is proven on a deployed worker.

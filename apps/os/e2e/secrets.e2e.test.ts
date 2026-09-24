@@ -13,7 +13,7 @@
 // value arrives at a pinned origin) is deployed-only: it egresses to one of THIS project's own apps
 // on a real project host. Every dispatch through a secret is a `secret/used` fact ON THE SECRET'S
 // PATH (the request as received — placeholders, never values — and the status); a WebSocket upgrade
-// through a secret is a dispatch like any other — the petshop's capnweb door over egress, dialled
+// through a secret is a dispatch like any other — the petshop's capnweb endpoint over egress, dialled
 // from a nested context (deployed-only: the local worker cannot make an outbound upgrade; the
 // platform pin, inside workerd, is __workers-tests__/secret-facet-proxies-a-socket.test.ts). The
 // connection mechanisms that refresh a credential are secrets-connections.e2e.test.ts.
@@ -327,10 +327,10 @@ test("a use is a fact: an egress through a secret appends `secret/used` on the s
 
 // DEPLOYED ONLY (measured 2026-09-21): the local worker under wrangler cannot make an OUTBOUND
 // WebSocket upgrade — its terminal fetch answers `TypeError: fetch failed` — while the deployed worker
-// and the workers lane (vitest-pool-workers, workerd's own fetch) can; the local proof of the same
+// and the Workers suite (vitest-pool-workers, workerd's own fetch) can; the local proof of the same
 // path, against an in-process fake shop, is __workers-tests__/secret-facet-proxies-a-socket.test.ts.
 deployedOnly(
-  "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door dialled from a NESTED context (`/agents/dialler`), whose egress forwards the upgrade to /secrets/shop and its facet substitutes the bearer, dials, and hands the 101 back; the capnweb call answers over it; the use is a fact on the secret's path with status 101",
+  "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb endpoint dialled from a NESTED context (`/agents/dialler`), whose egress forwards the upgrade to /secrets/shop and its facet substitutes the bearer, dials, and hands the 101 back; the capnweb call answers over it; the use is a fact on the secret's path with status 101",
   async () => {
     const shop = petshopBaseUrl();
     const accessToken = await petshopLegacyBearer(`secret-ws-${runId()}@example.com`);

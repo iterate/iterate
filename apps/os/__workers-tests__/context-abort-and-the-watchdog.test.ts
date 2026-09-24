@@ -21,10 +21,10 @@ test("the watchdog alarm an aborted incarnation left wakes the fresh one as a no
   const alarm = () => runInDurableObject(stub(ctx), (_instance, state) => state.storage.getAlarm());
   expect(await alarm()).toBe(t0 + W);
 
-  const aborted = (await stub(ctx).invoke(["itx", ["abort", "workers lane"]])) as StreamEvent;
+  const aborted = (await stub(ctx).invoke(["itx", ["abort", "Workers suite"]])) as StreamEvent;
   expect(aborted).toMatchObject({
     type: "events.iterate.com/context/aborted",
-    payload: { reason: "workers lane" },
+    payload: { reason: "Workers suite" },
   });
   await new Promise((resolve) => setTimeout(resolve, 50)); // the reset's zero-delay turn
 

@@ -258,7 +258,7 @@ test("oauth-refresh-token through a token-endpoint outage: one failed refresh, t
 // THE FIRST TOKENS, obtained by the platform: `itx.secrets.beginOAuth` hands back the provider's
 // authorize URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for
 // the page); the provider redirects the human to the platform's one callback with the code; the
-// callback admits only a signed-in member of the project (here the admin bearer, the lane's session),
+// callback admits only a signed-in member of the project (here the admin bearer, the suite's session),
 // and the secret's Durable Object exchanges the code. From then on it is the ordinary
 // `oauth-refresh-token` secret the story above proves. No code outside that object ever held a token
 // — not even the test.

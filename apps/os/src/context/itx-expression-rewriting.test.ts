@@ -515,7 +515,7 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
 // root, the proxy's verbs, `@` (in a match, in a non-final step, in a call), and the
 // prefix grammar (an argless pinned step, an anonymous step, an unbalanced paren, a non-identifier
 // step in the ARRAY half).
-const doorRefusals: {
+const appendRefusals: {
   match: ItxExpressionInput;
   target: ItxExpressionInput | null;
   throws: RegExp;
@@ -551,7 +551,7 @@ const doorRefusals: {
   { match: ["itx", ["builtins.kv", 1]], target: "itx.kv", throws: /not an identifier/ }, // …a call step's name too
   { match: ["itx", "__proto__"], target: "itx.kv", throws: /reserved/ },
 ];
-for (const { match, target, throws } of doorRefusals)
+for (const { match, target, throws } of appendRefusals)
   test(`rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary: REFUSED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}  ${throws}`, () => {
     expect(() =>
       normalizeControlEvent(

@@ -239,7 +239,7 @@ test.each([
 });
 
 // ── the pin ── never empty: a secret goes to its origins and nowhere else.
-// ── the verify lane ── `verifySecretHmac(material, { payload, signature, field? })`: one bit out.
+// ── the verify operation ── `verifySecretHmac(material, { payload, signature, field? })`: one bit out.
 test("hmacSha256Hex agrees with node's HMAC over a string and over bytes; constantTimeEquals compares whole strings", async () => {
   const oracle = (key: string, payload: string | Uint8Array) =>
     createHmac("sha256", key).update(payload).digest("hex");

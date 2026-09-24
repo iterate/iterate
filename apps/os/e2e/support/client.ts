@@ -31,7 +31,7 @@ export const loginPassword = (): string => {
   return password;
 };
 
-/** THE lane's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
+/** THE suite's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
  *  `{ actor: "admin" }`; with `as`, that user's session (the projects of their orgs) — what a
  *  membership row authenticates with. */
 export const adminCredentials = (as?: {
@@ -42,7 +42,7 @@ export const adminCredentials = (as?: {
   as,
 });
 
-/** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
+/** A URL on the one shared worker — for the raw HTTP routes that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
 /** MCP's protocol endpoint (global-setup: `<worker>/mcp`, or a deployed worker's own MCP origin). */
@@ -129,7 +129,7 @@ type OpenTransports = { sessions: any[]; sockets: WebSocket[] };
  *  into that test's own `afterEach`) and disposes THAT store alone. */
 const testTransports = new AsyncLocalStorage<OpenTransports>();
 /** The fallback owner: whatever opens a session with no test running — a file's `beforeAll`, the
- *  bench lane — disposed once per file (`disposeFileSessions`, support/setup.ts `afterAll`). */
+ *  benchmarks — disposed once per file (`disposeFileSessions`, support/setup.ts `afterAll`). */
 const fileTransports: OpenTransports = { sessions: [], sockets: [] };
 const openTransports = (): OpenTransports => testTransports.getStore() ?? fileTransports;
 
@@ -198,7 +198,7 @@ export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; w
   return { session: s, ws };
 }
 
-/** THE default door: a fresh session's itx for a project ctx (its root context), authenticated with
+/** THE default entry point: a fresh session's itx for a project ctx (its root context), authenticated with
  *  the admin secret — any project, no catalog row needed (src/session.ts); it is the only way in —
  *  there is no bare one. */
 export function openItx(ctx: string): any {
@@ -226,7 +226,7 @@ function dispose(open: OpenTransports): void {
  *  support/setup.ts; a sibling test running at the same time keeps its own. */
 export const disposeSessions = (): void => dispose(openTransports());
 
-/** Dispose what the FILE opened outside any test (a `beforeAll`, the bench lane) — afterEach never
+/** Dispose what the FILE opened outside any test (a `beforeAll`, the benchmarks) — afterEach never
  *  reaches those; support/setup.ts wires this to afterAll. */
 export const disposeFileSessions = (): void => dispose(fileTransports);
 
@@ -284,7 +284,7 @@ export const readHead = async (itx: any): Promise<number> => {
 // ── the two tables and the physical registry ──
 
 /** The subscriptions table joined with the stream-kept cursors — `itx.subscriptions.list()`, the
- *  layer's read door: `[{ name, target, consumes?, configuredAtOffset, cursor?, halted? }]`. A
+ *  layer's read method: `[{ name, target, consumes?, configuredAtOffset, cursor?, halted? }]`. A
  *  cursor is present only for a target the stream delivers at-least-once (one that cannot own its
  *  progress); a processor's row has none (its facet keeps its own checkpoint). */
 export async function subscriptions(itx: any): Promise<any[]> {
@@ -414,7 +414,7 @@ export async function rejection(
 }
 
 /** A subscriber callback recording every delivery (deep-cloned — capnweb payloads must not be read
- *  after the callback's turn). Works verbatim as a push target and behind a cursor-lane hook. */
+ *  after the callback's turn). Works verbatim as a push target and behind a cursor-delivery hook. */
 export function collector() {
   const invocations: { events: any[]; range: { after: number; through: number } }[] = [];
   return {

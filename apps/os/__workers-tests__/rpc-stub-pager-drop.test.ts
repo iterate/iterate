@@ -1,5 +1,5 @@
 // __workers-tests__/rpc-stub-pager-drop.test.ts — THE PAGER LEG DROPS UNDER A LIVE LEND, inside
-// workerd (the workers lane — the only lane that can close the DO's end of a pager and read its
+// workerd (the Workers suite — the only suite that can close the DO's end of a pager and read its
 // socket census, `rpcStubTransportState`).
 //
 // Target surface: the rpc-stub relay (src/context/rpc-stubs.ts `lendRpcStubOverPager`). A lent

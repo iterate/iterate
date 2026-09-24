@@ -61,7 +61,7 @@ export async function connectToOpenApi(
   );
 }
 
-/** A connected OpenAPI service. `call(operationId, input)` is the generic door; the operations are
+/** A connected OpenAPI service. `call(operationId, input)` is the generic entry point; the operations are
  *  its methods too. */
 export class OpenApiConnectionRpcTarget extends RpcTarget {
   readonly #itx: LibraryItx;
@@ -164,7 +164,7 @@ async function fetchDocument(
 }
 
 /** `baseUrl`, else the document's first server (resolved against the spec URL), else the spec URL
- *  minus its last path segment — QUERY KEPT, so a fetch-lane URL stays addressed. */
+ *  minus its last path segment — QUERY KEPT, so a expression-fetch URL stays addressed. */
 function requestBase(
   spec: OpenApiDocument,
   specUrl: string | undefined,
@@ -175,8 +175,8 @@ function requestBase(
   const relative = serverUrl && !/^[a-z][a-z0-9+.-]*:/i.test(serverUrl);
   if (serverUrl && !(relative && !specUrl)) {
     const base = new URL(serverUrl, specUrl);
-    // a RELATIVE server (`/api`, the common spelling) resolved against a fetch-lane spec URL keeps
-    // the lane's `?context=&itx=` — dropping it would send every operation to the worker's banner
+    // a RELATIVE server (`/api`, the common spelling) resolved against a expression-fetch spec URL keeps
+    // the expression fetch's `?context=&itx=` — dropping it would send every operation to the worker's banner
     if (relative && specUrl) base.search = new URL(specUrl).search;
     return base;
   }
@@ -192,7 +192,7 @@ function requestBase(
 /** A concrete OpenAPI parameter — PARSED, never cast: a `$ref` parameter (or any malformed one) has no
  *  string `name`/`in`, so it fails this and is dropped instead of surfacing as `{ name: undefined }`
  *  that violates OpenApiOperation. An internal `$ref` (a shared `#/components/parameters/…`) is
- *  resolved first; an external ref (a URL or file) stays dropped — this lane fetches only the spec. */
+ *  resolved first; an external ref (a URL or file) stays dropped — this path fetches only the spec. */
 const OpenApiParameter = z.object({
   name: z.string(),
   in: z.string(),

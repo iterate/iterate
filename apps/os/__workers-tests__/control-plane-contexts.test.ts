@@ -333,7 +333,7 @@ test("a user's builtins cd('/') is refused", async () => {
 
 // The RESOURCE OWNER beneath the mask (`resourceScope`): a user's kv, secrets and repos are keyed
 // by their own subtree, so a name is never another user's nor the global root's. The global root
-// and a context BELOW a user are reached through the lane's raw DO door (`stub`): no session can
+// and a context BELOW a user are reached through the suite's raw DO stub (`stub`): no session can
 // navigate there — `session.user.cd` is refused, `projects.get('global')` too.
 
 test("a user's kv is their own: A's put is A's get, not B's, not the global root's — and a context below A reads A's", async () => {
@@ -412,7 +412,7 @@ test.skip("the account facet's processEventBatch is not client-callable (needs t
 test.skip("a user cannot SUBSCRIBE to another user's log via the pager (needs the transport-admission gate)", () => {});
 
 /** A signed-in human's session: the admin fixture with `as` upserts the user and vends their session
- *  (src/session.ts `IterateRpcTarget.authenticate`). The bare `openSession()` door is `any` (it also
+ *  (src/session.ts `IterateRpcTarget.authenticate`). The bare `openSession()` entry point is `any` (it also
  *  lends live stubs); a read helper names the real root type, so the session it vends is fully typed —
  *  `.organizations.create(...)` is an `OrganizationRecord`, `.projects.list()` a `ProjectRecord[]`. */
 async function userSession(email: string) {

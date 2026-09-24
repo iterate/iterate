@@ -91,9 +91,9 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const asset = await fetchProjectUrl(site("/app.js"));
   expect(asset, asset.text).toMatchObject({ status: 200 });
   expect(asset.text).toContain("document.title");
-  // a visitor's x-itx-* never reach the app (the lane's own header is set after the strip), and
-  // x-iterate-app is the label the address selected — a visitor's own is overwritten at the DO's fetch
-  // lane, from the expression
+  // a visitor's x-itx-* never reach the app (the expression fetch's own header is set after the strip), and
+  // x-iterate-app is the label the address selected — a visitor's own is overwritten by the DO's
+  // expression fetch, from the expression
   const echo = await fetchProjectUrl(site("/echo"), {
     "x-itx-expression": "itx.kv",
     "x-itx-visitor": "1",
@@ -107,7 +107,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   // the second app shape, `<app>.<project>.<base>`: the same row. LOCAL ONLY: a wildcard
   // certificate covers ONE label under the base (`*.iterate.app`), and a wildcard
   // never matches two, so on the deployed worker this shape fails the TLS handshake until a
-  // certificate per project subdomain exists — a deploy-side fact, not the edge's (the workers lane
+  // certificate per project subdomain exists — a deploy-side fact, not the edge's (the Workers suite
   // pins the parse; this pins the whole edge, where it can be reached).
   const routing = ingressRouting();
   if (projectHostsAreLocal() && routing?.type === "subdomains") {
@@ -144,7 +144,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     expect(echoed, echoed.text).toMatchObject({ status: 200 });
     expect(JSON.parse(echoed.text)).toMatchObject({ app: "site" });
   }
-  // a label no rule serves is the lane's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
+  // a label no rule serves is the expression fetch's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
   const missing = await fetchProjectUrl(projectUrl({ project: slug, app: "other", path: "/" }));
   expect(missing, missing.text).toMatchObject({ status: 404 });
 });

@@ -1,6 +1,6 @@
 // __workers-tests__/uncontrolled-degradation.test.ts — THE RED PINS of the 2026-09-04 hunt for
 // UNCONTROLLED degradation: every way this context can still fail in a manner the PLATFORM decides
-// for us — a message we did not write, a wedge with no operator door, a retry that never ends —
+// for us — a message we did not write, a wedge with no operator remedy, a retry that never ends —
 // beyond out-of-memory (local workerd enforces no memory limit; the memory pins live in
 // src/stream/memory-budget.test.ts and e2e/isolate-ceilings-deployed.e2e.test.ts). Each row stages one
 // scenario against a REAL `IterateContextDurableObject` inside workerd (runInDurableObject for its
@@ -226,7 +226,7 @@ test("A4 — a facet whose checkpoint outgrows the cell ceiling is refused coded
 createFailing(test, /it dies of "internal error; reference = [a-z0-9]+"/, {
   timeoutMs: PIN_TIMEOUT_MS,
 })(
-  "B1 — className not exported: every push and every read dies of workerd's OPAQUE `internal error; reference = <id>` — the door's own `does not export class` check is dead code",
+  "B1 — className not exported: every push and every read dies of workerd's OPAQUE `internal error; reference = <id>` — the host's own `does not export class` check is dead code",
   async () => {
     captureIssueLines();
     const err = await facetThatCannotStart("prj_ud_start_noclass", FINE_SRC, "Nope");
@@ -302,7 +302,7 @@ createFailing(test, /it dies of "boom in the facet constructor" \(durableObjectR
 );
 
 // CONTROL: none of the three is a wedge — `processors.disable` (the null row) still lands, and takes
-// the row, the facet and its startup memo with it, so the operator door out exists.
+// the row, the facet and its startup memo with it, so the operator's way out exists.
 test("B4 — CONTROL: a facet that cannot start is still disable-able — the null row lands, the memo and the row go", async () => {
   captureIssueLines();
   for (const [ctx, src, className] of [
@@ -380,7 +380,7 @@ createFailing(
 // WHAT IT DIES OF: `SyntaxError: Unexpected token 'o', "not json" is not valid JSON` — V8's parser,
 // from `Stream.read`'s `JSON.parse` of the cell, naming NO offset. Every reader pages through
 // `read`: the client's own `read`, `waitForEvent`'s history scan, every facet's catch-up and gap
-// repair, the cursor lane's pages, the memo recovery. One bad cell, every reader dead, no way to
+// repair, the cursor delivery's pages, the memo recovery. One bad cell, every reader dead, no way to
 // tell WHICH row from the message.
 // An unparseable stored body is coded EVENT_UNREADABLE naming its offset, so a reader can read on
 // past it — BORN RED as V8's raw `is not valid JSON` from `read()` / waitForEvent's scan, naming
@@ -406,7 +406,7 @@ test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its off
 // discards the checkpoint (src/stream/stream.ts gates the state on `reducerVersion`) and
 // re-reduces the log from offset 0 in `new Stream(…)`; the re-reduce pages `read`, `read` dies at the
 // bad cell, the constructor throws, and it throws again on every wake — `runInDurableObject`
-// included, so there is no door left to repair the row through. Staged here by writing a foreign
+// included, so there is no path left to repair the row through. Staged here by writing a foreign
 // `reducerVersion` into the cursor cell (what a deploy with a bumped `CoreContract.version` does).
 // The constructor's re-reduce (a core version bump discards the checkpoint and re-reduces from 0)
 // SKIPS an unreadable row and reports it, so the context wakes — BORN RED as the raw SyntaxError
@@ -436,7 +436,7 @@ test("C3 — that row under a core version bump: the constructor's re-reduce ski
 // from the rows (`MAX(offset)`), re-reduces the core state from offset 0, and reports one issue
 // line — never fatal. BORN RED: the constructor read mark 0, decided the store was VIRGIN,
 // re-appended `stream/created` over offset 1 and died of `UNIQUE constraint failed: events.offset`
-// on EVERY wake, every door, `runInDurableObject` included — bricked, no operator door. Flipped
+// on EVERY wake, every entry point, `runInDurableObject` included — bricked, no operator remedy. Flipped
 // with the SQL storage module.
 test("D1 — the core checkpoint row lost: the constructor re-derives the mark from the rows, re-reduces the log, and the context wakes", async () => {
   captureIssueLines();
@@ -525,7 +525,7 @@ test("E3 — on a PAUSED stream the halt fact still lands (pause-exempt) and the
 // (a SQLite-backed DO's deleteAll clears the whole database), but the incarnation in memory still
 // holds its offsets, its core state and its "tables exist" assumption (the constructor creates them
 // only on a store with no `incarnation` cell). Every append and every read dies raw until the
-// actor is evicted — and this DO has no abort door, so nothing but the platform's idle eviction
+// actor is evicted — and this DO has no abort method, so nothing but the platform's idle eviction
 // ends it. The core snapshot keeps answering from memory, describing a log that is gone.
 createFailing(
   test,
@@ -604,7 +604,7 @@ function sleep(ms = 150) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ── the DO doors, spelled the way the edge spells them ──
+// ── the DO's entry points, spelled the way the edge spells them ──
 
 /** What `itx.enableProcessorByEvent(name, { source, className })` appends, spelled RAW on the DO's `append`:
  *  ONE subscription-configured row whose target hosts the class as the facet `name`

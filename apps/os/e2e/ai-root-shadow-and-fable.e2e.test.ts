@@ -6,7 +6,7 @@
 // (`fillItxExpressionHoles`) is the caller's input — spliced as an argument, the one argument when nested, its fields
 // merged by `...@` under the template's own keys (a pinned gateway model cannot be talked out of).
 // Locally the real binding is never called: every call lands on the fake. Against the deployed worker
-// (WORKER_BASE_URL not local) with E2E_REAL_MODELS=1, the daily real-model lane, the last test asks
+// (WORKER_BASE_URL not local) with E2E_REAL_MODELS=1, the daily real-model suite, the last test asks
 // the real binding for `models()` and runs ONE inference through `itx.fable`.
 
 import { RpcTarget } from "capnweb";
@@ -117,8 +117,8 @@ test("THE GATEWAY SHAPE: `...@` merges the caller's fields under a pinned model 
   expect(String((notAnObject as Error).message)).toMatch(/merges an object/);
 });
 
-test("the door end to end: `@` is refused in a match, in a call, and outside a target's final step", async () => {
-  const ctx = freshCtx("at-door");
+test("the rule grammar end to end: `@` is refused in a match, in a call, and outside a target's final step", async () => {
+  const ctx = freshCtx("at-grammar");
   const itx = openItx(ctx);
   expect(String((await rejection(itx.provide("itx.a(@)", "itx.kv"))).message)).toMatch(
     /legal only in a rewrite rule's target/,
@@ -129,14 +129,14 @@ test("the door end to end: `@` is refused in a match, in a call, and outside a t
   expect(String((await rejection(itx.invoke("itx.kv.get(@)"))).message)).toMatch(
     /legal only in a rewrite rule's target/,
   );
-  // …and a masked `itx.ai` refuses the dream, coded, while `itx.builtins.ai` is the physical door
+  // …and a masked `itx.ai` refuses the dream, coded, while `itx.builtins.ai` is the unmaskable built-in
   await itx.provide("itx.fable", `itx.ai.run('${MODEL}', @)`);
   await itx.provide("itx.ai", null);
   expect(errorCode(await rejection(itx.fable({ prompt: "hi" })))).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
 // DEPLOYED-TARGET MODE only (support/global-setup.ts): a local boot never calls the real binding. A paid
-// inference, so only the daily real-model lane runs it (docs/testing.md#real-model-rows).
+// inference, so only the daily real-model suite runs it (docs/testing.md#real-model-rows).
 realModelOnly(
   "REAL: the real binding answers models(); the dream runs ONE real inference through `itx.fable`",
   async () => {
@@ -164,7 +164,7 @@ class FakeAiGateway extends RpcTarget {
   }
 }
 
-/** A deterministic `env.AI`: the same three doors, canned answers, every call recorded. */
+/** A deterministic `env.AI`: the same three methods, canned answers, every call recorded. */
 class FakeAi extends RpcTarget {
   readonly calls: { model: string; inputs: unknown; options?: unknown }[] = [];
   run(model: string, inputs: unknown, options?: unknown) {

@@ -19,7 +19,7 @@
 //     once MAY reset the DO — the per-read byte budget bounds one read, not their sum; the reset count
 //     is REPORTED, recovery on the next call is asserted
 //   • facet catch-up: a processor enabled over the 144 MiB log reduces every event through its
-//     loopback read; append: one event past the platform ceiling is refused at the door,
+//     loopback read; append: one event past the platform ceiling is refused at append,
 //     EVENT_TOO_LARGE, nothing written, no offset burnt
 //   • LARGE EPHEMERAL FAN-OUT (a documented limit): 30 × 7 MiB ephemerals to 10 co-located facets MAY
 //     reset the parent — facet memory in the shared isolate the parent's JS cannot bound — but the ctx
@@ -128,7 +128,7 @@ export default class Oomer extends WorkerEntrypoint {
 // HOW IT WOULD BE FIXED, and why we didn't: bound the bytes IN FLIGHT across reads — an admission
 // gate that awaits room, serialised reads, or a coarse in-flight byte counter. We REMOVED exactly
 // that ceiling on 2026-09-07 because it forced `read()` async — rippling an await through every
-// same-isolate caller and splitting the door into read/readInternal — to defend a case no real
+// same-isolate caller and splitting the method into read/readInternal — to defend a case no real
 // workload hits (one client fanning out 24 six-MiB reads at once). If a real workload ever does,
 // restore the ceiling and assert a ZERO reset count below.
 //
@@ -170,10 +170,10 @@ test.sequential(
 );
 
 test.sequential(
-  "append: one event past the platform ceiling is refused at the door with EVENT_TOO_LARGE, nothing written",
+  "append: one event past the platform ceiling is refused at append with EVENT_TOO_LARGE, nothing written",
   { timeout: 120_000 },
   async () => {
-    const itx = openItx(freshCtx("membudget-door"));
+    const itx = openItx(freshCtx("membudget-append"));
     const [marker] = await itx.append({ type: "marker" });
     const error = await rejection(
       itx.append({ type: "blob", payload: { blob: "z".repeat(9 * MiB) } }),

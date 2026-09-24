@@ -1,5 +1,5 @@
 // __workers-tests__/hibernation-at-scale.test.ts — THE HIBERNATION PROPERTY AT SCALE, inside
-// workerd (the workers lane — vitest.config.ts's `workers` project):
+// workerd (the Workers suite — vitest.config.ts's `workers` project):
 //
 //   Hundreds of clients connect into ONE stream (each providing a live capnweb value under its own
 //   rpcStubKey — a rewrite rule at the same spelling, a hibernatable stub pager WebSocket), the
@@ -11,7 +11,7 @@
 // same instance teardown on demand, with hibernatable WebSockets PRESERVED (webSockets:
 // "hibernate" is its default — the exact production semantic).
 //
-// EVICTION MECHANISM (the first that works, per the lane's mandate — alternatives documented):
+// EVICTION MECHANISM (the first that works, per the suite's mandate — alternatives documented):
 //   (a) runInDurableObject(stub, (_i, state) => state.abort()) — REJECTED, MEASURED: the call
 //       itself rejects with the abort reason (abort kills the very request running the
 //       callback), and the hibernatable pager WebSockets DIE with the instance — a probe showed
@@ -159,7 +159,7 @@ function fleetCaller(): Promise<any> {
 
 /** The DO-only transport facts (rpcStubTransportState(): the whole in-memory socket census — physical
  *  truths, never event-derivable; `itx.rpcStubs.list()` is the edge half, PRESENCE = the
- *  keys with a transport right now. This workers lane holds the raw DO stub, so it speaks
+ *  keys with a transport right now. This Workers suite holds the raw DO stub, so it speaks
  *  the Workers-RPC verb directly). */
 type TransportState = {
   rpcStubPagers: number;
@@ -173,7 +173,7 @@ async function state(): Promise<TransportState> {
 
 /** Incarnation (the hibernation tell) — the core reduce's reduce of the stream/woken wake record
  *  (`itx.facets.get('core').snapshot()`; present from the constructor's wake on — every
- *  incarnation writes one before any door opens). */
+ *  incarnation writes one before it serves any call). */
 async function incarnationNow(): Promise<number> {
   const snap = (await stub(CTX).invoke("itx.facets.get('core').snapshot()")) as {
     state: { incarnation?: number };

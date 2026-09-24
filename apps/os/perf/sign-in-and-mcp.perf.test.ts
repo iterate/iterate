@@ -1,4 +1,4 @@
-// perf/sign-in-and-mcp.perf.test.ts — THE DOORS A PERSON AND AN AGENT COME IN BY: a new person's
+// perf/sign-in-and-mcp.perf.test.ts — THE WAYS A PERSON AND AN AGENT SIGN IN: a new person's
 // password sign-in (the sign-in page's own `POST /login`, a find-or-create on the control plane,
 // answered with the session cookie — support/principal.ts `issuerCookie`), and an MCP tool call with a
 // personal access token (the `run` tool, `itx.whoami()`, as session.e2e's grant row makes it). Each

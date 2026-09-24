@@ -106,7 +106,7 @@ pages on 5xx, platform-failure heals and errors.
   `src/context/residency-watchdog.test.ts` (the shared rule);
   [`record-pipelined-steps.test.ts`](../../../packages/iterate/src/sdk/record-pipelined-steps.test.ts) (1);
   `src/context/expression.test.ts` (2).
-- Workers lane: `__workers-tests__/alarm-and-pins.test.ts` (4),
+- Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
   `__workers-tests__/facet-birth-reset.test.ts` (5, 6),
   `__workers-tests__/residency-watchdog.test.ts` and `context-abort-and-the-watchdog.test.ts` (7).
 - Deployed: `e2e/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6;

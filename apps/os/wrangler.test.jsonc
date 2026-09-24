@@ -1,10 +1,10 @@
 {
-  // wrangler.test.jsonc — config for the `workers` project of vitest.config.ts (the lane that runs
+  // wrangler.test.jsonc — config for the `workers` project of vitest.config.ts (the suite that runs
   // INSIDE workerd via @cloudflare/vitest-plugin; `pnpm test`). Vite's built entry is the code
   // under test. The divergences, each deliberate and test-only:
   //
   //  1. the two generated modules the worker imports are written by scripts/build.ts
-  //     (vitest.global-setup.ts) — the same way for every lane.
+  //     (vitest.global-setup.ts) — the same way for every suite.
   //  2. no `ai` / `browser` binding (see the note by the bindings below); the in-process control
   //     plane's OAuth KV is a fresh local namespace.
   //
@@ -25,11 +25,11 @@
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // NO `ai` or `browser` binding here, on purpose: Workers AI and Browser Run are REMOTE-ONLY in
   // local dev, and vitest-pool-workers starts a remote proxy session for them at boot (an account to
-  // pick, a network to reach). The workers lane never calls `itx.ai` / `itx.browser`; the e2e lane
+  // pick, a network to reach). The Workers suite never calls `itx.ai` / `itx.browser`; the e2e suite
   // boots from the Vite-built Wrangler config (support/worker-config.ts) and carries the bindings, and its tests
   // shadow them locally / call them only against the deployed worker
   // (e2e/ai-root-shadow-and-fable.e2e.test.ts, e2e/browser-root.e2e.test.ts). `env.AI` and
-  // `env.BROWSER` are undefined in this lane.
+  // `env.BROWSER` are undefined in this suite.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Email Sending, simulated: the sign-in code's mail goes nowhere (the tests hand the code
   // sign-in a fake mailbox when they need to read the code, and the test code otherwise).
@@ -60,9 +60,9 @@
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
   // Configuration (src/app-config.ts): the `APP_CONFIG_<PATH>__<KEY>` spellings of the one object —
-  // this lane's issuer is `control.test`, its project hosts hang under `projects.test` (`exports.default.fetch`
+  // this suite's issuer is `control.test`, its project hosts hang under `projects.test` (`exports.default.fetch`
   // takes any hostname — no DNS), and its secrets are test values (control-plane.test.ts and
-  // session-doors.test.ts sign in with the password and authenticate with the admin bearer).
+  // project-host-routing.test.ts sign in with the password and authenticate with the admin bearer).
   "vars": {
     "APP_CONFIG_URLS__OS": "https://control.test",
     // the landing page's pointer (control-plane.test.ts)

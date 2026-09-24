@@ -1,7 +1,7 @@
 // path-ingress.e2e.test.ts — PATH ROUTING (src/app-config.ts `urls.ingressRouting: { type: "paths" }`):
 // a deployment with one hostname and no wildcard (workers.dev) reaches its projects as
 // `<os>/projects/<project>/<app>/…` and the apex `<os>/projects/<project>/…`. The worker strips the prefix before the
-// app sees the URL and hands the app its base path; every response back through this door is served
+// app sees the URL and hands the app its base path; every response back through this route is served
 // SANDBOXED (a `Content-Security-Policy: sandbox …` header the edge adds — an app runs in an opaque
 // origin, so its script cannot spend the issuer's cookie); and the platform's own first segments
 // (`api`, `mcp`, `login`, …) are never a project. LOCAL ONLY: every row boots its own worker with the

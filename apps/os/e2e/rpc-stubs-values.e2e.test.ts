@@ -5,14 +5,14 @@
 //   • a BARE FUNCTION is a stub (no RpcTarget subclass needed — capnweb passes functions by reference):
 //     client A provides an async fn, client B's `itx.runOnMyComputer('ls', ['-la'])` runs A's function
 //   • a callback passed to a provided RpcTarget's method fires back later in the CALLER's isolate — on
-//     the capnweb-client lane AND from a dynamic worker holding the scope via `env.ITX.get()`
+//     a capnweb client AND from a dynamic worker holding the scope via `env.ITX.get()`
 //   • rich values through the LONGEST path (client B → capnweb → edge → Workers RPC → context DO → the
 //     rules → `itx.rpcStubs.get` → pager page → the lent Workers-RPC leg → relay → client A, and back):
 //     Dates, bytes, callbacks, an RpcTarget WITH METHODS as an argument, Request in / Response out; and
-//     the stateless run lane carries a Date and a client callback into a confined loaded isolate
+//     the stateless run path carries a Date and a client callback into a confined loaded isolate
 //   • THE SLACK SDK SHAPE: `itx.slack` is a live bridge (a node script — in production a tiny daemon)
 //     replaying dotted calls onto a WebClient-shaped SDK instance — the natural dotted spelling, the
-//     explicit door, the string door, a pure rule targeting the bridge, a zero-declaration Proxy over a
+//     explicit form, the string form, a pure rule targeting the bridge, a zero-declaration Proxy over a
 //     bare RpcTarget; disposing the handle recalls the stub AND un-sets the rule (RPC_STUB_OFFLINE in the
 //     window, then NO_ITX_EXPRESSION_MATCH)
 
@@ -39,14 +39,14 @@ test("client A: provide('itx.runOnMyComputer', async fn) · client B: await itx.
   expect(ran).toEqual([["ls", ["-la"]]]);
 });
 
-test("callLater(cb) fires back in the caller — capnweb client AND dynamic worker lanes", async () => {
+test("callLater(cb) fires back in the caller — capnweb client AND dynamic worker callers", async () => {
   const ctx = freshCtx("calllater");
 
   // bridge session provides a LIVE Demo under itx.demo, rule itx.demo ⇒ itx.rpcStubs.get('itx.demo').
   const bridgeItx = openItx(ctx);
   const demo = await bridgeItx.provide("itx.demo", new Demo());
 
-  // ── lane 1: a plain capnweb client ──
+  // ── caller 1: a plain capnweb client ──
   const itx = openItx(ctx);
   let pinged = false;
   await itx.demo.timer.callLater(250, () => {
@@ -54,7 +54,7 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
   });
   await until("capnweb callback fired", () => pinged);
 
-  // ── lane 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
+  // ── caller 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
   const SRC_CONSUMER = {
     "cap.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -107,7 +107,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   ]);
   expect(cbResult).toBe("A:43"); // A called B's callback (42→43) and returned
 
-  // 4. the STATELESS RUN LANE (a real RPC method): a Date and a
+  // 4. the STATELESS RUN PATH (a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
   await itxB.invoke(`itx.append({ type: 'noop' })`); // ensure the stream exists
   await itxB.provide("itx.probe", ["itx", "workers", ["get", { source: SOURCES.probe }]]);
@@ -142,7 +142,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   const ctx = freshCtx("slack");
   const bridgeItx = openItx(ctx);
   const slack = new SlackReplayTarget();
-  // ONE provide door: the live bridge stub is lent under itx.slack with the rule at the same spelling.
+  // ONE provide: the live bridge stub is lent under itx.slack with the rule at the same spelling.
   const slackProvided = await bridgeItx.provide("itx.slack", slack);
 
   const itx = openItx(ctx);
@@ -161,17 +161,17 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
     { channel: "#general", text: "hello from itx" },
   ]);
 
-  // 1b. the SAME call via the explicit door (the desugared form the dotted spelling compiles to)
+  // 1b. the SAME call via the explicit form (the desugared form the dotted spelling compiles to)
   const postedExplicit = await itx.invoke([
     "itx",
     "slack",
     "chat",
-    ["postMessage", { channel: "#general", text: "via explicit door" }],
+    ["postMessage", { channel: "#general", text: "via explicit form" }],
   ]);
   expect(postedExplicit?.ok).toBe(true);
   expect(postedExplicit?.channel).toBe("#general");
 
-  // 2. the same thing through the GENERIC expression door (the string half)
+  // 2. the same thing through the GENERIC expression form (the string half)
   const listed = await itx.invoke(`itx.slack.conversations.list({ limit: 10 })`);
   expect(listed).toMatchObject({ ok: true, channels: [{ name: "general" }, expect.anything()] });
 

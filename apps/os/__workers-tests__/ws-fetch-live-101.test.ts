@@ -1,14 +1,14 @@
 // __workers-tests__/ws-fetch-live-101.test.ts — THE PLATFORM QUESTION, answered by running: does
-// OUR lane forward a GENUINE 101 from a LENT RPC STUB? YES — via the dedicated fetch-upgrade leg.
+// OUR platform forward a GENUINE 101 from a LENT RPC STUB? YES — via the dedicated fetch-upgrade leg.
 //
-// The harness-lane twin pinned that Node providers die
+// The harness twin pinned that Node providers die
 // at FABRICATION (no WebSocketPair; undici rejects status 101) — so the platform half needed a
-// workerd-side provider, and THIS lane runs inside workerd. The provider lives here, lent over a
+// workerd-side provider, and THIS suite runs inside workerd. The provider lives here, lent over a
 // real capnweb session; a real eyeball dials the app's project host. Every hop is
 // production-shaped:
 //
 //   eyeball exports.default.fetch `wsdev--<project>.projects.test` → the edge sets x-itx-expression to
-//   `itx.apps.wsdev` → the DO's itx-expression fetch lane → the rewrite rule at `itx.apps.wsdev`
+//   `itx.apps.wsdev` → the DO's itx-expression fetch → the rewrite rule at `itx.apps.wsdev`
 //   (pure data: target `itx.rpcStubs.get('itx.apps.wsdev')`, the registry naming the lent provider)
 //   → context/rpc-stubs.ts: the DO asks the borrowed stub to dial (an RPC call that EXECUTES in the
 //   relay's session context; its return is the honest ack), the relay dials the provider's fetch()
@@ -27,7 +27,7 @@
 //
 // The LOADED-worker half rides the same host: a `WorkerEntrypoint`'s own 101 — here the SDK's
 // `newWorkersRpcResponse` serving a capnweb API at `rpc--<project>.projects.test/<path>`, the path
-// arriving verbatim — flows back through the lane natively (no upgrade leg: the loader hop carries it).
+// arriving verbatim — flows back through the expression fetch natively (no upgrade leg: the loader hop carries it).
 // Run:
 //   pnpm exec vitest run --project workers __workers-tests__/ws-fetch-live-101.test.ts
 
@@ -48,9 +48,9 @@ test("plain fetch through a LENT RPC STUB: the eyeball's GET on the project host
   expect(site.observations).toContain('fetch invoked: GET upgrade=""');
 });
 
-// ─────────────────── the platform question proper — GREEN via the fetch-upgrade lane ───────────────────
+// ─────────────────── the platform question proper — GREEN via the fetch-upgrade leg ───────────────────
 
-// Was VERIFIED BROKEN (a DataCloneError on the RPC return leg) until the fetch-upgrade lane
+// Was VERIFIED BROKEN (a DataCloneError on the RPC return leg) until the fetch-upgrade leg
 // landed; now the regression pin for the whole path: genuine 101, frames BOTH ways through every
 // hop (eyeball ⇄ DO pair ⇄ upgrade leg ⇄ relay ⇄ capnweb ⇄ provider pair), clean close. Also caught on
 // the way: the pager keepalive literal must be DISTINCTIVE — setWebSocketAutoResponse is DO-wide,
@@ -174,7 +174,7 @@ async function createProject(project: string) {
 }
 
 /** Provide a fresh LiveSite over a live capnweb session as the app `wsdev` of `project` — the
- *  rewrite rule at `itx.apps.wsdev`, the ONE door — and hand back its host. */
+ *  rewrite rule at `itx.apps.wsdev`, the ONE route — and hand back its host. */
 async function provideLiveSite(project: string): Promise<{ site: LiveSite; host: string }> {
   const site = new LiveSite();
   await (await createProject(project)).provide("itx.apps.wsdev", site);

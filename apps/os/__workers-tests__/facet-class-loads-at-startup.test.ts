@@ -54,7 +54,7 @@ export class Tally extends FacetDurableObject {
 `;
 
 test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm calls add none; a release costs the next call exactly one more of each", async () => {
-  const ctx = "prj_facet_door_warm";
+  const ctx = "prj_facet_host_warm";
   const tap = await tapLoader(ctx);
   const first = await hostHello(ctx);
   expect(first).toMatchObject({ calls: 1 });
@@ -86,7 +86,7 @@ test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm cal
 });
 
 test("20 durable events pushed to a hosted facet's processEventBatch add no LOADER.get beyond the enable's catch-up", async () => {
-  const ctx = "prj_facet_door_push";
+  const ctx = "prj_facet_host_push";
   const tap = await tapLoader(ctx);
   // Enable the tally target the way `itx.processors.enable` spells it: ONE subscription-configured
   // whose target is the facet's `processEventBatch` through the load chain (alarm-and-pins.test.ts).
@@ -122,7 +122,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
 });
 
 test("a RUNNING facet is not coupled to loader availability: with the loader refusing every get, warm calls are answered; only the re-materialization after a release needs it", async () => {
-  const ctx = "prj_facet_door_loader_down";
+  const ctx = "prj_facet_host_loader_down";
   const tap = await tapLoader(ctx);
   const first = await hostHello(ctx);
   tap.refuseAfterFirst = new Error("simulated: LOADER unhealthy (LOADER.get threw)");

@@ -1,9 +1,9 @@
-// __workers-tests__/do-doors.test.ts — the IterateContextDurableObject's Workers-RPC doors,
-// pinned at zero distance (the workers lane is the only one that can BOTH call the DO verbs raw —
+// __workers-tests__/do-entry-points.test.ts — the IterateContextDurableObject's Workers-RPC entry points,
+// pinned at zero distance (the Workers suite is the only one that can BOTH call the DO verbs raw —
 // no capnweb edge reducing the returns away — AND inspect the DO's own storage via
-// runInDurableObject). The DO has exactly these doors: the STREAM (`append`, `read` — a wait is
-// the built-in `itx.waitForEvent`, through `invoke`), the ONE dispatch door (`invoke`), native `fetch` (the pager door, the
-// fetch-upgrade leg, the itx-expression fetch lane, egress) and the rpc-stub plumbing
+// runInDurableObject). The DO has exactly these entry points: the STREAM (`append`, `read` — a wait is
+// the built-in `itx.waitForEvent`, through `invoke`), the ONE dispatch method (`invoke`), native `fetch` (the pager upgrade, the
+// fetch-upgrade leg, the itx-expression fetch, egress) and the rpc-stub plumbing
 // (`lendRpcStub`, `rpcStubTransportState`; the pager attach IS the upgrade). There are NO configuration
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
 // rewrite rule exactly as the edge's `provide` does — a LITERAL `append({ type:
@@ -18,10 +18,10 @@
 //     residency watchdog's, support.ts `owedAlarm`) — a pin (a borrowed rpc stub, an open socket) is
 //     released by a timer, never the alarm; only storage.getAlarm() can see that (the deployed e2e
 //     tests pin the records but cannot read the alarm);
-//   • the doors themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's
+//   • the entry points themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's
 //     match is canonicalized at the append BOUNDARY (a Workers-RPC caller bypasses the edge, appends a
 //     literal, and the DO normalizes it — no builder in between); and a table row is
-//     `{ match, target }` keyed by the canonical match and NOTHING else — no lane, no offset
+//     `{ match, target }` keyed by the canonical match and NOTHING else — no delivery mode, no offset
 //     identity (HOW a target is served is never written on a rule: the delivery loop decides by
 //     evaluating a subscription's own target, subscription-delivery.ts);
 //   • the table is a MAP: a re-set at the same match REPLACES (nothing is "beneath"), `null`
@@ -39,7 +39,7 @@ import { parse, print, type ItxExpression } from "iterate/expression";
 import { adminCredentials, openSession, owedAlarm, stub, until } from "./support.ts";
 
 test("a core-snapshot probe materializes only created and woken, without subscriptions or an alarm", async () => {
-  await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
+  await runInDurableObject(stub("prj_do_virginprobe"), async (instance, state) => {
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
       state: { projectId?: string; path?: string; createdAt?: string; incarnation?: number };
@@ -47,7 +47,7 @@ test("a core-snapshot probe materializes only created and woken, without subscri
     expect(snap).toMatchObject({
       offset: 2, // created and woken
       state: {
-        projectId: "prj_doors_virginprobe",
+        projectId: "prj_do_virginprobe",
         path: "/",
         createdAt: expect.any(String),
         incarnation: 1,
@@ -79,10 +79,10 @@ test("a core-snapshot probe materializes only created and woken, without subscri
   });
 });
 
-test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing — no configuration verbs; a rewrite rule is ONE appended event the append boundary canonicalizes, and a table row is `{ match, target }`, nothing else", async () => {
-  const ctx = "prj_doors_canonical";
+test("the DO's entry points are the stream, invoke, fetch and the rpc-stub plumbing — no configuration verbs; a rewrite rule is ONE appended event the append boundary canonicalizes, and a table row is `{ match, target }`, nothing else", async () => {
+  const ctx = "prj_do_canonical";
   await runInDurableObject(stub(ctx), async (instance) => {
-    const doors = instance as unknown as Record<string, unknown>;
+    const methods = instance as unknown as Record<string, unknown>;
     for (const gone of [
       "provideCapability",
       "revokeCapability",
@@ -90,8 +90,8 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
       "removeSubscription",
       "attachRpcStubPager", // folded into the pager upgrade at `fetch` (key + the events that name it)
     ])
-      expect(gone in doors).toBe(false);
-    for (const door of [
+      expect(gone in methods).toBe(false);
+    for (const method of [
       "append",
       "read",
       "invoke",
@@ -99,7 +99,7 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
       "lendRpcStub",
       "rpcStubTransportState",
     ])
-      expect(typeof doors[door]).toBe("function");
+      expect(typeof methods[method]).toBe("function");
   });
   // A Workers-RPC caller bypasses the edge, so the EVENT BUILDER must canonicalize on its own: a
   // non-canonical spelling (leading whitespace) lands the CANONICAL match with the target verbatim.
@@ -119,7 +119,7 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
 });
 
 test("the rule table is a MAP: a re-set at the same match REPLACES (one row, nothing beneath), `null` DELETES, a second `null` is a benign no-op — and every set or un-set is exactly ONE event, never deduped", async () => {
-  const ctx = "prj_doors_map";
+  const ctx = "prj_do_map";
   const s = stub(ctx);
   await s.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -150,7 +150,7 @@ test("the rule table is a MAP: a re-set at the same match REPLACES (one row, not
 });
 
 test("un-setting a rule is pure data — the lent stub's transport is untouched: the census holds, the registry still lists the key, the match answers NO_ITX_EXPRESSION_MATCH, and the stub is still reachable THROUGH the registry", async () => {
-  const ctx = "prj_doors_unsetlive";
+  const ctx = "prj_do_unsetlive";
   const s = stub(ctx);
   // A PHYSICAL stub: a capnweb session lends a client's rpc stub under `itx.livecap` (its pager socket is
   // one transport in the DO's census) with the pure-data rule `itx.livecap ⇒
@@ -162,7 +162,7 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   const rpcStubPagersBefore = await rpcStubPagersOf(ctx);
   expect(rpcStubPagersBefore).toBe(1);
 
-  // The rule un-set AT THE DO DOOR — the raw event, not the handle. The row pops; the transport is
+  // The rule un-set AT THE DO'S `append` — the raw event, not the handle. The row pops; the transport is
   // NOT touched: the census is unchanged, the registry still lists the key, and only the RULE is
   // gone (default-deny at the match — NO_ITX_EXPRESSION_MATCH, not offline).
   await s.append({
@@ -185,7 +185,7 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
 });
 
 test("disposing the provide HANDLE is the other half: the stub is recalled — its pager leaves the census, presence shrinks — AND the rule it was provided with is un-set", async () => {
-  const ctx = "prj_doors_disposehandle";
+  const ctx = "prj_do_disposehandle";
   const s = stub(ctx);
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const provided = await itx.provide("itx.doomed", new Alive());
@@ -201,7 +201,7 @@ test("disposing the provide HANDLE is the other half: the stub is recalled — i
 });
 
 test("a PAUSED context survives an eviction: the constructor's birth-row replay is admitted while paused, so the next incarnation can take the resume (BORN RED: the pause check ran before the idempotency lookup, and a paused context could never be rebuilt)", async () => {
-  const ctx = "prj_doors_paused_evict";
+  const ctx = "prj_do_paused_evict";
   const s = stub(ctx);
   await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
   await evictDurableObject(s);
@@ -219,7 +219,7 @@ test("a PAUSED context survives an eviction: the constructor's birth-row replay 
 });
 
 test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale removal (naming the target or the offset the handle wrote) is a no-op against a replacement — there is no read-then-append window", async () => {
-  const ctx = "prj_doors_undo_cas";
+  const ctx = "prj_do_undo_cas";
   const s = stub(ctx);
   // RULES: session A's row, replaced by session B's; A's undo names A's target and changes nothing.
   await s.append({

@@ -4,13 +4,13 @@
 // methods along the path; the prototype hop (iterate/expression.ts) turns every unknown segment into
 // ONE accumulated `invoke(expression)` dispatch. Pins:
 //   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
-//     and answers 421 (never the control plane); the codec's own charset gate is the unit lane's
+//     and answers 421 (never the control plane); the codec's own charset gate is the unit suite's
 //   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
 //   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
 //     end (lib.ts: classify by code, never by message — own props survive DO → relay → client)
-//   • the explicit door `invoke(['itx', ['whoami']])`, the root dotted call, depth-2 built-ins, a dotted
+//   • the explicit form `invoke(['itx', ['whoami']])`, the root dotted call, depth-2 built-ins, a dotted
 //     write beside an expression read (ONE log), a lent rpc stub through its rule's match
-//   • a wrong guess REJECTS raw (no NOT_A_METHOD re-grammar), through the dotted and the explicit door
+//   • a wrong guess REJECTS raw (no NOT_A_METHOD re-grammar), through the dotted and the explicit form
 //   • then-safety (an awaited chain node settles into a live handle; a settled stub is not a thenable),
 //     stringify-safety (toJSON never dispatches), and the reserved transport words (then / dup /
 //     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
@@ -81,13 +81,13 @@ test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", a
 
 // ── the natural dotted client surface ──
 
-test("explicit door: invoke(['itx', ['whoami']]) answers (the half the dotted surface sugars)", async () => {
-  const ctx = freshCtx("door");
+test("explicit form: invoke(['itx', ['whoami']]) answers (the half the dotted surface sugars)", async () => {
+  const ctx = freshCtx("explicit");
   const who = await openItx(ctx).invoke(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/" });
 });
 
-test("root dotted call: await itx.whoami() falls back to the ONE invoke door", async () => {
+test("root dotted call: await itx.whoami() falls back to the ONE invoke method", async () => {
   const ctx = freshCtx("who");
   const who = await openItx(ctx).whoami();
   expect(who).toMatchObject({ projectId: ctx, path: "/" });
@@ -127,11 +127,11 @@ test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing
   );
 });
 
-test("a leaf miss through the EXPLICIT door also rejects", async () => {
+test("a leaf miss through the EXPLICIT form also rejects", async () => {
   const { itx } = await slackRig(freshCtx("leaf"));
   await rejection(
     itx.invoke(["itx", "slack", "chat", ["nosuchMethod", { channel: "#x", text: "y" }]]),
-    "explicit-door call on a method the bridge never had",
+    "explicit-form call on a method the bridge never had",
   );
 });
 
@@ -172,7 +172,7 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
 // a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through
-// the dispatch door (an event, a tally tick) or be refused by the rewrite rules — so the pin is
+// the dispatch method (an event, a tally tick) or be refused by the rewrite rules — so the pin is
 // behavioral: probe everywhere, then prove the log and the tally never moved and every handle stayed live.
 test("reserved segments are hidden at EVERY depth: transport words never dispatch as itx expressions", async () => {
   const ctx = freshCtx("resv");
@@ -233,8 +233,8 @@ async function slackRig(ctx: string) {
   const slack = new SlackReplayTarget();
   await openItx(ctx).provide("itx.slack", slack);
   const itx = openItx(ctx);
-  // Sanity through the EXPLICIT door — the rule rewrites before any dotted attempt.
-  await until("slack rule rewrites via the explicit door", async () => {
+  // Sanity through the EXPLICIT form — the rule rewrites before any dotted attempt.
+  await until("slack rule rewrites via the explicit form", async () => {
     const posted: any = await itx.invoke([
       "itx",
       "slack",
@@ -247,11 +247,11 @@ async function slackRig(ctx: string) {
   return { itx, slack };
 }
 
-/** Lend a live Tools stub behind the rule `itx.<name>` and wait until it answers via the STRING door. */
+/** Lend a live Tools stub behind the rule `itx.<name>` and wait until it answers via the STRING form. */
 async function liveRig(ctx: string, name: string) {
   const itx = openItx(ctx);
   await openItx(ctx).provide(`itx.${name}`, new Tools(name));
-  await until(`lent stub 'itx.${name}' answers via the string door`, async () => {
+  await until(`lent stub 'itx.${name}' answers via the string form`, async () => {
     return (await itx.invoke(`itx.${name}.hello()`)) === `hello-from-${name}`;
   });
   return itx;

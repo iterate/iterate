@@ -1,4 +1,4 @@
-// __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
+// __workers-tests__/support.ts — what every file in the Workers suite (the vitest project that runs
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the CONTROL_PLANE
 // registry stub, a capnweb session over the worker's /api (disposed at teardown — importing this module
 // registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
@@ -13,11 +13,11 @@ import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 
-/** This lane's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
+/** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
 export const ORIGIN = "https://control.test";
 
 /** The context DO for a ctx name (a project id or a full codec name), through the ITERATE_CONTEXT
- *  binding — the raw Workers-RPC stub, which is this lane's whole point: the DO's verbs with no
+ *  binding — the raw Workers-RPC stub, which is this suite's whole point: the DO's verbs with no
  *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
   env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
@@ -44,11 +44,11 @@ export const controlPlaneStub = () => env.CONTROL_PLANE.getByName("global");
 /** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows. */
 export const controlPlane = () => new ControlPlane(env.CONTROL_PLANE);
 
-/** This lane's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
+/** This suite's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
 const adminApiSecret = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
-/** THE lane's credentials (src/session.ts): the admin bearer — every project, `{ actor: "admin" }`. */
+/** THE suite's credentials (src/session.ts): the admin bearer — every project, `{ actor: "admin" }`. */
 export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
-/** This lane's sign-in password (wrangler.test.jsonc `APP_CONFIG_LOGIN__PASSWORD`) — what a browser
+/** This suite's sign-in password (wrangler.test.jsonc `APP_CONFIG_LOGIN__PASSWORD`) — what a browser
  *  session is minted with through `POST /login` (email + password). */
 export const loginPassword = (): string => env.APP_CONFIG_LOGIN__PASSWORD!;
 
@@ -74,7 +74,7 @@ const sessions: unknown[] = [];
 /** Open a capnweb session to the worker over a BARE WebSocket upgrade on `exports.default.fetch` (`/api` with no
  *  credential: the socket authenticates in-band) — newWebSocketRpcSession accepts the existing
  *  (accepted) socket per its typings. */
-// The RETURN is deliberately `any`: this is the shared LENDING door — callers reach through it to
+// The RETURN is deliberately `any`: this is the shared LENDING entry point — callers reach through it to
 // `.provide(key, new Echo(i))`, `.provide("itx.apps.x", new LiveSite())` and other live RpcTargets,
 // which capnweb's typed `provide` param (`ClientRpcStub`, a `dup()`-bearing shape) rejects for a raw
 // RpcTarget instance. A READ caller that wants the real surface names it locally
@@ -91,7 +91,7 @@ export async function openSession(): Promise<any> {
 }
 afterAll(async () => {
   if (sessions.length === 0) return;
-  // Let any fire-and-forget page/alarm cleanup drain before the lane's RPC bridge is torn down —
+  // Let any fire-and-forget page/alarm cleanup drain before the suite's RPC bridge is torn down —
   // otherwise a still-pending resolve surfaces as a (harmless) EnvironmentTeardownError.
   await new Promise((r) => setTimeout(r, 50));
   for (const s of sessions) {

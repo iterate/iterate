@@ -53,12 +53,12 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
   const routed = await call("https://routing-shapes.projects.test/", forged);
   expect(routed, await routed.clone().text()).toMatchObject({ status: 200 });
   expect(await routed.json()).toEqual({ root: true, app: null });
-  // a label with no row stays the lane's 404
+  // a label with no row stays the expression fetch's 404
   expect(await call("https://other--routing-shapes.projects.test/")).toMatchObject({ status: 404 });
 });
 
 /** A loaded worker that fetches an app of its own project through `env.ITX.fetch`, forging the app
- *  label on the way — what the app then sees is the fetch lane's answer. */
+ *  label on the way — what the app then sees is the expression fetch's answer. */
 const SRC_FORGER = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Forger extends WorkerEntrypoint {
@@ -71,7 +71,7 @@ export default class Forger extends WorkerEntrypoint {
 }`,
 };
 
-test("x-iterate-app is the fetch lane's, on every door: loaded code forging it on env.ITX.fetch is overwritten with the expression's label", async () => {
+test("x-iterate-app is the expression fetch's, on every route in: loaded code forging it on env.ITX.fetch is overwritten with the expression's label", async () => {
   using session = await api();
   const admin = session.authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "routing-forge" });

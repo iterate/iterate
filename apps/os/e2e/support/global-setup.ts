@@ -23,7 +23,7 @@ declare module "vitest" {
   interface ProvidedContext {
     /** Base URL of the one E2E worker, e.g. http://127.0.0.1:1234 — every test opens capnweb here. */
     workerBaseUrl: string;
-    /** The worker's admin bearer — what the lane's default session authenticates with
+    /** The worker's admin bearer — what the suite's default session authenticates with
      *  (support/client.ts): the local worker's (worker-config.ts), a deployed worker's
      *  `secrets.adminBearer`, read out of its APP_CONFIG (never in the tree). */
     adminApiSecret: string;
