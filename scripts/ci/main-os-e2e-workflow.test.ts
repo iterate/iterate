@@ -71,6 +71,13 @@ test("redeploys one preview, `main`, in place and tests it, never deleting it", 
   expect(JSON.stringify(main)).not.toContain("PREVIEW_PR_NUMBER");
 });
 
+// docs/testing.md#slow-rows: most PRs skip the e2e rows tagged `slow`; main runs every row.
+test("runs every e2e row, the ones tagged slow included", () => {
+  expect(main.jobs.e2e?.steps?.find((step) => step.id === "e2e")?.env).toMatchObject({
+    E2E_SLOW_ROWS: "run",
+  });
+});
+
 test("first deletes the per-run `main-<sha>` previews the one preview replaced", () => {
   expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeGreaterThan(
     -1,

@@ -75,6 +75,20 @@ test("Preview OS: only the trace runs after the suite, so the next push's deploy
   expect(afterSuite.map(([jobId]) => jobId)).toEqual(["trace"]);
 });
 
+// docs/testing.md#slow-rows: a push leaves the e2e rows tagged `slow` to the PR's paths and
+// `slow-e2e` label (apps/os/scripts/slow-rows.ts); a dispatch may ask for them either way.
+test("Preview OS: the slow rows follow the PR's paths and label unless a dispatch asks", () => {
+  const dispatch = (
+    parseYaml(
+      readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/preview-os.yml"), "utf8"),
+    ) as { on: { workflow_dispatch: { inputs: Record<string, { default?: string }> } } }
+  ).on.workflow_dispatch.inputs;
+  expect(dispatch["slow-rows"]?.default).toBe("");
+  expect(preview.jobs.e2e.steps?.find((step) => step.id === "e2e")?.env).toMatchObject({
+    E2E_SLOW_ROWS: "${{ inputs.slow-rows }}",
+  });
+});
+
 // After every deploy that succeeded, never after one that did not, and alone (deploy skipped) on
 // a dispatch with action=e2e.
 test.each([

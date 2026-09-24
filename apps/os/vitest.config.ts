@@ -25,7 +25,10 @@
 
 import { fileURLToPath } from "node:url";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
-import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import {
+  E2E_CI_RETRIES,
+  E2E_SLOW_ROW_TIMEOUT_MS,
+} from "@iterate-com/shared/test-support/e2e-policy";
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 
@@ -130,6 +133,19 @@ export default defineConfig({
           setupFiles: ["./e2e/support/setup.ts"],
           testTimeout: 60_000,
           hookTimeout: 120_000,
+          // THE SLOW ROWS (docs/testing.md#slow-rows): a row that waits out real platform time (a quiet
+          // minute, a sweep, an alarm) is tagged `slow`, and a PR that changes none of its code skips
+          // it: `pnpm preview e2e` picks the rows (scripts/slow-rows.ts). A tag this list does not
+          // define fails its row.
+          tags: [
+            {
+              name: "slow",
+              description:
+                "Waits out real platform time; skipped by PRs that change none of its code",
+              timeout: E2E_SLOW_ROW_TIMEOUT_MS,
+            },
+          ],
+          strictTags: true,
           // One retry in CI only (docs/testing.md: retries are measured, never silent — a local flake
           // should be SEEN, not absorbed). Each test is self-contained (fresh ctx).
           retry: process.env.CI ? E2E_CI_RETRIES : 0,

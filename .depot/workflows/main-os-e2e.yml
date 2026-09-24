@@ -1,8 +1,9 @@
 # MAIN'S E2E RUN on the dev/preview account, in parallel with Deploy OS, which waits for none of
 # it: a push to main (the paths a PR preview runs for) redeploys apps/os's Worker Preview `main` IN
 # PLACE, with the clients on top of the same name, and runs the e2e suite and the browser specs
-# against it. No run deletes it: a BRAND-NEW preview's Durable Objects answer Cloudflare's
-# `internal error; reference = …` for seconds after it is created, which the deploy's readiness gate
+# against it: every row, the ones tagged `slow` that most PRs skip too. No run deletes it: a
+# BRAND-NEW preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
+# seconds after it is created, which the deploy's readiness gate
 # (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place has a window
 # of its own instead, its previous version answering for up to ~100 s before a reset, which the
 # gate holds through (`--settle 150`; docs/depot-ci.md#main-os-e2e-keeps-one-preview). Nothing resets
@@ -198,6 +199,8 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows)
+          E2E_SLOW_ROWS: run
         run: doppler run -- pnpm preview e2e
       # The rows the alert names when main goes red.
       - name: Collect the failing rows

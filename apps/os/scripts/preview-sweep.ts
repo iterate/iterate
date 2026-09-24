@@ -7,7 +7,7 @@
 //   2. it is named `pr<n>-…` and pull request #n is closed or does not exist;
 //   3. it names no pull request (a branch, or a hand-picked name like `exp-…` or `soak`), its last
 //      deploy is more than 24 h old, no open pull request's head branch slugifies to its name, and it
-//      is no CI workflow's own (CI_WORKFLOW_PREVIEWS: `main`, `latency`, `real-model`). A quiet day
+//      is no CI workflow's own (CI_WORKFLOW_PREVIEWS: `main`, `latency`, `real-model`, `slow-e2e`). A quiet day
 //      is no reason to make a workflow's next preview brand-new; rule 1 takes the preview of a
 //      workflow that stopped.
 // Anything else is kept. A GitHub lookup that failed never makes a preview stale: a PR state of
@@ -52,14 +52,17 @@ export type SweptPreview = { name: string; lastDeployedAt?: string };
 /** THE CI WORKFLOWS' OWN PREVIEWS, by name: one per serialized workflow of main, redeployed in place
  *  by every run of it and deleted by none — Main OS e2e's `main` (.depot/workflows/main-os-e2e.yml),
  *  the latency guard's `latency` (os-latency.yml), the real-model suite's `real-model`
- *  (os-real-model.yml), each deploy's readiness gate held past the window its previous version still
- *  answers in (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Each maps to the per-run names its
- *  workflow gave its previews before (`main-<short sha>`, `latency-<run id>-<attempt>`,
- *  `real-model-<run id>-<attempt>`), which `supersededMainPreviews` deletes. */
-export const CI_WORKFLOW_PREVIEWS: ReadonlyMap<string, RegExp> = new Map([
+ *  (os-real-model.yml), the slow e2e rows' `slow-e2e` (os-slow-e2e.yml), each deploy's readiness gate
+ *  held past the window its previous version still answers in
+ *  (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Each maps to the per-run names its workflow gave
+ *  its previews before (`main-<short sha>`, `latency-<run id>-<attempt>`,
+ *  `real-model-<run id>-<attempt>`), which `supersededMainPreviews` deletes; `slow-e2e` always had
+ *  its one. */
+export const CI_WORKFLOW_PREVIEWS: ReadonlyMap<string, RegExp | undefined> = new Map([
   ["main", /^main-[0-9a-f]{7}$/],
   ["latency", /^latency-[0-9a-z]+-[0-9]+$/],
   ["real-model", /^real-model-[0-9a-z]+-[0-9]+$/],
+  ["slow-e2e", undefined],
 ]);
 
 /** One row of an account listing: a KV namespace (id + title), an R2 bucket (id = name), a D1

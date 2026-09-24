@@ -61,7 +61,11 @@ export const E2E_ROW_TIMEOUT_CEILING_MS = 90_000;
  */
 export const E2E_SLEEP_CEILING_MS = 30_000;
 
-/** The timeout of a `slow` row: one that waits real platform time and does not run on every PR. */
+/**
+ * The timeout of a row tagged `slow` (the tag's own, apps/os/vitest.config.ts), and the longest one
+ * such a row may declare: it waits real platform time, so it runs only where that costs no PR
+ * (docs/testing.md#slow-rows).
+ */
 export const E2E_SLOW_ROW_TIMEOUT_MS = 300_000;
 
 /**
@@ -92,8 +96,19 @@ export const E2E_BUDGET_EXEMPTIONS: Record<string, { reason: string; timeoutMs?:
 };
 
 /**
+ * The longest timeout an e2e row may declare: `E2E_SLOW_ROW_TIMEOUT_MS` when it is tagged `slow`,
+ * else its exemption's own `timeoutMs`, else `E2E_ROW_TIMEOUT_CEILING_MS`. scripts/ci/e2e-policy.test.ts
+ * holds every row to it from source, and apps/os/e2e/support/setup.ts holds each row of a run against
+ * a preview to it before the row starts.
+ */
+export function e2eRowTimeoutCeilingMs(row: { title: string; slow: boolean }) {
+  if (row.slow) return E2E_SLOW_ROW_TIMEOUT_MS;
+  return E2E_BUDGET_EXEMPTIONS[row.title]?.timeoutMs ?? E2E_ROW_TIMEOUT_CEILING_MS;
+}
+
+/**
  * Changing one of these files runs the `slow` e2e rows on the PR: the code whose residency and
- * alarm behaviour those rows prove, and the rows themselves.
+ * alarm behaviour those rows prove, and the rows themselves (apps/os/scripts/slow-rows.ts).
  */
 export const SLOW_ROW_PATHS = [
   "apps/os/src/context/facet-host.ts",

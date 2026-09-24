@@ -3,7 +3,8 @@
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
 // deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its
-// status line), e2e (vitest and Playwright against the live preview; the status line), reset (delete, then deploy), delete (the
+// status line), e2e (vitest and Playwright against the live preview, `--slow-rows` picking the rows
+// tagged `slow`, scripts/slow-rows.ts; the status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
 // top), delete-superseded (the per-run previews this CI workflow's preview replaced: `main-<sha>`,
 // `latency-<run>-<attempt>`, `real-model-<run>-<attempt>`), sweep
@@ -80,6 +81,7 @@ import {
   type PullRequestState,
   type SweptResource,
 } from "./preview-sweep.ts";
+import { chooseSlowRows, SlowRows, slowRowsTagsFilter } from "./slow-rows.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const REPO_ROOT = path.resolve(ROOT, "../..");
@@ -106,7 +108,7 @@ type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
-const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--settle <seconds>] [--dry-run]`;
+const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--settle <seconds>] [--slow-rows ${SlowRows.options.join("|")}] [--dry-run]`;
 
 /** The parent's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
  *  Cloudflare credentials for its account and the two secrets every preview inherits — the way
@@ -924,51 +926,76 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps, the
  *  Notes session specs signing out in its Dash (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL;
  *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. The
- *  status line in the PR body then says `e2e passed`, or `e2e failed` and which suites. */
-async function runE2e(previewName: string, prNumber: string | undefined) {
+ *  status line in the PR body then says `e2e passed`, or `e2e failed` and which suites. The rows
+ *  tagged `slow` run as asked, else as the PR's label and paths say (scripts/slow-rows.ts); `only`
+ *  runs them alone, no specs, and is no verdict on the PR, so it leaves the status line as it is. */
+async function runE2e(
+  previewName: string,
+  prNumber: string | undefined,
+  requested: SlowRows | undefined,
+) {
+  const { slowRows, reason } = await chooseSlowRows({
+    requested,
+    prNumber,
+    readPullRequest: async () => {
+      // GET /pulls/{n}: its `labels`, each with a `name`.
+      const [pull, paths] = await Promise.all([
+        github<{ labels: { name: string }[] }>(`/repos/${repository()}/pulls/${prNumber}`),
+        changedPaths(prNumber),
+      ]);
+      return { labels: pull.labels.map((label) => label.name), paths };
+    },
+  });
+  console.log(`[slow-rows] ${slowRows}: ${reason}`);
+  const statusPr = slowRows === "only" ? undefined : prNumber;
   let failedSuites: string[];
   try {
-    failedSuites = await runE2eSuites(previewName);
+    failedSuites = await runE2eSuites(previewName, slowRows);
   } catch (error) {
-    await writeStatus(prNumber, { state: "e2e failed", error: describe(error) });
+    await writeStatus(statusPr, { state: "e2e failed", error: describe(error) });
     throw error;
   }
   await writeStatus(
-    prNumber,
+    statusPr,
     failedSuites.length ? { state: "e2e failed", failedSuites } : { state: "e2e passed" },
   );
   if (failedSuites.length > 0)
     throw new Error(`${failedSuites.join(" and ")} failed against ${previewUrl(previewName)}`);
 }
 
-/** The two suites side by side; the names of those that failed. */
-async function runE2eSuites(previewName: string) {
+/** The two suites side by side, or the vitest rows alone with `only`; the names of those that
+ *  failed. The vitest run gets the rows' choice as E2E_SLOW_ROWS, which holds each row to its
+ *  timeout ceiling (e2e/support/setup.ts). */
+async function runE2eSuites(previewName: string, slowRows: SlowRows) {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(APPS.find((app) => app.name === name)!, previewName);
-  const spec = (async () => {
-    if (process.env.CI)
-      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-        cwd: REPO_ROOT,
-      });
-    return run("pnpm", ["spec"], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        ...env,
-        NOTES_BASE_URL: appUrl("notes"),
-        VOICE_BASE_URL: appUrl("voice"),
-        DASH_BASE_URL: appUrl("dash"),
-        ...PREVIEW_SUITE_TELEMETRY.specs,
-      },
-    });
-  })();
+  const spec =
+    slowRows === "only"
+      ? undefined
+      : (async () => {
+          if (process.env.CI)
+            await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+              cwd: REPO_ROOT,
+            });
+          return run("pnpm", ["spec"], {
+            cwd: REPO_ROOT,
+            env: {
+              ...process.env,
+              ...env,
+              NOTES_BASE_URL: appUrl("notes"),
+              VOICE_BASE_URL: appUrl("voice"),
+              DASH_BASE_URL: appUrl("dash"),
+              ...PREVIEW_SUITE_TELEMETRY.specs,
+            },
+          });
+        })();
   // `e2e:run`, not `e2e`: the deployed target needs no local build, and the preview's built dist/
   // stays intact while Playwright runs beside Vitest.
-  const e2e = runAsync("pnpm", ["e2e:run"], {
+  const e2e = runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
     cwd: ROOT,
-    env: { ...env, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
+    env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
   }).then(
     () => true,
     (error: unknown) => {
@@ -977,11 +1004,12 @@ async function runE2eSuites(previewName: string) {
     },
   );
   const [specResult, e2ePassed] = await Promise.all([spec, e2e]);
-  process.stdout.write(
-    `\n── playwright (pnpm spec) ──\n${specResult.stdout}${specResult.stderr}\n`,
-  );
-  return [!e2ePassed && "vitest e2e", specResult.status !== 0 && "pnpm spec"].filter(
-    (suite) => suite !== false,
+  if (specResult)
+    process.stdout.write(
+      `\n── playwright (pnpm spec) ──\n${specResult.stdout}${specResult.stderr}\n`,
+    );
+  return [!e2ePassed && "vitest e2e", specResult && specResult.status !== 0 && "pnpm spec"].filter(
+    (suite) => typeof suite === "string",
   );
 }
 
@@ -1253,6 +1281,7 @@ function parseArgs(argv: string[]): {
   name?: string;
   apps?: AppsMode;
   settleSeconds: number;
+  slowRows?: SlowRows;
   dryRun: boolean;
 } {
   const command = Command.safeParse(argv[0]);
@@ -1261,6 +1290,7 @@ function parseArgs(argv: string[]): {
   let name: string | undefined;
   let apps: AppsMode | undefined;
   let settleSeconds = 0;
+  let slowRows: SlowRows | undefined;
   let dryRun = false;
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
@@ -1274,9 +1304,13 @@ function parseArgs(argv: string[]): {
     } else if (arg === "--settle") {
       settleSeconds = Number(argv[++i]);
       if (!(Number.isInteger(settleSeconds) && settleSeconds >= 0)) throw new Error(USAGE);
+    } else if (arg === "--slow-rows") {
+      const choice = SlowRows.safeParse(argv[++i]);
+      if (!choice.success) throw new Error(USAGE);
+      slowRows = choice.data;
     } else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
   }
-  return { command: command.data, pr, name, apps, settleSeconds, dryRun };
+  return { command: command.data, pr, name, apps, settleSeconds, slowRows, dryRun };
 }
 
 /** The branch a PR-numbered run names its preview after: the flag, PREVIEW_NAME (the workflow's
@@ -1294,7 +1328,8 @@ async function resolveBranch(pr: string | undefined, name: string | undefined) {
 }
 
 /** The flags, then the workflow's spellings — PREVIEW_PR_NUMBER, PREVIEW_APPS (all | auto | none),
- *  PREVIEW_NAME (resolveBranch) — then the defaults. */
+ *  PREVIEW_NAME (resolveBranch), E2E_SLOW_ROWS (run | skip | only; empty decides) — then the
+ *  defaults. */
 async function main(argv: string[]) {
   const parsed = parseArgs(argv);
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
@@ -1314,7 +1349,12 @@ async function main(argv: string[]) {
     console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
     return;
   }
-  if (parsed.command === "e2e") return runE2e(previewName, pr);
+  if (parsed.command === "e2e")
+    return runE2e(
+      previewName,
+      pr,
+      parsed.slowRows || SlowRows.optional().parse(process.env.E2E_SLOW_ROWS || undefined),
+    );
   const ctx = await parentContext();
   if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
   if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
