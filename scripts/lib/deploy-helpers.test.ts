@@ -1,19 +1,19 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { runCloudflareCommandWith429Retry, runAsync, smokeResponse } from "./deploy-helpers.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("runAsync", () => {
-  it("resolves only after the child exits successfully", async () => {
+  test("resolves only after the child exits successfully", async () => {
     await expect(
       runAsync(process.execPath, ["--eval", "process.exit(0)"], { cwd: process.cwd() }),
     ).resolves.toBeUndefined();
   });
 
-  it("rejects a nonzero child exit", async () => {
+  test("rejects a nonzero child exit", async () => {
     await expect(
       runAsync(process.execPath, ["--eval", "process.exit(7)"], { cwd: process.cwd() }),
     ).rejects.toThrow("exited with 7");
@@ -21,7 +21,7 @@ describe("runAsync", () => {
 });
 
 describe("runCloudflareCommandWith429Retry", () => {
-  it("retries an explicit Wrangler 429 and then succeeds", async () => {
+  test("retries an explicit Wrangler 429 and then succeeds", async () => {
     const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
     const attemptFile = join(directory, "attempts");
     const script = `
@@ -53,7 +53,7 @@ describe("runCloudflareCommandWith429Retry", () => {
     }
   });
 
-  it("does not retry a non-429 command failure", async () => {
+  test("does not retry a non-429 command failure", async () => {
     const sleep = vi.fn(async () => {});
 
     await expect(
@@ -67,7 +67,7 @@ describe("runCloudflareCommandWith429Retry", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("does not retry a recovered 429 when a later unrelated error terminates the command", async () => {
+  test("does not retry a recovered 429 when a later unrelated error terminates the command", async () => {
     const sleep = vi.fn(async () => {});
 
     await expect(
@@ -84,7 +84,7 @@ describe("runCloudflareCommandWith429Retry", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("fails after the bounded 429 attempt budget is exhausted", async () => {
+  test("fails after the bounded 429 attempt budget is exhausted", async () => {
     const sleep = vi.fn(async () => {});
 
     await expect(
@@ -100,7 +100,7 @@ describe("runCloudflareCommandWith429Retry", () => {
 });
 
 describe("smokeResponse", () => {
-  it("can require an exact response body rather than trusting the status alone", async () => {
+  test("can require an exact response body rather than trusting the status alone", async () => {
     const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
 

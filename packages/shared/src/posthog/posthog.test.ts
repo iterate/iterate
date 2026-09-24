@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { proxyPosthogRequest } from "./posthog.ts";
 
 describe("proxyPosthogRequest", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(["static/array.js", "array/phc_test/config.js"])(
+  test.each(["static/array.js", "array/phc_test/config.js"])(
     "routes %s to PostHog's EU asset host",
     async (path) => {
       const upstream = vi.fn(async () => new Response("asset"));
@@ -22,7 +22,7 @@ describe("proxyPosthogRequest", () => {
     },
   );
 
-  it("forwards every other SDK request to ingest without application cookies", async () => {
+  test("forwards every other SDK request to ingest without application cookies", async () => {
     const upstream = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", upstream);
     const request = new Request("https://os.iterate.com/e/s/?compression=gzip-js", {

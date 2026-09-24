@@ -1166,8 +1166,7 @@ const plugin: StrictPlugin = {
         };
       },
     }),
-    "prefer-test-over-it": grandfatherRule({
-      allowedUpTo: testStyleRulesAllowedUpTo,
+    "prefer-test-over-it": {
       meta: {
         type: "suggestion",
         docs: {
@@ -1193,7 +1192,7 @@ const plugin: StrictPlugin = {
           },
         };
       },
-    }),
+    },
     // Dormant: registered, not armed; ItxScriptBuilder went with the legacy platform in #2837.
     "itx-script-fn-self-contained": {
       meta: {
