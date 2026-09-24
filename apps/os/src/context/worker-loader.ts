@@ -291,6 +291,12 @@ export async function prepareConfinedWorker(
     /** Mark this identity DEAD: the next `prepareConfinedWorker` for the same base loads under the
      *  next generation — a genuinely fresh isolate. The recovery for a cached isolate that can no
      *  longer be called (the clone-version failure the DO's facet call names). */
-    retire: () => loaderIdGenerations.set(loaderIdBase, { generation, dead: true }),
+    retire: () => {
+      // Only the identity still current: a burst of calls that all failed on generation n retires
+      // it once, and a late one never sends a recovered n+1 back to the dead n.
+      const current = loaderIdGenerations.get(loaderIdBase) ?? { generation: 0, dead: false };
+      if (current.generation === generation && !current.dead)
+        loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
+    },
   };
 }
