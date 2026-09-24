@@ -28,17 +28,14 @@ const delay = z
   .int()
   .min(0)
   .max(365 * 24 * 60 * 60 * 1000);
-// Lifecycle and recovery facts belong to their runtime transitions. In particular a scheduled
-// resume cannot release a paused stream: pause deliberately holds every scheduled append.
-const runtimeEvents = new Set([
-  "events.iterate.com/stream/created",
-  "events.iterate.com/stream/woken",
+// An operator's control belongs to the operator's own transition. In particular a scheduled resume
+// cannot release a paused stream: pause deliberately holds every scheduled append. The platform's
+// own records are refused by `normalizeControlEvent` (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`),
+// which runs over every scheduled event.
+const operatorControlEvents = new Set([
   "events.iterate.com/stream/paused",
   "events.iterate.com/stream/resumed",
-  "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/subscription-delivery-resumed",
-  // Kernel diagnostics are ephemeral and are never a durable schedule payload.
-  "events.iterate.com/stream/trace/alarm",
 ]);
 const EventBody = z.strictObject({
   type: z
@@ -46,8 +43,9 @@ const EventBody = z.strictObject({
     .min(1)
     .refine(
       (value) =>
-        !value.startsWith("events.iterate.com/stream/append-schedule") && !runtimeEvents.has(value),
-      "runtime scheduling/lifecycle events cannot be scheduled",
+        !value.startsWith("events.iterate.com/stream/append-schedule") &&
+        !operatorControlEvents.has(value),
+      "scheduling and operator control events cannot be scheduled",
     ),
   payload: z.record(z.string(), z.json()).optional(),
   metadata: z.record(z.string(), z.json()).optional(),

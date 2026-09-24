@@ -23,10 +23,11 @@
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //
-// ONE VALIDATION BOUNDARY: every append the DO commits passes `normalizeControlEvent` (below), which
-// zod-parses each control event's payload and stores the normalized form, so the fold CASTS what it
-// reads and never re-parses. The stream's own records (birth, wake, the halted fact, the alarm trace)
-// are well-formed by construction. No stored row predates its event's normalization.
+// ONE VALIDATION BOUNDARY: every append through the DO's door passes `normalizeControlEvent` (below),
+// which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
+// it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
+// the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
+// the door, and the door refuses them. No stored row predates its event's normalization.
 
 import {
   itxExpressionStepName,
@@ -593,13 +594,45 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
   return { target: expression };
 }
 
+/** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
+ *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
+export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
+
+/** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
+ *  loop (the halted fact) and the DO's alarm (the trace) straight through `Stream.append`.
+ *  `normalizeControlEvent` refuses them, so no caller rewrites who a context is (`created` feeds
+ *  `implicitRootsAt`), which incarnation runs, or halts a subscription row it does not own. */
+export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
+  "events.iterate.com/stream/created",
+  "events.iterate.com/stream/woken",
+  "events.iterate.com/stream/subscription-delivery-halted",
+  STREAM_ALARM_TRACE_EVENT,
+]);
+
+/** The operator's control events: `itx.append` of a literal event, no command in between. */
+const StreamPaused = z.object({ reason: z.string().optional() });
+const StreamResumed = z.object({});
+const SubscriptionDeliveryResumed = z.object({
+  name: z.string(),
+  afterOffset: z.number().int().nonnegative().optional(),
+});
+
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
- *  append (iterate-context-durable-object.ts). */
+ *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
+ *  other event passes through untouched. The DO runs this on every append
+ *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
+  if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
+    throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
+  if (event.type === "events.iterate.com/stream/paused")
+    return { ...event, payload: StreamPaused.parse(event.payload || {}) };
+  if (event.type === "events.iterate.com/stream/resumed")
+    return { ...event, payload: StreamResumed.parse(event.payload || {}) };
+  if (event.type === "events.iterate.com/stream/subscription-delivery-resumed")
+    return { ...event, payload: SubscriptionDeliveryResumed.parse(event.payload) };
   if (event.type === "events.iterate.com/project/ingress-configured") {
     if (event.ephemeral) throw new Error("ingress configuration must be durable");
     return { ...event, payload: normalizeIngressConfigured(event.payload) };

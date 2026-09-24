@@ -7,7 +7,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { afterEach, expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import { RESIDENCY_WATCHDOG_WINDOW_MS as W } from "../src/context/residency-watchdog.ts";
-import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
+import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
 import { releasePins, stub } from "./support.ts";
 
 const HELD = "events.iterate.com/context/held-resident-while-idle";
