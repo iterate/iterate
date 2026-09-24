@@ -100,9 +100,8 @@ export function cloudflareCustomHostnameProvider(
     ).find((entry) => entry.hostname === hostname && entry.status !== "deleted");
   return {
     async provision(hostname) {
-      const entry =
-        (await find(hostname)) ??
-        (await cloudflare<CloudflareCustomHostname>("", {
+      const create = () =>
+        cloudflare<CloudflareCustomHostname>("", {
           method: "POST",
           body: JSON.stringify({
             hostname,
@@ -113,6 +112,14 @@ export function cloudflareCustomHostnameProvider(
               settings: { min_tls_version: "1.2" },
             },
           }),
+        });
+      // a create that lost a race to another (a duplicate) finds the winner's
+      const entry =
+        (await find(hostname)) ??
+        (await create().catch(async (error: unknown) => {
+          const winner = await find(hostname);
+          if (!winner) throw error;
+          return winner;
         }));
       return {
         status: entry.status,

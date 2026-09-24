@@ -104,6 +104,20 @@ test("cloudflareCustomHostnameProvider: provision finds or creates a wildcard cu
   ]);
 });
 
+test("cloudflareCustomHostnameProvider: a create that lost a race to another finds the winner's", async () => {
+  let created = false;
+  const fetcher = (async (_input: string, init?: RequestInit) => {
+    const winner = { id: "ch-1", hostname: "iterate.shop.test", status: "pending" };
+    if (init?.method === "POST") {
+      created = true; // the other attempt's POST landed first
+      return Response.json({ success: false, errors: [{ message: "Duplicate custom hostname" }] });
+    }
+    return Response.json({ success: true, result: created ? [winner] : [] });
+  }) as typeof fetch;
+  const provider = cloudflareCustomHostnameProvider(config("token-1"), fetcher)!;
+  expect(await provider.provision("iterate.shop.test")).toMatchObject({ status: "pending" });
+});
+
 const SAAS = {
   zone: "iterate.app",
   zoneId: "zone-1",

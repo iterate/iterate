@@ -92,8 +92,9 @@ export class ProjectProcessor extends StreamProcessor<
     this.hostnames = hostnames;
   }
 
-  /** The hostname requests this incarnation is running, by `<hostname>@<request offset>`; the
-   *  durable ground is `state.hostnames[…].requested`. */
+  /** The hostnames this incarnation is working on — ONE request per hostname at a time, so an add
+   *  and a remove (or two adds) never race each other's claim; the durable ground is
+   *  `state.hostnames[…].requested`, and the answer's own delivery runs whatever was asked since. */
   #hostnameWork = new Set<string>();
 
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
@@ -149,16 +150,17 @@ export class ProjectProcessor extends StreamProcessor<
         };
       }
       case "events.iterate.com/project/hostname-add-answered": {
-        // one that lands after a remove was asked for changes nothing; a failure keeps what
-        // Cloudflare last said
-        const { hostname, cloudflare, error } = event.payload;
+        // it settles only its own request — one asked since stays owed; one that lands after a
+        // remove was asked changes nothing; a failure keeps what Cloudflare last said
+        const { hostname, requestOffset, cloudflare, error } = event.payload;
         const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
+        const requested = known.requested?.offset === requestOffset ? null : known.requested;
         return {
           ...state,
           hostnames: {
             ...state.hostnames,
-            [hostname]: { requested: null, cloudflare: cloudflare || known.cloudflare, error },
+            [hostname]: { requested, cloudflare: cloudflare || known.cloudflare, error },
           },
         };
       }
@@ -177,8 +179,16 @@ export class ProjectProcessor extends StreamProcessor<
         };
       }
       case "events.iterate.com/project/hostname-removed": {
-        if (!state.hostnames[event.payload.hostname]) return undefined;
-        const { [event.payload.hostname]: _gone, ...hostnames } = state.hostnames;
+        const { hostname, requestOffset } = event.payload;
+        const known = state.hostnames[hostname];
+        if (!known) return undefined;
+        // an add asked since the remove stays owed, from nothing
+        if (known.requested && known.requested.offset !== requestOffset)
+          return {
+            ...state,
+            hostnames: { ...state.hostnames, [hostname]: { ...known, cloudflare: null } },
+          };
+        const { [hostname]: _gone, ...hostnames } = state.hostnames;
         return { ...state, hostnames };
       }
       case "events.iterate.com/repo/created":
@@ -231,15 +241,14 @@ export class ProjectProcessor extends StreamProcessor<
     EmittedEventInput<typeof ProjectContract>
   >): undefined {
     if (!delivery.caughtUp) return;
-    // THE CUSTOM HOSTNAMES — state-derived, at head, in the background: each request the state still
-    // owes runs once per incarnation, and any later delivery runs it again after an eviction. Every
-    // step is idempotent: the claim for the same project, Cloudflare's find-or-create and delete, the
-    // answer keyed by the request's offset.
+    // THE CUSTOM HOSTNAMES — state-derived, at head, in the background: the request each hostname
+    // still owes, one hostname at a time, and any later delivery runs it again after an eviction.
+    // Every step is idempotent: the claim for the same project, Cloudflare's find-or-create and
+    // delete, the answer keyed by the request's offset.
     for (const [hostname, entry] of Object.entries(state.hostnames)) {
       const { requested } = entry;
-      const work = requested && `${hostname}@${requested.offset}`;
-      if (!requested || !work || this.#hostnameWork.has(work)) continue;
-      this.#hostnameWork.add(work);
+      if (!requested || this.#hostnameWork.has(hostname)) continue;
+      this.#hostnameWork.add(hostname);
       runInBackground(async () => {
         try {
           await append(
@@ -248,7 +257,7 @@ export class ProjectProcessor extends StreamProcessor<
               : await this.#removeHostname(hostname, requested.offset),
           );
         } finally {
-          this.#hostnameWork.delete(work);
+          this.#hostnameWork.delete(hostname);
         }
       });
     }
@@ -375,7 +384,7 @@ export class ProjectProcessor extends StreamProcessor<
     return {
       type: "events.iterate.com/project/hostname-add-answered" as const,
       idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
-      payload: { hostname, cloudflare, error },
+      payload: { hostname, requestOffset: offset, cloudflare, error },
     };
   }
 
@@ -387,7 +396,7 @@ export class ProjectProcessor extends StreamProcessor<
     return {
       idempotencyKey: `project/hostname-remove:${hostname}:${offset}`,
       type: "events.iterate.com/project/hostname-removed" as const,
-      payload: { hostname },
+      payload: { hostname, requestOffset: offset },
     };
   }
 }

@@ -102,9 +102,10 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-answered": {
       description:
-        "The answer to an add: Cloudflare's status and the DNS records the owner adds, or why it failed (taken, reserved, malformed, Cloudflare's refusal). A failed first add releases the claim.",
+        "The answer to the add at `requestOffset`: Cloudflare's status and the DNS records the owner adds, or why it failed (taken, reserved, malformed, Cloudflare's refusal). A failed first add releases the claim.",
       payloadSchema: z.object({
         hostname: z.string().min(1),
+        requestOffset: z.number().int().positive(),
         cloudflare: CustomHostnameObservation.nullable(),
         error: z.string().nullable(),
       }),
@@ -115,8 +116,12 @@ export const ProjectContract = defineProcessorContract({
       payloadSchema: z.object({ hostname: z.string().min(1) }),
     },
     "events.iterate.com/project/hostname-removed": {
-      description: "The hostname is no longer the project's.",
-      payloadSchema: z.object({ hostname: z.string().min(1) }),
+      description:
+        "The answer to the remove at `requestOffset`: the hostname is no longer the project's.",
+      payloadSchema: z.object({
+        hostname: z.string().min(1),
+        requestOffset: z.number().int().positive(),
+      }),
     },
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them.

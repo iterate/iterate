@@ -120,7 +120,7 @@ const reduceRows: {
   },
   {
     name: "a hostname's add is owed at its offset; the answer settles it; a re-add (the re-check) is owed again and keeps what Cloudflare said",
-    events: [hostname("add-requested"), answered("pending"), hostname("add-requested")],
+    events: [hostname("add-requested"), answered(1, "pending"), hostname("add-requested")],
     state: {
       ...empty,
       hostnames: {
@@ -136,9 +136,9 @@ const reduceRows: {
     name: "a failed add keeps its words; a failed re-check keeps the last observation",
     events: [
       hostname("add-requested"),
-      answered("active"),
+      answered(1, "active"),
       hostname("add-requested"),
-      answered(null, "boom"),
+      answered(3, null, "boom"),
     ],
     state: {
       ...empty,
@@ -152,12 +152,42 @@ const reduceRows: {
     events: [
       hostname("add-requested"),
       hostname("remove-requested"),
-      answered("active"),
-      hostname("removed"),
-      answered("active"),
+      answered(1, "active"),
+      removed(2),
+      answered(1, "active"),
       hostname("remove-requested"),
     ],
     state: empty,
+  },
+  {
+    name: "an answer settles only its own request: an add asked while another ran stays owed, with the older answer's observation",
+    events: [hostname("add-requested"), hostname("add-requested"), answered(1, "pending")],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: { verb: "add", offset: 2 },
+          cloudflare: observation("pending"),
+          error: null,
+        },
+      },
+    },
+  },
+  {
+    name: "an add asked while a remove ran survives the removal, owed from nothing",
+    events: [
+      hostname("add-requested"),
+      answered(1, "active"),
+      hostname("remove-requested"),
+      hostname("add-requested"),
+      removed(3),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: { verb: "add", offset: 4 }, cloudflare: null, error: null },
+      },
+    },
   },
   {
     name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
@@ -276,6 +306,49 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   ]);
 });
 
+test("ProjectProcessor — one request per hostname at a time: a remove asked while an add runs waits for it", async () => {
+  const calls: string[] = [];
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => (finish = resolve));
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async (name) => void calls.push(`claim ${name}`),
+      release: async (name) => void calls.push(`release ${name}`),
+      provider: {
+        provision: async () => {
+          await held;
+          return observation("pending");
+        },
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+  );
+  const owe = (verb: "add" | "remove", offset: number) =>
+    deliver(
+      processor,
+      {
+        ...empty,
+        hostnames: {
+          "www.acme.test": { requested: { verb, offset }, cloudflare: null, error: null },
+        },
+      },
+      async () => [],
+    );
+  owe("add", 1);
+  await settle();
+  owe("remove", 2); // the add is still running: nothing starts
+  await settle();
+  expect(calls).toEqual(["claim www.acme.test"]);
+  finish();
+  await settle();
+  owe("remove", 2); // the add's answer is delivered: the remove runs now
+  await settle();
+  expect(calls).toEqual(["claim www.acme.test", "remove www.acme.test", "release www.acme.test"]);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(
@@ -321,17 +394,29 @@ function secretDeleted(path: string) {
 
 const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
 
-function hostname(verb: "add-requested" | "remove-requested" | "removed") {
+function hostname(verb: "add-requested" | "remove-requested") {
   return {
     type: `events.iterate.com/project/hostname-${verb}`,
     payload: { hostname: "www.acme.test" },
   };
 }
 
-function answered(status: string | null, error: string | null = null) {
+function answered(requestOffset: number, status: string | null, error: string | null = null) {
   return {
     type: "events.iterate.com/project/hostname-add-answered",
-    payload: { hostname: "www.acme.test", cloudflare: status && observation(status), error },
+    payload: {
+      hostname: "www.acme.test",
+      requestOffset,
+      cloudflare: status && observation(status),
+      error,
+    },
+  };
+}
+
+function removed(requestOffset: number) {
+  return {
+    type: "events.iterate.com/project/hostname-removed",
+    payload: { hostname: "www.acme.test", requestOffset },
   };
 }
 
