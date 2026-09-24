@@ -1,4 +1,4 @@
-// ingress-routes.e2e.test.ts — `itx.ingressRoutes` through `/api`, exactly as a production client
+// fetch-routes.e2e.test.ts — `itx.fetchRoutes` through `/api`, exactly as a production client
 // (the `iterate tunnel` CLI) spells it: a route set on the project's root, a config worker shaped
 // like the template's (configs/default/worker.ts) asking `match` and forwarding through its own
 // `env.ITX.fetch`, and a fetch-shaped stub lent by a plain Node capnweb client — the tunnel's shape
@@ -9,7 +9,7 @@
 //   • a private route: an anonymous page load is sent to sign in, an anonymous fetch gets the 401
 //   • the lend recalled: 502 naming the route; the route deleted: the config worker's own answer
 //   • `set` refuses a malformed route and appends nothing for a route that stands
-// The workerd twin (no network) is __workers-tests__/ingress-routes.test.ts.
+// The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
 
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
@@ -25,13 +25,13 @@ import {
 } from "./support/project-host.ts";
 
 test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the private route's sign-in, a 502 once the stub is gone, and the host back to the config worker once the route is deleted", async () => {
-  const slug = freshDnsSafeProjectSlug("ingress-routes");
+  const slug = freshDnsSafeProjectSlug("fetch-routes");
   const projectId = await registerProject(slug);
   const itx = session().authenticate(adminCredentials()).projects.get(projectId);
   const provision = await itx.provide("itx.tunnels.blog", new LocalSite());
   const route = { requestMatcher: { routingSlug: "blog" }, target: "itx.tunnels.blog" };
-  await itx.ingressRoutes.set("tunnel-blog", route);
-  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_INGRESS_ROUTER }]]);
+  await itx.fetchRoutes.set("tunnel-blog", route);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_FETCH_ROUTER }]]);
   const blog = projectUrl({ project: slug, routingSlug: "blog", path: "/" });
 
   expect(await fetchProjectUrl(blog)).toMatchObject({ status: 200, text: "local site" });
@@ -46,7 +46,7 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
     closeCode: 1000,
   });
 
-  await itx.ingressRoutes.set("tunnel-blog", {
+  await itx.fetchRoutes.set("tunnel-blog", {
     ...route,
     authRequirement: { visitors: "project-members" },
   });
@@ -58,7 +58,7 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
   expect(navigation.headers.location).toContain("/.auth/login");
   expect(await fetchProjectUrl(blog)).toMatchObject({ status: 401, text: "Sign in\n" });
 
-  await itx.ingressRoutes.set("tunnel-blog", route);
+  await itx.fetchRoutes.set("tunnel-blog", route);
   provision[Symbol.dispose]();
   expect(
     await untilValue(
@@ -68,20 +68,20 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
     ),
   ).toMatchObject({ status: 502, text: "tunnel-blog is not connected\n" });
 
-  await itx.ingressRoutes.set("tunnel-blog", null);
-  expect(await itx.ingressRoutes.list()).toEqual([]);
+  await itx.fetchRoutes.set("tunnel-blog", null);
+  expect(await itx.fetchRoutes.list()).toEqual([]);
   expect(await fetchProjectUrl(blog)).toMatchObject({ status: 404, text: "no route\n" });
 });
 
-test("itx.ingressRoutes.set refuses a malformed route (INVALID_INPUT) before it appends and appends nothing for a route that already stands", async () => {
-  const projectId = await registerProject(freshDnsSafeProjectSlug("ingress-routes-set"));
+test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it appends and appends nothing for a route that already stands", async () => {
+  const projectId = await registerProject(freshDnsSafeProjectSlug("fetch-routes-set"));
   const itx = session().authenticate(adminCredentials()).projects.get(projectId);
   for (const [name, route] of [
     ["Tunnel_Blog", { requestMatcher: {}, target: "itx.x" }],
     ["no-target", { requestMatcher: {} }],
     ["bad-url", { requestMatcher: { url: { pathname: "(" } }, target: "itx.x" }],
   ] as const)
-    expect(await rejection(itx.ingressRoutes.set(name, route)), name).toMatchObject({
+    expect(await rejection(itx.fetchRoutes.set(name, route)), name).toMatchObject({
       code: "INVALID_INPUT",
     });
   // The route's own facts, not the log's head: the root's log also takes facts nobody here asked
@@ -89,30 +89,30 @@ test("itx.ingressRoutes.set refuses a malformed route (INVALID_INPUT) before it 
   const routeFacts = async () =>
     (await itx.readEvents()).events.filter(
       (event: { type: string; offset: number }) =>
-        event.type === "events.iterate.com/ingress-route/configured",
+        event.type === "events.iterate.com/fetch-route/configured",
     );
   const route = { requestMatcher: { url: { pathname: "/api/*" } }, target: "itx.api" };
-  await itx.ingressRoutes.set("api", route);
+  await itx.fetchRoutes.set("api", route);
   const facts = await routeFacts();
   expect(facts).toHaveLength(1);
-  await itx.ingressRoutes.set("api", route);
+  await itx.fetchRoutes.set("api", route);
   expect(await routeFacts()).toEqual(facts);
-  expect(await itx.ingressRoutes.list()).toMatchObject([
-    { ingressRouteName: "api", target: ["itx", "api"], configuredOffset: facts[0]?.offset },
+  expect(await itx.fetchRoutes.list()).toMatchObject([
+    { fetchRouteName: "api", target: ["itx", "api"], configuredOffset: facts[0]?.offset },
   ]);
 });
 
 /** The template's router (configs/default/worker.ts) with a 404 of its own. */
-const SRC_INGRESS_ROUTER = {
+const SRC_FETCH_ROUTER = {
   "cap.js": `import { ConfigWorker } from "./processor.js";
 export default class Router extends ConfigWorker {
   async fetch(request) {
-    const route = await this.withItx((itx) => itx.ingressRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
+    const route = await this.withItx((itx) => itx.fetchRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
     if (route) {
       if (route.authRequirement && !request.headers.get("x-itx-principal"))
         return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
       const headers = new Headers(request.headers);
-      headers.set("x-itx-expression", \`itx.ingressRoutes.fetch(\${JSON.stringify(route.ingressRouteName)})\`);
+      headers.set("x-itx-expression", \`itx.fetchRoutes.fetch(\${JSON.stringify(route.fetchRouteName)})\`);
       return this.env.ITX.fetch(new Request(request, { headers }));
     }
     return new Response("no route\\n", { status: 404 });

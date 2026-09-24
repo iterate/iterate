@@ -585,8 +585,8 @@ test.for(["message", "error"])(
   },
 );
 
-// A killed `iterate tunnel` leaves its ingress route answering 502 "<route> is not connected"; every
-// hop logs a 502 summary, all in the ray of the route's `ingress-route.target-offline` info line.
+// A killed `iterate tunnel` leaves its fetch route answering 502 "<route> is not connected"; every
+// hop logs a 502 summary, all in the ray of the route's `fetch-route.target-offline` info line.
 test("a tunnel's not-connected 502s, every hop of them, page nothing", async () => {
   await using _logs = queryableWorkersLogs(targetOfflineRequest("vite-ping"));
   await expect(summary()).resolves.toBe("prd is quiet");
@@ -972,7 +972,7 @@ function targetOfflineRequest(
   return [
     {
       timestamp: 42,
-      event: "ingress-route.target-offline",
+      event: "fetch-route.target-offline",
       $metadata: { type: "cf-worker", level: "info", requestId: `${rayId}-inner-do`, rayId },
       $workers: { executionModel: "durableObject", event: { request: { url } } },
     },

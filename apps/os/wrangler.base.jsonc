@@ -91,7 +91,7 @@
     // unused standalone namespace; agent streams and facet storage belong to the context.
     "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
     "ControlPlaneDurableObject": { "type": "durable-object", "storage": "sqlite" },
-    // The route table moved into each project root's core state (src/ingress-routes.ts); the class
+    // The route table moved into each project root's core state (src/fetch-routes.ts); the class
     // was only ever hosted as a facet, so its standalone namespace holds no object. Retire it.
     "IngressRoutesDurableObject": { "type": "durable-object", "state": "deleted" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },

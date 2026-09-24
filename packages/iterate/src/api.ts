@@ -134,10 +134,10 @@ export type CollectSecretInput = {
  * Iterate instance; it is not itself permission to write a secret. */
 export type CollectSecretLink = { path: string; url: string };
 
-/** WHICH requests an ingress route takes — every field given must hold: the host's routing slug
+/** WHICH requests a fetch route takes — every field given must hold: the host's routing slug
  *  (`blog` for `blog--<project>`), a `URLPattern` over the URL the app sees (its init's fields, each a
  *  pattern string), exact header values. `{}` takes every request. */
-export type IngressRouteRequestMatcher = {
+export type FetchRouteRequestMatcher = {
   routingSlug?: string;
   url?: {
     protocol?: string;
@@ -153,21 +153,21 @@ export type IngressRouteRequestMatcher = {
   headers?: Record<string, string>;
 };
 
-/** A route as `itx.ingressRoutes.set(name, route)` takes it: the requests it takes, the itx
+/** A route as `itx.fetchRoutes.set(name, route)` takes it: the requests it takes, the itx
  *  expression they go to, who may use it (`project-members`: the config worker answers anyone else
  *  the sign-in challenge; absent or null: public) and its priority (higher first, then by name). */
-export type IngressRouteInput = {
-  requestMatcher: IngressRouteRequestMatcher;
+export type FetchRouteInput = {
+  requestMatcher: FetchRouteRequestMatcher;
   target: ItxExpressionInput;
   authRequirement?: { visitors: "project-members" } | null;
   priority?: number;
 };
 
 /** A live route as `list()` and `match` answer it, its target parsed, with the offset of the
- *  `ingress-route/configured` fact that set it. */
-export type IngressRouteEntry = {
-  ingressRouteName: string;
-  requestMatcher: IngressRouteRequestMatcher;
+ *  `fetch-route/configured` fact that set it. */
+export type FetchRouteEntry = {
+  fetchRouteName: string;
+  requestMatcher: FetchRouteRequestMatcher;
   target: ItxExpression;
   authRequirement: { visitors: "project-members" } | null;
   priority: number;
@@ -245,21 +245,18 @@ export interface IterateContextApi {
      * from an agent context, a successful submission messages that same agent with the path only. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   };
-  /** The project's ingress routes, on its root `/`: which requests on its hosts go to which itx
-   *  expression. `set` appends one `ingress-route/configured` fact (`null` deletes the route);
+  /** The project's fetch routes, on its root `/`: which requests on its hosts go to which itx
+   *  expression. `set` appends one `fetch-route/configured` fact (`null` deletes the route);
    *  `match` answers the route a request takes, which the config worker forwards with
-   *  `env.ITX.fetch` naming `itx.ingressRoutes.fetch('<name>')` (a WebSocket upgrade included). */
-  ingressRoutes: {
-    set(
-      ingressRouteName: string,
-      route: IngressRouteInput | null,
-    ): Promise<{ ingressRouteName: string }>;
-    list(): Promise<IngressRouteEntry[]>;
+   *  `env.ITX.fetch` naming `itx.fetchRoutes.fetch('<name>')` (a WebSocket upgrade included). */
+  fetchRoutes: {
+    set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
+    list(): Promise<FetchRouteEntry[]>;
     match(request: {
       method: string;
       url: string;
       headers: Headers | Record<string, string> | [string, string][];
-    }): Promise<IngressRouteEntry | null>;
+    }): Promise<FetchRouteEntry | null>;
   };
   /** The table this context resolves against, described — the tree a model reads. `list()` follows a
    *  bare hop row into the context it names (a Durable Object hop, hence async). */

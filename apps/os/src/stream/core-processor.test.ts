@@ -30,7 +30,7 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
     itxExpressionRewriteRules: {},
     subscriptions: {},
     ingressTarget: null,
-    ingressRoutes: {},
+    fetchRoutes: {},
     schedules: {},
     scriptRuns: {},
   });
@@ -268,20 +268,20 @@ test("ingress target: an ephemeral configuration cannot be published", () => {
   ).toThrow("must be durable");
 });
 
-// ── the ingress routes — ingress-route/configured, folded by src/ingress-routes.ts ──
+// ── the fetch routes — fetch-route/configured, folded by src/fetch-routes.ts ──
 
-const routeType = "events.iterate.com/ingress-route/configured";
+const routeType = "events.iterate.com/fetch-route/configured";
 const blogRoute = {
-  ingressRouteName: "tunnel-blog",
+  fetchRouteName: "tunnel-blog",
   requestMatcher: { routingSlug: "blog" },
   target: ["itx", "tunnels", "blog"],
 };
 
-test("ingress routes: a fact sets its route at its offset and a null matcher deletes it; deleting a route that is not there, or an ephemeral fact, keeps the state", () => {
+test("fetch routes: a fact sets its route at its offset and a null matcher deletes it; deleting a route that is not there, or an ephemeral fact, keeps the state", () => {
   const set = reduceAll([at(4, routeType, blogRoute)]);
   expect(set).toEqual(
     expect.objectContaining({
-      ingressRoutes: {
+      fetchRoutes: {
         "tunnel-blog": {
           requestMatcher: { routingSlug: "blog" },
           target: ["itx", "tunnels", "blog"],
@@ -292,13 +292,13 @@ test("ingress routes: a fact sets its route at its offset and a null matcher del
       },
     }),
   );
-  const deleted = { ingressRouteName: "tunnel-blog", requestMatcher: null };
+  const deleted = { fetchRouteName: "tunnel-blog", requestMatcher: null };
   expect(reduceAll([at(5, routeType, deleted)], set)).toEqual(
-    expect.objectContaining({ ingressRoutes: {} }),
+    expect.objectContaining({ fetchRoutes: {} }),
   );
   expect(
     reduceCoreEvent({
-      event: at(5, routeType, { ...deleted, ingressRouteName: "gone" }),
+      event: at(5, routeType, { ...deleted, fetchRouteName: "gone" }),
       state: set,
     }),
   ).toBeUndefined();
@@ -310,10 +310,10 @@ test("ingress routes: a fact sets its route at its offset and a null matcher del
   ).toBeUndefined();
 });
 
-test("ingress routes: a malformed fact already in the log (appended while the table was a facet, which checked nothing at append) is skipped by the reduce, never thrown", () => {
+test("fetch routes: a malformed fact in the log is skipped by the reduce, never thrown, so one route that does not compile never breaks every request's match", () => {
   const badUrl = {
     ...blogRoute,
-    ingressRouteName: "bad-url",
+    fetchRouteName: "bad-url",
     requestMatcher: { url: { pathname: "(" } },
   };
   const state = reduceCoreEventBatch(
@@ -321,18 +321,18 @@ test("ingress routes: a malformed fact already in the log (appended while the ta
     CoreContract.initialState(),
     onError,
   );
-  expect(Object.keys(state.ingressRoutes)).toEqual(["tunnel-blog"]);
+  expect(Object.keys(state.fetchRoutes)).toEqual(["tunnel-blog"]);
 });
 
-test("ingress routes: the append boundary parses the fact and refuses a malformed or ephemeral one", () => {
+test("fetch routes: the append boundary parses the fact and refuses a malformed or ephemeral one", () => {
   expect(normalizeControlEvent({ type: routeType, payload: blogRoute }, "/")).toEqual({
     type: routeType,
     payload: blogRoute,
   });
   for (const payload of [
     {},
-    { ...blogRoute, ingressRouteName: "Tunnel_Blog" },
-    { ingressRouteName: "no-target", requestMatcher: {} },
+    { ...blogRoute, fetchRouteName: "Tunnel_Blog" },
+    { fetchRouteName: "no-target", requestMatcher: {} },
     { ...blogRoute, requestMatcher: { url: { pathname: "(" } } },
     { ...blogRoute, requestMatcher: { method: "GET" } },
   ])
@@ -342,25 +342,34 @@ test("ingress routes: the append boundary parses the fact and refuses a malforme
   ).toThrow("must be durable");
 });
 
-test("ingress routes: a root whose core checkpoint predates the table (13.0.0, when a facet kept it) re-reduces its log on the next wake, and keeps the routes it set", () => {
+test("fetch routes: a root whose core checkpoint was written by 14.0.0, when the table was `ingressRoutes`, re-reduces its log on the next wake into `fetchRoutes`; an `ingress-route/configured` fact is not read", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
   const before = new Stream(deps);
-  before.append(normalizeControlEvent({ type: routeType, payload: blogRoute }, "/"));
-  const { ingressRoutes: _notYetInCore, ...stateAt13 } = before.coreReducedState;
+  before.append(
+    { type: "events.iterate.com/ingress-route/configured", payload: { ...blogRoute } },
+    normalizeControlEvent(
+      { type: routeType, payload: { ...blogRoute, fetchRouteName: "api" } },
+      "/",
+    ),
+  );
+  const { fetchRoutes, ...rest } = before.coreReducedState;
+  expect(Object.keys(fetchRoutes)).toEqual(["api"]);
   before.storage.reduceCheckpoints.write(
     CoreContract.slug,
-    { reducerVersion: "13.0.0", reducedThroughOffset: before.highestDurableOffset() },
-    stateAt13,
+    { reducerVersion: "14.0.0", reducedThroughOffset: before.highestDurableOffset() },
+    { ...rest, ingressRoutes: { "tunnel-blog": fetchRoutes.api } },
     true,
   );
-  expect(new Stream(deps).coreReducedState.ingressRoutes).toMatchObject({
-    "tunnel-blog": { target: ["itx", "tunnels", "blog"], configuredOffset: 1 },
+  const after = new Stream(deps).coreReducedState;
+  expect(after.fetchRoutes).toMatchObject({
+    api: { target: ["itx", "tunnels", "blog"], configuredOffset: 2 },
   });
+  expect(after).not.toHaveProperty("ingressRoutes");
 });
 
 test(
-  "ingress routes: a core-version bump re-reduces a root's routes in O(routes) per page — 14,000 routes (a core checkpoint of ~2 MB) well under the CPU limit (a copy per fact is O(routes²): ~25 s on a laptop)",
+  "fetch routes: a core-version bump re-reduces a root's routes in O(routes) per page — 14,000 routes (a core checkpoint of ~2 MB) well under the CPU limit (a copy per fact is O(routes²): ~25 s on a laptop)",
   { timeout: 60_000 },
   () => {
     const storage = nodeSqliteDurableObjectStorage();
@@ -381,7 +390,7 @@ test(
     const startedAt = performance.now();
     const rebuilt = new Stream(deps);
     const rereduceMs = performance.now() - startedAt;
-    expect(Object.keys(rebuilt.coreReducedState.ingressRoutes)).toHaveLength(14_000);
+    expect(Object.keys(rebuilt.coreReducedState.fetchRoutes)).toHaveLength(14_000);
     expect(rereduceMs).toBeLessThan(5_000);
   },
 );
@@ -777,7 +786,7 @@ test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the inp
     configured(6, "a", "itx.y.f"),
     rule(7, "itx.x", null),
     configured(8, "b", null),
-    at(9, routeType, { ingressRouteName: "route-1", requestMatcher: null }),
+    at(9, routeType, { fetchRouteName: "route-1", requestMatcher: null }),
     at(10, routeType, { ...numberedRoute(2), priority: 5 }),
   ];
   const initial = CoreContract.initialState();
@@ -794,8 +803,8 @@ test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the inp
   // oxlint-disable-next-line iterate/prefer-object-property-match -- identity: not the same table object
   expect(afterSecond.itxExpressionRewriteRules).not.toBe(afterFirst.itxExpressionRewriteRules);
   // oxlint-disable-next-line iterate/prefer-object-property-match -- identity: not the same table object
-  expect(afterSecond.ingressRoutes).not.toBe(afterFirst.ingressRoutes);
-  expect(Object.keys(afterSecond.ingressRoutes)).toEqual(["route-2"]);
+  expect(afterSecond.fetchRoutes).not.toBe(afterFirst.fetchRoutes);
+  expect(Object.keys(afterSecond.fetchRoutes)).toEqual(["route-2"]);
 });
 
 test("reduceCoreEventBatch: a batch that touches nothing hands the SAME state back (identity is the host's change signal — no checkpoint rewrite, no live delta)", () => {
@@ -1274,7 +1283,7 @@ function rule(offset: number, match: string, target: string | null): StreamEvent
 /** The payload of route `route-<n>`: requests on routing slug `s<n>` go to `itx.t<n>`. */
 function numberedRoute(n: number) {
   return {
-    ingressRouteName: `route-${n}`,
+    fetchRouteName: `route-${n}`,
     requestMatcher: { routingSlug: `s${n}` },
     target: ["itx", `t${n}`],
   };
