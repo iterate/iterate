@@ -108,15 +108,19 @@ function soakRun(project: "e2e" | "perf", file: string): number | undefined {
     .filter((r) => r.status === "failed" || (r.failureMessages?.length ?? 0) > 0).length;
 }
 
+// Each lane's wall time on its own: `wall` stays the e2e suite's, comparable with a CI e2e job's.
 const wall: number[] = [];
+const perfWall: number[] = [];
 for (let n = 1; n <= runs; n++) {
-  const started = Date.now();
+  let started = Date.now();
   const failedNow = soakRun("e2e", path.join(OUT, `run-${n}.json`));
   wall.push(Date.now() - started);
+  started = Date.now();
   const perfFailed = soakRun("perf", path.join(OUT, `perf-${n}.json`));
+  perfWall.push(Date.now() - started);
   console.log(
-    `run ${n}/${runs}: ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow ?? "?"} failed, ` +
-      `perf ${perfFailed ?? "?"} failed`,
+    `run ${n}/${runs}: e2e ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow ?? "?"} failed; ` +
+      `perf ${(perfWall.at(-1)! / 1000).toFixed(0)} s, ${perfFailed ?? "?"} failed`,
   );
 }
 
@@ -131,11 +135,12 @@ const rows = [...tally.entries()].map(([title, e]) => ({
 }));
 writeFileSync(
   path.join(OUT, "summary.json"),
-  JSON.stringify({ runs, wallMs: wall, rows }, null, 2),
+  JSON.stringify({ runs, wallMs: wall, perfWallMs: perfWall, rows }, null, 2),
 );
 const flaky = rows.filter((r) => r.failed > 0).sort((a, b) => b.failed - a.failed);
 console.log(
-  `\n${runs} run(s); wall p50 ${(wall.sort((a, b) => a - b)[Math.floor(wall.length / 2)]! / 1000).toFixed(0)} s`,
+  `\n${runs} run(s); e2e wall p50 ${(wall.sort((a, b) => a - b)[Math.floor(wall.length / 2)]! / 1000).toFixed(0)} s, ` +
+    `perf wall p50 ${(perfWall.sort((a, b) => a - b)[Math.floor(perfWall.length / 2)]! / 1000).toFixed(0)} s`,
 );
 console.log(
   flaky.length ? `${flaky.length} row(s) failed at least once:` : "every row passed every time",
