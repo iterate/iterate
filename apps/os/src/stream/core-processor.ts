@@ -5,6 +5,7 @@
 //   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
+//   what reset it             context/aborted, then stream/woken            → wokenAfterContextAbortedOffset
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
 //   where the project apex goes project/ingress-configured { target|null } → ingressTarget
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
@@ -242,6 +243,12 @@ export type CoreState = {
   createdAt?: string;
   /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
   incarnation?: number;
+  /** The newest `context/aborted` (`itx.abort()`'s record) since the last wake record: the reset it
+   *  asked for is still to come. */
+  contextAbortedOffset?: number;
+  /** Set by the wake record: the `context/aborted` whose reset began this incarnation — a recorded,
+   *  deliberate reset (the fetch-upgrade 101s name it, context/rpc-stubs.ts). */
+  wokenAfterContextAbortedOffset?: number;
   paused: { reason: string } | null;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
    *  configured target REPLACES; `null` is kept as a MASK where something beneath would answer the
@@ -389,7 +396,14 @@ export function reduceCoreEvent(
         createdAt: event.createdAt,
       };
     case "events.iterate.com/stream/woken":
-      return { ...state, incarnation: payload.incarnation as number };
+      return {
+        ...state,
+        incarnation: payload.incarnation as number,
+        wokenAfterContextAbortedOffset: state.contextAbortedOffset,
+        contextAbortedOffset: undefined,
+      };
+    case "events.iterate.com/context/aborted":
+      return { ...state, contextAbortedOffset: event.offset };
     case "events.iterate.com/stream/paused":
       return { ...state, paused: { reason: (payload.reason as string | undefined) ?? "paused" } };
     case "events.iterate.com/stream/resumed":

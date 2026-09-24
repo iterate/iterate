@@ -332,6 +332,51 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
   expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
 });
 
+// A voice board that goes away takes its /api session with it, and its pager often drops a moment
+// before the session's own end reaches the lend. The drop is logged with its outcome, so a session
+// that ends while the re-dial is in flight logs nothing; a live one logs the drop once it is back.
+test.each([
+  {
+    session: "ends while the re-dial is in flight",
+    endSession: true,
+    logged: [],
+  },
+  {
+    session: "is live",
+    endSession: false,
+    logged: [{ event: "rpc-stub-pager-redialed", code: 1006, attempt: 1, downMs: 200 }],
+  },
+])(
+  "a pager that drops (1006) while its session $session: logged $logged.length time(s), with its outcome",
+  async ({ endSession, logged }) => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    warn.mockClear();
+    error.mockClear();
+    const redialed = new FakePagerWebSocket();
+    const closed = vi.spyOn(redialed, "close");
+    const fake = await relayOverFakeDurableObject(async (dial) => {
+      if (dial === 1) return new FakePagerWebSocket();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return redialed;
+    });
+
+    fake.pagers[0].close(1006);
+    if (endSession) fake.breakSession();
+    await vi.advanceTimersByTimeAsync(200);
+    await fake.waitedUntil[0];
+    expect({
+      logged: [...warn.mock.calls, ...error.mock.calls].map(([line]) => line),
+      redialedPagerClosed: closed.mock.calls.length > 0,
+    }).toEqual({
+      logged: logged.map((line) => expect.objectContaining(line)),
+      redialedPagerClosed: endSession,
+    });
+  },
+);
+
 test("a lend recalled while a re-dial hangs ends quietly at the deadline: no error, the late pager closed", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
@@ -499,9 +544,13 @@ async function relayOverFakeDurableObject(
     disposed: 0,
     waitedUntil: [] as Promise<unknown>[],
     dials: 0,
+    /** capnweb's death signal for the client's session (`onRpcBroken`). */
+    breakSession: () => {},
   };
   const lent = {
-    onRpcBroken() {},
+    onRpcBroken(breakSession: () => void) {
+      fake.breakSession = breakSession;
+    },
     [Symbol.dispose]() {
       fake.disposed += 1;
     },

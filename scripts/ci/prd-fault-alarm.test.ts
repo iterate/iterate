@@ -261,7 +261,6 @@ test("a page and a thread reply show how the pagers recovered in the window", ()
     ...quiet,
     errors: [["Connection closed: this Durable Object instance is no longer active.", 2]],
     pagers: [
-      ["rpc-stub-pager-dropped", 4],
       ["rpc-stub-pager-redialed", 3],
       ["rpc-stub-pager-redial-failed", 1],
     ],

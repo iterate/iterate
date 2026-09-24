@@ -615,18 +615,13 @@ export async function lendRpcStubOverPager(
    *  re-dial gives up: an abandoned dial the DO accepts later would otherwise REPLACE a pager a
    *  later try brought back (the DO closes the older one with 1000, which ends the lend). A 5xx is
    *  the DO not ready yet and is tried again; any other non-101 is its refusal (a paused stream)
-   *  and ends it. A lend recalled meanwhile ends it too. Giving up is an ERROR: the client is still
-   *  connected but unreachable through its key, and the prd fault alarm pages on errors. */
+   *  and ends it. A lend recalled meanwhile ends it too, quietly: a session that is ending (a voice
+   *  board gone, its /api socket closing) often loses its pager a moment before its own end reaches
+   *  this lend, so the drop is logged with its outcome, only once the session proved live — back in
+   *  service (a warn) or not (an ERROR: the client is still connected but unreachable through its
+   *  key, and the prd fault alarm pages on errors). */
   const redialPager = async (dropped: CloseEvent): Promise<void> => {
     const droppedAt = Date.now();
-    console.warn({
-      event: "rpc-stub-pager-dropped",
-      namespace: "rpc-stubs",
-      message: "a lent stub's pager closed under a live session — re-dialing",
-      rpcStubKey,
-      code: dropped.code,
-      reason: dropped.reason,
-    });
     let lastFailure = "";
     const delaysMs = [0, 2_000, 4_000, 8_000, 16_000];
     for (const [index, delayMs] of delaysMs.entries()) {
@@ -676,8 +671,11 @@ export async function lendRpcStubOverPager(
         console.warn({
           event: "rpc-stub-pager-redialed",
           namespace: "rpc-stubs",
-          message: "the pager is back in service; the DO re-appended what names the key",
+          message:
+            "a lent stub's pager dropped under a live session and is back in service; the DO re-appended what names the key",
           rpcStubKey,
+          code: dropped.code,
+          reason: dropped.reason,
           attempt,
           downMs: Date.now() - droppedAt,
         });
@@ -691,8 +689,10 @@ export async function lendRpcStubOverPager(
       event: "rpc-stub-pager-redial-failed",
       namespace: "rpc-stubs",
       message:
-        "the pager could not be re-dialed; the lend ends and the DO has un-set what named it",
+        "a lent stub's pager dropped under a live session and could not be re-dialed; the lend ends and the DO has un-set what named it",
       rpcStubKey,
+      code: dropped.code,
+      reason: dropped.reason,
       lastFailure,
       downMs: Date.now() - droppedAt,
     });
@@ -910,6 +910,15 @@ type FetchUpgradeResume = z.infer<typeof FetchUpgradeResume>;
 /** On a dialed upgrade socket's 101 (a leg, a re-dialed eyeball): the deploy that answered it, so a
  *  re-dialing end can tell a deploy's reset from a platform failure. */
 const FETCH_UPGRADE_DEPLOY_ID_HEADER = "x-itx-deploy-id";
+/** On every upgrade socket's 101 from a context whose incarnation began with the reset a recorded
+ *  `itx.abort()` asked for: that `context/aborted` event's offset, so a re-dialing end can tell the
+ *  deliberate reset from a platform failure (fetch-upgrade-splice.ts). Absent otherwise. */
+const FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER = "x-itx-context-aborted-offset";
+/** The `context/aborted` offset a DO's 101 names (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). */
+const contextAbortedOffsetOf = (response: Response): number | null => {
+  const offset = response.headers.get(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
+  return offset ? Number(offset) : null;
+};
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the
@@ -1023,8 +1032,11 @@ async function dialRpcStubFetch(
       upgradeId,
       // capnweb's TunneledWebSocket dispatches the runtime's own events (MessageEvent, CloseEvent)
       local: providerSocket as unknown as SpliceSocket,
+      // the provider's socket closes without a status when the tunnel's session ends
+      localGoneClose: { code: 1001, reason: "tunnel disconnected" },
       socket: leg,
       deployId: legResponse.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+      contextAbortedOffset: contextAbortedOffsetOf(legResponse),
       redial: async () => {
         const redialed = await dialLeg();
         if (!redialed.webSocket) {
@@ -1035,6 +1047,7 @@ async function dialRpcStubFetch(
         return {
           socket: redialed.webSocket,
           deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+          contextAbortedOffset: contextAbortedOffsetOf(redialed),
         };
       },
       report: reportFetchUpgradeSpliceEvent,
@@ -1084,6 +1097,7 @@ export function spliceEyeballAnswer(
   const resume = FetchUpgradeResume.parse(JSON.parse(header));
   const headers = new Headers(answer.headers);
   headers.delete(FETCH_UPGRADE_RESUME_HEADER);
+  headers.delete(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
   const pair = new WebSocketPair();
   const [visitor, local] = [pair[0], pair[1]];
   local.accept();
@@ -1092,8 +1106,10 @@ export function spliceEyeballAnswer(
     side: "eyeball",
     upgradeId: resume.upgradeId,
     local,
+    localGoneClose: { code: 1001, reason: "visitor disconnected" },
     socket: eyeball,
     deployId: resume.deployId,
+    contextAbortedOffset: contextAbortedOffsetOf(answer),
     redial: async () => {
       const redialed = await contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
         headers: { Upgrade: "websocket", [FETCH_UPGRADE_EYEBALL_HEADER]: resume.upgradeId },
@@ -1106,6 +1122,7 @@ export function spliceEyeballAnswer(
       return {
         socket: redialed.webSocket,
         deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+        contextAbortedOffset: contextAbortedOffsetOf(redialed),
       };
     },
     report: reportFetchUpgradeSpliceEvent,
@@ -1121,14 +1138,19 @@ export class RpcStubFetchServer {
   /** This DO's deploy and path: what a resumable upgrade's 101 says (`FetchUpgradeResume`). */
   readonly #deployId: string;
   readonly #path: string;
+  /** The `context/aborted` whose reset began this incarnation, or null: what every 101 names
+   *  (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). Read per answer: the wake record lands after
+   *  construction. */
+  readonly #contextAbortedOffset: () => number | null;
 
   constructor(
     ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">,
-    context: { deployId: string; path: string },
+    context: { deployId: string; path: string; contextAbortedOffset: () => number | null },
   ) {
     this.#ctx = ctx;
     this.#deployId = context.deployId;
     this.#path = context.path;
+    this.#contextAbortedOffset = context.contextAbortedOffset;
   }
 
   /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
@@ -1171,7 +1193,12 @@ export class RpcStubFetchServer {
     pair[1].serializeAttachment({
       fetchUpgrade: { upgradeId, side },
     } satisfies FetchUpgradeAttachment);
-    return new Response(null, { status: 101, webSocket: pair[0], headers });
+    const contextAbortedOffset = this.#contextAbortedOffset();
+    const answerHeaders: [string, string][] =
+      contextAbortedOffset === null
+        ? headers
+        : [...headers, [FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER, String(contextAbortedOffset)]];
+    return new Response(null, { status: 101, webSocket: pair[0], headers: answerHeaders });
   }
 
   /** PARTIAL FETCH: accept the transport's dedicated upgrade leg (opened mid-dial, carrying the

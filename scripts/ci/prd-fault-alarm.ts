@@ -304,9 +304,12 @@ export function triageIncidents(
   }
   const span = `${hhmm(window.from)}–${hhmm(window.to)} UTC`;
   const pagers = Object.fromEntries(reading.pagers);
+  // a pager's drop is logged with its outcome (apps/os context/rpc-stubs.ts `redialPager`)
+  const pagersRedialed = pagers["rpc-stub-pager-redialed"] ?? 0;
+  const pagersGaveUp = pagers["rpc-stub-pager-redial-failed"] ?? 0;
   const recovery =
-    (pagers["rpc-stub-pager-dropped"] ?? 0) > 0 &&
-    `• pagers in the window: ${pagers["rpc-stub-pager-dropped"]} dropped, ${pagers["rpc-stub-pager-redialed"] ?? 0} re-dialed, ${pagers["rpc-stub-pager-redial-failed"] ?? 0} gave up`;
+    pagersRedialed + pagersGaveUp > 0 &&
+    `• pagers in the window: ${pagersRedialed + pagersGaveUp} dropped, ${pagersRedialed} re-dialed, ${pagersGaveUp} gave up`;
   const page = opened.length
     ? {
         keys: opened.map(([key]) => key),

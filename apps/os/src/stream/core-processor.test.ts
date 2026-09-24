@@ -176,6 +176,35 @@ test("woken → incarnation; every wake overwrites (growth across idle is the hi
   expect(s).toMatchObject({ incarnation: 2, projectId: "prj_t" });
 });
 
+test.each([
+  {
+    log: "aborted, then woken (the reset itx.abort() asked for)",
+    types: ["context/aborted", "stream/woken"],
+    wokenAfterContextAbortedOffset: 2,
+  },
+  {
+    log: "aborted, woken, woken again (a later wake: hibernation, a platform reset)",
+    types: ["context/aborted", "stream/woken", "stream/woken"],
+    wokenAfterContextAbortedOffset: undefined,
+  },
+  {
+    log: "woken, then aborted (the reset still to come)",
+    types: ["stream/woken", "context/aborted"],
+    wokenAfterContextAbortedOffset: undefined,
+  },
+])("$log → wokenAfterContextAbortedOffset $wokenAfterContextAbortedOffset", (row) => {
+  const s = reduceAll(
+    row.types.map((type, index) =>
+      at(
+        index + 2,
+        `events.iterate.com/${type}`,
+        type === "stream/woken" ? { incarnation: index } : {},
+      ),
+    ),
+  );
+  expect(s).toMatchObject({ wokenAfterContextAbortedOffset: row.wokenAfterContextAbortedOffset });
+});
+
 test("pause is a latch: paused → resumed round-trips; reason carried", () => {
   const paused = reduceAll([at(1, "events.iterate.com/stream/paused", { reason: "maintenance" })]);
   expect(paused).toMatchObject({ paused: { reason: "maintenance" } });
