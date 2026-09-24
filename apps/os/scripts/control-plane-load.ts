@@ -8,7 +8,7 @@
  * project), the operator's listings (every user, organization and project counted). A logic error shows as a mismatch; a bottleneck as a verb whose p95 grows with the
  * load. Nothing here is cleaned up: the preview's `pnpm preview reset` is.
  *
- *   doppler run --project os --config preview -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-control-plane-cleanup-os-preview.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
+ *   doppler run --project os --config preview -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
  */
 import { newWebSocketRpcSession } from "capnweb";
 import { createCli } from "trpc-cli";

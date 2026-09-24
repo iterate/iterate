@@ -19,8 +19,6 @@ name: Preview delete
 
 permissions:
   contents: read
-  # The PR's head branch, which names its preview, on a dispatch.
-  pull-requests: read
 
 on:
   pull_request:
@@ -103,8 +101,6 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
+          # names the preview: `pr<n>`
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
         run: doppler run -- pnpm preview delete

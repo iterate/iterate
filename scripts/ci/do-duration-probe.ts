@@ -161,7 +161,7 @@ async function checkAccountActiveTime(input: {
  * The trailing 60 minutes' five biggest DO namespaces by active time, named
  * as the account's namespace listing names them: `<script>_<class>`, with the
  * preview slug in between for a Worker Preview
- * (`os-preview_pr2828-control-plane-cleanup_IterateContextDurableObject`).
+ * (`os_pr2828_IterateContextDurableObject`).
  * DO-hours in the trailing hour are DO-hours per hour, so the alert can put
  * a $/h on each.
  */

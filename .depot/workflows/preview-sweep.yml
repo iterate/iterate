@@ -1,5 +1,5 @@
 # THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the previews
-# of os-preview and of the apps on top whose PR closed without a delete, that went stale, or
+# of `os` and of the apps on top whose PR closed without a delete, that went stale, or
 # that were hand-named and left idle, plus any per-preview resource that outlived its preview. A CI
 # workflow's own preview (`main`, `latency`, `real-model`) goes only once that workflow has not
 # deployed it for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a
@@ -8,6 +8,12 @@
 # A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
 # goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a
 # page to #error-pulse instead (preview.ts: StuckArtifactsNamespace), tried again the next night.
+#
+# Beside it, the reset of the `os` parent's own data (`pnpm preview reset-parent`): what people and
+# agents left on https://os.iterate-dev-preview.workers.dev and the app parents signed in against
+# it, erased, then the parent deployed from main again. Every PR preview keeps its data and keeps
+# serving meanwhile. It takes the parents' deploy group (preview-parents.yml), so a push to main
+# never deploys the parent in the middle of an erase.
 #
 # Its own workflow, not a job of preview-os.yml, so no PR's checks carry it as a skipped job.
 # Sweep now with a dispatch:
@@ -61,3 +67,29 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: doppler run -- pnpm preview sweep
+
+  reset-parent:
+    name: reset the os parent
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 45
+    concurrency:
+      group: preview-parents
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Erase the os parent's data, then deploy it again
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm preview reset-parent

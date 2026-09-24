@@ -8,9 +8,9 @@ import { expect, test } from "vitest";
 import { parseAppConfig } from "./app-config.ts";
 import { mintTestLink, redeemTestLink } from "./test-link.ts";
 
-const pr123 = "https://pr123-feature-os-preview.iterate-dev-preview.workers.dev";
-const pr124 = "https://pr124-other-os-preview.iterate-dev-preview.workers.dev";
-const dash123 = "https://pr123-feature-dash-preview.iterate-dev-preview.workers.dev";
+const pr123 = "https://pr123-os.iterate-dev-preview.workers.dev";
+const pr124 = "https://pr124-os.iterate-dev-preview.workers.dev";
+const dash123 = "https://pr123-dash.iterate-dev-preview.workers.dev";
 const now = Date.UTC(2026, 8, 24);
 const link = {
   key: "preview-secrets-key",

@@ -237,12 +237,12 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
   expect({ e2e, specs, trace }).toEqual(expected);
 });
 
-test("a test job names its preview by the PR's branch, or by preview-name only without a PR number", () => {
+// A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts resolvePreviewName).
+test("a test job names its preview by the PR's number, or by preview-name without one", () => {
   for (const suite of suites) {
     const step = preview.jobs[suite.job]!.steps?.find((step) => step.id === suite.job);
     expect(step?.env).toMatchObject({
-      PREVIEW_NAME:
-        "${{ github.head_ref || (inputs.pull-request-number == '' && inputs.preview-name || '') }}",
+      PREVIEW_NAME: "${{ inputs.preview-name }}",
       PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
     });
   }

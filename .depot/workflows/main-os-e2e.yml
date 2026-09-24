@@ -90,40 +90,10 @@ defaults:
     shell: bash
 
 jobs:
-  # THE PREVIEW PARENT FROM MAIN: every preview branches from os-preview (envs.ts
-  # osEnvs.preview), and nothing else redeployed it when main changed: after #2888 it ran code from
-  # before ControlPlaneDurableObject (2026-09-23). Its own group, so two pushes never deploy it at
-  # once. The start-app parents need no such job: their one Durable Object class never changes.
-  parent:
-    name: Deploy the preview parent
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
-    concurrency:
-      group: os-preview-parent
-      cancel-in-progress: false
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy os-preview from main
-        working-directory: apps/os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy --env preview
-
+  # The parent this preview branches from is main's too, deployed beside this by
+  # preview-parents.yml; a preview does not depend on its parent's code.
   deploy:
     name: Deploy preview
-    needs: parent
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -386,12 +356,12 @@ jobs:
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
 
-  # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the parent, deploy and two
+  # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the deploy and two
   # test jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on
   # the pushed commit. Beside alert, which waits for none of it.
   trace:
     name: CI trace
-    needs: [parent, deploy, e2e, specs]
+    needs: [deploy, e2e, specs]
     if: always()
     runs-on:
       size: 2x8
@@ -440,7 +410,7 @@ jobs:
   # timeout is red; a run cancelled by hand gets no alert, and a run off main pages nobody.
   alert:
     name: alert
-    needs: [parent, deploy, e2e, specs]
+    needs: [deploy, e2e, specs]
     if: ${{ !cancelled() }}
     runs-on:
       size: 2x8

@@ -99,28 +99,26 @@ test("the trace job collects the deploy and both test jobs", async () => {
   });
 });
 
-test("on main, the trace covers the parent, deploy and both test jobs while alert still runs", async () => {
+test("on main, the trace covers the deploy and both test jobs while alert still runs", async () => {
   await using depot = await tracedWorkflow({
     workflowName: "Main OS e2e",
     workflowPath: "main-os-e2e.yml",
     jobs: [
-      ["parent", "finished", 3, 60],
-      ["deploy", "finished", 61, 100],
+      ["deploy", "finished", 3, 100],
       ["e2e", "finished", 101, 240],
       ["specs", "finished", 101, 180],
       ["alert", "running", 241, 0],
       ["trace", "running", 241, 0],
     ],
-    needs: ["parent", "deploy", "e2e", "specs"],
+    needs: ["deploy", "e2e", "specs"],
   });
 
   await new CiTrace().current(depot.directory);
 
   const trace = JSON.parse(await readFile(join(depot.directory, "trace.json"), "utf8"));
   const spans: { name: string }[] = trace.resourceSpans[0].scopeSpans[0].spans;
-  expect(spans.map((span) => span.name).slice(0, 4)).toEqual([
+  expect(spans.map((span) => span.name).slice(0, 3)).toEqual([
     "Main OS e2e",
-    "Preview parent",
     "Deploy preview",
     "E2E tests",
   ]);

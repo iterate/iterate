@@ -30,42 +30,47 @@ import {
 } from "./preview-config.ts";
 
 test.each([
-  ["feature/foo", "123", "pr123-feature-foo"],
-  ["Feature_Foo", "123", "pr123-feature-foo"],
+  ["feature/foo", "123", "pr123"],
+  [undefined, "123", "pr123"],
   ["feature/foo", "", "feature-foo"],
-  ["feature/foo", undefined, "feature-foo"],
-  ["--", "7", "pr7-preview"],
-])(
-  "the preview name (cloudflare-os: pr<n>-<branch slug>): %s with PR %s → %s",
-  (name, prNumber, expected) => {
-    expect(resolvePreviewName({ name, prNumber })).toBe(expected);
-  },
-);
+  ["Feature_Foo", undefined, "feature-foo"],
+  ["main", undefined, "main"],
+  ["previewer", undefined, "previewer"],
+])("the preview name: %s with PR %s → %s", (name, prNumber, expected) => {
+  expect(resolvePreviewName({ name, prNumber })).toBe(expected);
+});
 
-test("the preview name (cloudflare-os: pr<n>-<branch slug>): a long branch is truncated with a stable hash, inside the limit, number first", () => {
+test("the preview name: a long one is truncated with a stable hash, inside the limit", () => {
   const name = resolvePreviewName({
     name: "jonas/os-worker-previews-with-a-very-long-descriptive-branch-name",
-    prNumber: "2750",
   });
   expect(name.length).toBeLessThanOrEqual(MAX_PREVIEW_NAME_LENGTH);
-  expect(name).toMatch(/^pr2750-[a-z0-9-]+-[0-9a-f]{6}$/);
-  expect(name).toBe(
-    resolvePreviewName({
-      name: "jonas/os-worker-previews-with-a-very-long-descriptive-branch-name",
-      prNumber: "2750",
-    }),
-  );
+  expect(name).toMatch(/^jonas-os-worker-[a-z0-9-]+-[0-9a-f]{6}$/);
   expect(slugifyPreviewName("a".repeat(40))).not.toBe(slugifyPreviewName("a".repeat(41)));
 });
 
-test("the preview name (cloudflare-os: pr<n>-<branch slug>): the number reads back out of the name; a bare slug has none", () => {
-  expect(previewPullRequestNumber("pr123-feature-foo")).toBe(123);
+test("the preview name: one whose resources the account has for something else is refused", () => {
+  expect(() => resolvePreviewName({ name: "dev" })).toThrow(
+    "preview name dev would take os-dev-repos, which is not a preview's",
+  );
+  expect(() => resolvePreviewName({ name: "parent" })).toThrow(/would take os-parent-/);
+  // the former parent's own stores, the legacy slots' namespaces, and the empty slug's fallback
+  for (const name of ["preview", "preview-3", "--"])
+    expect(() => resolvePreviewName({ name })).toThrow(
+      /would take os-preview-.*, under the former parent os-preview's prefix/,
+    );
+  expect(() => resolvePreviewName({})).toThrow("a preview needs a PR number (--pr) or a name");
+});
+
+test("the preview name: a PR's number reads back out of it; any other name has none", () => {
+  expect(previewPullRequestNumber("pr123")).toBe(123);
+  expect(previewPullRequestNumber("pr123-feature-foo")).toBeUndefined();
   expect(previewPullRequestNumber("feature-foo")).toBeUndefined();
   expect(previewPullRequestNumber("pr-foo")).toBeUndefined();
 });
 
 const JOB = "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a";
-const DASH = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
+const DASH = "https://pr123-dash.iterate-dev-preview.workers.dev";
 const deployed: PreviewStatus = {
   state: "deployed",
   commit: "ccccccccc0123456789",
@@ -74,25 +79,23 @@ const deployed: PreviewStatus = {
 };
 
 const section = renderPullRequestSection({
-  previewName: "pr123-feature-foo",
+  previewName: "pr123",
   status: deployed,
-  url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
+  url: "https://pr123-os.iterate-dev-preview.workers.dev",
   deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
   dashboardUrl: "https://dash.cloudflare.com/x",
   apps: [
     {
       name: "dash",
-      url: "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev",
+      url: "https://pr123-dash.iterate-dev-preview.workers.dev",
     },
   ],
 });
 
 test("the PR body's managed section: names the URL, the deployment, the apps on top, and where the operations are", () => {
-  expect(section).toContain("https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev");
+  expect(section).toContain("https://pr123-os.iterate-dev-preview.workers.dev");
   expect(section).toContain("deployment `bd68a9bb`");
-  expect(section).toContain(
-    "| dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev |",
-  );
+  expect(section).toContain("| dash | https://pr123-dash.iterate-dev-preview.workers.dev |");
   expect(section).toContain("https://github.com/iterate/iterate/blob/main/apps/os/README.md");
   expect(section).not.toContain("depot ci dispatch");
   expect(section).not.toContain("Deployed from");
@@ -100,9 +103,9 @@ test("the PR body's managed section: names the URL, the deployment, the apps on 
 
 test("the PR body's managed section: names the commit the run deployed when the workflow resolved one; e2e is the status line's", () => {
   const withCommit = renderPullRequestSection({
-    previewName: "pr123-feature-foo",
+    previewName: "pr123",
     status: deployed,
-    url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
+    url: "https://pr123-os.iterate-dev-preview.workers.dev",
     deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [],
@@ -116,9 +119,9 @@ test("the PR body's managed section: names the commit the run deployed when the 
 });
 
 test("the PR body's managed section: on a PR the heading, every app and every config template carry a one-click `Sign in ↗`, and the section says as whom", () => {
-  const dash = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
-  const notes = "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev";
-  const os = "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev";
+  const dash = "https://pr123-dash.iterate-dev-preview.workers.dev";
+  const notes = "https://pr123-notes.iterate-dev-preview.workers.dev";
+  const os = "https://pr123-os.iterate-dev-preview.workers.dev";
   const signIn = {
     heading: `${os}/.auth/test-link?t=heading`,
     apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
@@ -132,7 +135,7 @@ test("the PR body's managed section: on a PR the heading, every app and every co
   };
   const render = (seeded: boolean) =>
     renderPullRequestSection({
-      previewName: "pr123-feature-foo",
+      previewName: "pr123",
       status: deployed,
       url: os,
       deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
@@ -144,20 +147,20 @@ test("the PR body's managed section: on a PR the heading, every app and every co
       signIn: { ...signIn, seeded },
     });
   expect(render(true)).toMatchInlineSnapshot(`
-    "### OS preview: \`pr123-feature-foo\`
+    "### OS preview: \`pr123\`
 
     <!-- os-preview-status:begin -->
     Status: **deployed** on \`ccccccccc\` · [CI job ↗](https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a) · updated 2026-09-24 10:32 UTC
     <!-- os-preview-status:end -->
 
-    **https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
+    **https://pr123-os.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
 
     | App on top, signed in against this preview | | |
     | --- | --- | --- |
-    | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
-    | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+    | dash | https://pr123-dash.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
+    | notes | https://pr123-notes.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
 
     \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
 
@@ -476,11 +479,11 @@ const template = {
     { binding: "OAUTH_KV", id: "2" },
   ],
 };
-const config = previewWranglerConfig({ template, previewName: "pr123-feature-foo" });
+const config = previewWranglerConfig({ template, previewName: "pr123" });
 
 test("the preview's wrangler config (a pure transform of Vite's built config): the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
   expect(config).toMatchObject({
-    name: "os-preview",
+    name: "os",
     main: "index.js",
     no_bundle: true,
     assets: template.assets,
@@ -500,26 +503,26 @@ test("the preview's wrangler config (a pure transform of Vite's built config): K
   expect(config.previews.r2_buckets).toEqual([{ binding: "FILES" }]);
   expect(config.previews).not.toHaveProperty("d1_databases");
   expect(config.previews).toMatchObject({
-    artifacts: [{ binding: "ARTIFACTS", namespace: "os-preview-pr123-feature-foo-repos" }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: "os-pr123-repos" }],
   });
 });
 
 test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths and the one-click sign-in links on; the secrets are the parent's Previews settings", () => {
   expect(config.previews).toMatchObject({
     vars: {
-      APP_CONFIG_URLS__OS: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
+      APP_CONFIG_URLS__OS: "https://pr123-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
     },
   });
-  expect(previewResourceName("pr123-feature-foo", "db")).toBe("os-preview-pr123-feature-foo-db");
+  expect(previewResourceName("pr123", "db")).toBe("os-pr123-db");
 });
 
 test("the preview's wrangler config (a pure transform of Vite's built config): a deployed Dash is available to secret collection link generation", () => {
-  const dashOrigin = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
+  const dashOrigin = "https://pr123-dash.iterate-dev-preview.workers.dev";
   const withDash = previewWranglerConfig({
     template,
-    previewName: "pr123-feature-foo",
+    previewName: "pr123",
     dashOrigin,
   });
   expect(withDash.previews.vars).toMatchObject({ APP_CONFIG_URLS__DASH: dashOrigin });
@@ -527,21 +530,21 @@ test("the preview's wrangler config (a pure transform of Vite's built config): a
 });
 
 test("a preview's apps link to each other at this PR's preview of each one's parent, the URLs the PR body lists", () => {
-  expect(appPreviewOrigins(APPS, "pr123-feature-foo")).toEqual({
-    dash: "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev",
-    agents: "https://pr123-feature-foo-agents-preview.iterate-dev-preview.workers.dev",
-    notes: "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev",
-    voice: "https://pr123-feature-foo-voice-preview.iterate-dev-preview.workers.dev",
-    kit: "https://pr123-feature-foo-kit-preview.iterate-dev-preview.workers.dev",
+  expect(appPreviewOrigins(APPS, "pr123")).toEqual({
+    dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
+    agents: "https://pr123-agents.iterate-dev-preview.workers.dev",
+    notes: "https://pr123-notes.iterate-dev-preview.workers.dev",
+    voice: "https://pr123-voice.iterate-dev-preview.workers.dev",
+    kit: "https://pr123-kit.iterate-dev-preview.workers.dev",
   });
 });
 
 test("an app the preview run does not deploy is named nowhere, never at its production origin", () => {
-  const dashOnly = appPreviewOrigins(changedApps(["apps/dash/src/apps.ts"]), "pr123-feature-foo");
+  const dashOnly = appPreviewOrigins(changedApps(["apps/dash/src/apps.ts"]), "pr123");
   expect(dashOnly).toEqual({
-    dash: "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev",
+    dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
   });
-  expect(appPreviewOrigins([], "pr123-feature-foo")).toEqual({});
+  expect(appPreviewOrigins([], "pr123")).toEqual({});
 });
 
 test("which apps on top a preview run deploys: the apps on top are the five clients", () => {
@@ -565,22 +568,21 @@ test.each<[string, string[], string[]]>([
 });
 
 test.each<[string, string, string | undefined]>([
-  ["os-preview-pr123-feature-foo-repos", "repos", "pr123-feature-foo"],
-  ["os-preview-pr123-feature-foo-db", "db", "pr123-feature-foo"],
-  ["os-preview-soak-repos", "repos", "soak"],
-  // the parent's own namespace is nobody's preview
-  ["os-preview-repos", "repos", undefined],
+  ["os-pr123-repos", "repos", "pr123"],
+  ["os-pr123-db", "db", "pr123"],
+  ["os-soak-repos", "repos", "soak"],
+  // nothing between the parent and the suffix: local dev's R2 bucket
+  ["os-files", "files", undefined],
   // another binding's resource
-  ["os-preview-pr123-feature-foo-db", "repos", undefined],
-  // another worker's: the former parent's, prd's
-  ["os-next-preview-repos", "repos", undefined],
-  ["os-prd-project-repos", "repos", undefined],
-  // a legacy platform preview slot's reads as preview `1`; the sweep leaves it for being older
-  // than the parent (preview-sweep.ts rule 7)
-  ["os-preview-1-repos", "repos", "1"],
-  // a former parent's: it reads as a preview name; the sweep leaves it while a worker of that name
-  // exists (preview-sweep.ts rule 4)
-  ["os-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
+  ["os-pr123-db", "repos", undefined],
+  // not the parent's prefix
+  ["iterate-spa-preview-repos", "repos", undefined],
+  // other resources read as preview names too; the sweep leaves them (preview-sweep.ts rule 4:
+  // those envs.ts and wrangler.base.jsonc name, and those of another worker whose name begins `os-`)
+  ["os-dev-repos", "repos", "dev"],
+  ["os-parent-repos", "repos", "parent"],
+  ["os-preview-repos", "repos", "preview"],
+  ["os-prd-project-repos", "repos", "prd-project"],
 ])(
   "the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes): %s as %s → %s",
   (resourceName, binding, expected) => {
@@ -589,8 +591,8 @@ test.each<[string, string, string | undefined]>([
 );
 
 test("the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes): round-trips previewResourceName", () => {
-  expect(previewNameOfResource(previewResourceName("pr7-x", "repos"), "repos")).toBe("pr7-x");
-  expect(previewNameOfResource(previewResourceName("pr7-x", "db"), "db")).toBe("pr7-x");
+  expect(previewNameOfResource(previewResourceName("pr7", "repos"), "repos")).toBe("pr7");
+  expect(previewNameOfResource(previewResourceName("exp-x", "db"), "db")).toBe("exp-x");
 });
 
 test.each([
@@ -668,9 +670,9 @@ function numberedLines(from: number, to: number) {
 /** A deployed section with no apps and no sign-in: what a status splice lands in. */
 function deployedSection() {
   return renderPullRequestSection({
-    previewName: "pr123-feature-foo",
+    previewName: "pr123",
     status: deployed,
-    url: "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev",
+    url: "https://pr123-os.iterate-dev-preview.workers.dev",
     deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [],

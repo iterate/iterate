@@ -11,11 +11,11 @@ shrink the fixture.
 
 ## 1. Read the URL
 
-| URL                                                                                                      | Deployment                                      |
-| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `https://agents.iterate.com/projects/<slug>?agent=<path>`                                                | prd (`agentsEnvs.prd` in `envs.ts`)             |
-| `https://pr<n>-<branch slug>-agents-preview.iterate-dev-preview.workers.dev/projects/pr<n>?agent=<path>` | that PR's preview (its PR body lists the URLs)  |
-| `http://localhost:<port>/projects/<slug>?agent=<path>`                                                   | `pnpm --dir apps/agents dev` against a local OS |
+| URL                                                                                | Deployment                                      |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `https://agents.iterate.com/projects/<slug>?agent=<path>`                          | prd (`agentsEnvs.prd` in `envs.ts`)             |
+| `https://pr<n>-agents.iterate-dev-preview.workers.dev/projects/pr<n>?agent=<path>` | that PR's preview (its PR body lists the URLs)  |
+| `http://localhost:<port>/projects/<slug>?agent=<path>`                             | `pnpm --dir apps/agents dev` against a local OS |
 
 - `agent` is the context path, URL-encoded: `/agents/web/<moment>` for a chat started in
   the browser, `/agents/voice/<version>/<device>/<call>` for a voice call. With no `agent`,
