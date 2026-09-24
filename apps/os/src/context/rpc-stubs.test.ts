@@ -9,6 +9,7 @@ import {
   type BorrowedRpcStub,
   lendRpcStubOverPager,
   encodeFetchExpression,
+  stampCallerHeaders,
 } from "./rpc-stubs.ts";
 
 test("fetch expression headers preserve Unicode worker source through the HTTP ByteString boundary", () => {
@@ -19,6 +20,38 @@ test("fetch expression headers preserve Unicode worker source through the HTTP B
   ];
   const headers = new Headers({ "x-itx-expression": encodeFetchExpression(expression) });
   expect(JSON.parse(headers.get("x-itx-expression")!)).toEqual(expression);
+});
+
+test("stampCallerHeaders strips every header the DO's fetch trusts as the platform's (caller and protocol) before writing the hop's caller: a Request's own copy never survives", () => {
+  const trusted = [
+    "x-itx-principal",
+    "x-itx-grant",
+    "x-itx-caller-path",
+    "x-itx-app",
+    "x-itx-platform-origin",
+    "x-itx-rpc-stub-pager",
+    "x-itx-fetch-upgrade",
+  ];
+  const forged = () =>
+    new Headers([
+      ...trusted.map((name): [string, string] => [name, "forged"]),
+      ["x-itx-expression-hops", "2"],
+      ["x-itx-expression", "itx.fetch"],
+    ]);
+  const leaving = forged();
+  stampCallerHeaders(leaving, null);
+  expect([...leaving.keys()].sort()).toEqual(["x-itx-expression", "x-itx-expression-hops"]); // the edge's hop count and a self-addressed expression ride on
+  const app = forged();
+  stampCallerHeaders(app, { principal: null, app: true, platformOrigin: "https://os.iterate.com" });
+  expect(Object.fromEntries(trusted.map((name) => [name, app.get(name)]))).toEqual({
+    "x-itx-principal": null,
+    "x-itx-grant": null,
+    "x-itx-caller-path": null,
+    "x-itx-app": "1",
+    "x-itx-platform-origin": "https://os.iterate.com",
+    "x-itx-rpc-stub-pager": null,
+    "x-itx-fetch-upgrade": null,
+  });
 });
 
 // ── rpc stub directory ── the borrowed table's one lifetime rule beyond lend/return:
