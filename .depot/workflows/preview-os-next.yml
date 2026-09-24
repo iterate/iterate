@@ -62,7 +62,7 @@ on:
       - apps/notes/**
       - apps/voice/**
       - apps/kit/**
-      # a preview builds kit's installer, never its firmware (envs.ts kitEnvs.preview)
+      # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
       - "!apps/kit/firmware/**"
       - specs/**
       - playwright.config.ts

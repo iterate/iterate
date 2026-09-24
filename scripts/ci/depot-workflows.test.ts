@@ -260,20 +260,18 @@ describe("Depot deployment safety", () => {
     expect(previewScript).toContain('DASH_BASE_URL: appUrl("dash")');
   });
 
-  test("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
+  // apps/kit/README.md "Firmware releases": the Kit Worker streams firmware from GitHub releases
+  test("Kit deploys only the installer; firmware ships as GitHub releases", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-kit.yml");
-    const deploy = workflow.jobs.deploy;
-    const install = deploy.steps?.find((step) => step.name === "Install ESP-IDF 5.4.2");
-    const build = deploy.steps?.find((step) => step.name === "Build Kit firmware releases");
-    const deployKit = deploy.steps?.find((step) => step.name === "Deploy apps/kit");
+    const deploy = workflow.jobs.deploy!;
+    const paths = workflow.on?.push?.paths || [];
+    const runs = (deploy.steps || []).map((step) => step.run || "");
 
-    expect(install?.run).toContain("--recursive --branch v5.4.2");
-    expect(install?.run).toContain("f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0");
-    expect(install?.run).toContain('"$IDF_PATH/install.sh" esp32s3');
-    expect(build?.run).toContain('source "$IDF_PATH/export.sh"');
-    expect(build?.run).toContain("pnpm run firmware:release");
-    expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
-    expect(workflow.on?.push?.paths).toEqual(
+    expect(runs.filter((run) => /esp-idf|export\.sh|firmware:/i.test(run))).toEqual([]);
+    expect(deploy).toMatchObject({ "runs-on": { size: "2x8" } });
+    expect(triggers(paths, "apps/kit/firmware/targets/havpe/CMakeLists.txt")).toBe(false);
+    expect(triggers(paths, "apps/kit/src/firmware/catalog.ts")).toBe(true);
+    expect(paths).toEqual(
       expect.arrayContaining([
         "package.json",
         "pnpm-lock.yaml",

@@ -156,6 +156,21 @@ jobs:
               --title "$(jq -r .title "$release/release.json")" \
               --notes-file "$release/notes.md" "$release"/assets/*
           done
+      # End to end: production Kit (apps/kit/src/firmware/firmware-proxy.ts) serves every published
+      # file byte for byte. A fresh release can take a moment to download, hence the retries.
+      - name: Check Kit serves the new releases
+        if: github.ref == 'refs/heads/main'
+        run: |-
+          set -euo pipefail
+          shopt -s nullglob
+          for release in dist/kit-firmware-*/; do
+            kit_url=$(jq -r .kitUrl "$release/release.json")
+            for file in "$release"/assets/*; do
+              curl -fsS --retry 5 --retry-delay 10 --retry-all-errors -o "$RUNNER_TEMP/served" "$kit_url$(basename "$file")"
+              cmp "$RUNNER_TEMP/served" "$file"
+            done
+            echo "Kit serves $(jq -r .tag "$release/release.json") at $kit_url."
+          done
 
   # A job, not a final step: it must also report a failed plan (after which nothing else runs), and
   # the publish job's boundary is that it checks out and runs no repository code.

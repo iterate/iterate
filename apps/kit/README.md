@@ -4,9 +4,9 @@ Kit Flasher is the browser installer at `https://k.iterate.com` for the
 supported ESP32-S3 voice boards: HA Voice PE, FutureProofHomes Satellite1, M5StickS3,
 StackChan, Waveshare AMOLED, Waveshare RLCD 4.2 and ZECTRIX NOTE4. The RLCD has an
 experimental KEY-button voice release; see its
-[board notes](firmware/devices/waveshare_s3_rlcd/README.md). Its catalog names the boards
-`apps/agents/scripts/voice-board.ts` proves through real air. It prepares the selected project,
-then flashes a checked source-built release and its private configuration directly over USB.
+[board notes](firmware/devices/waveshare_s3_rlcd/README.md). It prepares the selected project,
+then flashes a firmware release that CI built from this repository and its private configuration
+directly over USB.
 
 ## What a person needs
 
@@ -74,44 +74,22 @@ the same builds and lists what it would publish.
 - **Stray drafts.** A publish killed mid-upload can leave a draft release. Drafts
   have no tag, so nothing lists them; delete it in the releases page.
 - **Bench builds.** `node apps/kit/scripts/firmware-release.ts build --device <id>
---out /tmp/kit-<id>` with ESP-IDF active; see the
+--out /tmp/kit-<id>` (`pnpm firmware:build` in `apps/kit`) with ESP-IDF active; see the
   [firmware guide](./firmware/README.md#release-and-proof).
 
-## Release a firmware build
+Kit flashes only these releases: `kit-firmware/` releases of iterate/iterate, which
+the Kit Firmware workflow creates. The page lists a board's versions from GitHub's
+public API in the browser (`src/firmware/releases.ts`), so the Worker holds no
+GitHub token; the picker defaults to the newest, and any older release can be
+chosen. The Worker streams each release file from
+`/firmware/<device id>/<version>/<file>` (`src/firmware/firmware-proxy.ts`),
+because GitHub's download URLs send no CORS headers; the page checks the manifest
+(`src/firmware/prepare-manifest.ts`) and adds the install's configuration image
+at flash time. Production, the per-PR previews and `pnpm dev` all flash the same
+releases with no setup, and deploying Kit builds no firmware.
 
-Kit publishes from source, never from a third-party binary URL. The reviewed
-board inventory and flash layout are in
-[`src/firmware/catalog.ts`](./src/firmware/catalog.ts). With ESP-IDF active:
-
-```sh
-cd apps/kit
-source "$IDF_PATH/export.sh"
-pnpm firmware:release
-pnpm firmware:sync
-```
-
-`firmware:release` builds every catalog target into a fingerprinted local cache,
-checks ESP-IDF's flash plan and `iterate_kit` partition against the catalogue,
-and records a hash for each generated part. `firmware:sync` accepts only that
-current cache, copies the hashed parts into `public/firmware`, and writes ESP
-Web Tools manifests. `pnpm deploy` runs sync before the web build; a per-PR preview serves
-the installer without them. Deployment checks every installer
-route, verifies all public manifests and the catalog against the build, and
-downloads every firmware part to compare its SHA-256 with the released bytes.
-Run `pnpm exec tsx scripts/verify-firmware-assets.ts https://k.iterate.com`
-to repeat the asset verification.
-
-Sound assets are checked in; avatar sources are generated locally from their
-tracked atlases. Releasing existing boards needs no TTS request. Run host tests
-before release:
-
-```sh
-pnpm firmware:test:host
-```
-
-Host tests need cmake and are not part of Kit's `pnpm test`, which runs the
-installer's Vitest suite; CI's Test job runs both on every PR.
-
-For board structure, hardware requirements, target builds and air-path proof,
-see the [firmware guide](./firmware/README.md). The installer does not replace
-that hardware validation.
+For board structure, hardware requirements, host tests (`pnpm firmware:test:host`)
+and air-path proof, see the [firmware guide](./firmware/README.md). The installer
+does not replace that hardware validation. Host tests need cmake and are not part
+of Kit's `pnpm test`, which runs the installer's Vitest suite; CI's Test job runs
+both on every PR.

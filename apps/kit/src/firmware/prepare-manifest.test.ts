@@ -1,35 +1,24 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expect, test, vi } from "vitest";
+import { firmwareManifest } from "../../scripts/firmware-release.ts";
+import { DEFAULT_DEVICE_ID, findFirmwareDevice } from "./catalog.ts";
 import type { DeviceConfiguration } from "./config-image.ts";
-import type { EspWebToolsFirmwareRelease, FirmwareDevice } from "./catalog.ts";
-import { loadInstallManifestTemplate } from "./prepare-manifest.ts";
+import { loadFirmwareManifest, prepareInstallManifest } from "./prepare-manifest.ts";
 
-const device: FirmwareDevice = {
-  id: "test-device",
-  target: "test_device",
+const release = { deviceId: "test-device", version: "000001-2026-01-01-abcdef0" };
+const releaseManifest = {
   name: "Test device",
-  description: "Test ESP32-S3",
-  proofLabel: "Test device",
-  releases: [],
+  version: release.version,
+  builds: [
+    {
+      chipFamily: "ESP32-S3",
+      parts: [
+        { path: "./bootloader.bin", offset: 0 },
+        { path: "./iterate-kit-test.bin", offset: 0x10000 },
+      ],
+    },
+  ],
+  configurationPartition: { offset: 0x9000, size: 0x1000 },
 };
-
-const release: EspWebToolsFirmwareRelease = {
-  version: "1.0.0",
-  artifact: {
-    kind: "esp-web-tools",
-    target: "test-device",
-    configurationPartition: { offset: 0x9000, size: 512 },
-    parts: [
-      {
-        buildPath: "firmware.bin",
-        fileName: "firmware.bin",
-        offset: 0,
-      },
-    ],
-  },
-};
-
-const artifactHash = "a".repeat(64);
-
 const configuration: DeviceConfiguration = {
   wifi: { ssid: "studio", password: "secret123" },
   iterate: {
@@ -39,133 +28,162 @@ const configuration: DeviceConfiguration = {
   },
 };
 
-afterEach(() => {
-  vi.unstubAllGlobals();
+test("loadFirmwareManifest: fetches from Kit's origin and makes the part paths absolute", async () => {
+  stubKitPage();
+  const fetchManifest = serving(releaseManifest);
+
+  const manifest = await loadFirmwareManifest(release, fetchManifest);
+
+  expect(fetchManifest).toHaveBeenCalledExactlyOnceWith(
+    new URL("https://k.iterate.com/firmware/test-device/000001-2026-01-01-abcdef0/manifest.json"),
+  );
+  expect(manifest).toEqual({
+    version: release.version,
+    builds: [
+      {
+        chipFamily: "ESP32-S3",
+        parts: [
+          {
+            path: "https://k.iterate.com/firmware/test-device/000001-2026-01-01-abcdef0/bootloader.bin",
+            offset: 0,
+          },
+          {
+            path: "https://k.iterate.com/firmware/test-device/000001-2026-01-01-abcdef0/iterate-kit-test.bin",
+            offset: 0x10000,
+          },
+        ],
+      },
+    ],
+    configurationPartition: { offset: 0x9000, size: 0x1000 },
+  });
 });
 
-describe("loadInstallManifestTemplate", () => {
-  it("fetches firmware once and creates configuration blobs only when activated", async () => {
-    const nativeFetch = globalThis.fetch;
-    const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL");
-    const fetchManifest = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          name: device.name,
-          version: release.version,
-          builds: [
-            {
-              chipFamily: "ESP32-S3",
-              parts: [{ path: `./${artifactHash}-firmware.bin`, offset: 0 }],
-            },
-          ],
-        }),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchManifest);
-    vi.stubGlobal("window", {
-      location: { href: "https://k.iterate.com/setup" },
-      addEventListener: vi.fn(),
-    });
+test.for([
+  {
+    name: "another version",
+    manifest: { ...releaseManifest, version: "000002-2026-01-02-abcdef1" },
+    error:
+      'Firmware manifest is version "000002-2026-01-02-abcdef1", not 000001-2026-01-01-abcdef0.',
+  },
+  ...["../other/bootloader.bin", "./sub/bootloader.bin", "https://example.com/bootloader.bin"].map(
+    (path) => ({
+      name: `a part at ${path}`,
+      manifest: withPart({ path, offset: 0 }),
+      error: `Firmware manifest part ${path} is not beside the manifest.`,
+    }),
+  ),
+  {
+    name: "a part inside the configuration partition",
+    manifest: withPart({ path: "./bootloader.bin", offset: 0x9800 }),
+    error: "Firmware manifest places a binary inside the configuration partition.",
+  },
+  {
+    name: "no configuration partition",
+    manifest: { ...releaseManifest, configurationPartition: undefined },
+    error: /configurationPartition/,
+  },
+])("loadFirmwareManifest: refuses a manifest with $name", async ({ manifest, error }) => {
+  stubKitPage();
 
-    const template = await loadInstallManifestTemplate({ device, release });
+  await expect(loadFirmwareManifest(release, serving(manifest))).rejects.toThrow(error);
+});
 
-    expect(fetchManifest).toHaveBeenCalledOnce();
-    const first = template.prepare(configuration);
-    const second = template.prepare({
-      ...configuration,
-      wifi: { ...configuration.wifi, password: "new-secret" },
-    });
+test("loadFirmwareManifest: refuses a manifest Kit could not serve", async () => {
+  stubKitPage();
+  const notFound = vi.fn<typeof fetch>(async () => new Response("Not found.", { status: 404 }));
 
-    expect(fetchManifest).toHaveBeenCalledOnce();
-    expect(first.manifestUrl).not.toBe(second.manifestUrl);
+  await expect(loadFirmwareManifest(release, notFound)).rejects.toThrow(
+    "Firmware manifest returned HTTP 404.",
+  );
+});
 
-    const manifest = (await (await nativeFetch(first.manifestUrl)).json()) as {
-      builds: Array<{ parts: Array<{ path: string; offset: number }> }>;
-    };
-    expect(manifest.builds[0]?.parts).toEqual([
-      {
-        path: `https://k.iterate.com/firmware/test-device/1.0.0/${artifactHash}-firmware.bin`,
-        offset: 0,
-      },
-      {
-        path: expect.stringMatching(/^blob:/),
-        offset: release.artifact.configurationPartition.offset,
-      },
-    ]);
-
-    const configurationPart = manifest.builds[0]?.parts[1];
-    expect(configurationPart?.path).toMatch(/^blob:/);
-    expect(
-      new Uint8Array(await (await nativeFetch(configurationPart!.path)).arrayBuffer()),
-    ).toHaveLength(release.artifact.configurationPartition.size);
-    expect(revokeObjectUrl).not.toHaveBeenCalled();
-
-    first.dispose();
-    expect(revokeObjectUrl).toHaveBeenCalledTimes(2);
-    second.dispose();
-    expect(revokeObjectUrl).toHaveBeenCalledTimes(4);
+// the builder's output is the contract this module reads
+test("loadFirmwareManifest: loads what apps/kit/scripts/firmware-release.ts publishes", async () => {
+  stubKitPage();
+  const device = findFirmwareDevice(DEFAULT_DEVICE_ID)!;
+  const version = "002574-2026-09-23-b2a4558";
+  const files = [
+    "bootloader.bin",
+    "partition-table.bin",
+    "iterate-kit-havpe.bin",
+    "ota_data_initial.bin",
+    "srmodels.bin",
+  ];
+  const published = firmwareManifest({
+    device,
+    version,
+    chip: "esp32s3",
+    parts: [0, 0x8000, 0x10000, 0x511000, 0xa20000].map((offset, index) => ({
+      file: files[index]!,
+      offset,
+    })),
+    configurationPartition: { offset: 0x510000, size: 0x1000 },
   });
 
-  it("rejects a manifest for another chip or release", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            name: device.name,
-            version: release.version,
-            builds: [
-              {
-                chipFamily: "ESP32-C3",
-                parts: [{ path: `./${artifactHash}-firmware.bin`, offset: 0 }],
-              },
-            ],
-          }),
-        ),
-      ),
-    );
-    vi.stubGlobal("window", {
-      location: { href: "https://k.iterate.com/setup" },
-      addEventListener: vi.fn(),
-    });
+  const manifest = await loadFirmwareManifest({ deviceId: device.id, version }, serving(published));
 
-    await expect(loadInstallManifestTemplate({ device, release })).rejects.toThrow(
-      "does not match ESP32-S3",
-    );
-  });
-
-  it("refuses a release whose binary would overwrite its configuration partition", async () => {
-    const overlappingRelease: EspWebToolsFirmwareRelease = {
-      ...release,
-      artifact: {
-        ...release.artifact,
-        parts: [{ ...release.artifact.parts[0]!, offset: 0x9000 }],
+  expect(manifest).toMatchObject({
+    version,
+    builds: [
+      {
+        chipFamily: "ESP32-S3",
+        parts: files.map((file) => ({
+          path: `https://k.iterate.com/firmware/${device.id}/${version}/${file}`,
+        })),
       },
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            name: device.name,
-            version: release.version,
-            builds: [
-              {
-                chipFamily: "ESP32-S3",
-                parts: [{ path: `./${artifactHash}-firmware.bin`, offset: 0x9000 }],
-              },
-            ],
-          }),
-        ),
-      ),
-    );
-    vi.stubGlobal("window", {
-      location: { href: "https://k.iterate.com/setup" },
-      addEventListener: vi.fn(),
-    });
-
-    await expect(
-      loadInstallManifestTemplate({ device, release: overlappingRelease }),
-    ).rejects.toThrow("inside the configuration partition");
+    ],
+    configurationPartition: { offset: 0x510000, size: 0x1000 },
   });
 });
+
+test("prepareInstallManifest: adds the install's configuration image under the device's name", async () => {
+  stubKitPage();
+  const nativeFetch = globalThis.fetch;
+  const createObjectUrl = vi.spyOn(URL, "createObjectURL");
+  const manifest = await loadFirmwareManifest(release, serving(releaseManifest));
+  expect(createObjectUrl).not.toHaveBeenCalled();
+
+  const installManifestUrl = prepareInstallManifest(
+    manifest,
+    { id: "test-device", target: "test", name: "Renamed device", description: "" },
+    configuration,
+  );
+
+  const installManifest = (await (await nativeFetch(installManifestUrl)).json()) as {
+    builds: { parts: { path: string }[] }[];
+  };
+  expect(installManifest).toEqual({
+    name: "Renamed device",
+    version: release.version,
+    new_install_prompt_erase: true,
+    new_install_improv_wait_time: 0,
+    builds: [
+      {
+        chipFamily: "ESP32-S3",
+        parts: [
+          ...manifest.builds[0]!.parts,
+          { path: expect.stringMatching(/^blob:/), offset: 0x9000 },
+        ],
+      },
+    ],
+  });
+  const image = await (await nativeFetch(installManifest.builds[0]!.parts[2]!.path)).arrayBuffer();
+  expect(new TextDecoder().decode(image.slice(0, 8))).toBe("ITERKIT1");
+  expect(image).toMatchObject({ byteLength: 0x1000 });
+});
+
+/** The page the loader runs on; the Kit vitest config unstubs it after each test. */
+function stubKitPage() {
+  vi.stubGlobal("window", {
+    location: { href: "https://k.iterate.com/devices/test-device/firmware/latest" },
+    addEventListener: vi.fn(),
+  });
+}
+
+function serving(manifest: unknown) {
+  return vi.fn<typeof fetch>(async () => Response.json(manifest));
+}
+
+function withPart(part: { path: string; offset: number }) {
+  return { ...releaseManifest, builds: [{ chipFamily: "ESP32-S3", parts: [part] }] };
+}

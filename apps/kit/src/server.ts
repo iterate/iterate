@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { appAuth } from "iterate/next/app-server";
 import type { BrowserSession } from "iterate/next/app-session";
 import { deviceClientMetadata } from "./firmware/device-client.ts";
+import { proxyFirmwareFile } from "./firmware/firmware-proxy.ts";
 import { deviceAuth } from "./device-auth.ts";
 export { BrowserSession } from "iterate/next/app-session";
 
@@ -26,7 +27,10 @@ export default createServerEntry({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
-    // A device's own OAuth client and sign-in come first; the synced firmware binaries are assets.
+    // Firmware release files are public: esp-web-tools fetches them from the page (firmware-proxy.ts).
+    const firmware = await proxyFirmwareFile(request, fetch);
+    if (firmware) return firmware;
+    // A device's own OAuth client and sign-in come next.
     const deviceClient = deviceClientMetadata(url);
     if (deviceClient) return deviceClient;
     const deviceLogin = await deviceAuth(request, env);

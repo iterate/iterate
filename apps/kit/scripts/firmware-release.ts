@@ -19,7 +19,7 @@
 //   node apps/kit/scripts/firmware-release.ts build --device <id> [--version dev] [--previous <version>] --out <dir>
 //
 // It runs under plain `node` (Node 24 strips the types) before anything is installed, so it imports
-// only node:* and the catalog.
+// only node:*, the catalog and envs.ts (for Kit's production URL).
 //
 // - PROJECT_VER: https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-reference/system/misc_system_api.html#app-version
 // - The binary partition table: https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-guides/partition-tables.html
@@ -42,6 +42,7 @@ import {
 import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { kitEnvs } from "../../../envs.ts";
 import {
   FIRMWARE_REPOSITORY,
   FIRMWARE_VERSION_PATTERN,
@@ -415,7 +416,8 @@ export function filesOutsideInputs(input: {
 /**
  * Builds `device` at HEAD of `repoRoot` into `<out>/build` and, once every check passes, writes the
  * release into `<out>/release`: `assets/` (the flash files and `manifest.json`), `release.json`
- * (`{ tag, title }` for gh) and `notes.md`. ESP-IDF must be active (`source $IDF_PATH/export.sh`).
+ * (`{ tag, title }` for gh, and `kitUrl` for the publish job's check that production Kit serves
+ * every asset byte for byte) and `notes.md`. ESP-IDF must be active (`source $IDF_PATH/export.sh`).
  * `version` is the planned version, or `dev` for a bench build; `previous` is the device's newest
  * release, or empty.
  */
@@ -534,7 +536,16 @@ export function buildFirmwareRelease(input: {
   writeFileSync(join(assets, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(
     join(release, "release.json"),
-    `${JSON.stringify({ tag: firmwareReleaseTag(device.id, version), title: `${device.name} firmware ${version}` }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        tag: firmwareReleaseTag(device.id, version),
+        title: `${device.name} firmware ${version}`,
+        // where apps/kit/src/firmware/firmware-proxy.ts serves the assets once published
+        kitUrl: `${kitEnvs.prd.baseUrl}/firmware/${device.id}/${version}/`,
+      },
+      null,
+      2,
+    )}\n`,
   );
   writeFileSync(
     join(release, "notes.md"),
@@ -544,6 +555,8 @@ export function buildFirmwareRelease(input: {
       previous
         ? `Changes since ${previous}: https://github.com/${FIRMWARE_REPOSITORY}/compare/${previous.slice(-7)}...${head}`
         : "First release for this device.",
+      "",
+      `Flash it with Kit: ${kitEnvs.prd.baseUrl}/?device=${device.id}`,
       "",
     ].join("\n"),
   );

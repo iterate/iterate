@@ -14,11 +14,10 @@
     "routes:generate": "tsx scripts/app.ts generate-route-tree",
     "routes:check": "tsx scripts/app.ts generate-route-tree --check",
     "test": "vitest run --config vitest.config.ts --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
-    "firmware:sync": "tsx ./scripts/sync-firmware-assets.ts",
     "firmware:configure": "python3 firmware/tools/generate-atlases.py && cmake -S firmware -B firmware/.build/host -DCMAKE_BUILD_TYPE=Debug -DITERATE_KIT_SANITIZE=ON",
     "firmware:build:host": "pnpm firmware:configure && cmake --build firmware/.build/host --parallel",
     "firmware:test:host": "pnpm firmware:build:host && ctest --test-dir firmware/.build/host --output-on-failure",
-    "firmware:release": "tsx ./scripts/build-firmware-assets.ts"
+    "firmware:build": "node ./scripts/firmware-release.ts build"
   },
   "dependencies": {
     "@iterate-com/ui": "workspace:*",

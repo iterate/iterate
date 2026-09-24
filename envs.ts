@@ -42,8 +42,8 @@ export interface KitEnv {
 export const kitEnvs = {
   // THE PARENT of kit's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its
-  // data. A preview serves the installer without firmware binaries: building them takes ESP-IDF,
-  // which only the production deploy (and the Build Kit Firmware workflow) installs.
+  // data. A preview lists and flashes the same GitHub releases as production
+  // (apps/kit/src/firmware/releases.ts).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
