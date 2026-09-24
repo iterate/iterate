@@ -342,14 +342,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
   });
 
-  /** Tell every ancestor up to the owner's root (`ancestorPathsOf`) that this context exists. On
-   *  EVERY wake, not only the birth: the appends are keyed per child, so once landed a repeat is a
-   *  no-op, and one lost in flight heals on the next wake. Fire-and-forget: a parent may be mid-call
-   *  into this child, so waiting on its answer here could deadlock. */
+  /** Tell every ancestor up to `/` (`ancestorPathsOf`) that this context exists: on each wake until
+   *  every ancestor has it (the `ancestors-announced` kv flag), so a failed announcement heals on the
+   *  next wake and a landed one is never sent again (a context that wakes often would otherwise wake
+   *  its ancestors each time). Keyed per child, so a repeat lands nothing. Fire-and-forget: a parent
+   *  may be mid-call into this child, so waiting on its answer here could deadlock. */
   #announceToAncestors(): void {
     const { path } = this.#durableObjectAddress;
-    const ancestorPaths = ancestorPathsOf(this.#durableObjectAddress.projectId, path);
-    if (ancestorPaths.length === 0) return;
+    const ancestorPaths = ancestorPathsOf(path);
+    if (ancestorPaths.length === 0 || this.ctx.storage.kv.get("ancestors-announced")) return;
     const announced = Promise.all(
       ancestorPaths.map((ancestorPath) =>
         this.#sibling(ancestorPath).append({
@@ -358,9 +359,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           payload: { childPath: path },
         }),
       ),
-    ).catch((error: unknown) => {
-      console.error({ event: "context.announce-to-ancestors-failed", path, error: String(error) });
-    });
+    ).then(
+      () => this.ctx.storage.kv.put("ancestors-announced", true),
+      (error: unknown) => {
+        console.error({
+          event: "context.announce-to-ancestors-failed",
+          path,
+          error: String(error),
+        });
+      },
+    );
     this.ctx.waitUntil(announced);
   }
 

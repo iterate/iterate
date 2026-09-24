@@ -63,22 +63,11 @@ export function resourceScope(projectId: string, path: string): ResourceScope {
   };
 }
 
-/** THE ANCESTORS A CONTEXT ANNOUNCES ITSELF TO (`context/child-created`): every path from its
- *  owner's root (`resourceScope`) down to its parent, root first — `/a/b/c` in a project announces to
- *  `/`, `/a` and `/a/b`; `/users/<id>/x` to `/users/<id>`. None for an owner's root itself, and none
- *  in the kernel's own global contexts (the global `/`, `/users`), which no owner holds. */
-export function ancestorPathsOf(projectId: string, path: string): string[] {
-  const scope = resourceScope(projectId, path);
-  const canonical = resolveContextPath("/", path);
-  if (scope.kind === "global" || canonical === scope.rootPath) return [];
-  const below = canonical
-    .slice(scope.rootPath === "/" ? 0 : scope.rootPath.length)
-    .split("/")
-    .filter(Boolean);
-  const ancestors = [scope.rootPath];
-  for (const segment of below.slice(0, -1))
-    ancestors.push(`${ancestors.at(-1) === "/" ? "" : ancestors.at(-1)}/${segment}`);
-  return ancestors;
+/** The ancestors a context announces itself to (`context/child-created`), root first: `/a/b/c`
+ *  → `/`, `/a`, `/a/b`; `/` has none. */
+export function ancestorPathsOf(path: string): string[] {
+  const segments = resolveContextPath("/", path).split("/").filter(Boolean);
+  return segments.map((_, index) => `/${segments.slice(0, index).join("/")}`);
 }
 
 /** A context's path relative to its owner's root (`resourceScope`) — what a secret's placeholder

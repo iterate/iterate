@@ -137,18 +137,12 @@ test("a global owner's id keeps the codec's charset (the `:`/`.` delimiters cann
   expect(() => resourceScope("global", "/organizations/o.1")).toThrow(/only \[A-Za-z0-9_-\]/);
 });
 
-// ── ancestors ── who a new context announces itself to (`context/child-created`): its owner's root
-// down to its parent. An owner's root, and the kernel's own global contexts, announce to nobody.
+// ── ancestors ── who a context announces itself to (`context/child-created`): every ancestor, root first.
 test.each([
-  ["prj_x", "/", []],
-  ["prj_x", "/a", ["/"]],
-  ["prj_x", "/a/b/c", ["/", "/a", "/a/b"]],
-  ["prj_x", "a/b/", ["/", "/a"]],
-  ["global", "/", []],
-  ["global", "/users", []],
-  ["global", "/users/u1", []],
-  ["global", "/users/u1/x", ["/users/u1"]],
-  ["global", "/organizations/o1/a/b", ["/organizations/o1", "/organizations/o1/a"]],
-])("ancestorPathsOf(%s, %s) → %j", (projectId, path, ancestors) => {
-  expect(ancestorPathsOf(projectId, path)).toEqual(ancestors);
+  ["/", []],
+  ["/a", ["/"]],
+  ["/a/b/c", ["/", "/a", "/a/b"]],
+  ["a/b/", ["/", "/a"]],
+])("ancestorPathsOf(%s) → %j", (path, ancestors) => {
+  expect(ancestorPathsOf(path)).toEqual(ancestors);
 });
