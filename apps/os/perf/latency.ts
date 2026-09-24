@@ -1,4 +1,4 @@
-// perf/latency.ts — THE LATENCY GUARD'S LINES: every metric the perf lane records, what one sample of
+// perf/latency.ts — THE LATENCY GUARD'S LINES: every metric the perf suite records, what one sample of
 // it is, and the budget its median must stay on the right side of — with the measurements each
 // budget came from. The perf rows record through perf/record.ts and
 // hold themselves to these budgets (a local `pnpm perf`, the soak); the scheduled guard

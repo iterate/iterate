@@ -249,7 +249,7 @@ test("concurrent restores through the control plane: one slug never answers a di
 
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
   fetchReachesThisWorker();
-  // the bearer signs nobody in: the operator door is `/api` and `/mcp`, not the sign-in page
+  // the bearer signs nobody in: the operator's endpoints are `/api` and `/mcp`, not the sign-in page
   const bearerLogin = await exports.default.fetch(`${ORIGIN}/login`, {
     method: "POST",
     redirect: "manual",

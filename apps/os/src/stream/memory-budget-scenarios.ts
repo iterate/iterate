@@ -200,7 +200,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       throw new Error("the re-reduce did not reach the durable head");
   },
 
-  /** One event past the platform's own ceiling must be REFUSED at the door with a coded error —
+  /** One event past the platform's own ceiling must be REFUSED at append with a coded error —
    *  never accepted into a log it can then never be read back out of. */
   async "append-oversize"(args) {
     const storage = nodeSqliteDurableObjectStorage();
@@ -385,7 +385,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
    *  projects, which nothing caps but the delta's append ceiling (the checkpoint stays tiny). Every
    *  set stringifies AND parses both sides (lib.ts) and a one-item edit in an array replaces
    *  the WHOLE array in the delta, which then rides every watcher's queue (bounded per row). Measures
-   *  the transient per set and whether the delta still fits the append door. */
+   *  the transient per set and whether the delta still fits what append admits. */
   async "live-state-large-projection"(args) {
     const storage = nodeSqliteDurableObjectStorage();
     let delivery!: SubscriptionDelivery;
@@ -678,7 +678,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
 
   /** The core checkpoint is ONE kv cell: subscription rows fill it until the configure that would
    *  grow it past the cap throws inside the commit — the control plane's ceiling, refused with the
-   *  platform's own uncoded SQLITE_TOOBIG where every other door refusal is coded. Rows land
+   *  platform's own uncoded SQLITE_TOOBIG where every other append refusal is coded. Rows land
    *  `rowsPerAppend` at a time (`configureMsAtCap` is the cost of one configure at that size). Then
    *  a core-version bump: the
    *  constructor re-reduces every configure — one table copy per 500-event page (`reduceCoreEventBatch`),

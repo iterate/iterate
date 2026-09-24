@@ -3,7 +3,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
-export const TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION = 1;
+export const TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION = 2;
 export const TEST_TELEMETRY_INCOMPLETE_ERROR_NAME = "TestTelemetryIncompleteError";
 const Timestamp = z.iso.datetime({ offset: true });
 const RunStatus = z.enum(["passed", "failed", "skipped", "timedout", "interrupted", "cancelled"]);
@@ -34,7 +34,7 @@ const AnnotationRecord = z.object({
 const TestTelemetryContext = z.object({
   framework: z.enum(["vitest", "playwright"]),
   testKind: z.enum(["unit", "integration", "e2e"]),
-  lane: z.string().min(1),
+  suite: z.string().min(1),
   workspace: z.string().optional(),
   app: z.string().optional(),
   testProject: z.string().optional(),
@@ -116,7 +116,7 @@ const ModuleTelemetryRecord = z.object({
   executionWallDurationMs: z.number().nonnegative().optional(),
 });
 
-const TestTelemetryLane = z.object({
+const TestTelemetryRunner = z.object({
   context: TestTelemetryContext,
   status: RunStatus,
   durationMs: z.number().nonnegative(),
@@ -162,7 +162,7 @@ export const TestTelemetryArtifact = z.object({
     durationMs: z.number().nonnegative(),
     error: TestTelemetryError.optional(),
   }),
-  lanes: z.array(TestTelemetryLane),
+  runners: z.array(TestTelemetryRunner),
   tests: z.array(TestTelemetryRecord),
   modules: z.array(ModuleTelemetryRecord),
 });
@@ -174,7 +174,7 @@ export type TestTelemetryPhase = z.infer<typeof TestTelemetryPhase>;
 export type TestTelemetryAttempt = z.infer<typeof TestTelemetryAttempt>;
 export type TestTelemetryRecord = z.infer<typeof TestTelemetryRecord>;
 export type ModuleTelemetryRecord = z.infer<typeof ModuleTelemetryRecord>;
-export type TestTelemetryLane = z.infer<typeof TestTelemetryLane>;
+export type TestTelemetryRunner = z.infer<typeof TestTelemetryRunner>;
 
 /** Convert an arbitrary runner/orchestrator failure into the shared JSON-safe shape. */
 export function normalizeTestTelemetryError(
@@ -240,7 +240,7 @@ export function writeTestTelemetryFailureSentinel(
         durationMs: 0,
         error: { name: TEST_TELEMETRY_INCOMPLETE_ERROR_NAME, message },
       },
-      lanes: [
+      runners: [
         {
           context: input.context,
           status: "failed",
@@ -289,14 +289,14 @@ export function testTelemetryArtifactId(...parts: Array<string | number | undefi
 
 export function testTelemetryContextFromEnvironment(
   framework: TestTelemetryContext["framework"],
-  defaults: Pick<TestTelemetryContext, "testKind" | "lane"> &
-    Partial<Omit<TestTelemetryContext, "framework" | "testKind" | "lane">>,
+  defaults: Pick<TestTelemetryContext, "testKind" | "suite"> &
+    Partial<Omit<TestTelemetryContext, "framework" | "testKind" | "suite">>,
   environment: NodeJS.ProcessEnv = process.env,
 ): TestTelemetryContext {
   return TestTelemetryContext.parse({
     framework,
     testKind: environment.TEST_TELEMETRY_KIND || defaults.testKind,
-    lane: environment.TEST_TELEMETRY_LANE || defaults.lane,
+    suite: environment.TEST_TELEMETRY_SUITE || defaults.suite,
     workspace: environment.TEST_TELEMETRY_WORKSPACE || defaults.workspace,
     app: environment.TEST_TELEMETRY_APP || defaults.app,
     testProject: environment.TEST_TELEMETRY_PROJECT || defaults.testProject,

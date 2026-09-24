@@ -358,7 +358,7 @@ static esp_err_t bsp_spi_init(uint32_t max_transfer_sz)
 }
 
 /**************************************************************************************************
- *  I2S audio: standard speaker TX plus the Iterate TDM microphone RX seam.
+ *  I2S audio: standard speaker TX plus the Iterate TDM microphone RX interface.
  **************************************************************************************************/
 
 static i2s_chan_handle_t i2s_tx_chan = NULL;

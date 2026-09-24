@@ -19,5 +19,5 @@ process.env.E2E_RUN_ID = inject("runId");
 // that store alone — never a sibling still on the wire.
 beforeEach(() => enterTestTransports());
 afterEach(() => disposeSessions());
-// What a file opened outside a test — a `beforeAll`, the bench lane — belongs to the file.
+// What a file opened outside a test — a `beforeAll`, the benchmarks — belongs to the file.
 afterAll(() => disposeFileSessions());

@@ -76,7 +76,7 @@ test("records every Playwright attempt and nested step without uploading", async
   expect(artifact.context).toMatchObject({
     framework: "playwright",
     testKind: "e2e",
-    lane: "playwright",
+    suite: "playwright",
   });
   expect(artifact.tests[0]).toMatchObject({
     fullName: "chromium › greeting.spec.ts › greets",
@@ -233,7 +233,7 @@ test("preserves timed-out runs and run-level Playwright errors", async () => {
     status: "timedout",
     error: { message: "worker stopped responding", stack: "stack" },
   });
-  expect(artifact.lanes[0]).toMatchObject({
+  expect(artifact.runners[0]).toMatchObject({
     status: "timedout",
     collectionErrors: ["worker stopped responding"],
   });
@@ -307,6 +307,6 @@ function isolateTelemetryEnvironment() {
     vi.unstubAllEnvs();
   });
   vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
-  vi.stubEnv("TEST_TELEMETRY_LANE", undefined);
+  vi.stubEnv("TEST_TELEMETRY_SUITE", undefined);
   vi.stubEnv("FLAKE_RECORD_DIR", undefined);
 }

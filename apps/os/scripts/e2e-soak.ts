@@ -25,7 +25,7 @@
 //
 // A soak never pays for a model: E2E_REAL_MODELS is stripped from every run, so the real-model rows
 // skip (`realModelOnly`). On 2026-09-24 back-to-back soaks spent the preview account's AI Gateway cap
-// and every PR's preview e2e went red; the daily os-real-model.yml is those rows' lane
+// and every PR's preview e2e went red; the daily os-real-model.yml is where those rows run
 // (docs/testing.md#real-model-rows).
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -155,7 +155,7 @@ function soakRun(
   return failed.length;
 }
 
-// Each lane's wall time on its own: `wall` stays the e2e suite's, comparable with a CI e2e job's.
+// Each suite's wall time on its own: `wall` stays the e2e suite's, comparable with a CI e2e job's.
 const wall: number[] = [];
 const perfWall: number[] = [];
 const deployFailures: { run: number; preview: string; status: number | null }[] = [];

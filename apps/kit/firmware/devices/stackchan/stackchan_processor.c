@@ -134,7 +134,7 @@ static bool create_engine(int mode) {
  * tried here on 2026-08-11 for its double-talk behaviour; it did not create,
  * `create_engine` correctly refused, and the consequence of refusing was a
  * device that never mounted anything at all — no capability host, no voice_stream
- * lane, and a USB console that says nothing on this board, so no way to see
+ * channel, and a USB console that says nothing on this board, so no way to see
  * why from the outside. Recovering it needed a reflash of the previous
  * firmware.
  *
@@ -224,7 +224,7 @@ static enum iterate_kit_status processor_process(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   /*
-   * Condition both planes into scratch: the seam's inputs are const, and
+   * Condition both planes into scratch: the processor interface's inputs are const, and
    * aec_process wants distinct in/out anyway. Order matters and is the
    * donor's: high-pass the near BEFORE the filter sees it, scale the
    * reference BEFORE the filter learns from it.

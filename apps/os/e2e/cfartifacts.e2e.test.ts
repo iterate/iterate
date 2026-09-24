@@ -4,7 +4,7 @@
 // the unit tests over fakes (src/context/cf-artifacts.test.ts, src/repo/git-wire.test.ts) and the local
 // e2e run's fake remote (support/fake-git-server.ts) cannot prove — the binding is wired, the remote URL
 // and the token the proxy hands out open the real git-over-HTTPS endpoint, and the project scoping
-// holds end to end across /api. Every row runs in every lane: the local worker binds Artifacts too
+// holds end to end across /api. Every row runs in every environment: the local worker binds Artifacts too
 // (wrangler's local runtime serves it); `WORKER_BASE_URL=https://os.iterate.com pnpm e2e cfartifacts`
 // runs them against the deployed binding. A repo is
 // addressed by its context PATH (`/e2e/<suffix>`, unique per run; the Artifacts NAME behind it is

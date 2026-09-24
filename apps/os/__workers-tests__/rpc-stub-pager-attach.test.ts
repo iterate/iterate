@@ -1,5 +1,5 @@
 // __workers-tests__/rpc-stub-pager-attach.test.ts — THE ONE-SHOT PAGER ATTACH, inside workerd (the
-// workers lane — the only lane that can speak the DO's transport plumbing directly AND read its
+// Workers suite — the only suite that can speak the DO's transport plumbing directly AND read its
 // socket census, `rpcStubTransportState`).
 //
 // Target surface: RpcStubDirectory layer 2 (src/context/rpc-stubs.ts). The pager upgrade's
@@ -12,7 +12,7 @@
 //
 // The UN-SET half, same layer: the key's last pager close appends the removal — refused under a
 // pause, it lands on the `resumed` commit; a match at itx.builtins (the one row the removal spelling
-// could never express) is refused AT THE DOOR, so no such row can ever sit beside the real ones. And
+// could never express) is refused AT APPEND, so no such row can ever sit beside the real ones. And
 // a pager REPLACED at its key (a reconnect) is a reconnect, not a close: a page in flight survives
 // the swap and the new pager's lend answers it.
 
@@ -168,11 +168,11 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   await until("the rule un-set after resume", async () => (await ruleAt(ctx, "itx.k5")) === null);
 });
 
-test("the append door REFUSES a rule match rooted at itx.builtins (the reserved fixed point is no rule's to claim) — the un-expressible row can never enter the log beside the real ones", async () => {
+test("append REFUSES a rule match rooted at itx.builtins (the reserved fixed point is no rule's to claim) — the un-expressible row can never enter the log beside the real ones", async () => {
   const ctx = "prj_pager_raw_builtins_row";
-  // The door validates every append: a match at itx.builtins — the fixed point every call rewrites
+  // The DO validates every append: a match at itx.builtins — the fixed point every call rewrites
   // TO — is refused, so the "raw row the removal spelling cannot express" can never enter the log to
-  // begin with (a raw append once bypassed the builder; the boundary is the door now).
+  // begin with (a raw append once bypassed the builder; the boundary is append itself now).
   await runInDurableObject(stub(ctx), async (instance) => {
     await expect(
       instance.append({
@@ -236,7 +236,7 @@ test("a pager RECONNECT while a page is in flight is a reconnect, not a close: t
   }
 });
 
-/** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):
+/** Open a pager upgrade straight at the DO's `fetch` (what lendRpcStubOverPager does relay-side):
  *  the header IS the attach request — the key and the events that name it. */
 function openPager(ctx: string, rpcStubKey: string, appendEvents: StreamEventInput[] = []) {
   return stub(ctx).fetch("https://rpc-stub-pager.internal/", {

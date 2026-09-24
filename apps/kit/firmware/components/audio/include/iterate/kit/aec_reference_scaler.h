@@ -13,7 +13,7 @@
  * part of a device driver or adaptive filter. Some boards provide a physical
  * divider carrying the actual amplifier output; preserving that signal is
  * better than reconstructing it from pristine PCM, but its fixed attenuation
- * is board-specific. Keeping the calibration at this seam makes the cost and
+ * is board-specific. Keeping the calibration at this interface makes the cost and
  * clipping observable and lets host tests prove it cannot wrap.
  *
  * Input and output may be the same array. `clipped_samples` is a lifetime

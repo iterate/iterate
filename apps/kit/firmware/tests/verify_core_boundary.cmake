@@ -35,7 +35,7 @@ endforeach()
 list(JOIN ITERATE_KIT_PLATFORM_HEADER_NAMES "|"
   ITERATE_KIT_PLATFORM_HEADER_PATTERN)
 
-# This is a second line of defence, not the seam itself. Platform-private
+# This is a second line of defence, not the boundary itself. Platform-private
 # headers must also stay out of the core target's include paths so a bypass does
 # not compile. The source check makes the intended dependency direction visible
 # in a fast host test instead of waiting for a particular board build.

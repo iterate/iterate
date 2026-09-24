@@ -73,7 +73,7 @@ struct iterate_kit_posix_tls_stream_options {
    * intended to make an insecure configuration conspicuous at every callsite.
    */
   bool DANGEROUS_disable_certificate_verification;
-  /** Optional deterministic resolver seam; NULL selects DNS-SD on macOS. */
+  /** Optional deterministic resolver hook; NULL selects DNS-SD on macOS. */
   const struct iterate_kit_posix_tls_resolver_ops *resolver_ops;
   void *resolver_context;
 };

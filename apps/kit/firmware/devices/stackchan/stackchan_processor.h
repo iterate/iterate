@@ -17,7 +17,7 @@ enum {
 };
 
 /**
- * The proven StackChan echo canceller behind the shared processor seam.
+ * The proven StackChan echo canceller behind the shared processor interface.
  *
  * ESP-SR 2.4.7's standalone VOIP AEC (DiOS/athena-signal: adaptive filter,
  * double-talk detector, ERL estimator, residual suppressor; NLP always on)
@@ -38,7 +38,7 @@ enum {
  * ESP-SR exposes no filter reset, so reset() destroys and recreates the
  * engine — losing adaptation deliberately, because continuing a filter whose
  * near/reference timing is no longer meaningful presents as "echo came
- * back". A process failure returns non-OK and the seam wrapper (and the
+ * back". A process failure returns non-OK and the interface wrapper (and the
  * capture bridge, independently) overwrite the output with silence: raw
  * microphone audio never leaks around a failed canceller.
  */

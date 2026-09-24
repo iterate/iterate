@@ -1,6 +1,6 @@
-// scripts/ci/os-real-model-alert.ts — THE JUDGE FOR THE DAILY REAL-MODEL LANE (.depot/workflows/os-real-model.yml):
+// scripts/ci/os-real-model-alert.ts — THE JUDGE FOR THE DAILY REAL-MODEL SUITE (.depot/workflows/os-real-model.yml):
 // the rows titled `REAL:` run against real models once a day, never on a PR (docs/testing.md#real-model-rows).
-// It reads the lane's Vitest JSON report and pages #error-pulse on a change of state only, red once and
+// It reads the suite's Vitest JSON report and pages #error-pulse on a change of state only, red once and
 // green again once, the way Main OS e2e pages (main-e2e-alert.ts). A page leaves the run green: a
 // scheduled run reports on main's head, where red would read as "this commit broke". A BROKEN PROBE (no
 // report, no REAL: rows, or REAL: rows skipped because E2E_REAL_MODELS never reached them) fails the run
@@ -12,8 +12,8 @@ import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { pageOnChangeOfState, type MainE2eState } from "./main-e2e-alert.ts";
 
-/** The lane's name in its pages. */
-export const REAL_MODEL_LANE = "real-model e2e";
+/** The suite's name in its pages. */
+export const REAL_MODEL_SUITE = "real-model e2e";
 
 /** The parts of Vitest's JSON report the judge reads. */
 const VitestReport = z.object({
@@ -30,7 +30,7 @@ const VitestReport = z.object({
   ),
 });
 
-/** The lane's verdict from its report's `REAL:` rows: green when every one passed, red naming each
+/** The suite's verdict from its report's `REAL:` rows: green when every one passed, red naming each
  *  failed row with its error's first line, or broken when none ran. Pure. */
 export function realModelVerdict(
   report: z.infer<typeof VitestReport>,
@@ -61,7 +61,7 @@ async function judge(reportPath: string, dryRun: boolean): Promise<void> {
   if ("broken" in outcome) throw new Error(`broken probe: ${outcome.broken}`);
   console.log(JSON.stringify(outcome));
   await pageOnChangeOfState({
-    lane: REAL_MODEL_LANE,
+    suite: REAL_MODEL_SUITE,
     verdict: outcome.verdict,
     failedJobs: ["real-model rows"],
     failingRows: outcome.failingRows,

@@ -1,6 +1,6 @@
 // e2e/support/petshop.ts — the deployed dummy-petshop (apps/dummy-petshop), the fake third party the
 // secret-cell proofs connect to over plain HTTP: an OAuth 2.0 provider with refresh, a GraphQL
-// session-login door speaking the Waitrose wire shape, one bearer-protected pets API, GitHub-App
+// session-login endpoint speaking the Waitrose wire shape, one bearer-protected pets API, GitHub-App
 // style signed webhooks, and a `/__backdoor` console to force expiry, fail the token endpoint and
 // fire webhooks. The worker under test fetches it directly (the local worker over the real network,
 // the deployed worker from the edge); nothing here proxies for it.
@@ -46,7 +46,7 @@ export const petshopMintClient = (): Promise<{ clientId: string; clientSecret: s
   });
 
 /** Bump one client's epoch — every outstanding access token of it answers 401 from now on: the
- *  deterministic way to force a real 401 → refresh. The GraphQL login door is the client
+ *  deterministic way to force a real 401 → refresh. The GraphQL login endpoint is the client
  *  `graphql-session-login`. */
 export const petshopExpireTokens = (
   clientId: string,
@@ -57,10 +57,10 @@ export const petshopExpireTokens = (
     body: JSON.stringify({ clientId }),
   });
 
-/** Revoke ONE account's GraphQL-door sessions — the shop's per-account epoch
+/** Revoke ONE account's GraphQL-login sessions — the shop's per-account epoch
  *  (apps/dummy-petshop/src/graphql-login.ts `graphqlSessionAccountClientId`). The shop serves every
- *  concurrent CI run, so a test forcing a 401 revokes its own account's sessions, never the door's:
- *  a door-wide bump from one run killed the session another run had just minted. */
+ *  concurrent CI run, so a test forcing a 401 revokes its own account's sessions, never the endpoint's:
+ *  an endpoint-wide bump from one run killed the session another run had just minted. */
 export const petshopExpireGraphqlSessions = (
   username: string,
 ): Promise<{ clientId: string; accessTokenEpoch: number }> =>
@@ -94,7 +94,7 @@ export const petshopFailTokenEndpoint = (
   });
 
 /** A GitHub App installation of the caller's own, so its webhook secret is the caller's alone. The
- *  shop requires a public key for its App JWT door; the webhook rows never sign a JWT, so any PEM
+ *  shop requires a public key for its App JWT auth; the webhook rows never sign a JWT, so any PEM
  *  string stands. */
 export const petshopRegisterApp = (input: {
   installationId: string;
@@ -137,7 +137,7 @@ export const petshopAuthorizationServer = (): Promise<{
 }> => petshopJson("/.well-known/oauth-authorization-server");
 
 /** The connect half a trusted party runs ONCE: the consent-free authorize (`approve=1`, the test
- *  lane) → the code → the token exchange with HTTP Basic client auth. What lands in the secret. */
+ *  shortcut) → the code → the token exchange with HTTP Basic client auth. What lands in the secret. */
 export async function petshopConnect(client: {
   clientId: string;
   clientSecret: string;

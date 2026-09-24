@@ -39,7 +39,7 @@ enum {
 bool stackchan_audio_init(void);
 
 /**
- * The nonblocking shared codec seam for this board.
+ * The nonblocking shared codec interface for this board.
  *
  * read() delivers one raw 8 ms chunk per call: the near plane is measured
  * TDM slot 2 (slot 0's capsule has a 4.5-5.7 kHz interference shelf that

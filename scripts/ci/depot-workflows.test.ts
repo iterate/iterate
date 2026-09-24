@@ -566,7 +566,7 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
 // on every trigger: the image bake (its push to main runs the same bake), Kit Firmware, whose
 // daily run re-plans every board so a failed publish is repaired without a firmware push, the
 // latency guard, which measures a main push as it measures main every 3 hours, and the real-model
-// lane, which runs a main push to the agents runtime as it runs main daily.
+// suite, which runs a main push to the agents runtime as it runs main daily.
 test.for(
   depotWorkflowFiles.filter(
     (file) =>

@@ -831,7 +831,7 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
       "preview-e2e": {
         TEST_TELEMETRY_WORKSPACE: "os",
         TEST_TELEMETRY_KIND: "e2e",
-        TEST_TELEMETRY_LANE: "vitest",
+        TEST_TELEMETRY_SUITE: "vitest",
         FLAKE_RECORD_DIR: "test-results/flake-records/preview-e2e",
       },
     }

@@ -11,7 +11,7 @@ test("records module timing when Vitest omits the queued callback", () => {
   });
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
-  const reporter = new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" });
+  const reporter = new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" });
   const testModule = {
     moduleId: "/repo/single-file.e2e.test.ts",
     children: { allTests: () => [] },
@@ -54,7 +54,7 @@ test("preserves an interrupted Vitest run instead of reporting a test failure", 
   ) as TestTelemetryArtifact;
   expect(artifact).toMatchObject({
     run: { status: "interrupted" },
-    lanes: [expect.objectContaining({ status: "interrupted" })],
+    runners: [expect.objectContaining({ status: "interrupted" })],
   });
   rmSync(directory, { recursive: true });
 });
@@ -70,7 +70,7 @@ test("records the first failed attempt when a retry passes", async () => {
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
   vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
-  vi.stubEnv("TEST_TELEMETRY_LANE", undefined);
+  vi.stubEnv("TEST_TELEMETRY_SUITE", undefined);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", file);
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   onTestFinished(() => log.mockRestore());
@@ -101,7 +101,7 @@ test("records the first failed attempt when a retry passes", async () => {
       importDurations: { "/repo/dependency.ts": { selfTime: 5 } },
     }),
   };
-  const reporter = new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" });
+  const reporter = new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" });
   reporter.onTestModuleQueued(testModule);
   reporter.onTestModuleCollected(testModule);
   reporter.onTestModuleStart(testModule);
@@ -147,7 +147,7 @@ test("records the first failed attempt when a retry passes", async () => {
       }),
     ],
     context: expect.objectContaining({ framework: "vitest", testKind: "e2e" }),
-    lanes: [expect.objectContaining({ status: "passed", testCount: 1, retryCount: 1 })],
+    runners: [expect.objectContaining({ status: "passed", testCount: 1, retryCount: 1 })],
     modules: [
       expect.objectContaining({
         moduleId: "/repo/network.e2e.test.ts",
@@ -195,7 +195,7 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
     },
   };
 
-  await new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" }).onTestRunEnd(
+  await new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" }).onTestRunEnd(
     [testModule],
     [],
     "failed",

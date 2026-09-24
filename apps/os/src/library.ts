@@ -135,7 +135,7 @@ type LibraryDeps = {
 };
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
- *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
+ *  connections the connectors open, and the one release method. Nothing is constructed here: a wake
  *  pays nothing for the library until a verb runs. */
 export function buildLibrary(
   itx: LibraryItx,

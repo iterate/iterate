@@ -10,7 +10,7 @@ import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 import { finalizeTestTelemetry } from "./upload-test-telemetry.ts";
 
 const artifact: TestTelemetryArtifact = {
-  artifactSchemaVersion: 1,
+  artifactSchemaVersion: 2,
   artifactId: "preview:123:1",
   producer: "test-fixture",
   createdAt: "2026-07-21T10:00:12.000Z",
@@ -28,16 +28,16 @@ const artifact: TestTelemetryArtifact = {
     depotJobUrl: "https://depot.test/jobs/1",
     executionContext: "ci",
   },
-  context: { framework: "playwright", testKind: "e2e", lane: "preview" },
+  context: { framework: "playwright", testKind: "e2e", suite: "preview" },
   run: {
     status: "passed",
     startedAt: "2026-07-21T10:00:00.000Z",
     finishedAt: "2026-07-21T10:00:12.000Z",
     durationMs: 12_000,
   },
-  lanes: [
+  runners: [
     {
-      context: { framework: "playwright", testKind: "e2e", lane: "preview", app: "os" },
+      context: { framework: "playwright", testKind: "e2e", suite: "preview", app: "os" },
       status: "passed",
       durationMs: 12_000,
       exitCode: 0,
@@ -52,7 +52,7 @@ const artifact: TestTelemetryArtifact = {
       moduleId: "specs/resume.spec.ts",
       tags: ["@recovery"],
       annotations: [{ type: "slow", description: "real liveness timeout" }],
-      context: { framework: "playwright", lane: "playwright", app: "os", testProject: "os" },
+      context: { framework: "playwright", suite: "playwright", app: "os", testProject: "os" },
       retryCount: 1,
       passedAfterRetry: true,
       state: "passed",
@@ -223,7 +223,7 @@ test("fails on a runner's unreplaced sentinel after retaining it", async () => {
           message: "reporter did not write its completed telemetry artifact",
         },
       },
-      lanes: [{ ...artifact.lanes[0]!, status: "failed", collectionErrors: [] }],
+      runners: [{ ...artifact.runners[0]!, status: "failed", collectionErrors: [] }],
       tests: [],
       modules: [],
     },
@@ -246,9 +246,9 @@ test("a runner that finished with an error is failure evidence, not incomplete e
         status: "failed",
         error: { name: "Error", message: "worker stopped responding" },
       },
-      lanes: [
+      runners: [
         {
-          ...artifact.lanes[0]!,
+          ...artifact.runners[0]!,
           status: "timedout",
           collectionErrors: ["worker stopped responding"],
         },

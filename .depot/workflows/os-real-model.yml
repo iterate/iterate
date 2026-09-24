@@ -1,9 +1,9 @@
-# THE REAL-MODEL LANE for apps/os and the agents runtime: once a day, on every main push that changes
+# THE REAL-MODEL SUITE for apps/os and the agents runtime: once a day, on every main push that changes
 # how an agent calls its model, and on dispatch, deploy a THROWAWAY Worker Preview of main named
 # `real-model-<run id>-<attempt>`, run the rows titled `REAL:` against real models (OpenAI's astra on
 # Cloudflare's billing, the default model, and Workers AI), judge the run, then DELETE the preview.
 #
-# Every other lane (PR previews, Main OS e2e, the soak) runs those turns against a fake provider and
+# Every other run (PR previews, Main OS e2e, the soak) runs those turns against a fake provider and
 # spends nothing: one AI Gateway spend cap covers the preview account, and on 2026-09-24 a day of soaks
 # spent it and turned every PR's preview e2e red (docs/testing.md#real-model-rows). A run here costs
 # about $0.06.
@@ -29,7 +29,7 @@ on:
     - cron: "47 5 * * *"
   push:
     branches: [main]
-    # How an agent calls its model: the default model, the request, the byte transport, and this lane.
+    # How an agent calls its model: the default model, the request, the byte transport, and this suite.
     paths:
       - .depot/workflows/os-real-model.yml
       - scripts/ci/os-real-model-alert.ts

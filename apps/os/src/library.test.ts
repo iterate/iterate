@@ -843,7 +843,7 @@ test("openapi: an internal $ref parameter is RESOLVED; an external / missing / m
           operationId: "listPets",
           parameters: [
             { $ref: "#/components/parameters/Limit" }, // internal — RESOLVED against components below
-            { $ref: "https://other.example/p.json#/Cursor" }, // external — dropped (this lane fetches only the spec)
+            { $ref: "https://other.example/p.json#/Cursor" }, // external — dropped (this path fetches only the spec)
             { $ref: "#/components/parameters/Missing" }, // internal but absent — dropped
             { name: "tag", in: "query" },
           ],

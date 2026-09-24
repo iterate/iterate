@@ -1,4 +1,4 @@
-// workers-and-facets.e2e.test.ts — LOADING CODE: one door per host kind. `itx.workers.get({ source })`
+// workers-and-facets.e2e.test.ts — LOADING CODE: one entry point per host kind. `itx.workers.get({ source })`
 // (a stateless WorkerEntrypoint — its spec is its address) and `itx.facets.get(name, { source,
 // className })` (a DurableObject hosted as the durable facet `name`; `itx.facets.get(name)` addresses
 // a RUNNING facet). The SOURCE is the worker's MODULES (module name → code, `"cap.js"` the main
@@ -9,7 +9,7 @@
 //   • a producer source with a cacheKey runs ONCE per cold isolate (a warm key never re-runs it, a new
 //     key does, no key is refused) — for a worker and for a facet (the memo keeps the key for the bare
 //     name); a producer that THREW never poisons the key: the next attempt loads under the id's next
-//     generation (worker-loader.ts `loaderIdGenerations`), at both doors and through the memo
+//     generation (worker-loader.ts `loaderIdGenerations`), at both entry points and through the memo
 //   • dialing a REMOTE capnweb API is USERSPACE: a loaded WorkerEntrypoint imports capnweb's client
 //     from the SDK (`./processor.js`), reads the remote's url from Cloudflare's own `ctx.props`, and
 //     dials ONE one-shot HTTP batch per chain through egress (no built-in, no persistent socket, so the
@@ -18,7 +18,7 @@
 //   • DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining: `facets.get(name, spec).demo.timer
 //     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (iterate/expression.ts),
 //     never a bare Proxy (NonPipelinable over Workers RPC, workerd#6873) — and the callback fires back
-//     inside the caller, on the capnweb lane AND from worker B via env.ITX.get()
+//     inside the caller, from a capnweb client AND from worker B via env.ITX.get()
 //   • Kenton's persistent-stub machinery IN USE: a hosted DO stores its live itx handle (the
 //     ctx.exports-minted ItxEntrypoint stub) in its OWN storage and the handle read back replays the
 //     restore chain on use — storage.put throws for any non-restorable stub, so put succeeding + the
@@ -29,7 +29,7 @@ import { expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, until, workerUrl } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 
-// ── the two doors and their sources ──
+// ── the two entry points and their sources ──
 
 test("itx.workers.get({ source: src }) (stateless) + itx.facets.get(name, spec) (durable facet) + itx.facets.get(name)", async () => {
   const itx = openItx(freshCtx("load"));
@@ -125,7 +125,7 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
   const codeStore = new CodeStore();
   await itx.provide("itx.codeStore", codeStore);
 
-  // 1. no key → refused at the door; the producer never ran
+  // 1. no key → refused up front; the producer never ran
   await expect(
     itx.invoke(["itx", "workers", ["get", { source: "itx.codeStore.get('greet')" }], ["run", 1]]),
   ).rejects.toThrow(/needs a cacheKey/);
@@ -183,7 +183,7 @@ export class CounterDurableObject extends FacetDurableObject {
 // doctrine forbids. A TRANSIENT failure (the artifact not landed yet, a lent builder momentarily
 // offline) must not make the key dead for the life of the loader cache: the next attempt re-runs the
 // producer and loads under the id's next generation (worker-loader.ts `loaderIdGenerations`, fenced as
-// a workerd workaround) — at both doors, and for a facet through the bare-name memo too.
+// a workerd workaround) — at both entry points, and for a facet through the bare-name memo too.
 
 test("workers.get: a cacheKey whose producer threw once loads on the next attempt, once the producer would succeed", async () => {
   const itx = openItx(freshCtx("poisonkey"));
@@ -199,27 +199,27 @@ test("workers.get: a cacheKey whose producer threw once loads on the next attemp
   expect(await load()).toBe("hi");
 });
 
-test("facets.get: a facet whose producer threw once materializes on the next attempt — through the hosting door and by bare name through the memo", async () => {
+test("facets.get: a facet whose producer threw once materializes on the next attempt — through the hosting call and by bare name through the memo", async () => {
   const itx = openItx(freshCtx("poisonfacet"));
   const spec = {
-    source: "itx.kv.get('build:door.js')",
+    source: "itx.kv.get('build:greeter.js')",
     cacheKey: "facet-poison:v1",
-    className: "Door",
+    className: "Greeter",
   };
   const hello = (): Promise<unknown> =>
-    itx.invoke(["itx", "facets", ["get", "door", spec], ["hello"]]);
+    itx.invoke(["itx", "facets", ["get", "greeter", spec], ["hello"]]);
   await expect(hello()).rejects.toThrow();
   await itx.invoke([
     "itx",
     "kv",
     [
       "put",
-      "build:door.js",
-      `import { FacetDurableObject } from "./processor.js";\nexport class Door extends FacetDurableObject { static publicMethods = [...super.publicMethods, "hello"]; hello() { return "hi"; } }`,
+      "build:greeter.js",
+      `import { FacetDurableObject } from "./processor.js";\nexport class Greeter extends FacetDurableObject { static publicMethods = [...super.publicMethods, "hello"]; hello() { return "hi"; } }`,
     ],
   ]);
   expect(await hello()).toBe("hi");
-  expect(await itx.invoke(["itx", "facets", ["get", "door"], ["hello"]])).toBe("hi"); // the memo alone
+  expect(await itx.invoke(["itx", "facets", ["get", "greeter"], ["hello"]])).toBe("hi"); // the memo alone
 });
 
 // ── a remote capnweb API, dialed from userspace ──
@@ -312,14 +312,14 @@ export default class ConsumerB extends WorkerEntrypoint {
 }`,
 };
 
-test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lanes", async () => {
+test("dynamic worker → dynamic worker mid-chain pipelining, both kinds of consumer", async () => {
   const itx = openItx(freshCtx("dw2dw"));
 
   // aRef names worker A's stateful class: the source MODULES, handed over inline, + the exported
   // className. facets.get('counterA', aRef) loads the class and materializes it as the facet 'counterA'.
   const aRef = { source: SRC_WORKER_A, className: "CounterDurableObject" };
 
-  // ── lane 1: a plain capnweb client walks the mid-chain and the callback fires back HERE ──
+  // ── consumer 1: a plain capnweb client walks the mid-chain and the callback fires back HERE ──
   let clientPinged = false;
   await itx.facets
     .get("counterA", { source: aRef.source, className: aRef.className })
@@ -328,7 +328,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
     });
   await until("capnweb client callback fired", () => clientPinged, 30_000);
 
-  // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
+  // ── consumer 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
   const ran = await itx.workers.get({ source: SRC_WORKER_B }).run(aRef);
   // dynamic worker B: env.ITX.get().facets.get('counterA', aRef).demo.timer.callLater(cb) ran and the callback fired inside B
   expect(ran?.ran).toBe(true);

@@ -2,7 +2,7 @@
 // file speaks to through support/client.ts. Two reasons to own one: reading the worker's console
 // (wrangler's `getLogs()` is worker-global, so nobody else may drive it — push-delivery-no-dropped-warns
 // and apps/agents agents-partner-response-stream), or a non-default ingress routing (path-ingress).
-// Same config (support/worker-config.ts), same capnweb-over-WebSocket door.
+// Same config (support/worker-config.ts), same capnweb-over-WebSocket endpoint.
 
 import { newWebSocketRpcSession } from "capnweb";
 import type { IngressRouting } from "iterate/project-ingress";

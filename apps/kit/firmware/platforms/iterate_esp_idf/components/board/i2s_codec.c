@@ -178,7 +178,7 @@ bool iterate_kit_i2s_codec_speaker_is_playing(void) {
  * Everything else this speaker plays arrives over the stream, paced by the
  * server, seconds after the gesture that asked for it — which is exactly the
  * problem these solve: a press that answers within a frame instead of after a
- * dial. So they bypass the stream entirely and cut in at the last seam before
+ * dial. So they bypass the stream entirely and cut in at the last hook before
  * the DAC, where the playback hardware task drains them BEFORE it looks at
  * the mailbox. Preemption, not mixing, on purpose: a chime stepping on the
  * first milliseconds of an answer is acceptable and a mixer is not simpler

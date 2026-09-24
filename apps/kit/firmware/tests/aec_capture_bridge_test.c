@@ -154,7 +154,7 @@ static enum iterate_kit_status push_chunk(
  * Physical loudspeaker feedback and exact digital playout answer different
  * questions. The feedback is the best cancellation input because it contains
  * amplifier distortion; the exact playout is the only reliable far-active
- * oracle because the feedback lane can contain noise during silence. This
+ * oracle because the feedback channel can contain noise during silence. This
  * regression proves the generic cadence bridge cannot accidentally alias or
  * discard the third timeline while joining two 128-sample DMA chunks into one
  * 256-sample DSP frame.
@@ -318,7 +318,7 @@ static void processor_failure_is_auditable_silence(void) {
 }
 
 /*
- * A full PCM/WebSocket lane must not preserve the oldest speech until Wi-Fi
+ * A full PCM/WebSocket queue must not preserve the oldest speech until Wi-Fi
  * recovers. Here the second wire copy rejects one frame after 192 older clean
  * samples were already staged. The bridge must abandon that complete failed
  * frame and the remainder of the DSP frame, then resume with sample 1024—not
@@ -645,7 +645,7 @@ static void flat_cadence_is_an_exact_passthrough(void) {
  *
  * Unreachable behind a passthrough processor, which is why the three boards
  * that gained the bridge cannot observe it. Pinned anyway, because "cannot
- * fail" is a property of today's processor and not of this seam.
+ * fail" is a property of today's processor and not of this interface.
  */
 static void flat_process_failure_emits_silence_not_a_hole(void) {
   struct flat_fixture fixture = {0};

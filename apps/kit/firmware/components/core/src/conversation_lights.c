@@ -129,7 +129,7 @@ static void render_audio(
 
   const uint8_t speaker_level = pcm_peak_level(state->speaker_peak);
   /*
-   * One dim blue pixel means the call's media lane is ready; without it a valid
+   * One dim blue pixel means the call's media stream is ready; without it a valid
    * connected call and a call with no playable return path are visually
    * identical. Speech replaces the baseline with the 1--3 pixel peak meter.
    */
@@ -145,7 +145,7 @@ static void render_audio(
 /*
  * One dim microphone pixel means "capture is listening", not "sound was
  * measured". Speech replaces that baseline with a 1-3 pixel meter. This is
- * what lets silence remain distinguishable from an idle or dead /pcm lane.
+ * what lets silence remain distinguishable from an idle or dead /pcm stream.
  *
  * `microphone_listening` is the ONLY gate, deliberately. It is not conditioned
  * on the call being active (a press listens before there is a call) and not on

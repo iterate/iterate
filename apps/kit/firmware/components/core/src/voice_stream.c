@@ -252,7 +252,7 @@ static void handle_spk_frame(
    * A barge-in is exactly the case where the sender has no audio left to
    * attach the flag to — it has just thrown the answer away — so it sends the
    * flag on an empty chunk, whose empty `pcm` string decodes to nothing. Below
-   * the decode's early `return`, the clear was discarded on the doorstep for
+   * the decode's early `return`, the clear was discarded on arrival for
    * being an empty envelope, and three fixes upstream were measured against
    * that and moved nothing.
    */
@@ -297,7 +297,7 @@ static void handle_spk_frame(
    * to prevent cannot happen — a ring has no phase, and consecutive PCM16
    * samples written consecutively are the same waveform however they were cut.
    *
-   * The lane owes more frames until `lastFrameOfAnswer`; an empty clear frame
+   * The stream owes more frames until `lastFrameOfAnswer`; an empty clear frame
    * owes none.
    */
   voice_stream->answer_open = !last_frame && chunk_length > 0U;
@@ -311,7 +311,7 @@ static void handle_spk_frame(
    * AND THE END OF THE ANSWER RIDES ITS LAST CHUNK, announced AFTER the audio
    * is handed over so the buffer the owner is about to call drained already
    * holds everything it will ever hold. This was once a separate
-   * terminal event on a separate lane, where it routinely
+   * terminal event on a separate channel, where it routinely
    * arrived FIRST and cost 258 received frames that were never played.
    */
   if (last_frame && voice_stream->options.on_control != NULL) {
@@ -356,9 +356,9 @@ static void process_batch(
   if (voice_stream == NULL || delivered_events == NULL) return;
   /*
    * Stamped for the BATCH, before its contents are inspected and regardless
-   * of what it holds: this is the proof that the delivery lane still exists,
+   * of what it holds: this is the proof that the delivery stream still exists,
    * which is a different question from whether anything interesting was on
-   * it. An empty batch proves the lane; a dropped duplicate proves it too.
+   * it. An empty batch proves the stream; a dropped duplicate proves it too.
    */
   if (counts_for_current_subscription) {
     ++voice_stream->batches_on_connection;
@@ -576,7 +576,7 @@ enum capnweb_status iterate_kit_voice_stream_recycle_subscription(
   voice_stream->state = ITERATE_KIT_VOICE_STREAM_OPENING_CONNECTION;
   voice_stream->batches_on_connection = 0U;
   /* A fresh subscription starts a fresh range; the predecessor's `through`
-   * belongs to a different delivery lane and comparing across them would
+   * belongs to a different delivery stream and comparing across them would
    * manufacture a gap on every recycle. */
   voice_stream->last_delivery_through = -1;
   voice_stream->last_batch_ms =
@@ -650,9 +650,9 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
   offset += (size_t)written;
   /*
    * ONE ENCODE OVER THE WHOLE FLUSH. 640 is not a multiple of 3, so encoding
-   * frame by frame would leave a broken base64 group at every seam — but the
+   * frame by frame would leave a broken base64 group at every frame boundary — but the
    * frames of a flush are one continuous run of capture and the caller hands
-   * them over contiguous, so there are no seams to straddle.
+   * them over contiguous, so there are no boundaries to straddle.
    */
   {
     const size_t body_capacity =

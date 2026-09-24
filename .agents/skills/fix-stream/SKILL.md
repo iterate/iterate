@@ -94,9 +94,9 @@ Find where the person lost: silence after their input, a wrong answer, an error 
 chat that does not show what happened. Write the complaint down in the person's terms. A
 provider error the loop recovered from is usually not the complaint.
 
-## 4. Choose the seam and write the red test
+## 4. Choose the layer and write the red test
 
-Pick the narrowest layer that shows the complaint. Every seam here runs in node, with no
+Pick the narrowest layer that shows the complaint. Every layer here runs in node, with no
 deployment and no real model.
 
 | The complaint is about…                                               | Test next to                                                                                                           |
@@ -112,7 +112,7 @@ deployment and no real model.
   drop only whole event types that no code under test reads, and note each one in the test.
 - `reduceProcessor` numbers its inputs from 1, while the payloads name real offsets
   (`triggerOffset`, `requestOffset`, `llmRequestOffset`). Renumber consistently or cut to a
-  window where the numbering matches. The feed seam keeps the real offsets.
+  window where the numbering matches. The feed layer keeps the real offsets.
 - Assert the complaint in the person's terms, not the mechanism. For example: "the call's
   words show in the chat", not "`reduceAgentUi` handles `voice-agent/utterance-transcript`".
   The mechanism is the fix.
@@ -131,7 +131,7 @@ shows the red. Put a before/after excerpt of the prod log in the PR body.
 
 1. Make the smallest product fix consistent with the design. Grep for an existing path first,
    because the gap is often routing, not missing machinery. Run the test green, then the
-   package lane (`pnpm --dir apps/agents test`, or `packages/ui`'s). Push.
+   package suite (`pnpm --dir apps/agents test`, or `packages/ui`'s). Push.
 2. Shrink the fixture: revert the product file (`git checkout <red commit> -- <file>`), cut
    events, and confirm the test is still red. If it turns green, the cut removed the repro, so
    restore it. Keep the system item, the last complete turn before the bad part, and the bad

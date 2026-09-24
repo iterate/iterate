@@ -1083,7 +1083,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         );
         return result instanceof Response
           ? result
-          : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
+          : new Response(`expression fetch: ${JSON.stringify(result)}\n`);
       } catch (error) {
         // A project host makes this path public: default-deny is a 404 (a visitor's "no such app" is
         // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
@@ -1092,9 +1092,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const status =
           code === "NO_ITX_EXPRESSION_MATCH" ? 404 : code === "FACET_NO_UPGRADE" ? 400 : 500;
         if (status === 500)
-          reportIssue("iterate-context.fetch-lane", error, { itxExpression: itxExpressionHeader });
+          reportIssue("iterate-context.expression-fetch", error, {
+            itxExpression: itxExpressionHeader,
+          });
         const message = error instanceof Error ? error.message : String(error);
-        return new Response(`fetch lane error: ${message}\n`, { status });
+        return new Response(`expression fetch error: ${message}\n`, { status });
       }
     }
     // Bare egress is the PLATFORM's (a first-party facet's raw `fetch(url)`); loaded code's fetch
@@ -1118,7 +1120,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const { readable, writable } = new IdentityTransformStream();
     request.body.pipeTo(writable).catch((error: unknown) => {
       console.info({
-        event: "fetch-lane.request-body-unread",
+        event: "expression-fetch.request-body-unread",
         namespace: "iterate-context",
         name: this.#durableObjectAddress.name,
         message: error instanceof Error ? error.message : String(error),

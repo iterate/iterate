@@ -17,7 +17,7 @@ path and a namespace for fresh conversations, with no per-board model choice.
 | `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                 |
 | `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, ESP-TLS WebSocket transport, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                |
 | `platforms/host`            | the host ESP-IDF (`esp_idf/esp_idf.h`): the ESP-IDF primitives the loop names, on a laptop                                                                                                                                   |
-| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec seam, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                           |
+| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec interface, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                      |
 | `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                               |
 | `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                              |
 | `devices/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                       |
@@ -132,7 +132,7 @@ pnpm firmware:test:host
 `pnpm firmware:build:host` (from `apps/kit`) configures and builds every host
 target into `firmware/.build/host`, `iterate-kit-mac` among them. It runs the
 voice loop the ESP boards run, with the Mac's hardware behind the same
-seams: CoreAudio behind the codec seam (`platforms/darwin/darwin_audio_codec.c`),
+interfaces: CoreAudio behind the codec interface (`platforms/darwin/darwin_audio_codec.c`),
 Apple's VoiceProcessingIO where the HAVPE has its XMOS, the keyboard as the
 button, the provisioning image read from a file. `devices/mac/mac_device.c` pumps the
 loop's two audio tasks on one thread — a control step, two capture steps and a
@@ -189,7 +189,7 @@ At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
 mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
 failures.
 
-The device dials `wss://<os base url host>/api` — the OS's public door — with
+The device dials `wss://<os base url host>/api` — the OS's public endpoint — with
 the blob's key as `Authorization: Bearer` on the upgrade: a personal access
 token the Kit page minted for the person who set the device up, scoped to the
 one project, revocable from that person's sessions list. Both transports send

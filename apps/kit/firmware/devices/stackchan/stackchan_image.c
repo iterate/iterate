@@ -76,7 +76,7 @@ static struct {
    * When the picture we last published stops owning the glass, in ms since
    * boot on esp_timer's clock — the avatar keeps the authoritative copy; this
    * one exists so acceptance can refuse a write into a surface the render
-   * task is still reading, without a second avatar seam.
+   * task is still reading, without a second avatar interface.
    */
   volatile uint64_t visible_through_ms;
   volatile uint32_t fetches;

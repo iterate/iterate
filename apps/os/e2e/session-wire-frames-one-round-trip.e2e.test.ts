@@ -100,7 +100,7 @@ test("pipelining: subscribe({ target: fn }) + subscribe({ name: <its UNRESOLVED 
   const itx = await w.session.authenticate(adminCredentials()).projects.get(ctx);
   const mark = w.mark();
   {
-    // ONE door, one burst: the subscribe is NOT awaited; the removal names the row by pipelining
+    // ONE session, one burst: the subscribe is NOT awaited; the removal names the row by pipelining
     // the unresolved handle's `name` getter as its argument (capnweb serializes it as a pipeline
     // reference, so the server delivers the removal only after the subscribe resolved).
     const subscription = itx.subscribe({ consumes: ["never"], target: () => undefined });
@@ -217,7 +217,7 @@ test("one-directional delivery: batches keep flowing with the subscriber's outbo
   const producer = openItx(ctx);
   const chunk = (n: number) =>
     producer.invoke(["itx", ["append", { type: "chunk", ephemeral: true, payload: { n } }]]);
-  await chunk(0); // one probe proves the lane before the stall
+  await chunk(0); // one probe proves delivery before the stall
   await until("the probe delivered", () => received.length >= 1, 10_000);
   await sleep(300); // its answer flushes before the stall
 

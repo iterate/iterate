@@ -15,7 +15,7 @@
 // (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
 // the real wire codec to it. Those rows are `localOnly` — the fake remote listens on THIS machine's
 // loopback, which a deployed worker's egress cannot reach (403). The "against real Artifacts" row runs
-// the same story on the real binding in every lane (the local worker binds Artifacts too).
+// the same story on the real binding in every environment (the local worker binds Artifacts too).
 
 import { expect, test, type TestContext } from "vitest";
 import type { RepoLogEntry } from "../src/repo/git-wire.ts";

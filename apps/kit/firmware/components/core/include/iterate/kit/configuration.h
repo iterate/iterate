@@ -71,7 +71,7 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
 
 /**
  * Converts a validated HTTP(S) OS base URL to the corresponding WS(S) `/api`
- * endpoint in caller-owned storage. That is the OS's public door: its OAuth
+ * endpoint in caller-owned storage. That is the OS's public endpoint: its OAuth
  * gate resolves the blob's key, sent as `Authorization: Bearer` on the
  * upgrade, before the first Cap'n Web frame. The destination is cleared on
  * error.

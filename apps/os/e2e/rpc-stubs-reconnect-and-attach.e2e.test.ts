@@ -18,7 +18,7 @@
 //   • the rule / the row is appended INSIDE the pager attach: its offset is BELOW the key's ephemeral
 //     `rpc-stub/attached` (the presence fact)
 //   • a paused stream's refusal of a provide or a subscribe crosses /api CODED (STREAM_PAUSED); after
-//     resume the same calls land (the attach's atomicity at the DO's door — 409 + code, no socket, no
+//     resume the same calls land (the attach's atomicity at the DO — 409 + code, no socket, no
 //     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
 
 import { expect, test } from "vitest";
@@ -236,7 +236,7 @@ test("subscribe({ target: fn }): the row is appended INSIDE the pager attach —
 
 test("a paused stream's refusal of a provide or a subscribe crosses /api CODED — STREAM_PAUSED on the error — and after resume the same calls land", async () => {
   // The edge turns the refused pager upgrade's answer (a 409 whose JSON body carries the code) into
-  // the coded capnweb error a client classifies by; the attach itself is pinned at the DO's door.
+  // the coded capnweb error a client classifies by; the attach itself is pinned at the DO.
   const ctx = freshCtx("attach-refused");
   const itx = openItx(ctx);
   await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });

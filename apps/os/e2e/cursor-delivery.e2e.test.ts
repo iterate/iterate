@@ -1,4 +1,4 @@
-// cursor-delivery.e2e.test.ts — THE CURSOR LANE live. A subscription whose target cannot own its
+// cursor-delivery.e2e.test.ts — CURSOR DELIVERY live. A subscription whose target cannot own its
 // progress — a Worker-Loader entrypoint's `processEventBatch(events, range)`, the stateless "project
 // worker" — is delivered at-least-once from a cursor THE STREAM keeps
 // (`itx.subscriptions.get(name).cursor`): the awaited call is the ack; a plain throw climbs the one
@@ -6,7 +6,7 @@
 // with a `subscription-delivery-halted` fact; recovery is the operator's ONE event,
 // `subscription-delivery-resumed { name, afterOffset? }` — un-halt, and seek. Nothing is declared: the
 // loop evaluates the target and looks at the value (an entrypoint handle ⇒ cursor; a live stub or a
-// facet ⇒ push, no cursor). No lanes, no forwarder facet, no policy knobs. Pins:
+// facet ⇒ push, no cursor). No delivery modes, no forwarder facet, no policy knobs. Pins:
 //   • the digest worker delivered from a stream-kept cursor; poison halts with the fact (one attempt,
 //     one audit row, fresh traffic never resurrects it); `resumed { afterOffset }` un-halts, seeks past
 //     the poison and IS the wake
@@ -47,8 +47,8 @@ type Range = { after: number; through: number };
 
 // ── the LEDGER rig: a stateless worker that ledgers every delivery into the project's kv ──
 
-/** `ledger:calls` / `ledger:log` (= the delivered offsets per call), so the test observes the cursor
- *  lane from outside without a live callback in the loop. `ctx.props.firstCall` scripts delivery #1:
+/** `ledger:calls` / `ledger:log` (= the delivered offsets per call), so the test observes cursor
+ *  delivery from outside without a live callback in the loop. `ctx.props.firstCall` scripts delivery #1:
  *  "throw" (a plain, retryable Error — the ladder) or "hold" (2s in flight — a resume races it). */
 const SRC_LEDGER = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -148,7 +148,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   expect(rowAfter.cursor).toMatchObject({ attempt: 0 });
   expect(rowAfter.cursor.confirmedOffset).toBeGreaterThanOrEqual(fresh.offset);
   expect(stuck.offset).toBeGreaterThan(poisoned.offset); // the seek landed between the two
-  // …and the lane keeps flowing afterwards.
+  // …and delivery keeps flowing afterwards.
   await itx.append({ type: "mark" });
   await until("digest=6", async () => (await digested(itx)) === 6, 30_000);
 });
@@ -252,7 +252,7 @@ test("a resumed afterOffset BEYOND head must not deaden the row — the next app
   const c = collector();
   await cursorSubscribe(itx, "beyond", c.fn, ["mark"]);
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
-  await until("lane works", () => c.offsets().includes(m1.offset), 8_000);
+  await until("delivery works", () => c.offsets().includes(m1.offset), 8_000);
   await itx.append({ type: RESUMED, payload: { name: "beyond", afterOffset: m1.offset + 1000 } });
   const [m2] = await itx.append({ type: "mark", payload: { n: 2 } });
   // a wait that runs out names what was delivered and the row as the stream keeps it (its cursor,
@@ -292,7 +292,7 @@ test("the view: a push target's row has NO cursor; a resumed fact for an unknown
   expect(await itx.subscriptions.get("never-was")).toBeNull();
 });
 
-// ─────────────────────────────── what the cursor lane delivers ───────────────────────────────
+// ─────────────────────────────── what the cursor delivery delivers ───────────────────────────────
 
 test("consumes ['*'] delivers every durable event; the row carries a cursor at `through` with the ladder idle", async () => {
   const itx = openItx(freshCtx("starcur"));
@@ -302,7 +302,7 @@ test("consumes ['*'] delivers every durable event; the row carries a cursor at `
   await cursorSubscribe(itx, "control", control.fn, ["note"]);
   const [note] = await itx.append({ type: "note" });
   await until(
-    "control got it (the lane works)",
+    "control got it (delivery works)",
     () => control.offsets().includes(note.offset),
     8_000,
   );
@@ -403,7 +403,7 @@ test("row isolation — one halted row never blocks its neighbor", async () => {
 });
 
 test("cursor subscriptions enable no processor and mint no facet; a row appears per name, its cursor at rest at its configure offset until a delivery", async () => {
-  // The cursor lane is kernel code in the DO over its own kv and alarm — nothing to auto-enable,
+  // The cursor delivery is kernel code in the DO over its own kv and alarm — nothing to auto-enable,
   // nothing to list as a processor.
   const itx = openItx(freshCtx("auto"));
   await Promise.all(
@@ -451,7 +451,7 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
 });
 
 test("agreement: a push subscriber and a cursor subscriber see the SAME offsets in order", async () => {
-  const itx = openItx(freshCtx("lanes"));
+  const itx = openItx(freshCtx("modes"));
   const pushed = collector();
   const cursored = collector();
   await itx.subscribe({ name: "via-push", consumes: ["mark"], target: pushed.fn });
@@ -579,7 +579,7 @@ const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
 
 /** The stateless "project worker" shape whose progress THE STREAM must keep (a Worker-Loader
  *  entrypoint cannot own it): its `processEventBatch(events, range)` hands the batch to a LIVE hook
- *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor lane delivered
+ *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor delivery delivered
  *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
  *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). */
 const HOOKED_SOURCE = (hook: string) => ({
@@ -603,7 +603,7 @@ class Hook extends RpcTarget {
   }
 }
 
-/** Subscribe `name` on the CURSOR lane: lend the live hook behind the rule `itx.<name>Hook`, hand the
+/** Subscribe `name` on the CURSOR delivery: lend the live hook behind the rule `itx.<name>Hook`, hand the
  *  hooked worker's source over INLINE and rewrite `itx.<name>Worker` onto its entrypoint, subscribe
  *  its `processEventBatch` BY EXPRESSION (an entrypoint handle ⇒ the stream keeps the cursor). Names
  *  are one JS identifier. */
@@ -626,7 +626,7 @@ async function cursorSubscribe(
   });
 }
 
-/** The `digest` fixture (e2e/support/sources.ts) on the cursor lane: counts delivered events into
+/** The `digest` fixture (e2e/support/sources.ts) on the cursor delivery: counts delivered events into
  *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
 async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
   await itx.provide("itx.digest", ["itx", "workers", ["get", { source: SOURCES.digest }]]);

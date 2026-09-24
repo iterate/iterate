@@ -160,7 +160,7 @@ test("a payload-less live-state/changed event never rejects an append that alrea
         if (e.payload?.key === "avatar") seen.push(JSON.parse(JSON.stringify(e.payload)));
     },
   });
-  // The lane itself works: a WELL-FORMED change payload for the watched key is delivered.
+  // Delivery itself works: a WELL-FORMED change payload for the watched key is delivered.
   await itx.append({
     type: "events.iterate.com/live-state/changed",
     ephemeral: true,

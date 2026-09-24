@@ -285,7 +285,7 @@ export async function hmacSha256Hex(key: string, payload: string | Uint8Array): 
 
 /** Constant-time equality of two strings: HMAC both under one
  *  throwaway key and compare the fixed-length digests with no early exit, so neither content nor
- *  LENGTH shapes the timing — the candidate comes from an unauthenticated door. */
+ *  LENGTH shapes the timing — the candidate comes from an unauthenticated caller. */
 export async function constantTimeEquals(expected: string, candidate: string): Promise<boolean> {
   // a symmetric algorithm mints one key, not a pair — the union in the types is for RSA/EC
   const key = (await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [
@@ -303,7 +303,7 @@ export async function constantTimeEquals(expected: string, candidate: string): P
   return difference === 0;
 }
 
-/** THE VERIFY LANE, pure: does `signature` (hex, either case) equal the HMAC-SHA256 of `payload`
+/** THE VERIFY OPERATION, pure: does `signature` (hex, either case) equal the HMAC-SHA256 of `payload`
  *  under the key `material` holds (at `field`)? One bit out; the key never leaves the caller. A
  *  material with no key at the field verifies nothing. */
 export async function verifySecretHmac(

@@ -201,7 +201,7 @@ async function processedThrough(s: ReturnType<typeof stub>, facet: string, offse
   await s.invoke(["itx", "facets", ["get", facet], ["waitUntilProcessed", { offset }]]);
 }
 
-/** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
+/** The hosting call as an expression: `itx.facets.get(name, { source, className })` — the source is
  *  the worker's modules, literally. */
 function hostedFacet(source: Record<string, string>, cls: string, name: string): ItxExpression {
   return ["itx", "facets", ["get", name, { source, className: cls }]];

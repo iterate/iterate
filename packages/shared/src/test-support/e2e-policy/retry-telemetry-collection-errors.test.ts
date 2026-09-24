@@ -80,8 +80,7 @@ test.each([
       status: "failed",
       error: { message: `${failure} failed` },
     });
-    // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- existing test telemetry wire field
-    expect(artifact.lanes).toContainEqual(
+    expect(artifact.runners).toContainEqual(
       expect.objectContaining({ collectionErrors: [`${failure} failed`] }),
     );
   },

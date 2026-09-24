@@ -1,12 +1,12 @@
 /**
- * Unit tests for the pet shop's capnweb door (`POST /capnweb`, the HTTP-batch
+ * Unit tests for the pet shop's capnweb endpoint (`POST /capnweb`, the HTTP-batch
  * half — the WebSocket half needs workerd's WebSocketPair, so the live e2e
  * drives it), driven in plain Node against the real route handler with a REAL
  * capnweb client whose global fetch is routed into the shop, over the
  * test/shop.ts in-memory storage fake and the cloudflare:workers shim.
  * Hermetic — no network.
  */
-/* oxlint-disable iterate/no-capnweb-http-batch -- these tests drive the pet shop SERVER's HTTP-batch /capnweb door on purpose (the WebSocket half is covered separately); the rule targets stateless-worker client code, not a batch handler under test */
+/* oxlint-disable iterate/no-capnweb-http-batch -- these tests drive the pet shop SERVER's HTTP-batch /capnweb endpoint on purpose (the WebSocket half is covered separately); the rule targets stateless-worker client code, not a batch handler under test */
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { accessToken, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
@@ -55,7 +55,7 @@ test("an unknown pet id rejects with the shop's message", async () => {
   await expect(session().getPet("pet-99")).rejects.toThrow(/No pet with id pet-99/);
 });
 
-test("401 without a bearer token — the door itself, and as the client sees it", async () => {
+test("401 without a bearer token — the endpoint itself, and as the client sees it", async () => {
   const shop = makeShop();
   const direct = await shop.call("/capnweb", { method: "POST", body: "" });
   expect(direct).toMatchObject({ status: 401 });

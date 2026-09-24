@@ -1,10 +1,10 @@
-// __workers-tests__/alarm-and-pins.test.ts — the context DO's alarm, inside workerd (the workers
-// lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
+// __workers-tests__/alarm-and-pins.test.ts — the context DO's alarm, inside workerd (the Workers
+// suite — the ONLY suite that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
 // Target surface: IterateContextDurableObject.alarm() (src/iterate-context-durable-object.ts),
 // Residency.pinCallEnded (src/context/residency.ts), FacetHost#liveFacetNames/#facetWorkInFlight
-// (src/context/facet-host.ts), the delivery loop's cursor lane + `deliverEveryCursorSubscription`
+// (src/context/facet-host.ts), the delivery loop's cursor delivery + `deliverEveryCursorSubscription`
 // (src/stream/subscription-delivery.ts), and the rpc-stub directory (src/context/rpc-stubs.ts).
 //
 // THE ALARM SERVES DURABLE OBLIGATIONS ONLY, in order — this file pins the cursor half and the
@@ -26,11 +26,11 @@
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
 // `StreamProcessor` (`CounterProcessor`) and its one-line `StreamProcessorDurableObject` host
 // (`CounterDurableObject`, the class the load chain names) — loaded through the Worker Loader and
-// hosted as facets (there are no built-in processors). The workers lane materializes them fine (the
+// hosted as facets (there are no built-in processors). The Workers suite materializes them fine (the
 // loader accepts allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline
 // `CounterProcessor` source below, enabled the way the `itx.processors.enable` root spells it — ONE
 // `subscription-configured` whose target is the facet's `processEventBatch` through the load chain,
-// appended at the DO's one write door (`append`; the DO has no configuration verbs). Live stubs
+// appended through the DO's one write method (`append`; the DO has no configuration verbs). Live stubs
 // (over hibernatable stub pager sockets) work fully here too — see hibernation-at-scale.test.ts.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
@@ -495,9 +495,9 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
     i === 3 ? expect(got.has("echo-3:hi")).toBe(false) : expect(got.has(`echo-${i}:hi`)).toBe(true);
 });
 
-// ─────────────────────────── THE ALARM'S FIRST JOB: the cursor lane's pump ───────────────────────────
+// ─────────────────────────── THE ALARM'S FIRST JOB: the cursor delivery's pump ───────────────────────────
 
-/** A stateless project worker — the CURSOR lane (a Worker-Loader entrypoint cannot own its
+/** A stateless project worker — the CURSOR delivery (a Worker-Loader entrypoint cannot own its
  *  progress, so the stream keeps a cursor row and the awaited `processEventBatch` is the ack).
  *  Throws while kv `flaky-mode` is "fail"; otherwise tallies the batch into kv `flaky-digested`. */
 const FLAKY_SRC = /* js */ `
@@ -512,8 +512,8 @@ export default class Flaky extends WorkerEntrypoint {
 }
 `;
 
-test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried from alarm() — the cursor advances, the ladder resets", async () => {
-  // The cursor lane rides THIS DO's alarm (facets have none — workerd#6810 — so a retry can never
+test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried from alarm() — the cursor advances, the ladder resets", async () => {
+  // The cursor delivery rides THIS DO's alarm (facets have none — workerd#6810 — so a retry can never
   // live in the facet). PINS: a delivery that throws leaves a cursor row on the ladder
   // (attempt ≥ 1, a nextAttemptAtMs, NOT halted — one failure is far from 15); when the alarm fires
   // past that instant, `deliverEveryCursorSubscription` re-delivers the SAME batch from the cursor
@@ -583,7 +583,7 @@ async function durableCount(ctx: string): Promise<number> {
     .length;
 }
 
-/** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO door: ONE
+/** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO's `invoke`: ONE
  *  subscription-configured event — a literal appended through `append` (normalized at the boundary)
  *  — whose target is the facet's `processEventBatch` through the load chain (the facet name = the
  *  subscription name = the `.get(name)` name). */

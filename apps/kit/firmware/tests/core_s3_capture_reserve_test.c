@@ -67,7 +67,7 @@ static enum iterate_kit_core_s3_capture_push_result push_capture(
  * The IDF ISR borrows a DMA pointer only until its callback returns. A reserve
  * which stores that pointer, or publishes its slot before the copy completes,
  * will eventually feed overwritten samples to AEC under ordinary scheduling.
- * This round trip proves the portable seam owns all 1,024 bytes and preserves
+ * This round trip proves the portable interface owns all 1,024 bytes and preserves
  * the physical completion metadata which later drives delay diagnostics.
  */
 static void accepted_dma_is_copied_and_delivered_in_order(void) {
@@ -274,7 +274,7 @@ static void dma_sequence_gap_poison_is_fail_closed(void) {
 /*
  * A BSP or codec reconfiguration can invalidate acoustic alignment without a
  * malformed buffer or visible sequence gap. The outer owner needs the same
- * policy seam for IDF overflow counters and I2S restarts; keeping it explicit
+ * policy hook for IDF overflow counters and I2S restarts; keeping it explicit
  * prevents an error log from becoming the only response while stale PCM still
  * drains into AEC.
  */

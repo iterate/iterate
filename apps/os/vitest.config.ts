@@ -1,7 +1,7 @@
-// THE vitest config; pick a lane with `--project` (`pnpm test` runs unit + workers, `pnpm e2e`,
+// THE vitest config; pick a project with `--project` (`pnpm test` runs unit + workers, `pnpm e2e`,
 // `pnpm perf` and `pnpm bench` the other three). Five PROJECTS (vitest's own word), each a genuinely
 // different execution context:
-//   • unit    — in-process node, the fast lane (src/**/*.test.ts)
+//   • unit    — in-process node, the fast suite (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
 //               under test is Vite's built dist/server/index.js — `exports.default.fetch`

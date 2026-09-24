@@ -27,7 +27,7 @@ test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof 
 });
 
 test("the step walk threads a NATIVE RpcPromise unawaited — regression = this fails", async () => {
-  // THE regression detector for the native lane: walk a chain whose call step returns a real
+  // THE regression detector for the native path: walk a chain whose call step returns a real
   // workerd RpcPromise, with a property step AFTER it. Pipelined (correct), the walk builds on the
   // promise — the property step yields a still-open RpcProperty; if the walk regressed to
   // await-every-step (or iterate-context.ts's registerPipelinedRpcBrand calls disappeared), the value comes

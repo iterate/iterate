@@ -9,7 +9,7 @@ import type { IngressRouting } from "iterate/project-ingress";
 /** The package root (this file lives at e2e/support/). */
 export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
-/** The e2e worker's admin bearer — what the lane's default session authenticates with
+/** The e2e worker's admin bearer — what the suite's default session authenticates with
  *  (support/client.ts `adminCredentials`; global-setup hands it to every file). */
 export const E2E_ADMIN_API_SECRET = "e2e-admin-api-secret";
 /** The e2e worker's sign-in password — what a browser session is minted with (support/principal.ts:

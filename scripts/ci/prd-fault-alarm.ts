@@ -138,7 +138,7 @@ async function readWindow(
   // workerd#918: a Durable Object that answers before a request body is read can log
   // "Can't read from request stream after response has been sent." though the client got its
   // response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
-  // fetch lane's pipe (#2871; the #2880 follow-up measured no effect). It pages only on `/api`
+  // itx-expression fetch's pipe (#2871; the #2880 follow-up measured no effect). It pages only on `/api`
   // itself — the capnweb endpoint, a platform call, not a site visit (`/api/…` is a site's path).
   const unreadBody = "Can't read from request stream after response has been sent";
   const [serverErrors, heals, errors, apiUnreadBodyErrors] = await Promise.all([

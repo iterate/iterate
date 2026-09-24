@@ -238,7 +238,7 @@ static void idle_motion_is_deterministic_on_the_playout_clock(void)
  * The display task and analyzer deliberately share core 0 on StackChan. If a
  * lower-priority analyzer is preempted after opening its seqlock, a renderer
  * which waits for the write to finish prevents the analyzer from ever running
- * again. This test fixes that architectural failure mode at the portable seam:
+ * again. This test fixes that architectural failure mode at the portable boundary:
  * an in-progress publication must fail immediately and preserve the last good
  * pose, allowing the renderer to keep drawing and retry 33 ms later.
  */

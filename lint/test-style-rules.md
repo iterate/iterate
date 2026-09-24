@@ -6,7 +6,7 @@ field of it. They were introduced in
 [#1361](https://github.com/iterate/iterate/pull/1361), re-armed in
 [#1965](https://github.com/iterate/iterate/pull/1965), and are armed on every
 `*.test.ts` and `*.test.tsx` in the repository: each workspace's unit tests, the
-os Workers lane and the e2e lane.
+os Workers suite and the e2e suite.
 
 Every line must comply. Where a rule genuinely does not apply to a file, exclude that
 exact path in `.oxlintrc.json` with a comment saying why.
@@ -54,9 +54,9 @@ shared closure state and lifecycle hooks grow. Put the group in the title
   them (`vi.useRealTimers()`, `vi.unstubAllGlobals()`, `vi.unstubAllEnvs()`,
   `spy.mockRestore()`). Only apps/kit's config restores them itself
   (`unstubGlobals`, `restoreMocks`).
-- **Setup every file of a lane needs** (the os e2e lane's
+- **Setup every file of a suite needs** (the os e2e suite's
   `setupFiles: ["./e2e/support/setup.ts"]`, which injects the shared worker's
-  URL and disposes each test's sessions) belongs in that lane's `setupFiles`.
+  URL and disposes each test's sessions) belongs in that suite's `setupFiles`.
   Setup one file needs is an idempotent call at the top of each test that needs
   it.
 
@@ -75,7 +75,7 @@ and Start's generated server entry to a stand-in page
 A module whose only platform dependency is a base class (`RpcTarget`,
 `WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the
 test file. Behaviour that needs the real runtime belongs in
-the Workers lane (`apps/os/__workers-tests__/`).
+the Workers suite (`apps/os/__workers-tests__/`).
 
 ## Exact equality
 

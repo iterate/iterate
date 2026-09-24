@@ -1,10 +1,10 @@
 // stream.e2e.test.ts — THE EVENT LOG through `itx.append` / `itx.readEvents` / `itx.waitForEvent`
 // (`Stream` in stream/stream.ts, whose mechanics are src/stream/stream.test.ts; this file proves the
-// doors end to end through the real DO). Pins:
+// entry points end to end through the real DO). Pins:
 //   • the WAKE RECORD: the DO's constructor appends `stream/created` @1 and `stream/woken` @2 before
-//     any door opens, and the first user append lands @3; the core reduce carries identity +
+//     any call is served, and the first user append lands @3; the core reduce carries identity +
 //     incarnation; woken exactly once per incarnation, created once ever
-//   • the append door's runtime guards; idempotency at the commit point (an in-batch hit reduced ONCE
+//   • append's runtime guards; idempotency at the commit point (an in-batch hit reduced ONCE
 //     by the commit-point reduce, a mid-batch conflict rolling the whole batch back and burning no
 //     offset, a hit interleaved with fresh events, two sessions' concurrent appends keeping offsets
 //     unique)
@@ -19,8 +19,8 @@
 //     the real DO SQLite (event_chunks), an idempotent chunked retry dedupes, a mid-batch conflict rolls
 //     the chunk rows back, chunk rows stay invisible to paging, a surrogate pair straddling a chunk
 //     boundary survives (the JSON is sliced by UTF-16 code units)
-//   • `waitForEvent` through a LOADED worker's `env.ITX.get()` — the scope's door waits on the DO and
-//     returns the committed event (the Workers-RPC lane no other suite drives)
+//   • `waitForEvent` through a LOADED worker's `env.ITX.get()` — the scope's method waits on the DO and
+//     returns the committed event (the Workers-RPC path no other suite drives)
 //   • OPT-IN, deployed only (RUN_WAKE_LOOP_PROBE=1): the self-wake trace — a stuck cursor delivery on
 //     a dormant context self-wakes on the DO's alarm, and the probe prints each wake's story
 
@@ -42,7 +42,7 @@ import { enableFixtureProcessor } from "./support/sources.ts";
 
 // ── the wake record ──
 
-test("any door materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
+test("any call materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
   const ctx = freshCtx("woken");
   const itx = openItx(ctx);
   // A bare read sees only the birth and wake records; no implicit subscriptions.
@@ -74,7 +74,7 @@ test("any door materializes a fresh context: readEvents(0) starts with created t
 
 // ── the commit point: guards, idempotency, depth, the pause slice, paging ──
 
-// ── the append door's runtime guards ──
+// ── append's runtime guards ──
 
 test("the runtime guard rejects a non-string or blank type, committing nothing", async () => {
   // There is no TS-type allow-list on the RPC boundary; the ONE explicit runtime guard in
@@ -180,7 +180,7 @@ test("concurrent appends from two sessions to one ctx keep offsets unique", asyn
 
 // ── expression/value depth near the codec's parse budget ──
 
-test("a 64-deep nested-array payload (structured lane) appends and reads back byte-identically", async () => {
+test("a 64-deep nested-array payload (the structured half) appends and reads back byte-identically", async () => {
   const itx = openItx(freshCtx("depth"));
   const payload = { d: nested(64) }; // the value-depth budget is 64 — this is AT the edge
   const [committed] = await itx.append({ type: "deep", payload });
@@ -240,7 +240,7 @@ test("pause refuses durable AND ephemeral appends, mixed batches wholesale — c
   const ephErr = await rejection(itx.append({ type: "blip", payload: {}, ephemeral: true }));
   expect(ephErr.message).toContain("stream paused");
   // a batch MIXING the resume with a non-control event is refused WHOLESALE (enforcement is
-  // batch-atomic at the door — no partial admission)
+  // batch-atomic at append — no partial admission)
   const mixedErr = await rejection(
     itx.append(
       { type: "events.iterate.com/stream/resumed", payload: {} },
@@ -339,7 +339,7 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
 
   // A small event, then a 5MB body, then a small event — dense offsets on both sides. (The
   // context's constructor minted created + woken and the core reduce's ephemeral live-state delta
-  // before any door opened; `small-before` is appended twice so the two receipts are adjacent — a
+  // before any call was served; `small-before` is appended twice so the two receipts are adjacent — a
   // plain event changes no core state, so nothing ephemeral lands between them.)
   await itx.append({ type: "small-before" });
   const [before] = await itx.append({ type: "small-before" });
@@ -462,16 +462,16 @@ test("a surrogate pair straddling a chunk boundary round-trips byte-identically"
   ).toBe(true);
 });
 
-// ── waitForEvent through the loaded-worker lane ──
+// ── waitForEvent through a loaded worker ──
 
-test("waitForEvent through a LOADED worker's env.ITX.get() — the scope's dotted door waits on the DO and returns the event", async () => {
+test("waitForEvent through a LOADED worker's env.ITX.get() — the scope's dotted method waits on the DO and returns the event", async () => {
   const ctx = freshCtx("waitload");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  // The door under test is `waitForEvent` on the itx scope a loaded worker holds (`env.ITX.get()` —
+  // The method under test is `waitForEvent` on the itx scope a loaded worker holds (`env.ITX.get()` —
   // the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
-  // worker returns the committed event — the Workers-RPC lane no other suite drives.
+  // worker returns the committed event — the Workers-RPC path no other suite drives.
   const SRC_WAITER = {
     "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Waiter extends WorkerEntrypoint {

@@ -34,7 +34,7 @@ const localSequential = test.skipIf(!projectHostsAreLocal()).sequential;
 
 localSequential(
   "enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit",
-  { timeout: 120_000 }, // the row's own worker boot on top of the lane's minute
+  { timeout: 120_000 }, // the row's own worker boot on top of the suite's minute
   async () => {
     await using worker = await ownWorker();
     // Identity is `ctx.props`, minted at materialization — there is no configure window in which the
@@ -57,7 +57,7 @@ localSequential(
 
 localSequential(
   "disable mid-drive: appends survive, no ongoing error storm, re-enable rebuilds an exact reduce",
-  { timeout: 120_000 }, // the row's own worker boot on top of the lane's minute
+  { timeout: 120_000 }, // the row's own worker boot on top of the suite's minute
   async () => {
     await using worker = await ownWorker();
     const itx = await worker.itx(freshCtx("middrive"));
@@ -123,7 +123,7 @@ localSequential(
       .projects.get(ctx);
     const c = collector();
     await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });
-    // one probe proves the lane end-to-end BEFORE the stall
+    // one probe proves delivery end-to-end BEFORE the stall
     await itx.append({ type: "flood", ephemeral: true, payload: { probe: true } });
     await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
     // the victim's row is a PUSH row (pure data — target `itx.builtins.rpcStubs.get('subscription:victim')`,

@@ -3,19 +3,19 @@
 // every short name `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
 // consulted only after the context's own rows. (The resolver's own rows — the depth budget, longest
 // match wins, a longer match under a target's prefix — are context/itx-expression-rewriting.test.ts;
-// the table as a MAP and a null's delete are __workers-tests__/do-doors.test.ts +
+// the table as a MAP and a null's delete are __workers-tests__/do-entry-points.test.ts +
 // src/stream/core-processor.test.ts.) Pins:
 //   • a provided stub at a built-in's name SHADOWS it (the real root: ai-root-shadow-and-fable.e2e); a
 //     dead stub's un-set leaves a user's alias to the shadowed root alone, in either configuration order
-//   • `provide(match, null)` at a built-in's name is a MASK the handle's dispose lifts; the physical
-//     door still answers; the platform-equivalent target deletes the row
+//   • `provide(match, null)` at a built-in's name is a MASK the handle's dispose lifts; the built-in
+//     still answers; the platform-equivalent target deletes the row
 //   • `rewriteRules.list()` is the EFFECTIVE table, described, each row with the context it came from
 //     (a bare null lists only the context's own rows); `get(match)` canonicalizes the caller's spelling; `resolve(call)` is the
 //     pure chain and `invoke(call) ≡ invoke(resolve(call).at(-1))`; `invoke(call, ...args)` applies
 //     live args
 //   • A BARE `itx` ROW with a target answers every name no implicit row claims (at a child: every
 //     project root; the context's own log stays its own); it may not name its OWN context
-//   • the door refuses a match at `itx.builtins` or at a proxy verb; the platform never spells a short
+//   • append refuses a match at `itx.builtins` or at a proxy verb; the platform never spells a short
 //     name, so a row at `itx.rpcStubs` or `itx.facets` redirects nothing the platform relies on
 //   • an EXPRESSION handle's dispose removes the row it wrote (compare-and-set on the printed target);
 //     RED (`createFailing`): while the stream is paused the removal is refused and forgotten
@@ -73,7 +73,7 @@ for (const order of ["alias first", "stub first"] as const)
     expect(await itx.me()).toEqual(real);
   });
 
-test("a DENY: provide(match, null) at a built-in's name masks it; the physical door still answers; disposing the deny lifts it", async () => {
+test("a DENY: provide(match, null) at a built-in's name masks it; the built-in still answers; disposing the deny lifts it", async () => {
   const ctx = freshCtx("mask");
   const itx = openItx(ctx);
   await itx.kv.put("k", "v");
@@ -89,7 +89,7 @@ test("a DENY: provide(match, null) at a built-in's name masks it; the physical d
   });
   // a partial mask under the root refuses only what it claims
   await itx.provide("itx.kv.put", null);
-  expect(await itx.builtins.kv.get("k")).toBe("v"); // the physical door still answers
+  expect(await itx.builtins.kv.get("k")).toBe("v"); // the built-in still answers
   deny[Symbol.dispose]();
   await until("the deny lifted", async () =>
     (await itx.rewriteRules.get("itx.kv"))?.target === "itx.builtins.kv" ? true : undefined,
@@ -154,7 +154,7 @@ test("rewriteRules.list() under a bare row WITH a target still shows every impli
 
 // An EXPRESSION handle's undo is compare-and-set on the row's target: `#removeRuleInBackground`
 // (src/iterate-context.ts) removes the row only while its target is still the one this handle wrote —
-// spelled the way `rewriteRules.get` spells it (PRINTED, with holes), since the door's event carries
+// spelled the way `rewriteRules.get` spells it (PRINTED, with holes), since the appended event carries
 // the PARSED form.
 test("disposing an EXPRESSION provide handle removes the rule it wrote — the platform row beneath shows through again", async () => {
   const itx = openItx(freshCtx("expression-dispose"));
@@ -213,7 +213,7 @@ test("resolve(call) is the pure chain, and THE LAW holds: invoke(call) ≡ invok
   expect(await itx.invoke("itx.whoami()")).toMatchObject({ projectId: ctx }); // no args: the call as spelled
 });
 
-test("A BARE `itx` ROW WITH A TARGET at a child: a live capability answers every name no implicit row claims — the context's own log stays its own; `builtins` is the physical door", async () => {
+test("A BARE `itx` ROW WITH A TARGET at a child: a live capability answers every name no implicit row claims — the context's own log stays its own; `builtins` is the unmaskable built-in", async () => {
   const ctx = freshCtx("override");
   const root = openItx(ctx);
   const live = new Override();
@@ -240,8 +240,8 @@ test("A BARE `itx` ROW WITH A TARGET at a child: a live capability answers every
   expect(errorCode(await rejection(root.cd("/x").kv.get("k")))).toBe("NO_ITX_EXPRESSION_MATCH"); // nothing project-level is implicit at a child
 });
 
-test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; the platform never spells a short name", async () => {
-  const ctx = freshCtx("door");
+test("append refuses a match rooted at itx.builtins or at a proxy verb; the platform never spells a short name", async () => {
+  const ctx = freshCtx("refusals");
   const itx = openItx(ctx);
   expect(String((await rejection(itx.provide("itx.builtins.kv", "itx.whoami"))).message)).toMatch(
     /may not be rooted at "itx\.builtins"/,
@@ -265,12 +265,12 @@ test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; 
   expect(ruleTargets).toContainEqual(["itx", "builtins", "rpcStubs", ["get", "itx.tool"]]);
 });
 
-test("the door: a whole-context override may not name its OWN context (every call would route back into itself, a fresh resolve per hop); a sibling context is fine", async () => {
+test("append refuses a whole-context override that names its OWN context (every call would route back into itself, a fresh resolve per hop); a sibling context is fine", async () => {
   const itx = openItx(freshCtx("own-context-override")).cd("/x");
   for (const target of ["itx.builtins.cd('/x')", "itx.builtins.cd('.')"])
     expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
   // …spelled short as well: `cd` is implicit and outranks the bare row, so `itx.cd('/x')` resolves
-  // to the physical door and the same self-hop is refused
+  // to the built-in and the same self-hop is refused
   for (const target of ["itx.cd('/x')", "itx.cd('../x')"])
     expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
   const sibling = await itx.provide("itx", "itx.builtins.cd('/y')");
@@ -361,9 +361,9 @@ test("the table is a MAP under concurrency: 5 concurrent re-sets of ONE match le
   expect(await itx.invoke(["itx", ["race"]])).toBe(Number(lastTarget.slice("itx.probe".length)));
 });
 
-test("a NON-CANONICAL match spelling through the provide door is stored CANONICAL and rewrites", async () => {
-  // The one-canonicalizer pin: the provide door canonicalizes ONCE at the top, so the reduce stores
-  // exactly the match every later door (dispatch, un-set by match) compares against — a stray space
+test("a NON-CANONICAL match spelling through provide is stored CANONICAL and rewrites", async () => {
+  // The one-canonicalizer pin: provide canonicalizes ONCE at the top, so the reduce stores
+  // exactly the match every later step (dispatch, un-set by match) compares against — a stray space
   // can never mint a row no call reaches.
   const ctx = freshCtx("canon");
   const itx = openItx(ctx);
@@ -396,7 +396,7 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
   const ctx = freshCtx("badrule");
   const itx = openItx(ctx);
   // The append BOUNDARY validates every control event (core-processor `normalizeControlEvent`), so a
-  // malformed rewrite-rule is rejected at the door — not committed and then skipped at the reduce.
+  // malformed rewrite-rule is rejected at append — not committed and then skipped at the reduce.
   // An unparseable target:
   const unparseable = await rejection(
     itx.append({
@@ -416,7 +416,7 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
     }),
     "wrong payload shapes",
   );
-  // the table is untouched — it still takes rules and resolves them (no refusal wedged the door)
+  // the table is untouched — it still takes rules and resolves them (no refusal wedged append)
   await itx.provide("itx.hello", "itx.whoami");
   expect(await itx.invoke(["itx", ["hello"]])).toMatchObject({ projectId: ctx });
   // and the refused match is no row at all (default-deny answers there)

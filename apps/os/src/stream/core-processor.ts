@@ -23,11 +23,11 @@
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //
-// ONE VALIDATION BOUNDARY: every append through the DO's door passes `normalizeControlEvent` (below),
+// ONE VALIDATION BOUNDARY: every append through the DO passes `normalizeControlEvent` (below),
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
 // it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
-// the door, and the door refuses them. No stored row predates its event's normalization.
+// validation, and `append` refuses them. No stored row predates its event's normalization.
 
 import {
   itxExpressionStepName,

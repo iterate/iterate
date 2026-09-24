@@ -88,7 +88,7 @@ struct iterate_kit_itx_mount_options {
  *   provide("<capability match>", <this device>)   -> a rewrite rule handle
  *
  * `projects.get` is pure addressing and takes one string; `provide` is the ONE
- * front door for making a name mean this device.
+ * entry point for making a name mean this device.
  *
  * WHAT READY OWNS: the session import (what the liveness probe asks), the
  * project import, and the rewrite-rule handle that IS the live provision —

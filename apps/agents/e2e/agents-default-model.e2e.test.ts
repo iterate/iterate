@@ -1,6 +1,6 @@
 // e2e/agents-default-model.e2e.test.ts — THE DEFAULT MODEL'S TURN, twice over (docs/testing.md#real-model-rows).
 //
-// INTERCEPTED, in every lane (PR previews, Main OS e2e, local, the soak): the agent's `itx.ai` is
+// INTERCEPTED, in every run (PR previews, Main OS e2e, local, the soak): the agent's `itx.ai` is
 // shadowed by a fake that plays the provider. The whole deployed runtime runs above it: the turn
 // loop, the attachment turned into a vision input, the byte transport, the chunk windows, the
 // settlement and the context report. The fake asserts what the runtime ASKED for (the model, the
@@ -9,7 +9,7 @@
 // REAL, once a day (os-real-model.yml, `E2E_REAL_MODELS=1`): the same turns against OpenAI's astra
 // on Cloudflare's billing and a pinned Workers AI model. What only a provider can prove: that it
 // accepts the request and answers the question. About $0.05 a run on the preview account's AI
-// Gateway, whose daily spend cap every lane shares.
+// Gateway, whose daily spend cap every run shares.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { collector, freshCtx, until } from "../../os/e2e/support/client.ts";

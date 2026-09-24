@@ -47,7 +47,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
 
 test("a first-party facet name refuses a spec — no source ever names a class of this worker", async () => {
   // Refused INSIDE the object (runInDurableObject): a rejected RPC promise crossing to the test is
-  // reported as unhandled in the object whatever the caller does with it (the facet-door lesson).
+  // reported as unhandled in the object whatever the caller does with it (the facet-hosting lesson).
   const refusals = await runInDurableObject(
     stub("prj_facet_exports_refusal"),
     async (instance: unknown) => {

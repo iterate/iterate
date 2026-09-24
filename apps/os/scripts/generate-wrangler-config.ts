@@ -126,7 +126,7 @@ function wranglerConfig() {
 
 /** The Vite plugin builds one flattened environment at a time: `name` is an envs.ts deployment or
  *  "self-host"; none is a local build — `localDev` for `vite dev` (plain dev secrets as vars), else
- *  the local build the e2e lane runs, on `port`. */
+ *  the local build the e2e suite runs, on `port`. */
 export function viteWranglerConfig(
   name: string | undefined,
   options: { localDev: boolean; port: string },

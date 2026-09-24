@@ -1,7 +1,7 @@
 # Vitest Testing Patterns
 
 This document covers detailed testing patterns used in this codebase. For the
-test lanes themselves — what exists, how to run each against local dev /
+test suites themselves — what exists, how to run each against local dev /
 previews / prd, and the canonical env vars — see [Testing](testing.md).
 
 ## Core Principles
@@ -20,7 +20,7 @@ no `vi.mock`, `test` rather than `it`, and
 `expect(object).toMatchObject({ property })` rather than
 `expect(object.property).toBe(...)`. Every line complies. [The rules and what to write instead](../lint/test-style-rules.md)
 cover ordered rows (`test.sequential`), gated suites (`test.skipIf`), disposable
-fixtures (`using`/`await using`) and the os unit lane's `cloudflare:workers` shim.
+fixtures (`using`/`await using`) and the os unit suite's `cloudflare:workers` shim.
 
 ## Table-based Testing with test.for
 
@@ -52,13 +52,13 @@ instead of snapshotting the whole thing.
 
 ## Polling and Waiting for Conditions
 
-The Workers lane and the e2e lane each poll with their own
-`until(label, fn, timeoutMs?)`, lane-local by design
+The Workers suite and the e2e suite each poll with their own
+`until(label, fn, timeoutMs?)`, suite-local by design
 ([test helper layers](testing.md#where-test-helpers-live)):
 `apps/os/__workers-tests__/support.ts` and `apps/os/e2e/support/client.ts`.
 `until` returns the first value that is neither `undefined` nor `false`, and
 throws `until(<label>): timed out …` once `timeoutMs` passes (10s in the
-Workers lane, 20s in e2e, whose copy also polls through a throwing `fn`):
+Workers suite, 20s in e2e, whose copy also polls through a throwing `fn`):
 
 ```typescript
 const row = await until("subscription row", async () =>

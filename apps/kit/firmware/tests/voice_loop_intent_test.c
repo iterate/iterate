@@ -9,7 +9,7 @@
  * The board here has no `poll` op at all, so there is no
  * physical button in the program: every intent has to come from the capability
  * the loop mounts, over the same Cap'n Web session a real caller uses, through
- * the same transport seam a real socket delivers on.
+ * the same transport interface a real socket delivers on.
  */
 
 #include "esp_idf.h"
@@ -1205,7 +1205,7 @@ static void server_end_discards_a_tail_before_b(void) {
 /*
  * AN ACCEPTED CALL WITH NOTHING OWED IS QUIET, NOT DEAD. GPT-Live's facet
  * drops idle silence, so a person thinking and a model listening deliver no
- * batch at all; the downlink deadline must not read that as a lost lane and
+ * batch at all; the downlink deadline must not read that as a lost stream and
  * recycle the connection (it did, every ten seconds, 2026-09-11).
  */
 static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
@@ -1233,11 +1233,11 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
 }
 
 /*
- * A LANE THAT GOES SILENT MID-ANSWER IS DEAD. An answer began and its `last`
+ * A STREAM THAT GOES SILENT MID-ANSWER IS DEAD. An answer began and its `last`
  * never came: ten seconds of nothing owed-and-undelivered is the failure the
  * deadline exists for, and the recycle still fires.
  */
-static void a_lane_silent_mid_answer_is_recycled(void) {
+static void a_stream_silent_mid_answer_is_recycled(void) {
   size_t after_accept;
   size_t after_chunk;
   quiescent();
@@ -1374,7 +1374,7 @@ int main(void) {
   server_end_discards_a_tail_before_b();
   pump();
   an_idle_accepted_call_is_not_recycled_for_silence();
-  a_lane_silent_mid_answer_is_recycled();
+  a_stream_silent_mid_answer_is_recycled();
   activation_during_codec_read_keeps_idle_pre_roll();
   an_unaccepted_activation_times_out_once();
   delayed_a_setup_cannot_cancel_or_mount_b();

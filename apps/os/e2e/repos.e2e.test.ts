@@ -18,7 +18,7 @@
 // the real wire codec runs locally too. A row that reads or commits through git is `localOnly`: the
 // fake remote listens on THIS machine's loopback, which a deployed worker's egress cannot reach (403);
 // rows that only touch the proxy still run deployed (the fake proxy is called back over the
-// WebSocket), and the last test runs the story on real Artifacts — in every lane: the local worker
+// WebSocket), and the last test runs the story on real Artifacts — in every environment: the local worker
 // binds Artifacts too (wrangler's local runtime serves it).
 
 import { expect, test } from "vitest";

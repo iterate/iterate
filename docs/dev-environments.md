@@ -192,7 +192,7 @@ the selected environment's `secrets.adminBearer` and opens a session with the
 `admin` actor, which reaches every project. It does not impersonate a customer
 unless you ask it to: `authenticate({ type: "admin-secret", secret, as: { email } })`
 acts as that user's session (the projects of their organizations). The e2e
-lane's `adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly
+suite's `adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly
 this.
 
 The `iterate` CLI (`packages/cli`) takes the bearer from
@@ -312,8 +312,8 @@ scoped identity (a real user's OAuth grant) when you can.
 
 Each environment (local dev, the preview parent, prd) has its own
 `secrets.key`, bearer and password, so a leak is scoped to one environment;
-every per-PR preview shares its parent's. A blank `secrets.adminBearer` turns the operator
-door off entirely (a self-host needs none: a personal access token covers
+every per-PR preview shares its parent's. A blank `secrets.adminBearer` turns operator
+access off entirely (a self-host needs none: a personal access token covers
 scripting).
 
 ## Browsers: the golden path for agents

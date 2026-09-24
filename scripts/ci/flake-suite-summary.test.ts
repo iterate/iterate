@@ -133,7 +133,7 @@ function temporaryDirectory() {
 
 function browserResult() {
   return TestTelemetryArtifact.parse({
-    artifactSchemaVersion: 1,
+    artifactSchemaVersion: 2,
     artifactId: "playwright-1",
     producer: "playwright-telemetry-reporter",
     createdAt: "2026-09-15T12:01:00.000Z",
@@ -150,8 +150,7 @@ function browserResult() {
     context: {
       framework: "playwright",
       testKind: "e2e",
-      // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- existing test telemetry wire field
-      lane: "playwright",
+      suite: "playwright",
       workspace: "iterate-root",
     },
     run: {
@@ -179,7 +178,6 @@ function browserResult() {
       },
     ],
     modules: [],
-    // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- existing test telemetry wire field
-    lanes: [],
+    runners: [],
   });
 }

@@ -8,13 +8,13 @@
 //     table listing the processor (ONE row, `hostedFacet`, the source elided, NO cursor — a facet owns
 //     its progress); the facet ADDRESS through the built-in, through a rule of its own, the barrier
 //     verb, a name the facet does not expose rejecting raw; two userspace processors side by side
-//   • the door's refusals: a dotted name, no source, the core reduce's name at either door (core's
+//   • the refusals: a dotted name, no source, the core reduce's name at either entry point (core's
 //     slice names `rewrite-rules` / `subscriptions` are ordinary facet names)
-//   • the raw event-sourced door agrees with the verb, both ways: a hand-appended
+//   • the raw event-sourced form agrees with the verb, both ways: a hand-appended
 //     subscription-configured IS the enablement; `{ target: null }` deletes the hosted facet, storage
 //     included, and a re-enable rebuilds from the log
 //   • a two-session enable race yields ONE lineage with exact counts; re-enable while WARM with the
-//     SAME spec appends NOTHING (idempotent at the door — every entity's `create()` enables its row on
+//     SAME spec appends NOTHING (idempotent at enable — every entity's `create()` enables its row on
 //     every call) and never corrupts the reduce; double-enable then ONE disable disables (no
 //     enablement stack)
 //   • `waitUntilProcessed(future offset)` times out with its documented error and leaks no waiter
@@ -25,7 +25,7 @@
 //     STREAM_PAUSED; an operator's plain `stream/resumed` restores flow
 // (The two pins that read the worker's console — a quiet enable is clean, disable mid-drive raises no
 // error storm — are push-delivery-no-dropped-warns.e2e, which owns a worker of its own; a stale
-// subscribe handle's compare-and-set undo is __workers-tests__/do-doors.test.ts.)
+// subscribe handle's compare-and-set undo is __workers-tests__/do-entry-points.test.ts.)
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
@@ -87,7 +87,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(row.cursor).toBeUndefined();
 });
 
-test("facet address: the built-in door, a rewrite rule onto it, barrier verb, probe-resistance", async () => {
+test("facet address: the built-in address, a rewrite rule onto it, barrier verb, probe-resistance", async () => {
   const itx = openItx(freshCtx("addr"));
   await enableFixtureProcessor(itx, "tally");
   await itx.invoke(`itx.append({ type: 'mark' })`);
@@ -139,13 +139,13 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
   expect((await processorNames(itx)).sort()).toEqual(["tally", "user-tally"]);
 });
 
-// ── enablement is a row: the doors, the lineage, the barrier ──
+// ── enablement is a row: the entry points, the lineage, the barrier ──
 
-// ── the door's refusals ──
+// ── the refusals ──
 
 test("processors.enable rejects a name that is not ONE segment (a dotted name)", async () => {
   // A processor's name is its facet name, its subscription name, its `.get(name)` name — ONE
-  // segment ([A-Za-z0-9_-]+). "a.b" is refused at the door instead of being re-segmented by a path
+  // segment ([A-Za-z0-9_-]+). "a.b" is refused at enable instead of being re-segmented by a path
   // grammar into an orphan no delivery would ever reach.
   const itx = openItx(freshCtx("dotname"));
   await expect(
@@ -169,9 +169,9 @@ test("processors.enable REQUIRES a source ref — there are no built-in processo
   expect(await subscriptions(itx)).toEqual([]);
 });
 
-test("the core reduce's name is refused at BOTH doors — never a facet to enable or disable; the names of core's slices (rewrite-rules, subscriptions) are ordinary facet names", async () => {
+test("the core reduce's name is refused at BOTH entry points — never a facet to enable or disable; the names of core's slices (rewrite-rules, subscriptions) are ordinary facet names", async () => {
   // `core` is THE inline reduce — always on, never a facet — and its address
-  // (`itx.facets.get('core')`) is taken, so its name is refused at both doors: a processor that ran
+  // (`itx.facets.get('core')`) is taken, so its name is refused at both entry points: a processor that ran
   // under it could never be addressed or disabled by name. Nothing else is reserved: core's slices
   // have no facet address of their own, so `rewrite-rules` and `subscriptions` are plain names a
   // processor may take, address and drop like any other.
@@ -206,8 +206,8 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
 
 // ── the row IS the enablement ──
 
-test("the raw event-sourced door agrees with the verb — a hand-appended subscription-configured naming the facet's processEventBatch IS the enablement", async () => {
-  const itx = openItx(freshCtx("rawdoor"));
+test("the raw event-sourced form agrees with the verb — a hand-appended subscription-configured naming the facet's processEventBatch IS the enablement", async () => {
+  const itx = openItx(freshCtx("rawevent"));
   await itx.append({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
@@ -236,7 +236,7 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   await Promise.all([enableFixtureProcessor(itxA, "tally"), enableFixtureProcessor(itxB, "tally")]);
 
   // same name REPLACES (no stack): the racing enables landed one or two configured events — the
-  // door appends nothing for a row already in the table, and a race may or may not see it — and the
+  // enable appends nothing for a row already in the table, and a race may or may not see it — and the
   // table holds ONE row named tally
   expect((await processorNames(itxA)).filter((s) => s === "tally")).toHaveLength(1);
 
@@ -255,7 +255,7 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   expect(snap.state.counts).toMatchObject({ seen: 3 });
 });
 
-test("re-enable while WARM with the same spec appends NOTHING (idempotent at the door) and never corrupts the reduce (no reset, no double-count)", async () => {
+test("re-enable while WARM with the same spec appends NOTHING (idempotent at enable) and never corrupts the reduce (no reset, no double-count)", async () => {
   const itx = openItx(freshCtx("reenable"));
   await enableFixtureProcessor(itx, "tally");
   await itx.append({ type: "mark" });
@@ -272,7 +272,7 @@ test("re-enable while WARM with the same spec appends NOTHING (idempotent at the
       (e) => e.type === "events.iterate.com/stream/subscription-configured",
     ).length;
   const configuredBefore = await configuredEvents();
-  await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ nothing appended: the door answers from the table
+  await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ nothing appended: enable answers from the table
   expect(await configuredEvents()).toBe(configuredBefore);
   expect((await processorNames(itx)).filter((s) => s === "tally")).toHaveLength(1);
   await itx.append({ type: "mark" });
@@ -391,7 +391,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(paused.source?.processor?.whileProcessing?.type).toBe("burst");
   expect(paused.idempotencyKey).toMatch(/^breaker\/trip@\d+$/); // a replay can never double-pause
 
-  // the stream is paused: a further append refuses at the door, coded, with the breaker's reason
+  // the stream is paused: a further append is refused, coded, with the breaker's reason
   const err = await rejection(itx.append({ type: "more" }));
   expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused: breaker: durable events exceeded the bucket");

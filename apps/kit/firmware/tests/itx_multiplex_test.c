@@ -261,7 +261,7 @@ static void start_mount(struct fixture *fixture) {
  * `(events, range)` the OS calls a lent stub with — argument 0 IS the events
  * array — while live state still hands over one state object and no range.
  * Telling them apart on the array, rather than on a field that happened to be
- * in the old batch envelope, is what makes this seam honest.
+ * in the old batch envelope, is what makes this boundary honest.
  */
 static void observe(
     void *owner,

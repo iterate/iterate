@@ -1,7 +1,7 @@
 // __workers-tests__/facets-never-answer-a-socket.test.ts — a facet reached BY ITX EXPRESSION answers
 // RPC and plain HTTP, NEVER a WebSocket. A socket terminates at the edge (a session's /api pager
 // socket on the context DO, a project host's lent-stub upgrade leg) and the facet behind it is
-// reached by itx expression; so the context DO's `facets.get` door refuses an upgrade aimed at a
+// reached by itx expression; so the context DO's `facets.get` refuses an upgrade aimed at a
 // facet, coded FACET_NO_UPGRADE, BEFORE the facet is even materialized — and a test's direct release
 // can abort an idle facet with nothing to lose (a socket a facet HELD would die with it, 1006, unseen
 // by the parent: measured 2026-09-13, the reason for this rule). The one facet that PROXIES a socket
@@ -58,7 +58,7 @@ test("a project host reaches a facet-hosted app over plain HTTP and RPC; a WebSo
 });
 
 test("the DO's invoke method refuses the same upgrade, coded, on a facet it has never started", async () => {
-  const ctx = "prj_facet_no_upgrade_door";
+  const ctx = "prj_facet_no_upgrade";
   const upgrade = new Request("https://facet.internal/live", { headers: { Upgrade: "websocket" } });
   const outcome = await (
     stub(ctx).invoke([

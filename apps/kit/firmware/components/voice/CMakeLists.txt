@@ -29,7 +29,7 @@ else()
   # becomes a call — is tested on a laptop rather than on a flash.
   #
   # It compiles here because the ESP-IDF it names is the host one
-  # (platforms/host/esp_idf), and the five platform seams it calls —
+  # (platforms/host/esp_idf), and the five platform interfaces it calls —
   # provisioning, reset reason, restart note, system update, the itx
   # transport — come from whichever platform a target links: tests/fakes for
   # a test, platforms/darwin for targets/mac. Nothing about the loop changes

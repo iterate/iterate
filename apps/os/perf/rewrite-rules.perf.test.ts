@@ -19,7 +19,7 @@ test("300 rules: invoking the NEWEST rule and a built-in root both stay under 15
   }));
   expect(await itx.append(...rules)).toHaveLength(300);
 
-  // Warm both lanes once (table rehydration / DO wake are not what we are measuring).
+  // Warm both paths once (table rehydration / DO wake are not what we are measuring).
   expect(await itx.invoke(["itx", ["m299"]])).toMatchObject({ projectId: ctx, path: "/" });
   await itx.invoke(["itx", ["whoami"]]);
 

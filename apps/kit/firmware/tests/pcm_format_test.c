@@ -6,10 +6,10 @@
 #include <stdint.h>
 
 /*
- * The userspace PCM lane deliberately stays mono PCM16 at 16 kHz on every
+ * The userspace PCM stream deliberately stays mono PCM16 at 16 kHz on every
  * device.  The Voice Preview Edition's XMOS/AIC3204 playback clock is instead
  * fixed at stereo signed-32 at 48 kHz.  This test pins the conversion at the
- * hardware boundary so neither the portable lane nor userspace acquires a
+ * hardware boundary so neither the portable stream nor userspace acquires a
  * device-specific resampler.
  *
  * Literal expected words matter here: recomputing the answer with another
@@ -55,13 +55,13 @@ static void interpolates_without_changing_the_hardware_contract(void) {
 }
 
 /*
- * Audio arrives in 10 ms lane edges, but those boundaries are transport
+ * Audio arrives in 10 ms chunks, but those boundaries are transport
  * artefacts rather than acoustic discontinuities. Resetting interpolation on
  * every edge would create a periodic hold/jitter component even when every
  * frame is delivered. This split-vs-contiguous equality test therefore pins
- * the stateful seam that the physical playback owner must retain.
+ * the stateful boundary that the physical playback owner must retain.
  */
-static void preserves_interpolation_across_lane_edges(void) {
+static void preserves_interpolation_across_chunk_edges(void) {
   const int16_t first[] = {-3000, 0};
   const int16_t second[] = {3000};
   const int16_t contiguous[] = {-3000, 0, 3000};
@@ -304,7 +304,7 @@ int main(void) {
   wire_byte_counts();
   playback_shapes();
   interpolates_without_changing_the_hardware_contract();
-  preserves_interpolation_across_lane_edges();
+  preserves_interpolation_across_chunk_edges();
   extracts_processed_and_non_aec_capture_channels();
   validates_shapes_and_extracts_pcm16();
   capture_gain_preserves_q31_precision_before_pcm16();

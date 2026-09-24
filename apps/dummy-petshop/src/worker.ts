@@ -2,9 +2,9 @@
  * dummy-petshop — a deliberately fake third-party service ("the pet shop")
  * for exercising Iterate's integrations & secrets system end to end
  * (apps/os/e2e/support/petshop.ts is the OS side's client): ONE pets API
- * behind many authentication doors — an OAuth 2.0 provider with Basic client
+ * behind many authentication schemes — an OAuth 2.0 provider with Basic client
  * auth at the token endpoint and short-TTL sealed tokens, a
- * legacy email+password login, a GraphQL session-login door, MCP, typed
+ * legacy email+password login, a GraphQL session-login endpoint, MCP, typed
  * RPC/OpenAPI surfaces, three WebSocket gateways — plus HMAC-signed outbound
  * webhooks and a test backdoor. GET / documents the whole surface.
  *
@@ -112,7 +112,7 @@ interface CodePayload {
   exp: number;
   /** PKCE S256 challenge (RFC 7636) when the client sent one at /oauth/authorize.
    * The token endpoint requires the matching code_verifier when this is present;
-   * absent for the legacy consent-only lane, which keeps existing e2e green. */
+   * absent for the legacy consent-only flow, which keeps existing e2e green. */
   codeChallenge?: string;
 }
 
@@ -180,11 +180,11 @@ const INDEX = dedent`
   GET  /.well-known/oauth-protected-resource[/mcp]  RFC 9728 — /mcp's resource + this origin as its auth server
   GET  /.well-known/oauth-authorization-server      RFC 8414 — authorize/token/register endpoints, PKCE S256, auth methods none + client_secret_basic
   POST /oauth/register      RFC 7591 dynamic client registration → a client pinned to its redirect_uris; token_endpoint_auth_method "none" ⇒ public (no secret, PKCE), else confidential
-  GET  /oauth/authorize     ?client_id&redirect_uri&state[&code_challenge] — consent page; add &approve=1[&user=x] to skip it (test lane); a DCR client's redirect_uri must be one it registered
+  GET  /oauth/authorize     ?client_id&redirect_uri&state[&code_challenge] — consent page; add &approve=1[&user=x] to skip it (for tests); a DCR client's redirect_uri must be one it registered
   POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
   POST /oauth/token         grant_type=authorization_code | refresh_token; confidential = HTTP Basic (RFC 6749 §2.3.1), public = client_id in the body; PKCE code_verifier required for public clients (and any code that carried a challenge, RFC 7636)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
-  POST /graphql             GraphQL session-login door: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
+  POST /graphql             GraphQL session-login endpoint: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
                             → sealed ${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
                             (one more way into the ONE pets API); expired/revoked → 401; no refresh grant — re-login is the refresh
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
@@ -232,9 +232,9 @@ function consentPage(params: {
       ["client_id", params.clientId],
       ["redirect_uri", params.redirectUri],
       ["state", params.state],
-      // PKCE challenge rides through the consent POST so the browser lane
+      // PKCE challenge rides through the consent POST so the browser flow
       // (human clicks Approve) proves the same code_verifier at token time
-      // as the consent-free &approve=1 lane.
+      // as the consent-free &approve=1 flow.
       ["code_challenge", params.codeChallenge],
     ] as const
   )
@@ -340,7 +340,7 @@ async function mintCodeRedirect(
 // standards "OAuth-protected MCP server": a client that hits /mcp unauthorized
 // reads the WWW-Authenticate `resource_metadata` URL, discovers this origin as
 // its own authorization server, registers a client, and runs the code+PKCE
-// flow against the endpoints already served above. This is the door the OS
+// flow against the endpoints already served above. This is the server the OS
 // outbound MCP-OAuth flow (itx.mcp.beginOAuth) is proven against.
 // ---------------------------------------------------------------------------
 
@@ -483,7 +483,7 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     }
     // PKCE (RFC 7636). A public client has no secret, so PKCE is its ONLY proof
     // and is mandatory. A confidential client is verified when it sent a
-    // challenge (the legacy consent-only lane sends none — no verifier required).
+    // challenge (the legacy consent-only flow sends none — no verifier required).
     if (client.public && !code.codeChallenge) {
       return json(
         { error: "invalid_grant", error_description: "PKCE is required for public clients" },
@@ -648,8 +648,8 @@ async function appInstallationAccessToken(
   );
 }
 
-/** The GraphQL login door's view of the shop: the sealing key, and the two
- * revocation epochs a session of `username` is bound to — the door's
+/** The GraphQL login endpoint's view of the shop: the sealing key, and the two
+ * revocation epochs a session of `username` is bound to — the endpoint's
  * (`graphql-session-login`) and the account's. */
 const graphqlLoginDeps = (deps: PetshopDeps): GraphqlLoginDeps => ({
   sealKey: deps.sealKey,
@@ -670,7 +670,7 @@ async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant |
   const grant = await unseal<Grant>(token, deps.sealKey);
   if (!grant) return null;
   if ((grant as { t?: string }).t === "graphql-session") {
-    // The GraphQL login door's session is one more way in to the SAME API:
+    // The GraphQL login endpoint's session is one more way in to the SAME API:
     // adapt it to an access-shaped grant (its "client" is the auth style —
     // this login flow has no OAuth client).
     const session = await graphqlSessionFromBearer(token, graphqlLoginDeps(deps));
@@ -691,7 +691,7 @@ async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant |
 
 /** POST a JSON payload signed GitHub-style: `<header>: sha256=<hex hmac>`.
  * `signatureHeader` defaults to petshop's OAuth-webhook header; the GitHub-App
- * webhook lane passes `x-hub-signature-256`. Delivery failure is reported, not
+ * webhook delivery passes `x-hub-signature-256`. Delivery failure is reported, not
  * thrown. */
 async function deliverWebhook(input: {
   url: string;
@@ -1047,7 +1047,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     };
     const rejection = await authorizeRejection(deps, params.clientId, params.redirectUri);
     if (rejection) return rejection;
-    // The consent-free lane: specs and agents append &approve=1 instead of
+    // The consent-free flow: specs and agents append &approve=1 instead of
     // scripting a form submit; browsers land on the consent page.
     if (url.searchParams.get("approve") === "1") {
       return mintCodeRedirect({ ...params, user: url.searchParams.get("user") ?? "" }, deps);
@@ -1078,7 +1078,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     }
   }
   if (key === "POST /api/legacy-login") return legacyLogin(request, deps);
-  // The GraphQL session-login door (graphql-login.ts): one more way to
+  // The GraphQL session-login endpoint (graphql-login.ts): one more way to
   // authenticate against the same pets API.
   if (key === "POST /graphql") {
     return handleGraphqlLogin(request, graphqlLoginDeps(deps));
@@ -1129,7 +1129,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     }
     return handleMcpRequest(request, { owner: grant.sub, pets: deps.pets });
   }
-  // The capnweb door (capnweb.ts): the same pets API as an RPC session — a
+  // The capnweb endpoint (capnweb.ts): the same pets API as an RPC session — a
   // batch POST or a WebSocket upgrade — behind the same bearer check; the token
   // rides the Authorization header of the POST or of the upgrade request.
   if (url.pathname === "/capnweb") {

@@ -879,7 +879,7 @@ type ClientWebSocket = {
 
 /** TRANSPORT SIDE of an rpc-stub fetch (runs where the client's stub is legally touchable —
  *  today that is the capnweb session's request context; a NATIVE provider's socket answer still
- *  dies on its own RPC leg, pinned in fetch-door.e2e.test.ts — a future dial-back fix must
+ *  dies on its own RPC leg, pinned in fetch.e2e.test.ts — a future dial-back fix must
  *  deliver the upgradeId to the provider WITHOUT riding the Request headers verbatim, because a
  *  provider that forwards its received Request would smuggle the header back into our own
  *  upgrade-leg handler). Dials the provider's real fetch and branches ONLY on the answer:

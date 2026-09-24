@@ -40,7 +40,7 @@ import { HangTools, Tools } from "./support/targets.ts";
 // (A never-configured match is default-deny like any other unmatched call — NO_ITX_EXPRESSION_MATCH
 // across the /api hop is context.e2e; RPC_STUB_OFFLINE narrows to "rule exists, no stub under its
 // key": the hand-configured-rule and mid-invoke tests below. That a visitor's `x-itx-*` headers never
-// reach the DO's attach door is __workers-tests__/control-plane.test.ts + ingress-project-host.e2e.)
+// reach the DO's attach is __workers-tests__/control-plane.test.ts + ingress-project-host.e2e.)
 
 test("same-key re-provide replaces the transport while online and appends ONE more rule event — the map still holds one rule, the match follows the survivor", async () => {
   const ctx = freshCtx("replace");
@@ -97,7 +97,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
   const ctx = freshCtx("dispose");
   const observer = openItx(ctx);
   const sA = session();
-  // ONE door: the provide lends the stub under the key AND configures itx.ghosttool ⇒ itx.rpcStubs.get('itx.ghosttool').
+  // ONE call: the provide lends the stub under the key AND configures itx.ghosttool ⇒ itx.rpcStubs.get('itx.ghosttool').
   await sA
     .authenticate(adminCredentials())
     .projects.get(ctx)
@@ -414,7 +414,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
     // (a) subscribe then subscribe({ name, target: null }) — the recall path (row + stub both go).
     const subscription = await observer.subscribe({ target: () => undefined });
     await observer.subscribe({ name: await subscription.name, target: null });
-    // (b) provide a live stub with a rule, then dispose the handle — ONE door in, one door out
+    // (b) provide a live stub with a rule, then dispose the handle — ONE call in, one call out
     //     (dispose recalls this session's stub AND un-sets the rule).
     const provided = await observer.provide(`itx.tool${i}`, new Tools(`s${i}`));
     provided[Symbol.dispose]();

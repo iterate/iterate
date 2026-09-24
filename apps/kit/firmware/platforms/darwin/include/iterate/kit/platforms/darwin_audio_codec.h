@@ -77,7 +77,7 @@ struct iterate_kit_darwin_audio_codec_metrics {
  * Caller-owned CoreAudio codec adapter.
  *
  * CoreAudio owns both sample clocks and calls the bounded SPSC rings from its
- * internal threads. The cooperative owner crosses the portable codec seam;
+ * internal threads. The cooperative owner crosses the portable codec interface;
  * lifecycle and diagnostics remain Darwin-specific because neither is a
  * hardware-independent audio operation. open() may allocate CoreAudio queue
  * resources. After it returns, read(), write(), and pump() do not allocate or

@@ -17,7 +17,7 @@ const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import
 
 test(
   "published CLI: OAuth PKCE login, refresh, project listing and an itx script with durable settlement",
-  // The package build's own minute on top of the lane's default.
+  // The package build's own minute on top of the suite's default.
   { timeout: 125_000 },
   async ({ expect }) => {
     await buildPublishedCli();

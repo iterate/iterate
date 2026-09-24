@@ -146,7 +146,7 @@ if (isMainModule(import.meta.url)) {
     throw new Error("--artifact-root requires a path");
   }
   // `--expect-unit-workspaces`: the checked-out tree's test workspaces (the Test workflow);
-  // otherwise the list the workflow names (the preview lanes' `iterate-root,os`).
+  // otherwise the list the workflow names (the preview jobs' `iterate-root,os`).
   const expectedWorkspaces = process.argv.includes("--expect-unit-workspaces")
     ? unitTestWorkspaces(process.cwd())
     : (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")

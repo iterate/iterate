@@ -1,7 +1,7 @@
 # THE LATENCY GUARD for apps/os: every 3 hours, and on every main push to what reaches the platform,
 # deploy a THROWAWAY Worker Preview of main named `latency-<run id>-<attempt>` that nothing else touches
 # (Main OS e2e has its own; a latency measured beside another suite measures that suite), run the perf
-# lane against it (apps/os/perf: concurrent project creation at 1, 10 and 25 people, sign-in, MCP, a
+# suite against it (apps/os/perf: concurrent project creation at 1, 10 and 25 people, sign-in, MCP, a
 # context's first append, wake and processor cold start, rule invocation, stream fan-out — every
 # metric and its budget in apps/os/perf/latency.ts), judge the run, then DELETE the preview.
 #
@@ -39,7 +39,7 @@ on:
     - cron: "29 */3 * * *"
   push:
     branches: [main]
-    # What reaches the Worker (deploy-os.yml's list) plus the perf lane and this guard.
+    # What reaches the Worker (deploy-os.yml's list) plus the perf suite and this guard.
     paths:
       - .depot/workflows/os-latency.yml
       - scripts/ci/os-latency-guard.ts
@@ -110,16 +110,16 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
         run: doppler run -- pnpm preview deploy
-      # The perf lane alone on the preview; its verdict is the judge's, so a missed budget does not
+      # The perf suite alone on the preview; its verdict is the judge's, so a missed budget does not
       # stop the job here. Its credentials are the preview's parent's APP_CONFIG (e2e/support/global-setup.ts).
-      - name: Measure (the perf lane)
+      - name: Measure (the perf suite)
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
           export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
           doppler run -- pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json \
-            || echo "the perf lane exited $?: the judge decides"
+            || echo "the perf suite exited $?: the judge decides"
       - name: Read the previous run's state
         run: |-
           set -euo pipefail

@@ -1,4 +1,4 @@
-// Where a signed-in browser lands (the worker sends `/` here, the login door's `next` too), the way
+// Where a signed-in browser lands (the worker sends `/` here, the login route's `next` too), the way
 // the root decides: exactly one project → that project; otherwise the projects list — read off the
 // tree (components/organization-tree.tsx) once it has loaded. The list itself never redirects — the
 // switcher's "All projects" must not hijack a single-project person back.

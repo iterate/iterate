@@ -26,7 +26,7 @@ test("normalizes arbitrary runner errors into one JSON-safe model", () => {
 test("writes an immediate file and a durable CI-directory copy from one artifact", () => {
   const repositoryRoot = mkdtempSync(join(tmpdir(), "ci-telemetry-contract-"));
   const artifact: TestTelemetryArtifact = {
-    artifactSchemaVersion: 1,
+    artifactSchemaVersion: 2,
     artifactId: "vitest:@iterate/example:123:456",
     producer: "test",
     createdAt: "2026-07-21T12:00:01Z",
@@ -37,14 +37,14 @@ test("writes an immediate file and a durable CI-directory copy from one artifact
       runnerProvider: "local",
       executionContext: "local",
     },
-    context: { framework: "vitest", testKind: "unit", lane: "unit" },
+    context: { framework: "vitest", testKind: "unit", suite: "unit" },
     run: {
       status: "passed",
       startedAt: "2026-07-21T12:00:00Z",
       finishedAt: "2026-07-21T12:00:01Z",
       durationMs: 1000,
     },
-    lanes: [],
+    runners: [],
     tests: [],
     modules: [],
   };
@@ -80,7 +80,7 @@ test("leaves an explicit failure artifact when a runner never reaches its end ho
         runnerProvider: "local",
         executionContext: "local",
       },
-      context: { framework: "vitest", testKind: "unit", lane: "unit" },
+      context: { framework: "vitest", testKind: "unit", suite: "unit" },
     },
     { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory },
   );
@@ -93,7 +93,9 @@ test("leaves an explicit failure artifact when a runner never reaches its end ho
     status: "failed",
     error: { name: "TestTelemetryIncompleteError" },
   });
-  expect(written.lanes[0]?.collectionErrors[0]).toContain("did not write its completed telemetry");
+  expect(written.runners[0]?.collectionErrors[0]).toContain(
+    "did not write its completed telemetry",
+  );
   rmSync(artifactDirectory, { recursive: true });
 });
 

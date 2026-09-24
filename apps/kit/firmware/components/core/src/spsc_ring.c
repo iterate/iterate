@@ -6,12 +6,12 @@
 #include <string.h>
 
 /*
- * This ring is the small concurrency primitive underneath bounded byte lanes.
+ * This ring is the small concurrency primitive underneath bounded byte queues.
  * It is specifically SPSC: one producer owns write_acquired and
  * producer_sequence;
  * one consumer owns read_acquired and consumer_sequence. Supporting multiple
  * writers with a mutex or CAS reservation loop was rejected because audio
- * tasks must never wait behind unrelated work and every current lane already
+ * tasks must never wait behind unrelated work and every current queue already
  * has a natural single owner.
  *
  * A slot's bytes and length are ordinary memory until the producer's release

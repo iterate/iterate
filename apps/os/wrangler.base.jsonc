@@ -41,7 +41,7 @@
   // Workers AI, exposed VERBATIM as the built-in root `itx.ai` (context/built-ins.ts).
   "ai": { "binding": "AI" },
   // Browser Run, the built-in root `itx.browser` (context/built-ins.ts). Quick Actions need the
-  // remote binding in local wrangler; the workers test lane omits this the same way it omits `ai`.
+  // remote binding in local wrangler; the Workers test suite omits this the same way it omits `ai`.
   "browser": { "binding": "BROWSER" },
   // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts). wrangler dev simulates it (the
   // message lands in a local file); a deployment sends from APP_CONFIG_LOGIN_EMAIL_FROM (envs.ts).
@@ -54,7 +54,7 @@
   // A namespace is created by name through the API (`POST /accounts/<id>/artifacts/namespaces`; a
   // repo create on a missing one fails with "Namespace is not active"). wrangler's local runtime has
   // NO Artifacts simulator — the binding is a proxy to the real product on the block's account — so
-  // the local lane (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
+  // local runs (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
   // (created by hand), so local runs never write repos into prd's. A deployment's is envs.ts
   // `artifactsNamespace`; a preview's is `os-preview-<name>-repos`, created and deleted with
   // the preview (scripts/preview.ts).
@@ -110,5 +110,5 @@
   // `APP_CONFIG_SECRETS__KEY`, and scripts/generate-wrangler-config.ts sets each deployment's (and
   // local dev's) `APP_CONFIG_URLS__*` vars from envs.ts. (No wrangler `secrets.required` here: it is
   // a types and local-dev aid, not a deploy guard, and it collides with a harness that passes the
-  // same names as vars — the e2e lane's.)
+  // same names as vars — the e2e suite's.)
 }
