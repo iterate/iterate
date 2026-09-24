@@ -8,11 +8,11 @@ secrets, and local dispatch.
 Edit the YAML directly, and put runtime logic in normal scripts under `scripts/ci` instead of embedding large
 `actions/github-script` blocks.
 
-Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
-failure-rate analysis lives in PostHog; see
-[CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
-backfill (dispatch-only while PostHog delivery is off), Doppler-managed Depot
-organization token and its scope caveat, and CLI/MCP queries.
+Workflow-run and job-attempt history (which workflow and job ran for which pull
+request, how long it queued and ran, how it ended) goes to PostHog from an
+hourly sync; see [CI and test telemetry](ci-test-telemetry.md) for the events,
+the sync's window, the Depot organization token and its scope caveat, and
+replays.
 
 ## Time budget
 
@@ -82,7 +82,7 @@ does not support, belongs there too.
 | `os-crash-hunt.yml`          | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                   |
 | `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker                                    |
 | `flake-dashboard.yml`        | Hourly, dispatch                                    | Folds the flake records into [#2580](https://github.com/iterate/iterate/issues/2580) |
-| `ci-telemetry.yml`           | Dispatch                                            | GitHub, Depot and review-bot telemetry (delivers nothing while PostHog is off)       |
+| `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                             |
 | `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                |
 
 Each file's header comment and `on:` block are the details.
@@ -160,10 +160,10 @@ The list must contain only `DOPPLER_TOKEN`. Do not copy GitHub, Depot API,
 Cloudflare, Slack, PostHog, or other service credentials into Depot. Put them
 in the appropriate Doppler config; CI reaches them through the bootstrap
 token. GitHub operations use `${{ github.token }}` and workflow-level
-`permissions` instead of a stored bot token. The CI telemetry collector is the
-non-obvious case: its Depot organization token lives in `_shared/preview`, but
-the collector sends under `_shared/prd` so it reaches the canonical PostHog
-project. See [CI and test telemetry](ci-test-telemetry.md) for the exact setup.
+`permissions` instead of a stored bot token. The CI telemetry sync reads its
+Depot organization token from `_shared/preview`; the PostHog project key it
+sends with is public and comes from `envs.ts`. See
+[CI and test telemetry](ci-test-telemetry.md).
 
 The daily PR dashboard also avoids a hidden token exception: it finds today's
 message and detail reply through Slack history instead of persisting their

@@ -104,22 +104,10 @@ test.each(["specs", "preview-e2e"])(
       producer: "vitest-retry-telemetry-reporter",
       context: { ...browser.context, framework: "vitest", workspace: "os" },
     });
-    const finalizer = TestTelemetryArtifact.parse({
-      ...browser,
-      artifactId: "finalizer",
-      producer: "preview-e2e-orchestrator",
-      context: { ...browser.context, framework: "mixed" },
-      expectedArtifactSources: [browser, backend].map((a) => ({
-        producer: a.producer,
-        ...a.context,
-      })),
-      run: { ...browser.run, status: "failed", error: { message: "Missing consumer result" } },
-      tests: [],
-    });
     await writeFlakeSuiteSummaries({
       directory: output.path,
       group: "preview",
-      artifacts: [finalizer, missing === "specs" ? backend : browser],
+      artifacts: [missing === "specs" ? backend : browser],
       expectedWorkspaces: [],
       cancelled: false,
       headSha: "abc123",

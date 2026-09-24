@@ -1,12 +1,15 @@
+# THE CI TELEMETRY SYNC (scripts/ci/sync-ci-telemetry.ts): one PostHog event per Depot workflow run
+# and one per job attempt that finished since the previous successful scheduled sync, read from
+# Depot's API, with the pull request and branch from GitHub's. No test-level events
+# (docs/ci-test-telemetry.md). A failed sync's window goes to the next one, up to six hours back.
 name: CI telemetry sync
 permissions:
-  actions: read
-  checks: read
   contents: read
   pull-requests: read
-# Dispatch only: PostHog delivery is off (scripts/ci/posthog-events.ts), so a run collects and then
-# drops everything. The schedule comes back with delivery (docs/ci-test-telemetry.md).
 on:
+  schedule:
+    # Hourly, off the other schedules' minutes (:07/:22/:37/:52, :13, :41).
+    - cron: "29 * * * *"
   workflow_dispatch:
 concurrency:
   group: ci-telemetry-sync
@@ -20,22 +23,18 @@ jobs:
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
-      # One day per dispatch. Run the script locally for a longer backfill (it defaults to seven
-      # days; stable insert IDs make overlapping windows idempotent).
-      CI_TELEMETRY_LOOKBACK_DAYS: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Backfill GitHub, Depot, and review-bot telemetry
+      # The Depot organization token lives in Doppler _shared/preview. The PostHog project key is
+      # public and comes from envs.ts.
+      - name: Send workflow and job telemetry to PostHog
         run: |-
           set -euo pipefail
           export DEPOT_CI_TELEMETRY_TOKEN
           DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
-          doppler run --project _shared --config prd \
-            --preserve-env=DEPOT_CI_TELEMETRY_TOKEN,GITHUB_TOKEN -- \
-            pnpm tsx scripts/ci/sync-ci-telemetry.ts
+          pnpm tsx scripts/ci/sync-ci-telemetry.ts

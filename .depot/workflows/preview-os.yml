@@ -221,15 +221,13 @@ jobs:
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview e2e
       # Fails when either runner left no complete artifact, and writes the specs and preview-e2e
-      # suite summaries next to their flake lines. It runs under _shared/prd like the Test
-      # workflow's finalizer; PostHog delivery itself is off (scripts/ci/posthog-events.ts). A
-      # cancelled run keeps its partial evidence without reporting it as failures.
-      - name: Normalize test telemetry and write the suite summaries
+      # suite summaries next to their flake lines. A cancelled run keeps its partial evidence without
+      # reporting it as failures.
+      - name: Check test telemetry and write the suite summaries
         if: always()
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
       # One artifact per suite, pulled by the flake dashboard's writer. A job retry re-uploads under
       # the same name, hence overwrite.
       - name: Upload specs flake records

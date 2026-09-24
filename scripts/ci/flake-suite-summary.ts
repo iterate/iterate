@@ -25,23 +25,16 @@ export async function writeFlakeSuiteSummaries(input: {
         ? source.producer === "playwright-telemetry-reporter" && source.workspace === "iterate-root"
         : source.producer === "vitest-retry-telemetry-reporter" && source.workspace === "os";
     };
-    // Keep this suite's declarations as well as its runners. A missing sibling
-    // suite must not prevent this one from proving its own test inventory.
-    const evidence = input.artifacts.flatMap((artifact) => {
-      const expectedArtifactSources = (artifact.expectedArtifactSources || []).filter(matchesSuite);
-      return matchesSuite({ ...artifact.context, producer: artifact.producer }) ||
-        expectedArtifactSources.length
-        ? [{ ...artifact, expectedArtifactSources }]
-        : [];
-    });
-    const artifacts = evidence.filter((artifact) =>
+    // Only this suite's runners: a missing sibling suite must not prevent this one from proving its
+    // own test inventory.
+    const artifacts = input.artifacts.filter((artifact) =>
       matchesSuite({ ...artifact.context, producer: artifact.producer }),
     );
     const source = artifacts[0] || input.artifacts[0];
     if (!source) throw new Error("Cannot identify the CI run for the flake suite summary");
     const branch = source.ci.branch || "";
     const completeness = analyzeTestTelemetryCompleteness(
-      evidence,
+      artifacts,
       suite === "unit" ? input.expectedWorkspaces : [],
     );
     const diagnostics = [
@@ -51,9 +44,6 @@ export async function writeFlakeSuiteSummaries(input: {
       ...(suite !== "unit" && artifacts.length !== 1
         ? [`Expected 1 full-suite runner results, received ${artifacts.length}`]
         : []),
-      ...completeness.missingArtifactSources.map(
-        ({ source }) => `Missing runner: ${source.producer}@${source.workspace}`,
-      ),
       ...completeness.missingWorkspaces.map((name) => `Missing workspace: ${name}`),
       ...completeness.incompleteArtifactIds.map((id) => `Incomplete runner result: ${id}`),
       ...completeness.foreignArtifactIds.map((id) => `Result belongs to another CI run: ${id}`),
