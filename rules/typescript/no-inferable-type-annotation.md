@@ -5,7 +5,7 @@ files:
   [
     "**/*.{ts,tsx,mts,cts}",
     "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
-    "!**/{__tests__,test,tests,spec,specs}/**",
+    "!**/{__tests__,__workers-tests__,test,tests,spec,specs}/**",
   ]
 ---
 
