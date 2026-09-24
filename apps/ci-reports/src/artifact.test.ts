@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { configure } from "@zip.js/zip.js/lib/zip-core-native.js";
-import { strToU8, zipSync } from "fflate";
+import { strToU8, zipSync, type Zippable } from "fflate";
 import { expect, test } from "vitest";
 import { serveDepotArtifact } from "./artifact.ts";
 
@@ -124,7 +124,10 @@ test("reading one file in a large report only downloads ZIP metadata and that fi
 
 test("an entry larger than the 8 MiB single-read cap streams whole in chunked reads", async () => {
   const video = randomBytes(12 * 1024 * 1024);
-  await using depot = await depotServer({ "video.webm": video });
+  // Stored, not deflated: the reader's range reads are the same for either method, and deflating
+  // 12 MiB of random bytes in fflate is 0.8 s of fixture on an idle machine, more than the rest of
+  // the row; beside the other workspaces' runners that pushed the row past 5 s (2026-09-24).
+  await using depot = await depotServer({ "video.webm": [video, { level: 0 }] });
   depot.data.artifact.name = "public-report";
   const response = await serveDepotArtifact(new Request(`${reportUrl}/video.webm`), {
     token: "secret",
@@ -303,7 +306,7 @@ const html =
 
 /** Depot's API and its artifact storage, answering for one ZIP of `files`: by default a CI trace. */
 async function depotServer(
-  files: Record<string, Uint8Array> = {
+  files: Zippable = {
     "trace.html": strToU8(html),
     "trace.json": strToU8('{"resourceSpans":[]}'),
   },
