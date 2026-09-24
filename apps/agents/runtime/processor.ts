@@ -346,7 +346,15 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     return (this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami()));
   }
 
-  reduce({ state, event }: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
+  /** Every change the facts make is stamped with the event's time: `lastActivityAt` moves exactly
+   *  when the state does, so a harmless fact (a late intent, a repeated certificate) never reorders
+   *  the sidebar. */
+  reduce(args: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
+    const next = this.#reduceFacts(args);
+    return next && { ...next, lastActivityAt: args.event.createdAt };
+  }
+
+  #reduceFacts({ state, event }: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
     switch (event.type) {
       case "events.iterate.com/agent/create-requested":
         // Born once: a request after the certificate is a harmless fact; after a failure, a new
