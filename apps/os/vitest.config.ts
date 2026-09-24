@@ -44,18 +44,22 @@ const onUnhandledError = (error: unknown): boolean | void => {
 
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
  *  row that waits a real deadline started after ninety seconds of short files and the run ended at
- *  170 s instead of its floor (measured 2026-09-21). These files start in slot one, longest first;
+ *  170 s instead of its floor (measured 2026-09-21). These files start first, the longest first;
  *  everything else follows vitest's own order, which runs every unit file before the first workers
- *  file. `pnpm test` (unit + workers, 3 slots in CI), 2026-09-24: oauth's 30 s re-check rows 128 s
- *  (the run's floor), the facet-push watchdog 62 s, the CPU-bound memory children 20 s beside those
- *  two idle waits; alarm-and-pins (42 s, fixed sub-second waits) starts in the first free slot.
+ *  file. `pnpm test` (unit + workers, 7 slots in CI), 2026-09-24: the facet-push watchdog 62 s (the
+ *  run's floor), oauth's four 30 s re-checks 34–36 s each, a file apiece (oauth-support.ts), the
+ *  CPU-bound memory children 20 s beside those idle waits; alarm-and-pins (42 s, fixed sub-second
+ *  waits) starts in the first free slot.
  *  `pnpm e2e`, with rows concurrent (deployed): context-watchdog's two eviction windows 37 s (it
  *  started 13 s in behind the first sixteen files), session's 30 s grant re-check 34 s, the dormant
  *  deadline 24 s, the 144 MiB file's sequential rows, the slow client's upload 10–15 s. A file that
  *  stops being long drops off this list. */
 const LONG_POLES = [
-  "__workers-tests__/oauth.test.ts",
   "__workers-tests__/facet-push-timeout-heals.test.ts",
+  "__workers-tests__/oauth-recheck-deploy-reset.test.ts",
+  "__workers-tests__/oauth-recheck-no-project.test.ts",
+  "__workers-tests__/oauth-recheck-revoked.test.ts",
+  "__workers-tests__/oauth-recheck-membership.test.ts",
   "src/stream/memory-budget.test.ts",
   "e2e/context-watchdog.e2e.test.ts",
   "e2e/session.e2e.test.ts",
@@ -78,6 +82,12 @@ export default defineConfig({
     // The sequencer is a ROOT option — vitest reads `ctx.config.sequence.sequencer`, never a project's;
     // it orders every project's files, and one list serves all three that name a pole.
     sequence: { sequencer: LongPolesFirst },
+    // SEVEN SLOTS FOR `pnpm test` IN CI, on the 4-vCPU Test runner where vitest's default is three
+    // (the CPUs less one). Its long files wait real timers at no CPU — oauth's re-checks, the
+    // facet-push watchdog — and at three slots they queued behind each other while the job averaged
+    // 23 % CPU. At seven, every long pole starts at once. A ROOT option: unit and workers run as one
+    // group, which vitest refuses to split between two `maxWorkers`; e2e sets its own.
+    maxWorkers: process.env.CI ? 7 : undefined,
     globalSetup: ["./vitest.global-setup.ts"],
     // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
     onUnhandledError,
