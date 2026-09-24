@@ -62,8 +62,8 @@ const BASELINE_MIN_RUNS = 5;
 /** A regression is more than this many times the baseline… (not 2: one commit's runs spread up to
  *  2.4× their median in the calibration, apps/os/perf/latency.ts) */
 const REGRESSION_FACTOR = 3;
-/** …and, for a time, also more than this far above it: twice a 30 ms round trip is weather (the
- *  calibration's warm appends ran 25 ms on one preview and 72 ms on the next). */
+/** …and, for a time, also more than this far above it: three times a 25 ms round trip is weather
+ *  (the calibration's warm appends ran 25 ms on one preview and 72 ms on the next). */
 const REGRESSION_FLOOR_MS = 250;
 
 const MetricName = z.enum(Object.keys(LATENCY_METRICS) as [LatencyMetricName]);
@@ -133,7 +133,9 @@ export function readReport(report: z.infer<typeof VitestReport>) {
     for (const row of file.assertionResults) {
       Object.assign(samples, row.meta?.latency);
       const messages = row.failureMessages || [];
-      if (row.status === "failed" && !messages.every((message) => message.includes(BUDGET_MISSED)))
+      const budgetOnly =
+        messages.length > 0 && messages.every((message) => message.includes(BUDGET_MISSED));
+      if (row.status === "failed" && !budgetOnly)
         broken.push(
           `${row.fullName}: ${messages.find((message) => !message.includes(BUDGET_MISSED)) || row.status}`,
         );
