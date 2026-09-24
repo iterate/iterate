@@ -412,3 +412,28 @@ test("itx.workspaces.delete(path) lands the request and the death certificate on
   );
   expect(await readAll(itx.cd("/workspaces/gone"))).toHaveLength(own.length);
 });
+
+test("the project facet's collection refuses a creation whose creator is not an absolute context path, before it writes anything on the path", async () => {
+  const itx = openItx(freshCtx("ws-creator-input"));
+  // A project member at `/` reaches the collection directly; the library always names the creator.
+  for (const options of [undefined, {}, { creator: 7 }, { creator: "jail" }])
+    expect(
+      await rejection(
+        itx.invoke([
+          "itx",
+          "facets",
+          ["get", "project"],
+          ["workspaces"],
+          ["create", "/w", options],
+        ]),
+        JSON.stringify(options),
+      ),
+    ).toMatchObject({ code: "INVALID_INPUT" });
+  const written = (await readAll(itx.cd("/w"))).map((e) => e.type);
+  for (const type of [
+    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/itx/rewrite-rule-configured",
+    "events.iterate.com/workspace/create-requested",
+  ])
+    expect(written).not.toContain(type);
+});

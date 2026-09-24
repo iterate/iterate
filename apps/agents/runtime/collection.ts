@@ -70,8 +70,10 @@ export class AgentCollectionRpcTarget extends RpcTarget {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
       // The parent link goes to this collection's base — the context whose own `itx.agents` row
-      // reached it — and never to a context the call names: a script could otherwise link its child
-      // above its own masks (e2e/inherited-capabilities.e2e.test.ts).
+      // reached it — and never to a context `create` names: a script could otherwise link its child
+      // above its own masks. The base itself is still the caller's to choose through the public
+      // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
+      // e2e/inherited-capabilities.e2e.test.ts.
       const creator = resolveContextPath("/", this.base);
       // Writing a parent link on an ancestor would point back down to its child.
       // Refuse before loading a facet or changing any context rows.

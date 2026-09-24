@@ -6,11 +6,15 @@
 // is all that varies — the facet's name, the row's, the event prefix, the catalog's key. Addressing
 // an entity (`itx.repos.get(path)`) is the library's (library.ts): straight to the path, never through `/`.
 import { RpcTarget } from "cloudflare:workers";
+import { z } from "zod";
+import { codedError, resolveContextPath } from "iterate/next/lib";
 import type { WithItx } from "iterate/next/sdk";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
 import type { EntityCreationAndDeletionState } from "./entity-state.ts";
+
+const CreationOptions = z.object({ creator: z.string().startsWith("/") });
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";
@@ -45,8 +49,17 @@ export class EntityCollectionRpcTarget extends RpcTarget {
    *  request that opened it, so a certificate landing between the read and the wait is seen, not
    *  missed. A deleted entity is not re-creatable: thrown. Data back, never the handle:
    *  `itx.<entity>s.get(path)` addresses it. */
-  create(path: string, { creator }: { creator: string }): Promise<{ path: string }> {
+  create(path: string, options: { creator: string }): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
+      // The library always names an absolute creator, but a project member at `/` reaches this facet
+      // directly (`itx.facets.get('project')`), and the creator becomes a parent link as written.
+      const parsed = CreationOptions.safeParse(options);
+      if (!parsed.success)
+        throw codedError(
+          "INVALID_INPUT",
+          `${this.slug}s.create(${JSON.stringify(path)}): the creator must be an absolute context path`,
+        );
+      const creator = resolveContextPath("/", parsed.data.creator);
       const context = itx.cd(path);
       // The facet is the platform's own durable object for the entity and `snapshot()` the engine's
       // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
