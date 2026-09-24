@@ -48,7 +48,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     if (!args.includes("--detach")) return serve(args);
     const running = await runningServer();
     if (running) return console.log(`already running: ${describe(running)}`);
-    await startDetached(args.filter((argument) => argument !== "--detach"));
+    await startDetached(args);
   },
   status: async () => {
     const running = await runningServer();
@@ -180,7 +180,13 @@ async function startDetached(args: string[]) {
   // process.execArgv carries tsx's loader (`--import …/tsx/…`), so the child runs this .ts file
   const child = spawn(
     process.execPath,
-    [...process.execArgv, import.meta.filename, "serve", ...args],
+    [
+      ...process.execArgv,
+      import.meta.filename,
+      "serve",
+      // `start --detach` and a `restart --detach` alike: the rest is vite's
+      ...args.filter((argument) => argument !== "--detach"),
+    ],
     { cwd: root, detached: true, stdio: ["ignore", log, log, "ipc"] },
   );
   closeSync(log);
