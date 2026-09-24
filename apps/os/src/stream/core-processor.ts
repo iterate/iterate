@@ -28,7 +28,6 @@
 // reads and never re-parses. The stream's own records (birth, wake, the halted fact, the alarm trace)
 // are well-formed by construction. No stored row predates its event's normalization.
 
-import { RunRequested, RunSettled } from "iterate/next/stream/run";
 import {
   itxExpressionStepName,
   normalizedItxExpression,
