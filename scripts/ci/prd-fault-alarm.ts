@@ -173,11 +173,17 @@ function incidentsOf(reading: FaultReading, open: (key: string) => boolean) {
     ],
     // a lone blip heals a call or three; 2026-09-23 ran ~1,800
     ["platform-failure heals", reading.heals, (name: string) => name],
-    // every error is a page; expected ones are filtered in readWindow
+    // every error is a page; expected ones are filtered in readWindow. A failed invocation's
+    // summary is its request line: one incident per method and host, not per path — a scanner's
+    // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident.
     [
       "errors",
       reading.errors,
-      (m: string) => m.replace(/reference = \w+/g, "reference = …").slice(0, 80),
+      (m: string) =>
+        m
+          .replace(/^([A-Z]+ https?:\/\/[^/?#\s]+)\S*$/, "$1/…")
+          .replace(/reference = \w+/g, "reference = …")
+          .slice(0, 80),
     ],
   ] as const;
   const incidents = new Map<string, { what: string; label: string; count: number }>();

@@ -249,6 +249,27 @@ test("a page and a thread reply show how the pagers recovered in the window", ()
   );
 });
 
+test("a failed invocation's request line is one incident per method and host, not per path", () => {
+  const opened = triageIncidents(
+    {
+      ...quiet,
+      errors: [
+        ["GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/credentials.csv", 10],
+        ["GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/.env?x=1", 1],
+        ["POST https://k.iterate.com/?rest_route=%2Fbatch%2Fv1", 1],
+        ["call timed out", 2],
+      ],
+    },
+    window,
+    null,
+  );
+  expect(Object.keys(opened.incidents)).toEqual([
+    "errors: GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/…",
+    "errors: POST https://k.iterate.com/…",
+    "errors: call timed out",
+  ]);
+});
+
 test("every first-party prd Worker is read, not os-prd alone", async () => {
   await using cloudflare = workersLogs(serverErrorsOnly(0));
   await summary();
@@ -356,7 +377,7 @@ test("a fresh error sharing the pager URL and every HTTP 5xx survive reset class
   const result = await summary();
   expect(result).toContain("2 5xx responses: docs.iterate.com 2");
   expect(result).toContain(
-    "3 errors: POST https://docs.iterate.com/_iterate/auth/refresh 2, GET https://rpc-stub-pager.internal/ 1",
+    "3 errors: POST https://docs.iterate.com/… 2, GET https://rpc-stub-pager.internal/… 1",
   );
 });
 
@@ -376,14 +397,14 @@ test("resets arriving between the count and evidence read never subtract away a 
     if (query.view === "events") events.push(...resetPair());
   });
   const result = await summary();
-  expect(result).toContain("1 errors: GET https://rpc-stub-pager.internal/ 1");
+  expect(result).toContain("1 errors: GET https://rpc-stub-pager.internal/… 1");
 });
 
 test("a full evidence page keeps the alarm and reports the cap", async () => {
   await using _logs = queryableWorkersLogs(Array.from({ length: 25 }, () => resetPair()).flat());
   using log = vi.spyOn(console, "log");
   const result = await summary();
-  expect(result).toContain("50 errors: GET https://rpc-stub-pager.internal/ 50");
+  expect(result).toContain("50 errors: GET https://rpc-stub-pager.internal/… 50");
   expect(log).toHaveBeenCalledWith(
     JSON.stringify({ event: "prd-fault-alarm.reset-evidence", count: 100, capped: true }),
   );
@@ -441,7 +462,7 @@ test("null identities leave ambiguous summaries visible without treating the pay
   );
   using warn = vi.spyOn(console, "warn");
   const result = await summary();
-  expect(result).toContain("2 errors: GET https://rpc-stub-pager.internal/ 2");
+  expect(result).toContain("2 errors: GET https://rpc-stub-pager.internal/… 2");
   expect(warn).not.toHaveBeenCalled();
 });
 
@@ -463,7 +484,7 @@ test("a stateless summary with a reset's request ID is never excluded from the c
     { ...stateless, $workers: { ...stateless.$workers, executionModel: "stateless" } },
   ]);
   const result = await summary();
-  expect(result).toContain("1 errors: GET https://rpc-stub-pager.internal/ 1");
+  expect(result).toContain("1 errors: GET https://rpc-stub-pager.internal/… 1");
 });
 
 test.for([undefined, null, "", "Network connection lost."])(
