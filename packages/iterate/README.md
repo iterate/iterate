@@ -16,7 +16,7 @@ rule and its reasons: [the SDK/platform line](../../docs/2026-09-24-sdk-platform
 
 Code the platform loads for a project (a config worker, a facet, a worker behind a rewrite rule)
 imports the SDK as `./processor.js` and reaches its context through `withItx`: one round trip,
-after which the scope and every call made through it are released.
+after which the scope, every call made through it and every handle it awaited are released.
 
 ```js
 import { ConfigWorker, withItx } from "./processor.js";
@@ -32,8 +32,9 @@ export default class extends ConfigWorker {
 // Anywhere else: withItx(this.env.ITX, (itx) => itx.kv.get("key"))
 ```
 
-Never keep what `env.ITX.get()` hands out: a kept scope, step or answer keeps the isolate, and
-the object hosting it, running and billed after the context is evicted. An object that needs
+Never keep what `env.ITX.get()` hands out, and answer data, not handles, from `withItx`: a kept
+scope, step or handle keeps the context, and any facet holding it, resident after the project goes
+idle. An object that needs
 reach takes a `WithItx` accessor (`(call) => withItx(this.env.ITX, call)`), never a scope; work
 that outlives the call runs under a processor's `runInBackground` claim. Lint refuses a raw
 `ITX.get()` in this repository (`iterate/no-raw-itx-get`).
