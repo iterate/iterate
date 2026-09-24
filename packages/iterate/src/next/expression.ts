@@ -21,13 +21,13 @@ const ITX_EXPRESSION_STRING_MAX_CHARS = 2048;
  *  is `["itx","builtins","rpcStubs",["get","cam"],["",1,2]]` — what a `provide(stub)` rule spells when
  *  the lent stub is called with args. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-/** An itx expression as data: the scope root (`itx`) then get/call steps. THE parsed form every door
- *  works on. */
+/** An itx expression as data: the scope root (`itx`) then get/call steps. THE parsed form every
+ *  dispatching method works on. */
 export type ItxExpression = ItxExpressionStep[];
 /** THE dispatch target, in EITHER codec half — a dotted string that starts with the scope root
  *  (`"itx.facets.get('core')"`) OR the parsed structured form (`["itx","facets",["get","core"]]`).
  *  Both carry call args (the string via `.method(args)`), and `normalizedItxExpression` normalizes
- *  either to the structured form — so either works wherever one works, at every door that dispatches. */
+ *  either to the structured form — so either works wherever one works, in every method that dispatches. */
 export type ItxExpressionInput = string | ItxExpression;
 /** An itx-expression PREFIX — a rewrite rule's `match`: dotted names, any of which may be a call step
  *  PINNING literal args — `itx.ai.run` or `itx.ai.run('gpt-5')` or `itx.repo.get('main').files`. A
@@ -198,8 +198,8 @@ function assertItxExpressionShape(expression: ItxExpression): void {
   // STRING form lexes a bare `@` into the marker, and only for a rule's target.
 }
 
-/** THE ONE NORMALIZING DOOR: either half, normalized to the array half and checked — a string is
- *  parsed (short by rule), an array is shape-checked in place. Every door that takes an
+/** THE ONE NORMALIZER: either half, normalized to the array half and checked — a string is
+ *  parsed (short by rule), an array is shape-checked in place. Every function that takes an
  *  `ItxExpressionInput` (the edge `invoke`, the resolver, the event builders, the prefix parser
  *  below) enters through it. */
 export function normalizedItxExpression(
@@ -274,7 +274,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 // ── dispatch ── EXECUTE a rewritten call's steps against a LIVE object graph (the codec that
 // turns strings ⇄ these structures is above; the rules that rewrite a call to a built-in
 // root are apps/os/src/context/itx-expression-rewriting.ts). `walkSteps` is THE step walk —
-// `ItxExpressionResolver` replays the steps after the root with it; the facet door and the delivery
+// `ItxExpressionResolver` replays the steps after the root with it; the facet dispatch and the delivery
 // loop walk steps on a local object with it. `callOn` applies args to a resolved value. The dotted write-half (a handle
 // whose dotted access reduces into one dispatch) is `InvokeHandle` (the next section) — the
 // ONE such primitive, pipelinable over Workers RPC.
@@ -282,7 +282,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 // Promise brands the step walk threads UNAWAITED: property access and calls pipeline on them
 // natively, so the whole chain reduces into one round trip and the caller's terminal await is the
 // single flush. apps/os iterate-context.ts registers the native cloudflare:workers brands and capnweb's at boot — that
-// import can't live here because the unit lane runs this module in Node, where the list stays empty
+// import can't live here because the Node unit tests run this module, where the list stays empty
 // and every step is simply awaited.
 const PIPELINED_RPC_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];
 /** Register a pipelinable promise brand (the workerd entrypoint's two calls at boot). */
@@ -405,7 +405,7 @@ export async function callOn(value: unknown, receiver: unknown, args: unknown[])
   throw codedError("NOT_A_METHOD", `target is not callable but ${args.length} arg(s) were passed`);
 }
 
-// ── invoke handle ── THE DOTTED DOOR: how a surface that declares only fixed methods is
+// ── invoke handle ── THE DOTTED SURFACE: how a surface that declares only fixed methods is
 // spoken as deep dotted access (`itx.slack.chat.postMessage({...})`), every unknown segment
 // accumulating into ONE `invoke(expression)` dispatch, `[...root, ...prefix, [method, ...args]]`.
 // Declared members always win. The pieces: the reserved names, the function-backed PATH PROXY, the
@@ -439,7 +439,7 @@ export async function callOn(value: unknown, receiver: unknown, args: unknown[])
 //
 // The library tier may import this module and the codec only (library.test.ts).
 
-/** The dispatch door every dotted miss collapses onto. `IterateContextRpcTarget` implements it directly (root
+/** The dispatch method every dotted miss collapses onto. `IterateContextRpcTarget` implements it directly (root
  *  `itx`); a mid-chain `InvokeHandle` implements it relative to itself (empty root). */
 type InvokeTarget = {
   invoke(itxExpression: ItxExpression): unknown;
@@ -561,7 +561,7 @@ export class InvokeHandle extends RpcTarget {
     super();
     this.#dispatchItxExpressionSteps = dispatchItxExpressionSteps;
   }
-  /** THE reduce door the prototype hop dispatches onto; the expression is RELATIVE to this handle. */
+  /** THE dispatch method the prototype hop reduces onto; the expression is RELATIVE to this handle. */
   invoke(itxExpressionSteps: ItxExpression): unknown {
     return this.#dispatchItxExpressionSteps(itxExpressionSteps);
   }

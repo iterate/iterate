@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 // client/react.tsx — the React binding for live state, shared by every UI. `useLiveState` subscribes a component to a producer's live
-// state (a processor slug, a mini-app key), seeds through its door, and re-renders on every synced
+// state (a processor slug, a mini-app key), seeds from it, and re-renders on every synced
 // delta via `useSyncExternalStore` over the LiveStateStore. The transport and the store
 // (client/live-state.ts) stay framework-free, so this is the ONE file that imports React.
 //
@@ -26,36 +26,36 @@ export type LiveStateResult<S = unknown> = {
 };
 
 /** Subscribe to a producer's live state and render its latest value. Pass a ready `itx` (a capnweb
- *  `api.authenticate(credentials).user` or `.projects.get(id)`), the producer's `key`, and a `door`
+ *  `api.authenticate(credentials).user` or `.projects.get(id)`), the producer's `key`, and a `readSeed`
  *  thunk that reads `{rev, state}` (`() => itx.invoke("itx.facets.get('slug').liveSnapshot()")`).
  *  Re-subscribes when the session, `key`, or `name` changes; unmount (and every re-subscribe)
  *  disposes the previous server-side subscription. */
 export function useLiveState<S>(
   itx: LiveStateItx | undefined,
-  opts: { key: string; name?: string; door: () => Promise<LiveStateSeed<S>> },
+  opts: { key: string; name?: string; readSeed: () => Promise<LiveStateSeed<S>> },
 ): LiveStateResult<S> {
   const [store, setStore] = useState<LiveStateStore<S> | undefined>();
   const [status, setStatus] = useState<LiveStateStatus>("connecting");
   const [error, setError] = useState<string | undefined>();
-  // The door thunk is a fresh arrow every render; hold the latest so the effect need not re-run per
+  // The readSeed thunk is a fresh arrow every render; hold the latest so the effect need not re-run per
   // render. The effect SNAPSHOTS it at connect time, so an old subscription's gap heal can never
-  // read a NEWER key's door (cross-key contamination after a key/session switch).
-  const doorRef = useRef(opts.door);
-  doorRef.current = opts.door;
+  // read a NEWER key's seed (cross-key contamination after a key/session switch).
+  const readSeedRef = useRef(opts.readSeed);
+  readSeedRef.current = opts.readSeed;
 
   useEffect(() => {
     setStore(undefined);
     setStatus("connecting");
     setError(undefined);
     if (!itx) return;
-    const door = doorRef.current; // pinned to THIS key/session for the connection's whole life
+    const readSeed = readSeedRef.current; // pinned to THIS key/session for the connection's whole life
     let disposed = false;
     let dispose: (() => Promise<void>) | undefined;
     const unmounted = new AbortController(); // an unmount while the first seed is pending recalls the row
     connectLiveState<S>(itx, {
       key: opts.key,
       name: opts.name,
-      door,
+      readSeed,
       signal: unmounted.signal,
       onResync: (r) => {
         if (disposed) return;
@@ -352,7 +352,7 @@ export function useIterateContext(
     for (const name of names) {
       connectLiveState<unknown>(itx, {
         key: name,
-        door: async () =>
+        readSeed: async () =>
           // the engine's own `{ rev, state }` seed, as `liveSnapshot()` answers it
           (await itx.invoke(`itx.facets.get('${name}').liveSnapshot()`)) as LiveStateSeed<unknown>,
         signal: unmounted.signal,

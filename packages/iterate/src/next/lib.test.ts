@@ -100,7 +100,7 @@ describe("diff + applyPatch", () => {
   });
 });
 
-// ── origin ── the check `from-server-cookie` (session.ts) and the console's POST doors
+// ── origin ── the check `from-server-cookie` (session.ts) and the console's POST forms
 // (apps/os issuer-pages.ts) ride on: `{ origin, becomes }` rows for a request to https://worker.example/api.
 
 describe("isSameOriginBrowserRequest", () => {

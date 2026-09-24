@@ -249,7 +249,7 @@ export class ProcessorEngine<State> {
     this.#liveState = new LiveState(this.#stream, slug, seed);
   }
 
-  /** THE SEED DOOR for live-state clients (LiveState.snapshot), caught up first. */
+  /** THE SEED READ for live-state clients (LiveState.snapshot), caught up first. */
   async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
     if (!this.#reducedThroughPushedHead()) await this.catchUpFromLog();
     return this.#liveState.snapshot();
@@ -269,9 +269,9 @@ export class ProcessorEngine<State> {
     this.#liveState.set(projection);
   }
 
-  // ── the drive doors ──
+  // ── driving the reduce ──
 
-  /** THE push door: contiguous → reduce it directly (no read); anything else → gap repair from the
+  /** THE push method: contiguous → reduce it directly (no read); anything else → gap repair from the
    *  own cursor first. Fire-and-forget safe: enqueues on the serial chain. */
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
     // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their catch-up
@@ -667,7 +667,7 @@ export class ProcessorEngine<State> {
 export { jsonEqual };
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
- *  door checks ONE rule by hand: `type` is a non-empty string. */
+ *  append method checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
   type: string;
@@ -769,7 +769,7 @@ export type ReduceCheckpoint<State> = {
 };
 
 /** What BOTH hosts read and write their checkpoints through — the stream's storage and a facet's
- *  own (the unit lane drives it over node:sqlite, stream/test-support.ts). */
+ *  own (the Node unit tests drive it over node:sqlite, stream/test-support.ts). */
 export class ReduceCheckpointTable {
   readonly #sql: SqlStorageHandle;
 
@@ -847,18 +847,18 @@ export class ReduceCheckpointTable {
 //
 // MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
 // change it bumps the revision and appends the ephemeral `live-state/changed` delta carrying
-// `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED DOOR. The stream keeps no
-// per-subscriber state — the CLIENT owns its chain: seed through the door, apply a payload whose
-// `from` matches its held rev, re-read the door on any mismatch (live-state-chains-client-side.e2e).
+// `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED READ. The stream keeps no
+// per-subscriber state — the CLIENT owns its chain: seed from `snapshot()`, apply a payload whose
+// `from` matches its held rev, re-read the seed on any mismatch (live-state-chains-client-side.e2e).
 //
 // The revision is seeded from a per-incarnation EPOCH (not 0): a reborn holder mints a fresh epoch,
-// so every stale client rev mismatches and re-reads the door instead of applying a patch onto a
+// so every stale client rev mismatches and re-reads the seed instead of applying a patch onto a
 // diverged base. Lossy by contract — a dropped delta append is a chain gap the client heals, never
 // state loss. HARD RULE: no processor can ever REDUCE the delta (processor.ts `reducesEvent`), so a
 // state-change notification can never feed a reduce; a SUBSCRIPTION may name the type to watch it.
 
 /** A delta whose patch is over this many chars is not sent: a whole-array replace of a large
- *  projection would cost every watcher the projection per set, and past the event ceiling the door
+ *  projection would cost every watcher the projection per set, and past the event ceiling the append
  *  would refuse it outright. The delta rides with `patch: null` instead — the rev moved, re-seed. */
 const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
 
@@ -881,7 +881,7 @@ export class LiveState<S> {
    *  CROSS-HOP sink: `env.ITX.get().append(e)` mints a FRESH capability per call, so two deltas
    *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
    *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
-   *  but it costs every watcher the full door re-read the deltas exist to avoid. Every delta rides
+   *  but it costs every watcher the full seed re-read the deltas exist to avoid. Every delta rides
    *  this ONE chain and is emitted only after the previous append settles (see set()). Nobody waits
    *  on this. */
   #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
@@ -899,7 +899,7 @@ export class LiveState<S> {
     return this.#state;
   }
 
-  /** THE seed door: `{rev, state}` read together (single-threaded ⇒ atomically), which is what lets
+  /** THE seed read: `{rev, state}` read together (single-threaded ⇒ atomically), which is what lets
    *  a client chain patches exactly instead of guessing which changes its snapshot already contains. */
   snapshot(): { rev: number; state: S } {
     return { rev: this.#liveStateRev, state: this.#state };

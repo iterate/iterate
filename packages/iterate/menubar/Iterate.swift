@@ -333,7 +333,7 @@ final class ApprovalController: ObservableObject {
         ruleKey: event["ruleKey"] as? String ?? "",
         body: bodyContent
       )
-      // A backlog batch that already has a decision is shown awaiting the door
+      // A backlog batch that already has a decision is shown awaiting the platform
       // (spinner), not as a fresh Approve prompt.
       request.submitting = event["submitted"] as? Bool ?? false
       if !requests.contains(where: { $0.offset == offset }) {
@@ -342,8 +342,8 @@ final class ApprovalController: ObservableObject {
       }
     case "submitted":
       // A decision landed (this app's or another approver's): show the row
-      // awaiting the door rather than a fresh prompt, and pull any delivered
-      // banner — the door only honors the first decision anyway.
+      // awaiting the platform rather than a fresh prompt, and pull any delivered
+      // banner — the platform only honors the first decision anyway.
       if let offset = event["offset"] as? Int {
         setSubmitting(offset, true)
         ApprovalNotifications.withdraw(offset)
@@ -354,7 +354,7 @@ final class ApprovalController: ObservableObject {
         ApprovalNotifications.withdraw(offset)
       }
     case "unsettled":
-      // The door ignored the decision (key not enrolled / revoked) and the hold is
+      // The platform ignored the decision (key not enrolled / revoked) and the hold is
       // still open — clear the spinner so Approve/Reject return, and say why.
       if let offset = event["offset"] as? Int {
         setSubmitting(offset, false)
@@ -818,7 +818,7 @@ enum ApprovalNotifications {
 
   /// Pull a delivered banner once its request is no longer answerable here — a
   /// decision landed or it settled — so a stale Reject tap can't send a
-  /// dead-weight contradiction (the door only honors the first decision).
+  /// dead-weight contradiction (the platform only honors the first decision).
   static func withdraw(_ offset: Int) {
     UNUserNotificationCenter.current().removeDeliveredNotifications(
       withIdentifiers: [identifier(offset)])

@@ -3,7 +3,7 @@
 //
 //   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 //
-// The workerd HOSTS live here too (this file imports cloudflare:workers; the node lane never imports it):
+// The workerd HOSTS live here too (this file imports cloudflare:workers; the Node unit tests never import it):
 //   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
 //                                  the methods a caller reaches by itx expression (`publicMethods`)
 //   StreamProcessorDurableObject — the facet shell that hosts ONE `StreamProcessor`
@@ -52,7 +52,7 @@ export { applyPatch, diff, type PatchOp } from "../lib.ts";
 export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
 // `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
-// cannot await — then `set` to mutate and `snapshot()` as the client seed door (stream/processor.ts).
+// cannot await — then `set` to mutate and `snapshot()` as the client's seed read (stream/processor.ts).
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -186,7 +186,7 @@ export abstract class StreamProcessorDurableObject<
   snapshot(): Promise<{ offset: number; state: State }> {
     return this.#engine.snapshot();
   }
-  /** The live-state seed door: `{ rev, state: projectLiveState(reduced) }`. */
+  /** The live-state seed read: `{ rev, state: projectLiveState(reduced) }`. */
   liveSnapshot(): Promise<{ rev: number; state: unknown }> {
     return this.#engine.liveSnapshot();
   }

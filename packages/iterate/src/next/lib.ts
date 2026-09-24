@@ -1,5 +1,5 @@
 // lib.ts — the pure helpers every layer shares, one platform-neutral file (it rides the SDK bundle
-// and the node unit lane, so no cloudflare:workers here):
+// and the Node unit tests, so no cloudflare:workers here):
 //   errors  — `codedError` / `errorCode` / `reportIssue` / `forwardIssues`: THE machine-readable
 //             error channel
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
@@ -33,7 +33,7 @@ type ErrorCode =
   | "STREAM_PAUSED"
   | "INVALID_CONTEXT" // a context name / project id the codec refuses (apps/os context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
-  | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
+  | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused on entry
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
   | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (apps/os first-party-facet-placement.ts)
@@ -45,7 +45,7 @@ type ErrorCode =
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
-// (There is no separate boundary-validation library: the append door's own runtime guards
+// (There is no separate boundary-validation library: the append method's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 
 /** A plain Error carrying `code` (+ optional `data`) as own enumerable properties. */

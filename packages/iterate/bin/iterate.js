@@ -33,7 +33,7 @@ const isEphemeralPackageRunner = () =>
   process.env.npm_command === "exec" &&
   (process.env.npm_lifecycle_event === "npx" || process.env.npm_lifecycle_event === "bunx");
 
-// The black-box PTY lane (apps/os/e2e/iterate-cli.e2e.test.ts) builds the
+// The black-box PTY test (apps/os/e2e/iterate-cli.e2e.test.ts) builds the
 // package, then exercises this same public bin while the monorepo source tree
 // is still present. Force the published
 // artifact path so that test cannot accidentally fall back to TypeScript.

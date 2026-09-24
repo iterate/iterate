@@ -52,8 +52,7 @@ export function useContextStub<S extends Disposable>(
 export function useFacetLiveState(stub: IterateContextHandle | undefined, facet: string) {
   return useLiveState<unknown>(stub, {
     key: facet,
-    // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- the hook's own option name (iterate/next/react `useLiveState`)
-    door: async () =>
+    readSeed: async () =>
       z
         .object({ rev: z.number(), state: z.unknown() })
         .parse(await stub!.invoke(`itx.facets.get('${facet}').liveSnapshot()`)),

@@ -92,7 +92,7 @@ describe("projectAddressOf — paths", () => {
     { url: `${PRD}/projects/p/9site`, names: null, why: "an app label starts with a letter" },
     { url: `${PRD}/projects/p/Site`, names: null, why: "an app label is lowercase" },
     { url: `${PRD}/p/site`, names: null, why: "not under /projects/ — the platform's own paths" },
-    { url: `${PRD}/api`, names: null, why: "a platform door" },
+    { url: `${PRD}/api`, names: null, why: "a platform endpoint" },
     { url: `${PRD}/projects`, names: null, why: "the prefix alone" },
     { url: `${PRD}/projects/`, names: null, why: "the prefix alone, trailing slash" },
   ];

@@ -156,7 +156,7 @@ function Phone({ project }: { project: string }) {
   const [lastStats, setLastStats] = useState<string>();
   const live = useLiveState<VoiceLiveView>(call?.itx, {
     key: "voice-agent",
-    door: async () =>
+    readSeed: async () =>
       z
         .object({ rev: z.number(), state: VoiceLiveView })
         .parse(await call!.itx.invoke("itx.facets.get('voice-agent').liveSnapshot()")),

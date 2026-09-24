@@ -1,7 +1,7 @@
 // client/live-state.ts — THE CLIENT HALF of live state (`iterate/next/client`), framework-free, for
 // browsers and node test clients. Two concepts:
-//   live state store  — `createLiveStateStore`: the pure reduce — seed through the door, apply each delta, heal on a gap
-//   live state client — `connectLiveState`: wire an itx session's `subscribe` + a seed door to the store
+//   live state store  — `createLiveStateStore`: the pure reduce — seed from the producer, apply each delta, heal on a gap
+//   live state client — `connectLiveState`: wire an itx session's `subscribe` + a seed read to the store
 
 import { z } from "zod";
 import { applyPatch, type PatchOp } from "../lib.ts";
@@ -9,11 +9,11 @@ import { applyPatch, type PatchOp } from "../lib.ts";
 // ── live state store ── THE CLIENT HALF of live state, for browsers and node test clients.
 // A deliberately small store for the platform's live-state wire:
 //
-//   • SEED through the producer's door — `{rev, state}` read via an RPC method (a processor's
+//   • SEED from the producer — `{rev, state}` read via an RPC method (a processor's
 //     `liveSnapshot()`, a mini-app's `state()`).
 //   • APPLY each `{key, from, to, patch}` delta the subscription delivers: a patch lands only when
 //     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
-//     epoch) — resync by re-reading the door.
+//     epoch) — resync by re-reading the seed.
 //
 // The patch format is lib.ts (an RFC-6902 subset), so this store shares ONE applyPatch with
 // the producer — no second diff implementation. No capnweb import: a caller wires the transport and
@@ -21,12 +21,12 @@ import { applyPatch, type PatchOp } from "../lib.ts";
 
 /** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
  *  ephemeral event, delivered raw to the subscriber. `patch: null` = the change was too large to
- *  send — the rev moved, re-seed through the door. */
+ *  send — the rev moved, re-read the seed. */
 export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] | null };
 
 /** The delta as it arrives over the wire — PARSED, never cast: `from`/`to` MUST be real numbers (a
  *  non-numeric rev would poison the held revision and silently wedge every later frame), and each
- *  patch op is a known RFC-6902-subset shape. A frame that fails this heals through the seed door
+ *  patch op is a known RFC-6902-subset shape. A frame that fails this heals by re-reading the seed
  *  rather than being applied — the same recovery the store already runs on a revision gap. */
 const LiveStateDeltaMessage: z.ZodType<LiveStateDelta> = z.object({
   key: z.string(),
@@ -43,7 +43,7 @@ const LiveStateDeltaMessage: z.ZodType<LiveStateDelta> = z.object({
     .nullable(),
 });
 
-/** What the producer's seed door returns: the current revision paired with the current value. */
+/** What the producer's seed read returns: the current revision paired with the current value. */
 export type LiveStateSeed<S> = { rev: number; state: S };
 
 export type LiveStateStore<S> = {
@@ -53,7 +53,7 @@ export type LiveStateStore<S> = {
   rev(): number | null;
   /** Subscribe to changes (for React's useSyncExternalStore, or a test's await-loop). */
   subscribe(listener: () => void): () => void;
-  /** Seed (or re-seed) from the door — the first paint, and the heal after a gap. */
+  /** Seed (or re-seed) from a seed read — the first paint, and the heal after a gap. */
   seed(seed: LiveStateSeed<S>): void;
   /** Reduce one delta in; on a revision gap call `resync` and hold the value until a fresh seed. */
   apply(delta: LiveStateDelta, resync: () => void): void;
@@ -72,7 +72,7 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       return () => void listeners.delete(listener);
     },
     seed: (seed) => {
-      // MONOTONIC: a late-resolving OLDER door read must never move the store backwards past state
+      // MONOTONIC: a late-resolving OLDER seed read must never move the store backwards past state
       // deltas have already advanced (a delta-triggered resync can race the initial seed). Revisions
       // are time-seeded epochs plus increments, so "newer" is numeric.
       if (held.rev !== null && seed.rev < held.rev) return;
@@ -84,11 +84,11 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       // (Epochs are minted from the clock, so a reborn producer's fresh chain sits numerically above
       // every rev an old chain handed out; a frame wholly behind us is genuinely old. The one
       // exception is a clock that regressed across a producer rebirth — accepted: the next applied
-      // or gapped frame resyncs through the door anyway.)
+      // or gapped frame resyncs from a fresh seed anyway.)
       if (held.rev !== null && delta.to <= held.rev) return;
       // A gap (its `from` is not the held rev — including "no seed yet") means a missed delta or a
       // reborn epoch, and a `null` patch means the change was too large to send — either way re-read
-      // the door instead of applying onto a diverged base.
+      // the seed instead of applying onto a diverged base.
       if (delta.from !== held.rev || !delta.patch) {
         resync();
         return;
@@ -99,11 +99,11 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
   };
 }
 
-// ── live state client ── wire an itx session's `subscribe` + a seed door to a LiveStateStore.
+// ── live state client ── wire an itx session's `subscribe` + a seed read to a LiveStateStore.
 // This is the whole cleanroom client: a subscription that consumes the one live-state event type
 // (`itx.subscribe({ target, consumes: ["events.iterate.com/live-state/changed"] })`) delivers every
 // key's deltas in batches; this filters the watched `key` and reduces each delta into the store; a
-// `door` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
+// `readSeed` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
 // the store above and the React hook stay pure.
 
 /** The slice of an itx session this needs — a capnweb `IterateContextRpcTarget` proxy satisfies it structurally:
@@ -124,23 +124,23 @@ export type LiveStateConnection<S> = {
   dispose(): Promise<void>;
 };
 
-/** Subscribe to a producer's live state and reduce it into a store. `door` reads the seed
+/** Subscribe to a producer's live state and reduce it into a store. `readSeed` reads the seed
  *  (`itx.invoke("itx.facets.get('slug').liveSnapshot()")` for a processor, or a mini-app's
  *  own `state()` method). Subscribe happens BEFORE the first seed, so a delta racing the seed just
- *  triggers one door re-read — never a lost update. Gap heals are SINGLE-FLIGHT (a burst of gapped
- *  frames triggers one door read, not one per frame); a failed heal is reported through `onResync`
+ *  triggers one seed re-read — never a lost update. Gap heals are SINGLE-FLIGHT (a burst of gapped
+ *  frames triggers one seed read, not one per frame); a failed heal is reported through `onResync`
  *  and retried by the next delivered delta (its `from` still mismatches, so it re-triggers). */
 export async function connectLiveState<S>(
   itx: LiveStateItx,
   opts: {
     key: string;
     name?: string;
-    door: () => Promise<LiveStateSeed<S>>;
-    /** Called after each gap heal attempt: "healed" on a fresh seed, the error when the door read
+    readSeed: () => Promise<LiveStateSeed<S>>;
+    /** Called after each gap heal attempt: "healed" on a fresh seed, the error when the seed read
      *  failed (the store keeps its last value; the next delta retries). */
     onResync?: (result: "healed" | Error) => void;
     /** Abort while the FIRST seed is still pending (a component unmounting): the row just configured
-     *  is recalled and the connect rejects — a door that never answers leaves nothing lent. */
+     *  is recalled and the connect rejects — a seed read that never answers leaves nothing lent. */
     signal?: AbortSignal;
   },
 ): Promise<LiveStateConnection<S>> {
@@ -161,7 +161,7 @@ export async function connectLiveState<S>(
       healWantedAgain = false;
       reseed();
     };
-    void opts.door().then(
+    void opts.readSeed().then(
       (s) => {
         if (!disposed) {
           store.seed(s);
@@ -185,7 +185,7 @@ export async function connectLiveState<S>(
         // capnweb hands each event as a live proxy value — deep-copy to a plain object, then PARSE
         // the frame (never cast network data). The whole decode is guarded: an ABSENT payload makes
         // `JSON.parse(JSON.stringify(undefined))` throw before validation, and any throw here would
-        // skip every later delta in the batch. A malformed OR undecodable frame heals via the door
+        // skip every later delta in the batch. A malformed OR undecodable frame heals from a fresh seed
         // instead of poisoning the held rev or escaping this callback.
         let parsed: ReturnType<(typeof LiveStateDeltaMessage)["safeParse"]> | undefined;
         try {
@@ -201,8 +201,8 @@ export async function connectLiveState<S>(
         }
         if (parsed.data.key !== opts.key) continue;
         // `store.apply` runs `applyPatch`, which THROWS on a patch it refuses (a `/__proto__` path a
-        // legitimate state with an own `__proto__` key produces, say). Contain it per frame: heal via
-        // the door — which re-seeds the state DIRECTLY, no patch to reject — instead of escaping this
+        // legitimate state with an own `__proto__` key produces, say). Contain it per frame: heal from
+        // a fresh seed — which re-seeds the state DIRECTLY, no patch to reject — instead of escaping this
         // callback and skipping every later frame.
         try {
           store.apply(parsed.data, reseed);
@@ -213,7 +213,7 @@ export async function connectLiveState<S>(
     },
   });
   try {
-    const seed = opts.door();
+    const seed = opts.readSeed();
     const { signal } = opts;
     const aborted =
       signal &&
@@ -226,7 +226,7 @@ export async function connectLiveState<S>(
         if (signal.aborted) abort();
         else signal.addEventListener("abort", abort, { once: true });
       });
-    if (aborted) seed.catch(() => undefined); // the door may still settle after the abort — quietly
+    if (aborted) seed.catch(() => undefined); // the seed read may still settle after the abort — quietly
     store.seed(await (aborted ? Promise.race([seed, aborted]) : seed));
   } catch (error) {
     // The seed failed after the row was configured: recall it, or the server keeps delivering to a
