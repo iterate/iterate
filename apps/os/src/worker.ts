@@ -210,10 +210,11 @@ export default {
     // touch, so a hostname whose project the control plane does not know must never reach one —
     // else any label under the wildcard would mint durable storage from the public internet. The
     // host's address (a static rule, else a hostname a project added: one catalog read), then one
-    // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
-    // host's label (a slug, an id would do too) to the project's id; an unknown label is 421. When
-    // a read fails or has not answered in 3 s, the control plane's last-known copy of its answer
-    // stands in (last-known-project.ts); a host with none waits, and answers 503 if it fails.
+    // catalog read (memoized per isolate: a slug's project never changes; an unknown label five
+    // seconds, edge.ts `projectOfHost`) — the row resolves the host's label (a slug, an id would do
+    // too) to the project's id; an unknown label is 421. When a read fails or has not answered in
+    // 3 s, the control plane's last-known copy of its answer stands in (last-known-project.ts); a
+    // host with none waits, and answers 503 if it fails.
     const admitted = await admitProjectHost(controlPlane, {
       config: appConfig,
       url,

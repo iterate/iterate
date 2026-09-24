@@ -1,10 +1,10 @@
 // src/control-plane/last-known-project.ts — A PROJECT HOST'S ADMISSION, STALE-IF-ERROR: which
 // project a request's host names and that project's catalog row, as the control plane answers
 // (edge.ts: a project's own hostname is one read, memoized thirty seconds; the row is one read,
-// memoized for the isolate's life) and, ONLY when a read fails on the platform's side
-// (ControlPlaneUnavailableError) or has not answered in 3 s, as the control plane last wrote it
-// down. A deploy's fresh isolates have no memo, so without a copy a control-plane outage fails
-// every project host until it ends (188 s on 2026-09-24).
+// memoized for the isolate's life, and a label no project holds five seconds) and, ONLY when a
+// read fails on the platform's side (ControlPlaneUnavailableError) or has not answered in 3 s, as
+// the control plane last wrote it down. A deploy's fresh isolates have no memo, so without a copy a
+// control-plane outage fails every project host until it ends (188 s on 2026-09-24).
 //
 // THE COPIES are `OAUTH_KV` entries the control plane's Durable Object writes when what they copy
 // changes (durable-object.ts): a project's row under `last-known:project:<slug>` and `…:<id>` when
@@ -136,7 +136,7 @@ export async function admitProjectHost(
   if (!address) return null;
   const project = await readOrCopy(
     "project",
-    () => controlPlane.getProject(address.project),
+    () => controlPlane.projectOfHost(address.project),
     async () =>
       hostnameRow || (await firstCopy([lastKnownKey("project", address.project)]))?.row || null,
   );
