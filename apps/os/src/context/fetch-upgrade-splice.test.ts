@@ -56,6 +56,28 @@ test("a deploy resets the context mid-stream: both ends re-dial, what was in fli
   });
 });
 
+test("a second reset seconds after a deploy's, on the same new deploy, is the deploy's too; one a minute later is a platform failure", async () => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  splice.context.reset({ deployId: "deploy-2", downForMs: 0 });
+  await vi.advanceTimersByTimeAsync(2_000);
+  splice.context.reset({ deployId: "deploy-2", downForMs: 0 });
+  await vi.advanceTimersByTimeAsync(60_000);
+  splice.context.reset({ deployId: "deploy-2", downForMs: 0 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(splice).toMatchObject({
+    reports: [
+      { deployReset: true },
+      { deployReset: true },
+      { deployReset: true },
+      { deployReset: true },
+      { deployReset: false },
+      { deployReset: false },
+    ],
+  });
+});
+
 test.for([
   { name: "a dropped leg", side: "leg" as const },
   { name: "a dropped eyeball socket", side: "eyeball" as const },
