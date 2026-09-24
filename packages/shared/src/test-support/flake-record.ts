@@ -115,7 +115,7 @@ function failedOutright(test: RetriedTestTelemetry) {
  * the repo root — would find nothing.
  */
 export async function appendFlakeRecord(record: FlakeRecord): Promise<void> {
-  // Outside Node (a Workers or browser test lane) there is no `process` global at all.
+  // Outside Node (a Workers or browser test runner) there is no `process` global at all.
   const dir = globalThis.process?.env.FLAKE_RECORD_DIR;
   if (!dir) return;
   try {

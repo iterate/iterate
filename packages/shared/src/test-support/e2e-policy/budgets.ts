@@ -28,7 +28,7 @@ export const E2E_CI_RETRIES = 1;
 /**
  * Pause before the vitest retry (vitest `retry.delay`). Zero-delay retries
  * re-run INTO the blip that failed the first attempt: observed twice on the
- * streams-example-app capnweb lane, where a fresh websocket died and the
+ * streams-example-app capnweb suite, where a fresh websocket died and the
  * instant re-roll died the same way within the same second (post-deploy
  * rollout propagation / a brief edge wobble). 5s is longer than every blip
  * observed and far below any test timeout. Playwright needs no equivalent:

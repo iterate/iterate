@@ -1,6 +1,6 @@
 // scripts/ci/os-latency-guard.ts — THE LATENCY GUARD'S JUDGE (.depot/workflows/os-latency.yml, every
 // 3 hours and on main pushes, against a throwaway preview of main that nothing else touches). It reads
-// one run of apps/os's perf lane — Vitest's JSON report, where each row left its raw samples on its
+// one run of apps/os's perf suite — Vitest's JSON report, where each row left its raw samples on its
 // meta (apps/os/perf/record.ts) — and judges every metric's median against two lines:
 //   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and
 //   • a sharp REGRESSION against the guard's own rolling baseline, the last 10 main runs: more than
@@ -349,7 +349,7 @@ async function judge(options: {
       : { schemaVersion: 1, runs: [], red: [] };
   const report = existsSync(options.report)
     ? readReport(VitestReport.parse(JSON.parse(readFileSync(options.report, "utf8"))))
-    : { samples: {}, broken: [`no report at ${options.report}: the perf lane did not run`] };
+    : { samples: {}, broken: [`no report at ${options.report}: the perf suite did not run`] };
   const readings = judgeRun({
     samples: report.samples,
     history: state.runs,

@@ -60,8 +60,7 @@ export async function writeFlakeSuiteSummaries(input: {
         ...(artifact.run.error
           ? [`Runner ${artifact.artifactId}: ${artifact.run.error.message}`]
           : []),
-        // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- existing test telemetry wire field
-        ...artifact.lanes.flatMap((result) => result.collectionErrors),
+        ...artifact.runners.flatMap((result) => result.collectionErrors),
         ...artifact.tests
           .filter(
             (test) =>

@@ -64,7 +64,7 @@ jobs:
           TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TEST_TELEMETRY_KIND: unit
-          TEST_TELEMETRY_LANE: unit
+          TEST_TELEMETRY_SUITE: unit
           TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: doppler run -- pnpm test
       # Kit's firmware compiled for the host (ASan/UBSan) and run under CTest. Its own step, not

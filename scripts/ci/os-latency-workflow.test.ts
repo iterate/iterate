@@ -34,7 +34,7 @@ test("runs on a schedule, on every main push that could change the platform's sp
   });
   expect(latency.on.push?.branches).toEqual(["main"]);
   const paths = latency.on.push?.paths ?? [];
-  // everything that deploys the Worker, plus the perf lane and the guard itself
+  // everything that deploys the Worker, plus the perf suite and the guard itself
   for (const file of [
     "apps/os/src/worker.ts",
     "apps/os/src/control-plane/catalog.ts",
@@ -77,7 +77,7 @@ test("measures a throwaway preview of its own, deleted whatever happened", () =>
   });
 });
 
-test("the judge reads the report the perf lane wrote and keeps the state the next run reads", () => {
+test("the judge reads the report the perf suite wrote and keeps the state the next run reads", () => {
   expect(latency).toMatchObject({ name: stateArtifact.workflow });
   const keep = latency.jobs.measure?.steps?.find(
     (step) => step.with?.name === stateArtifact.artifact,

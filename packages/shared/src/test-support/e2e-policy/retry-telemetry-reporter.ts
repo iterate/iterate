@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "../flake-record.ts";
 import {
+  TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION,
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
   testTelemetryArtifactId,
@@ -69,7 +70,7 @@ type ReportedHookContext = {
 };
 
 type HookDurations = { beforeEach: number; afterEach: number };
-type ReporterDefaults = { testKind?: "unit" | "integration" | "e2e"; lane?: string };
+type ReporterDefaults = { testKind?: "unit" | "integration" | "e2e"; suite?: string };
 
 /**
  * Vitest's built-in JSON reporter omits retry counts and the timing split we
@@ -98,7 +99,7 @@ export class RetryTelemetryReporter {
       process.env.TEST_TELEMETRY_WORKSPACE || process.env.npm_package_name || process.cwd();
     this.context = testTelemetryContextFromEnvironment("vitest", {
       testKind: this.defaults.testKind ?? "unit",
-      lane: this.defaults.lane ?? "unit",
+      suite: this.defaults.suite ?? "unit",
       workspace: this.workspace,
     });
     this.artifactId = testTelemetryArtifactId(
@@ -348,7 +349,7 @@ export class RetryTelemetryReporter {
             ? "failed"
             : "passed";
       writeTestTelemetryArtifact({
-        artifactSchemaVersion: 1,
+        artifactSchemaVersion: TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION,
         artifactId: this.artifactId,
         producer: "vitest-retry-telemetry-reporter",
         createdAt: new Date(finishedAtMs).toISOString(),
@@ -361,7 +362,7 @@ export class RetryTelemetryReporter {
           durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
           ...(runErrors[0] && { error: runErrors[0] }),
         },
-        lanes: [
+        runners: [
           {
             context: this.context,
             status,

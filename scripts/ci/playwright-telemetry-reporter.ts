@@ -12,6 +12,7 @@ import {
   unknownFlakeRecordFromTelemetry,
 } from "@iterate-com/shared/test-support/flake-record";
 import {
+  TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION,
   ciTelemetrySourceFromEnvironment,
   testTelemetryArtifactId,
   testTelemetryContextFromEnvironment,
@@ -44,7 +45,7 @@ export default class PlaywrightTelemetryReporter implements Reporter {
       process.env.TEST_TELEMETRY_WORKSPACE || process.env.npm_package_name || config.rootDir;
     this.context = testTelemetryContextFromEnvironment("playwright", {
       testKind: "e2e",
-      lane: "playwright",
+      suite: "playwright",
       workspace,
     });
     this.artifactId = testTelemetryArtifactId("playwright", workspace, process.pid, startedAtMs);
@@ -80,7 +81,7 @@ export default class PlaywrightTelemetryReporter implements Reporter {
     const finishedAtMs = result.startTime.getTime() + durationMs;
     const status: TestTelemetryArtifact["run"]["status"] = result.status;
     writeTestTelemetryArtifact({
-      artifactSchemaVersion: 1,
+      artifactSchemaVersion: TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION,
       artifactId: this.artifactId,
       producer: "playwright-telemetry-reporter",
       createdAt: new Date(finishedAtMs).toISOString(),
@@ -93,7 +94,7 @@ export default class PlaywrightTelemetryReporter implements Reporter {
         durationMs,
         ...(this.globalErrors[0] && { error: this.globalErrors[0] }),
       },
-      lanes: [
+      runners: [
         {
           context: this.context,
           status,

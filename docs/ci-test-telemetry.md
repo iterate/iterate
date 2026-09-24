@@ -219,7 +219,7 @@ Re-run the check on a downloaded artifact with
    and a `PlaywrightIncompleteStepError`.
 4. Write the sentinel from the first real lifecycle hook.
 5. Pin `TEST_TELEMETRY_WORKSPACE` in the command's environment. A unit
-   workspace is expected once it has a `test` script; a preview lane's runner
+   workspace is expected once it has a `test` script; a preview job's runner
    goes in its workflow's `TEST_TELEMETRY_EXPECTED_WORKSPACES`.
 6. Keep the finalizer and the artifact upload as `if: always()` steps.
 

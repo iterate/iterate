@@ -1,6 +1,6 @@
 /**
  * The naming convention for disposable test fixtures (projects, orgs) minted
- * by the Playwright lane's fixtures (specs/test-support/forged-session.ts):
+ * by the Playwright suite's fixtures (specs/test-support/forged-session.ts):
  * `<prefix>-<base36 timestamp>-<uuid slice>`.
  *
  * Project slugs become DNS labels (`<slug>.localhost`, a project host), so
