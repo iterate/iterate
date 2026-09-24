@@ -2,7 +2,7 @@
 // namespace, where the FACTS about them land — an authentication (session.ts), a personal access
 // token minted, a grant ended or used (grants.ts, oauth.ts), a consent approved (consent.ts) — each
 // appended by the verb that did it, stamped with the caller; and the memberships the session lands
-// here after the control-plane database writes them (session.ts `publishPlatformFacts`).
+// here after the control-plane database writes them (session.ts `foldPlatformFacts`).
 // This file is the only place its own events and their payloads are spelled; processor.ts folds
 // them into the state a client reads through live state (the dash's tree: which organizations a
 // person belongs to is THIS fold, bounded per person); durable-object.ts hosts it as the

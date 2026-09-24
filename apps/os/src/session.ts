@@ -17,7 +17,7 @@ import type { IterateApi } from "iterate/next/api";
 import { codedError, reportIssue } from "iterate/next/lib";
 import { OAuthScope } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
-import type { StreamEventInput } from "iterate/next/stream/processor";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { SessionTeardown } from "./session-teardown.ts";
@@ -207,35 +207,65 @@ export function ownerContext(contextNamespace: IterateContextNamespace, owner: F
  *  the one thing the processor folding them trusts (a person can append any type to their own
  *  context; the platform's fixed point, which no rewrite rule redirects, is the only writer of the
  *  stamp). A grant's end (grants.ts, the revocation truth) and a grant's use (oauth.ts) await it;
- *  everything else goes through `publishPlatformFacts`.
+ *  the organization verbs await it `folded` (`foldPlatformFacts`); the rest goes through
+ *  `publishPlatformFacts`.
+ *
+ *  `folded` then waits on the owner's processor's read-your-writes barrier (`waitUntilProcessed`,
+ *  which catches up from the log itself and rejects after its ten seconds) through the last fact's
+ *  offset: the processor's push is asynchronous, so an append alone does not mean a read of the fold
+ *  sees it.
  *
  *  THE CONTROL-PLANE DATABASE IS THE TRUTH; these facts are the fold the dash renders and the entity's
- *  activity, not the source of authority. Two CONCURRENT conflicting commands to the same context (a
- *  membership added and removed at once) deliver on independent chains with no ordering between
- *  them — the fold can settle opposite to the database's own order until the next authoritative
- *  read. Acceptable here: the edge authorizes every action against the database, never the fold. */
+ *  activity, not the source of authority. Two CONCURRENT conflicting commands from different callers
+ *  to the same context (a membership added and removed at once) have no ordering between them — the
+ *  fold can settle opposite to the database's own order until the next authoritative read.
+ *  Acceptable here: the edge authorizes every action against the database, never the fold. */
 export async function appendPlatformFacts(
   contextNamespace: IterateContextNamespace,
   owner: FactOwner,
   facts: StreamEventInput | StreamEventInput[],
   caller: Caller,
+  { folded = false }: { folded?: boolean } = {},
 ): Promise<void> {
   const context = ownerContext(contextNamespace, owner);
   const events = Array.isArray(facts) ? facts : [facts];
-  await context.invoke(
-    ["itx", "processors", ["enable", ownerAddress(owner).processor]],
-    [],
-    caller,
-  );
-  await context.invoke(["itx", "builtins", ["append", ...events]], [], {
+  const { processor } = ownerAddress(owner);
+  await context.invoke(["itx", "processors", ["enable", processor]], [], caller);
+  const appended = (await context.invoke(["itx", "builtins", ["append", ...events]], [], {
     ...caller,
     platform: true,
-  });
+  })) as StreamEvent[];
+  const offset = appended.at(-1)?.offset;
+  if (folded && offset !== undefined)
+    await context.invoke(
+      ["itx", "facets", ["get", processor], ["waitUntilProcessed", { offset }]],
+      [],
+      caller,
+    );
+}
+
+/** AN ORGANIZATION VERB'S FACTS — on the organization and on each member's account — appended and
+ *  FOLDED before the verb answers. The control-plane database already decided the write; the answer
+ *  now also means the folds hold it, so a caller's next read sees it and one caller's facts land in
+ *  the order it made its calls. Fire-and-forget once let a cold organization context take a rename
+ *  before the creation it renamed, and the fold kept the old name for good. A failed append fails
+ *  the verb, loudly: the database's write stands (the same rename or membership again lands the
+ *  same fact, which the fold absorbs), and the fold is never silently behind it. */
+async function foldPlatformFacts(
+  input: Pick<SessionInput, "contextNamespace">,
+  landings: [FactOwner, StreamEventInput | StreamEventInput[]][],
+  caller: Caller,
+): Promise<void> {
+  await Promise.all(
+    landings.map(([owner, facts]) =>
+      appendPlatformFacts(input.contextNamespace, owner, facts, caller, { folded: true }),
+    ),
+  );
 }
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
- *  sign-ins, mints and consents; the organization's creation, rename, deletion and membership
- *  changes. A lost fact is a gap in the record, never a failed action. A deploy resetting the
+ *  sign-ins, mints and consents — facts no answer depends on. A lost fact is a gap in the record,
+ *  never a failed action. A deploy resetting the
  *  owner's Durable Object cuts in-flight appends at the transport (retryable-error.ts) — expected on
  *  every deploy under traffic, so a warning; any other failure is reported, as oauth.ts reports a
  *  grant use it could not record. */
@@ -570,18 +600,18 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     // scripts add members themselves (an owner named by the operator gets no session here).
     if (record.role === "owner") {
       const membership = memberAddedFact(record.id, caller.principal!.actor, "owner");
-      publishPlatformFacts(
+      await foldPlatformFacts(
         sessionInput,
-        { organization: record.id },
-        [orgCreatedFact(record.name), membership],
+        [
+          [{ organization: record.id }, [orgCreatedFact(record.name), membership]],
+          [{ account: caller.principal!.actor }, membership],
+        ],
         caller,
       );
-      publishPlatformFacts(sessionInput, { account: caller.principal!.actor }, membership, caller);
     } else
-      publishPlatformFacts(
+      await foldPlatformFacts(
         sessionInput,
-        { organization: record.id },
-        orgCreatedFact(record.name),
+        [[{ organization: record.id }, orgCreatedFact(record.name)]],
         caller,
       );
     return record;
@@ -600,10 +630,9 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       organizationId,
       data.name,
     );
-    publishPlatformFacts(
+    await foldPlatformFacts(
       sessionInput,
-      { organization: organizationId },
-      orgRenamedFact(record.name),
+      [[{ organization: organizationId }, orgRenamedFact(record.name)]],
       caller,
     );
     return { ...record, role: "owner" };
@@ -618,14 +647,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     // The members, read before the delete refuses or succeeds — to end their memberships below.
     const members = await sessionInput.controlPlane.listMembers(organizationId);
     await sessionInput.controlPlane.deleteOrganization(caller, organizationId);
-    for (const { userId } of members)
-      publishPlatformFacts(
-        sessionInput,
-        { account: userId },
-        memberRemovedFact(organizationId, userId),
-        caller,
-      );
-    publishPlatformFacts(sessionInput, { organization: organizationId }, orgDeletedFact(), caller);
+    await foldPlatformFacts(
+      sessionInput,
+      [
+        ...members.map(({ userId }): [FactOwner, StreamEventInput] => [
+          { account: userId },
+          memberRemovedFact(organizationId, userId),
+        ]),
+        [{ organization: organizationId }, orgDeletedFact()],
+      ],
+      caller,
+    );
   }
 
   /** Add a person to an organization the caller owns, as an owner or a member. */
@@ -641,8 +673,14 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.addMember(caller, organizationId, data);
     const fact = memberAddedFact(organizationId, userId, data.role);
-    publishPlatformFacts(sessionInput, { organization: organizationId }, fact, caller);
-    publishPlatformFacts(sessionInput, { account: userId }, fact, caller);
+    await foldPlatformFacts(
+      sessionInput,
+      [
+        [{ organization: organizationId }, fact],
+        [{ account: userId }, fact],
+      ],
+      caller,
+    );
   }
 
   /** Remove a person from an organization the caller owns. */
@@ -653,8 +691,14 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.removeMember(caller, organizationId, data);
     const fact = memberRemovedFact(organizationId, userId);
-    publishPlatformFacts(sessionInput, { organization: organizationId }, fact, caller);
-    publishPlatformFacts(sessionInput, { account: userId }, fact, caller);
+    await foldPlatformFacts(
+      sessionInput,
+      [
+        [{ organization: organizationId }, fact],
+        [{ account: userId }, fact],
+      ],
+      caller,
+    );
   }
 }
 
@@ -762,20 +806,23 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     if (priorOrgIds) {
       const projectFact = projectCreatedFact(project.id, project.slug);
       if (priorOrgIds.has(project.orgId))
-        publishPlatformFacts(sessionInput, { organization: project.orgId }, projectFact, caller);
+        await foldPlatformFacts(
+          sessionInput,
+          [[{ organization: project.orgId }, projectFact]],
+          caller,
+        );
       else {
         const organization = await sessionInput.controlPlane.getOrganization(project.orgId);
         const membership = memberAddedFact(project.orgId, caller.principal!.actor, "owner");
-        publishPlatformFacts(
+        await foldPlatformFacts(
           sessionInput,
-          { organization: project.orgId },
-          [orgCreatedFact(organization?.name ?? project.orgId), membership, projectFact],
-          caller,
-        );
-        publishPlatformFacts(
-          sessionInput,
-          { account: caller.principal!.actor },
-          membership,
+          [
+            [
+              { organization: project.orgId },
+              [orgCreatedFact(organization?.name ?? project.orgId), membership, projectFact],
+            ],
+            [{ account: caller.principal!.actor }, membership],
+          ],
           caller,
         );
       }

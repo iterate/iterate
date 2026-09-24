@@ -14,7 +14,7 @@
 //      facts land (session.ts `publishPlatformFacts`, grants.ts, consent.ts) and a user's secrets
 //      catalog is folded (built-ins.ts `ownerRootFacet`).
 //   2. `organization` — an organization's own context, `global:/organizations/<id>`, and nowhere
-//      else: session.ts `publishPlatformFacts` (created, renamed, deleted, a project created in it) and
+//      else: session.ts `foldPlatformFacts` (created, renamed, deleted, a project created in it) and
 //      the organization's secrets catalog (built-ins.ts `ownerRootFacet`).
 //   3. `project` — a project's root `/`, and nowhere else: its creation saga (session.ts
 //      `projects.create`), the entity collections (library.ts `projectFacet`) and the project's

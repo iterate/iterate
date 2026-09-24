@@ -3,9 +3,11 @@
 // plane (src/control-plane/), which writes its catalog and lands the FACTS on the organization's
 // own record (`organization` facet at `/organizations/<id>`) and on each member's account
 // (`account` facet at `/users/<id>`, `memberships`) — the two folds the dash reads through live
-// state. These rows read what a client can: the verbs' answers, the list through the person's
-// reach, and the two folds. Every row mints its own person, organization and project; the files
-// run in parallel.
+// state. A verb answers only once its facts are FOLDED (src/session.ts `appendOrganizationFacts`),
+// so these rows read the folds at once, never by polling; only another person's reach waits, on
+// the edge's memo. These rows read what a client can: the verbs' answers, the list through the
+// person's reach, and the two folds. Every row mints its own person, organization and project; the
+// files run in parallel.
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
 import { adminCredentials, rejection, session, until } from "./support/client.ts";
@@ -44,19 +46,11 @@ test("organizations.create({ name }) answers the owner's row, and the membership
   });
   // the catalog, read through the person's memberships
   expect(await api.organizations.list()).toContainEqual(org);
-  // THE ACCOUNT: the saga lands `organization/member-added` on `/users/<id>` before it answers
-  const membership = await until(
-    "the membership on the account",
-    async () => (await memberships(api))[org.id],
-  );
-  expect(membership).toEqual({ role: "owner", since: expect.any(String) });
+  // THE ACCOUNT: the verb folds `organization/member-added` on `/users/<id>` before it answers
+  expect((await memberships(api))[org.id]).toEqual({ role: "owner", since: expect.any(String) });
   // THE ORGANIZATION'S RECORD: its name, its members — the context a member holds by identity
   using organization = await api.organizations.get(org.id);
-  const state = await until("the organization's record", async () => {
-    const state = await record(organization);
-    return state.members?.[userId] ? state : undefined;
-  });
-  expect(state).toMatchObject({
+  expect(await record(organization)).toMatchObject({
     name,
     deletedAt: null,
     members: { [userId]: { role: "owner", since: expect.any(String) } },
@@ -80,13 +74,12 @@ test("projects.create({ project, orgId }) lands the project in that organization
     role: "owner",
   });
   expect(await api.organizations.list()).toContainEqual({ ...org, projects: 1 });
-  // the organization's record: `organization/project-created` landed on it by the saga
+  // the organization's record: `organization/project-created` folded on it before the answer
   using organization = await api.organizations.get(org.id);
-  const listed = await until(
-    "the project on the organization's record",
-    async () => (await record(organization)).projects?.[projectId],
-  );
-  expect(listed).toEqual({ slug, createdAt: expect.any(String) });
+  expect((await record(organization)).projects?.[projectId]).toEqual({
+    slug,
+    createdAt: expect.any(String),
+  });
   // the same organization's same slug is the same project (a new request, the same answer)
   using again = await api.projects.create({ project: slug, orgId: org.id });
   expect((await again.whoami()).projectId).toBe(projectId);
@@ -132,11 +125,10 @@ test("organizations.rename answers the new name and the record follows; delete i
     role: "owner",
     projects: 1,
   });
+  // the record follows at once — and no earlier fact of the same person lands after it (the
+  // creation, answered before, once overtook the rename on a cold context and kept the old name)
   using organization = await api.organizations.get(org.id);
-  await until(
-    "the record's name follows",
-    async () => (await record(organization)).name === renamed,
-  );
+  expect(await record(organization)).toMatchObject({ name: renamed });
   expect(
     (await api.organizations.list()).find((row: { id: string }) => row.id === org.id)?.name,
   ).toBe(renamed);
@@ -151,13 +143,10 @@ test("organizations.rename answers the new name and the record follows; delete i
   expect((await api.organizations.list()).map((row: { id: string }) => row.id)).toContain(org.id);
   // an empty organization goes: the row, and the membership off the owner's account
   const empty = await api.organizations.create({ name: `Empty ${slug}` });
-  await until(
-    "the empty organization on the account",
-    async () => (await memberships(api))[empty.id],
-  );
+  expect((await memberships(api))[empty.id]).toBeDefined();
   await api.organizations.delete(empty.id);
   expect((await api.organizations.list()).map((row: { id: string }) => row.id)).toEqual([org.id]);
-  await until("the membership off the account", async () => !(await memberships(api))[empty.id]);
+  expect((await memberships(api))[empty.id]).toBeUndefined();
   // the deleted organization's context is no longer the person's to hold
   expect(
     errorCode(await rejection(api.organizations.get(empty.id).whoami(), "a deleted org")),
@@ -189,12 +178,7 @@ test("organizations.addMember gives a second person the organization — their l
       REACH_MEMO_BOUND_MS,
     ),
   ).toEqual({ id: org.id, name: `Organization ${slug}`, role: "member", projects: 1 });
-  expect(
-    await until(
-      "the membership on the guest's account",
-      async () => (await memberships(guest))[org.id],
-    ),
-  ).toEqual({
+  expect((await memberships(guest))[org.id]).toEqual({
     role: "member",
     since: expect.any(String),
   });
@@ -208,12 +192,8 @@ test("organizations.addMember gives a second person the organization — their l
   expect((await guest.projects.get(projectId).whoami()).projectId).toBe(projectId);
   // … and the organization's record has both
   using organization = await owner.organizations.get(org.id);
-  expect(
-    await until("both members on the record", async () => {
-      const { members } = await record(organization);
-      return members?.[guestId] ? members : undefined;
-    }),
-  ).toEqual({
+  const { members: both } = await record(organization);
+  expect(both).toEqual({
     [ownerId]: { role: "owner", since: expect.any(String) },
     [guestId]: { role: "member", since: expect.any(String) },
   });
@@ -229,10 +209,7 @@ test("organizations.addMember gives a second person the organization — their l
   ).toBe("FORBIDDEN");
   // REMOVE: the guest's list, account and reach all lose it
   await owner.organizations.removeMember(org.id, { userId: guestId });
-  await until(
-    "the membership off the guest's account",
-    async () => !(await memberships(guest))[org.id],
-  );
+  expect((await memberships(guest))[org.id]).toBeUndefined();
   await until(
     "the organization off the guest's list",
     async () =>
@@ -251,12 +228,8 @@ test("organizations.addMember gives a second person the organization — their l
       "FORBIDDEN",
     REACH_MEMO_BOUND_MS,
   );
-  expect(
-    await until("the guest off the record", async () => {
-      const { members } = await record(organization);
-      return members?.[guestId] ? undefined : members;
-    }),
-  ).toEqual({ [ownerId]: { role: "owner", since: expect.any(String) } });
+  const { members: ownerAlone } = await record(organization);
+  expect(ownerAlone).toEqual({ [ownerId]: { role: "owner", since: expect.any(String) } });
   // THE LAST OWNER stays: an organization keeps at least one
   const refused = await rejection(
     owner.organizations.removeMember(org.id, { userId: ownerId }),
@@ -265,9 +238,7 @@ test("organizations.addMember gives a second person the organization — their l
   );
   expect(errorCode(refused)).toBe("INVALID_INPUT");
   expect(refused.message).toMatch(/at least one owner/);
-  expect(
-    await until("the owner still on the account", async () => (await memberships(owner))[org.id]),
-  ).toEqual({ role: "owner", since: expect.any(String) });
+  expect((await memberships(owner))[org.id]).toEqual({ role: "owner", since: expect.any(String) });
 });
 
 test("a person's first projects.create without orgId makes their organization — named after the email's local part, them its owner — and lands the project in it; their next lands in the same one", async () => {
@@ -284,9 +255,7 @@ test("a person's first projects.create without orgId makes their organization �
   expect(await api.projects.list()).toEqual([
     { id: projectId, slug, orgId: org.id, role: "owner" },
   ]);
-  expect(
-    await until("the membership on the account", async () => (await memberships(api))[org.id]),
-  ).toEqual({ role: "owner", since: expect.any(String) });
+  expect((await memberships(api))[org.id]).toEqual({ role: "owner", since: expect.any(String) });
   // the next project without orgId goes to the same organization — no second one is minted
   using second = await api.projects.create({ project: `${slug}-2` });
   const { projectId: secondId } = await second.whoami();
