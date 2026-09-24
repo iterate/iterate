@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSameOriginBrowserRequest } from "../lib.ts";
 import { ITX_PRINCIPAL_HEADER } from "../principal.ts";
 
 const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
@@ -8,11 +9,11 @@ const Principal = z.object({ actor: z.string().min(1), email: z.string().optiona
 export const auth = {
   require(request: Request): Response | null {
     const url = new URL(request.url);
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-      const origin = request.headers.get("origin");
-      if (origin && origin !== url.origin)
-        return new Response("Cross-site request refused", { status: 403 });
-    }
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+      !isSameOriginBrowserRequest(request)
+    )
+      return new Response("Cross-site request refused", { status: 403 });
     const principal = request.headers.get(ITX_PRINCIPAL_HEADER);
     if (principal) {
       Principal.parse(JSON.parse(principal)); // Platform-owned stamp; malformed means a defect.
