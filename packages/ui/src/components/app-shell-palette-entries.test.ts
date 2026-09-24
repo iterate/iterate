@@ -6,6 +6,7 @@ import {
   filterPaletteEntries,
   readSidebarNav,
   UNLABELLED_NAV_GROUP,
+  withoutProjectLinks,
   type PaletteEntry,
 } from "./app-shell-palette-entries.ts";
 
@@ -123,6 +124,20 @@ test("reads menu buttons and sub-buttons with their group, parent, active state 
       href: "https://agents.example.com/",
     },
   ]);
+});
+
+test("a sidebar link to a project under its slug is its project row; a page at its URL stays", () => {
+  const content = document.createElement("div");
+  content.innerHTML = `
+    <a data-slot="sidebar-menu-button" href="/projects/acme-site"><span>Overview</span></a>
+    <a data-slot="sidebar-menu-sub-button" href="/projects/acme-site"><span>acme-site</span></a>
+    <a data-slot="sidebar-menu-sub-button" href="/projects/globex"><span>globex</span></a>
+  `;
+  expect(
+    withoutProjectLinks(readSidebarNav(content), [
+      { label: "acme-site", href: "http://localhost:3000/projects/acme-site" },
+    ]).map((item) => item.label),
+  ).toEqual(["Overview", "globex"]);
 });
 
 test("no content mounted (a phone's closed sidebar sheet): nothing to list", () => {

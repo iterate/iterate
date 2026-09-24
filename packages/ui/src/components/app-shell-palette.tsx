@@ -7,6 +7,7 @@ import { CheckIcon, SearchIcon } from "lucide-react";
 import {
   filterPaletteEntries,
   plainLeftClick,
+  withoutProjectLinks,
   type PaletteEntry,
   type SidebarNavItem,
 } from "./app-shell-palette-entries.ts";
@@ -149,10 +150,6 @@ function PaletteBody({
 }) {
   const [query, setQuery] = useState("");
   const links = useRef(new Map<string, HTMLAnchorElement>());
-  // a sidebar link to a project (the dash's organization tree) is already its project row
-  const projectUrls = new Set(
-    projects.map((project) => new URL(projectHref(project), location.href).href),
-  );
   const projectRows = projects.map(
     (project): PaletteRow => ({
       kind: "project",
@@ -164,19 +161,23 @@ function PaletteBody({
       href: projectHref(project),
     }),
   );
-  const navRows = nav
-    .filter((item) => !item.href || !projectUrls.has(item.href))
-    .map(
-      ({ element, label, group, detail, active }, index): PaletteRow => ({
-        kind: "nav",
-        id: `nav:${index}`,
-        label,
-        group,
-        detail,
-        active,
-        element,
-      }),
-    );
+  const navRows = withoutProjectLinks(
+    nav,
+    projects.map((project) => ({
+      label: project.slug,
+      href: new URL(projectHref(project), location.href).href,
+    })),
+  ).map(
+    ({ element, label, group, detail, active }, index): PaletteRow => ({
+      kind: "nav",
+      id: `nav:${index}`,
+      label,
+      group,
+      detail,
+      active,
+      element,
+    }),
+  );
   const groups = filterPaletteEntries([...navRows, ...projectRows], query);
   return (
     <Command shouldFilter={false} loop>

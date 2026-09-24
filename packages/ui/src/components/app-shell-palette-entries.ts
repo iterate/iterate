@@ -97,6 +97,18 @@ function textOf(element: Element | null | undefined) {
   return element?.textContent?.replace(/\s+/g, " ").trim() || "";
 }
 
+/** The sidebar's items less those that are only a link to a project — the dash's organization tree
+ *  lists each project by its slug, and the project's own row already offers it. A page at a
+ *  project's URL under its own label (the dash's "Overview" is `/projects/<slug>`) stays.
+ *  `projects` carry absolute hrefs, as the reader's do. */
+export function withoutProjectLinks(
+  nav: SidebarNavItem[],
+  projects: { label: string; href: string }[],
+): SidebarNavItem[] {
+  const links = new Set(projects.map((project) => `${project.label} ${project.href}`));
+  return nav.filter((item) => !links.has(`${item.label} ${item.href}`));
+}
+
 /** A plain left click — not a modified one (cmd/ctrl/shift/alt: a new tab or window), not the
  *  middle button, not one something else already handled. */
 export function plainLeftClick(
