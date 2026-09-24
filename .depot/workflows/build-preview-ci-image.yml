@@ -13,6 +13,7 @@ on:
       - "patches/**"
       - "scripts/depot-ci/dependencies.mjs"
       - "scripts/depot-ci/bake-preview-ci-image.sh"
+      - "scripts/depot-ci/esp-idf.sh"
       - ".depot/workflows/build-preview-ci-image.yml"
   schedule:
     # Weekly (Mondays 04:17 UTC) repairs drift even when dependency inputs have
