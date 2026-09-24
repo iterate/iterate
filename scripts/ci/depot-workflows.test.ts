@@ -530,12 +530,17 @@ describe("Depot validation capacity", () => {
   });
 
   // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
-  // only runs on its schedule carries that job as a skipped check. The image bake is the
-  // exception: its push to main runs the same bake.
+  // only runs on its schedule carries that job as a skipped check. Two workflows run the same jobs
+  // on every trigger: the image bake (its push to main runs the same bake), and Kit Firmware,
+  // whose daily run re-plans every board so a failed publish is repaired without a firmware push.
   test.for(
     depotWorkflowFiles.filter(
       (file) =>
-        loadWorkflow(file).on?.schedule && file !== ".depot/workflows/build-preview-ci-image.yml",
+        loadWorkflow(file).on?.schedule &&
+        ![
+          ".depot/workflows/build-preview-ci-image.yml",
+          ".depot/workflows/kit-firmware.yml",
+        ].includes(file),
     ),
   )("%s runs only on its schedule or on request", (file) => {
     expect(
