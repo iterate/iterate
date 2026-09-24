@@ -25,18 +25,15 @@ test("the same run listed on two passes more than 3 days apart folds once", () =
   expect(later.workflows).toMatchObject({ w1: { folded: ["a1"], seenAt: day(4).toISOString() } });
 });
 
-test("a retried job's new attempt folds only its own artifact", () => {
-  const first = pass({ workflows: {} }, [finished("w1")], [artifact("a1", "w1")], day(0));
+test("a retried job's new attempt folds only its own artifact, beside the failed attempt's", () => {
+  const failedAttempt = attemptArtifact("a1", 1, "qn5lblb3j7");
+  const first = pass({ workflows: {} }, [finished("w1")], [failedAttempt], day(0));
   const retried = { ...finished("w1"), job_counts: { total: 2, finished: 2, failed: 0 } };
+  const retry = attemptArtifact("a2", 2, "c0h7kdmr45");
 
-  const second = pass(
-    { workflows: first.workflows },
-    [retried],
-    [artifact("a1", "w1"), artifact("a2", "w1")],
-    day(0.1),
-  );
+  const second = pass({ workflows: first.workflows }, [retried], [failedAttempt, retry], day(0.1));
 
-  expect(second).toMatchObject({ listed: [retried], folded: [artifact("a2", "w1")] });
+  expect(second).toMatchObject({ listed: [retried], folded: [retry] });
   expect(second.workflows).toMatchObject({ w1: { folded: ["a1", "a2"] } });
 });
 
@@ -54,6 +51,7 @@ test("only flake-records artifacts of the listed workflows fold, in completion o
     [
       artifact("late", "w1", "2026-09-23T10:05:00Z"),
       { ...artifact("telemetry", "w1"), name: "unit-test-telemetry" },
+      { ...artifact("attempt telemetry", "w1"), name: "unit-test-telemetry-attempt-qn5lblb3j7" },
       artifact("other workflow", "w2"),
       artifact("early", "w1", "2026-09-23T10:01:00Z"),
     ],
@@ -132,6 +130,15 @@ function artifact(artifactId: string, workflowId: string, createdAt = "2026-09-2
     attempt: 1,
     size_bytes: 1000,
     created_at: createdAt,
+  } satisfies DepotArtifact;
+}
+
+/** One job attempt's own `flake-records-unit-attempt-<id>` upload. */
+function attemptArtifact(artifactId: string, attempt: number, attemptId: string) {
+  return {
+    ...artifact(artifactId, "w1"),
+    name: `flake-records-unit-attempt-${attemptId}`,
+    attempt,
   } satisfies DepotArtifact;
 }
 

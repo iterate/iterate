@@ -120,7 +120,7 @@ Vitest (retry-telemetry-reporter.ts) / Playwright (playwright-telemetry-reporter
      writes each suite's suite-summary.json beside its flake records
                     │
                     ▼  if: always(), if-no-files-found: error
-  actions/upload-artifact: unit-test-telemetry / preview-test-telemetry / main-test-telemetry
+  actions/upload-artifact: {unit,preview,main}-test-telemetry-attempt-<job attempt id>
 ```
 
 The contract is `packages/shared/src/test-support/ci-telemetry.ts`. Two
@@ -192,7 +192,8 @@ a GitHub-looking URL that `gh run download` cannot fetch):
 depot_run_id="$(depot ci run list --org 0p91s0lz49 --repo iterate/iterate \
   --sha "$(git rev-parse HEAD)" --output json | jq -r '.[0].run_id')"
 artifact_id="$(depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json \
-  | jq -r '.artifacts[] | select(.name == "unit-test-telemetry") | .artifact_id')"
+  | jq -r '[.artifacts[] | select(.name | startswith("unit-test-telemetry-attempt-"))]
+    | max_by(.attempt) | .artifact_id')"
 depot ci artifacts download "$artifact_id" --org 0p91s0lz49 --output-file /tmp/unit.zip
 unzip -q /tmp/unit.zip -d /tmp/unit
 jq '.tests[] | {moduleId, fullName, durationMs, retryCount, phases}' /tmp/unit/raw/*.json
@@ -251,6 +252,6 @@ count. An incomplete attempt keeps that provenance visible with a warning,
 while any observed retry/failure still adds or resets its unknown-flake row.
 
 Main's preview suites run in Main OS e2e (`main-os-e2e.yml`), on a throwaway
-preview of each main push, and upload the same `flake-records-specs` and
-`flake-records-preview-e2e` artifacts as a PR's Preview OS run; the writer's
+preview of each main push, and upload the same `flake-records-specs-attempt-<id>` and
+`flake-records-preview-e2e-attempt-<id>` artifacts as a PR's Preview OS run; the writer's
 `SUITE_WORKFLOWS` lists Test, Preview OS and Main OS e2e.

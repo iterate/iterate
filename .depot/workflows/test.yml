@@ -25,6 +25,16 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 20
     steps:
+      # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
+      # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
+      # colliding with them or, with overwrite, deleting them. First, so every upload can name itself.
+      - name: Name this attempt's artifacts
+        id: attempt
+        # The job URL's `attempt=` is the attempt's id (a retry gets a new one).
+        run: |
+          id="${DEPOT_JOB_URL##*attempt=}"
+          [[ "$id" =~ ^[a-z0-9]+$ ]] || { echo "DEPOT_JOB_URL names no job attempt: '${DEPOT_JOB_URL:-}'"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -70,25 +80,21 @@ jobs:
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit ${{ cancelled() && '--cancelled' || '' }}
       # The whole flake-reporting contract from CI's side: publish the
       # recorder lines and the finalizer's suite-summary.json as a workflow
-      # artifact for the flake dashboard to pull
+      # artifact for the flake dashboard to pull, one per job attempt
       # (docs/testing.md#flakes-and-pinned-failures). CI holds no dashboard
       # credential.
       - name: Upload flake records
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flake-records-unit
+          name: flake-records-unit-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/flake-records
           if-no-files-found: ignore
-          # A job retry re-uploads under the same name; without this the step
-          # fails on the collision. Ingestion keys on run+attempt, so the
-          # attempt that wins the overwrite is the one whose records land.
-          overwrite: true
       - name: Upload test telemetry artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-telemetry
+          name: unit-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/ci-telemetry
           include-hidden-files: true
           if-no-files-found: error

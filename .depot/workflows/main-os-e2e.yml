@@ -156,6 +156,16 @@ jobs:
     outputs:
       failing-rows: ${{ steps.failing-rows.outputs.failing-rows }}
     steps:
+      # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
+      # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
+      # colliding with them or, with overwrite, deleting them. First, so every upload can name itself.
+      - name: Name this attempt's artifacts
+        id: attempt
+        # The job URL's `attempt=` is the attempt's id (a retry gets a new one).
+        run: |
+          id="${DEPOT_JOB_URL##*attempt=}"
+          [[ "$id" =~ ^[a-z0-9]+$ ]] || { echo "DEPOT_JOB_URL names no job attempt: '${DEPOT_JOB_URL:-}'"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
       - name: Checkout main
         uses: actions/checkout@v4
         with:
@@ -188,27 +198,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flake-records-specs
+          name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/flake-records/specs
           if-no-files-found: ignore
-          overwrite: true
       - name: Upload preview e2e flake records
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flake-records-preview-e2e
+          name: flake-records-preview-e2e-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/flake-records/preview-e2e
           if-no-files-found: ignore
-          overwrite: true
       - name: Upload test telemetry artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: main-test-telemetry
+          name: main-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/ci-telemetry
           include-hidden-files: true
           if-no-files-found: error
-          overwrite: true
 
   # ALWAYS, whatever happened before, cancelled included: the preview, its Artifacts
   # namespace, KV namespaces and R2 bucket, and the clients' previews of the same name.

@@ -172,6 +172,60 @@ test("keeps Playwright's raw result status separate from its expected outcome", 
   rmSync(artifactDirectory, { recursive: true });
 });
 
+test("a plain spec that failed every attempt leaves an unexpected-error flake record", async () => {
+  process.env.TEST_TELEMETRY_ARTIFACT_DIR = mkdtempSync(join(tmpdir(), "playwright-hard-fail-"));
+  const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
+  process.env.FLAKE_RECORD_DIR = flakeRecordDirectory;
+  const attempt = (retry: number) =>
+    ({
+      retry,
+      status: "failed",
+      duration: 400,
+      startTime: new Date(`2026-07-21T12:00:0${retry}Z`),
+      workerIndex: 0,
+      parallelIndex: 0,
+      errors: [{ message: `attempt ${retry}: locator('chat') not visible` }],
+      steps: [],
+    }) as unknown as TestResult;
+  const test = {
+    results: [attempt(0), attempt(1)],
+    title: "chat opens",
+    titlePath: () => ["chromium", "chat.spec.ts", "chat opens"],
+    location: { file: "/repo/specs/chat.spec.ts", line: 3, column: 1 },
+    parent: { project: () => ({ name: "chromium" }) },
+    expectedStatus: "passed",
+    outcome: () => "unexpected",
+  } as unknown as TestCase;
+  const reporter = new PlaywrightTelemetryReporter();
+  reporter.onBegin(
+    { rootDir: "/repo/specs" } as FullConfig,
+    { allTests: () => [test] } as unknown as Suite,
+  );
+  await reporter.onEnd({
+    status: "failed",
+    startTime: new Date("2026-07-21T12:00:00Z"),
+    duration: 800,
+  } as FullResult);
+
+  const flakeRecords = readdirSync(flakeRecordDirectory).flatMap((file) =>
+    readFileSync(join(flakeRecordDirectory, file), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  );
+  // The first attempt's error: the one a retry would have absorbed.
+  expect(flakeRecords).toEqual([
+    {
+      name: "chat opens",
+      kind: "unknown",
+      outcome: "unexpected-error",
+      durationMs: 800,
+      at: "2026-07-21T12:00:00.000Z",
+      error: "attempt 0: locator('chat') not visible",
+    },
+  ]);
+});
+
 test("preserves timed-out runs and run-level Playwright errors", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-timeout-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;

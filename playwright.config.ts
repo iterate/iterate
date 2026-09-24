@@ -49,8 +49,8 @@ export default defineConfig({
     ["list"],
     ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
     ["json", { outputFile: "test-results/playwright-results.json" }],
-    // The telemetry reporter writes the canonical test artifact and the retried-pass flake records
-    // the preview's CI finalizer uploads (docs/testing.md#flakes-and-pinned-failures).
+    // The telemetry reporter writes the canonical test artifact and the plain tests' flake records
+    // (retried passes and hard failures) the preview's CI finalizer uploads (docs/testing.md#flakes-and-pinned-failures).
     ["./scripts/ci/playwright-telemetry-reporter.ts"],
     // The trace reporter prints each attempt's `@@ci-trace` lifecycle records when
     // CI_TRACE_ENABLED=1 (docs/ci-traces.md).

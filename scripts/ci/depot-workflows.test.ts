@@ -1,4 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, matchesGlob, relative, resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -6,6 +8,8 @@ import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
+/** What a test job's evidence artifacts end with: the job attempt's id (docs/depot-ci.md#artifacts-per-job-attempt). */
+const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -742,7 +746,9 @@ describe("Depot validation capacity", () => {
       // Every suite's records (and the summary the finalizer wrote beside them) leave the job after
       // the finalizer, whatever the suite's outcome.
       for (const suite of suites) {
-        const records = steps.find((step) => step.with?.name === `flake-records-${suite}`);
+        const records = steps.find(
+          (step) => step.with?.name === `flake-records-${suite}${attemptSuffix}`,
+        );
         expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
           if: "always()",
           uses: "actions/upload-artifact@v4",
@@ -752,11 +758,70 @@ describe("Depot validation capacity", () => {
     },
   );
 
+  test.each([
+    { file: ".depot/workflows/test.yml", jobId: "test" },
+    { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
+    { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e" },
+  ])(
+    "the $jobId job of $file names its evidence per job attempt and never overwrites it",
+    ({ file, jobId }) => {
+      const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
+      // Overwritten on purpose: the latest attempt's HTML report, which a link can name. Each
+      // attempt's own copy is inside its test-results artifact.
+      const evidence = steps.filter(
+        (step) =>
+          step.uses === "actions/upload-artifact@v4" &&
+          step.with?.name !== "public-playwright-report",
+      );
+
+      expect(steps[0], `${file} must name the attempt before anything can fail`).toMatchObject({
+        id: "attempt",
+      });
+      expect(evidence.length).toBeGreaterThan(0);
+      for (const step of evidence) {
+        expect(String(step.with?.name), `${file}: ${step.name}`).toMatch(
+          /^[a-z0-9-]+-attempt-\$\{\{ steps\.attempt\.outputs\.id \}\}$/u,
+        );
+        expect(step.with?.overwrite, `${file}: ${step.name}`).toBeUndefined();
+      }
+    },
+  );
+
+  test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
+    const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
+    const directory = mkdtempSync(join(tmpdir(), "job-attempt-"));
+    const attempt = (jobUrl: string) => {
+      const output = join(directory, "output");
+      writeFileSync(output, "");
+      const result = spawnSync("bash", ["-e", "-c", run], {
+        env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, DEPOT_JOB_URL: jobUrl },
+        encoding: "utf8",
+      });
+      return { status: result.status, output: readFileSync(output, "utf8") };
+    };
+    try {
+      expect(
+        attempt(
+          "https://depot.dev/orgs/0p91s0lz49/workflows/x37szwmr3k?job=xv1qfjsdbq&attempt=7wxvtkb2rg",
+        ),
+      ).toEqual({ status: 0, output: "id=7wxvtkb2rg\n" });
+      expect(attempt("")).toEqual({ status: 1, output: "" });
+      expect(attempt("https://depot.dev/orgs/0p91s0lz49/workflows/x37szwmr3k")).toEqual({
+        status: 1,
+        output: "",
+      });
+    } finally {
+      rmSync(directory, { recursive: true });
+    }
+  });
+
   test("the preview e2e job keeps the browser evidence, whatever the suite's outcome", () => {
     const steps = loadWorkflow(".depot/workflows/preview-os.yml").jobs.e2e?.steps ?? [];
     const playwrightConfig = readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8");
     const suite = steps.find((step) => step.run?.includes("pnpm preview e2e"));
-    const results = steps.find((step) => step.with?.name === "preview-os-test-artifacts");
+    const results = steps.find(
+      (step) => step.with?.name === `preview-os-test-artifacts${attemptSuffix}`,
+    );
     const report = steps.find((step) => step.with?.name === "public-playwright-report");
 
     // the root config writes per-test output (traces, screenshots, error context) and the HTML

@@ -185,6 +185,16 @@ jobs:
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
     steps:
+      # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
+      # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
+      # colliding with them or, with overwrite, deleting them. First, so every upload can name itself.
+      - name: Name this attempt's artifacts
+        id: attempt
+        # The job URL's `attempt=` is the attempt's id (a retry gets a new one).
+        run: |
+          id="${DEPOT_JOB_URL##*attempt=}"
+          [[ "$id" =~ ^[a-z0-9]+$ ]] || { echo "DEPOT_JOB_URL names no job attempt: '${DEPOT_JOB_URL:-}'"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
       # The commit deploy deployed; alone on a dispatch with action=e2e, the head, then the PR
       # merged into main as deploy would resolve it.
       - name: Checkout the tested commit
@@ -228,47 +238,44 @@ jobs:
         env:
           TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
-      # One artifact per suite, pulled by the flake dashboard's writer. A job retry re-uploads under
-      # the same name, hence overwrite.
+      # One artifact per suite and job attempt, pulled by the flake dashboard's writer.
       - name: Upload specs flake records
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flake-records-specs
+          name: flake-records-specs-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/flake-records/specs
           if-no-files-found: ignore
-          overwrite: true
       - name: Upload preview e2e flake records
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flake-records-preview-e2e
+          name: flake-records-preview-e2e-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/flake-records/preview-e2e
           if-no-files-found: ignore
-          overwrite: true
       - name: Upload test telemetry artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: preview-test-telemetry
+          name: preview-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
           path: test-results/ci-telemetry
           include-hidden-files: true
           if-no-files-found: error
-          overwrite: true
       # THE BROWSER EVIDENCE (docs/depot-ci.md#browser-reports-from-artifacts), whatever the suite's
       # outcome: everything the run wrote under test-results/ — each failed spec's trace.zip,
       # screenshot and error-context.md under playwright-output/, playwright-results.json, the
       # telemetry — and Playwright's HTML report on its own. `depot ci artifacts download` fetches
-      # either; `pnpm exec playwright show-report` / `show-trace` open them.
+      # either; `pnpm exec playwright show-report` / `show-trace` open them. The report alone is named
+      # for the PR, not the attempt, and overwritten: it is the latest attempt's report, and each
+      # attempt's own copy is in its test-results artifact.
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: preview-os-test-artifacts
+          name: preview-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
-          overwrite: true
       - name: Upload public Playwright HTML report
         if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
         uses: actions/upload-artifact@v4

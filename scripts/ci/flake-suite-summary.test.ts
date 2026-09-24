@@ -56,7 +56,8 @@ test("per-test evidence uses the retry record's identity and never counts retrie
   expect(summary).toMatchObject({
     status: "complete",
     testCount: 5,
-    unknownFlakeCount: 1,
+    // The retried pass and the hard failure: both leave a kind "unknown" record.
+    unknownFlakeCount: 2,
     tests: [
       { name: "sends a message", outcome: "pass" },
       { name: unknownFlakeRecordFromTelemetry(artifact.tests[1]!)!.name, outcome: "fail" },

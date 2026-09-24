@@ -1,4 +1,4 @@
-// THE FLAKE DASHBOARD'S WRITER: fold the `flake-records-<suite>` artifacts that CI jobs finished
+// THE FLAKE DASHBOARD'S WRITER: fold the `flake-records-<suite>-attempt-<id>` artifacts that CI jobs finished
 // since the last run into the dashboard state, and rewrite issue #2580 from it. It replaces the
 // legacy platform's flake-dashboard starter app, which pulled the same artifacts on GitHub check_run
 // webhooks and went with #2837. `.depot/workflows/flake-dashboard.yml` runs it on a schedule.
@@ -27,8 +27,8 @@ import { DEPOT_ORG, mapConcurrent } from "../depot.ts";
 import { createOctokit } from "../github.ts";
 import { FlakeDashboardState } from "./contract.ts";
 import {
-  ARTIFACT_PREFIX,
   DASHBOARD_MARKER,
+  flakeRecordsSuite,
   foldFlakeRuns,
   renderBody,
   runRecordedFromArtifact,
@@ -92,7 +92,7 @@ export function artifactsToFold(
       .filter(
         (artifact) =>
           listing.has(artifact.workflow_id) &&
-          artifact.name.startsWith(ARTIFACT_PREFIX) &&
+          flakeRecordsSuite(artifact.name) !== undefined &&
           !writer.workflows[artifact.workflow_id]?.folded.includes(artifact.artifact_id),
       )
       // Fold in the order the jobs finished, as the legacy app appended them.
@@ -235,7 +235,7 @@ async function main() {
       return runRecordedFromArtifact({
         zip: new Uint8Array(await readFile(file)),
         runId: `${artifact.run_id}-${artifact.attempt || 1}`,
-        suite: artifact.name.slice(ARTIFACT_PREFIX.length),
+        suite: flakeRecordsSuite(artifact.name)!,
         branch: "unknown",
         commit: headSha.get(artifact.workflow_id) || "unknown",
       });
