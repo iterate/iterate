@@ -21,7 +21,7 @@ jobs:
     # (that pattern ends in "Sandbox terminated before worker reported
     # completion" with no logs/metrics).
     runs-on:
-      size: 4x16
+      size: 8x32
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 20
     steps:
