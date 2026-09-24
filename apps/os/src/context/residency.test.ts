@@ -111,6 +111,20 @@ test("watchdog: armed by the first inbound call, one alarm write per window", ()
   });
 });
 
+test("the alarm's overdue watch hears when the first inbound call starts and the last one settles, never between", () => {
+  const fixture = residencyFixture();
+  fixture.residency.inboundCallStarted();
+  fixture.residency.inboundCallStarted();
+  fixture.residency.inboundCallEnded(false);
+  expect(fixture.residency.holdsResident()).toBe(true);
+  fixture.residency.inboundCallEnded(true);
+  fixture.residency.inboundCallInOneTurn();
+  expect({ heldChanges: fixture.heldChanges, held: fixture.residency.holdsResident() }).toEqual({
+    heldChanges: [true, false, true, false],
+    held: false,
+  });
+});
+
 test("watchdog: a quiet window records the incarnation once, and never arms again", () => {
   const fixture = residencyFixture();
   fixture.state.liveFacetNames = ["agent"];
@@ -263,6 +277,7 @@ function residencyFixture() {
   const appended: unknown[] = [];
   const reconciles = { count: 0 };
   const released = { count: 0 };
+  const heldChanges: boolean[] = [];
   const residency = new Residency({
     name: "project.iterate/",
     ctx: {
@@ -297,6 +312,9 @@ function residencyFixture() {
     reconcileAlarm: () => {
       reconciles.count += 1;
     },
+    inboundCallsHeldChanged: () => {
+      heldChanges.push(residency.holdsResident());
+    },
   });
-  return { residency, state, facetResets, appended, reconciles, released, log, warn };
+  return { residency, state, facetResets, appended, reconciles, released, heldChanges, log, warn };
 }
