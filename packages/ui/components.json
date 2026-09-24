@@ -13,7 +13,7 @@
   "iconLibrary": "lucide",
   "aliases": {
     "components": "@iterate-com/ui/components",
-    "utils": "@iterate-com/ui/lib/utils",
+    "utils": "cn",
     "hooks": "@iterate-com/ui/hooks",
     "lib": "@iterate-com/ui/lib",
     "ui": "@iterate-com/ui/components"

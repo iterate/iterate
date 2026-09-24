@@ -52,7 +52,6 @@ on:
       - packages/ui/src/components/textarea.tsx
       - packages/ui/src/components/tooltip.tsx
       - packages/ui/src/hooks/use-mobile.ts
-      - packages/ui/src/lib/utils.ts
   workflow_dispatch: {}
 concurrency:
   group: shadcn-drift-${{ github.event.pull_request.number || github.ref }}

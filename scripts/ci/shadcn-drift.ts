@@ -26,9 +26,9 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
 
 /** The registry items packages/ui vendors: what `shadcn add` is asked for. Each writes
- *  src/components/<item>.tsx, but for `utils`: src/lib/utils.ts, `export { cn } from "cn"`, which
- *  components.json's `aliases.utils` names and the CLI rewrites a registry item's `@/lib/utils`
- *  import to (the AI Elements items still import `cn` that way). */
+ *  src/components/<item>.tsx. components.json's `aliases.utils` is the `cn` package itself, so the
+ *  CLI rewrites a registry item's `@/lib/utils` import (the AI Elements items still use one) to
+ *  `import { cn } from "cn"` and no `utils` item is vendored. */
 export const SHADCN_ITEMS = [
   "alert-dialog",
   "avatar",
@@ -56,19 +56,15 @@ export const SHADCN_ITEMS = [
   "tabs",
   "textarea",
   "tooltip",
-  "utils",
 ];
 
 /** The files those items write, their registry dependencies (input-group for command, use-mobile
  *  for sidebar) included. The oxlint and oxfmt ignore lists, the `rules/` exclusions and the drift
  *  check's path filter name the same files (shadcn-drift.test.ts). */
 export const VENDORED_FILES = [
-  ...SHADCN_ITEMS.filter((item) => item !== "utils").map(
-    (item) => `packages/ui/src/components/${item}.tsx`,
-  ),
+  ...SHADCN_ITEMS.map((item) => `packages/ui/src/components/${item}.tsx`),
   "packages/ui/src/components/input-group.tsx",
   "packages/ui/src/hooks/use-mobile.ts",
-  "packages/ui/src/lib/utils.ts",
 ].sort();
 
 /** Our own stylesheet, into which the CLI merges an item's CSS: only whether it would, is compared. */

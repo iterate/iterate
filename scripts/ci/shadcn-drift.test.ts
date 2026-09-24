@@ -9,7 +9,7 @@ const repoRoot = resolve(import.meta.dirname, "../..");
 // `shadcn add <items> --dry-run --view src/` from shadcn@4.21.0, NO_COLOR, cut to two files: the
 // box's `│ │ ` before an empty line keeps its trailing space.
 const viewOutput = `- Resolving items.
-┌ shadcn add skeleton, utils (dry run)
+┌ shadcn add skeleton, use-mobile (dry run)
 │
 ├ src/components/skeleton.tsx (overwrite) 4 lines
 │ ┌──────────────────────────────────────────────
@@ -19,9 +19,9 @@ const viewOutput = `- Resolving items.
 │ │ 
 │ └──────────────────────────────────────────────
 │
-├ src/lib/utils.ts (skip) 2 lines
+├ src/hooks/use-mobile.ts (skip) 2 lines
 │ ┌──────────────────────────────────────────────
-│ │ export { cn } from "cn"
+│ │ export const MOBILE_BREAKPOINT = 768
 │ │ 
 │ └──────────────────────────────────────────────
 │
@@ -35,10 +35,14 @@ test("reads each file of the dry run's view by its repository path, with its exa
       action: "overwrite",
       content: 'import { cn } from "cn"\n\n  export { Skeleton }\n',
     },
-    { path: "packages/ui/src/lib/utils.ts", action: "skip", content: 'export { cn } from "cn"\n' },
+    {
+      path: "packages/ui/src/hooks/use-mobile.ts",
+      action: "skip",
+      content: "export const MOBILE_BREAKPOINT = 768\n",
+    },
   ]);
   expect(() => parseView(viewOutput.replace("(skip) 2 lines", "(skip) 3 lines"))).toThrow(
-    /printed 2 of src\/lib\/utils.ts's 3 lines/,
+    /printed 2 of src\/hooks\/use-mobile.ts's 3 lines/,
   );
 });
 

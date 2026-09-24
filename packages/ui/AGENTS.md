@@ -10,7 +10,7 @@ vendors them. Each of these files is byte for byte what the pinned shadcn CLI wr
 badge, breadcrumb, button, card, checkbox, command, dialog, dropdown-menu, empty, field, input,
 label, native-select, select, separator, sheet, sidebar, skeleton, sonner, spinner, table, tabs,
 textarea and tooltip in `src/components/`, plus `src/components/input-group.tsx` (command's
-dependency), `src/hooks/use-mobile.ts` (sidebar's) and `src/lib/utils.ts` (the `utils` item).
+dependency) and `src/hooks/use-mobile.ts` (sidebar's).
 `scripts/ci/shadcn-drift.ts` lists them.
 
 - **Customise at the call site or in a wrapper** of our own, never in the file: a `className`, a
@@ -20,10 +20,9 @@ dependency), `src/hooks/use-mobile.ts` (sidebar's) and `src/lib/utils.ts` (the `
   makes `dark:` never match (`@custom-variant dark (@media not all)`). Dev CSS keeps those rules
   inside `@media not all`; the production build drops the block, so they ship no bytes.
 - **`cn` comes from the `cn` package** (shadcn's replacement for clsx + tailwind-merge), which the
-  CLI's components import directly. Our own files import it the same way. `src/lib/utils.ts` is
-  shadcn's `utils` item, `export { cn } from "cn"`, and exists for the CLI: `components.json`'s
-  `aliases.utils` names it, and the CLI rewrites a registry item's `@/lib/utils` import to it, as
-  the AI Elements items still do. It is the one re-export docs/jonasland-rules.md allows.
+  CLI's components import directly. Our own files import it the same way. `components.json`'s
+  `aliases.utils` is `cn` itself, so the CLI rewrites a registry item's `@/lib/utils` import (the
+  AI Elements items still use one) to `import { cn } from "cn"`; there is no `lib/utils.ts`.
 - **`globals.css` imports `shadcn/tailwind.css`**: the `data-*` variants these components are
   written against, `no-scrollbar`, `scroll-fade` and `shimmer`. It comes from the `shadcn`
   devDependency, pinned exactly, which is also the CLI.
