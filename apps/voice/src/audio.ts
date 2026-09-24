@@ -2,18 +2,14 @@
 // microphone frames in, answer frames of any length out. One AudioContext at 16 kHz carries both
 // directions, so no resampling happens here; the two worklets (public/worklets) do the per-sample
 // work off the main thread.
+import { bytesToBase64 } from "@iterate-com/shared/base64";
 
 /** 16 kHz, one 50 ms frame = 800 samples. */
 export const FRAME_SAMPLES = 800;
 
 /** PCM16 samples to the base64 the relay's `mic-frame` carries. */
 export function int16ToBase64(pcm: Int16Array): string {
-  const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
+  return bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
 }
 
 /** A `spk-frame`'s base64 back to PCM16 samples (a fresh, aligned buffer). */

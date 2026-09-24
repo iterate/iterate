@@ -6,6 +6,7 @@
   "exports": {
     "./chunked-text": "./src/chunked-text.ts",
     "./agent-events": "./src/agent-events.ts",
+    "./base64": "./src/base64.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",

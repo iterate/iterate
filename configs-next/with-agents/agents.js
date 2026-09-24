@@ -27,6 +27,15 @@ import {
   StreamProcessor
 } from "./processor.js";
 
+// ../../packages/shared/src/base64.ts
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+  }
+  return btoa(binary);
+}
+
 // runtime/contract.ts
 import { z } from "./processor.js";
 import { defineProcessorContract } from "./processor.js";
@@ -451,12 +460,6 @@ async function appendUnlessLost(append, ...events) {
   } catch (error) {
     if (!/idempotency key .* already names a different event/.test(String(error))) throw error;
   }
-}
-function base64Of(bytes) {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 32768)
-    binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-  return btoa(binary);
 }
 var ChatAnswer = z2.union([
   z2.object({ response: z2.string() }),
@@ -919,7 +922,9 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
           try {
             images.set(file.path, {
               contentType: file.contentType,
-              base64: base64Of(await this.deps.withItx((itx) => itx.files.get(file.path).bytes()))
+              base64: bytesToBase64(
+                await this.deps.withItx((itx) => itx.files.get(file.path).bytes())
+              )
             });
           } catch {
           }

@@ -10,6 +10,7 @@
  * The device carries no source or class name; the bundles live in the project's KV.
  */
 import { z } from "zod";
+import { bytesToBase64 } from "@iterate-com/shared/base64";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ConfigWorker } from "./processor.js";
 import { ScreenInfo, ScreenImageInput, ScreenStatus, renderScreenPixels } from "./screen.js";
@@ -18,14 +19,6 @@ import SCREEN_CONTEXT from "./screen-context.md";
 /* Replaced by the installer with the bundle's content hash (the voice-delegate facet's key is inlined at its
  * row below): the loader caches an isolate under the key, so a new build must be a new key. */
 const VOICE_AGENT_CACHE_KEY = "voice-agent:dev";
-
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
 
 export default class VoiceWorker extends ConfigWorker {
   async health(): Promise<{ ok: true; projectId: unknown; cacheKey: string }> {
@@ -109,7 +102,9 @@ export default class VoiceWorker extends ConfigWorker {
         uploadId,
         format,
         offset,
-        data: base64(bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length))),
+        data: bytesToBase64(
+          bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length)),
+        ),
       });
       if (acknowledged !== expected) {
         throw new Error(

@@ -34,6 +34,7 @@ import type { WithItx } from "iterate/next/sdk";
 import type { RewriteRuleListEntry } from "iterate/next/api";
 import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
 import type { RunSettlement } from "iterate/next/stream/run";
+import { bytesToBase64 } from "@iterate-com/shared/base64";
 import {
   AgentContract,
   type AgentState,
@@ -159,14 +160,6 @@ async function appendUnlessLost(
   } catch (error) {
     if (!/idempotency key .* already names a different event/.test(String(error))) throw error;
   }
-}
-
-/** Bytes → base64, in chunks (a spread of a large array overflows the call stack). */
-function base64Of(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
 }
 
 // ── the model call's wire shapes (the platform's, verbatim) ──
@@ -832,7 +825,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           try {
             images.set(file.path, {
               contentType: file.contentType,
-              base64: base64Of(await this.deps.withItx((itx) => itx.files.get(file.path).bytes())),
+              base64: bytesToBase64(
+                await this.deps.withItx((itx) => itx.files.get(file.path).bytes()),
+              ),
             });
           } catch {
             // named by its hint line instead
