@@ -27,8 +27,9 @@
 //       each eviction here reproduces the production sequence first: the release (return the stubs) →
 //       evict — see releasePinsLikeProduction().
 //   (c) waiting for the pins' release — NOT VIABLE as the eviction ITSELF: the release is a timer
-//       PIN_RELEASE_AFTER_IDLE_MS (30 s) after the pins' last use (`#pinCallEnded`), and it only returns the
-//       borrowed stubs and closes library connections — the weaker assertion, subsumed by (b).
+//       PIN_RELEASE_AFTER_IDLE_MS (30 s) after the pins' last use (`pinCallEnded` in
+//       context/residency.ts), and it only returns the borrowed stubs and closes library
+//       connections — the weaker assertion, subsumed by (b).
 //       support.ts's `releasePins` runs that release directly, which is how (b)'s precondition is met
 //       above — no waiting needed.
 

@@ -102,8 +102,9 @@ export class RpcStubDirectory {
    *  terminal-fetch call into its serve(). */
   readonly #rpcStubFetch: RpcStubFetchServer;
 
-  // LAYER 1 — the borrowed rpc stubs, in memory ONLY; returned at the DO's pins' release — never per
-  // call, never on a timer (a pending timer would itself pin the DO out of hibernation).
+  // LAYER 1 — the borrowed rpc stubs, in memory ONLY; returned at the pins' release
+  // (context/residency.ts) — never per call, never on a timer (a pending timer would itself pin
+  // the DO out of hibernation).
   readonly #borrowedRpcStubs = new Map<string, BorrowedRpcStub>();
 
   // LAYER 2 — the pagers: per key, the page awaiting its lend — CONCURRENT cold invokes share it
@@ -189,8 +190,9 @@ export class RpcStubDirectory {
     return this.#borrowedRpcStubs.size > 0;
   }
 
-  /** THE IDLE RETURN (the DO's pins' release, on its timer): give every borrowed stub back so the DO
-   *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
+  /** THE IDLE RETURN (the pins' release in context/residency.ts, on its timer): give every
+   *  borrowed stub back so the DO can hibernate. Losing them costs exactly one page on the next
+   *  call — that is the deal. */
   returnBorrowedRpcStubs(): void {
     for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
       this.#borrowedRpcStubs.delete(rpcStubKey);
@@ -414,7 +416,7 @@ export type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
 /** WHAT THE EDGE LENDS (and the DO borrows as `BorrowedRpcStub`): a per-page Workers-RPC leg
  *  wrapping the session's capnweb stub, walking itx-expression steps on it (a DIRECT dotted dispatch
  *  — never `.apply`), so a call from the stream reaches the client's actual function over the capnweb
- *  WebSocket. Minted fresh per page and returned at the DO's pins' release. */
+ *  WebSocket. Minted fresh per page and returned at the pins' release (context/residency.ts). */
 class LentRpcStub extends WorkersRpcTarget {
   #clientRpcStub: ClientRpcStub;
   /** THE ONE "the lend ended" reason, SHARED across every page of one pager (a `{ reason }` holder)

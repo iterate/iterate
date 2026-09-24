@@ -104,7 +104,7 @@ pages on 5xx, platform-failure heals and errors.
 
 - Unit: `src/context/residency.test.ts` (the clocks, the pins' timer, the record) and
   `src/context/residency-watchdog.test.ts` (the shared rule);
-  `packages/iterate/src/next/sdk/record-pipelined-steps.test.ts` (1);
+  [`record-pipelined-steps.test.ts`](../../../packages/iterate/src/next/sdk/record-pipelined-steps.test.ts) (1);
   `src/context/expression.test.ts` (2).
 - Workers lane: `__workers-tests__/alarm-and-pins.test.ts` (4),
   `__workers-tests__/facet-birth-reset.test.ts` (5, 6),

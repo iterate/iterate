@@ -59,7 +59,7 @@ test.for<{
     },
   },
   {
-    name: "sweep: a call from loaded code still in flight — a whole window from the pass",
+    name: "sweep: an inbound call still in flight — a whole window from the pass",
     midway: ({ residency }) => residency.inboundCallStarted(),
     expected: {
       resets: 0,
