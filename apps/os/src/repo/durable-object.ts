@@ -263,16 +263,26 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  `repo/commit-completed` on this path. Changes that leave the tree as it was commit nothing and
    *  append nothing: `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). The
    *  push is compare-and-swapped on the tip the changes were applied to: a `main` that moved in the
-   *  meantime refuses the commit — call again. */
+   *  meantime refuses the commit — call again. `parent` names the tip the caller decided on (`null`:
+   *  an unborn `main`): a `main` anywhere else refuses the commit before anything is pushed, so a
+   *  decision made on an older read never lands on top of a commit it did not see (the project's
+   *  seed, project/processor.ts). */
   async commitFiles(input: {
     message: string;
     changes: RepoFileChange[];
     author?: { name: string; email: string };
+    parent?: string | null;
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
     const path = await this.#created();
     if (!input.message.trim())
       throw new Error("repo.commitFiles: message must be a non-empty string");
     if (input.changes.length === 0) throw new Error("repo.commitFiles: changes must name a file");
+    const parent = z
+      .string()
+      .regex(/^[a-f0-9]{40}$/)
+      .nullable()
+      .optional()
+      .parse(input.parent);
     this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches
     const transport = await this.#transport("write");
     const tip = (await transport.tipOf(REF)) || null;
@@ -288,6 +298,11 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       if (owed.commitOid === tip) await this.#commitFact(owed);
       else await this.ctx.storage.delete("commit-fact");
     }
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- `parent` absent commits onto whatever main holds; `null` names an unborn main, which a born one refuses
+    if (parent !== undefined && parent !== tip)
+      throw new Error(
+        `repo ${path}: the commit was refused: main is at ${tip || "no commit (unborn)"}, not at the parent it names (${parent || "unborn"})`,
+      );
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
     // THROWS in #tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
     const { manifest, objects }: TipSnapshot = tip
