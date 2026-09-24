@@ -98,7 +98,7 @@ describe("the PR body's managed section", () => {
   test("on a PR the heading and every app carry a one-click `Sign in ↗`, and the section says as whom", () => {
     const dash = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
     const notes = "https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev";
-    const os = "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev";
+    const os = "https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev";
     const signIn = {
       heading: `${os}/.auth/test-link?t=heading`,
       apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
@@ -121,12 +121,12 @@ describe("the PR body's managed section", () => {
     expect(render(true)).toMatchInlineSnapshot(`
       "### OS preview: \`pr123-feature-foo\`
 
-      **https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
+      **https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
 
       | App on top, signed in against this preview | | |
       | --- | --- | --- |
-      | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
-      | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+      | dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
+      | notes | https://pr123-feature-foo-notes-preview.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-feature-foo-os-preview.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
 
       \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
 
