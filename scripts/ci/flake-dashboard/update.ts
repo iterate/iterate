@@ -20,10 +20,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { Octokit } from "@octokit/rest";
+import type { Octokit } from "@octokit/rest";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
 import { DEPOT_ORG, mapConcurrent } from "../depot.ts";
+import { createOctokit } from "../github.ts";
 import { FlakeDashboardState } from "./contract.ts";
 import {
   ARTIFACT_PREFIX,
@@ -169,9 +170,7 @@ async function main() {
     );
   else if (!dryRun)
     throw new Error("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY are required to write the dashboard");
-  const github = new Octokit({
-    auth: app?.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN,
-  });
+  const github = createOctokit(app?.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
 
   const previous = await readPreviousState();
   const now = new Date();
