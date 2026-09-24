@@ -290,7 +290,9 @@ export async function processorNames(itx: any): Promise<string[]> {
 // ── the idioms ──
 
 /** Poll `fn` until it returns a truthy/defined value or time out. Absorbs transient throws (a call
- *  racing an eviction). */
+ *  racing an eviction). A timeout says how the wait went — how many polls answered, how many threw,
+ *  and the slowest poll — so a worker that answered slowly (a queue ahead of the poll) reads
+ *  differently from one that answered promptly and never had the state. */
 export const until = async <T>(
   label: string,
   fn: () => T | undefined | false | Promise<T | undefined | false>,
@@ -298,17 +300,53 @@ export const until = async <T>(
 ): Promise<T> => {
   const t0 = Date.now();
   let lastError: unknown;
+  let polls = 0;
+  let threw = 0;
+  let slowestPollMs = 0;
   for (;;) {
+    const pollStarted = Date.now();
     const v = await Promise.resolve(fn()).catch((error: unknown) => {
       lastError = error;
+      threw++;
       return undefined;
     });
+    polls++;
+    slowestPollMs = Math.max(slowestPollMs, Date.now() - pollStarted);
     if (v !== undefined && v !== false) return v as T;
     if (Date.now() - t0 > timeoutMs)
       throw new Error(
-        `until(${label}): timed out after ${timeoutMs}ms${lastError !== undefined ? ` — last error: ${lastError instanceof Error ? lastError.message : String(lastError)}` : ""}`,
+        `until(${label}): timed out after ${timeoutMs}ms (${polls} polls, ${threw} threw, the slowest ${slowestPollMs}ms)${lastError !== undefined ? ` — last error: ${lastError instanceof Error ? lastError.message : String(lastError)}` : ""}`,
       );
     await sleep(50);
+  }
+};
+
+/** Poll `read` until `done(value)` holds, and hand back that value. A timeout names the LAST VALUE
+ *  READ — what the state was, not only that the wanted state never came (`until`'s message can only
+ *  say the predicate stayed false) — as `describe` renders it (a log as its event types, say). */
+export const untilValue = async <T>(
+  label: string,
+  read: () => Promise<T>,
+  done: (value: T) => boolean,
+  { timeoutMs = 20_000, describe = (value: T): unknown => value } = {},
+): Promise<T> => {
+  let last: { value: T } | undefined;
+  try {
+    return await until(
+      label,
+      async () => {
+        const value = await read();
+        last = { value };
+        return done(value) ? { value } : false;
+      },
+      timeoutMs,
+    ).then((hit) => hit.value);
+  } catch (error) {
+    if (!last) throw error;
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} — last value read: ${JSON.stringify(describe(last.value))?.slice(0, 2000)}`,
+      { cause: error },
+    );
   }
 };
 

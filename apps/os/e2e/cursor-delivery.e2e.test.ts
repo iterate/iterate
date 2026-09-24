@@ -255,7 +255,19 @@ test("a resumed afterOffset BEYOND head must not deaden the row — the next app
   await until("lane works", () => c.offsets().includes(m1.offset), 8_000);
   await itx.append({ type: RESUMED, payload: { name: "beyond", afterOffset: m1.offset + 1000 } });
   const [m2] = await itx.append({ type: "mark", payload: { n: 2 } });
-  await until("the event after the resume delivers", () => c.offsets().includes(m2.offset), 5_000);
+  // a wait that runs out names what was delivered and the row as the stream keeps it (its cursor,
+  // any halt) — a slow delivery and a deadened row read differently
+  await until(
+    "the event after the resume delivers",
+    () => c.offsets().includes(m2.offset),
+    5_000,
+  ).catch(async (error: unknown) => {
+    const row = (await subscriptions(itx)).find((r) => r.name === "beyond");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} — m2 at ${m2.offset}, delivered ${JSON.stringify(c.invocations.map((i) => i.range))}, the row ${JSON.stringify(row)}`,
+      { cause: error },
+    );
+  });
 });
 
 test("the view: a push target's row has NO cursor; a resumed fact for an unknown name commits and changes nothing", async () => {

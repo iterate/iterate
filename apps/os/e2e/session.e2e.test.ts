@@ -17,6 +17,7 @@ import {
   session,
   sleep,
   until,
+  untilValue,
   workerUrl,
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
@@ -174,9 +175,14 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   expect(projectSlug).toBe(slug);
   const projectFacts = async () =>
     (await readAll(itx)).filter((e) => e.type.startsWith("events.iterate.com/project/"));
-  const created = await until("project/created on /", async () =>
-    (await projectFacts()).find((e) => e.type === "events.iterate.com/project/created"),
+  // the saga SETTLES on `created` or `create-failed`: a failed birth fails here with its own fact,
+  // and a wait that runs out names the facts it had (which step the saga was on)
+  const settled = await untilValue("project/created on /", projectFacts, (facts) =>
+    facts.some((e) => /\/project\/create(d|-failed)$/.test(e.type)),
   );
+  const created = settled.find((e) => e.type === "events.iterate.com/project/created");
+  if (!created)
+    throw new Error(`the project's birth failed on /: ${JSON.stringify(settled.at(-1))}`);
   const [requested, ...rest] = await projectFacts();
   // the saga's own facts on /: the request, the apex pointed at the seeded commit, the certificate
   expect([requested, ...rest].map((e) => e.type)).toEqual([

@@ -16,7 +16,7 @@
 //   • a rewrite rule masks `abort` like any name; a jail's bare null takes both verbs away
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/next/lib";
-import { freshCtx, openItx, readAll, rejection, sleep } from "./support/client.ts";
+import { freshCtx, openItx, readAll, rejection, sleep, until } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
@@ -35,20 +35,22 @@ export default class extends WorkerEntrypoint {
 };
 
 /** A facet with memory that dies with its instance, storage that does not, and a call that never
- *  answers. */
+ *  answers — and says how many such calls this instance holds. */
 const COUNTER = {
   source: {
     "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class CounterDurableObject extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "bump", "hang"];
+  static publicMethods = [...super.publicMethods, "bump", "hang", "hanging"];
   inMemory = 0;
+  hangs = 0;
   async bump() {
     this.inMemory += 1;
     const durable = ((await this.ctx.storage.get("n")) ?? 0) + 1;
     await this.ctx.storage.put("n", durable);
     return { inMemory: this.inMemory, durable };
   }
-  hang() { return new Promise(() => {}); }
+  hang() { this.hangs += 1; return new Promise(() => {}); }
+  hanging() { return this.hangs; }
 }`,
   },
   className: "CounterDurableObject",
@@ -176,7 +178,9 @@ test("itx.facets.abort(name) resets that facet from the host: a call hung on it 
   expect(await counter().bump()).toEqual({ inMemory: 2, durable: 2 });
   const hung = counter().hang();
   hung.catch(() => undefined);
-  await sleep(500); // the call is on the facet
+  // the call is ON the facet before the abort — the facet says so (a fixed pause here was a guess:
+  // under load the call arrived after the abort, on the fresh instance, and hung for good)
+  await until("the hung call is on the facet", async () => (await counter().hanging()) === 1);
   const wakesBefore = wakes(await readAll(itx));
 
   expect(await itx.facets.abort("counter", "stuck")).toMatchObject({

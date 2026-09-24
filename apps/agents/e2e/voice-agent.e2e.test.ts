@@ -7,7 +7,7 @@ import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { bundleVoiceSources, createVoiceInstall } from "../scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../voice/install.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
-import { openItx, readAll, runId, until } from "../../os/e2e/support/client.ts";
+import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
   deployedOnly,
@@ -200,6 +200,7 @@ export default class extends WorkerEntrypoint {
       ]);
       // Seven real sandbox scripts: candidate probe, commit, then live verification.
       // The former six-step cap discarded that last check after changing the site.
+      const websiteAsked = received.length;
       await call.append({
         type: `${T}delegation-requested`,
         payload: {
@@ -211,11 +212,26 @@ export default class extends WorkerEntrypoint {
           ],
         },
       });
-      const websiteAnswer = await until("verified website edit", () =>
-        received.find(
-          (event) => event.type === `${T}commentary` && event.payload.delegationId === "website",
-        ),
-      );
+      const isWebsiteAnswer = (event: (typeof received)[number]) =>
+        event.type === `${T}commentary` && event.payload.delegationId === "website";
+      // a wait that runs out names what the delegation said so far (which of its scripts it was on)
+      const websiteAnswer = (
+        await untilValue(
+          "verified website edit",
+          async () => received,
+          (events) => events.some(isWebsiteAnswer),
+          {
+            describe: (events) =>
+              events
+                .slice(websiteAsked)
+                .filter((event) => !event.type.endsWith("-frame"))
+                .map(
+                  (event) =>
+                    `${event.type.replace(T, "")} ${JSON.stringify(event.payload).slice(0, 200)}`,
+                ),
+          },
+        )
+      ).find(isWebsiteAnswer)!;
       expect(websiteAnswer.payload).toMatchObject({
         content: "The horse joke is live on your website.",
       });

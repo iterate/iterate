@@ -33,7 +33,10 @@ import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
 import { hmacSha256Hex, nowSeconds, pkceS256, seal, unseal } from "./seal.ts";
 import {
   GRAPHQL_LOGIN_PASSWORD,
+  GRAPHQL_SESSION_CLIENT_ID,
   GRAPHQL_SESSION_TTL_SECONDS,
+  type GraphqlLoginDeps,
+  graphqlSessionAccountClientId,
   graphqlSessionFromBearer,
   handleGraphqlLogin,
 } from "./graphql-login.ts";
@@ -182,7 +185,7 @@ const INDEX = dedent`
   POST /oauth/token         grant_type=authorization_code | refresh_token; confidential = HTTP Basic (RFC 6749 §2.3.1), public = client_id in the body; PKCE code_verifier required for public clients (and any code that carried a challenge, RFC 7636)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
   POST /graphql             GraphQL session-login door: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
-                            → sealed ~${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
+                            → sealed ${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
                             (one more way into the ONE pets API); expired/revoked → 401; no refresh grant — re-login is the refresh
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
   GET  /api/pets            the account's (entirely fictional) pets
@@ -202,7 +205,7 @@ const INDEX = dedent`
 
   GET  /__backdoor/state                   the whole mutable state, for spec assertions
   POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
-  POST /__backdoor/expire-tokens           {clientId} → invalidate that client's outstanding access tokens
+  POST /__backdoor/expire-tokens           {clientId} → invalidate that client's outstanding access tokens ("graphql-session-login:<username>": one account's GraphQL sessions)
   POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
   POST /__backdoor/rotate-signing-secret   new webhook HMAC secret
   POST /__backdoor/fail-token-endpoint     {clientId,times} → that client's next N token calls return 500
@@ -645,6 +648,18 @@ async function appInstallationAccessToken(
   );
 }
 
+/** The GraphQL login door's view of the shop: the sealing key, and the two
+ * revocation epochs a session of `username` is bound to — the door's
+ * (`graphql-session-login`) and the account's. */
+const graphqlLoginDeps = (deps: PetshopDeps): GraphqlLoginDeps => ({
+  sealKey: deps.sealKey,
+  getAccessTokenEpochs: (username) =>
+    deps.state.getState().then((state) => ({
+      epoch: accessTokenEpochFor(state, GRAPHQL_SESSION_CLIENT_ID),
+      accountEpoch: accessTokenEpochFor(state, graphqlSessionAccountClientId(username)),
+    })),
+});
+
 /** Resolve the request's bearer token to a live grant — an OAuth/legacy access
  * token or a GitHub-App installation token — or null (absent, tampered,
  * expired, epoch-revoked). Both grant types are validated identically. */
@@ -658,16 +673,12 @@ async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant |
     // The GraphQL login door's session is one more way in to the SAME API:
     // adapt it to an access-shaped grant (its "client" is the auth style —
     // this login flow has no OAuth client).
-    const session = await graphqlSessionFromBearer(token, {
-      sealKey: deps.sealKey,
-      getAccessTokenEpoch: () =>
-        deps.state.getState().then((state) => accessTokenEpochFor(state, "graphql-session-login")),
-    });
+    const session = await graphqlSessionFromBearer(token, graphqlLoginDeps(deps));
     if (!session) return null;
     return {
       t: "access",
       sub: session.sub,
-      clientId: "graphql-session-login",
+      clientId: GRAPHQL_SESSION_CLIENT_ID,
       epoch: session.epoch,
       exp: session.exp,
     };
@@ -1070,11 +1081,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
   // The GraphQL session-login door (graphql-login.ts): one more way to
   // authenticate against the same pets API.
   if (key === "POST /graphql") {
-    return handleGraphqlLogin(request, {
-      sealKey: deps.sealKey,
-      getAccessTokenEpoch: () =>
-        deps.state.getState().then((state) => accessTokenEpochFor(state, "graphql-session-login")),
-    });
+    return handleGraphqlLogin(request, graphqlLoginDeps(deps));
   }
   if (key === "GET /api/me" || key === "GET /api/pets") {
     const grant = await accessGrant(request, deps);
