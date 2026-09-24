@@ -56,14 +56,14 @@ test("a deploy resets the context mid-stream: both ends re-dial, what was in fli
   });
 });
 
-test("a second reset seconds after a deploy's, on the same new deploy, is the deploy's too; one a minute later is a platform failure", async () => {
+test("a second reset seconds after a deploy's, on the same new deploy, is the deploy's too; one three minutes later is a platform failure", async () => {
   vi.useFakeTimers();
   using splice = spliced();
   splice.connectEyeball();
   splice.context.reset({ deployId: "deploy-2", downForMs: 0 });
   await vi.advanceTimersByTimeAsync(2_000);
   splice.context.reset({ deployId: "deploy-2", downForMs: 0 });
-  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.advanceTimersByTimeAsync(180_000);
   splice.context.reset({ deployId: "deploy-2", downForMs: 0 });
   await vi.advanceTimersByTimeAsync(0);
   expect(splice).toMatchObject({

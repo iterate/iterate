@@ -33,8 +33,9 @@
  *  on prd 2026-09-24). */
 export const FETCH_UPGRADE_RESUME_DEADLINE_MS = 30_000;
 /** How long after a re-dial found a new deploy a further reset still counts as that deploy's: the
- *  runtime resets a context again seconds after a deploy's first reset (2–14 s on prd). */
-const DEPLOY_SETTLE_MS = 60_000;
+ *  runtime resets a context again after a deploy's first reset — 5 s, 14 s, 40 s and 90 s later on
+ *  prd 2026-09-24 (the new version reaching the context's other callers). */
+const DEPLOY_SETTLE_MS = 180_000;
 /** The re-dials after a drop, their delays from the drop: the first at once. The deadline, counted
  *  from the first drop the other end has not resumed since, bounds them all. */
 const REDIAL_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000];
