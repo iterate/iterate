@@ -17,8 +17,13 @@ The engine and four generated atlases were extracted from the measured
 StackChan prototype in
 `~/src/github.com/iterate/stackchan/experiments/02-minimal-realtime-aec/firmware-ws`.
 The generated atlas headers record their CC0 1.0 dedication for the generator's
-contribution. Their source packs describe the images as project-generated,
-AI-assisted original artwork; no third-party game artwork is included here.
+contribution. The images are project-generated, AI-assisted original artwork;
+no third-party game artwork is included here. The art was drawn against and
+compiled by the prototype's sprite pipeline
+(`~/src/github.com/iterate/stackchan/experiments/02-minimal-realtime-aec/tools/sprite-pipeline`);
+this repository keeps only its output in `assets/`, which
+[`tools/generate-atlases.py`](../../tools/generate-atlases.py) turns into the
+atlas C sources.
 
 The renderer snapshot is intentionally a one-shot operation. A display task
 may share a core with a lower-priority analyzer, so spinning on an in-progress

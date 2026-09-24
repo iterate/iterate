@@ -13,9 +13,7 @@
 
 static size_t channel_health(char *out, size_t capacity, size_t used);
 static void table_amplifier_phase(enum iterate_kit_voice_phase phase);
-#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
 static void table_amplifier_sound(uint32_t bytes);
-#endif
 
 /** One complete 20 ms wire frame; the only queued storage in either direction. */
 struct iterate_kit_i2s_codec_frame {
@@ -50,50 +48,9 @@ static bool (*playback_ready)(void *);
 static void (*playback_observed)(void *, const int16_t *, size_t, bool);
 static void (*playback_idle)(void *);
 
-/* A diagnostic build must make it impossible for an audible sample to reach
- * any table-owned I2S writer. The static frame is also the physical XMOS
- * reference: clocks and timing remain representative while AUDIO_PA_EN stays
- * low. Keep the counters in the codec rather than a board UI path, because
- * chimes and streamed PCM meet only here. */
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-static const int16_t silent_output_frame[320];
-static uint32_t silent_output_attempts;
-static uint32_t silent_output_suppressed_samples;
-static uint32_t silent_output_written_samples;
-
-static void note_silent_output_attempt(size_t samples) {
-  portENTER_CRITICAL(&codec_lock);
-  if (silent_output_attempts != UINT32_MAX) ++silent_output_attempts;
-  if (samples > UINT32_MAX - silent_output_suppressed_samples) {
-    silent_output_suppressed_samples = UINT32_MAX;
-  } else {
-    silent_output_suppressed_samples += (uint32_t)samples;
-  }
-  portEXIT_CRITICAL(&codec_lock);
-}
-
-static void note_silent_output_write(size_t samples) {
-  portENTER_CRITICAL(&codec_lock);
-  if (samples > UINT32_MAX - silent_output_written_samples) {
-    silent_output_written_samples = UINT32_MAX;
-  } else {
-    silent_output_written_samples += (uint32_t)samples;
-  }
-  portEXIT_CRITICAL(&codec_lock);
-}
-#endif
-
 static enum iterate_kit_status codec_hardware_write(
     const int16_t *samples, size_t sample_count) {
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-  (void)samples;
-  const enum iterate_kit_status status = hardware_write(
-      hardware_context, silent_output_frame, sample_count);
-  if (status == ITERATE_KIT_OK) note_silent_output_write(sample_count);
-  return status;
-#else
   return hardware_write(hardware_context, samples, sample_count);
-#endif
 }
 
 void iterate_kit_i2s_codec_set_playback_callbacks(
@@ -150,13 +107,7 @@ static enum iterate_kit_status codec_write(
       sample_count > 320) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-  note_silent_output_attempt(sample_count);
-  (void)playback;
-  memset(frame.samples, 0, sample_count * sizeof(*frame.samples));
-#else
   memcpy(frame.samples, playback, sample_count * sizeof(*playback));
-#endif
   frame.sample_count = sample_count;
   return xQueueSend(playback_mailbox, &frame, 0) == pdTRUE
       ? ITERATE_KIT_OK
@@ -245,17 +196,12 @@ static uint32_t sound_cursor;
 
 void iterate_kit_i2s_codec_play_sound(const uint8_t *pcm, uint32_t bytes) {
   if (pcm == NULL || bytes < 2U) return;
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-  note_silent_output_attempt(bytes / 2U);
-  return;
-#else
   table_amplifier_sound(bytes);
   portENTER_CRITICAL(&codec_lock);
   sound_pcm = pcm;
   sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
   sound_cursor = 0U;
   portEXIT_CRITICAL(&codec_lock);
-#endif
 }
 
 bool iterate_kit_i2s_codec_sound_active(void) {
@@ -412,25 +358,20 @@ static void playback_hardware_task(void *argument) {
       continue;
     }
     if (before_write != NULL) before_write(hardware_context);
-#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
     const uint32_t frame_ms = (uint32_t)(frame.sample_count * 1000U / 16000U);
     iterate_kit_i2s_codec_reserve_write(frame_ms);
-#endif
     const enum iterate_kit_status status = codec_hardware_write(
         frame.samples, frame.sample_count);
     if (status != ITERATE_KIT_OK) {
       portENTER_CRITICAL(&codec_lock);
-#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
       iterate_kit_starvation_ledger_rollback_write(&ledger, frame_ms);
-#endif
       if (status != ITERATE_KIT_UNAVAILABLE) ++playback_driver_failures;
       portEXIT_CRITICAL(&codec_lock);
     } else {
       atomic_store_explicit(
           &runtime_playback_queue_overflow_tracking,
           true, memory_order_release);
-      if (playback_observed != NULL &&
-          !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED) {
+      if (playback_observed != NULL) {
         playback_observed(hardware_context, frame.samples, frame.sample_count, sound != NULL);
       }
     }
@@ -493,22 +434,6 @@ size_t iterate_kit_i2s_codec_health(char *out, size_t capacity) {
    * or invent mailbox counters for hardware that has no shared mailbox. */
   const size_t count = hardware_read == NULL ? 2U : sizeof(fields) / sizeof(fields[0]);
   size_t used = iterate_kit_health_append_fields(out, capacity, fields, count);
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-  if (used == 0U) return 0U;
-  portENTER_CRITICAL(&codec_lock);
-  const struct iterate_kit_health_field silent_fields[] = {
-    {"silentOutput", 1U},
-    {"silentOutputAttempts", silent_output_attempts},
-    {"silentOutputSuppressedSamples", silent_output_suppressed_samples},
-    {"silentOutputWrittenSamples", silent_output_written_samples},
-  };
-  portEXIT_CRITICAL(&codec_lock);
-  const size_t silent_used = iterate_kit_health_append_fields(
-      out + used, capacity - used, silent_fields,
-      sizeof(silent_fields) / sizeof(silent_fields[0]));
-  if (silent_used == 0U) return 0U;
-  used += silent_used;
-#endif
   return channel_health(out, capacity, used);
 }
 
@@ -623,12 +548,6 @@ bool iterate_kit_i2s_codec_open_playback(
 }
 
 static bool set_table_amplifier(bool on) {
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-  /* Keep every table amp low on boot completion, phase changes and local
-   * sounds. HAVPE's board fact is GPIO47, labelled AUDIO_PA_EN in its
-   * schematic; the same rule makes this diagnostic safe for new table boards. */
-  on = false;
-#endif
   if (channel_facts.amplifier_gpio < 0 || on == amplifier_on) return true;
   if (gpio_set_level(channel_facts.amplifier_gpio, on ? 1 : 0) != ESP_OK) return false;
   amplifier_on = on;
@@ -660,7 +579,6 @@ static void table_amplifier_phase(enum iterate_kit_voice_phase phase) {
   }
 }
 
-#if !ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
 static void table_amplifier_sound(uint32_t bytes) {
   if (!amplifier_configured || !channel_facts.amplifier_gated) return;
   if (!set_table_amplifier(true)) iterate_kit_i2s_codec_note_failure(false);
@@ -671,7 +589,6 @@ static void table_amplifier_sound(uint32_t bytes) {
       (int64_t)(ring_ms + channel_facts.amplifier_settle_ms) * 1000;
   portEXIT_CRITICAL(&codec_lock);
 }
-#endif
 
 /** The two same-time taps are measured BEFORE fixed make-up gain. A loudness
  * gate cannot distinguish a quiet person from residual echo; never blank or

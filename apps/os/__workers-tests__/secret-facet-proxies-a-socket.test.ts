@@ -66,6 +66,73 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
   expect(await closed).toMatchObject({ code: 1006 });
 });
 
+// A browser cannot set Authorization on a WebSocket, so browser-shaped APIs carry the credential as
+// one of the offered subprotocols. The petshop's /gateway-subprotocol reads it from
+// `petshop.access-token.<token>` and selects `petshop.v1` (apps/dummy-petshop/src/gateway.ts).
+test("a WebSocket whose credential rides in Sec-WebSocket-Protocol: egress substitutes the placeholder there, the petshop's /gateway-subprotocol accepts the upgrade and selects its real subprotocol, and the frames round-trip", async () => {
+  const email = "secret-facet-subprotocol@example.com";
+  const accessToken = await petshopLegacyBearer(email);
+
+  const project = "prj_secret_facet_subprotocol";
+  await stub(project).invoke(
+    ["itx", "secrets", ["set", "/secrets/shop", accessToken, { urls: [SHOP] }]],
+    [],
+    { principal: null },
+  );
+
+  const response = await stub(`${project}.iterate/agents/browser`).fetch(
+    new Request(`${SHOP}/gateway-subprotocol`, {
+      headers: {
+        upgrade: "websocket",
+        "sec-websocket-protocol": 'petshop.v1, petshop.access-token.getSecret("/secrets/shop")',
+      },
+    }),
+  );
+  expect(response).toMatchObject({ status: 101 });
+  expect(response.headers.get("sec-websocket-protocol")).toBe("petshop.v1");
+  const socket = response.webSocket;
+  if (!socket) throw new Error("no webSocket on the 101");
+  const frames: unknown[] = [];
+  socket.addEventListener("message", (event) => {
+    frames.push(JSON.parse(event.data as string));
+  });
+  const closed = new Promise<never>((_, reject) =>
+    socket.addEventListener("close", (event) =>
+      reject(new Error(`closed ${event.code} after ${JSON.stringify(frames)}`)),
+    ),
+  );
+  closed.catch(() => {});
+  const received = (count: number) =>
+    Promise.race([
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (frames.length >= count) resolve();
+        };
+        socket.addEventListener("message", check);
+        check();
+      }),
+      closed,
+    ]);
+  socket.accept();
+
+  // The gateway authenticates at the upgrade: `ready` names the account the substituted token was
+  // minted for; a placeholder that reached it unsubstituted would be `invalid` and a 4001 close.
+  await received(3);
+  expect(frames).toEqual([
+    { op: "hello", heartbeatIntervalMs: 30_000 },
+    { op: "ready", user: { sub: email, clientId: "legacy-login" } },
+    {
+      op: "dispatch",
+      type: "pet.created",
+      data: { id: "pet-3", name: "Rex", species: "terrier" },
+    },
+  ]);
+  socket.send("ping");
+  await received(4);
+  expect(frames[3]).toEqual({ op: "echo", received: "ping" });
+  socket.close();
+});
+
 // The deployed voice-agent e2e covers the full loaded-facet and audio path; this isolates the
 // parent-context forwarding regression without needing a deployed Worker Loader.
 test("an app's fetch expression inherits WebSocket egress through its parent context", async () => {

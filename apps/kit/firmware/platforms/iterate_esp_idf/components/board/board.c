@@ -127,7 +127,6 @@ struct iterate_kit_board_facts iterate_kit_board_defaults(
 #ifdef ESP_PLATFORM
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -426,19 +425,6 @@ static size_t iterate_kit_board_modules(
 /** Install shared startup, presentation, controls, health and modules, then run. */
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
-#if ITERATE_KIT_DIAGNOSTIC_SILENT_OUTPUT_ENABLED
-  /* Latch before provisioning/network startup. A diagnostic must never roll
-   * back into the previous, potentially audible image if networking fails. */
-  const bool output_off = board->audio != NULL &&
-      board->audio->amplifier_gpio >= 0 &&
-      iterate_kit_i2s_codec_prepare_amplifier(board->audio);
-  const esp_err_t accepted = esp_ota_mark_app_valid_cancel_rollback();
-  if (!output_off || accepted != ESP_OK) {
-    ESP_LOGE("board", "silent startup failed: output_off=%d ota=%s",
-        output_off, esp_err_to_name(accepted));
-    for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-#endif
   volume_percent = board->facts.speaker.ceiling;
   struct iterate_kit_board_facts facts = iterate_kit_board_defaults(board);
   facts.speaker.set_volume = set_volume;
