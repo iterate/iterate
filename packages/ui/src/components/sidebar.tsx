@@ -1,6 +1,5 @@
 "use client";
 
-// oxlint-disable react/only-export-components -- this shared sidebar API intentionally exports its context hook beside the components that use it.
 import * as React from "react";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";

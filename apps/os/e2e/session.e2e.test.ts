@@ -1,5 +1,5 @@
 // Public OAuth admission, principal propagation and Cap’n Web resource teardown.
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- the /api one-shot batch door itself is under test; everything else is WS
+// The /api one-shot HTTP batch is itself under test here; everything else is WS.
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
@@ -267,7 +267,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   // The account's own session (the login cookie) is what the sessions page speaks; a batch session
   // is one-shot, so each account call below opens its own.
   const accountRequest = () => new Request(workerUrl("/api"), { headers: issuerHeaders });
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- A bounded mint through the account capability, the console's own client.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A bounded mint through the account capability, the console's own client.
   using minter = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   const { token, expiresAt } = await minter
     .authenticate({ type: "from-server-cookie" })
@@ -298,7 +298,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect((await fetchProjectUrl(echoOf(otherSlug), bearer)).status).toBe(403);
 
   // the account lists it as what it is …
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
   using lister = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   const listed = await lister.authenticate({ type: "from-server-cookie" }).grants.list();
   const grant = listed.items.find((item) => item.name === "E2E personal access token");
@@ -324,7 +324,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
   // the issuer session it was minted through (best-effort and async: wait for it)
   const accountEvents = async () => {
-    // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read of the account context per attempt.
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read of the account context per attempt.
     using reader = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
     return (await reader.authenticate({ type: "from-server-cookie" }).user.readEvents(0, 500))
       .events as { type: string; payload: Record<string, unknown>; source?: unknown }[];
@@ -349,7 +349,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
     platform: true,
   });
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   // `grants.end` answers once `account/grant-ended` has landed on the person's account — nothing to
   // clean up later, so nothing to return
@@ -381,7 +381,7 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
   const ctx = await registerProject(slug, member);
   const { token } = await oauthSession(ctx, member);
 
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- A public bearer also admits a bounded socketless batch.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A public bearer also admits a bounded socketless batch.
   using batch = newHttpBatchRpcSession<IterateRpcTarget>(
     new Request(workerUrl("/api"), {
       headers: { Authorization: `Bearer ${token}` },

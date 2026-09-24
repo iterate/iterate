@@ -6,7 +6,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { transformSync } from "esbuild";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- one bounded operator fixture installs the app; the app itself uses real browser RPC.
 import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateApi } from "iterate/next/api";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
@@ -39,7 +38,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
     readFileSync(resolve(import.meta.dirname, "../../apps/os/examples/mini-app.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   ).code;
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
   using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
   );

@@ -4,7 +4,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
 import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
 import type { IterateApi } from "iterate/next/api";
@@ -78,7 +77,7 @@ test("the Notes app works through a project config worker, and its session there
       `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,
     );
   expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
   using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
   );

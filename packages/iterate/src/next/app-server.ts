@@ -7,7 +7,6 @@
 // bind a browser to an issuer of the linker's choosing, and the app would then show that issuer's
 // world as the person's. Once a session exists, its record is the ONLY source of where the credential
 // goes (`BrowserSession.host()`): the login probe, the `/api` proxy and logout all read it there.
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read for the Sign-in-again page, no live capabilities.
 import { newHttpBatchRpcSession } from "capnweb";
 import type { BrowserHost, BrowserSession } from "./app-session.ts";
 import type { IterateApi } from "./api.ts";
@@ -114,7 +113,7 @@ function nextPathOf(next: string | null, origin: string): string {
  *  the page named. One bounded HTTP-batch read of the platform (the logout path's shape), best
  *  effort: a slow or failed read simply leaves those lines off, the page still works. */
 async function grantSummary(resource: string, bearer: string) {
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read, no live capabilities.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read, no live capabilities.
   using api = newHttpBatchRpcSession<IterateApi>(
     new Request(resource, {
       headers: { Authorization: `Bearer ${bearer}` },

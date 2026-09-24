@@ -484,20 +484,23 @@ const plugin: StrictPlugin = {
       meta: {
         docs: {
           description:
-            "Forbid capnweb's newHttpBatchRpcSession - always use a WebSocket session instead",
+            "Prefer a capnweb WebSocket session over newHttpBatchRpcSession; bounded one-shot batches need a reasoned disable.",
         },
         type: "problem",
       },
       create: (context) => {
+        const message =
+          "Prefer newWebSocketRpcSession and dispose it when the call completes; a bounded one-shot HTTP batch needs a disable comment giving its reason.";
+        // Calls and re-exports, not the import line: each batch is judged where it is made, and a
+        // re-export (the SDK's) hands the constructor to code this rule cannot see.
         return {
-          Identifier: (node) => {
-            if (node.name === "newHttpBatchRpcSession") {
-              context.report({
-                node,
-                message:
-                  "Never use newHttpBatchRpcSession. Stateless workers can hold a WebSocket session for the duration of a request - use newWebSocketRpcSession and dispose it when the call completes.",
-              });
-            }
+          CallExpression: (node) => {
+            if (node.callee.type === "Identifier" && node.callee.name === "newHttpBatchRpcSession")
+              context.report({ node, message });
+          },
+          ExportSpecifier: (node) => {
+            if (getPropertyName(node.local) === "newHttpBatchRpcSession")
+              context.report({ node, message });
           },
         };
       },

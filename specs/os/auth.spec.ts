@@ -4,7 +4,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture setup; browser actions use the app's real WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateApi } from "iterate/next/api";
@@ -71,7 +70,7 @@ test("first Claude consent creates the organization and project on the consent p
   page.on("pageerror", (error) => errors.push(error.message));
   // a slug the deployment's own organization holds — the onboarding step's refused first try below
   const takenSlug = `taken-${stamp()}`;
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
   using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
   );
@@ -254,7 +253,7 @@ test("first Claude consent creates the organization and project on the consent p
     // refused first try made ONE organization, not one per try; and the projects' minted ids, by
     // which alone a project is addressed (the page showed their slugs).
     const headers = await cookieHeaders(context, origin);
-    // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
     using api = newHttpBatchRpcSession<IterateApi>(new Request(`${origin}/api`, { headers }));
     const session = api.authenticate({ type: "from-server-cookie" });
     const [inventory, orgs, listed] = await Promise.all([

@@ -1,7 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { VideoModePageExtension } from "middlewright";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup; specs drive the product through the browser.
 import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateApi } from "iterate/next/api";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
@@ -137,7 +136,7 @@ async function createAdminProject(input: { baseUrl: string; email: string; slug:
   // create() resolves only after the project-creation saga commits, so no separate lifecycle
   // poll is needed.
   return test.step("create project fixture over /api", async () => {
-    // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
     using session = newHttpBatchRpcSession<IterateApi>(
       new Request(`${new URL(input.baseUrl).origin}/api`, {
         headers: { authorization: `Bearer ${config.adminApiSecret}` },

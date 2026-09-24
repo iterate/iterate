@@ -84,7 +84,7 @@ export function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- created once per config; the value syncs via a separate effect, the callbacks are Effect Events
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- created once per config; the value syncs via a separate effect, the callbacks are Effect Events
   }, [language, placeholder, focusOnMount]);
 
   // Keep the document in sync when the value is driven from outside.

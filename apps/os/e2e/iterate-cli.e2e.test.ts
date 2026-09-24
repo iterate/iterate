@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- Same bounded consent request as the issuer page; CLI calls use WebSockets.
 import { newHttpBatchRpcSession } from "capnweb";
 import { connectOsNext } from "iterate/next/node";
 import { beforeAll, test } from "vitest";
@@ -63,7 +62,7 @@ test("published CLI: OAuth PKCE login, refresh, project listing and an itx scrip
     expect(authorize.searchParams.get("scope")).toBe("iterate");
     expect(authorize.searchParams.get("resource")).toBe(workerUrl("/api"));
     expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
-    // eslint-disable-next-line iterate/no-capnweb-http-batch -- The issuer's one consent action, with the signed-in user's cookie.
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- The issuer's one consent action, with the signed-in user's cookie.
     using issuer = newHttpBatchRpcSession<IterateRpcTarget>(
       new Request(workerUrl("/api"), {
         headers: {

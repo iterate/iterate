@@ -1,6 +1,5 @@
 // Real issuer login, consent and code exchange. The identity proof is the sign-in page's own password
 // step (`POST /login` with the email and the deployment's password — the same post the page makes).
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture calls; the returned public client uses WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateRpcTarget } from "../../src/session.ts";
@@ -40,7 +39,7 @@ export async function oauthSession(projectId: string, user: { email: string }) {
     redirectUri,
     resources: [workerUrl("/api")],
   });
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- The same consent capability the browser calls, with an issuer session.
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A bounded fixture call (the returned public client uses WebSocket): the same consent capability the browser calls, with an issuer session.
   using issuerApi = newHttpBatchRpcSession<IterateRpcTarget>(
     new Request(workerUrl("/api"), { headers }),
   );

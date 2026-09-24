@@ -620,7 +620,9 @@ describe("Depot validation capacity", () => {
     const scripts = readPackageJson(".").scripts;
 
     expect(lint?.run).toBe("pnpm lint");
-    expect(scripts?.lint).toBe("oxlint . --threads 1 --deny-warnings");
+    expect(scripts?.lint).toBe(
+      "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
+    );
     // One thread for fixes too: at the default one per core, every JS worker starts its own
     // type-aware service and grandfather-rule git spawns, and a 16-core machine hits spawn ENOMEM.
     // Measured at 1, 4, 8 and 12 threads, more threads were no faster.

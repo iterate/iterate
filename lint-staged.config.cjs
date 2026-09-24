@@ -26,8 +26,8 @@ const agentConfig = {
     () => "pnpm typecheck",
     // if tests prove slow, we could do smart dependency tracking to only run tests for changed files
     () => "pnpm test",
-    // applies fixes, then fails on any warning left, as CI's `pnpm lint` does
-    () => "pnpm lint:fix --deny-warnings",
+    // applies fixes, then fails on any warning or unused disable directive left, as CI's `pnpm lint` does
+    () => "pnpm lint:fix --deny-warnings --report-unused-disable-directives-severity error",
   ],
 };
 

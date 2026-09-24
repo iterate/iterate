@@ -10,7 +10,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "preview": "pnpm --dir apps/os preview",
-    "lint": "oxlint . --threads 1 --deny-warnings",
+    "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint . --fix --threads 1",
     "knip": "knip --workspace apps/os --workspace apps/kit --workspace packages/shared --workspace packages/ui --workspace packages/iterate",
     "prepare": "is-ci || husky",
