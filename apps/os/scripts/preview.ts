@@ -759,26 +759,12 @@ async function runE2e(previewName: string) {
       },
     });
   })();
-  // The deployed target needs no local Vite build. Keep the preview's built dist/ intact while
-  // Playwright runs beside Vitest; the package's local `e2e` script intentionally rebuilds it.
-  // The reporters are the `e2e` script's: the retry telemetry reporter records first attempts
-  // that failed.
-  const e2e = runAsync(
-    "pnpm",
-    [
-      "exec",
-      "vitest",
-      "run",
-      "--configLoader",
-      "runner",
-      "--project",
-      "e2e",
-      "--sequence.concurrent",
-      "--reporter=default",
-      "--reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
-    ],
-    { cwd: ROOT, env: { ...env, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] } },
-  ).then(
+  // `e2e:run`, not `e2e`: the deployed target needs no local build, and the preview's built dist/
+  // stays intact while Playwright runs beside Vitest.
+  const e2e = runAsync("pnpm", ["e2e:run"], {
+    cwd: ROOT,
+    env: { ...env, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
+  }).then(
     () => true,
     (error: unknown) => {
       console.error(describe(error));
