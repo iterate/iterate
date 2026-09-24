@@ -142,6 +142,11 @@ export default {
       // The Workers types are named by tsconfig.base.json.
       ignoreDependencies: ["@cloudflare/workers-types"],
     },
+    "apps/tunnels": {
+      entry: ["src/worker.ts!", "scripts/*.ts"],
+      // The pinned Captun CLI is run by scripts/tunnel.ts through pnpm exec.
+      ignoreDependencies: ["@cloudflare/workers-types"],
+    },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],

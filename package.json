@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --dir apps/os dev",
     "getin": "tsx scripts/getin.ts",
+    "tunnel": "tsx scripts/tunnel.ts",
     "os": "pnpm --dir apps/os",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs",

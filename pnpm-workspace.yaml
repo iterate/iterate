@@ -8,6 +8,7 @@ packages:
   - apps/spa
   - apps/dummy-petshop
   - apps/ci-reports
+  - apps/tunnels
   - packages/cli
   - packages/iterate
   - packages/shared
@@ -52,6 +53,8 @@ overrides:
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
+  # Match the Captun gateway's existing WebSocket-capable protocol build.
+  captun>capnweb: npm:@iterate-com/capnweb@0.10.0
   '@iterate-com/agents>capnweb': npm:@iterate-com/capnweb@0.12.2
   os>capnweb: npm:@iterate-com/capnweb@0.12.2
   srvx: 0.11.12

@@ -1,0 +1,27 @@
+{
+  "name": "@iterate-com/tunnels",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "deploy": "tsx scripts/deploy.ts",
+    "ensure-resources": "tsx scripts/ensure-resources.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@types/ws": "8.18.1",
+    "trpc-cli": "0.15.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.16",
+    "ws": "8.19.0",
+    "wrangler": "catalog:cloudflare"
+  }
+}

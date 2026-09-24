@@ -22,6 +22,20 @@ export const PRD_ACCOUNT_ID = cloudflareAccounts.prd.cloudflareAccountId;
 /** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
 export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].cloudflareAccountId;
 
+/** Captun is shared by local development and CI. Preserve its existing production Worker and
+ * Durable Object namespace: open tunnels must survive changes to the platform. */
+export const tunnelsEnvs: Record<
+  string,
+  { cloudflareAccountId: string; dopplerConfig: string; workerName: string; hostname: string }
+> = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "tunnels-prd",
+    hostname: "tunnels.iterate.com",
+  },
+};
+
 /**
  * Placeholder for a Cloudflare resource that hasn't been created yet.
  * Deploy scripts refuse to ship it; `ensure-resources` replaces it.

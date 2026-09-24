@@ -19,3 +19,5 @@ setup:
     path: apps/dummy-petshop/
   - project: _shared
     path: apps/ci-reports/
+  - project: tunnels
+    path: apps/tunnels/
