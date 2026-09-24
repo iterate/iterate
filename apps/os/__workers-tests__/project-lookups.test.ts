@@ -1,8 +1,8 @@
 // How often a project's row is asked of the `CONTROL_PLANE` singleton. A project host's admission
-// (src/control-plane/edge.ts `projectOfHost`) keeps a label no project holds five seconds per
-// isolate, so a scanner's burst at one unknown label is one read, and a project created right after
-// its label was missed is still served promptly. A project's context keeps its own slug in its
-// storage (src/iterate-context-durable-object.ts `#projectSlug`).
+// (src/control-plane/edge.ts `getProjectKeepingMisses`) keeps a label no project holds five seconds
+// per isolate, so a scanner's burst at one unknown label is one read, and a project created right
+// after its label was missed is still served promptly. A project's context keeps its own slug in
+// its storage (src/iterate-context-durable-object.ts `#projectSlug`).
 import { runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -32,6 +32,28 @@ test("a project created through this isolate's edge right after its label was mi
   await expectNoProject(label);
 
   using _project = await (await operator()).projects.create({ project: label });
+  const served = await call(`https://${label}.projects.test/`);
+  expect(served, await served.clone().text()).not.toMatchObject({ status: 421 });
+});
+
+test("a read that missed a label while this isolate created its project keeps no miss: the next request is served", async () => {
+  const label = freshLabel("created-mid-read");
+  const reads = await spyOnProjectReads();
+  const { promise: asked, resolve: ask } = Promise.withResolvers<void>();
+  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
+  // the Durable Object's method answers over RPC, where a promise answers as its value
+  reads.mockImplementationOnce((async () => {
+    ask();
+    await answered;
+    return null;
+  }) as unknown as () => null);
+
+  const missed = call(`https://${label}.projects.test/`);
+  await asked;
+  using _project = await (await operator()).projects.create({ project: label });
+  answer();
+  expect(await missed).toMatchObject({ status: 421 });
+
   const served = await call(`https://${label}.projects.test/`);
   expect(served, await served.clone().text()).not.toMatchObject({ status: 421 });
 });

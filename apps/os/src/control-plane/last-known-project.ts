@@ -136,7 +136,7 @@ export async function admitProjectHost(
   if (!address) return null;
   const project = await readOrCopy(
     "project",
-    () => controlPlane.projectOfHost(address.project),
+    () => controlPlane.getProjectKeepingMisses(address.project),
     async () =>
       hostnameRow || (await firstCopy([lastKnownKey("project", address.project)]))?.row || null,
   );
