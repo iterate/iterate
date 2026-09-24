@@ -37,7 +37,11 @@ static inline uint32_t iterate_kit_atomic_load_relaxed_u32(
   return __atomic_load_n(value, __ATOMIC_RELAXED);
 }
 
-/** Add one without wrapping; no payload or ownership is published. */
+/**
+ * Add one without wrapping; no payload or ownership is published. Saturation
+ * keeps the monotonic statement "at least UINT32_MAX" true, whereas
+ * wraparound would make a worsening fault appear to recover.
+ */
 static inline void
 iterate_kit_atomic_saturating_increment_relaxed_u32(
     volatile uint32_t *value) {

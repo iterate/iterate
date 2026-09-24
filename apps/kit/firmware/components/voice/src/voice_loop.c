@@ -1298,47 +1298,11 @@ static void fence_activation(void) {
   runtime.voice_stream_generation = 0U;
 }
 
-static void end_local_activation(const char *reason, const char *status) {
-  if (runtime.activation_live) ESP_LOGI(tag, "call ended here: %s", reason);
-  bool queued;
-  /* Every local end is immediately audible: discard the old answer before
-   * fencing capture or waiting for its terminal to reach the stream. */
-  (void)abandon_speaker_audio();
-  /* A terminal is required only after this activation reached the stream. */
-  queued = !runtime.activation_live ||
-      runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
-  fence_activation();
-  /* `pending_terminals` owns the ID now. Do not let a delayed acceptance or
-   * speaker frame match an activation the person has already ended. */
-  runtime.activation[0] = '\0';
-  stream_path[0] = '\0';
-  runtime.activation_live = false;
-  atomic_store_explicit(&runtime.speaker_peak, 0U, memory_order_relaxed);
-  atomic_store_explicit(&runtime.speaker_peak_at_ms, 0U, memory_order_release);
-  runtime.view.wants_call = false;
-  runtime.view.listening = false;
-  /* A queued terminal fences later microphone appends, so the old call must
-   * stop governing new local intent immediately. */
-  runtime.view.call_active = false;
-  runtime.voice_stream->call_active = false;
-  runtime.voice_stream->answer_open = false;
-  runtime.voice_stream->last_presence_at_ms = 0U;
-  runtime.opening_started_at_ms = 0U;
-  runtime.opening_outcome = OPENING_IDLE;
-  atomic_fetch_add_explicit(
-      &runtime.capture_generation, 1U, memory_order_acq_rel);
-  atomic_store_explicit(&runtime.capture_open, false, memory_order_release);
-  atomic_store_explicit(
-      &runtime.capture_discard_requested, true, memory_order_release);
-  runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-  runtime.view.status = queued ? status : "cancel backlog full";
-  if (!queued) ESP_LOGE(tag, "terminal backlog full for activation");
-}
-
-/* The server has already accepted the terminal; fence only local audio. */
-static void end_authoritative_activation(const char *status) {
-  if (!runtime.activation_live) return;
-  ESP_LOGI(tag, "call ended by the server");
+/*
+ * Close the current activation on this device: no delayed acceptance or
+ * speaker frame may match it, and it stops governing new local intent at once.
+ */
+static void close_activation_locally(const char *status) {
   fence_activation();
   runtime.activation[0] = '\0';
   stream_path[0] = '\0';
@@ -1360,6 +1324,28 @@ static void end_authoritative_activation(const char *status) {
       &runtime.capture_discard_requested, true, memory_order_release);
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
   runtime.view.status = status;
+}
+
+static void end_local_activation(const char *reason, const char *status) {
+  if (runtime.activation_live) ESP_LOGI(tag, "call ended here: %s", reason);
+  bool queued;
+  /* Every local end is immediately audible: discard the old answer before
+   * fencing capture or waiting for its terminal to reach the stream. */
+  (void)abandon_speaker_audio();
+  /* A terminal is required only after this activation reached the stream. */
+  queued = !runtime.activation_live ||
+      runtime.first_mic_append_at_ms == 0U || queue_terminal(reason);
+  /* `pending_terminals` owns the ID now, and a queued terminal fences later
+   * microphone appends, so the ended call must stop governing local intent. */
+  close_activation_locally(queued ? status : "cancel backlog full");
+  if (!queued) ESP_LOGE(tag, "terminal backlog full for activation");
+}
+
+/* The server has already accepted the terminal; fence only local audio. */
+static void end_authoritative_activation(const char *status) {
+  if (!runtime.activation_live) return;
+  ESP_LOGI(tag, "call ended by the server");
+  close_activation_locally(status);
 }
 
 static const char *const setup_voice_path[] = {"voice", "setupVoiceAgent"};
@@ -3118,22 +3104,17 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * EVERY producer gates on outbox headroom: exhaustion is
        * SESSION-FATAL in this peer (finish_message terminalizes on
        * backpressure), and the measured drain is only ~25-50 messages/s.
-       * Mic frames aggregate to 4-frame/80ms appends (12.5 pushes/s);
-       * frames are skipped without headroom — the freshest-wins mic queue
-       * makes that loss honest.
+       * Mic frames flush every MIC_FLUSH_MS (at most 20 pushes/s), up to
+       * MIC_FRAMES_PER_APPEND frames per append; frames are skipped without
+       * headroom — the freshest-wins mic queue makes that loss honest.
        */
       struct iterate_kit_spsc_ring_metrics outbox_metrics;
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-      size_t outbox_free =
+      const size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static int16_t pcm_storage[MIC_FRAMES_PER_APPEND][FRAME_SAMPLES];
       static bool call_active_shown;
-
-      /* A terminal append consumes the same ring as mic frames. Refresh the
-       * headroom before deciding whether another producer may append. */
-      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-      outbox_free = CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
 
       /*
        * One intent path for both sources: a physical button edge and an RPC
