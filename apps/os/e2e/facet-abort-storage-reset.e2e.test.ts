@@ -13,18 +13,16 @@
 // So the platform never stops a facet without starting it again, and a birth starts every facet
 // the last incarnation ran before its first write. Each row below drives one way a facet stops,
 // with a storage-heavy loaded facet, and asserts the context is not reset. Measured on os-preview
-// previews, 2026-09-24 (runs that reset the context, before → after this workaround):
-//   • `itx.facets.abort` right after 40 rows of 2 KB:                        48 of 48 → 0 of 64
-//   • the facet evicted with its context right after them, the next
-//     incarnation's calls (no platform abort at all; the birth reset
-//     skipped: the same):                                                    32 of 32 → 0 of 32
-//   • the birth reset of a facet the last incarnation left running and
-//     writing every 5 ms:                                                     2 of 16 → 0 of 32
-//   • a new loaded identity (a source change) of a facet that just wrote
-//     40 rows (the restart that has always followed its abort):              4 of 104
-//   • the sweep's reset in place, and the call watchdog's, of a facet still
-//     writing:                                                  1 of 16 and 0 of 16 → 0 of 16 each
-//   (the after column: the rows below, FACET_ABORT_REPRO_RUNS=16, on a preview of this workaround)
+// previews, 2026-09-24, with FACET_ABORT_REPRO_RUNS=16 (runs whose context reset once the path
+// began; none reset during setup), a preview of main before and of this workaround after:
+//   • `itx.facets.abort` right after 40 rows of 2 KB:            63 of 64 → 0 of 64
+//   • the facet evicted with its context right after them; the
+//     next incarnation's calls (no platform abort at all):         64 of 64 → 0 of 64
+//   • the birth reset of a facet left running, writing every 5 ms:  5 of 64 → 0 of 64
+//   • the call watchdog's reset of a facet hung mid-write:          2 of 64 → 0 of 64
+//   • the sweep's reset in place of a facet still writing:          1 of 63 → 0 of 63
+//   • a new loaded identity right after 40 rows:                    0 of 64 → 0 of 64
+//   • the raw fault, a facet aborting its own child facet:         64 of 64 → 64 of 64
 // The first row asserts the fault is STILL there, with no platform code between the abort and the
 // fault: a loaded facet aborts its OWN child facet. When it stops reproducing, Cloudflare fixed it —
 // remove the workaround (FACET_START_WATCHDOG_MS names every piece).

@@ -67,16 +67,16 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  writes and then STOPS — aborted (`ctx.facets.abort`), or evicted with its context — makes one of
  *  the context's next storage commits fail with "Internal error in Durable Object storage caused
  *  object to be reset": the whole object resets, and every call in flight on it fails. Measured on
- *  an os-preview preview: 40 rows of 2 KB, then an abort, 100 % of runs; the same facet evicted
- *  with its context, then the next incarnation's calls, 100 %. The facet STARTED AGAIN before the
+ *  an os-preview preview: 40 rows of 2 KB, then an abort, 47 of 48 runs; the same facet evicted
+ *  with its context, then the next incarnation's calls, 48 of 48. The facet STARTED AGAIN before the
  *  context commits anything more avoids it: after an abort, a start right after it and before any
  *  other event (`#restart`); after an eviction, a start in the next incarnation's birth before its
  *  first write (`startFacetsTheLastIncarnationRan`) — a start after that write does not. So the
  *  platform never stops a facet without starting it again: every abort of its own is a `#restart`,
  *  and a birth starts every facet the last incarnation ran (`facet-ran:<name>` rows). A start is
  *  one call, `listPublicMethods`, under its own watchdog (a birth waits on it, and a birth that
- *  outlasts 30 s resets the object); a start that fails is logged, never thrown. Remove when
- *  the repro stops reproducing. */
+ *  outlasts 30 s resets the object); a start that fails is logged, never thrown, and its row stays
+ *  for the next birth or sweep. Remove when the repro stops reproducing. */
 const FACET_START_WATCHDOG_MS = 10_000;
 /** Every call but a platform start: the call watchdog, and a facet that timed out started again. */
 const FACET_CALL_WATCHDOG = { watchdogMs: FACET_CALL_WATCHDOG_MS, restartOnTimeout: true };
