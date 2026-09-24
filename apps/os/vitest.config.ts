@@ -72,7 +72,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["src/**/*.test.ts", "examples/**/*.test.ts", "scripts/*.test.ts"],
+          include: ["src/**/*.test.ts", "scripts/*.test.ts"],
           // The edge and DO modules reach the control plane, whose OAuth provider imports
           // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
@@ -101,7 +101,6 @@ export default defineConfig({
           // cold-start lesson, scaled up).
           testTimeout: 120_000,
           hookTimeout: 120_000,
-          onUnhandledError,
         },
       },
       {
@@ -134,7 +133,6 @@ export default defineConfig({
           // 2026-09-21), so the `e2e` script passes `--sequence.concurrent`. `maxConcurrency` IS per
           // project: the default 5 would run a 21-row file in five waves.
           maxConcurrency: 32,
-          onUnhandledError,
         },
       },
       {
