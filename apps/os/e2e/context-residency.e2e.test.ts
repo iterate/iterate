@@ -527,7 +527,7 @@ test(
         e.offset < slept.offset,
     );
     console.log(
-      `[residency] ${woken.length} wake(s) mid-sleep; slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
+      `[residency] ${woken.length} wake(s) mid-sleep (${woken.map((e: any) => e.payload.reason).join(", ")}); slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
     );
     // The claim's alarm woke the context mid-sleep (20 s in, the context idle since the append), and
     // every birth mid-sleep spared the claimed facet — a birth names what it reset on its wake record.
