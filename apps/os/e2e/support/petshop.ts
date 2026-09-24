@@ -59,7 +59,7 @@ export const petshopExpireTokens = (
 
 /** Revoke ONE account's GraphQL-login sessions — the shop's per-account epoch
  *  (apps/dummy-petshop/src/graphql-login.ts `graphqlSessionAccountClientId`). The shop serves every
- *  concurrent CI run, so a test forcing a 401 revokes its own account's sessions, never the whole endpoint's:
+ *  concurrent CI run, so a test forcing a 401 revokes its own account's sessions, never the endpoint's:
  *  an endpoint-wide bump from one run killed the session another run had just minted. */
 export const petshopExpireGraphqlSessions = (
   username: string,
