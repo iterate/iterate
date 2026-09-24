@@ -566,6 +566,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // Loaded code can delegate its scope to descendants through durable rows; child code
     // keeps its own ceiling. The append boundary validates the rest of each control event.
     if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
+    // `account/…` and `organization/…` keys are the platform's facts on a global context (grants.ts,
+    // session.ts): a key a person took first would answer the platform's fact with theirs, which the
+    // owner's fold ignores (a grant that never ends).
+    if (projectId === GLOBAL_PROJECT_ID && !caller.platform)
+      for (const { idempotencyKey } of events)
+        if (/^(?:account|organization)\//.test(String(idempotencyKey)))
+          throw codedError(
+            "FORBIDDEN",
+            `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+          );
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
