@@ -31,7 +31,11 @@ Google, or Cloudflare. Two deployment secrets let you act as anyone, instantly:
 the **password** (`login.password`) signs in as whatever email you type, and
 the **operator bearer** (`secrets.adminBearer`) opens an operator session that
 reaches every project, optionally as a named user (see
-[Acting as users](#acting-as-users-and-admins)).
+[Acting as users](#acting-as-users-and-admins)). `login.allowedEmails` limits
+who may sign in by any of them (`["*@iterate.com"]`, or the var
+`APP_CONFIG_LOGIN__ALLOWED_EMAILS=*@iterate.com,*@nustom.com`); a live grant for
+an address it stops naming is refused at its next use. The operator bearer is
+not limited by it.
 
 ## Local dev
 
@@ -292,9 +296,10 @@ The `os-phone` project covers the platform's own pages at phone width.
 ### Minting in production
 
 The same mechanism works against **production**: you can open an operator
-session on `https://os.iterate.com` to poke around in prd. (Signing in as a
-chosen identity there needs `login.password`, and only if production sets one;
-its people sign in with Google, Cloudflare or the mailed code.)
+session on `https://os.iterate.com` to poke around in prd. Production sets no
+`login.password`: its people sign in with Google, Cloudflare or the mailed code,
+each of which proves the email, and only as an address `login.allowedEmails`
+names. The operator bearer's `as` acts as a chosen user instead.
 
 ```bash
 # an operator session against production (reaches every project); the bearer is
@@ -305,8 +310,7 @@ APP_CONFIG_ADMIN_API_SECRET=<prd adminBearer> pnpm exec iterate --config prd \
 
 Production's operator bearer is a **master key**: anyone holding
 `secrets.adminBearer` from `os/prd` can act on every project, and
-as any user. So is a production `login.password`, if one is ever set: it signs
-in as any email. Every run is attributed on the project's root log to the
+as any user. Every run is attributed on the project's root log to the
 principal that made it, but the bearer's principal is the operator, not a
 person. Guard those Doppler values like any production secret, and prefer a
 scoped identity (a real user's OAuth grant) when you can.

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { cookieValueOf, errorCode, sameOriginPath } from "iterate/lib";
 import { signClaims, verifyClaims } from "./caller.ts";
 import type { Env } from "./env.ts";
+import { EMAIL_NOT_ALLOWED_MESSAGE, emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -128,6 +129,11 @@ export async function identityResponse(request: Request, env: Env) {
         status: 403,
         headers,
       });
+    if (!emailAllowed(config.login.allowedEmails, identity.data.email)) {
+      const query = new URLSearchParams({ next: flow.data.next, error: EMAIL_NOT_ALLOWED_MESSAGE });
+      headers.set("Location", `/login?${query}`);
+      return new Response(null, { status: 303, headers });
+    }
     // The provider and its stable subject together name the person (the control plane's rule: link
     // once by verified email, then by the subject); an email change cannot change the actor.
     const user = await new ControlPlane(env.CONTROL_PLANE).linkIdentity(

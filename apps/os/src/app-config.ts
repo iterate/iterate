@@ -9,7 +9,7 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
-//     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
+//     login: { allowedEmails, password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
 //     secrets: { key, previousKey, adminBearer },
 //   }
@@ -135,6 +135,30 @@ export const AppConfig = z.object({
    *  deployment with none (nobody could ever sign in). */
   login: z
     .object({
+      /** WHO MAY SIGN IN (allowed-emails.ts): email patterns, `*` for any run of characters —
+       *  `["*@iterate.com", "someone@example.com"]`. A JSON array, or as the var
+       *  `APP_CONFIG_LOGIN__ALLOWED_EMAILS` a comma-separated list too. Every mechanism refuses an
+       *  address it does not name, and a live grant for one stops working. Unset ⇒ everyone. */
+      allowedEmails: z
+        .preprocess(
+          (value) =>
+            typeof value === "string"
+              ? value
+                  .split(",")
+                  .map((pattern) => pattern.trim())
+                  .filter(Boolean)
+              : value,
+          z
+            .array(
+              z
+                .string()
+                .trim()
+                .toLowerCase()
+                .regex(/^[^@\s]+@[^@\s]+$/, 'expected email patterns like "*@iterate.com"'),
+            )
+            .min(1, "lists no pattern, so nobody could sign in — name one, or unset it"),
+        )
+        .optional(),
       /** A GLOBAL PASSWORD: anyone who knows it signs in as the email they type — the membership is
        *  the password, the email is the name tag. The self-host default; also how the specs sign in.
        *  Blank ⇒ off. */

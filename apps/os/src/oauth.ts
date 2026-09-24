@@ -17,6 +17,7 @@ import type { Env } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
+import { emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import { providerStore } from "./oauth-store.ts";
 
@@ -99,8 +100,8 @@ async function grantIsRevoked(env: Env, userId: string, grantId: string): Promis
   return Boolean((await accountStateOf(env, userId)).endedGrants[grantId]);
 }
 
-/** Whether `grant` still admits its bearer: its token unexpired, its deadline not passed, and no end
- * on the person's account. A fresh read of the account on each admission — never memoized: provider
+/** Whether `grant` still admits its bearer: its token unexpired, its deadline not passed, its
+ * person's email one `login.allowedEmails` admits, and no end on the person's account. A fresh read of the account on each admission — never memoized: provider
  * KV expiry/deletion alone cannot deny a token during propagation or a refresh racing with logout,
  * and a memo here would let a revoked grant through for its life. (The live socket's 30 s
  * re-check, rpc.ts, is the one lag anywhere.) */
@@ -108,6 +109,7 @@ export async function grantIsLive(env: Env, grant: AccessGrant): Promise<boolean
   return (
     grant.expiresAt > Date.now() &&
     grant.deadline > Date.now() &&
+    emailAllowed(appConfigOf(env).login.allowedEmails, grant.email) &&
     !(await grantIsRevoked(env, grant.userId, grant.grantId))
   );
 }
@@ -319,6 +321,8 @@ async function grantLifetime(
   if (await grantIsRevoked(env, input.userId, input.grantId))
     throw refused("grant_ended", "The session is no longer active.");
   const grant = parsed.data;
+  if (!emailAllowed(appConfigOf(env).login.allowedEmails, grant.email))
+    throw refused("email_not_allowed", "The session is no longer active.");
   const remaining = Math.floor((grant.deadline - Date.now()) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime (`invalid_request`).
   if (remaining < 60) throw refused("deadline_passed", "The session has expired.");

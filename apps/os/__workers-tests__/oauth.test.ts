@@ -223,6 +223,19 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toMatchObject({ status: 400 });
 });
 
+test("login.allowedEmails: a live grant whose email the list stops naming is refused at its next admission", async () => {
+  fetchReachesThisWorker();
+  const flow = await grant([`${ORIGIN}/api`]);
+  const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+  const token = flow.token!.access_token;
+  const listing = (patterns: string) =>
+    ({ ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: patterns }) as typeof env;
+  expect(await authorizationForToken(listing("*@example.com"), token, addresses)).toMatchObject({
+    principal: { actor: flow.user.id },
+  });
+  expect(await authorizationForToken(listing("*@iterate.com"), token, addresses)).toBeNull();
+});
+
 test("a refresh a second after the code exchange reads the grant the exchange wrote, whatever copy KV serves", async () => {
   fetchReachesThisWorker();
   // KV serves a location's cached copy of a key for up to 60 s after another location wrote a new

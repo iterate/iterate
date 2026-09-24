@@ -27,7 +27,10 @@ const adminApiSecret = (): string => {
  *  APP_CONFIG) — `POST /login` with an email and this mints a browser session (support/principal.ts). */
 export const loginPassword = (): string => {
   const password = process.env.LOGIN_PASSWORD;
-  if (!password) throw new Error("LOGIN_PASSWORD unset — the e2e globalSetup/setup did not run");
+  if (!password)
+    throw new Error(
+      "LOGIN_PASSWORD unset — the e2e globalSetup/setup did not run, or the deployment sets no login.password (prd)",
+    );
   return password;
 };
 
