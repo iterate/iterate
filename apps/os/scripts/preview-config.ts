@@ -62,10 +62,18 @@ export function slugifyPreviewName(raw: string) {
   return `${slug.slice(0, budget - hash.length - 1).replace(/-+$/, "")}-${hash}`;
 }
 
+/** THE FORMER PARENT, until 2026-09-24. Its own stores (`os-preview-files`, `os-preview-repos`) and
+ *  the legacy platform's slot namespaces (`os-preview-<n>-repos`, tens of thousands of repos each)
+ *  are all `os-preview-…`: what a preview named `preview` or `preview-…` would call its own under
+ *  the parent `os`, and a delete of that preview would take them. They outlive any worker, so the
+ *  name is refused whether or not the worker still exists. */
+const FORMER_PARENT = "os-preview";
+
 /** `pr<n>` for a pull request: its URLs are `pr<n>-os.…`, `pr<n>-dash.…`, one per PR whatever its
  *  branch is called. Without a number — a CI workflow's own preview, a laptop's experiment — the
  *  slugified name, which the sweep judges on age alone. A name whose resources would be one the
- *  account already has for something else (`dev` → local dev's `os-dev-repos`) is refused. */
+ *  account already has for something else (`dev` → local dev's `os-dev-repos`), or under the former
+ *  parent's prefix, is refused. */
 export function resolvePreviewName({ name, prNumber }: { name?: string; prNumber?: string }) {
   const pr = (prNumber || "").trim();
   if (/^\d+$/.test(pr)) return `pr${pr}`;
@@ -78,6 +86,11 @@ export function resolvePreviewName({ name, prNumber }: { name?: string; prNumber
     .find((resourceName) => taken.has(resourceName));
   if (clash)
     throw new Error(`preview name ${previewName} would take ${clash}, which is not a preview's`);
+  const repos = previewResourceName(previewName, "repos");
+  if (repos.startsWith(`${FORMER_PARENT}-`))
+    throw new Error(
+      `preview name ${previewName} would take ${repos}, under the former parent ${FORMER_PARENT}'s prefix`,
+    );
   return previewName;
 }
 

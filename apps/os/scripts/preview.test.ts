@@ -35,7 +35,7 @@ test.each([
   ["feature/foo", "", "feature-foo"],
   ["Feature_Foo", undefined, "feature-foo"],
   ["main", undefined, "main"],
-  ["--", undefined, "preview"],
+  ["previewer", undefined, "previewer"],
 ])("the preview name: %s with PR %s → %s", (name, prNumber, expected) => {
   expect(resolvePreviewName({ name, prNumber })).toBe(expected);
 });
@@ -54,6 +54,11 @@ test("the preview name: one whose resources the account has for something else i
     "preview name dev would take os-dev-repos, which is not a preview's",
   );
   expect(() => resolvePreviewName({ name: "parent" })).toThrow(/would take os-parent-/);
+  // the former parent's own stores, the legacy slots' namespaces, and the empty slug's fallback
+  for (const name of ["preview", "preview-3", "--"])
+    expect(() => resolvePreviewName({ name })).toThrow(
+      /would take os-preview-.*, under the former parent os-preview's prefix/,
+    );
   expect(() => resolvePreviewName({})).toThrow("a preview needs a PR number (--pr) or a name");
 });
 
