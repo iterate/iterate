@@ -28,13 +28,15 @@ shared closure state and lifecycle hooks grow. Put the group in the title
 `// ── section ──` comment.
 
 - **Rows that must run in order.** `pnpm e2e` runs every file's tests
-  concurrently (`--sequence.concurrent`). A row that reads worker-global state
-  (its own worker's logs, one seeded context it also resets) is
-  `test.sequential(...)`, and a table of them is `test.sequential.for(rows)(...)`.
-  Sequential rows run one at a time, in file order, while the file's other rows
-  stay concurrent. `apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts` is
-  the model. Prefer a row that owns its state over an ordered one: a test that
-  creates its own project needs no ordering.
+  concurrently (`--sequence.concurrent`). Rows that share state they also
+  measure or reset (one seeded context) are `test.sequential(...)`, and a table
+  of them is `test.sequential.for(rows)(...)`. Sequential rows run one at a time,
+  in file order, while the file's other rows stay concurrent.
+  `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts` is the model. Prefer a row
+  that owns its state over an ordered one: a test that creates its own project
+  needs no ordering, and a row that reads worker logs boots its own worker
+  (`apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts`, sequential only so
+  one extra workerd runs at a time).
 - **Gated suites.** `describe.skipIf(cond)` becomes `test.skipIf(cond)` on each
   test.
 - **Tables.** `describe.for`/`describe.each` become `test.for` with object rows
@@ -67,7 +69,9 @@ argument (`apps/os/src/context/rpc-stubs.test.ts` injects its `waitUntil`).
 `vi.fn()`, `vi.spyOn(...)` and `vi.stubGlobal(...)` are not module mocks.
 
 For `cloudflare:workers`: the os unit project aliases it to
-[`src/test/cloudflare-workers-shim.ts`](../apps/os/src/test/cloudflare-workers-shim.ts).
+[`src/test/cloudflare-workers-shim.ts`](../apps/os/src/test/cloudflare-workers-shim.ts),
+and Start's generated server entry to a stand-in page
+([`src/test/start-server-entry-shim.ts`](../apps/os/src/test/start-server-entry-shim.ts)).
 A module whose only platform dependency is a base class (`RpcTarget`,
 `WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the
 test file. Behaviour that needs the real runtime belongs in
