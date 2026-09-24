@@ -8,7 +8,7 @@
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 
 import type { Ai } from "@cloudflare/workers-types";
-import type { InvokeHandle, ItxExpressionInput } from "./expression.ts";
+import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
 import type { IngressRouting } from "./project-ingress.ts";
@@ -134,6 +134,46 @@ export type CollectSecretInput = {
  * Iterate instance; it is not itself permission to write a secret. */
 export type CollectSecretLink = { path: string; url: string };
 
+/** WHICH requests an ingress route takes — every field given must hold: the host's routing slug
+ *  (`blog` for `blog--<project>`), a `URLPattern` over the URL the app sees (its init's fields, each a
+ *  pattern string), exact header values. `{}` takes every request. */
+export type IngressRouteRequestMatcher = {
+  routingSlug?: string;
+  url?: {
+    protocol?: string;
+    username?: string;
+    password?: string;
+    hostname?: string;
+    port?: string;
+    pathname?: string;
+    search?: string;
+    hash?: string;
+    baseURL?: string;
+  };
+  headers?: Record<string, string>;
+};
+
+/** A route as `itx.ingressRoutes.set(name, route)` takes it: the requests it takes, the itx
+ *  expression they go to, who may use it (`project-members`: the config worker answers anyone else
+ *  the sign-in challenge; absent or null: public) and its priority (higher first, then by name). */
+export type IngressRouteInput = {
+  requestMatcher: IngressRouteRequestMatcher;
+  target: ItxExpressionInput;
+  authRequirement?: { visitors: "project-members" } | null;
+  priority?: number;
+};
+
+/** A live route as `list()` and `match` answer it, its target parsed, with the offset of the
+ *  `ingress-route/configured` fact that set it. */
+export type IngressRouteEntry = {
+  ingressRouteName: string;
+  requestMatcher: IngressRouteRequestMatcher;
+  target: ItxExpression;
+  authRequirement: { visitors: "project-members" } | null;
+  priority: number;
+  configuredOffset: number;
+};
+
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
@@ -156,6 +196,9 @@ export interface IterateContextApi {
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
     | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** This project's public URL over HTTP: the apex, or a routing slug's host (`blog--<project>`),
+   *  at `path`. Only from a session, which carries the origin to compose it with. */
+  url(target?: { routingSlug?: string; path?: string }): Promise<string>;
   /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in
    *  memory and the next call starts a fresh incarnation from durable storage. Resolves with the
    *  `events.iterate.com/context/aborted { reason?, callerPath?, app? }` event it recorded — durable
@@ -201,6 +244,22 @@ export interface IterateContextApi {
      * chat. The link fixes the project, platform instance, secret path and egress pin. If called
      * from an agent context, a successful submission messages that same agent with the path only. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
+  };
+  /** The project's ingress routes, on its root `/`: which requests on its hosts go to which itx
+   *  expression. `set` appends one `ingress-route/configured` fact (`null` deletes the route);
+   *  `match` answers the route a request takes, which the config worker forwards with
+   *  `env.ITX.fetch` naming `itx.ingressRoutes.fetch('<name>')` (a WebSocket upgrade included). */
+  ingressRoutes: {
+    set(
+      ingressRouteName: string,
+      route: IngressRouteInput | null,
+    ): Promise<{ ingressRouteName: string }>;
+    list(): Promise<IngressRouteEntry[]>;
+    match(request: {
+      method: string;
+      url: string;
+      headers: Headers | Record<string, string> | [string, string][];
+    }): Promise<IngressRouteEntry | null>;
   };
   /** The table this context resolves against, described — the tree a model reads. `list()` follows a
    *  bare hop row into the context it names (a Durable Object hop, hence async). */

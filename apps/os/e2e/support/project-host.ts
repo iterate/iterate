@@ -216,25 +216,30 @@ export async function fetchProjectHost(
   return { status: res.status, headers: Object.fromEntries(res.headers), text: await res.text() };
 }
 
-/** What one eyeball WebSocket round trip saw: `opened` (the 101), the first message, the close code. */
+/** What one eyeball WebSocket round trip saw: `opened` (the 101), the subprotocol the 101 named,
+ *  the first message, the close code. */
 type WebSocketRoundTrip = {
   opened: boolean;
+  protocol?: string;
   echo?: string;
   closeCode?: number;
   error?: string;
 };
 
 /** One full eyeball WebSocket round trip on a project address (`projectUrl`, its scheme turned to
- *  ws/wss) — open → send → first message → close (1000) — through `projectHostDispatcher`. Never
- *  throws: the caller asserts on the outcome. */
+ *  ws/wss) — open → send → first message → close (1000) — through `projectHostDispatcher`, asking
+ *  for `protocols` (a browser's handshake fails on a 101 that names none of them). Never throws:
+ *  the caller asserts on the outcome. */
 export function wsRoundTripOnProjectUrl(
   url: URL,
   send: string,
   timeoutMs = 10_000,
+  protocols: string[] = [],
 ): Promise<WebSocketRoundTrip> {
   return new Promise((resolve) => {
     const out: WebSocketRoundTrip = { opened: false };
     const ws = new UndiciWebSocket(url.href.replace(/^http/, "ws"), {
+      protocols,
       dispatcher: projectHostDispatcher(),
     });
     const timer = setTimeout(() => {
@@ -247,6 +252,7 @@ export function wsRoundTripOnProjectUrl(
     }, timeoutMs);
     ws.addEventListener("open", () => {
       out.opened = true;
+      out.protocol = ws.protocol;
       ws.send(send);
     });
     ws.addEventListener("message", (event) => {

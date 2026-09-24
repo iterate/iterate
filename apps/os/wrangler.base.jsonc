@@ -91,6 +91,7 @@
     // unused standalone namespace; agent streams and facet storage belong to the context.
     "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
     "ControlPlaneDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "IngressRoutesDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },

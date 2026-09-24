@@ -34,6 +34,11 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "project", context: "global:/users/user_1", allowed: false },
   { facet: "project", context: "global:/organizations/org_1", allowed: false },
   { facet: "project", context: "global:/projects/prj_1", allowed: false },
+  // 3. `ingress-routes` — a project's root, and nowhere else.
+  { facet: "ingress-routes", context: "prj_1:/", allowed: true },
+  { facet: "ingress-routes", context: "prj_1:/notes", allowed: false },
+  { facet: "ingress-routes", context: "global:/", allowed: false },
+  { facet: "ingress-routes", context: "global:/users/user_1", allowed: false },
   // 4. `secret` — `/secrets/<name>` directly under its owner's root; the global root owns none.
   { facet: "secret", context: "prj_1:/secrets/api-key", allowed: true },
   { facet: "secret", context: "prj_1:/secrets/a.b_c-1", allowed: true },

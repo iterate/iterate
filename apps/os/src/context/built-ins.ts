@@ -11,10 +11,11 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { codedError, jsonEqual, resolveContextPath } from "iterate/lib";
+import { codedError, errorCode, jsonEqual, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
+  normalizedItxExpression,
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -24,6 +25,7 @@ import {
 import type {
   CollectSecretInput,
   CollectSecretLink,
+  IngressRouteInput,
   RewriteRuleListEntry,
   SecretCatalogEntry,
   SecretMaterial,
@@ -49,12 +51,20 @@ import {
   type SecretHmacVerification,
 } from "../secrets.ts";
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
+import {
+  IngressRouteConfiguredPayload,
+  IngressRoutesContract,
+  type IngressRoute,
+  type IngressRoutesState,
+} from "../ingress-routes/contract.ts";
+import { matchIngressRoute } from "../ingress-routes/processor.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
+  itxExpressionFetchCall,
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
@@ -232,6 +242,32 @@ export interface BuiltInScope extends LibraryRoots {
      *  provider's scheme names (Stripe `${t}.${body}` with its own tolerance check on `t`, GitHub the
      *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
+  };
+  /** THE INGRESS ROUTES (src/ingress-routes/): named rules on the project's root `/` saying which
+   *  requests on the project's hosts go to which itx expression — `iterate tunnel`'s lent stub, a
+   *  facet, a loaded worker. `set(name, route)` validates the route and appends
+   *  `ingress-route/configured` on `/` (`null` deletes it; the same route again appends nothing);
+   *  `list()` is the table; `match({ method, url, headers })` the first route whose matcher holds —
+   *  by priority, highest first, then by name — or null (`routingSlug` against the edge's
+   *  `x-iterate-routing-slug`, `url` a `URLPattern` against the URL the app sees, `headers` exact).
+   *  `fetch(name, request)` forwards the request to the route's target and answers its Response,
+   *  a WebSocket upgrade included — reached on the FETCH CHANNEL (`x-itx-expression:
+   *  itx.ingressRoutes.fetch('<name>')` through `env.ITX.fetch`), since a socket cannot cross Workers
+   *  RPC; a target that is not connected (a tunnel's lent stub gone) answers 502. The config worker
+   *  asks `match` and enforces `authRequirement` itself (configs/default/worker.ts): the target sees
+   *  the request as the config worker forwarded it. Only on a project's root. */
+  ingressRoutes: {
+    set(
+      ingressRouteName: string,
+      route: IngressRouteInput | null,
+    ): Promise<{ ingressRouteName: string }>;
+    list(): Promise<IngressRoute[]>;
+    match(request: {
+      method: string;
+      url: string;
+      headers: Headers | Record<string, string> | [string, string][];
+    }): Promise<IngressRoute | null>;
+    fetch(ingressRouteName: string, request: Request): Promise<Response>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -605,6 +641,27 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       { name: string }[]
     >;
 
+  /** `itx.ingressRoutes` is the project root's: its facts land on `/`, where the `ingress-routes`
+   *  facet keeps the table. */
+  const assertOnProjectRoot = (verb: string) => {
+    if (projectId === GLOBAL_PROJECT_ID || path !== "/")
+      throw codedError(
+        "INVALID_CONTEXT",
+        `itx.ingressRoutes.${verb}: a project's ingress routes live on its root "/" — reach them there, itx.cd("/").ingressRoutes`,
+      );
+  };
+  /** The route table: empty while no route was ever set (no `ingress-routes` row, so no facet is
+   *  hosted for a project without routes), else the facet's snapshot, caught up through the log. */
+  const ingressRoutesTable = async (): Promise<IngressRoutesState["ingressRoutes"]> => {
+    if (!deps.subscriptions.get(IngressRoutesContract.slug)) return {};
+    // The facet is the platform's own IngressRoutesDurableObject; its snapshot's state is the
+    // contract's parsed shape — ours, so asserted.
+    const { state } = (await deps.callFacetAsPlatform(IngressRoutesContract.slug, [
+      ["snapshot"],
+    ])) as { state: IngressRoutesState };
+    return state.ingressRoutes;
+  };
+
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
@@ -861,6 +918,128 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           ["verifyHmac", secretPath, input],
           () => secretFacet(["verifyHmac", input]) as Promise<boolean>,
         ),
+    },
+    ingressRoutes: {
+      set: async (ingressRouteName, route) => {
+        assertOnProjectRoot("set");
+        const refusal = (reason: string) =>
+          codedError(
+            "INVALID_INPUT",
+            `itx.ingressRoutes.set(${JSON.stringify(ingressRouteName)}): ${reason}`,
+          );
+        let target: unknown;
+        try {
+          // the string half parsed once, here; anything else is the schema's to refuse
+          target =
+            typeof route?.target === "string" || Array.isArray(route?.target)
+              ? normalizedItxExpression(route.target)
+              : route?.target;
+        } catch (error) {
+          throw refusal(`target: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        const parsed = IngressRouteConfiguredPayload.safeParse(
+          !route
+            ? { ingressRouteName, requestMatcher: null }
+            : {
+                ingressRouteName,
+                requestMatcher: route.requestMatcher,
+                target,
+                authRequirement: route.authRequirement || null,
+                priority: route.priority || 0,
+              },
+        );
+        if (!parsed.success) throw refusal(z.prettifyError(parsed.error));
+        const payload = parsed.data;
+        // IDEMPOTENT: the route as it stands appends nothing.
+        const current = (await ingressRoutesTable())[ingressRouteName];
+        if (
+          !payload.requestMatcher
+            ? !current
+            : current &&
+              jsonEqual(
+                {
+                  requestMatcher: current.requestMatcher,
+                  target: current.target,
+                  authRequirement: current.authRequirement,
+                  priority: current.priority,
+                },
+                {
+                  requestMatcher: payload.requestMatcher,
+                  target: payload.target,
+                  authRequirement: payload.authRequirement,
+                  priority: payload.priority,
+                },
+              )
+        )
+          return { ingressRouteName };
+        // The processor row (idempotent), consuming this one fact: the root log is busy, and the
+        // facet reduces nothing else.
+        await ownContext().invoke(
+          [
+            "itx",
+            "builtins",
+            "processors",
+            [
+              "enable",
+              IngressRoutesContract.slug,
+              { consumes: [...IngressRoutesContract.consumes] },
+            ],
+          ],
+          [],
+          hopCaller(),
+        );
+        const [configured] = await append({
+          type: "events.iterate.com/ingress-route/configured",
+          payload,
+        });
+        // Read-your-writes: the next `match` (the very next request) sees this route.
+        await deps.callFacetAsPlatform(IngressRoutesContract.slug, [
+          ["waitUntilProcessed", { offset: configured!.offset }],
+        ]);
+        return { ingressRouteName };
+      },
+      list: async () => {
+        assertOnProjectRoot("list");
+        return Object.entries(await ingressRoutesTable())
+          .map(([ingressRouteName, route]) => ({ ingressRouteName, ...route }))
+          .sort(
+            (a, b) => b.priority - a.priority || (a.ingressRouteName < b.ingressRouteName ? -1 : 1),
+          );
+      },
+      match: async (request) => {
+        assertOnProjectRoot("match");
+        return matchIngressRoute(await ingressRoutesTable(), {
+          url: request.url,
+          headers: new Headers(request.headers),
+        });
+      },
+      fetch: async (ingressRouteName, request) => {
+        assertOnProjectRoot("fetch");
+        const route = (await ingressRoutesTable())[ingressRouteName];
+        if (!route)
+          return new Response(`no ingress route ${JSON.stringify(ingressRouteName)}\n`, {
+            status: 404,
+          });
+        // The target is the route's author's (a project member wrote the fact): it runs as the
+        // platform's own hop, never as the loaded code that asked — the rows a call rewrites through
+        // are the owner's grants. In-process, so a socket-bearing Response comes back intact.
+        try {
+          // A fetch-shaped target answers a Response (the same call `x-itx-expression` makes);
+          // `invoke` is untyped.
+          return (await ownContext().invoke(
+            itxExpressionFetchCall(route.target, request),
+            [],
+            hopCaller(),
+          )) as Response;
+        } catch (error) {
+          // A tunnel whose laptop is gone: its lent stub is offline, or the lend ended and the rule
+          // naming it went with it. The upstream's absence, never a platform fault.
+          const code = errorCode(error);
+          if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH")
+            return new Response(`${ingressRouteName} is not connected\n`, { status: 502 });
+          throw error;
+        }
+      },
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),
