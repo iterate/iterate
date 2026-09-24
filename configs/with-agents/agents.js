@@ -145,7 +145,7 @@ var AgentContract = defineProcessorContract({
       payloadSchema: z.object({})
     },
     "events.iterate.com/agent/deleted": {
-      description: "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry \u2014 hence it names the path. Terminal: a deleted agent is not re-creatable.",
+      description: "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry and keeps the death \u2014 hence it names the path. Terminal: a deleted agent is not re-creatable, and its facet is never hosted again.",
       payloadSchema: z.object({ path: z.string().min(1) })
     },
     "events.iterate.com/agent/configured": {
@@ -1380,7 +1380,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
   get(path) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.withItx, path, this.spec);
+    return new AgentReference(this.withItx, path, this.spec, this.catalog);
   }
   /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
   async list() {
@@ -1400,15 +1400,20 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
       const creator = resolveContextPath("/", this.base);
       if (creator.startsWith(`${path}/`))
         throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
+      const dead = new Error(`agent ${path}: deleted \u2014 not re-creatable`);
+      if ((await this.catalog()).deleted[path]) throw dead;
       const context = itx.cd(path);
       const spec = await this.spec();
-      const { state } = await context.invoke([
-        "itx",
-        "facets",
-        ["get", "agent", spec],
-        ["snapshot"]
-      ]);
-      if (state.deletion) throw new Error(`agent ${path}: deleted \u2014 not re-creatable`);
+      const snapshot = async (facet) => await context.invoke(["itx", "facets", facet, ["snapshot"]]);
+      let state;
+      try {
+        ({ state } = await snapshot(["get", "agent"]));
+      } catch (error) {
+        if (errorCode(error) !== "NO_FACET") throw error;
+        if ((await this.catalog()).deleted[path]) throw dead;
+        ({ state } = await snapshot(["get", "agent", spec]));
+      }
+      if (state.deletion) throw dead;
       await context.processors.enable("agent", spec);
       if (state.creation?.status === "created") return { path };
       let requestedAtOffset;
@@ -1464,13 +1469,21 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
       const context = itx.cd(path);
-      const spec = await this.spec();
-      const { state } = await context.invoke([
-        "itx",
-        "facets",
-        ["get", "agent", spec],
-        ["snapshot"]
-      ]);
+      const catalog = await this.catalog();
+      if (!catalog.deleted[path] && !catalog.agents[path])
+        throw new Error(`agent ${path}: not created \u2014 nothing to delete`);
+      const rows = async () => await context.processors.list();
+      if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
+        return { path };
+      const snapshot = async (facet) => await context.invoke(["itx", "facets", facet, ["snapshot"]]);
+      let state;
+      try {
+        ({ state } = await snapshot(["get", "agent"]));
+      } catch (error) {
+        if (errorCode(error) !== "NO_FACET") throw error;
+        if (catalog.deleted[path] || (await this.catalog()).deleted[path]) return { path };
+        ({ state } = await snapshot(["get", "agent", await this.spec()]));
+      }
       if (state.deletion?.status !== "deleted") {
         if (state.creation?.status !== "created")
           throw new Error(`agent ${path}: not created \u2014 nothing to delete`);
@@ -1488,8 +1501,8 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
           afterOffset: requestedAtOffset
         });
       }
-      const rows = await context.processors.list();
-      if (rows.some((row) => row.name === "agent")) await context.processors.disable("agent");
+      if ((await rows()).some((row) => row.name === "agent"))
+        await context.processors.disable("agent");
       return { path };
     });
   }
@@ -1498,16 +1511,39 @@ var AgentReference = class extends RpcTarget2 {
   withItx;
   path;
   spec;
-  constructor(withItx, path, spec) {
+  catalog;
+  constructor(withItx, path, spec, catalog) {
     super();
     this.withItx = withItx;
     this.path = path;
     this.spec = spec;
+    this.catalog = catalog;
   }
+  /** A person's words: a dead agent refuses from the catalog (the header: its facet is never hosted
+   *  again); a live one's words go to the facet its context hosts, by NAME — never by spec, so no
+   *  facet is hosted for an agent that has none. NO_FACET is then a context without an `agent` row
+   *  or facet: never born, or a live agent whose processors replace it (a voice agent's), which is
+   *  hosted from the spec as it always was. */
   async message(input) {
+    const path = this.path;
+    const dead = new Error(`agent ${path}: deleted`);
+    if ((await this.catalog()).deleted[path]) throw dead;
+    try {
+      return await this.withItx(
+        (itx) => itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input]])
+      );
+    } catch (error) {
+      if (errorCode(error) !== "NO_FACET") throw error;
+    }
+    const catalog = await this.catalog();
+    if (catalog.deleted[path]) throw dead;
+    if (!catalog.agents[path])
+      throw new Error(
+        `agent ${path}: not created \u2014 itx.agents.create(${JSON.stringify(path)}) first`
+      );
     const spec = await this.spec();
     return this.withItx(
-      (itx) => itx.cd(this.path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]])
+      (itx) => itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]])
     );
   }
   append(...events) {
@@ -1518,10 +1554,16 @@ var AgentReference = class extends RpcTarget2 {
 // runtime/catalog.ts
 var AgentCatalogContract = defineProcessorContract2({
   slug: "agents",
-  version: "1",
+  // 2: the deleted agents are kept (`deleted`), so a verb on one refuses from here without hosting
+  // its facet again (collection.ts).
+  version: "2",
   description: "The agents installed in this project by the userspace agents app.",
   stateSchema: z3.object({
-    agents: z3.record(z3.string(), z3.object({ createdAt: z3.string() })).default({})
+    agents: z3.record(z3.string(), z3.object({ createdAt: z3.string() })).default({}),
+    /** Every agent that died, by path: its death certificate. Terminal — a deleted agent is not
+     *  re-creatable — so a verb on one answers from this row and never hosts the agent's facet on
+     *  its context again (collection.ts says why that matters). */
+    deleted: z3.record(z3.string(), z3.object({ deletedAt: z3.string() })).default({})
   }),
   events: {},
   processorDeps: [AgentContract],
@@ -1539,9 +1581,13 @@ var AgentCatalogProcessor = class extends StreamProcessor2 {
       if (state.agents[path]) return;
       return { ...state, agents: { ...state.agents, [path]: { createdAt: event.createdAt } } };
     }
-    if (!state.agents[path]) return;
+    if (state.deleted[path]) return;
     const { [path]: _deleted, ...agents } = state.agents;
-    return { ...state, agents };
+    return {
+      ...state,
+      agents,
+      deleted: { ...state.deleted, [path]: { deletedAt: event.createdAt } }
+    };
   }
 };
 var Certificate = z3.discriminatedUnion("type", [
@@ -1572,7 +1618,14 @@ var AgentCollectionDurableObject = class extends StreamProcessorDurableObject2 {
   at(base) {
     return new AgentCollectionRpcTarget(
       (call) => this.withItx(call),
-      async () => (await this.snapshot()).state,
+      // THROUGH THE LOG'S HEAD, not the last pushed batch (`snapshot()` alone answers from what the
+      // delivery loop has pushed so far): a death is on `/` before `delete()` returns — the saga
+      // announces it before its own certificate — so a verb on the dead agent right after must see
+      // it, or it would host the facet again (collection.ts).
+      async () => {
+        await this.catchUpFromLog();
+        return (await this.snapshot()).state;
+      },
       async () => {
         const cacheKey = await this.withItx((itx) => itx.kv.get("agents/runtime-key"));
         if (!cacheKey) throw new Error("The agents runtime has not been installed");
