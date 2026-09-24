@@ -410,7 +410,9 @@ Any Playwright spec re-runs as a watchable demo — pointer highlights on every
 action, dead air compressed, the blank startup lead-in trimmed. Design and
 plugin by Misha: [middlewright](https://github.com/iterate/middlewright)'s
 `videoMode`, wired in `specs/test-support/test.ts`; the auto start-trim
-shipped in iterate/middlewright#3 / PR #1788.
+shipped in iterate/middlewright#3 / PR #1788. middlewright is experimental and
+maintained by us, so fix its issues upstream; until a release is published to
+npm by hand, the root `package.json` pins a pkg.pr.new build of it.
 
 ```bash
 # local dev, one flow (the config auto-starts the dev server)
@@ -454,23 +456,10 @@ frame-stepper and `video-mode-report.html`, all also attached to the HTML
 report.
 
 **Getting the video into a PR description is manual** — the "automatic" part
-is only the recording/trimming. GitHub renders an inline video player only
-for `user-attachments` URLs, and only its web editors mint those (`<video>`
-tags pointing at any other host are sanitised — which is why older PRs fell
-back to release-asset GIFs, e.g. PR #1764):
-
-1. Upload `video-rendered.webm` through a github.com editor: drag or paste it
-   into the PR-description editor, or attach it in any comment editor and
-   clear the comment WITHOUT submitting — the asset is already permanent.
-   Agents can point a browser-automation `file_upload` at the editor's file
-   input. GitHub accepts `.webm`, `.mp4` and `.mov`;
-   `ffmpeg -i video-rendered.webm demo.mp4` gives the widest playback support.
-2. GitHub inserts a `https://github.com/user-attachments/assets/…` URL — put
-   it on its own line in the body, with blank lines above and below, and it
-   renders as an inline player. There is no API or `gh` route for this
-   upload. PR #1788's before/after clip is the working example; [Pull
-   requests](pull-requests.md#video) has the command that checks the player
-   rendered.
+is only the recording/trimming. Ship `video-rendered.webm` through a github.com
+editor, as [Pull requests](pull-requests.md#video) describes, with the command
+that checks the player rendered. PR #1788's before/after clip is the working
+example.
 
 ## Retries and timeouts
 

@@ -66,16 +66,14 @@ Mint the URL through a github.com editor: drag or paste the file into the PR
 description editor, or upload via the attach flow of any PR page's comment
 editor (a browser-automation `file_upload` tool pointed at the editor's file
 input works), wait for the inserted `user-attachments` URL, then clear the
-comment WITHOUT submitting — the asset is already permanent. Put the bare URL
-in the body on its own line with blank lines above and below.
+comment WITHOUT submitting — the asset is already permanent. There is no API
+or `gh` route for this upload. GitHub accepts `.webm`, `.mp4` and `.mov`;
+`ffmpeg -i video-rendered.webm demo.mp4` gives the widest playback support.
+Put the bare URL in the body on its own line with blank lines above and below.
 
-Spec recordings: `VIDEO_MODE=1 pnpm spec -g <name>`. Ship
-`video-rendered.webm` (dead air sped up, pointer annotations) —
-`video-raw.webm` is the raw capture (a copy of Playwright's own `video.webm`).
-Rendering needs an `ffmpeg` with the `ass` filter on `PATH`: Homebrew's
-`ffmpeg` lacks it, so install `ffmpeg-full` (keg-only) and put
-`$(brew --prefix ffmpeg-full)/bin` first. Output paths and the upload steps:
-[Video mode](testing.md#video-mode-recorded-spec-demos-for-prs). Note that video mode depends on "middlewright" which is somewhat experimental and also maintained by us. If there are issues with it they typically need to be fixed upstream. we can use pkg-pr-new releases and publish to npm will be done manually later.
+Spec recordings: ship `video-rendered.webm` from `VIDEO_MODE=1 pnpm spec -g <name>`;
+[Video mode](testing.md#video-mode-recorded-spec-demos-for-prs) covers the
+rendering setup (`ffmpeg-full`) and the output paths.
 
 Verify the player rendered:
 
@@ -101,13 +99,59 @@ These rules apply whenever an agent is asked to open, babysit, address review, o
 
 ### Wait for reviews (especially Cursor Bugbot)
 
-- **Do wait** for **Cursor Bugbot** (and other review bots that post threads, such as **Iterate Review** when it runs — it has not posted since #2837) to finish before treating the PR as “done,” unless the human says not to.
-- “Pass” / “success” / “skipping” on the check is not enough if the review agent is still writing comments — re-poll review threads until the run is finished and threads are accounted for.
-- Prefer waiting for **Cursor Bugbot** and **Iterate Review** over merging on lint/test green alone.
+- **Do wait** for **Cursor Bugbot** (and any other review bot that posts threads) to finish before treating the PR as “done,” unless the human says not to.
+- Bugbot is done when its check-run reaches `status: completed` (`success`, `skipped` and `neutral` all count); its findings are the unresolved review threads, which must reach zero. Rules 1–3 below say how to poll both.
+- Prefer waiting for **Cursor Bugbot** over merging on lint/test green alone.
+
+#### Agent wait loops: gate on the head commit's check-runs
+
+Hand-rolled "wait for green" loops (agents babysitting a PR) keep failing the
+same three ways. The rules that survive contact:
+
+1. **Poll the head commit's check-runs, never `gh pr checks` text.** Right
+   after a push there is a window where the previous head's checks are gone
+   and the new head's are not registered yet — a `grep -c pending` gate reads
+   that empty moment as "all done" and exits before CI even starts. Ask for
+   the checks OF THE COMMIT and require the ones you care about to exist and
+   be `completed`:
+
+   ```bash
+   HEAD=$(git rev-parse HEAD)
+   gh api "repos/iterate/iterate/commits/$HEAD/check-runs?per_page=100" \
+     -q '[.check_runs[] | {name, status, conclusion}]'
+   ```
+
+2. **Never wait for "Cursor Bugbot posted a review for `<sha>`".** Bugbot
+   SKIPS pushes it deems trivial (merge commits especially) — the check ends
+   in `skipped` and no review naming that sha ever appears, so a review-body
+   gate spins until its iteration cap and then reports hour-stale state.
+   Gate on the Bugbot check-run reaching a terminal `status: completed`
+   (conclusion `success`/`skipped`/`neutral` all mean "bugbot is done"), and
+   read FINDINGS from unresolved review threads, which is also what blocks
+   merges:
+
+   ```bash
+   gh api graphql -f query='{ repository(owner: "iterate", name: "iterate") {
+     pullRequest(number: <pr>) { reviewThreads(first: 60) { nodes { isResolved } } } } }' \
+     -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
+   ```
+
+3. **A push obsoletes every running monitor.** A loop started before a push
+   waits on answers about a head that no longer exists. Kill it and start a
+   fresh one pinned to `git rev-parse HEAD`; print that sha as the loop's
+   first line so a stale monitor is recognizable at a glance.
+
+Also know what actually blocks the merge: `gh pr view --json mergeStateStatus`
+answers `BLOCKED` (required things missing — the `main` ruleset requires
+**Lint and Typecheck / lint-typecheck** and **Test / test**), `UNSTABLE`
+(something failing that is NOT required — the Preview OS deploy and e2e are in
+this category), or `CLEAN`. A wait-for-green loop that treats `UNSTABLE` as
+fatal waits forever on a red non-required check. GitHub does not enforce
+review-thread resolution on `main`; this doc does.
 
 ### Address every review / CI comment
 
-- Treat **inline review threads** (Bugbot, Iterate Review, humans) as work items. For each:
+- Treat **inline review threads** (Bugbot, other review bots, humans) as work items. For each:
   1. **Fix** the code if the comment is right, **or**
   2. **Reply** explaining why it does not apply (with a real reason, not a brush-off).
   3. **Resolve** the thread after the fix or the reply.

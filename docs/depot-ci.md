@@ -206,51 +206,9 @@ depot ci run list --org 0p91s0lz49 --repo iterate/iterate --pr <pr-number> --out
 depot ci status <run-id> --org 0p91s0lz49 --output json
 ```
 
-### Agent wait loops: gate on the head commit's check-runs
-
-Hand-rolled "wait for green" loops (agents babysitting a PR) keep failing the
-same three ways. The rules that survive contact:
-
-1. **Poll the head commit's check-runs, never `gh pr checks` text.** Right
-   after a push there is a window where the previous head's checks are gone
-   and the new head's are not registered yet — a `grep -c pending` gate reads
-   that empty moment as "all done" and exits before CI even starts. Ask for
-   the checks OF THE COMMIT and require the ones you care about to exist and
-   be `completed`:
-
-   ```bash
-   HEAD=$(git rev-parse HEAD)
-   gh api "repos/iterate/iterate/commits/$HEAD/check-runs?per_page=100" \
-     -q '[.check_runs[] | {name, status, conclusion}]'
-   ```
-
-2. **Never wait for "Cursor Bugbot posted a review for `<sha>`".** Bugbot
-   SKIPS pushes it deems trivial (merge commits especially) — the check ends
-   in `skipped` and no review naming that sha ever appears, so a review-body
-   gate spins until its iteration cap and then reports hour-stale state.
-   Gate on the Bugbot check-run reaching a terminal `status: completed`
-   (conclusion `success`/`skipped`/`neutral` all mean "bugbot is done"), and
-   read FINDINGS from unresolved review threads, which is also what blocks
-   merges:
-
-   ```bash
-   gh api graphql -f query='{ repository(owner: "iterate", name: "iterate") {
-     pullRequest(number: <pr>) { reviewThreads(first: 60) { nodes { isResolved } } } } }' \
-     -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
-   ```
-
-3. **A push obsoletes every running monitor.** A loop started before a push
-   waits on answers about a head that no longer exists. Kill it and start a
-   fresh one pinned to `git rev-parse HEAD`; print that sha as the loop's
-   first line so a stale monitor is recognizable at a glance.
-
-Also know what actually blocks the merge: `gh pr view --json mergeStateStatus`
-answers `BLOCKED` (required things missing — the `main` ruleset requires
-**Lint and Typecheck / lint-typecheck** and **Test / test**), `UNSTABLE`
-(something failing that is NOT required — the Preview OS deploy and e2e are in
-this category), or `CLEAN`. A wait-for-green loop that treats `UNSTABLE` as
-fatal waits forever on a red non-required check. GitHub does not enforce
-review-thread resolution on `main`; the [PR workflow](pull-requests.md) does.
+Agents babysitting a PR: the wait-loop rules (gate on the head commit's
+check-runs, Bugbot's check-run and unresolved threads, a push obsoletes every
+monitor) are in [Pull requests](pull-requests.md#agent-wait-loops-gate-on-the-head-commits-check-runs).
 
 ## Run A Workflow From Your Checkout
 
