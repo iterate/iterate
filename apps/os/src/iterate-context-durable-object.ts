@@ -2,8 +2,9 @@
 // `{projectId, path}` (codec-named `{projectId}.iterate{path}`), the parent of everything a context
 // holds: the stream with its core reduce (stream/stream.ts), subscription delivery
 // (stream/subscription-delivery.ts), the facets (context/facet-host.ts over `ctx.facets` and
-// context/worker-loader.ts), the rpc stubs (context/rpc-stubs.ts), and `fetch()` (the pager
-// upgrade, HTTP requests, egress). Each module's header says what it does; this file is the wiring and the entry points.
+// context/worker-loader.ts), the rpc stubs (context/rpc-stubs.ts), what ends its residency when
+// nothing should hold it (context/residency.ts), and `fetch()` (the pager upgrade, HTTP requests,
+// egress). Each module's header says what it does; this file is the wiring and the entry points.
 //   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to the context at that path, whose `secret` facet substitutes and dispatches (secret/durable-object.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
@@ -79,9 +80,9 @@ import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
-import { FacetHost, UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "./context/facet-host.ts";
+import { FacetHost } from "./context/facet-host.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
-import { RESIDENCY_WATCHDOG_WINDOW_MS, decideQuietDeadline } from "./context/residency-watchdog.ts";
+import { Residency } from "./context/residency.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -92,11 +93,6 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** How long a context's PINS stay unused — no borrowed rpc stub called, no open socket used —
- *  before a timer returns the stubs and closes the sockets so the actor can hibernate. A pin lives
- *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
- *  do the pins. */
-const PIN_RELEASE_AFTER_IDLE_MS = 30_000;
 /** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `stream/trace/alarm` event,
  *  appended as the pass starts (`alarm-fired`, with what was armed and every deadline it found)
  *  and as it ends (`alarm-pass` with what it armed next, or `alarm-abandoned` with what it threw).
@@ -310,17 +306,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#appConfig.urls.os ||
         ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
       this.#stream.appendBirthRecord();
-      // THE BIRTH RESET (FacetHost `resetUnclaimedLoadedFacets`): a loaded facet the last incarnation
-      // left running without a claim ends here, before this incarnation reaches it. Named on this
-      // incarnation's wake record, and logged: the residency watchdog's own wake writes no record.
-      this.#facetsResetAtBirth = this.#facetHost.resetUnclaimedLoadedFacets();
-      if (this.#facetsResetAtBirth.length > 0)
-        console.log({
-          event: "context.facets-reset-at-birth",
-          namespace: "iterate-context",
-          name: this.#durableObjectAddress.name,
-          facets: this.#facetsResetAtBirth,
-        });
+      this.#residency.resetUnclaimedFacetsAtBirth();
       // Retire only the subscription installed by older runtime versions. This durable
       // removal runs once per existing context; explicit user subscriptions are preserved.
       const config = this.#stream.coreReducedState.subscriptions.config;
@@ -340,10 +326,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** The loaded facets this incarnation's birth reset (FacetHost `resetUnclaimedLoadedFacets`) —
-   *  named on its wake record. */
-  #facetsResetAtBirth: string[] = [];
-
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
    *  `{ principal: null }` explicitly, whatever the committing call's caller was. The commit lands
@@ -354,8 +336,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
-    wakeRecordDetail: () =>
-      this.#facetsResetAtBirth.length > 0 ? { facetsReset: this.#facetsResetAtBirth } : {},
+    wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
@@ -368,12 +349,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
   });
 
-  /** Inbound append: counts as an inbound call for the residency watchdog and records a `request`
-   *  wake before committing and running the committed-event effects. */
+  /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event
+   *  effects. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    this.#inboundCallInOneTurn();
-    this.#stream.appendWakeRecord("request");
+    this.#inboundRequestInOneTurn();
     return this.#appendAndRunCommittedEffects(events);
+  }
+
+  /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,
+   *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
+   *  `request` wake record — in that order, so the watchdog is armed before the wake's commit
+   *  reconciles the alarm. */
+  #inboundRequestInOneTurn(): void {
+    this.#residency.inboundCallInOneTurn();
+    this.#stream.appendWakeRecord("request");
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
@@ -407,8 +396,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     limit = 500,
     options: { includeEphemeral?: boolean } = {},
   ): Promise<StreamPage> {
-    this.#inboundCallInOneTurn();
-    this.#stream.appendWakeRecord("request");
+    this.#inboundRequestInOneTurn();
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
@@ -440,9 +428,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #libraryItx = new InvokeHandle((steps) => {
     // Every call the library makes (a connection opening, a call through it) is a use of the
     // library's pin: the quiet period runs from the call's end.
-    this.#pinCallStarted();
+    this.#residency.pinCallStarted();
     const { app: _loadedCode, ...caller } = this.#caller;
-    return this.#invokeInProcess(["itx", ...steps], [], caller).finally(() => this.#pinCallEnded());
+    return this.#invokeInProcess(["itx", ...steps], [], caller).finally(() =>
+      this.#residency.pinCallEnded(),
+    );
   }) as unknown as LibraryItx;
   /** THE LIBRARY: its verbs closed over `#libraryItx`. An open capnweb socket it holds pins this
    *  actor awake; the pins' timer closes it. */
@@ -612,10 +602,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // the stub, and a borrowed stub is exactly what the release exists to return).
       get: (rpcStubKey) =>
         new RpcStubHandle((itxExpressionSteps) => {
-          this.#pinCallStarted();
+          this.#residency.pinCallStarted();
           return this.#rpcStubs
             .invokeRpcStub(rpcStubKey, itxExpressionSteps)
-            .finally(() => this.#pinCallEnded());
+            .finally(() => this.#residency.pinCallEnded());
         }),
       list: () => this.#rpcStubs.listRpcStubKeys(),
     },
@@ -623,11 +613,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // platform's own call past the facets' lists (the `itx.secrets` verbs), and the claim a hosted
     // processor makes on this context's alarm.
     claimFacetAlarm: (name, at) => {
-      this.#lastOutsideActivityEndedAt = Date.now(); // a claim restarts the sweep's quiet clock
+      this.#residency.outsideActivityEnded(); // a claim restarts the sweep's quiet clock
       this.#facetHost.claim(name, at);
       // A RELEASE is the last thing the facet's work did: its instance is unclaimed from here, and
       // the sweep may have run (and disarmed) while the claim held it — so the release arms it.
-      if (at === null) this.#armUnclaimedFacetSweep();
+      if (at === null) this.#residency.armUnclaimedFacetSweep();
     },
     facets: {
       get: (name, spec) => this.#facetHost.handle(name, spec),
@@ -711,8 +701,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deleteAlarm: () => this.ctx.storage.deleteAlarm(),
     deadlines: () => [
       ...this.#durableAlarmDeadlines(),
-      this.#residencyWatchdogArmedFor,
-      this.#unclaimedFacetSweepArmedFor,
+      ...Object.values(this.#residency.deadlines()),
     ],
   });
 
@@ -741,7 +730,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
-    loadedFacetMaterialized: () => this.#armUnclaimedFacetSweep(),
+    loadedFacetMaterialized: () => this.#residency.armUnclaimedFacetSweep(),
+  });
+
+  // ── RESIDENCY (context/residency.ts): the pins' release, the watchdog, the sweep, the birth reset ──
+
+  // Annotated because TypeScript cannot infer it: its `incarnation` reads `#stream`, whose
+  // `wakeRecordDetail` reads this field back (TS7022).
+  readonly #residency: Residency = new Residency({
+    name: this.#durableObjectAddress.name,
+    ctx: this.ctx,
+    facetHost: this.#facetHost,
+    rpcStubs: this.#rpcStubs,
+    library: this.#library,
+    scriptRunsInFlight: () => this.#scriptRunsInFlight.size,
+    incarnation: () => this.#stream.storage.incarnation,
+    append: (events) => this.#appendAndRunCommittedEffects(events),
+    reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
   });
 
   #traceAlarm(
@@ -761,8 +766,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         delivery: delivery.slice(0, 32),
         deliveryOmitted: Math.max(0, delivery.length - 32),
         claims: this.#facetHost.deadlines(),
-        residencyWatchdog: this.#residencyWatchdogArmedFor,
-        unclaimedFacetSweep: this.#unclaimedFacetSweepArmedFor,
+        ...this.#residency.deadlines(),
       },
       durableHead: this.#stream.highestDurableOffset(),
       facetWorkInFlight: facets.facetWorkInFlight,
@@ -811,37 +815,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  // ── THE PINS' RELEASE: borrowed stubs returned and sockets closed by a timer, so this actor can hibernate (workerd#6800) ──
-
-  /** THE PINS' TIMER: a pin's use — a borrowed stub called, the library's socket used (the two
-   *  things that keep an actor resident on the edge, both measured) — starts the quiet period over
-   *  when the call ENDS; a call in flight holds it off (a stub is never returned out from under a
-   *  call); its end releases every pin (`#releasePins`). In memory on purpose: the pins are, and
-   *  the pin itself keeps the actor resident until the timer fires. A pending timer holds off
-   *  eviction AND hibernation, billed, for its whole length (measured 2026-09-23) — harmless only
-   *  because this one is armed while a pin already holds the actor, and for 30 s; nothing pinned
-   *  means nothing to release. A live facet is not a pin: it does not hold this actor — it runs on
-   *  after the actor is evicted, and the next incarnation's birth resets it unless it is claimed
-   *  (FacetHost `resetUnclaimedLoadedFacets`). */
-  #pinReleaseTimer: ReturnType<typeof setTimeout> | undefined;
-  #pinCallsInFlight = 0;
-  #pinCallStarted(): void {
-    this.#pinCallsInFlight += 1;
-    clearTimeout(this.#pinReleaseTimer);
-    this.#pinReleaseTimer = undefined;
-  }
-  #pinCallEnded(): void {
-    this.#pinCallsInFlight -= 1;
-    if (this.#pinCallsInFlight > 0) return;
-    // A call that ends with nothing pinned (an HTTP client's, a stub returned mid-call) starts no
-    // timer: a pending timer holds off eviction and hibernation, and there would be nothing to release.
-    if (!this.#rpcStubs.hasBorrowedRpcStubs() && !this.#library.holdsOpenSocket()) return;
-    this.#pinReleaseTimer = setTimeout(() => {
-      this.#pinReleaseTimer = undefined;
-      this.#releasePins();
-    }, PIN_RELEASE_AFTER_IDLE_MS);
-  }
-
   /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
    *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
    *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
@@ -855,16 +828,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
     if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
-      await this.#alarmCoordinator.pass(async () => {
-        this.#checkResidencyWatchdog(wokeAt);
-        this.#checkUnclaimedFacetSweep(wokeAt);
-      });
+      await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
     }
     try {
       await this.#alarmCoordinator.pass(async () => {
-        this.#checkResidencyWatchdog(wokeAt);
-        this.#checkUnclaimedFacetSweep(wokeAt);
+        this.#residency.alarmPassStarted(wokeAt);
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
         // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
@@ -950,167 +919,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw error;
     }
     this.#traceAlarm("alarm-pass", fired);
-    this.#lastOutsideActivityEndedAt = Date.now(); // a pass that did durable work restarts the sweep's quiet clock
-  }
-
-  /** THE RELEASE (the pins' timer, `#pinCallEnded`): every borrowed stub returned, every library
-   *  connection closed — the pins. Never a facet: a facet is not a pin (it does not hold this
-   *  actor), and one may be mid-attempt — an LLM call in its background — that an abort would kill
-   *  for nothing; the claimed ones outlive this incarnation on purpose. */
-  #releasePins(): void {
-    this.#rpcStubs.returnBorrowedRpcStubs();
-    this.#library.releaseConnections();
-  }
-
-  // ── THE RESIDENCY WATCHDOG (context/residency-watchdog.ts): an actor held resident with nothing to do, recorded ──
-
-  /** The watchdog's deadline, epoch ms — in memory on purpose: a fresh incarnation has none, so the
-   *  alarm an evicted one left wakes it for nothing. */
-  #residencyWatchdogArmedFor: number | null = null;
-  /** Once per incarnation: a recorded incarnation is never armed again. */
-  #residencyWatchdogRecorded = false;
-  /** Inbound calls — Workers RPC, fetch, socket events; never the alarm — in flight, and when the
-   *  last one ended: the quiet window runs from there. */
-  #inboundCallsInFlight = 0;
-  #lastInboundCallEndedAt: number | null = null;
-  /** THE UNCLAIMED-FACET SWEEP'S QUIET CLOCK: when the last inbound call from OUTSIDE the project's
-   *  loaded code ended (an edge session, HTTP, MCP, a sibling's hop, a socket event), a claim was
-   *  made, or an alarm pass did durable work. A call from loaded code — `caller.app`, a loaded
-   *  worker's fetch — counts as work while in flight, but does not restart it: a facet that calls its
-   *  own context more often than the context would evict would otherwise never be quiet, and never
-   *  reset. */
-  #lastOutsideActivityEndedAt: number | null = null;
-
-  /** An inbound call begins, and arms the watchdog when none is armed: one alarm write per quiet
-   *  window, not per call. Before the call's wake record, so a fresh incarnation's first commit
-   *  supersedes the alarm its predecessor's watchdog left in one write, not a delete and a set. */
-  #inboundCallStarted(): void {
-    this.#inboundCallsInFlight += 1;
-    if (this.#residencyWatchdogArmedFor !== null || this.#residencyWatchdogRecorded) return;
-    this.#residencyWatchdogArmedFor = Date.now() + RESIDENCY_WATCHDOG_WINDOW_MS;
-    this.#alarmCoordinator.reconcile();
-  }
-  #inboundCallEnded(fromLoadedCode = false): void {
-    this.#inboundCallsInFlight -= 1;
-    this.#lastInboundCallEndedAt = Date.now();
-    if (!fromLoadedCode) this.#lastOutsideActivityEndedAt = this.#lastInboundCallEndedAt;
-  }
-  /** An inbound call that runs in ONE synchronous turn (`append`, `read`, a lend, a socket event):
-   *  begun and ended at once — the clock does not move inside a turn. */
-  #inboundCallInOneTurn(): void {
-    this.#inboundCallStarted();
-    this.#inboundCallEnded();
-  }
-
-  /** Inbound calls, facet work, script runs and pin calls in flight right now — what keeps both quiet
-   *  deadlines (the watchdog's and the unclaimed-facet sweep's) from coming due. */
-  #workInFlight(facetWorkInFlight: number): number {
-    return (
-      this.#inboundCallsInFlight +
-      facetWorkInFlight +
-      this.#scriptRunsInFlight.size +
-      this.#pinCallsInFlight
-    );
-  }
-
-  /** The watchdog's decision, applied at the start of every alarm pass: nothing, a later deadline,
-   *  or THE RECORD — one appended fact and one structured `console.warn` (the line Workers Logs
-   *  alerts on; `durableObjectId` finds the held session's still-open invocation there). Never an
-   *  abort, and never a failed pass. */
-  #checkResidencyWatchdog(now: number): void {
-    const facets = this.#facetHost.snapshot();
-    const decision = decideQuietDeadline({
-      armedFor: this.#residencyWatchdogArmedFor,
-      now,
-      lastCallEndedAt: this.#lastInboundCallEndedAt,
-      workInFlight: this.#workInFlight(facets.facetWorkInFlight),
-      windowMs: RESIDENCY_WATCHDOG_WINDOW_MS,
-    });
-    if (decision.action === "none") return;
-    if (decision.action === "rearm") {
-      this.#residencyWatchdogArmedFor = decision.at;
-      return;
-    }
-    this.#residencyWatchdogArmedFor = null;
-    this.#residencyWatchdogRecorded = true;
-    const transport = this.#rpcStubs.rpcStubTransportState();
-    const payload = {
-      incarnation: this.#stream.storage.incarnation,
-      idleSince: new Date(decision.idleSince).toISOString(),
-      idleForMs: now - decision.idleSince,
-      liveFacets: facets.liveFacetNames.slice(0, 32),
-      borrowedRpcStubs: transport.borrowedRpcStubs,
-      rpcStubPagers: transport.rpcStubPagers,
-      webSockets: this.ctx.getWebSockets().length,
-      libraryHoldsSocket: this.#library.holdsOpenSocket(),
-    };
-    console.warn({
-      event: "context.held-resident-while-idle",
-      namespace: "iterate-context",
-      name: this.#durableObjectAddress.name,
-      durableObjectId: this.ctx.id.toString(),
-      ...payload,
-    });
-    try {
-      this.#appendAndRunCommittedEffects([
-        { type: "events.iterate.com/context/held-resident-while-idle", payload },
-      ]);
-    } catch (error) {
-      reportIssue("iterate-context.residency-watchdog", error, {
-        incarnation: payload.incarnation,
-      });
-    }
-  }
-
-  // ── THE UNCLAIMED-FACET SWEEP (FacetHost `resetUnclaimedLoadedFacets`): a loaded facet the last call left running, ended ──
-
-  /** The sweep's deadline, epoch ms — in memory on purpose, like the watchdog's: a fresh incarnation
-   *  has none, so the alarm an evicted one left wakes it only for its birth, which did the reset. */
-  #unclaimedFacetSweepArmedFor: number | null = null;
-
-  /** A loaded facet was materialized, or a claim released: the sweep is owed once this context has
-   *  been quiet for `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`. Armed when none is: one alarm write per
-   *  quiet period. */
-  #armUnclaimedFacetSweep(): void {
-    if (this.#unclaimedFacetSweepArmedFor !== null) return;
-    this.#unclaimedFacetSweepArmedFor = Date.now() + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS;
-    this.#alarmCoordinator.reconcile();
-  }
-
-  /** The sweep's decision, applied in every alarm pass beside the watchdog's and by the same rule
-   *  (`decideQuietDeadline`, its own window, its own clock `#lastOutsideActivityEndedAt`): nothing,
-   *  a later deadline while a call or facet work is in flight or the quiet period is young, or THE
-   *  SWEEP — this still-resident incarnation's unclaimed loaded facets reset in place. An incarnation
-   *  that evicted on time never gets here: the alarm wakes a fresh one, whose birth reset them. */
-  #checkUnclaimedFacetSweep(now: number): void {
-    const decision = decideQuietDeadline({
-      armedFor: this.#unclaimedFacetSweepArmedFor,
-      now,
-      workInFlight: this.#workInFlight(this.#facetHost.snapshot().facetWorkInFlight),
-      lastCallEndedAt: this.#lastOutsideActivityEndedAt,
-      windowMs: UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS,
-    });
-    if (decision.action === "none") return;
-    if (decision.action === "rearm") {
-      this.#unclaimedFacetSweepArmedFor = decision.at;
-      return;
-    }
-    this.#unclaimedFacetSweepArmedFor = null;
-    const facets = this.#facetHost.resetUnclaimedLoadedFacets();
-    if (facets.length > 0)
-      console.log({
-        event: "context.facets-reset-when-quiet",
-        namespace: "iterate-context",
-        name: this.#durableObjectAddress.name,
-        facets,
-      });
+    this.#residency.outsideActivityEnded(); // a pass that did durable work restarts the sweep's quiet clock
   }
 
   /** DO-only, for the tests that run inside workerd (`__workers-tests__/support.ts` `owedAlarm`): the
    *  deadlines on the one alarm that are this incarnation's alone and owe nothing — the residency
    *  watchdog's and the unclaimed-facet sweep's. */
   inMemoryAlarmDeadlines(): (number | null)[] {
-    return [this.#residencyWatchdogArmedFor, this.#unclaimedFacetSweepArmedFor];
+    return Object.values(this.#residency.deadlines());
   }
 
   /** DO-only, for the tests that run inside workerd (`__workers-tests__`): the release, plus every
@@ -1121,9 +937,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  re-materialize from their startup memo on their next call. */
   releasePins(): void {
     this.#facetHost.abortLiveFacetsWhenIdle("released for the test's eviction");
-    clearTimeout(this.#pinReleaseTimer);
-    this.#pinReleaseTimer = undefined;
-    this.#releasePins();
+    this.#residency.releasePinsNow();
   }
 
   // ── dispatch: ONE method, the rewrite rules ──
@@ -1143,10 +957,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
-    this.#inboundCallStarted();
+    this.#residency.inboundCallStarted();
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
-      this.#inboundCallEnded(caller.app === true),
+      this.#residency.inboundCallEnded(caller.app === true),
     );
     // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (expression.ts
     // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
@@ -1195,9 +1009,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Ends when the Response is handed back — a body still streaming after that is not counted, so
    *  a stream longer than the watchdog's window is recorded as held. */
   async fetch(request: Request): Promise<Response> {
-    this.#inboundCallStarted();
+    this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
-      this.#inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
+      this.#residency.inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
     );
   }
 
@@ -1375,15 +1189,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    this.#inboundCallInOneTurn();
-    this.#stream.appendWakeRecord("request");
+    this.#inboundRequestInOneTurn();
     // Fetch-upgrade frames only (eyeball ⇄ upgrade leg); a pager socket's inbound payloads carry
     // nothing this DO acts on.
     this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    this.#inboundCallInOneTurn();
-    this.#stream.appendWakeRecord("request");
+    this.#inboundRequestInOneTurn();
     if (this.#rpcStubFetch.handleWebSocketClose(ws, code, reason)) return;
     this.#rpcStubs.rpcStubPagerClosed(ws);
   }
@@ -1398,8 +1210,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  permissively and the directory types it. (The pager has no verb: it is the
    *  `x-itx-rpc-stub-pager` upgrade at `fetch`.) */
   lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
-    this.#inboundCallInOneTurn();
-    this.#stream.appendWakeRecord("request");
+    this.#inboundRequestInOneTurn();
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,
       stub: input.stub as BorrowedRpcStub, // unvalidatable by design (the docstring above)

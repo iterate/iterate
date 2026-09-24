@@ -2,10 +2,10 @@
 // lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
-// Target surface: IterateContextDurableObject.alarm()/#pinCallEnded, FacetHost#liveFacetNames/#facetWorkInFlight
-// (src/iterate-context-durable-object.ts), the delivery loop's cursor lane +
-// `deliverEveryCursorSubscription` (src/stream/subscription-delivery.ts), and the rpc-stub directory
-// (src/context/rpc-stubs.ts).
+// Target surface: IterateContextDurableObject.alarm() (src/iterate-context-durable-object.ts),
+// Residency.pinCallEnded (src/context/residency.ts), FacetHost#liveFacetNames/#facetWorkInFlight
+// (src/context/facet-host.ts), the delivery loop's cursor lane + `deliverEveryCursorSubscription`
+// (src/stream/subscription-delivery.ts), and the rpc-stub directory (src/context/rpc-stubs.ts).
 //
 // THE ALARM SERVES DURABLE OBLIGATIONS ONLY, in order — this file pins the cursor half and the
 // negative space:
