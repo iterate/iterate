@@ -285,7 +285,7 @@ async function answers(baseUrl: string, vite: ChildProcess) {
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (vite.exitCode !== null || vite.signalCode) return "exited";
-    const response = await fetch(`${baseUrl}/version`).catch(() => null);
+    const response = await version(baseUrl);
     if (response?.ok) return "ready";
     await sleep(250);
   }
@@ -306,7 +306,7 @@ type DevServer = {
 async function runningServer() {
   const record = readRecord();
   if (!record || record.pid !== holder()) return null;
-  const response = await fetch(`${record.baseUrl}/version`).catch(() => null);
+  const response = await version(record.baseUrl);
   return response?.ok ? record : null;
 }
 
@@ -343,6 +343,12 @@ async function taken(port: number) {
       socket.once("error", () => resolve(false));
     });
   return (await accepts("127.0.0.1")) || (await accepts("::1"));
+}
+
+/** `GET /version`, null when it fails or takes over 5s: a server that accepts and never answers
+ *  must not hang a deadline, `status` or `getin`. */
+function version(baseUrl: string) {
+  return fetch(`${baseUrl}/version`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
 }
 
 function alive(pid: number) {
