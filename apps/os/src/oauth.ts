@@ -17,11 +17,14 @@ import { appendAccountFacts } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
-/** Encrypted by the provider. Every grant is created through parseAuthorization,
- * so this version also proves the grant has a nonempty, allowed resource audience. */
+/** Encrypted by the provider. Every grant is created through parseAuthorization, so it has a
+ * nonempty, allowed resource audience. */
 export const GrantProps = z.object({
   kind: z.enum(["issuer", "app", "personal"]),
-  version: z.literal(2),
+  /** Being dropped: no other version ever existed. Optional for one deploy, so an isolate still
+   *  running this reads the grants the next deploy mints without it; that deploy stops the writers
+   *  stamping it (issuer-session.ts, consent.ts, grants.ts) and deletes this key. */
+  version: z.literal(2).optional(),
   userId: z.string().startsWith("user_"),
   email: z.string(),
   /** the identity provider's picture and display name of the person (when the provider supplies them), shown where the

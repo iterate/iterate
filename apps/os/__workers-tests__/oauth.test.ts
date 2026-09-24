@@ -9,7 +9,12 @@ import type { GrantEnded } from "../src/account/contract.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { projectsForClient } from "../src/consent.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
-import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oauth.ts";
+import {
+  accountStateOf,
+  authorizationForToken,
+  authorizationOf,
+  oauthHelpers,
+} from "../src/oauth.ts";
 import { rpcResponse } from "../src/rpc.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -255,6 +260,31 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
     expect(challenge.headers.get("WWW-Authenticate")).toContain('scope="iterate"');
   }
 });
+
+// GrantProps.version is dropped in two deploys (oauth.ts): this one reads a grant without it, so the
+// next one can stop stamping it while an isolate of this one still admits what it mints.
+test.each([{ version: 2 }, {}])(
+  "a grant is admitted with or without version 2: %o",
+  async (stamp) => {
+    const user = await controlPlane().ensureUser("oauth-versionless@example.com");
+    const grant = {
+      kind: "app",
+      ...stamp,
+      userId: user.id,
+      email: user.email,
+      projects: null,
+      deadline: Date.now() + 60_000,
+      grantId: "versionless-grant",
+      scope: ["iterate"],
+      expiresAt: Date.now() + 60_000,
+    };
+    expect(await authorizationOf(env, grant)).toEqual({
+      principal: { actor: user.id, email: user.email },
+      reach: { userId: user.id },
+      grant,
+    });
+  },
+);
 
 test("the configured header bearer is the same administrator at both protocols", async () => {
   const { root } = await rpc(adminSecret);
