@@ -74,26 +74,22 @@ test("an agent cannot create an ancestor and invert its parent capability chain"
   ]);
 });
 
-// Pinned: collection.ts takes `creator` from the call, so a script picks its child's parent link.
-createFailing(test, /parent link should be its caller's own context/)(
-  "a script cannot choose its new agent's parent link: the child links to the context that created it, whatever `creator` the call names",
-  async () => {
-    const root = await openAgentItx(freshCtx("agent-creator"));
-    await root.provide("itx.tool", () => "hello-from-root");
-    await root.agents.create("/agents/a");
-    await root.cd("/agents/a").provide("itx.tool", null);
-    // The script runs in /agents/a/sandbox, beneath the mask, and names the root as the creator.
-    const { links, tool } = (await root
-      .cd("/agents/a")
-      .run(
-        "async (itx) => { await itx.agents.create('./b', { creator: '/' }); const links = (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); const tool = await itx.cd('./b').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
-      )) as { links: string[]; tool: string };
-    expect(links, "the child's parent link should be its caller's own context").toEqual([
-      "itx.cd('/agents/a/sandbox')",
-    ]);
-    expect(tool).toMatch(/is masked/);
-  },
-);
+test("a script cannot choose its new agent's parent link: the child links to the context that created it, whatever `creator` the call names", async () => {
+  const root = await openAgentItx(freshCtx("agent-creator"));
+  await root.provide("itx.tool", () => "hello-from-root");
+  await root.agents.create("/agents/a");
+  await root.cd("/agents/a").provide("itx.tool", null);
+  // The script runs in /agents/a/sandbox, beneath the mask, and names the root as the creator.
+  const { links, tool } = (await root
+    .cd("/agents/a")
+    .run(
+      "async (itx) => { await itx.agents.create('./b', { creator: '/' }); const links = (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); const tool = await itx.cd('./b').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
+    )) as { links: string[]; tool: string };
+  expect(links, "the child's parent link should be its caller's own context").toEqual([
+    "itx.cd('/agents/a/sandbox')",
+  ]);
+  expect(tool).toMatch(/is masked/);
+});
 
 // Pinned: the root's `itx.agents` row is inherited by every context linked to the root, and the
 // collection it reaches links each agent to its own base, `/`, never to the context that asked.

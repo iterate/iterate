@@ -74,9 +74,7 @@ var AgentContract = defineProcessorContract({
   stateSchema: z.object({
     creation: z.object({
       status: z.enum(["requested", "created", "failed"]),
-      offset: z.number().int().positive(),
-      /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
-      creator: z.string().optional()
+      offset: z.number().int().positive()
     }).nullable().default(null),
     /** Where deletion stands, as the offset of the event that says so; null while the agent lives. */
     deletion: z.object({
@@ -128,8 +126,8 @@ var AgentContract = defineProcessorContract({
   }),
   events: {
     "events.iterate.com/agent/create-requested": {
-      description: "Someone asked for this agent (`itx.agents.create(path)`). The context it lands on IS the agent; `creator` is the context that asked \u2014 the saga writes the child's parent link `itx \u21D2 itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
-      payloadSchema: z.object({ creator: z.string().optional() })
+      description: "Someone asked for this agent (`itx.agents.create(path)`). No payload: the context it lands on IS the agent. The collection writes the child's parent link `itx \u21D2 itx.cd(creator)` before this request, the creator being the context whose `itx.agents` reached the collection, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({})
     },
     "events.iterate.com/agent/created": {
       description: "The birth certificate: on the agent's path, and cross-posted to / for the project catalog \u2014 hence it names the path.",
@@ -569,11 +567,7 @@ var AgentProcessor = class extends StreamProcessor {
       case "events.iterate.com/agent/create-requested":
         return state.creation?.status === "created" ? void 0 : {
           ...state,
-          creation: {
-            status: "requested",
-            offset: event.offset,
-            creator: event.payload.creator
-          }
+          creation: { status: "requested", offset: event.offset }
         };
       case "events.iterate.com/agent/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
@@ -1389,11 +1383,11 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
    *  sought after the request that opened it, so a certificate landing between the read and the
    *  wait is seen, not missed. A deleted agent is not re-creatable: thrown. Data back, never the
    *  handle: `itx.agents.get(path)` addresses it. */
-  create(path, options = {}) {
+  create(path) {
     return this.withItx(async (itx) => {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
-      const creator = resolveContextPath("/", options.creator || this.base);
+      const creator = resolveContextPath("/", this.base);
       if (creator.startsWith(`${path}/`))
         throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
       const context = itx.cd(path);
@@ -1435,7 +1429,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget2 {
         );
         const [requested] = await context.append({
           type: "events.iterate.com/agent/create-requested",
-          payload: { creator }
+          payload: {}
         });
         requestedAtOffset = requested.offset;
       }
