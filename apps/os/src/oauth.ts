@@ -12,8 +12,7 @@ import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
-import { appendAccountFacts } from "./session.ts";
+import { appendPlatformFacts, ownerContext } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
@@ -93,20 +92,13 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
  *  awaits it), when each was last used. One hop to the person's own Durable Object. */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
-  const name = DurableObjectNameCodec.stringify({
-    projectId: GLOBAL_PROJECT_ID,
-    path: `/users/${userId}`,
-  });
   // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
-  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`. Dialed
-  // through the namespace as a value (session.ts's `contextNamespace` convention), not a raw
-  // `env.ITERATE_CONTEXT.getByName` — this read is the platform's own, after the token is verified.
-  const contextNamespace = env.ITERATE_CONTEXT;
-  const { state } = (await contextNamespace
-    .getByName(name)
-    .invoke(["itx", "facets", ["get", "account"], ["snapshot"]], [], { principal: null })) as {
-    state: AccountState;
-  };
+  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
+  const { state } = (await ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
+    ["itx", "facets", ["get", "account"], ["snapshot"]],
+    [],
+    { principal: null },
+  )) as { state: AccountState };
   return state;
 }
 
@@ -152,9 +144,9 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
   if ((grantUseRecordedAt.get(key) ?? 0) > now - GRANT_USE_MEMO_MS) return;
   grantUseRecordedAt.set(key, now);
   try {
-    await appendAccountFacts(
+    await appendPlatformFacts(
       env.ITERATE_CONTEXT,
-      grant.userId,
+      { account: grant.userId },
       {
         type: "events.iterate.com/account/grant-used",
         payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,

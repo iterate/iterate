@@ -181,7 +181,7 @@ describe("security requirements — the global namespace is not navigable", () =
         ["get", "account"],
         ["snapshot"],
       ]) as Promise<AccountSnapshot>;
-    // The platform's own fact folds: this session's authentication (session.ts `publishAccountFact`).
+    // The platform's own fact folds: this session's authentication (session.ts `publishPlatformFacts`).
     await until("the platform's authentication fact is folded", async () =>
       (await account()).state.authentications.length > 0 ? true : undefined,
     );
@@ -240,7 +240,7 @@ describe("security requirements — the global namespace is not navigable", () =
         ["get", "organization"],
         ["snapshot"],
       ]) as Promise<OrganizationSnapshot>;
-    // The platform's own fact folds: the organization's creation (session.ts `publishOrganizationFact`).
+    // The platform's own fact folds: the organization's creation (session.ts `publishPlatformFacts`).
     await until("the platform's creation fact is folded", async () =>
       (await snapshot()).state.name === "the real name" ? true : undefined,
     );

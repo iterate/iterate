@@ -11,10 +11,10 @@
 // path canonical (paths.ts `DurableObjectNameCodec`), its owner root `resourceScope`'s (paths.ts).
 // THE RULES, rows of the table test beside this file:
 //   1. `account` — a user's own context, `global:/users/<id>`, and nowhere else: where the person's
-//      facts land (session.ts `publishGlobalFact`, grants.ts, consent.ts) and a user's secrets
+//      facts land (session.ts `publishPlatformFacts`, grants.ts, consent.ts) and a user's secrets
 //      catalog is folded (built-ins.ts `ownerRootFacet`).
 //   2. `organization` — an organization's own context, `global:/organizations/<id>`, and nowhere
-//      else: session.ts `publishGlobalFact` (created, renamed, deleted, a project created in it) and
+//      else: session.ts `publishPlatformFacts` (created, renamed, deleted, a project created in it) and
 //      the organization's secrets catalog (built-ins.ts `ownerRootFacet`).
 //   3. `project` — a project's root `/`, and nowhere else: its creation saga (session.ts
 //      `projects.create`), the entity collections (library.ts `projectFacet`) and the project's

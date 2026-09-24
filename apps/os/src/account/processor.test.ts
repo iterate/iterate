@@ -7,8 +7,8 @@ import { reduceProcessor } from "../stream/test-support.ts";
 import { AccountProcessor } from "./processor.ts";
 import { type AccountState } from "./contract.ts";
 
-/** Every fact the account folds is the platform's: stamped `source.platform` as its writers stamp it
- *  (session.ts `publishAccountFact`, grants.ts, oauth.ts). */
+/** Every fact the account folds is the platform's: stamped `source.platform` as its one writer
+ *  stamps it (session.ts `appendPlatformFacts`). */
 const platform = { platform: true } as const;
 const authenticated = (operationId: string, credential: "from-server-cookie" | "admin-secret") => ({
   type: "events.iterate.com/account/authenticated",
