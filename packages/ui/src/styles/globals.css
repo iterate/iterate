@@ -20,11 +20,14 @@
    https://tailwindcss.com/docs/dark-mode#toggling-dark-mode-manually */
 @custom-variant dark (@media not all);
 
-/* On a phone every sheet fills the screen (#1883): each SheetContent call site passes
-   `data-[side=right]:w-full`. The phone's sidebar is a sheet the vendored sidebar.tsx renders with no
-   className to pass (upstream's is 3/4 wide), so this reaches it by its slot; below `sm` (40rem), as
-   the call sites' own. Unlayered, so it outranks the utilities layer's `data-[side=left]:w-3/4`. */
+/* On a phone every sheet fills the screen (#1883), where upstream's are 3/4 wide. Each SheetContent
+   call site passes `data-[side=right]:w-full` (as wide as its max-width allows from `sm` up, too);
+   below `sm` (40rem) this rule also covers a sheet whose call site doesn't, and the phone's sidebar,
+   a sheet the vendored sidebar.tsx renders with no className to pass, by its slot. Keyed on the
+   sheet's own data-slot: Base UI puts data-side on every positioned popup. Unlayered, so it
+   outranks the utilities layer's `data-[side=…]:w-3/4`. */
 @media (width < 40rem) {
+  [data-slot="sheet-content"]:is([data-side="left"], [data-side="right"]),
   [data-slot="sidebar"][data-mobile="true"] {
     width: 100%;
   }

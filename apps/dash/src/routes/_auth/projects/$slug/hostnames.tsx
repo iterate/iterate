@@ -160,7 +160,10 @@ function ProjectHostnames() {
         open={search.add === 1}
         onOpenChange={(open) => !open && void navigate({ search: {}, replace: true })}
       >
-        <SheetContent side="right" className="data-[side=right]:sm:max-w-md">
+        <SheetContent
+          side="right"
+          className="data-[side=right]:w-full data-[side=right]:sm:max-w-md"
+        >
           <form onSubmit={(event) => void add(event)} className="flex h-full flex-col">
             <SheetHeader>
               <SheetTitle>Add hostname</SheetTitle>
