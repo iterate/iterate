@@ -142,6 +142,40 @@ test.each<{
   expect(plan.orphans.map((orphan) => orphan.previewName)).toEqual(orphanOf ? [orphanOf] : []);
 });
 
+test.each<{
+  label: string;
+  kind: PreviewResourceKind;
+  resource: string;
+  createdHoursAgo?: number;
+  orphanOf: string | false;
+}>(
+  // prettier-ignore
+  [
+    { label: "a legacy slot's Artifacts namespace", kind: "artifacts", resource: "os-preview-3-repos", createdHoursAgo: 3000, orphanOf: false },
+    { label: "a legacy slot's R2", kind: "r2", resource: "os-preview-3-files", createdHoursAgo: 3000, orphanOf: false },
+    { label: "a gone preview's day-old D1", kind: "d1", resource: "os-preview-exp-x-db", createdHoursAgo: 25, orphanOf: false },
+    { label: "a gone preview's KV, which has no stamp (rules 4–6 alone)", kind: "kv", resource: "os-preview-exp-final-itx-kv", orphanOf: "exp-final" },
+  ],
+)(
+  "7: the parent's creation time unknown keeps every stamped resource: $label",
+  ({ kind, resource, createdHoursAgo, orphanOf }) => {
+    const plan = planPreviewSweep(
+      input({
+        parentCreatedAt: undefined,
+        resources: [
+          {
+            kind,
+            name: resource,
+            id: "id",
+            createdAt: createdHoursAgo === undefined ? undefined : hoursAgo(createdHoursAgo),
+          },
+        ],
+      }),
+    );
+    expect(plan.orphans.map((orphan) => orphan.previewName)).toEqual(orphanOf ? [orphanOf] : []);
+  },
+);
+
 test("5: a stale preview's resources are not orphans — deletePreview takes them with it", () => {
   const plan = planPreviewSweep(
     input({

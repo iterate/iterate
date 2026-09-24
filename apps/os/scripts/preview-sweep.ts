@@ -27,6 +27,8 @@
 //      left `os-preview-<n>-repos` namespaces (2026-05 and 2026-07, tens of thousands of repos each)
 //      whose names read as previews `1`…`18` of the parent `os-preview`; they are older than it, and
 //      no preview of it owns them. A resource with no creation stamp (KV) is judged on 4–6 alone.
+//      When the parent's creation time is unknown (the scripts listing does not name it) or a stamp
+//      does not parse, every stamped resource is kept: a failed lookup never deletes.
 // scripts/preview.ts looks each orphan's preview up once more right before deleting it.
 import {
   MAX_PREVIEW_NAME_LENGTH,
@@ -58,7 +60,7 @@ export type PreviewSweepInput = {
   /** Every worker script on the account (rule 4: another worker whose name begins `<parent>-`). */
   workerNames: string[];
   /** When the parent worker was created (the scripts listing's `created_on`; rule 7), or undefined
-   *  when the listing does not name it. */
+   *  when the listing does not name it, which keeps every resource that has a creation stamp. */
   parentCreatedAt: string | undefined;
   resourceSuffixes: Record<PreviewResourceKind, string[]>;
   previews: SweptPreview[];
@@ -140,8 +142,12 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     if (listedPreviewResourceNames.has(resource.name)) continue;
     const previewName = previewNameOfSweptResource(resource, input);
     if (!previewName) continue;
-    // rule 7
-    if (input.parentCreatedAt && hoursSince(resource.createdAt) > hoursSince(input.parentCreatedAt))
+    // rule 7: a stamped resource goes on only when it provably postdates the parent (NaN, from an
+    // unknown parent or a stamp that does not parse, compares false and keeps it)
+    if (
+      resource.createdAt &&
+      !(hoursSince(resource.createdAt) <= hoursSince(input.parentCreatedAt))
+    )
       continue;
     let reason = `preview ${previewName} does not exist`;
     if (resource.kind === "d1" || resource.kind === "artifacts") {
