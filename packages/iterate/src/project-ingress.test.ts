@@ -7,7 +7,7 @@ import {
   projectUrlOf,
   type IngressRouting,
   type ProjectAddress,
-  customProjectHostOf,
+  projectWildcardHostOf,
 } from "./project-ingress.ts";
 
 const subdomains: IngressRouting = { type: "subdomains", hostname: "iterate.app" };
@@ -242,38 +242,7 @@ test("every composed URL parses back to its target", () => {
   }
 });
 
-// ── customProjectHostOf ──
-const hostnames = { "iterate.com": "iterate" };
-test.each([
-  {
-    hostname: "iterate.com",
-    becomes: { app: null, project: "iterate" },
-    why: "the apex, as named",
-  },
-  {
-    hostname: "Iterate.COM.",
-    becomes: { app: null, project: "iterate" },
-    why: "case and a trailing dot forgiven",
-  },
-  {
-    hostname: "www.iterate.com",
-    becomes: null,
-    why: "only the hostnames named — no wildcard under them",
-  },
-  {
-    hostname: "os.iterate.com",
-    becomes: null,
-    why: "the platform's own origin is not a project",
-  },
-  {
-    hostname: "iterate.iterate.app",
-    becomes: null,
-    why: "the ingress's own shapes are not custom hostnames",
-  },
-])("$hostname → $why", ({ hostname, becomes }) => {
-  expect(customProjectHostOf(hostname, hostnames)).toEqual(becomes);
-});
-
+// ── projectWildcardHostOf ──
 const wildcard = {
   hostname: "iterate.com",
   project: "iterate",
@@ -287,12 +256,18 @@ const wildcard = {
   ],
 };
 test.each([
+  { hostname: "iterate.com", project: "iterate" },
+  { hostname: "Iterate.COM.", project: "iterate" },
   { hostname: "www.iterate.com", project: "iterate" },
   { hostname: "Blog.Iterate.com.", project: "iterate" },
-  { hostname: "iterate.com", project: "iterate" },
   { hostname: "deep.www.iterate.com", project: null },
+  { hostname: "notiterate.com", project: null },
   { hostname: "www.iterate.app", project: null },
   ...wildcard.excludedHostnames.map((hostname) => ({ hostname, project: null })),
 ])("project wildcard $hostname → $project", ({ hostname, project }) => {
-  expect(customProjectHostOf(hostname, hostnames, wildcard)?.project ?? null).toBe(project);
+  expect(projectWildcardHostOf(hostname, wildcard)?.project ?? null).toBe(project);
+});
+
+test("no project wildcard names no project", () => {
+  expect(projectWildcardHostOf("iterate.com", undefined)).toBeNull();
 });

@@ -1,6 +1,6 @@
 ---
 name: fix-stream
-description: Turn a broken agent chat (an Agents app URL such as agents.iterate.workers.dev/projects/<slug>?agent=/agents/web/<moment>) into a red repro test seeded with the chat's real events, then a green fix, then a minimal fixture. Use when someone says "fix <agents url>", pastes an agent chat with a complaint, or reports an agent that went silent or wrong.
+description: Turn a broken agent chat (an Agents app URL such as agents.iterate.com/projects/<slug>?agent=/agents/web/<moment>) into a red repro test seeded with the chat's real events, then a green fix, then a minimal fixture. Use when someone says "fix <agents url>", pastes an agent chat with a complaint, or reports an agent that went silent or wrong.
 ---
 
 # fix-stream
@@ -13,7 +13,7 @@ shrink the fixture.
 
 | URL                                                                                                      | Deployment                                      |
 | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `https://agents.iterate.workers.dev/projects/<slug>?agent=<path>`                                        | prd (`agentsEnvs.prd` in `envs.ts`)             |
+| `https://agents.iterate.com/projects/<slug>?agent=<path>`                                                | prd (`agentsEnvs.prd` in `envs.ts`)             |
 | `https://pr<n>-<branch slug>-agents-preview.iterate-dev-preview.workers.dev/projects/pr<n>?agent=<path>` | that PR's preview (its PR body lists the URLs)  |
 | `http://localhost:<port>/projects/<slug>?agent=<path>`                                                   | `pnpm --dir apps/agents dev` against a local OS |
 

@@ -53,11 +53,6 @@ export function e2eWorkerConfig(
       ...vars,
       APP_CONFIG_URLS__OS: platformOrigin,
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(ingressRouting),
-      // One custom hostname (a project's apex outside the base) for the ingress test that proves the
-      // custom-hostname branch; the project it names is registered by that test.
-      APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES: JSON.stringify({
-        "custom-apex.test": "custom-apex-project",
-      }),
       APP_CONFIG_LOGIN__PASSWORD: E2E_LOGIN_PASSWORD,
       APP_CONFIG_SECRETS__KEY: "e2e-secrets-key",
       APP_CONFIG_SECRETS__ADMIN_BEARER: E2E_ADMIN_API_SECRET,

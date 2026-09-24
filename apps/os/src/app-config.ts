@@ -8,8 +8,9 @@
 // lives beside its consumer. The object's keys are the schema's own names, nested as the schema is:
 //
 //   {
-//     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {}, projectWildcard: { hostname, project } },
+//     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
 //     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
+//     customHostnames: { zone, reservedZones }, cloudflareApiToken,
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -22,8 +23,8 @@
 
 import { z } from "zod";
 import {
-  customProjectHostOf,
   projectAddressOf,
+  projectWildcardHostOf,
   type IngressRouting,
   type ProjectAddress,
 } from "iterate/project-ingress";
@@ -104,12 +105,7 @@ export const AppConfig = z.object({
           hostname: z.string().trim().default(""),
         })
         .optional(),
-      /** TEMPORARY — hostnames of this deployment's own that ARE a project's apex
-       *  (`{ "iterate.com": "iterate" }`): a request there lands on that project's config worker
-       *  `fetch` exactly as `<project>.<hostname>` does; the route and the DNS record are the
-       *  deployment's (envs.ts). This belongs in the project's own runtime config, not the platform's. */
-      temporaryCustomHostnames: z.record(dnsName, z.string().trim().min(1, REQUIRED)).default({}),
-      /** First-level subdomains of this owned zone serve one project's config worker. */
+      /** This owned zone's apex and first-level names serve one project's config worker. */
       projectWildcard: z
         .object({
           hostname: dnsName,
@@ -119,6 +115,22 @@ export const AppConfig = z.object({
         .optional(),
     })
     .prefault({}),
+  /** CUSTOM HOSTNAMES a project adds itself (project/custom-hostnames.ts): each a Cloudflare for
+   *  SaaS custom hostname on `zone`, whose fallback origin `cname.<zone>` its owner CNAMEs to, routed
+   *  by the control plane's hostname table. Unset ⇒ no project can add one. Both keys come from
+   *  envs.ts (scripts/generate-wrangler-config.ts). */
+  customHostnames: z
+    .object({
+      /** The SaaS zone the custom hostnames are created on (`iterate.app`). */
+      zone: dnsName,
+      /** The deployment's own zones: a hostname equal to or under one is refused — it is ours. */
+      reservedZones: z.array(dnsName).default([]),
+    })
+    .optional(),
+  /** The deployment's Cloudflare API token, for what the worker itself asks of Cloudflare at runtime:
+   *  today a project's custom hostnames (edit on `customHostnames.zone`). Blank ⇒ none; a custom
+   *  hostname is then refused with that reason rather than half-provisioned. */
+  cloudflareApiToken: redacted(z.string().trim().default("")),
   /** How a person signs in. Each mechanism is on iff its block is present; `parseAppConfig` refuses a
    *  deployment with none (nobody could ever sign in). */
   login: z
@@ -454,9 +466,10 @@ export function platformAddressesOf(env: AppConfigEnv, request: Request): Platfo
   };
 }
 
-/** The project `url` is a host of: under the ingress routing (iterate/project-ingress:
- *  subdomains — a host under the wildcard; paths — `/<project>[/<app>]` on the platform origin), or
- *  one of the deployment's custom hostnames (a project's apex). The platform and MCP origins are the
+/** The project `url` is a host of by the deployment's STATIC rules: under the ingress routing
+ *  (iterate/project-ingress: subdomains — a host under the wildcard; paths — `/<project>[/<app>]` on
+ *  the platform origin), or the project wildcard (an owned zone's apex and first-level names). A
+ *  hostname a project added itself is the control plane's (control-plane/edge.ts `projectHostOf`). The platform and MCP origins are the
  *  platform's own even when their zone also has a project wildcard. What worker.ts admits a project
  *  host with, and what consent.ts binds a project's CIMD client to. */
 export function projectHostOf(
@@ -467,10 +480,6 @@ export function projectHostOf(
   const routed = projectAddressOf(config.urls.ingressRouting, url, platformOrigin);
   if (routed) return routed;
   if (url.origin === platformOrigin || url.origin === config.urls.mcp) return null;
-  const custom = customProjectHostOf(
-    url.hostname,
-    config.urls.temporaryCustomHostnames,
-    config.urls.projectWildcard,
-  );
-  return custom && { ...custom, basePath: "" };
+  const wildcard = projectWildcardHostOf(url.hostname, config.urls.projectWildcard);
+  return wildcard && { ...wildcard, basePath: "" };
 }

@@ -23,6 +23,7 @@ const empty: ProjectState = {
   workspaces: {},
   secrets: {},
   configRepoTip: null,
+  hostnames: {},
 };
 
 const reduceRows: {
@@ -69,6 +70,7 @@ const reduceRows: {
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       secrets: {},
       configRepoTip: null,
+      hostnames: {},
     },
   },
   {
@@ -115,6 +117,50 @@ const reduceRows: {
         "/vendor/lib": { createdAt: expect.any(String) },
       },
     },
+  },
+  {
+    name: "a hostname's add is owed at its offset; the provisioned answer settles it; a re-add (the re-check) is owed again and keeps what Cloudflare said",
+    events: [hostname("add-requested"), provisioned("pending"), hostname("add-requested")],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: { verb: "add", offset: 3 },
+          cloudflare: observation("pending"),
+          error: null,
+        },
+      },
+    },
+  },
+  {
+    name: "a failed add keeps its words; a failed re-check keeps the last observation",
+    events: [
+      hostname("add-requested"),
+      provisioned("active"),
+      hostname("add-requested"),
+      {
+        type: "events.iterate.com/project/hostname-add-failed",
+        payload: { hostname: "www.acme.test", error: "boom" },
+      },
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: null, cloudflare: observation("active"), error: "boom" },
+      },
+    },
+  },
+  {
+    name: "a remove is owed at its offset; an add's late answer does not undo it; the removal drops the entry; an answer or a remove for an unknown hostname is ignored",
+    events: [
+      hostname("add-requested"),
+      hostname("remove-requested"),
+      provisioned("active"),
+      hostname("removed"),
+      provisioned("active"),
+      hostname("remove-requested"),
+    ],
+    state: empty,
   },
   {
     name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
@@ -169,6 +215,102 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   expect(appended).toHaveLength(2);
 });
 
+// THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
+test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases", async () => {
+  const calls: string[] = [];
+  let failProvision = false;
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: ["iterate.app"],
+      claim: async (name) => void calls.push(`claim ${name}`),
+      release: async (name) => void calls.push(`release ${name}`),
+      provider: {
+        provision: async (name) => {
+          calls.push(`provision ${name}`);
+          if (failProvision) throw new Error("Cloudflare says no");
+          return observation("pending");
+        },
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+  );
+  const appended: { type: string; idempotencyKey?: string; payload: unknown }[] = [];
+  const owe = (name: string, verb: "add" | "remove", offset: number, provisioned = false) =>
+    deliver(
+      processor,
+      {
+        ...empty,
+        hostnames: {
+          [name]: {
+            requested: { verb, offset },
+            cloudflare: provisioned ? observation("active") : null,
+            error: null,
+          },
+        },
+      },
+      async (...events) => void appended.push(...(events as typeof appended)),
+    );
+  owe("www.acme.test", "add", 4);
+  owe("www.acme.test", "add", 4); // the same request again this incarnation: nothing more
+  await settle();
+  failProvision = true;
+  owe("new.acme.test", "add", 5);
+  await settle();
+  owe("docs.iterate.app", "add", 6);
+  await settle();
+  owe("www.acme.test", "add", 7, true); // a failed re-check of a serving hostname keeps its claim
+  await settle();
+  owe("www.acme.test", "remove", 8);
+  await settle();
+  expect(calls).toEqual([
+    "claim www.acme.test",
+    "provision www.acme.test",
+    "claim new.acme.test",
+    "provision new.acme.test",
+    "release new.acme.test",
+    "claim www.acme.test",
+    "provision www.acme.test",
+    "remove www.acme.test",
+    "release www.acme.test",
+  ]);
+  expect(appended.map((event) => [event.type.split("/").pop(), event.idempotencyKey])).toEqual([
+    ["hostname-provisioned", "project/hostname-add:www.acme.test:4"],
+    ["hostname-add-failed", "project/hostname-add:new.acme.test:5"],
+    ["hostname-add-failed", "project/hostname-add:docs.iterate.app:6"],
+    ["hostname-add-failed", "project/hostname-add:www.acme.test:7"],
+    ["hostname-removed", "project/hostname-remove:www.acme.test:8"],
+  ]);
+  expect(appended[2]!).toMatchObject({
+    payload: {
+      hostname: "docs.iterate.app",
+      error: "'docs.iterate.app' is under iterate.app, which this deployment serves itself.",
+    },
+  });
+});
+
+test("ProjectProcessor — a deployment that cannot provision refuses a hostname with that reason", async () => {
+  const appended: { type: string; payload: unknown }[] = [];
+  deliver(
+    processor(),
+    {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: { verb: "add", offset: 1 }, cloudflare: null, error: null },
+      },
+    },
+    async (...events) => void appended.push(...(events as typeof appended)),
+  );
+  await settle();
+  expect(appended).toEqual([
+    expect.objectContaining({
+      type: "events.iterate.com/project/hostname-add-failed",
+      payload: { hostname: "www.acme.test", error: "This deployment cannot add custom hostnames." },
+    }),
+  ]);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(
@@ -213,6 +355,34 @@ function secretDeleted(path: string) {
 }
 
 const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
+
+function hostname(verb: "add-requested" | "remove-requested" | "removed") {
+  return {
+    type: `events.iterate.com/project/hostname-${verb}`,
+    payload: { hostname: "www.acme.test" },
+  };
+}
+
+function provisioned(status: string) {
+  return {
+    type: "events.iterate.com/project/hostname-provisioned",
+    payload: { hostname: "www.acme.test", cloudflare: observation(status) },
+  };
+}
+
+function observation(status: string) {
+  return {
+    status,
+    sslStatus: status,
+    records: [{ type: "CNAME" as const, name: "www.acme.test", value: "cname.iterate.app" }],
+    errors: [],
+  };
+}
+
+/** Two turns: a background effect's awaits, then its append. */
+const settle = async () => {
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((r) => setTimeout(r, 0));
+};
 
 const deliver = (
   processor: ProjectProcessor,

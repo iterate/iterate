@@ -59,10 +59,10 @@ function ownOriginZone(url: string): string {
   return hostname.endsWith(".workers.dev") ? hostname : registrableDomainOf(hostname);
 }
 
-/** THE ZONES THAT ARE OURS, from envs.ts: every OS deployment's origins, its project wildcard
- *  and custom apexes, and the first-party apps' origins — deduped and sorted. The browser-auth gate
- *  (`appAuth` `denyZones`) refuses to connect an app to an issuer under any of them: a project host
- *  or a custom apex is userspace and could serve a look-alike issuer. */
+/** THE ZONES THAT ARE OURS, from envs.ts: every OS deployment's origins, its project wildcard,
+ *  and the first-party apps' origins — deduped and sorted. The browser-auth gate (`appAuth`
+ *  `denyZones`) refuses to connect an app to an issuer under any of them: a project host is
+ *  userspace and could serve a look-alike issuer. */
 export function ownZones(): string[] {
   // These existing userspace hosts remain untrusted issuers even after their deployment code is removed.
   const zones = new Set([
@@ -76,7 +76,6 @@ export function ownZones(): string[] {
     if (env.dashBaseUrl) zones.add(ownOriginZone(env.dashBaseUrl));
     if (env.ingressRouting?.type === "subdomains") zones.add(env.ingressRouting.hostname);
     if (env.projectWildcard) zones.add(env.projectWildcard.hostname);
-    for (const hostname of Object.keys(env.temporaryCustomHostnames || {})) zones.add(hostname);
   }
   for (const envs of Object.values(FIRST_PARTY_APPS))
     for (const env of Object.values(envs) as { baseUrl: string }[])

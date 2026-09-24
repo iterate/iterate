@@ -20,7 +20,6 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   ingressRouting,
-  localOnly,
   projectHostsAreLocal,
   projectUrl,
   registerProject,
@@ -148,39 +147,6 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const missing = await fetchProjectUrl(projectUrl({ project: slug, app: "other", path: "/" }));
   expect(missing, missing.text).toMatchObject({ status: 404 });
 });
-
-// A CUSTOM HOSTNAME (`urls.temporaryCustomHostnames`, worker-config.ts: `custom-apex.test` ⇒
-// `custom-apex-project`) is that project's apex outside the base: the config worker's `fetch`
-// answers, the same row a `<project>.<base>` apex lands on. LOCAL ONLY: the deployed map is prd's
-// (`iterate.com` ⇒ the `iterate` project), proven by hand against iterate.com.
-localOnly(
-  "a custom hostname is a project's apex: the config worker's fetch answers it",
-  async () => {
-    const projectId = await registerProject("custom-apex-project"); // the slug worker-config.ts maps custom-apex.test to
-    const itx = openItx(projectId);
-    await itx.provide("itx.apps.site", siteRule());
-    // A custom hostname reaches its project, but needs an explicit ingress target.
-    const bare = await fetchProjectHost("custom-apex.test", "/");
-    expect(bare, bare.text).toMatchObject({ status: 404 });
-    expect(bare.text).toMatch(/no site yet/);
-    await itx.append({
-      type: "events.iterate.com/project/ingress-configured",
-      payload: {
-        target: [
-          "itx",
-          "workers",
-          ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:custom-apex" }],
-        ],
-      },
-    });
-    const apex = await fetchProjectHost("custom-apex.test", "/echo");
-    expect(apex, apex.text).toMatchObject({ status: 200 });
-    expect((JSON.parse(apex.text) as { url: string }).url).toContain("//custom-apex.test/echo");
-    // a hostname the map does not name is not a project host (nor the platform origin): 421
-    const unknown = await fetchProjectHost("other-apex.test", "/");
-    expect(unknown, unknown.text).toMatchObject({ status: 421 });
-  },
-);
 
 test("a project host verifies an OAuth bearer, strips credentials and rejects a grant for another project", async () => {
   const slug = freshDnsSafeProjectSlug("ingress-who");

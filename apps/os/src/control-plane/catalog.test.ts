@@ -328,6 +328,29 @@ test.for([
   expect(projectSlug(name)).toBe(slug);
 });
 
+test("hostnames: a claim routes the hostname to its project; again for the same project is a no-op; another project's is refused; a release drops only the releasing project's claim", () => {
+  const { c } = catalog();
+  const shop = c.createProject(admin, { project: "shop" });
+  const blog = c.createProject(admin, { project: "blog" });
+  expect(c.projectByHostname("www.shop.test")).toBeNull();
+  c.claimHostname(shop.id, "www.shop.test");
+  c.claimHostname(shop.id, "www.shop.test");
+  expect(c.projectByHostname("www.shop.test")).toEqual(shop);
+  expect(refusal(() => c.claimHostname(blog.id, "www.shop.test"))).toMatchObject({
+    code: "INVALID_INPUT",
+    message: "The hostname 'www.shop.test' belongs to another project.",
+  });
+  expect(refusal(() => c.claimHostname("prj_nobody", "x.test"))).toMatchObject({
+    code: "INVALID_INPUT",
+  });
+  c.releaseHostname(blog.id, "www.shop.test");
+  expect(c.projectByHostname("www.shop.test")).toEqual(shop);
+  c.releaseHostname(shop.id, "www.shop.test");
+  expect(c.projectByHostname("www.shop.test")).toBeNull();
+  c.claimHostname(blog.id, "www.shop.test");
+  expect(c.projectByHostname("www.shop.test")).toEqual(blog);
+});
+
 const as = (user: { id: string; email: string }): Caller => ({
   principal: { actor: user.id, email: user.email },
 });

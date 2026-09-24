@@ -98,24 +98,16 @@ export interface OsEnv {
    *  without renaming the data it binds. `ensure-resources`, erase-data and the wrangler generator
    *  derive the names from this, never from the worker name. */
   resourceNamePrefix: string;
-  /** TEMPORARY (`APP_CONFIG urls.temporaryCustomHostnames`) — hostnames of this deployment's own that
-   *  ARE a project's apex: `{ "iterate.com": "iterate" }` lands a request on that project's config
-   *  worker `fetch`, exactly as `<project>.<hostname>` does. The generator adds one zone route per
-   *  hostname (its registrable domain's zone must exist in the account), ensure-resources the proxied
-   *  DNS record. Belongs in the project's own runtime config, not here. */
-  temporaryCustomHostnames?: Record<string, string>;
-  /** One first-level wildcard on an owned zone, served as the named project's config-worker apex.
-   *  More specific Worker routes on that zone continue to take precedence. */
+  /** An owned zone served as the named project's config-worker apex: the zone's apex and every
+   *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
+   *  specific Worker routes on that zone continue to take precedence. */
   projectWildcard?: { hostname: string; project: string; excludedHostnames?: string[] };
-  /** Registrable domains in this account which host entries in `temporaryCustomHostnames`.
-   * They receive their own Worker route and proxied DNS record, rather than becoming a
-   * Cloudflare-for-SaaS hostname on a project-host zone. */
-  ownedProjectCustomApexes?: string[];
   /** The project-host zones this deployment serves as a Cloudflare for SaaS provider (the zone's
-   *  fallback origin, `cname.<zone>`, is the deployment's).
-   *  A `temporaryCustomHostnames` key whose zone lives in ANOTHER Cloudflare account is a CUSTOM
-   *  HOSTNAME on the first of these (ensure-resources creates it; the owner CNAMEs their apex to the
-   *  fallback origin), reached through the one `*\/*` route the generator adds per SaaS zone. */
+   *  fallback origin, `cname.<zone>`, is the deployment's), reached through the one `*\/*` route the
+   *  generator adds per SaaS zone. A hostname a project adds itself (apps/os
+   *  src/project/custom-hostnames.ts) is a custom hostname on the first of these, created at runtime
+   *  with the worker's `APP_CONFIG_CLOUDFLARE_API_TOKEN` (Doppler); its owner CNAMEs it to the
+   *  fallback origin. */
   cloudflareForSaasProjectHostnameBases?: string[];
   resources: { oauthKvId: string; itxKvId: string };
 }
@@ -152,17 +144,8 @@ export const osEnvs: Record<string, OsEnv> = {
     dashBaseUrl: "https://dash.iterate.com",
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     ingressRouting: { type: "subdomains", hostname: "iterate.app" },
-    // Each apex is its project's: the config worker's `fetch` serves it. Every zone must exist in
-    // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
-    temporaryCustomHostnames: {
-      // This zone is in this account and has its own route and DNS record.
-      "iterate.com": "iterate",
-      // these three zones live in OTHER Cloudflare accounts: Cloudflare for SaaS custom hostnames on
-      // iterate.app (below), each apex CNAMEd by its owner to cname.iterate.app
-      "garple.com": "garple",
-      "lispwoso.com": "lispwoso",
-      "templestein.com": "templestein",
-    },
+    // iterate.com and its first-level names are the iterate project's site; other domains are the
+    // projects' own custom hostnames (garple.com, lispwoso.com, templestein.com), on iterate.app
     projectWildcard: {
       hostname: "iterate.com",
       project: "iterate",
@@ -172,12 +155,13 @@ export const osEnvs: Record<string, OsEnv> = {
         "os.iterate.com",
         "mcp.iterate.com",
         "dash.iterate.com",
+        "agents.iterate.com",
+        "notes.iterate.com",
         "k.iterate.com",
         "voice.iterate.com",
         "install.iterate.com",
       ],
     },
-    ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     // Not `os-prd-repos`: the legacy platform's namespace of that name (2026-05-18) is still bound
     // by its artifact viewer, cf-artifact-viewer-prd (artifacts.iterate.com).
@@ -210,7 +194,7 @@ export const dashEnvs = {
   },
 };
 
-/** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
+/** apps/agents — the agents page (README there); the notes app's shape, on a custom domain. */
 export const agentsEnvs = {
   // THE PARENT of agents's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's apps/os preview as its issuer. Nothing reads its data.
@@ -225,7 +209,8 @@ export const agentsEnvs = {
     dopplerConfig: "prd",
     workerName: "agents",
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
-    baseUrl: "https://agents.iterate.workers.dev",
+    // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
+    baseUrl: "https://agents.iterate.com",
   },
 };
 
@@ -243,9 +228,8 @@ export const notesEnvs = {
     dopplerConfig: "prd",
     workerName: "notes",
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
-    // Its own workers.dev subdomain — NOT a custom domain (iterate.com is the iterate project's
-    // apex, osEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
-    baseUrl: "https://notes.iterate.workers.dev",
+    // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
+    baseUrl: "https://notes.iterate.com",
   },
 };
 

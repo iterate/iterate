@@ -68,8 +68,11 @@
     // the landing page's pointer (control-plane.test.ts)
     "APP_CONFIG_URLS__DASH": "https://dash.test",
     "APP_CONFIG_URLS__INGRESS_ROUTING": "{\"type\":\"subdomains\",\"hostname\":\"projects.test\"}",
-    // one custom apex, for the consent test that binds a client on it to its project
-    "APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES": "{\"custom-apex.test\":\"custom-apex-project\"}",
+    // projects' own hostnames, on a SaaS zone whose Cloudflare API the tests fake
+    // (project-host-routing.test.ts); the consent test claims one directly (issuer-bootstrap.test.ts)
+    "APP_CONFIG_CUSTOM_HOSTNAMES__ZONE": "saas.test",
+    "APP_CONFIG_CUSTOM_HOSTNAMES__RESERVED_ZONES": "[\"control.test\",\"dash.test\",\"projects.test\",\"saas.test\"]",
+    "APP_CONFIG_CLOUDFLARE_API_TOKEN": "cloudflare-test-token",
     // the password signs in through the page's real posts; the mailed code is tested with a fake
     // mailbox handed to password-and-code-sign-in.ts directly
     "APP_CONFIG_LOGIN__PASSWORD": "test-password",

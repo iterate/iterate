@@ -67,25 +67,23 @@ export function projectAddressOf(
   return { app, project, basePath: `/projects/${project}/${app}` };
 }
 
-/** A CUSTOM HOSTNAME — one of a deployment's own that IS a project's apex (apps/os
- *  `urls.temporaryCustomHostnames`, `{ "iterate.com": "iterate" }`): the apex shape, `app: null`, so the
- *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for a
- *  hostname the map does not name, unless the optional first-level wildcard names a project.
- *  The map's spelling, case and a trailing dot are forgiven. Pure. */
-export function customProjectHostOf(
+/** A PROJECT WILDCARD — an owned zone served as one project's apex (apps/os
+ *  `urls.projectWildcard`, `{ hostname: "iterate.com", project: "iterate" }`): the zone's apex and
+ *  every first-level name under it but the excluded ones, in the apex shape, `app: null`, so the
+ *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for
+ *  anything else. Case and a trailing dot are forgiven. Pure. */
+export function projectWildcardHostOf(
   hostname: string,
-  hostnames: Record<string, string>,
-  wildcard?: { hostname: string; project: string; excludedHostnames?: string[] },
+  wildcard: { hostname: string; project: string; excludedHostnames?: string[] } | undefined,
 ): { app: null; project: string } | null {
+  if (!wildcard) return null;
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
-  const exact = hostnames[normalized];
-  if (exact) return { app: null, project: exact };
-  if (wildcard?.excludedHostnames?.includes(normalized)) return null;
-  const suffix = wildcard && `.${wildcard.hostname}`;
-  const wildcardMatch =
-    suffix && normalized.endsWith(suffix) ? normalized.slice(0, -suffix.length) : null;
-  const project = wildcardMatch && !wildcardMatch.includes(".") ? wildcard?.project : null;
-  return project ? { app: null, project } : null;
+  if (wildcard.excludedHostnames?.includes(normalized)) return null;
+  const suffix = `.${wildcard.hostname}`;
+  const label = normalized.endsWith(suffix) ? normalized.slice(0, -suffix.length) : null;
+  return normalized === wildcard.hostname || (label && !label.includes("."))
+    ? { app: null, project: wildcard.project }
+    : null;
 }
 
 /** The URL of `app` (null ⇒ the apex, the config worker) in `project` under `routing`, at `path`

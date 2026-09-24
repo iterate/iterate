@@ -69,7 +69,7 @@ test("the Notes app works through a project config worker, and its session there
     readFileSync(resolve(import.meta.dirname, "../../apps/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   )
-    .code.replace('"notes.iterate.workers.dev"', JSON.stringify(notes.host))
+    .code.replace('"notes.iterate.com"', JSON.stringify(notes.host))
     .replace(
       'url.protocol = "https:"',
       `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,

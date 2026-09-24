@@ -60,5 +60,5 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: Notes
-          PUBLIC_URL: https://notes.iterate.workers.dev
+          PUBLIC_URL: https://notes.iterate.com
         run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

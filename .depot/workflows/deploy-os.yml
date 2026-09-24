@@ -83,8 +83,8 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy --env prd
       # READ-ONLY, right after the deploy (scripts/ci/prd-post-deploy-check.ts): once `/version` names
-      # the new version (≤ 60 s), one GET of each production project host (envs.ts
-      # osEnvs.prd.temporaryCustomHostnames), four tries 10 s apart while it looks down. A host still
+      # the new version (≤ 60 s), one GET of each production project host
+      # (scripts/ci/prd-post-deploy-check.ts PRD_PROJECT_HOST_URLS), four tries 10 s apart while it looks down. A host still
       # answering 421 or 5xx, or not at all, or a `/version` that never moves, pages #error-pulse and
       # fails this workflow. Faults on the new version are the prd fault alarm's (prd-fault-alarm.yml,
       # every 15 minutes).

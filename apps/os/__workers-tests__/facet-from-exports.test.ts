@@ -40,7 +40,14 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
     classKind: "DurableObjectClass",
     snapshot: {
       offset: expect.any(Number),
-      state: { creation: null, repos: {}, workspaces: {}, secrets: {}, configRepoTip: null },
+      state: {
+        creation: null,
+        repos: {},
+        workspaces: {},
+        secrets: {},
+        configRepoTip: null,
+        hostnames: {},
+      },
     },
   });
 });

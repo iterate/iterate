@@ -1,6 +1,6 @@
 // src/project/durable-object.ts — THE PROJECT: the `project` facet on the context at `/`, THE CATALOG
-// HOST. It hosts the project processor (processor.ts: the project's own creation saga and the catalog
-// folded from the certificates cross-posted to `/`), and THE COLLECTIONS hang off it as methods —
+// HOST. It hosts the project processor (processor.ts: the project's own creation saga, its custom
+// hostnames, and the catalog folded from the certificates cross-posted to `/`), and THE COLLECTIONS hang off it as methods —
 // `repos`, `workspaces` (collection.ts, one instance per entity): each reads the catalog
 // from this facet's `snapshot()` for `list()` and runs the entity's creation saga for `create(path)`,
 // reached as `itx.repos.list()` / `itx.repos.create(path)` through the library (library.ts, one
@@ -9,20 +9,46 @@
 // and by the first `list()`, which hosts the facet without a row.
 import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
+import { DurableObjectNameCodec } from "../context/paths.ts";
+import type { ControlPlaneDurableObject } from "../control-plane/durable-object.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
-import { ProjectProcessor } from "./processor.ts";
+import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
+import { ProjectProcessor, type ProjectHostnames } from "./processor.ts";
 
 export class ProjectDurableObject extends StreamProcessorDurableObject<
   ProjectState,
-  { ITX?: ItxEntrypointService },
+  {
+    ITX?: ItxEntrypointService;
+    CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject>;
+  } & AppConfigEnv,
   ItxEntrypointScope
 > {
   /** The processor's reads, and the two collections `itx.repos` / `itx.workspaces` reach (library.ts). */
   static override publicMethods = [...super.publicMethods, "repos", "workspaces"];
 
-  processor = new ProjectProcessor((call) => this.withItx(call), downloadPublicGithubTemplate);
+  processor = new ProjectProcessor(
+    (call) => this.withItx(call),
+    downloadPublicGithubTemplate,
+    () => this.#hostnames(),
+  );
+
+  /** The custom-hostname effect's reach, for THIS project — built when a request runs, never at
+   *  construction: its claims in the control plane's hostname table, and Cloudflare under the
+   *  deployment's `customHostnames` config. */
+  #hostnames(): ProjectHostnames {
+    const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    const controlPlane = () => this.env.CONTROL_PLANE.getByName("global");
+    const config = appConfigOf(this.env);
+    return {
+      reservedZones: config.customHostnames?.reservedZones ?? [],
+      claim: (hostname) => controlPlane().claimHostname(projectId, hostname),
+      release: (hostname) => controlPlane().releaseHostname(projectId, hostname),
+      provider: cloudflareCustomHostnameProvider(config),
+    };
+  }
 
   // THE COLLECTIONS are METHODS, not fields: Workers RPC reaches only what the PROTOTYPE declares,
   // and an RpcTarget a METHOD returns is the shape it hands back as a stub — so the library spells

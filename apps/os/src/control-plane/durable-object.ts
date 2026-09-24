@@ -53,6 +53,9 @@ export class ControlPlaneDurableObject extends DurableObject {
   accessibleTo(userId: string) {
     return this.#db.accessibleTo(userId);
   }
+  projectByHostname(hostname: string) {
+    return this.#db.projectByHostname(hostname);
+  }
   invitation(tokenHash: string, userId: string | null) {
     return this.#db.invitation(tokenHash, userId, Date.now());
   }
@@ -102,6 +105,13 @@ export class ControlPlaneDurableObject extends DurableObject {
     input: { project: string; organizationId?: string; restoreProjectId?: string },
   ) {
     return this.#write(() => this.#db.createProject(caller, input));
+  }
+
+  claimHostname(projectId: string, hostname: string) {
+    this.#write(() => this.#db.claimHostname(projectId, hostname));
+  }
+  releaseHostname(projectId: string, hostname: string) {
+    this.#write(() => this.#db.releaseHostname(projectId, hostname));
   }
 
   oauthGrant(key: string) {
