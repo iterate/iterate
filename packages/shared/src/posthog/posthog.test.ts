@@ -36,7 +36,7 @@ describe("proxyPosthogRequest", () => {
   );
 
   it("forwards every other SDK request to ingest without application cookies", async () => {
-    const upstream = vi.fn(async () => new Response(null, { status: 204 }));
+    const upstream = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", upstream);
     const request = new Request("https://os.iterate.com/e/s/?compression=gzip-js", {
       method: "POST",
@@ -55,12 +55,12 @@ describe("proxyPosthogRequest", () => {
 
     const [url, init] = upstream.mock.calls[0]!;
     expect(url).toBe("https://eu.i.posthog.com/s/?compression=gzip-js");
-    const headers = new Headers(init.headers);
+    const headers = new Headers(init!.headers);
     expect(headers.get("cookie")).toBeNull();
     expect(headers.get("origin")).toBe("https://os.iterate.com");
     expect(headers.get("referer")).toBe("https://os.iterate.com/projects/test?token=secret");
     expect(headers.get("host")).toBe("eu.i.posthog.com");
     expect(headers.get("x-forwarded-for")).toBe("203.0.113.7");
-    expect(await new Response(init.body).text()).toBe('{"snapshot":true}');
+    expect(await new Response(init!.body).text()).toBe('{"snapshot":true}');
   });
 });
