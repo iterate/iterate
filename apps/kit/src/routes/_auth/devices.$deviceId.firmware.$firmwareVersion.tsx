@@ -9,6 +9,7 @@ import {
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
+import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import {
   Select,
   SelectContent,
@@ -253,7 +254,7 @@ function KitPage() {
               Wi-Fi password
             </FieldLabel>
             <FieldContent>
-              <Input
+              <SecretInput
                 id="wifi-password"
                 name="wifi-password"
                 type="password"
@@ -324,7 +325,7 @@ function KitPage() {
             <Field className={horizontalFieldClassName}>
               <FieldLabel htmlFor="openai-key">OpenAI API key</FieldLabel>
               <FieldContent>
-                <Input
+                <SecretInput
                   id="openai-key"
                   type="password"
                   autoComplete="new-password"

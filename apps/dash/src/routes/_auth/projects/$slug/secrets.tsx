@@ -33,6 +33,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
+import { SecretTextarea } from "@iterate-com/ui/components/not-recorded";
 import {
   Sheet,
   SheetClose,
@@ -51,7 +52,6 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { Textarea } from "@iterate-com/ui/components/textarea";
 
 export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   // the sheet's state is the URL: `?new=1` sets a new secret, `?update=<name>` updates that one
@@ -465,13 +465,11 @@ function SecretForm({
         )}
         <Field>
           <FieldLabel htmlFor="secret-value">{updating ? "New value" : "Value"}</FieldLabel>
-          <Textarea
+          <SecretTextarea
             id="secret-value"
             value={value}
             onChange={(event) => setValue(event.target.value)}
             placeholder="sk_live_…"
-            autoComplete="off"
-            spellCheck={false}
             required
             ref={valueField}
             rows={4}
