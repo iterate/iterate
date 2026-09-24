@@ -322,6 +322,8 @@ jobs:
         run: >-
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
+      # A re-run of this job alone keeps the execution, so the name, of the run it traces; without
+      # overwrite the upload fails and the report statuses are never posted.
       - name: Upload the CI trace
         uses: actions/upload-artifact@v4
         with:
@@ -329,6 +331,7 @@ jobs:
           path: ci-trace.ignoreme/trace.*
           if-no-files-found: error
           retention-days: 30
+          overwrite: true
       # Finds both artifacts in Depot by name, so it runs after the upload.
       - name: Post the report statuses
         env:

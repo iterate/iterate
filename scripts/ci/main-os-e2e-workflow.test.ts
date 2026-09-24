@@ -102,6 +102,12 @@ test("main's trace job collects, uploads and posts exactly as a PR preview's doe
   expect(afterCheckout(main)).toEqual(afterCheckout(preview));
 });
 
+// A re-run of the trace job alone traces the same execution, so it uploads under the same name.
+test("a re-run of the trace job replaces its trace upload and still posts the statuses", () => {
+  const upload = main.jobs.trace?.steps?.find((step) => step.name === "Upload the CI trace");
+  expect(upload?.with).toMatchObject({ overwrite: true });
+});
+
 function readWorkflow(file: string): unknown {
   return parseYaml(
     readFileSync(resolve(import.meta.dirname, "../../.depot/workflows", file), "utf8"),
