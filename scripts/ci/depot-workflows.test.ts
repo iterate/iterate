@@ -20,6 +20,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  env?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on": {
     image?: string;
@@ -485,6 +486,50 @@ describe("Depot validation capacity", () => {
     // Any one of these means the job installs its own toolchain instead of using the baked one.
     const installSteps = ["Setup pnpm", "Setup Node", "Install Doppler CLI"];
     expect(job.steps?.filter((step) => installSteps.includes(step.name || ""))).toEqual([]);
+  });
+
+  // Reuse of the baked node_modules hangs on all three: the image's preinstalled workspace, the
+  // store it was baked with (dependencies.mjs fingerprints every pnpm_config_*), and the reconcile
+  // command itself. A job missing one pays a full install on every run.
+  test("every job that reconciles the baked workspace has the image, the store and the checkout it needs", () => {
+    const reconcilers = readdirSync(resolve(repoRoot, ".depot/workflows"))
+      .filter((file) => file.endsWith(".yml"))
+      .flatMap((file) => {
+        const workflow = loadWorkflow(`.depot/workflows/${file}`);
+        return Object.entries(workflow.jobs).flatMap(([jobId, job]) =>
+          job.steps?.some((step) => step.run === "node scripts/depot-ci/dependencies.mjs install")
+            ? [{ file, jobId, workflow, job }]
+            : [],
+        );
+      });
+    expect(reconcilers.length).toBeGreaterThan(0);
+    for (const { file, jobId, workflow, job } of reconcilers) {
+      expect({ file, jobId, image: job["runs-on"] }).toMatchObject({
+        image: expect.objectContaining({ image: bakedImage }),
+      });
+      expect({ file, jobId, env: { ...workflow.env, ...job.env } }).toMatchObject({
+        env: expect.objectContaining({ PNPM_CONFIG_STORE_DIR: "/home/runner/.pnpm-store" }),
+      });
+      const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
+      expect({ file, jobId, checkout: checkout?.with }).toMatchObject({
+        checkout: expect.objectContaining({ clean: false }),
+      });
+    }
+  });
+
+  test("a step named for the baked reconcile runs it", () => {
+    const misnamed = readdirSync(resolve(repoRoot, ".depot/workflows"))
+      .filter((file) => file.endsWith(".yml"))
+      .flatMap((file) =>
+        Object.values(loadWorkflow(`.depot/workflows/${file}`).jobs).flatMap((job) =>
+          (job.steps || []).filter(
+            (step) =>
+              step.name === "Reconcile dependencies (baked)" &&
+              step.run !== "node scripts/depot-ci/dependencies.mjs install",
+          ),
+        ),
+      );
+    expect(misnamed).toEqual([]);
   });
 
   // Each runs the baked image's pnpm install, which the 2x8 client deploys run too (Deploy Dash's

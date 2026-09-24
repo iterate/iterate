@@ -22,7 +22,7 @@ jobs:
           clean: false
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Post LOC report
         run: pnpm tsx scripts/ci/loc-report.ts

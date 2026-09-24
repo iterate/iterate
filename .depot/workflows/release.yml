@@ -100,7 +100,7 @@ jobs:
 
           echo "echoing changes for debugging:"
           cat changelog.md
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         if: steps.check_changes.outputs.commits != '0'
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Create release

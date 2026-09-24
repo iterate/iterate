@@ -98,10 +98,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # THE STORE THE IMAGE WAS BAKED WITH. scripts/depot-ci/dependencies.mjs hashes every pnpm_config_*
-  # variable into its fingerprint (the store dir decides where node_modules links point), and the bake
-  # job sets this one — so a workflow without it computes a different fingerprint on identical sources
-  # and never reuses the baked node_modules (every os-next job, 2026-09-22, ~55 s of paging each).
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
   PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull-request-number }}
   ACTION: ${{ inputs.action || 'deploy' }}

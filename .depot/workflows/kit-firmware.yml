@@ -186,7 +186,7 @@ jobs:
     timeout-minutes: 10
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # the store the image was baked with, so the baked node_modules are reused (docs/depot-ci.md)
+      # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
       PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
     steps:
       - name: Checkout code

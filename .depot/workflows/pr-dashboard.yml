@@ -28,7 +28,7 @@ jobs:
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Reconcile dependencies (baked)
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Notify PR update
         run: pnpm tsx scripts/ci/notify.ts pr-update

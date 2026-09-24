@@ -64,7 +64,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The store the image was baked with (preview-os-next.yml says why).
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
