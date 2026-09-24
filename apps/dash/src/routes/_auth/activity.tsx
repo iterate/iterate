@@ -1,11 +1,11 @@
 // /activity — the person's own record: everything that happened on their account context
 // (`session.user`, the global `/users/<id>`): sign-ins, tokens minted and ended, consents approved —
 // the context view over that log, with the account fold enabled on first visit.
-import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { AllowAccount } from "../../components/allow-account.tsx";
-import { ContextActivity, type ActivityItx } from "../../components/context-activity.tsx";
+import { ContextActivity } from "../../components/context-activity.tsx";
+import { useContextStub } from "../../lib/context-stub.ts";
 
 export const Route = createFileRoute("/_auth/activity")({
   // the view's every choice — mode, filter, the inspected event, the open sheet — is this URL
@@ -19,28 +19,10 @@ function ActivityPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const canReadAccount = info.scopes.includes("account");
-  const [user, setUser] = useState<ActivityItx>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    if (!canReadAccount) return;
-    let disposed = false;
-    let held: Awaited<typeof api.user> | undefined;
-    // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
-    // for an updater and CALL it — so it is wrapped in a thunk.
-    Promise.resolve(api.user).then(
-      (stub) => {
-        if (disposed) return stub[Symbol.dispose]();
-        held = stub;
-        setUser(() => stub);
-      },
-      (caught: unknown) =>
-        !disposed && setError(caught instanceof Error ? caught.message : String(caught)),
-    );
-    return () => {
-      disposed = true;
-      held?.[Symbol.dispose]();
-    };
-  }, [api, canReadAccount]);
+  const user = useContextStub(canReadAccount ? () => Promise.resolve(api.user) : null, [
+    api,
+    canReadAccount,
+  ]);
   if (!canReadAccount)
     return (
       <AllowAccount
@@ -59,9 +41,9 @@ function ActivityPage() {
           what the account fold made of it.
         </p>
       </div>
-      {error ? (
+      {user.error ? (
         <p role="alert" data-type="error" className="text-sm text-destructive">
-          {error}
+          {user.error}
         </p>
       ) : (
         <ContextActivity
@@ -69,7 +51,7 @@ function ActivityPage() {
           onStateChange={(patch) =>
             void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true })
           }
-          itx={user}
+          itx={user.stub}
           title={<span className="font-mono text-xs">/users/{info.principal.actor}</span>}
           ensureProcessor="account"
         />

@@ -7,18 +7,15 @@ import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { ArrowUpRight, CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
-import { useLiveState } from "iterate/next/react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useOrganizationTree } from "../../../../components/organization-tree.tsx";
+import { useContextStub, useFacetLiveState } from "../../../../lib/context-stub.ts";
 import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
-
-/** The project's root context as the page holds it: `api.projects.get(id)`, a capnweb stub. */
-type ProjectContext = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 
 /** The project facet's live state, the one field this page reads: where the project's own creation
  *  stands, as the offset of the event that says so (null until `project/create-requested` lands). */
@@ -34,32 +31,6 @@ export const Route = createFileRoute("/_auth/projects/$slug/")({
   component: ProjectOverview,
 });
 
-/** The project's root context, held for the page's life and disposed on unmount. */
-function useProjectContext(api: AuthenticatedApp["api"], projectId: string) {
-  const [context, setContext] = useState<ProjectContext>();
-  useEffect(() => {
-    let disposed = false;
-    let held: ProjectContext | undefined;
-    (async () => {
-      const stub = await api.projects.get(projectId);
-      // an unmount mid-await comes before the handle the await returns
-      if (disposed) {
-        stub[Symbol.dispose]();
-        return;
-      }
-      held = stub;
-      // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
-      // for an updater and CALL it (an empty method call the server refuses).
-      setContext(() => stub);
-    })().catch(() => undefined); // the route resolved the project already; a refusal leaves the plain overview
-    return () => {
-      disposed = true;
-      held?.[Symbol.dispose]();
-    };
-  }, [api, projectId]);
-  return context;
-}
-
 function ProjectOverview() {
   const { project } = Route.useRouteContext();
   const { api, info } = shell.useRouteContext();
@@ -68,14 +39,10 @@ function ProjectOverview() {
     (candidate) => candidate.id === project.orgId,
   );
   const host = projectHostOf(info, project.slug);
-  const context = useProjectContext(api, project.id);
-  const live = useLiveState<unknown>(context, {
-    key: "project",
-    door: async () =>
-      z
-        .object({ rev: z.number(), state: z.unknown() })
-        .parse(await context!.invoke("itx.facets.get('project').liveSnapshot()")),
-  });
+  // the project's root context, held for the page's life; the route resolved the project already,
+  // so a refusal leaves the plain overview
+  const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
+  const live = useFacetLiveState(context, "project");
   const parsed = ProjectLive.safeParse(live.value).data;
   const creation = parsed?.creation ?? null;
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
@@ -166,6 +133,9 @@ function ProjectCreationProgress({ configRepoSeeded }: { configRepoSeeded: boole
     </section>
   );
 }
+
+/** The project's root context as the page holds it: `api.projects.get(id)`, a capnweb stub. */
+type ProjectContext = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 
 /** The failure the project processor reported: the state keeps the OFFSET of `project/create-failed`
  *  on `/`, the event itself the words — read here, one row. */
