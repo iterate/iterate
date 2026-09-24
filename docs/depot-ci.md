@@ -511,7 +511,7 @@ or alone on an `action=e2e` dispatch, then runs the Vitest e2e suite and the
 Playwright specs concurrently against the live preview (`runE2e` in
 `apps/os/scripts/preview.ts`). Job dependencies replace milestone signalling:
 there is no commit status to wait for, and a red e2e can run again without a
-redeploy (dispatch `action=e2e`, or retry the job), because the preview persists
+redeploy (dispatch `action=e2e`, or retry the e2e job and then the trace job), because the preview persists
 until the PR closes.
 
 ## Interactive trace reports
@@ -525,7 +525,11 @@ open the report in the browser:
 - **Playwright report**: the e2e job's Playwright HTML report, when the suite
   ran.
 
-A PR's statuses are on its head commit, main's on the pushed commit. See
+A PR's statuses are on its head commit, main's on the pushed commit. Retrying
+one job (`depot ci retry <run-id> --job <job-id>`) re-runs that job alone, so
+after retrying e2e, retry the run's trace job too: it re-collects the trace and
+re-posts both statuses at the new uploads. A dispatch with `action=e2e` runs
+its own trace job. See
 [CI traces](./ci-traces.md) for the timing model, the viewer, replay commands
 and OTLP JSON export.
 
