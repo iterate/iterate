@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./chunked-text": "./src/chunked-text.ts",
-    "./message": "./src/message.ts",
     "./agent-events": "./src/agent-events.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",

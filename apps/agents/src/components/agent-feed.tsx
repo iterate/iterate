@@ -146,17 +146,6 @@ export function AgentFeedItemRow({
       // An os-next actor quiesces after a short idle and wakes on the next request, so wakes
       // are a fact of every turn, not a signal — the Events view lists them; the chat does not.
       return null;
-    case "processor-revived":
-    case "child-stream-created":
-      return (
-        <div className="flex items-center gap-3 py-3 text-xs text-muted-foreground">
-          <div className="h-px flex-1 bg-border/70" />
-          <span className="shrink-0 font-mono">
-            {item.kind === "processor-revived" ? "Processor revived" : `Created ${item.childPath}`}
-          </span>
-          <div className="h-px flex-1 bg-border/70" />
-        </div>
-      );
   }
 }
 
@@ -545,7 +534,7 @@ export function AgentLiveActivity({
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
   const doneSummary = summarizeAgentUiActivity(live, doneSteps);
-  const working = isAgentUiActivityWorking(live, undefined);
+  const working = isAgentUiActivityWorking(live);
   const activityExpanded = toggledIds.has(activityToggleId);
   const showStepRail =
     activityExpanded &&

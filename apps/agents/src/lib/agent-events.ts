@@ -9,12 +9,11 @@
 // the platform's strict schema (the missing ones follow from `failureKind`).
 import { z } from "zod";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
-import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import {
   formatAgentUiDuration,
   initialAgentUiState,
   reduceAgentUi,
-  reduceAgentUiRuntime,
+  settleAgentUiAtIdleBoundary,
   type AgentUiItem,
   type AgentUiState,
   type AgentUiStep,
@@ -120,8 +119,8 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
 }
 
 /** The whole feed from the log: every event in offset order through the shared reducer, then —
- *  when the agent facet reports itself idle and no step is still running — the turn boundary
- *  the runtime reports its transition, dated at the last fact. */
+ *  when the agent facet reports itself idle and no step is still running — the turn boundary,
+ *  dated at the last fact. */
 export function reduceAgentFeed(
   events: readonly Event[],
   idle: boolean,
@@ -135,11 +134,7 @@ export function reduceAgentFeed(
   }
   const last = events.at(-1);
   if (idle && last && state.live && !state.live.steps.some((step) => step.status === "running")) {
-    const reduced = reduceAgentUiRuntime(state, {
-      runtime: ZERO_AGENT_RUNTIME,
-      sinceOffset: last.offset,
-      since: last.createdAt,
-    });
+    const reduced = settleAgentUiAtIdleBoundary(state, last.createdAt);
     state = reduced.endState;
     items.push(...reduced.items);
   }

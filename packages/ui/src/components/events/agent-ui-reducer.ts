@@ -1,19 +1,12 @@
-import { appendText, sliceText, StreamText } from "@iterate-com/shared/chunked-text";
-import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
-import {
-  MessageMentions,
-  decodeMessageMentions,
-  hasConfigRepoFileMentions,
-  type Mention,
-} from "@iterate-com/shared/message";
+import { appendText, sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
+import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
-import { z } from "zod";
 import type { Event } from "./types.ts";
 
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
 // requests · 7.4 s") → assistant message, with quiet stream wake dividers.
-// Reduced from raw events: settled items, plus in-flight activity, streamed
-// text and presence.
+// Reduced from raw events: settled items, plus the in-flight activity and its
+// streamed text.
 
 export type AgentUiLlmStep = {
   kind: "llm";
@@ -192,26 +185,8 @@ export function formatAgentUiDuration(durationMs: number): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export function isAgentRuntimeVisiblyActive(runtime: AgentRuntime | undefined): boolean {
-  return (
-    runtime !== undefined &&
-    (runtime.triggers.runnable > 0 ||
-      runtime.llmRequests.scheduled > 0 ||
-      runtime.llmRequests.requested > 0 ||
-      runtime.llmRequests.started > 0 ||
-      runtime.runningScripts > 0)
-  );
-}
-
-export function isAgentUiActivityWorking(
-  activity: AgentUiActivity | null,
-  runtime?: AgentRuntime,
-): boolean {
-  return (
-    activity != null &&
-    (isAgentRuntimeVisiblyActive(runtime) ||
-      activity.steps.some((step) => step.status === "running"))
-  );
+export function isAgentUiActivityWorking(activity: AgentUiActivity | null): boolean {
+  return Boolean(activity?.steps.some((step) => step.status === "running"));
 }
 
 /** What the live activity is doing right now, from journal facts alone. */
@@ -310,19 +285,12 @@ export type AgentUiMessageVia = {
   sender?: string;
 };
 
-export type AgentUiMentionResolution = {
-  status: "resolved" | "missing" | "binary" | "read-failed";
-  truncated?: boolean;
-};
-
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
-  mentions?: Mention[];
-  mentionResolutions?: Record<string, AgentUiMentionResolution>;
   via?: AgentUiMessageVia;
 };
 
@@ -335,13 +303,6 @@ export type AgentUiStreamWakeItem = {
   count?: number;
 };
 
-export type AgentUiChildStreamItem = {
-  kind: "child-stream-created";
-  id: string;
-  childPath: string;
-  timestampMs: number;
-};
-
 export type AgentUiStreamPauseItem = {
   kind: "stream-paused" | "stream-resumed";
   id: string;
@@ -350,73 +311,11 @@ export type AgentUiStreamPauseItem = {
   timestampMs: number;
 };
 
-/** The platform revived a processor whose incarnation died owing background
- * work. Recovery is adoption — the open request survives and settles normally
- * — so this renders as a subtle marker, never as a cancelled/failed step. */
-export type AgentUiProcessorRevivedItem = {
-  kind: "processor-revived";
-  id: string;
-  processorSlug?: string;
-  /** Lifetime revival count for this processor, when the payload carries it. */
-  revivals?: number;
-  timestampMs: number;
-};
-
 export type AgentUiItem =
   | AgentUiMessageItem
   | AgentUiActivity
   | AgentUiStreamWakeItem
-  | AgentUiChildStreamItem
-  | AgentUiStreamPauseItem
-  | AgentUiProcessorRevivedItem;
-
-export type AgentUiProcessorAnnouncement = {
-  slug: string;
-  version: string;
-  description: string;
-  consumes: string[];
-  emits: string[];
-  ownedEvents: Array<{ type: string; description?: string }>;
-};
-
-export type AgentUiPresenceEntry = {
-  connectionKey: string;
-  connectionKind: "hosted" | "session";
-  connected: boolean;
-  description?: string;
-  user?: { id?: string; email: string; name?: string; picture?: string };
-  processor?: AgentUiProcessorAnnouncement;
-};
-
-/**
- * Token accounting folded from agent/token-usage-reported (the agent
- * processor's normalized per-request reports): lifetime totals plus the most
- * recent report, whose input+output against maxContextTokens is the context
- * fullness the next turn starts from. A compaction context clears the last
- * report — the conversation it measured is gone.
- */
-export type AgentUiTokenUsage = {
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCachedInputTokens: number;
-  totalReasoningOutputTokens: number;
-  lastReport: {
-    model: string;
-    maxContextTokens: number;
-    inputTokens: number;
-    outputTokens: number;
-  } | null;
-};
-
-export function initialAgentUiTokenUsage(): AgentUiTokenUsage {
-  return {
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    totalCachedInputTokens: 0,
-    totalReasoningOutputTokens: 0,
-    lastReport: null,
-  };
-}
+  | AgentUiStreamPauseItem;
 
 export type AgentUiState = {
   /** The running activity (streaming thinking/code), or null when no work is active. */
@@ -425,13 +324,7 @@ export type AgentUiState = {
   deferredAssistantMessages: AgentUiMessageItem[];
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
-  /** Rich user messages waiting for their durable mention-resolution event. */
-  pendingMentionMessages: Record<string, AgentUiMessageItem>;
   eventCount: number;
-  /** Connection roster reduced from connection-opened/connection-closed facts. */
-  presence: AgentUiPresenceEntry[];
-  /** Lifetime token totals + the latest report (context fullness). */
-  tokenUsage: AgentUiTokenUsage;
   /**
    * Settled activities whose script outcome was inferred at a boundary rather
    * than supplied by a durable completion. A late completion replaces the
@@ -450,229 +343,19 @@ export type AgentUiState = {
   paused: boolean;
 };
 
-const AgentUiLlmStepSchema = z
-  .strictObject({
-    kind: z.literal("llm"),
-    id: z.string(),
-    llmRequestOffset: z.number().int().nonnegative(),
-    status: z.enum(["running", "done"]),
-    model: z.string().optional(),
-    thinkingText: StreamText,
-    responseText: StreamText,
-    previewTruncated: z.boolean().optional(),
-    assistantEventOffset: z.number().int().positive().optional(),
-    interpreted: z.boolean().optional(),
-    inputTokens: z.number().int().nonnegative().optional(),
-    outputTokens: z.number().int().nonnegative().optional(),
-    durationMs: z.number().finite().nonnegative().optional(),
-    outcome: z.enum(["completed", "failed", "cancelled"]).optional(),
-    cancelReason: AgentLlmRequestCancelReason.optional(),
-    errorMessage: z.string().optional(),
-    startedAtMs: z.number().finite(),
-  })
-  .refine((step) => step.cancelReason == null || step.outcome === "cancelled", {
-    message: "cancelReason requires a cancelled outcome",
-    path: ["cancelReason"],
-  }) satisfies z.ZodType<AgentUiLlmStep>;
-
-const AgentUiCodeStepSchema = z.strictObject({
-  kind: z.literal("code"),
-  id: z.string(),
-  executionId: z.string(),
-  status: z.enum(["running", "done"]),
-  code: z.string(),
-  result: z.unknown().optional(),
-  errorMessage: z.string().optional(),
-  durationMs: z.number().finite().nonnegative().optional(),
-  success: z.boolean().optional(),
-  outcomeSource: z.enum(["durable", "inferred"]).optional(),
-  startedAtMs: z.number().finite(),
-  expiresAtMs: z.number().finite(),
-  activitySummary: z.string().optional(),
-}) satisfies z.ZodType<AgentUiCodeStep>;
-
-export const AgentUiActivitySchema = z.strictObject({
-  kind: z.literal("activity"),
-  id: z.string(),
-  status: z.enum(["running", "done"]),
-  steps: z.array(z.discriminatedUnion("kind", [AgentUiLlmStepSchema, AgentUiCodeStepSchema])),
-  startedAtMs: z.number().finite(),
-  endedAtMs: z.number().finite().optional(),
-}) satisfies z.ZodType<AgentUiActivity>;
-
-const AgentUiFileAttachmentSchema = z.strictObject({
-  contentType: z.string(),
-  filename: z.string(),
-  path: z.string(),
-  size: z.number().finite().nonnegative(),
-  url: z.string(),
-}) satisfies z.ZodType<AgentUiFileAttachment>;
-
-const AgentUiMessageViaSchema = z.strictObject({
-  service: z.enum(["slack", "telegram", "agent", "email", "github"]),
-  sender: z.string().optional(),
-}) satisfies z.ZodType<AgentUiMessageVia>;
-
-const AgentUiMentionResolutionSchema = z.strictObject({
-  status: z.enum(["resolved", "missing", "binary", "read-failed"]),
-  truncated: z.boolean().optional(),
-}) satisfies z.ZodType<AgentUiMentionResolution>;
-
-const AgentUiMessageItemSchema = z.strictObject({
-  kind: z.enum(["user", "assistant"]),
-  id: z.string(),
-  text: z.string(),
-  timestampMs: z.number().finite(),
-  files: z.array(AgentUiFileAttachmentSchema).optional(),
-  mentions: MessageMentions.optional(),
-  mentionResolutions: z.record(z.string(), AgentUiMentionResolutionSchema).optional(),
-  via: AgentUiMessageViaSchema.optional(),
-}) satisfies z.ZodType<AgentUiMessageItem>;
-
-/** The server-published presentation contract shared by all feed renderers. */
-export const AgentUiItemSchema = z.discriminatedUnion("kind", [
-  AgentUiMessageItemSchema,
-  AgentUiActivitySchema,
-  z.strictObject({
-    kind: z.literal("stream-woken"),
-    id: z.string(),
-    text: z.string(),
-    timestampMs: z.number().finite(),
-    count: z.number().int().positive().optional(),
-  }),
-  z.strictObject({
-    kind: z.literal("child-stream-created"),
-    id: z.string(),
-    childPath: z.string(),
-    timestampMs: z.number().finite(),
-  }),
-  z.strictObject({
-    kind: z.enum(["stream-paused", "stream-resumed"]),
-    id: z.string(),
-    text: z.string(),
-    reason: z.string().optional(),
-    timestampMs: z.number().finite(),
-  }),
-  z.strictObject({
-    kind: z.literal("processor-revived"),
-    id: z.string(),
-    processorSlug: z.string().optional(),
-    revivals: z.number().int().nonnegative().optional(),
-    timestampMs: z.number().finite(),
-  }),
-]) satisfies z.ZodType<AgentUiItem>;
-
-const AgentMentionResolutionEvent = z.object({
-  sourceOffset: z.number().int().nonnegative(),
-  outcomes: z.array(
-    z.object({
-      status: z.enum(["resolved", "missing", "binary", "read-failed"]),
-      mentionIds: z.array(z.string().min(1)),
-      truncated: z.boolean().optional(),
-    }),
-  ),
-});
-
-const AgentUiProcessorAnnouncementSchema = z.strictObject({
-  slug: z.string(),
-  version: z.string(),
-  description: z.string(),
-  consumes: z.array(z.string()),
-  emits: z.array(z.string()),
-  ownedEvents: z.array(z.strictObject({ type: z.string(), description: z.string().optional() })),
-}) satisfies z.ZodType<AgentUiProcessorAnnouncement>;
-
-const AgentUiPresenceEntrySchema = z.strictObject({
-  connectionKey: z.string(),
-  connectionKind: z.enum(["hosted", "session"]),
-  connected: z.boolean(),
-  description: z.string().optional(),
-  user: z
-    .strictObject({
-      id: z.string().optional(),
-      email: z.string(),
-      name: z.string().optional(),
-      picture: z.string().optional(),
-    })
-    .optional(),
-  processor: AgentUiProcessorAnnouncementSchema.optional(),
-}) satisfies z.ZodType<AgentUiPresenceEntry>;
-
-const AgentUiTokenUsageSchema = z.strictObject({
-  totalInputTokens: z.number().int().nonnegative(),
-  totalOutputTokens: z.number().int().nonnegative(),
-  totalCachedInputTokens: z.number().int().nonnegative(),
-  totalReasoningOutputTokens: z.number().int().nonnegative(),
-  lastReport: z
-    .strictObject({
-      model: z.string(),
-      maxContextTokens: z.number().int().nonnegative(),
-      inputTokens: z.number().int().nonnegative(),
-      outputTokens: z.number().int().nonnegative(),
-    })
-    .nullable(),
-}) satisfies z.ZodType<AgentUiTokenUsage>;
-
-export const AgentUiStateSchema = z
-  .strictObject({
-    live: AgentUiActivitySchema.nullable(),
-    deferredAssistantMessages: z.array(AgentUiMessageItemSchema),
-    queuedUserMessages: z.array(AgentUiMessageItemSchema),
-    pendingMentionMessages: z.record(z.string(), AgentUiMessageItemSchema),
-    eventCount: z.number().int().nonnegative(),
-    presence: z.array(AgentUiPresenceEntrySchema),
-    tokenUsage: AgentUiTokenUsageSchema,
-    provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
-    summaryActivity: z.string().nullable(),
-    summaryActivityUpdatedAtMs: z.number().finite().nullable(),
-    paused: z.boolean(),
-  })
-  .superRefine((state, context) => {
-    for (const [id, activity] of Object.entries(state.provisionalActivities)) {
-      if (id !== activity.id) {
-        context.addIssue({
-          code: "custom",
-          message: `provisional activity key ${JSON.stringify(id)} does not match its id`,
-          path: ["provisionalActivities", id, "id"],
-        });
-      }
-    }
-    for (const [sourceOffset, message] of Object.entries(state.pendingMentionMessages)) {
-      if (message.id !== `user-${sourceOffset}`) {
-        context.addIssue({
-          code: "custom",
-          message: `pending mention message ${JSON.stringify(sourceOffset)} does not match its id`,
-          path: ["pendingMentionMessages", sourceOffset, "id"],
-        });
-      }
-    }
-  }) satisfies z.ZodType<AgentUiState>;
-
-export function isAgentActivity(value: unknown): value is AgentUiActivity {
-  return AgentUiActivitySchema.safeParse(value).success;
-}
-
-export function isCurrentAgentUiState(value: unknown): value is AgentUiState {
-  return AgentUiStateSchema.safeParse(value).success;
-}
-
 /**
  * A durable completion normally follows its idle boundary immediately. Keep a
  * small correction window, but never let malformed streams with permanently
  * missing completions grow the reducer state without bound.
  */
 export const AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT = 32;
-export const AGENT_UI_PENDING_MENTION_LIMIT = 32;
 
 export function initialAgentUiState(): AgentUiState {
   return {
     live: null,
     deferredAssistantMessages: [],
     queuedUserMessages: [],
-    pendingMentionMessages: {},
     eventCount: 0,
-    presence: [],
-    tokenUsage: initialAgentUiTokenUsage(),
     provisionalActivities: {},
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
@@ -696,37 +379,18 @@ export function reduceAgentUi(
 }
 
 /**
- * Exact runtime state exposed by the individual Agent processor. This is a
- * live presentation boundary, deliberately not an event in the agent journal.
+ * Close the journal-reduced UI state at an idle boundary the agent reports
+ * outside the journal, dated `since`: overdue scripts expire, the live
+ * activity settles and deferred messages flush. Callers render the returned
+ * items as a transient tail; the reduction itself stays journal facts only.
  */
-export type AgentUiRuntimeTransition = {
-  runtime: AgentRuntime;
-  sinceOffset: number;
-  since: string;
-};
-
-/**
- * Project the journal-reduced UI state through the Agent processor's current
- * runtime. Callers render the returned items as a transient tail; the browser
- * feed database remains a reduction of journal facts only.
- */
-export function reduceAgentUiRuntime(
+export function settleAgentUiAtIdleBoundary(
   start: AgentUiState,
-  transition: AgentUiRuntimeTransition,
+  since: string,
 ): { endState: AgentUiState; items: AgentUiItem[] } {
-  const boundaryAtMs = Date.parse(transition.since);
+  const boundaryAtMs = Date.parse(since);
   if (!Number.isFinite(boundaryAtMs)) {
     return { endState: start, items: [] };
-  }
-
-  if (isAgentRuntimeVisiblyActive(transition.runtime)) {
-    return {
-      endState: {
-        ...start,
-        live: ensureLive(start, transition.sinceOffset, boundaryAtMs),
-      },
-      items: [],
-    };
   }
 
   const items: AgentUiItem[] = [];
@@ -737,15 +401,10 @@ export function reduceAgentUiRuntime(
 
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
-const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_LLM_RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
-const STREAM_CONNECTION_OPENED = "events.iterate.com/stream/connection-opened";
-const STREAM_CONNECTION_CLOSED = "events.iterate.com/stream/connection-closed";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
-const STREAM_PROCESSOR_REVIVED = "events.iterate.com/stream/processor-revived";
-const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
 const STREAM_PAUSED = "events.iterate.com/stream/paused";
 const STREAM_RESUMED = "events.iterate.com/stream/resumed";
 const AGENT_PAUSED = "events.iterate.com/agent/paused";
@@ -778,37 +437,13 @@ function reduceAgentUiEvent(
       const role = readString(event, "role");
       const text = readString(event, "content");
       if (text == null) return state;
-      let contextState = state;
-      const compaction = readRecord(event, "compaction");
-      if (
-        typeof compaction?.replacesHistoryThrough === "number" &&
-        compaction.replacesHistoryThrough < event.offset &&
-        state.tokenUsage.lastReport !== null
-      ) {
-        contextState = {
-          ...state,
-          tokenUsage: { ...state.tokenUsage, lastReport: null },
-        };
-      }
       const actor = readRecord(event, "actor");
       const actorType = typeof actor?.type === "string" ? actor.type : undefined;
-      if (
-        role === "developer" &&
-        actorType === "integration" &&
-        actor?.name === "agent-mention-resolver"
-      ) {
-        const resolution = AgentMentionResolutionEvent.safeParse(
-          readPayloadRecord(event)?.mentionResolution,
-        );
-        return resolution.success
-          ? applyAgentMentionResolution(contextState, items, resolution.data)
-          : contextState;
-      }
 
       if (role === "assistant") {
         const llmRequestOffset = readLlmRequestOffset(event);
-        if (llmRequestOffset == null) return contextState;
-        return updateLlmStep(contextState, llmRequestOffset, (step) =>
+        if (llmRequestOffset == null) return state;
+        return updateLlmStep(state, llmRequestOffset, (step) =>
           step.status === "running"
             ? {
                 ...step,
@@ -818,24 +453,17 @@ function reduceAgentUiEvent(
             : step,
         );
       }
-      if (role === "system") return contextState;
+      if (role === "system") return state;
 
       const files = readFileAttachments(event);
       if (role === "user") {
-        const decodedMessage = decodeMessageMentions(text, readPayloadRecord(event)?.mentions);
-        const item: AgentUiMessageItem = {
+        return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text,
           ...(files.length === 0 ? {} : { files }),
-          ...(decodedMessage === null ? {} : { mentions: decodedMessage.mentions }),
           timestampMs,
-        };
-        const pendingState =
-          decodedMessage !== null && hasConfigRepoFileMentions(decodedMessage.mentions)
-            ? rememberPendingMentionMessage(contextState, event.offset, item)
-            : contextState;
-        return emitUserMessageItem(pendingState, items, item);
+        });
       }
       if (
         actorType === "agent" ||
@@ -845,7 +473,7 @@ function reduceAgentUiEvent(
         actorType === "github"
       ) {
         const rendersFromRawEvent = actorType === "slack" || actorType === "telegram";
-        if (rendersFromRawEvent && files.length === 0) return contextState;
+        if (rendersFromRawEvent && files.length === 0) return state;
         const senderValue =
           actorType === "agent"
             ? actor?.path
@@ -857,7 +485,7 @@ function reduceAgentUiEvent(
                   ? actor?.address
                   : actor?.login;
         const sender = typeof senderValue === "string" ? senderValue : undefined;
-        return emitUserMessageItem(contextState, items, {
+        return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text: rendersFromRawEvent ? "" : text,
@@ -866,7 +494,7 @@ function reduceAgentUiEvent(
           via: { service: actorType, ...(sender === undefined ? {} : { sender }) },
         });
       }
-      return contextState;
+      return state;
     }
 
     case "events.iterate.com/agent/web-message-sent": {
@@ -923,7 +551,7 @@ function reduceAgentUiEvent(
       let responseDelta = "";
       let thinkingDelta = "";
       for (const chunk of chunks) {
-        const deltas = extractCloudflareChunkDeltas(chunk);
+        const deltas = llmChunkDeltas(chunk);
         responseDelta += deltas.responseDelta;
         thinkingDelta += deltas.thinkingDelta;
       }
@@ -1005,7 +633,7 @@ function reduceAgentUiEvent(
       // A script extracted from an assistant response (`agent-output:<offset>`)
       // marks that response's llm step interpreted: the Script tab now carries
       // the code, so pretty rendering can fold the raw response away.
-      const extractedFromAssistantOffset = /^(?:agent-output|reply):(\d+)$/.exec(executionId);
+      const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
       const interpretedState =
         extractedFromAssistantOffset === null
           ? state
@@ -1055,8 +683,8 @@ function reduceAgentUiEvent(
       // A visible reply the script sent was deferred while its step ran (see
       // emitAssistantMessageItem). If this settle is the turn's last journal
       // fact — nothing running, no follow-up round — no later event exists to
-      // flush it, and the runtime-transition flush is a transient overlay on
-      // a lane that can lag or wedge independently. Journal facts alone must
+      // flush it, and the idle-boundary flush is a transient overlay driven
+      // by the agent's idle report, which can lag or wedge. Journal facts alone must
       // surface a sent message: settle the activity here and flush. A paused
       // loop is the same situation even with no deferred messages: the pause
       // fact already landed (possibly mid-request), no follow-up round is
@@ -1094,120 +722,12 @@ function reduceAgentUiEvent(
       return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
     }
 
-    case AGENT_TOKEN_USAGE_REPORTED: {
-      const model = readString(event, "model");
-      const maxContextTokens = readNumber(event, "maxContextTokens");
-      const inputTokens = readNumber(event, "inputTokens");
-      const outputTokens = readNumber(event, "outputTokens");
-      if (model == null || maxContextTokens == null || inputTokens == null || outputTokens == null)
-        return state;
-      const usage = state.tokenUsage;
-      return {
-        ...state,
-        tokenUsage: {
-          totalInputTokens: usage.totalInputTokens + inputTokens,
-          totalOutputTokens: usage.totalOutputTokens + outputTokens,
-          totalCachedInputTokens:
-            usage.totalCachedInputTokens + (readNumber(event, "cachedInputTokens") ?? 0),
-          totalReasoningOutputTokens:
-            usage.totalReasoningOutputTokens + (readNumber(event, "reasoningOutputTokens") ?? 0),
-          lastReport: { model, maxContextTokens, inputTokens, outputTokens },
-        },
-      };
-    }
-
-    case STREAM_CONNECTION_OPENED: {
-      const payload = readPayloadRecord(event);
-      if (payload == null) return state;
-      const connectionKey =
-        typeof payload.connectionKey === "string" ? payload.connectionKey : null;
-      if (connectionKey == null) return state;
-      const connectionKind = payload.kind === "hosted" ? "hosted" : "session";
-      const openedBy = isRecord(payload.openedBy) ? payload.openedBy : undefined;
-      const announcement = readProcessorAnnouncement(openedBy?.processor);
-      const openerUser = isRecord(openedBy?.user) ? openedBy.user : undefined;
-      const user =
-        typeof openerUser?.email === "string"
-          ? {
-              ...(typeof openerUser.id === "string" && { id: openerUser.id }),
-              email: openerUser.email,
-              ...(typeof openerUser.name === "string" && { name: openerUser.name }),
-              ...(typeof openerUser.picture === "string" && { picture: openerUser.picture }),
-            }
-          : undefined;
-      const entry: AgentUiPresenceEntry = {
-        connectionKey,
-        connectionKind,
-        connected: true,
-        ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
-        ...(user === undefined ? {} : { user }),
-        ...(announcement == null ? {} : { processor: announcement }),
-      };
-      const existingIndex = state.presence.findIndex(
-        (candidate) => candidate.connectionKey === connectionKey,
-      );
-      const presence =
-        existingIndex === -1
-          ? [...state.presence, entry]
-          : state.presence.map((candidate, index) => (index === existingIndex ? entry : candidate));
-      return { ...state, presence };
-    }
-
-    case STREAM_CONNECTION_CLOSED: {
-      const connectionKey = readString(event, "connectionKey");
-      if (connectionKey == null) return state;
-      return {
-        ...state,
-        presence: state.presence.map((entry) =>
-          entry.connectionKey === connectionKey ? { ...entry, connected: false } : entry,
-        ),
-      };
-    }
-
     case STREAM_WOKEN: {
-      // Every connection died with the previous stream incarnation; survivors
-      // re-dial and re-land as fresh connected facts.
-      const next = {
-        ...state,
-        presence: state.presence.map((entry) =>
-          entry.connected ? { ...entry, connected: false } : entry,
-        ),
-      };
-      if (isInitialStreamWake(event)) return next;
+      if (isInitialStreamWake(event)) return state;
       items.push({
         kind: "stream-woken",
         id: `stream-woken-${event.offset}`,
         text: STREAM_WAKE_LABEL,
-        timestampMs,
-      });
-      return next;
-    }
-
-    case STREAM_PROCESSOR_REVIVED: {
-      // A processor incarnation died owing background work and the platform
-      // revived it. The open request was ADOPTED and settles normally, so
-      // this is a subtle marker — never a cancelled or failed step.
-      const payload = readPayloadRecord(event);
-      const processorSlug =
-        typeof payload?.processorSlug === "string" ? payload.processorSlug : undefined;
-      const revivals = typeof payload?.revivals === "number" ? payload.revivals : undefined;
-      items.push({
-        kind: "processor-revived",
-        id: `processor-revived-${event.offset}`,
-        ...(processorSlug === undefined ? {} : { processorSlug }),
-        ...(revivals === undefined ? {} : { revivals }),
-        timestampMs,
-      });
-      return state;
-    }
-
-    case STREAM_CHILD_STREAM_CREATED: {
-      const childPath = readString(event, "childPath");
-      if (childPath == null) return state;
-      items.push({
-        kind: "child-stream-created",
-        id: `child-stream-created-${event.offset}`,
-        childPath,
         timestampMs,
       });
       return state;
@@ -1219,7 +739,7 @@ function reduceAgentUiEvent(
     // also a run boundary: no more work is coming, so an idle live activity
     // (e.g. mid-turn after a script returned a value — the "processing" gap)
     // settles from this journal fact alone instead of waiting on the
-    // runtime-transition overlay. A still-running step keeps the activity
+    // idle-boundary overlay. A still-running step keeps the activity
     // live: agent/paused is operator/script-appendable while a request is
     // open, and that request settles normally.
     case STREAM_PAUSED:
@@ -1274,7 +794,7 @@ function settleLiveIfIdle(
   endedAtMs: number,
   items: AgentUiItem[],
 ): AgentUiState {
-  if (isAgentUiActivityWorking(state.live, undefined)) return state;
+  if (isAgentUiActivityWorking(state.live)) return state;
   return settleLive(state, endedAtMs, items);
 }
 
@@ -1383,54 +903,6 @@ function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): Agent
   return flushQueuedUserMessages({ ...state, deferredAssistantMessages: [] }, items);
 }
 
-function rememberPendingMentionMessage(
-  state: AgentUiState,
-  sourceOffset: number,
-  item: AgentUiMessageItem,
-): AgentUiState {
-  const pendingMentionMessages = {
-    ...state.pendingMentionMessages,
-    [String(sourceOffset)]: item,
-  };
-  while (Object.keys(pendingMentionMessages).length > AGENT_UI_PENDING_MENTION_LIMIT) {
-    const oldestOffset = Object.keys(pendingMentionMessages)[0];
-    if (oldestOffset === undefined) break;
-    delete pendingMentionMessages[oldestOffset];
-  }
-  return { ...state, pendingMentionMessages };
-}
-
-function applyAgentMentionResolution(
-  state: AgentUiState,
-  items: AgentUiItem[],
-  resolution: z.infer<typeof AgentMentionResolutionEvent>,
-): AgentUiState {
-  const sourceOffset = String(resolution.sourceOffset);
-  const pending = state.pendingMentionMessages[sourceOffset];
-  if (pending === undefined) return state;
-
-  const mentionResolutions: Record<string, AgentUiMentionResolution> = {};
-  for (const outcome of resolution.outcomes) {
-    for (const mentionId of outcome.mentionIds) {
-      mentionResolutions[mentionId] = {
-        status: outcome.status,
-        ...(outcome.truncated === undefined ? {} : { truncated: outcome.truncated }),
-      };
-    }
-  }
-  const corrected = { ...pending, mentionResolutions };
-  const pendingMentionMessages = { ...state.pendingMentionMessages };
-  delete pendingMentionMessages[sourceOffset];
-  const queuedIndex = state.queuedUserMessages.findIndex((message) => message.id === pending.id);
-  if (queuedIndex !== -1) {
-    const queuedUserMessages = [...state.queuedUserMessages];
-    queuedUserMessages[queuedIndex] = corrected;
-    return { ...state, pendingMentionMessages, queuedUserMessages };
-  }
-  items.push(corrected);
-  return { ...state, pendingMentionMessages };
-}
-
 // A user message while steps are still running must not archive those steps
 // as finished — the agent is still working. Queue it for the next flush;
 // otherwise emit directly. Shared by plain user messages and file-attachment
@@ -1441,7 +913,7 @@ function emitUserMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live, undefined)) {
+  if (isAgentUiActivityWorking(settled.live)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
@@ -1460,7 +932,7 @@ function emitAssistantMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live, undefined)) {
+  if (isAgentUiActivityWorking(settled.live)) {
     return {
       ...settled,
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
@@ -1555,12 +1027,13 @@ function updateLlmStep(
 }
 
 /**
- * The response/thinking text deltas inside one streamed LLM chunk, across the
- * vendor dialects we receive (Workers AI, OpenAI chat completions, Anthropic).
- * The ONE place that knows chunk shapes: the live feed folds these into the
- * streaming tail.
+ * The response/thinking text deltas inside one streamed LLM chunk, in the
+ * shapes apps/agents/runtime/processor.ts puts into `llm-response-chunks`:
+ * OpenAI Responses API events for a partner model, and a `@cf/` Workers AI
+ * model's raw SSE events (`{ response }`, or `choices[].delta` from a model
+ * that speaks the OpenAI chat format).
  */
-export function extractCloudflareChunkDeltas(chunk: unknown): {
+function llmChunkDeltas(chunk: unknown): {
   responseDelta: string;
   thinkingDelta: string;
 } {
@@ -1586,13 +1059,6 @@ export function extractCloudflareChunkDeltas(chunk: unknown): {
     return {
       responseDelta: typeof delta?.content === "string" ? delta.content : "",
       thinkingDelta: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : "",
-    };
-  }
-  // Anthropic: { delta: { text, thinking } }
-  if (isRecord(chunk.delta)) {
-    return {
-      responseDelta: typeof chunk.delta.text === "string" ? chunk.delta.text : "",
-      thinkingDelta: typeof chunk.delta.thinking === "string" ? chunk.delta.thinking : "",
     };
   }
   return { responseDelta: "", thinkingDelta: "" };
@@ -1623,35 +1089,6 @@ function readUsageTokens(usage: unknown): { input?: number; output?: number } {
     ...(typeof usage.inputTokens === "number" && { input: usage.inputTokens }),
     ...(typeof usage.outputTokens === "number" && { output: usage.outputTokens }),
   };
-}
-
-function readProcessorAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
-  if (!isRecord(value)) return null;
-  const announcement = isRecord(value.announcement) ? value.announcement : value;
-  if (typeof announcement.slug !== "string" || typeof announcement.version !== "string")
-    return null;
-  return {
-    slug: announcement.slug,
-    version: announcement.version,
-    description: typeof announcement.description === "string" ? announcement.description : "",
-    consumes: readStringArray(announcement.consumes),
-    emits: readStringArray(announcement.emits),
-    ownedEvents: Array.isArray(announcement.ownedEvents)
-      ? announcement.ownedEvents
-          .filter((owned): owned is Record<string, unknown> => isRecord(owned))
-          .filter((owned) => typeof owned.type === "string")
-          .map((owned) => ({
-            type: owned.type as string,
-            ...(typeof owned.description === "string" && { description: owned.description }),
-          }))
-      : [],
-  };
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function readFileAttachments(event: Event): AgentUiFileAttachment[] {

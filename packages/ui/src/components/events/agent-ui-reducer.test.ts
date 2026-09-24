@@ -4,98 +4,18 @@
 // items and live active-work tail the agent feed renders.
 import { expect, test } from "vitest";
 import { appendText } from "@iterate-com/shared/chunked-text";
-import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   deriveAgentUiLiveStatus,
   initialAgentUiState,
   reduceAgentUi,
-  reduceAgentUiRuntime,
+  settleAgentUiAtIdleBoundary,
   summarizeAgentUiActivity,
   type AgentUiItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 const SCRIPT_EXPIRES_AT = Date.parse("2026-06-11T00:15:00.000Z");
-
-test("preserves valid linked mentions and falls back to plain text on mismatch", () => {
-  const mentions = [
-    {
-      id: "config-repo/AGENTS.md",
-      type: "repo-file",
-      repoPath: "/repos/config",
-      path: "AGENTS.md",
-    },
-  ];
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "user",
-        actor: { type: "user", origin: "web" },
-        content: "Read [@AGENTS.md](mention://config-repo/AGENTS.md)",
-        mentions,
-      },
-    },
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "user",
-        actor: { type: "user", origin: "web" },
-        content: "plain fallback",
-        mentions,
-      },
-    },
-  ]);
-
-  expect(state.items[0]).toMatchObject({ kind: "user", mentions });
-  expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
-  expect(state.items[1]).not.toHaveProperty("mentions");
-});
-
-test("projects durable mention outcomes onto their original occurrences", () => {
-  const mentions = [
-    {
-      id: "config-repo/AGENTS.md",
-      type: "repo-file",
-      repoPath: "/repos/config",
-      path: "AGENTS.md",
-    },
-  ];
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "user",
-        actor: { type: "user", origin: "web" },
-        content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
-        mentions,
-      },
-    },
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "developer",
-        actor: { type: "integration", name: "agent-mention-resolver" },
-        content: "resolution details",
-        mentionResolution: {
-          sourceOffset: 1,
-          outcomes: [{ status: "missing", mentionIds: ["config-repo/AGENTS.md"] }],
-        },
-      },
-    },
-  ]);
-
-  expect(state.items).toMatchObject([
-    { id: "user-1", mentions },
-    {
-      id: "user-1",
-      mentions,
-      mentionResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
-    },
-  ]);
-  expect(Object.keys(state.pendingMentionMessages)).toEqual([]);
-});
 
 test("streams thinking and response deltas into the live llm step", () => {
   const state = reduceAll([
@@ -641,7 +561,7 @@ test("keeps the live indicator while a running script emits chat messages", () =
     status: "running",
   });
 
-  const completed = projectRuntime(
+  const completed = settleAtIdle(
     reduceAll([
       ...countdownEvents,
       {
@@ -667,7 +587,7 @@ test("keeps the live indicator while a running script emits chat messages", () =
 // Regression: prod stream agents/web/2026-08-07t15-50-03-269z. The script
 // sent the visible reply (deferred while its code step ran), settled, and
 // the stream went quiet — the journal fold alone must emit the reply, not
-// hold it hostage until a runtime transition or some future event arrives.
+// hold it hostage until an idle boundary or some future event arrives.
 test("flushes a script-sent reply when its script settles and nothing else is running", () => {
   const state = reduceAll([
     {
@@ -762,105 +682,6 @@ test("accumulates agent llm-response-chunks deltas", () => {
   });
 });
 
-test("tracks open callback connections including processor announcements", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/stream/connection-opened",
-      payload: {
-        connectionKey: "agent:agent",
-        kind: "hosted",
-        openedBy: {
-          incarnationId: "i1",
-          processor: {
-            announcement: {
-              slug: "agent",
-              version: "0.1.0",
-              description: "Drives the LLM loop.",
-              consumes: ["a"],
-              emits: ["b"],
-              ownedEvents: [{ type: "events.iterate.com/agent/context-added" }],
-            },
-          },
-        },
-      },
-    },
-    {
-      type: "events.iterate.com/stream/connection-opened",
-      payload: {
-        connectionKey: "browser:tab-1",
-        kind: "session",
-        openedBy: {
-          description: "browser",
-          user: {
-            id: "usr_jonas",
-            email: "jonas@example.com",
-            name: "Jonas Temple",
-            picture: "https://example.com/jonas.png",
-          },
-        },
-      },
-    },
-    {
-      type: "events.iterate.com/stream/connection-closed",
-      payload: { connectionKey: "browser:tab-1", reason: "closed-by-owner" },
-    },
-  ]);
-
-  expect(state.presence).toHaveLength(2);
-  expect(state.presence[0]).toMatchObject({
-    connectionKey: "agent:agent",
-    connectionKind: "hosted",
-    connected: true,
-    processor: { slug: "agent", version: "0.1.0" },
-  });
-  expect(state.presence[1]).toMatchObject({
-    connectionKey: "browser:tab-1",
-    connectionKind: "session",
-    connected: false,
-    user: {
-      id: "usr_jonas",
-      email: "jonas@example.com",
-      name: "Jonas Temple",
-      picture: "https://example.com/jonas.png",
-    },
-  });
-});
-
-test("clears stale opener metadata when a connection key reopens", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/stream/connection-opened",
-      payload: {
-        connectionKey: "browser:tab-1",
-        kind: "session",
-        openedBy: {
-          description: "browser",
-          user: { email: "jonas@example.com", name: "Jonas Temple" },
-        },
-      },
-    },
-    {
-      type: "events.iterate.com/stream/connection-opened",
-      payload: {
-        connectionKey: "browser:tab-1",
-        kind: "session",
-        openedBy: { description: "browser" },
-      },
-    },
-  ]);
-
-  expect(state).toMatchObject({
-    presence: [
-      {
-        connectionKey: "browser:tab-1",
-        connectionKind: "session",
-        connected: true,
-        description: "browser",
-      },
-    ],
-  });
-});
-
 test("does not show the bootstrap stream wake in the agent feed", () => {
   const state = reduceAll([
     { type: "events.iterate.com/stream/created" },
@@ -870,14 +691,10 @@ test("does not show the bootstrap stream wake in the agent feed", () => {
   expect(state).toMatchObject({ items: [] });
 });
 
-test("shows later stream wakes in the agent feed and clears presence", () => {
+test("shows later stream wakes in the agent feed", () => {
   const state = reduceAll([
     { type: "events.iterate.com/stream/created" },
     { type: "events.iterate.com/stream/woken" },
-    {
-      type: "events.iterate.com/stream/connection-opened",
-      payload: { connectionKey: "agent:agent", kind: "hosted" },
-    },
     { type: "events.iterate.com/stream/woken" },
   ]);
 
@@ -885,13 +702,12 @@ test("shows later stream wakes in the agent feed and clears presence", () => {
     items: [
       {
         kind: "stream-woken",
-        id: "stream-woken-4",
+        id: "stream-woken-3",
         text: "Stream durable object woke",
-        timestampMs: Date.parse("2026-06-11T00:00:04.000Z"),
+        timestampMs: Date.parse("2026-06-11T00:00:03.000Z"),
       },
     ],
   });
-  expect(state.presence).toMatchObject([{ connectionKey: "agent:agent", connected: false }]);
 });
 
 test("a durable rebuild recovers the interrupted partial from the settled fact", () => {
@@ -921,69 +737,6 @@ test("a durable rebuild recovers the interrupted partial from the settled fact",
     outcome: "cancelled",
     cancelReason: "interrupted-by-user-input",
     responseText: "Let me check your cal",
-  });
-});
-
-test("shows a subtle processor-revived marker without disturbing a live activity", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "hi" },
-    },
-    {
-      type: "events.iterate.com/agent/llm-request-requested",
-      offset: 5,
-      payload: { model: "gpt-test", expiresAt: Date.parse("2026-06-11T00:10:00.000Z") },
-    },
-    // The incarnation died mid-turn; the platform revived the processor and
-    // the open request was ADOPTED — it settles normally afterwards.
-    {
-      type: "events.iterate.com/stream/processor-revived",
-      payload: { processorSlug: "agent", revivals: 2, version: "test" },
-    },
-    {
-      type: "events.iterate.com/agent/llm-request-settled",
-      payload: {
-        requestOffset: 5,
-        durationMs: 2100,
-        result: { status: "succeeded", text: "hi again" },
-      },
-    },
-  ]);
-
-  // The marker emitted in place; the adopted request still settled as one
-  // ordinary completed step — no cancelled/failed outcome from the crash.
-  expect(state.items).toContainEqual({
-    kind: "processor-revived",
-    id: "processor-revived-3",
-    processorSlug: "agent",
-    revivals: 2,
-    timestampMs: Date.parse("2026-06-11T00:00:03.000Z"),
-  });
-  expect(state.live?.steps[0]).toMatchObject({
-    kind: "llm",
-    status: "done",
-    outcome: "completed",
-  });
-});
-
-test("shows child stream creation events in the agent feed", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/stream/child-stream-created",
-      payload: { childPath: "/agents/test/child" },
-    },
-  ]);
-
-  expect(state).toMatchObject({
-    items: [
-      {
-        kind: "child-stream-created",
-        id: "child-stream-created-1",
-        childPath: "/agents/test/child",
-        timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
-      },
-    ],
   });
 });
 
@@ -1054,7 +807,7 @@ test("shows agent pause and resume (the turn-loop breaker) as the same marker ro
 });
 
 test("settles a completed LLM request at run-level idle even without an assistant message", () => {
-  const state = projectRuntime(
+  const state = settleAtIdle(
     reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -1083,7 +836,7 @@ test("settles a completed LLM request at run-level idle even without an assistan
 });
 
 test("makes missing durable completions explicit when run-level idle closes work", () => {
-  const state = projectRuntime(
+  const state = settleAtIdle(
     reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -1130,8 +883,8 @@ test("emits a same-id correction when a durable script settlement arrives after 
       expiresAt: SCRIPT_EXPIRES_AT,
     },
   };
-  const provisional = projectRuntime(reduceAll([requested]), 10).items.at(-1);
-  const corrected = projectRuntime(
+  const provisional = settleAtIdle(reduceAll([requested]), 10).items.at(-1);
+  const corrected = settleAtIdle(
     reduceAll([
       requested,
       {
@@ -1189,7 +942,7 @@ test("projects several unsettled scripts as one provisional activity", () => {
       },
     },
   ];
-  const state = projectRuntime(
+  const state = settleAtIdle(
     reduceAll([
       ...requestedEvents,
       {
@@ -1212,7 +965,7 @@ test("projects several unsettled scripts as one provisional activity", () => {
   });
 });
 
-test("treats live state as authoritative when journal projection is newer", () => {
+test("the reported idle boundary settles the activity even when the journal fold is newer", () => {
   const state = reduceAll([
     {
       type: "events.iterate.com/agent/llm-request-requested",
@@ -1220,7 +973,7 @@ test("treats live state as authoritative when journal projection is newer", () =
       payload: { model: "gpt-test" },
     },
   ]);
-  const projected = projectRuntime(state, 11);
+  const projected = settleAtIdle(state, 11);
 
   expect(projected.live).toBeNull();
   expect(projected.items).toMatchObject([
@@ -1228,7 +981,7 @@ test("treats live state as authoritative when journal projection is newer", () =
   ]);
 });
 
-test("settles activity from live state after a later non-runtime-changing event", () => {
+test("the reported idle boundary settles the activity after a later journal event", () => {
   const state = reduceAll([
     {
       type: "events.iterate.com/capability-host/script-run-requested",
@@ -1260,7 +1013,7 @@ test("settles activity from live state after a later non-runtime-changing event"
     },
   ]);
 
-  const projected = projectRuntime(state, 3);
+  const projected = settleAtIdle(state, 3);
 
   expect(projected.live).toBeNull();
   expect(projected.items).toMatchObject([
@@ -1333,65 +1086,6 @@ test("queues a user message that arrives mid-turn", () => {
     text: "also, one more thing",
   });
   expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
-});
-
-test("updates a queued file mention when its resolution arrives mid-turn", () => {
-  const mentions = [
-    {
-      id: "config-repo/AGENTS.md",
-      type: "repo-file",
-      repoPath: "/repos/config",
-      path: "AGENTS.md",
-    },
-  ];
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/llm-request-requested",
-      offset: 7,
-      payload: { model: "gpt-test" },
-    },
-    {
-      type: "events.iterate.com/agent/context-added",
-      offset: 8,
-      payload: {
-        role: "user",
-        actor: { type: "user", origin: "web" },
-        content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
-        mentions,
-      },
-    },
-    {
-      type: "events.iterate.com/agent/context-added",
-      offset: 9,
-      payload: {
-        role: "developer",
-        actor: { type: "integration", name: "agent-mention-resolver" },
-        content: "resolution details",
-        mentionResolution: {
-          sourceOffset: 8,
-          outcomes: [
-            {
-              status: "resolved",
-              truncated: true,
-              mentionIds: ["config-repo/AGENTS.md"],
-            },
-          ],
-        },
-      },
-    },
-  ]);
-
-  expect(state.items).toHaveLength(0);
-  expect(state.queuedUserMessages).toMatchObject([
-    {
-      id: "user-8",
-      mentions,
-      mentionResolutions: {
-        "config-repo/AGENTS.md": { status: "resolved", truncated: true },
-      },
-    },
-  ]);
-  expect(Object.keys(state.pendingMentionMessages)).toEqual([]);
 });
 
 test("settles queued user messages before the next LLM request starts", () => {
@@ -1577,7 +1271,7 @@ test("renders inter-agent mail as a labeled user bubble", () => {
 });
 
 test("groups expired and unrecognized cancellations into one failed activity", () => {
-  const state = projectRuntime(
+  const state = settleAtIdle(
     reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -1669,90 +1363,6 @@ test("the first settlement wins when a duplicate races in", () => {
   expect(summarizeAgentUiActivity(state.live)).toMatchObject({
     outcome: "interrupted",
     requestCount: 1,
-  });
-});
-
-test("tallies token-usage reports and tracks the latest as context fullness", () => {
-  // Payload shapes mirror the contract's payloads exactly — the reducer
-  // reads by key, so made-up fields would pass silently and never catch
-  // drift.
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/token-usage-reported",
-      payload: {
-        llmRequestOffset: 3,
-        model: "openai/gpt-5.5",
-        maxContextTokens: 272_000,
-        inputTokens: 1_000,
-        outputTokens: 50,
-        cachedInputTokens: 800,
-        reasoningOutputTokens: 10,
-      },
-    },
-    // A model without the cache/reasoning breakdown still tallies.
-    {
-      type: "events.iterate.com/agent/token-usage-reported",
-      payload: {
-        llmRequestOffset: 7,
-        model: "@cf/test/totals-only-model",
-        maxContextTokens: 256_000,
-        inputTokens: 2_000,
-        outputTokens: 150,
-      },
-    },
-  ]);
-
-  expect(state).toMatchObject({
-    tokenUsage: {
-      totalInputTokens: 3_000,
-      totalOutputTokens: 200,
-      totalCachedInputTokens: 800,
-      totalReasoningOutputTokens: 10,
-      lastReport: {
-        model: "@cf/test/totals-only-model",
-        maxContextTokens: 256_000,
-        inputTokens: 2_000,
-        outputTokens: 150,
-      },
-    },
-  });
-  // Usage reports render in the strip, not as feed rows.
-  expect(state.items).toHaveLength(0);
-});
-
-test("a compaction context clears the context-fullness reading but keeps lifetime totals", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/token-usage-reported",
-      payload: {
-        llmRequestOffset: 3,
-        model: "openai/gpt-5.5",
-        maxContextTokens: 272_000,
-        inputTokens: 140_000,
-        outputTokens: 500,
-      },
-    },
-    {
-      type: "events.iterate.com/agent/context-added",
-      offset: 5,
-      payload: {
-        role: "developer",
-        content: "[Compacted summary.]",
-        compaction: { replacesHistoryThrough: 3 },
-      },
-    },
-  ]);
-
-  // The meter must not keep showing the pre-reset fullness after the
-  // conversation it measured is gone; totals are lifetime, so they stay.
-  expect(state).toMatchObject({
-    tokenUsage: {
-      totalInputTokens: 140_000,
-      totalOutputTokens: 500,
-      totalCachedInputTokens: 0,
-      totalReasoningOutputTokens: 0,
-      lastReport: null,
-    },
   });
 });
 
@@ -2080,16 +1690,12 @@ function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unkn
   return { ...state, items };
 }
 
-function projectRuntime(
-  reduced: ReturnType<typeof reduceAll>,
-  sinceOffset: number,
-  runtime: AgentRuntime = ZERO_AGENT_RUNTIME,
-) {
-  const projected = reduceAgentUiRuntime(reduced, {
-    runtime,
-    sinceOffset,
-    since: new Date(Date.parse("2026-06-11T00:00:00.000Z") + sinceOffset * 1_000).toISOString(),
-  });
+/** The agent reports itself idle at the moment of `sinceOffset` (one second per offset). */
+function settleAtIdle(reduced: ReturnType<typeof reduceAll>, sinceOffset: number) {
+  const projected = settleAgentUiAtIdleBoundary(
+    reduced,
+    new Date(Date.parse("2026-06-11T00:00:00.000Z") + sinceOffset * 1_000).toISOString(),
+  );
   return { ...projected.endState, items: [...reduced.items, ...projected.items] };
 }
 
