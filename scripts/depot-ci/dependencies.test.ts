@@ -21,6 +21,8 @@ test.each([
   [".pnpmfile.cjs", "module.exports = { hooks: {} };\n"],
   ["patches/change.patch", "new patch input\n"],
   ["external/index.js", "module.exports = 8;\n"],
+  // the bake's recipe: its runner, its Node, the tags it snapshots
+  [".depot/workflows/build-preview-ci-image.yml", "runs-on: depot-ubuntu-26.04-16\n"],
 ])("changed %s changes the dependency fingerprint", (file, contents) => {
   using workspace = fixture();
   const before = workspace.run("fingerprint");
