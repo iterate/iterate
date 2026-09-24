@@ -95,7 +95,8 @@ test("writes the tests table, then a manifest naming the job attempt, its tree a
   expect(written).toEqual(manifest);
 
   const rows = await parquetReadObjects({
-    file: readFileSync(join(repoRoot, testEvidencePaths.testsTable)).buffer as ArrayBuffer,
+    // a copy: a small file's Buffer is a slice of Node's shared pool, so its `.buffer` holds other bytes
+    file: new Uint8Array(readFileSync(join(repoRoot, testEvidencePaths.testsTable))).buffer,
   });
   expect(rows).toMatchObject([
     { test_run_id: "testrun_1nxc464grh", full_name: "stream › appends round-trip" },
