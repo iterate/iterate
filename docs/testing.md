@@ -624,7 +624,7 @@ Two wrappers in `packages/shared/src/test-support` register through the runner's
 
 Every outcome of either wrapper, and every plain test that failed and then passed on its CI retry (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|preview>`) adds each suite's `suite-summary.json`, and the job uploads `flake-records-<suite>` artifacts. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
 
-Each suite carries a monthly `flake sentinel`: a `createFlake` test that throws its allowed error about 10% of the time until its month ends. A sentinel that reads 0% or goes red means the pipeline is broken. When its month ends, roll the date forward instead of unwrapping it.
+Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. A sentinel that reads 0% or goes red means the pipeline is broken. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
 
 The two subsections below are the full contract.
 
