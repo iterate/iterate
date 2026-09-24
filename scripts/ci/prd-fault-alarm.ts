@@ -434,9 +434,9 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
-  // An ingress route whose target is not connected (`iterate tunnel` killed without Ctrl-C) answers
+  // A fetch route whose target is not connected (`iterate tunnel` killed without Ctrl-C) answers
   // 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
-  // "ingress-route.target-offline", … })` (apps/os context/built-ins.ts); a Vite tab left open
+  // "fetch-route.target-offline", … })` (apps/os context/built-ins.ts); a Vite tab left open
   // re-requests it every second. Each hop of that request logs its own 502 summary at error level
   // under its own requestId: the project host's Worker, the context DO's fetch, the ItxEntrypoint of
   // the config worker's `env.ITX.fetch`, and the DO's fetch again. The loaded config worker starts a
@@ -446,7 +446,7 @@ async function readWindow(
   // (2,000 answers "Internal error"). A capped or failed read excludes nothing: it can only remove
   // noise, never lose an observed fault.
   const notTargetOffline = await rows(
-    [{ key: "event", operation: "eq", value: "ingress-route.target-offline", type: "string" }],
+    [{ key: "event", operation: "eq", value: "fetch-route.target-offline", type: "string" }],
     "$metadata.rayId",
   ).then(
     (found) => {

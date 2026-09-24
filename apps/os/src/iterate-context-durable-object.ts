@@ -672,7 +672,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       list: () => this.#subscriptionList(),
       get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
     },
-    ingressRoutes: () => this.#stream.coreReducedState.ingressRoutes,
+    fetchRoutes: () => this.#stream.coreReducedState.fetchRoutes,
     rewriteRules: {
       list: (depth = 3) => this.#rewriteRuleList(depth),
       // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.

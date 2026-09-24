@@ -25,7 +25,7 @@ import {
 import type {
   CollectSecretInput,
   CollectSecretLink,
-  IngressRouteInput,
+  FetchRouteInput,
   RewriteRuleListEntry,
   SecretCatalogEntry,
   SecretMaterial,
@@ -52,11 +52,11 @@ import {
 } from "../secrets.ts";
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import {
-  IngressRouteConfiguredPayload,
-  matchIngressRoute,
-  type IngressRoute,
-  type IngressRouteTable,
-} from "../ingress-routes.ts";
+  FetchRouteConfiguredPayload,
+  matchFetchRoute,
+  type FetchRoute,
+  type FetchRouteTable,
+} from "../fetch-routes.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
@@ -242,31 +242,28 @@ export interface BuiltInScope extends LibraryRoots {
      *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
   };
-  /** THE INGRESS ROUTES (src/ingress-routes.ts): named rules on the project's root `/` saying which
+  /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` saying which
    *  requests on the project's hosts go to which itx expression — `iterate tunnel`'s lent stub, a
    *  facet, a loaded worker. `set(name, route)` validates the route and appends
-   *  `ingress-route/configured` on `/` (`null` deletes it; the same route again appends nothing);
+   *  `fetch-route/configured` on `/` (`null` deletes it; the same route again appends nothing);
    *  `list()` is the table; `match({ method, url, headers })` the first route whose matcher holds —
    *  by priority, highest first, then by name — or null (`routingSlug` against the edge's
    *  `x-iterate-routing-slug`, `url` a `URLPattern` against the URL the app sees, `headers` exact).
    *  `fetch(name, request)` forwards the request to the route's target and answers its Response,
    *  a WebSocket upgrade included — reached on the FETCH CHANNEL (`x-itx-expression:
-   *  itx.ingressRoutes.fetch('<name>')` through `env.ITX.fetch`), since a socket cannot cross Workers
+   *  itx.fetchRoutes.fetch('<name>')` through `env.ITX.fetch`), since a socket cannot cross Workers
    *  RPC; a target that is not connected (a tunnel's lent stub gone) answers 502. The config worker
    *  asks `match` and enforces `authRequirement` itself (configs/default/worker.ts): the target sees
    *  the request as the config worker forwarded it. Only on a project's root. */
-  ingressRoutes: {
-    set(
-      ingressRouteName: string,
-      route: IngressRouteInput | null,
-    ): Promise<{ ingressRouteName: string }>;
-    list(): Promise<IngressRoute[]>;
+  fetchRoutes: {
+    set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
+    list(): Promise<FetchRoute[]>;
     match(request: {
       method: string;
       url: string;
       headers: Headers | Record<string, string> | [string, string][];
-    }): Promise<IngressRoute | null>;
-    fetch(ingressRouteName: string, request: Request): Promise<Response>;
+    }): Promise<FetchRoute | null>;
+    fetch(fetchRouteName: string, request: Request): Promise<Response>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -520,9 +517,9 @@ interface BuildBuiltInsDeps {
     list(): ScheduledAppend[];
   };
   rewriteRules: BuiltInScope["rewriteRules"];
-  /** The route table in this context's core state (stream/core-processor.ts `ingressRoutes`) —
-   *  `itx.ingressRoutes` reads it on a project's root. */
-  ingressRoutes: () => IngressRouteTable;
+  /** The route table in this context's core state (stream/core-processor.ts `fetchRoutes`) —
+   *  `itx.fetchRoutes` reads it on a project's root. */
+  fetchRoutes: () => FetchRouteTable;
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
   /** The facet host's entry, verbatim (accepted trade: a busy stateful facet pins its stream), and the
@@ -653,18 +650,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       { name: string }[]
     >;
 
-  /** `itx.ingressRoutes` is the project root's: its facts land on `/`, whose core state is the table. */
+  /** `itx.fetchRoutes` is the project root's: its facts land on `/`, whose core state is the table. */
   const assertOnProjectRoot = (verb: string) => {
     if (projectId === GLOBAL_PROJECT_ID || path !== "/")
       throw codedError(
         "INVALID_CONTEXT",
-        `itx.ingressRoutes.${verb}: a project's ingress routes live on its root "/" — reach them there, itx.cd("/").ingressRoutes`,
+        `itx.fetchRoutes.${verb}: a project's fetch routes live on its root "/" — reach them there, itx.cd("/").fetchRoutes`,
       );
   };
   /** The route by name — an own key of the table only (a DNS label may be `constructor`). */
-  const ingressRouteNamed = (ingressRouteName: string) => {
-    const table = deps.ingressRoutes();
-    return Object.hasOwn(table, ingressRouteName) ? table[ingressRouteName] : undefined;
+  const fetchRouteNamed = (fetchRouteName: string) => {
+    const table = deps.fetchRoutes();
+    return Object.hasOwn(table, fetchRouteName) ? table[fetchRouteName] : undefined;
   };
 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
@@ -924,13 +921,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           () => secretFacet(["verifyHmac", input]) as Promise<boolean>,
         ),
     },
-    ingressRoutes: {
-      set: async (ingressRouteName, route) => {
+    fetchRoutes: {
+      set: async (fetchRouteName, route) => {
         assertOnProjectRoot("set");
         const refusal = (reason: string) =>
           codedError(
             "INVALID_INPUT",
-            `itx.ingressRoutes.set(${JSON.stringify(ingressRouteName)}): ${reason}`,
+            `itx.fetchRoutes.set(${JSON.stringify(fetchRouteName)}): ${reason}`,
           );
         let target: unknown;
         try {
@@ -942,11 +939,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         } catch (error) {
           throw refusal(`target: ${error instanceof Error ? error.message : String(error)}`);
         }
-        const parsed = IngressRouteConfiguredPayload.safeParse(
+        const parsed = FetchRouteConfiguredPayload.safeParse(
           !route
-            ? { ingressRouteName, requestMatcher: null }
+            ? { fetchRouteName, requestMatcher: null }
             : {
-                ingressRouteName,
+                fetchRouteName,
                 requestMatcher: route.requestMatcher,
                 target,
                 authRequirement: route.authRequirement || null,
@@ -956,7 +953,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         if (!parsed.success) throw refusal(z.prettifyError(parsed.error));
         const payload = parsed.data;
         // IDEMPOTENT: the route as it stands appends nothing.
-        const current = ingressRouteNamed(ingressRouteName);
+        const current = fetchRouteNamed(fetchRouteName);
         if (
           !payload.requestMatcher
             ? !current
@@ -976,32 +973,32 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
                 },
               )
         )
-          return { ingressRouteName };
+          return { fetchRouteName };
         // Read-your-writes by construction: the core reduce folds the fact in the commit that
         // appends it, so the next `match` (the very next request) sees this route.
-        await append({ type: "events.iterate.com/ingress-route/configured", payload });
-        return { ingressRouteName };
+        await append({ type: "events.iterate.com/fetch-route/configured", payload });
+        return { fetchRouteName };
       },
       list: async () => {
         assertOnProjectRoot("list");
-        return Object.entries(deps.ingressRoutes())
-          .map(([ingressRouteName, route]) => ({ ingressRouteName, ...route }))
+        return Object.entries(deps.fetchRoutes())
+          .map(([fetchRouteName, route]) => ({ fetchRouteName, ...route }))
           .sort(
-            (a, b) => b.priority - a.priority || (a.ingressRouteName < b.ingressRouteName ? -1 : 1),
+            (a, b) => b.priority - a.priority || (a.fetchRouteName < b.fetchRouteName ? -1 : 1),
           );
       },
       match: async (request) => {
         assertOnProjectRoot("match");
-        return matchIngressRoute(deps.ingressRoutes(), {
+        return matchFetchRoute(deps.fetchRoutes(), {
           url: request.url,
           headers: new Headers(request.headers),
         });
       },
-      fetch: async (ingressRouteName, request) => {
+      fetch: async (fetchRouteName, request) => {
         assertOnProjectRoot("fetch");
-        const route = ingressRouteNamed(ingressRouteName);
+        const route = fetchRouteNamed(fetchRouteName);
         if (!route)
-          return new Response(`no ingress route ${JSON.stringify(ingressRouteName)}\n`, {
+          return new Response(`no fetch route ${JSON.stringify(fetchRouteName)}\n`, {
             status: 404,
           });
         // The target is the route's author's (a project member wrote the fact): it runs as the
@@ -1022,10 +1019,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           // the 502 summaries in this line's ray; the header names the route to a client.
           const code = errorCode(error);
           if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH") {
-            console.info({ event: "ingress-route.target-offline", ingressRouteName, code });
-            return new Response(`${ingressRouteName} is not connected\n`, {
+            console.info({ event: "fetch-route.target-offline", fetchRouteName, code });
+            return new Response(`${fetchRouteName} is not connected\n`, {
               status: 502,
-              headers: { "x-iterate-ingress-route-offline": ingressRouteName },
+              headers: { "x-iterate-fetch-route-offline": fetchRouteName },
             });
           }
           throw error;

@@ -81,8 +81,8 @@ iterate tunnel 5173 --project my-project --name blog
 iterate tunnel 3000 --project my-project --public   # anyone may use it; the name is random
 ```
 
-The tunnel lends the local port to the project as `itx.tunnels.<name>` and sets the ingress
-route `tunnel-<name>` (`itx.ingressRoutes`), which the project's config worker consults first
+The tunnel lends the local port to the project as `itx.tunnels.<name>` and sets the fetch
+route `tunnel-<name>` (`itx.fetchRoutes`), which the project's config worker consults first
 (the default templates do; an older project adds the lines from `configs/default/worker.ts` to
 its own `worker.ts`). By default only signed-in project members get through; others are sent to
 sign in. Ctrl-C deletes the route; a tunnel that dies without it leaves the host answering 502

@@ -171,7 +171,7 @@ test.for([
   const calls: string[] = [];
   const project = {
     url: async () => url,
-    ingressRoutes: {
+    fetchRoutes: {
       list: async () => [],
       set: async (name: string, route: unknown) =>
         void calls.push(`set ${name} ${route && "route"}`),
