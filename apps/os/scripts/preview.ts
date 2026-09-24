@@ -3,8 +3,9 @@
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
 // deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its
-// status line), e2e (vitest and Playwright against the live preview, `--slow-rows` picking the rows
-// tagged `slow`, scripts/slow-rows.ts; the status line), reset (delete, then deploy), delete (the
+// status line), e2e and specs (the vitest e2e suite, `--slow-rows` picking the rows tagged `slow`,
+// scripts/slow-rows.ts, or the Playwright specs, against the live preview; the suite's line under the
+// status line), reset (delete, then deploy), delete (the
 // preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
 // top), delete-superseded (the per-run previews this CI workflow's preview replaced: `main-<sha>`,
 // `latency-<run>-<attempt>`, `real-model-<run>-<attempt>`), sweep
@@ -72,11 +73,15 @@ import {
   previewUrl,
   renderPullRequestSection,
   resolvePreviewName,
+  PREVIEW_SUITES,
   splicePreviewStatus,
+  splicePreviewSuite,
   splicePullRequestBody,
   templateQuickLaunches,
   writePreviewWranglerConfig,
   type PreviewStatus,
+  type PreviewSuite,
+  type PreviewSuiteStatus,
 } from "./preview-config.ts";
 import {
   planPreviewSweep,
@@ -103,6 +108,7 @@ const Command = z.enum([
   "config",
   "deploy",
   "e2e",
+  "specs",
   "reset",
   "delete",
   "delete-superseded",
@@ -128,8 +134,7 @@ function describe(error: unknown) {
 }
 
 /** Run a command and capture its output — wrangler's `--json` payload, its prose for a not-found
- *  check, Playwright's report to print after vitest's. What may stream through runs by
- *  deploy-helpers' `runAsync`. */
+ *  check. What may stream through runs by deploy-helpers' `runAsync`. */
 function run(
   command: string,
   args: string[],
@@ -272,27 +277,27 @@ function checkedOutCommit() {
   return result.stdout.trim();
 }
 
-/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`):
- *  this checkout's commit, this CI job (`DEPOT_JOB_URL`), now. Only with a PR and a token; a
- *  write that fails is logged, never the job's failure — the job's own outcome stands. */
+/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`), or
+ *  a suite's line under it (`PreviewSuiteStatus`): this checkout's commit, this CI job
+ *  (`DEPOT_JOB_URL`), now. Only with a PR and a token; a write that fails is logged, never the
+ *  job's failure — the job's own outcome stands. */
 async function writeStatus(
   prNumber: string | undefined,
-  status: Pick<PreviewStatus, "state" | "failedSuites" | "error">,
+  status:
+    | Pick<PreviewStatus, "state" | "error">
+    | Pick<PreviewSuiteStatus, "suite" | "state" | "error">,
 ) {
   if (!prNumber || !process.env.GITHUB_TOKEN) return;
-  await (async () => {
-    const full: PreviewStatus = {
-      ...status,
-      commit: checkedOutCommit(),
-      runUrl: process.env.DEPOT_JOB_URL,
-      at: new Date(),
-    };
-    await writePullRequestBody(prNumber, `the preview status (${status.state})`, (body) =>
-      splicePreviewStatus(body, full),
-    );
-  })().catch((error: unknown) =>
-    console.warn(`could not write the preview status (${status.state}): ${describe(error)}`),
-  );
+  const what =
+    "suite" in status
+      ? `the ${PREVIEW_SUITES[status.suite]} line (${status.state})`
+      : `the preview status (${status.state})`;
+  const stamp = { commit: checkedOutCommit(), runUrl: process.env.DEPOT_JOB_URL, at: new Date() };
+  await writePullRequestBody(prNumber, what, (body) =>
+    "suite" in status
+      ? splicePreviewSuite(body, { ...status, ...stamp })
+      : splicePreviewStatus(body, { ...status, ...stamp }),
+  ).catch((error: unknown) => console.warn(`could not write ${what}: ${describe(error)}`));
 }
 
 // ── leftover D1s (no preview creates one any more; deletePreview and the sweep delete them) ─────
@@ -901,11 +906,11 @@ async function deleteAll(cf: Cf, previewName: string) {
 }
 
 /** Each suite's test telemetry identity, pinned rather than read from pnpm's ambient package name:
- *  the workspace is what the CI finalizer (`upload-test-telemetry.ts --flake-suites preview`, which
- *  expects exactly these two workspaces) and scripts/ci/flake-suite-summary.ts match a suite by, and
- *  each suite records its flake lines into its own `flake-records-<suite>` directory (relative to
- *  GITHUB_WORKSPACE). Only when the workflow asks for telemetry (TEST_TELEMETRY_ARTIFACT_DIR): a run
- *  from a laptop records nothing. */
+ *  the workspace is what its job's CI finalizer (`upload-test-telemetry.ts --flake-suites specs`
+ *  or `preview-e2e`, which expects that one workspace) and scripts/ci/flake-suite-summary.ts match
+ *  the suite by, and each suite records its flake lines into its own `flake-records-<suite>`
+ *  directory (relative to GITHUB_WORKSPACE). Only when the workflow asks for telemetry
+ *  (TEST_TELEMETRY_ARTIFACT_DIR): a run from a laptop records nothing. */
 const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, string>> = process.env
   .TEST_TELEMETRY_ARTIFACT_DIR
   ? {
@@ -922,55 +927,10 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
     }
   : { specs: {}, "preview-e2e": {} };
 
-/** THE PROOF: the vitest e2e suite and the root Playwright specs (specs/AGENTS.md), both in
- *  deployed-target mode against the preview, side by side — the same two suites `pnpm e2e` and
- *  `pnpm spec` run. Each runner derives the deployed target itself
- *  (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this process's environment and the
- *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
- *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps, the
- *  Notes session specs signing out in its Dash (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL;
- *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. The
- *  status line in the PR body then says `e2e passed`, or `e2e failed` and which suites. The rows
- *  tagged `slow` run as asked, else as the PR's label and paths say (scripts/slow-rows.ts); `only`
- *  runs them alone, no specs, and is no verdict on the PR, so it leaves the status line as it is. */
-async function runE2e(
-  previewName: string,
-  prNumber: string | undefined,
-  requested: SlowRows | undefined,
-) {
-  const { slowRows, reason } = await chooseSlowRows({
-    requested,
-    prNumber,
-    readPullRequest: async () => {
-      // GET /pulls/{n}: its `labels`, each with a `name`.
-      const [pull, paths] = await Promise.all([
-        github<{ labels: { name: string }[] }>(`/repos/${repository()}/pulls/${prNumber}`),
-        changedPaths(prNumber),
-      ]);
-      return { labels: pull.labels.map((label) => label.name), paths };
-    },
-  });
-  console.log(`[slow-rows] ${slowRows}: ${reason}`);
-  const statusPr = slowRows === "only" ? undefined : prNumber;
-  let failedSuites: string[];
-  try {
-    failedSuites = await runE2eSuites(previewName, slowRows);
-  } catch (error) {
-    await writeStatus(statusPr, { state: "e2e failed", error: describe(error) });
-    throw error;
-  }
-  await writeStatus(
-    statusPr,
-    failedSuites.length ? { state: "e2e failed", failedSuites } : { state: "e2e passed" },
-  );
-  if (failedSuites.length > 0)
-    throw new Error(`${failedSuites.join(" and ")} failed against ${previewUrl(previewName)}`);
-}
-
-/** THE DEPLOYED TARGET, in the test evidence folder before the suites start, when the workflow
+/** THE DEPLOYED TARGET, in the test evidence folder before the suite starts, when the workflow
  *  records evidence (TEST_TELEMETRY_ARTIFACT_DIR): the preview and the deployment its `/version`
- *  answers with. A run against a preview deployed earlier (the `action=e2e` dispatch) tests what
- *  that deploy left, not the commit this job checked out
+ *  answers with. A run against a preview deployed earlier (a dispatch of `test`, `e2e` or `specs`)
+ *  tests what that deploy left, not the commit this job checked out
  *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). It never fails the run: a
  *  preview that does not answer fails the suites, and the file then has no deploymentId. */
 async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget["apps"]) {
@@ -996,61 +956,78 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
   }
 }
 
-/** The two suites side by side, or the vitest rows alone with `only`; the names of those that
- *  failed. The vitest run gets the rows' choice as E2E_SLOW_ROWS, which holds each row to its
- *  timeout ceiling (e2e/support/setup.ts). */
-async function runE2eSuites(previewName: string, slowRows: SlowRows) {
+/** THE PROOF, one suite per CI job (preview-os.yml's E2E tests and Browser specs), against the
+ *  live preview in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
+ *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
+ *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
+ *  process's environment and the parent's envs.ts entry): the vitest suite in its global-setup, the
+ *  specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
+ *  preview's Notes and Voice apps, the Notes session specs signing out in its Dash (NOTES_BASE_URL,
+ *  VOICE_BASE_URL, DASH_BASE_URL; their specs fail in CI without them). The suite's line under the
+ *  PR body's status line then says `passed` or `failed`. The e2e rows tagged `slow` run as asked,
+ *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
+ *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
+ *  row to its timeout ceiling (e2e/support/setup.ts). */
+async function runSuite(
+  suite: PreviewSuite,
+  previewName: string,
+  prNumber: string | undefined,
+  requestedSlowRows: SlowRows | undefined,
+) {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(APPS.find((app) => app.name === name)!, previewName);
   await writeDeployedTarget(
     previewName,
-    // the client apps the specs run against; the vitest rows alone use none
-    slowRows === "only"
-      ? []
-      : ["notes", "voice", "dash"].map((name) => ({ name, url: appUrl(name) })),
+    // the client apps the specs run against; the vitest rows use none
+    suite === "specs"
+      ? ["notes", "voice", "dash"].map((name) => ({ name, url: appUrl(name) }))
+      : [],
   );
-  const spec =
-    slowRows === "only"
-      ? undefined
-      : (async () => {
-          if (process.env.CI)
-            await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-              cwd: REPO_ROOT,
-            });
-          return run("pnpm", ["spec"], {
-            cwd: REPO_ROOT,
-            env: {
-              ...process.env,
-              ...env,
-              NOTES_BASE_URL: appUrl("notes"),
-              VOICE_BASE_URL: appUrl("voice"),
-              DASH_BASE_URL: appUrl("dash"),
-              ...PREVIEW_SUITE_TELEMETRY.specs,
-            },
-          });
-        })();
-  // `e2e:run`, not `e2e`: the deployed target needs no local build, and the preview's built dist/
-  // stays intact while Playwright runs beside Vitest.
-  const e2e = runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
-    cwd: ROOT,
-    env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
-  }).then(
-    () => true,
-    (error: unknown) => {
-      console.error(describe(error));
-      return false;
-    },
-  );
-  const [specResult, e2ePassed] = await Promise.all([spec, e2e]);
-  if (specResult)
-    process.stdout.write(
-      `\n── playwright (pnpm spec) ──\n${specResult.stdout}${specResult.stderr}\n`,
-    );
-  return [!e2ePassed && "vitest e2e", specResult && specResult.status !== 0 && "pnpm spec"].filter(
-    (suite) => typeof suite === "string",
-  );
+  let statusPr = prNumber;
+  try {
+    if (suite === "e2e") {
+      const { slowRows, reason } = await chooseSlowRows({
+        requested: requestedSlowRows,
+        prNumber,
+        readPullRequest: async () => {
+          // GET /pulls/{n}: its `labels`, each with a `name`.
+          const [pull, paths] = await Promise.all([
+            github<{ labels: { name: string }[] }>(`/repos/${repository()}/pulls/${prNumber}`),
+            changedPaths(prNumber),
+          ]);
+          return { labels: pull.labels.map((label) => label.name), paths };
+        },
+      });
+      console.log(`[slow-rows] ${slowRows}: ${reason}`);
+      if (slowRows === "only") statusPr = undefined;
+      // `e2e:run`, not `e2e`: the deployed target needs no local build.
+      await runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
+        cwd: ROOT,
+        env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
+      });
+    } else {
+      if (process.env.CI)
+        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+          cwd: REPO_ROOT,
+        });
+      await runAsync("pnpm", ["spec"], {
+        cwd: REPO_ROOT,
+        env: {
+          ...env,
+          NOTES_BASE_URL: appUrl("notes"),
+          VOICE_BASE_URL: appUrl("voice"),
+          DASH_BASE_URL: appUrl("dash"),
+          ...PREVIEW_SUITE_TELEMETRY.specs,
+        },
+      });
+    }
+  } catch (error) {
+    await writeStatus(statusPr, { suite, state: "failed", error: describe(error) });
+    throw new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+  }
+  await writeStatus(statusPr, { suite, state: "passed" });
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1389,8 +1366,9 @@ async function main(argv: string[]) {
     console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
     return;
   }
-  if (parsed.command === "e2e")
-    return runE2e(
+  if (parsed.command === "e2e" || parsed.command === "specs")
+    return runSuite(
+      parsed.command,
       previewName,
       pr,
       parsed.slowRows || SlowRows.optional().parse(process.env.E2E_SLOW_ROWS || undefined),

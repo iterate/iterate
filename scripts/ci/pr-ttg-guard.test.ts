@@ -72,6 +72,34 @@ test("a push without Preview OS waits for Lint and Typecheck and Test alone", ()
   ).toMatchObject({ outcome: "green", e2e: "no-preview", seconds: 191.7 });
 });
 
+// Since Preview OS runs on every push, a push that changes no preview path runs its Deploy preview
+// job alone, to decide so, and skips E2E tests.
+test("a push whose Preview OS skipped E2E tests has no preview, and still waits for Preview OS", () => {
+  const skipped = {
+    ...pxt90nlfvh,
+    workflows: pxt90nlfvh.workflows.map((entry) =>
+      entry.workflow.name === "Preview OS"
+        ? {
+            workflow: { ...entry.workflow, finishedAt: "2026-09-24T11:52:30.000Z" },
+            jobs: [
+              { job: { jobKey: "preview-os.yml:deploy", status: "finished" }, attempts: [{}] },
+              { job: { jobKey: "preview-os.yml:e2e", status: "skipped" }, attempts: [] },
+              { job: { jobKey: "preview-os.yml:specs", status: "skipped" }, attempts: [] },
+            ],
+          }
+        : entry,
+    ),
+  };
+  expect(
+    measurePush({
+      metrics: skipped,
+      firstExecutions: {},
+      nextRunAt: undefined,
+      summary: undefined,
+    }),
+  ).toMatchObject({ outcome: "green", e2e: "no-preview", seconds: 200.5 });
+});
+
 test("a re-run check counts at its first execution: red at that execution's end", () => {
   // run v7gm132nt1: Preview OS's e2e failed, its re-run passed at 11:47:33
   expect(

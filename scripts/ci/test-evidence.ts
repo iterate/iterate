@@ -587,7 +587,13 @@ export function testEvidenceUploadedPrefix(summary: string) {
  * The CI jobs that write and upload a test evidence folder, as Depot keys them (`<file>:<job>`).
  * scripts/ci/depot-workflows.test.ts holds this to the workflows.
  */
-export const testEvidenceJobs = ["test.yml:test", "preview-os.yml:e2e", "main-os-e2e.yml:e2e"];
+export const testEvidenceJobs = [
+  "test.yml:test",
+  "preview-os.yml:e2e",
+  "preview-os.yml:specs",
+  "main-os-e2e.yml:e2e",
+  "main-os-e2e.yml:specs",
+];
 
 /** A failed step's warning title, which its summary line and the fallback report's repeat. */
 export const stepFailureTitles = {

@@ -65,16 +65,17 @@ test("no status is posted until the trace's own artifact is in Depot", async () 
   expect(collected.statuses()).toEqual([]);
 });
 
-test("the trace job collects the deploy and e2e jobs", async () => {
+test("the trace job collects the deploy and both test jobs", async () => {
   await using depot = await tracedWorkflow({
     workflowName: "Preview OS",
     workflowPath: "preview-os.yml",
     jobs: [
       ["deploy", "finished", 3, 40],
       ["e2e", "finished", 41, 180],
+      ["specs", "finished", 41, 120],
       ["trace", "running", 181, 0],
     ],
-    needs: ["deploy", "e2e"],
+    needs: ["deploy", "e2e", "specs"],
   });
 
   await new CiTrace().current(depot.directory);
@@ -83,12 +84,13 @@ test("the trace job collects the deploy and e2e jobs", async () => {
   const spans: { name: string }[] = trace.resourceSpans[0].scopeSpans[0].spans;
   expect(spans.map((span) => span.name)).toEqual([
     "Preview OS",
-    "Deploy",
-    "E2E",
+    "Deploy preview",
+    "E2E tests",
     "Setup",
     "Test",
     "Finish",
     "Run the e2e suite against the preview",
+    "Browser specs",
   ]);
   expect(spans[0]).toMatchObject({
     attributes: expect.arrayContaining([
@@ -97,7 +99,7 @@ test("the trace job collects the deploy and e2e jobs", async () => {
   });
 });
 
-test("on main, the trace covers the parent, deploy and e2e while alert still runs", async () => {
+test("on main, the trace covers the parent, deploy and both test jobs while alert still runs", async () => {
   await using depot = await tracedWorkflow({
     workflowName: "Main OS e2e",
     workflowPath: "main-os-e2e.yml",
@@ -105,10 +107,11 @@ test("on main, the trace covers the parent, deploy and e2e while alert still run
       ["parent", "finished", 3, 60],
       ["deploy", "finished", 61, 100],
       ["e2e", "finished", 101, 240],
+      ["specs", "finished", 101, 180],
       ["alert", "running", 241, 0],
       ["trace", "running", 241, 0],
     ],
-    needs: ["parent", "deploy", "e2e"],
+    needs: ["parent", "deploy", "e2e", "specs"],
   });
 
   await new CiTrace().current(depot.directory);
@@ -118,8 +121,8 @@ test("on main, the trace covers the parent, deploy and e2e while alert still run
   expect(spans.map((span) => span.name).slice(0, 4)).toEqual([
     "Main OS e2e",
     "Preview parent",
-    "Deploy",
-    "E2E",
+    "Deploy preview",
+    "E2E tests",
   ]);
   expect(spans[0]).toMatchObject({
     attributes: expect.arrayContaining([

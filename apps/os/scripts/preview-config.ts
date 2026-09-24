@@ -180,20 +180,31 @@ export function splicePullRequestBody(body: string, section: string) {
 const STATUS_BEGIN = "<!-- os-preview-status:begin -->";
 const STATUS_END = "<!-- os-preview-status:end -->";
 
-/** Where a PR's preview stands, as its body's status line says: the deploy job writes `deploying`,
- *  then `deployed` with the whole section or `deploy failed`; the e2e job rewrites the line alone
- *  with `e2e passed` or `e2e failed`. */
+/** Where a PR's preview stands, as its body's status line says: the Deploy preview job writes
+ *  `deploying`, then `deployed` with the whole section or `deploy failed`. */
 export type PreviewStatus = {
-  state: "deploying" | "deployed" | "deploy failed" | "e2e passed" | "e2e failed";
+  state: "deploying" | "deployed" | "deploy failed";
   /** the commit the job checked out: the PR merged into main, or the head alone */
   commit: string;
   /** the CI job that wrote it (Depot's `DEPOT_JOB_URL`); absent from a laptop */
   runUrl?: string;
   at: Date;
-  /** e2e failed: which of the two suites */
-  failedSuites?: string[];
   /** a failure's error: its first line is the summary, the rest's tail goes under `<details>` */
   error?: string;
+};
+
+/** The suites a deployed preview runs, each its own CI job and check (preview-os.yml), by their
+ *  names there: `e2e`, the vitest e2e suite, and `specs`, the Playwright specs. Their lines follow
+ *  the status line in SUITE_ORDER. */
+export const PREVIEW_SUITES = { e2e: "E2E tests", specs: "Browser specs" } as const;
+export type PreviewSuite = keyof typeof PREVIEW_SUITES;
+const SUITE_ORDER: PreviewSuite[] = ["e2e", "specs"];
+
+/** A suite's line under the status line, which its own job writes once it ran: passed or failed,
+ *  on the commit it tested. Both jobs run at once, so each rewrites its own line alone. */
+export type PreviewSuiteStatus = Omit<PreviewStatus, "state"> & {
+  suite: PreviewSuite;
+  state: "passed" | "failed";
 };
 
 /** The last `count` lines of a command's output, colour codes stripped: what a failure keeps. */
@@ -203,11 +214,13 @@ export function lastLines(text: string, count: number) {
   return plain.split("\n").slice(-count).join("\n");
 }
 
-/** The status line, and on a failure its one-line summary and the error's tail, folded. After a
- *  failed deploy the rest of the section is the last good deploy's, and the line says so. */
-export function renderPreviewStatus(status: PreviewStatus) {
+/** The status line or a suite's, and on a failure its one-line summary and the error's tail,
+ *  folded. After a failed deploy the rest of the section is the last good deploy's, and the line
+ *  says so. */
+export function renderPreviewStatus(status: PreviewStatus | PreviewSuiteStatus) {
+  const label = "suite" in status ? PREVIEW_SUITES[status.suite] : "Status";
   const line = [
-    `Status: **${status.state}** on \`${status.commit.slice(0, 9)}\`${status.failedSuites?.length ? ` (${status.failedSuites.join(", ")})` : ""}`,
+    `${label}: **${status.state}** on \`${status.commit.slice(0, 9)}\``,
     ...(status.runUrl ? [`[CI job ↗](${status.runUrl})`] : []),
     `updated ${status.at.toISOString().slice(0, 16).replace("T", " ")} UTC`,
   ].join(" · ");
@@ -240,22 +253,74 @@ export function renderPreviewStatus(status: PreviewStatus) {
 
 const statusBlock = (status: PreviewStatus) =>
   `${STATUS_BEGIN}\n${renderPreviewStatus(status)}\n${STATUS_END}`;
+const suiteMarkers = (suite: PreviewSuite) =>
+  [`<!-- os-preview-${suite}:begin -->`, `<!-- os-preview-${suite}:end -->`] as const;
+const suiteBlock = (status: PreviewSuiteStatus) => {
+  const [begin, end] = suiteMarkers(status.suite);
+  return `${begin}\n${renderPreviewStatus(status)}\n${end}`;
+};
 
-/** Rewrite the status line alone, leaving the rest of the managed section as it is: in place, at
- *  the top of a section that has none, or as the whole section of a body that has none. */
-export function splicePreviewStatus(body: string, status: PreviewStatus) {
-  const block = statusBlock(status);
+/** Rewrite the managed section's inside with `rewrite`, or make the body's section `block` alone
+ *  when it has none (the first deploy failed before writing one). */
+function spliceSection(body: string, block: string, rewrite: (inner: string) => string) {
   const begin = body.indexOf(SECTION_BEGIN);
   const end = body.indexOf(SECTION_END, begin);
   if (begin < 0 || end < begin) return splicePullRequestBody(body, block);
   const inner = body.slice(begin + SECTION_BEGIN.length, end);
-  const statusBegin = inner.indexOf(STATUS_BEGIN);
-  const statusEnd = inner.indexOf(STATUS_END, statusBegin);
-  const spliced =
-    statusBegin >= 0 && statusEnd > statusBegin
-      ? inner.slice(0, statusBegin) + block + inner.slice(statusEnd + STATUS_END.length)
-      : `\n${block}\n${inner.replace(/^\n/, "")}`;
-  return body.slice(0, begin + SECTION_BEGIN.length) + spliced + body.slice(end);
+  return body.slice(0, begin + SECTION_BEGIN.length) + rewrite(inner) + body.slice(end);
+}
+
+/** `inner` with the block between `begin` and `end` replaced by `block`, or undefined without one. */
+function replaceBlock(inner: string, begin: string, end: string, block: string) {
+  const from = inner.indexOf(begin);
+  const to = inner.indexOf(end, from);
+  if (from < 0 || to < from) return undefined;
+  return inner.slice(0, from) + block + inner.slice(to + end.length);
+}
+
+/** Rewrite the status line alone, leaving the rest of the managed section as it is: in place, at
+ *  the top of a section that has none, or as the whole section of a body that has none. A new
+ *  deploy (`deploying`) drops the suites' lines, which were the previous deploy's. */
+export function splicePreviewStatus(body: string, status: PreviewStatus) {
+  const block = statusBlock(status);
+  return spliceSection(body, block, (inner) => {
+    const kept =
+      status.state === "deploying"
+        ? SUITE_ORDER.reduce((text, suite) => {
+            const [begin, end] = suiteMarkers(suite);
+            return replaceBlock(text, `\n${begin}`, end, "") ?? text;
+          }, inner)
+        : inner;
+    return (
+      replaceBlock(kept, STATUS_BEGIN, STATUS_END, block) ??
+      `\n${block}\n${kept.replace(/^\n/, "")}`
+    );
+  });
+}
+
+/** Rewrite one suite's line alone: in place, else after the status line and the lines of the
+ *  suites before it (SUITE_ORDER), else at the top of the section. */
+export function splicePreviewSuite(body: string, status: PreviewSuiteStatus) {
+  const block = suiteBlock(status);
+  const [begin, end] = suiteMarkers(status.suite);
+  return spliceSection(body, block, (inner) => {
+    const replaced = replaceBlock(inner, begin, end, block);
+    if (replaced) return replaced;
+    const anchors = [
+      STATUS_END,
+      ...SUITE_ORDER.slice(0, SUITE_ORDER.indexOf(status.suite)).map(
+        (suite) => suiteMarkers(suite)[1],
+      ),
+    ];
+    const at = Math.max(
+      ...anchors.map((marker) =>
+        inner.includes(marker) ? inner.indexOf(marker) + marker.length : -1,
+      ),
+    );
+    return at < 0
+      ? `\n${block}\n${inner.replace(/^\n/, "")}`
+      : `${inner.slice(0, at)}\n${block}${inner.slice(at)}`;
+  });
 }
 
 /** A deploy's status writes around its steps. The PR body has no conditional update, so the last

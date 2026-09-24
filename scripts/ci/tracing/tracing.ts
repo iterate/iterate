@@ -262,8 +262,9 @@ export function assembleTrace(
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
-      // The e2e job's `e2e` step (preview-os.yml) opens its Test phase.
-      const tests = shells.find((event) => event.step === "e2e");
+      // A test job's suite step (preview-os.yml: `e2e` in E2E tests, `specs` in Browser specs)
+      // opens its Test phase.
+      const tests = shells.find((event) => event.step === "e2e" || event.step === "specs");
       const boundaries = [{ name: "Setup", time: start }];
       if (tests) {
         boundaries.push({ name: "Test", time: tests.time });
@@ -624,8 +625,9 @@ const SourceWorkflow = z.object({
 });
 const jobLabels = new Map([
   ["parent", "Preview parent"],
-  ["deploy", "Deploy"],
-  ["e2e", "E2E"],
+  ["deploy", "Deploy preview"],
+  ["e2e", "E2E tests"],
+  ["specs", "Browser specs"],
 ]);
 const TraceJob = z.object({
   jobs: z.object({ trace: z.object({ needs: z.array(z.string()).min(1) }) }),
