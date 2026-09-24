@@ -846,7 +846,7 @@ function renderCost(state: FlakeDashboardState): string[] {
       const incidents = cost.incidents.toSorted((a, b) => b.rows - a.rows);
       return [
         "",
-        `### ${escape(suite)}: ${runs} runs since ${shortDate(new Date(cost.runs[0]!).toISOString())} UTC · ${incidents.length} incident${incidents.length === 1 ? "" : "s"}`,
+        `### ${escape(suite)}: ${runs} run${runs === 1 ? "" : "s"} since ${shortDate(new Date(cost.runs[0]!).toISOString())} UTC · ${incidents.length} incident${incidents.length === 1 ? "" : "s"}`,
         "",
         "row | p50 | p95 | marginal | retries | PR failures | proposal",
         "--- | --- | --- | --- | --- | --- | ---",
