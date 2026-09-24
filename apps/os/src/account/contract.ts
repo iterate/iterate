@@ -14,7 +14,7 @@
 //   AccountState = ProcessorState<typeof AccountContract>   the reduced state below
 //   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { OrganizationContract, OrganizationRole } from "../organization/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 

@@ -18,7 +18,7 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, rejection, until } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 import { SlackReplayTarget } from "./support/targets.ts";
@@ -149,7 +149,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 1. THE HEADLINE: the NATURAL DOTTED spelling every client writes — plain property access on the
   //    capnweb stub — replayed end to end (slack → chat → postMessage). This is the prototype-hop
-  //    dotted surface (iterate/next/expression.ts): unknown segments accumulate into ONE
+  //    dotted surface (iterate/expression.ts): unknown segments accumulate into ONE
   //    invoke dispatch. No client SDK, just capnweb.
   const posted = await itx.slack.chat.postMessage({ channel: "#general", text: "hello from itx" });
   expect(posted?.ok).toBe(true);

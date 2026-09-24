@@ -11,7 +11,7 @@
 //   ConsumedEvent<typeof WorkspaceContract>                                            what reduce and processEvent see
 //   EventInput<typeof WorkspaceContract>                                               what `itx.workspaces.get(path).append(…)` takes
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 
 export const WorkspaceContract = defineProcessorContract({

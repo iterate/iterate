@@ -10,9 +10,9 @@ import * as prompts from "@clack/prompts";
 import { os } from "@orpc/server";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import { connectIterate } from "./next-node.ts";
+import { connectIterate } from "./node.ts";
 import { isCodingAgent } from "./coding-agent.ts";
-import type { SessionCredentials } from "./next/api.ts";
+import type { SessionCredentials } from "./api.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
 import {

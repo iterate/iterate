@@ -13,8 +13,8 @@ import {
   type ProcessEventArgs,
   type ReduceArgs,
   StreamProcessor,
-} from "iterate/next/stream/processor";
-import type { WithItx } from "iterate/next/sdk";
+} from "iterate/stream/processor";
+import type { WithItx } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { RepoContract, type RepoState } from "./contract.ts";
 

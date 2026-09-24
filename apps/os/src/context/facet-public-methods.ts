@@ -11,7 +11,7 @@
 //      — the method called on the facet, or the property read off it — must be on that list, or the
 //      call is refused FORBIDDEN before it reaches the facet. Later steps walk what that member
 //      answered: handing that out is the member's own decision.
-//   2. The SDK's facet shells list generously (packages/iterate/src/next/sdk): `FacetDurableObject`
+//   2. The SDK's facet shells list generously (packages/iterate/src/sdk): `FacetDurableObject`
 //      lists `fetch`; `StreamProcessorDurableObject` adds `snapshot`, `liveSnapshot` and
 //      `waitUntilProcessed`. A subclass lists its own on top: `[...super.publicMethods, "message"]`.
 //   3. What feeds a facet is on no list: `processEventBatch`, `catchUpFromLog` and `revive` are the
@@ -21,8 +21,8 @@
 //   4. A first-party class's list is read off the class; a loaded class's is asked of the facet once
 //      per startup memo (`listPublicMethods()`, which the shells answer). A loaded class that extends
 //      neither shell answers no list, so nothing on it is reached by expression.
-import { codedError } from "iterate/next/lib";
-import { itxExpressionStepName, type ItxExpression } from "iterate/next/expression";
+import { codedError } from "iterate/lib";
+import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
 
 /** Refuses — FORBIDDEN — a walk on the facet `facetName` whose first step is not one of the
  *  `publicMethods` its class lists (rule 1). The refusal names the step and the list. */

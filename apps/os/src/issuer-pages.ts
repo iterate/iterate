@@ -9,7 +9,7 @@ import {
   deploymentEnvironment,
   environmentFaviconSvg,
 } from "@iterate-com/ui/lib/environment-favicon";
-import { isSameOriginBrowserRequest } from "iterate/next/lib";
+import { isSameOriginBrowserRequest } from "iterate/lib";
 import type { Env, Handler } from "./env.ts";
 import { withIssuerRequest } from "./issuer-request-context.server.ts";
 
@@ -26,7 +26,7 @@ const publicFiles = new Set([
   "/cloudflare-logo.svg",
   // the browser extension's OAuth client logo_uri (apps/browser-extension/panel.js)
   "/client-logos/browser-extension.svg",
-  // the stylesheet apps' own sign-in pages link from their issuer (iterate/next/app-server)
+  // the stylesheet apps' own sign-in pages link from their issuer (iterate/app-server)
   "/issuer.css",
   // the prompt an agent follows to deploy and connect a platform of the person's own
   "/setup-prompt.md",
@@ -96,7 +96,7 @@ export const issuerHandler: Handler = {
 };
 
 /** This deployment's tab icon, for pages on other origins: the SDK's gate pages
- *  (iterate/next/app-server) link their issuer's. Production's is the logo itself; a per-PR preview
+ *  (iterate/app-server) link their issuer's. Production's is the logo itself; a per-PR preview
  *  or local dev draws its badge (@iterate-com/ui/lib/environment-favicon), read from the host this
  *  request reached, as the issuer's own pages do. */
 function favicon(request: Request, env: Env) {

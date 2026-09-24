@@ -2,7 +2,7 @@
 // spec: `itx.builtins.facets.get("repo").processEventBatch` marks the row as hosting RepoDurableObject
 // (this worker's class), while any other name still needs `{ source, className }` to host.
 import { expect, test } from "vitest";
-import type { ItxExpression } from "iterate/next/expression";
+import type { ItxExpression } from "iterate/expression";
 import { facetSpecFromHostingTarget } from "./stream/core-processor.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "./first-party-facets.ts";
 

@@ -1,5 +1,5 @@
 import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
-import { reportIssue } from "iterate/next/lib";
+import { reportIssue } from "iterate/lib";
 import type { Env } from "./env.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { GrantsRpcTarget } from "./grants.ts";

@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import type { AccountState } from "../src/account/contract.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";

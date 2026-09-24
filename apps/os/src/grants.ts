@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { CimdFetchError, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
-import { codedError, isLocalOrigin } from "iterate/next/lib";
-import type { GrantRecord } from "iterate/next/api";
-import { authorizationCodeRequest } from "iterate/next/oauth";
+import { codedError, isLocalOrigin } from "iterate/lib";
+import type { GrantRecord } from "iterate/api";
+import { authorizationCodeRequest } from "iterate/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
 import type { PlatformAddresses } from "./app-config.ts";
 import type { Env } from "./env.ts";

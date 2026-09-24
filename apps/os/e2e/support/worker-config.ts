@@ -4,7 +4,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
-import type { IngressRouting } from "iterate/next/project-ingress";
+import type { IngressRouting } from "iterate/project-ingress";
 
 /** The package root (this file lives at e2e/support/). */
 export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));

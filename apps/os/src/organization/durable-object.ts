@@ -3,7 +3,7 @@
 // `ctx.exports` — ordinary bundled worker code pulling `OrganizationProcessor` from ./processor.ts,
 // exactly as the account's host does. Its row is enabled with the first fact the control plane
 // lands (src/control-plane/durable-object.ts), idempotently.
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { OrganizationState } from "./contract.ts";
 import { OrganizationProcessor } from "./processor.ts";

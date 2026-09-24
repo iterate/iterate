@@ -3,7 +3,7 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
-import { appSession } from "iterate/next/app-server";
+import { appSession } from "iterate/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import type { GrantEnded } from "../src/account/contract.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
@@ -18,7 +18,7 @@ const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
   fetchReachesThisWorker();
-  // CIMD is the apps' own path (iterate/next/app-server.ts), but standard MCP clients (the MCP Inspector,
+  // CIMD is the apps' own path (iterate/app-server.ts), but standard MCP clients (the MCP Inspector,
   // Claude's connector) require dynamic registration — so both are advertised, on every deployment.
   const metadata = await (
     await call("/.well-known/oauth-authorization-server")

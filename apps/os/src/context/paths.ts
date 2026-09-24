@@ -3,7 +3,7 @@
 // key is prefixed by), and how a context's Durable Object name is formatted and parsed
 // (`DurableObjectNameCodec`). Imported by the edge, the DO, the built-ins and the resolver alike, so
 // it imports nothing of theirs.
-import { codedError, resolveContextPath } from "iterate/next/lib";
+import { codedError, resolveContextPath } from "iterate/lib";
 
 /** The charset a projectId (and, in the global namespace, an owner id) is held to. */
 const PROJECT_ID = /^[A-Za-z0-9_-]+$/;

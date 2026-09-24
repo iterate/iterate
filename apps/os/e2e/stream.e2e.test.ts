@@ -25,7 +25,7 @@
 //     a dormant context self-wakes on the DO's alarm, and the probe prints each wake's story
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
 import {
   disposeSessions,

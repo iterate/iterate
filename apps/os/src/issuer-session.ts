@@ -1,6 +1,6 @@
-import { startAppSession } from "iterate/next/app-server";
-import { sameOriginPath } from "iterate/next/lib";
-import { OAuthScope } from "iterate/next/oauth-scopes";
+import { startAppSession } from "iterate/app-server";
+import { sameOriginPath } from "iterate/lib";
+import { OAuthScope } from "iterate/oauth-scopes";
 import { clientDisplay } from "./client-display.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";

@@ -20,12 +20,12 @@
 // `DurableObject` class): there is NO host-injected wrapper and no bare-lambda entry point — the code the
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
-import { codedError } from "iterate/next/lib";
+import { codedError } from "iterate/lib";
 import {
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
-} from "iterate/next/expression";
+} from "iterate/expression";
 import PROCESSOR_SDK_MODULE from "../generated/processor-sdk.js";
 
 /** A worker's MODULES, module name → code. `"cap.js"` is the main module. */

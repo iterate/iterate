@@ -1,5 +1,5 @@
 import { newWebSocketRpcSession } from "capnweb";
-import type { IterateApi } from "iterate/next/api";
+import type { IterateApi } from "iterate/api";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
 
 /**

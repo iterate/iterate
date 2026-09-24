@@ -13,7 +13,7 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../src/context/facet-host.ts";
 import { releasePins, stub } from "./support.ts";
 

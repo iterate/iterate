@@ -4,9 +4,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { codedError } from "iterate/next/lib";
-import type { WaitForEventFilter } from "iterate/next/api";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import { codedError } from "iterate/lib";
+import type { WaitForEventFilter } from "iterate/api";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   buildLibrary,
   type LibraryItx,
@@ -1076,8 +1076,8 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "capnweb",
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
-  "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
-  "iterate/next/lib", // the package's pure helpers (error codes, resolveContextPath) — in the SDK bundle every userspace worker gets
+  "iterate/expression", // the codec — the package's, as a userspace worker would import it
+  "iterate/lib", // the package's pure helpers (error codes, resolveContextPath) — in the SDK bundle every userspace worker gets
   // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
   // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
   // worker would import from the SDK just the same.

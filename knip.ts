@@ -151,7 +151,7 @@ export default {
       project: ["src/**/*.{ts,tsx}"],
     },
     "packages/iterate": {
-      // The `iterate/next/*` SDK is the package.json export map; the CLI is the bin.
+      // The `iterate/*` SDK is the package.json export map; the CLI is the bin.
       entry: ["src/**/*.test.{ts,tsx}"],
       project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "tsdown*.ts"],
       // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as

@@ -19,7 +19,7 @@
 // (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts). Hosted from `ctx.exports`
 // (first-party-facets.ts): ordinary bundled worker code, reached as `itx.facets.get("workspace")`
 // (library.ts).
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
 import type { WorkspaceState } from "./contract.ts";

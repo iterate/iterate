@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { newHttpBatchRpcSession } from "capnweb";
-import { connectIterate } from "iterate/next/node";
+import { connectIterate } from "iterate/node";
 import { test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { MyComputer } from "../../../packages/iterate/src/use-my-computer.ts";

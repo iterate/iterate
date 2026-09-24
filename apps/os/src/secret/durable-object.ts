@@ -24,10 +24,10 @@
 // the offsets of the facts that say so. Hosted from `ctx.exports` (first-party-facets.ts): ordinary
 // bundled worker code with the worker's real env — the at-rest key and the signing secret among it.
 
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
-import type { EventInput } from "iterate/next/stream/processor";
-import { signClaims, verifyAdminSecret } from "iterate/next/principal";
-import { codedError, reportIssue } from "iterate/next/lib";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import type { EventInput } from "iterate/stream/processor";
+import { signClaims, verifyAdminSecret } from "iterate/principal";
+import { codedError, reportIssue } from "iterate/lib";
 import {
   appConfigOf,
   atRestKeysOf,

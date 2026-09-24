@@ -10,8 +10,8 @@
 // refused before `itx.secrets.set` can steer the `secret` facet there.
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
-import type { ItxExpressionInput } from "iterate/next/expression";
+import { errorCode } from "iterate/lib";
+import type { ItxExpressionInput } from "iterate/expression";
 import { signedInSession } from "./support.ts";
 
 /** One row: the first-party facet named on a context the person holds, and whether the platform

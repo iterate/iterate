@@ -11,7 +11,7 @@
 //   ProjectState                        = ProcessorState<typeof ProjectContract>  the reduced state below
 //   ConsumedEvent<typeof ProjectContract>                                          what reduce and processEvent see
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";

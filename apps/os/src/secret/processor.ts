@@ -4,11 +4,7 @@
 // the value; the kernel's `ProcessorEngine` drives this reduce inside that facet and answers it as
 // `snapshot()`. Imports only the pure kernel, so a unit test constructs it with `new` and reduces
 // rows (processor.test.ts, in node).
-import {
-  type ConsumedEvent,
-  type ReduceArgs,
-  StreamProcessor,
-} from "iterate/next/stream/processor";
+import { type ConsumedEvent, type ReduceArgs, StreamProcessor } from "iterate/stream/processor";
 import { SecretContract, type SecretState } from "./contract.ts";
 
 export class SecretProcessor extends StreamProcessor<

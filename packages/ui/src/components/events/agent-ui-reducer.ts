@@ -1,6 +1,6 @@
 import { appendText, sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
-import { RunSettled } from "iterate/next/stream/run";
+import { RunSettled } from "iterate/stream/run";
 import type { Event } from "./types.ts";
 
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3

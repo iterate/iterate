@@ -19,8 +19,8 @@
 
 import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
-import { FacetHandle } from "iterate/next/expression";
-import { errorCode } from "iterate/next/lib";
+import { FacetHandle } from "iterate/expression";
+import { errorCode } from "iterate/lib";
 import {
   type ScannedRange,
   type StreamEvent,
@@ -28,7 +28,7 @@ import {
   StreamProcessor,
   type ReduceArgs,
   ReduceCheckpointTable,
-} from "iterate/next/stream/processor";
+} from "iterate/stream/processor";
 import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";

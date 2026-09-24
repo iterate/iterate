@@ -16,8 +16,8 @@
 // with it, reached as `itx.facets.get("repo")` (library.ts).
 
 import { z } from "zod";
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
-import type { EventInput } from "iterate/next/stream/processor";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import type { EventInput } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   AUTHOR,

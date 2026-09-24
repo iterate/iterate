@@ -2,7 +2,7 @@ import { createFileRoute, useRouter, useRouterState } from "@tanstack/react-rout
 import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
-import { useLiveState } from "iterate/next/react";
+import { useLiveState } from "iterate/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,

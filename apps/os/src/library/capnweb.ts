@@ -8,7 +8,7 @@
 // busy facet; dispose it and the session closes. A batch connection holds no socket and pins nothing.
 
 import { RpcSession, newWebSocketRpcSession, type RpcStub, type RpcTransport } from "capnweb";
-import { InvokeHandle, walkStepsOnRpcStub } from "iterate/next/expression";
+import { InvokeHandle, walkStepsOnRpcStub } from "iterate/expression";
 import type { LibraryItx } from "../library.ts";
 import { refuseUnlessOk, responseRefusal } from "./connection.ts";
 

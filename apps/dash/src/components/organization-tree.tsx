@@ -17,7 +17,7 @@
 // oxlint-disable react/only-export-components -- the tree's hook and its loader-side reads are the component's own API: one file, one place.
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/next/app";
+import type { AuthenticatedApp } from "iterate/app";
 import { useContextStub, useFacetLiveState } from "../lib/context-stub.ts";
 
 export type OrganizationRole = "owner" | "member";

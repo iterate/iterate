@@ -18,7 +18,7 @@
   },
   "include": [
     "src/cli.ts",
-    "src/next-node.ts",
+    "src/node.ts",
     "src/cli.test.ts",
     "tsdown.config.ts",
     "vitest.config.ts"

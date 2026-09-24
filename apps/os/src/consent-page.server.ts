@@ -5,7 +5,7 @@
 
 import { redirect } from "@tanstack/react-router";
 import { z } from "zod";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ConsentRpcTarget } from "./consent.ts";

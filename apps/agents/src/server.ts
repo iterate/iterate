@@ -1,9 +1,9 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env } from "cloudflare:workers";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
-import { appAuth } from "iterate/next/app-server";
-import type { BrowserSession } from "iterate/next/app-session";
-export { BrowserSession } from "iterate/next/app-session";
+import { appAuth } from "iterate/app-server";
+import type { BrowserSession } from "iterate/app-session";
+export { BrowserSession } from "iterate/app-session";
 
 declare global {
   namespace Cloudflare {

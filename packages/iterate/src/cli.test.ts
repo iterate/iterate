@@ -23,7 +23,7 @@ import {
   refreshOAuthSession,
   shellCommand,
 } from "./cli.ts";
-import { connectIterate } from "./next-node.ts";
+import { connectIterate } from "./node.ts";
 import { Config } from "./config.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
@@ -415,7 +415,7 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No port");
   const source = `
-    import { connectIterate } from ${JSON.stringify(new URL("./next-node.ts", import.meta.url).href)};
+    import { connectIterate } from ${JSON.stringify(new URL("./node.ts", import.meta.url).href)};
     import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
     using connection = await connectIterate({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
     await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });

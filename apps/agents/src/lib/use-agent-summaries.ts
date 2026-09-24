@@ -4,8 +4,8 @@
 // the set and keeps the summaries it had meanwhile, so the order does not flicker on a new agent.
 import { useEffect, useState } from "react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/next/app";
-import { connectLiveState } from "iterate/next/client";
+import type { AuthenticatedApp } from "iterate/app";
+import { connectLiveState } from "iterate/client";
 import { summarizeAgentState, type AgentSummary } from "./agent-summary.ts";
 
 /** What the sidebar knows of one agent's live state: its summary, or why there is none — the

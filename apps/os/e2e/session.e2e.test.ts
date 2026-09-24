@@ -3,7 +3,7 @@
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
   adminCredentials,

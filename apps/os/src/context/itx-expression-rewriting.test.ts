@@ -15,8 +15,8 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   InvokeHandle,
-} from "iterate/next/expression";
-import type { RewriteRuleListEntry } from "iterate/next/api";
+} from "iterate/expression";
+import type { RewriteRuleListEntry } from "iterate/api";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { nodeSqliteStream } from "../stream/test-support.ts";
 import {

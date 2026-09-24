@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { createFileRoute, getRouteApi, Link } from "@tanstack/react-router";
 import { z } from "zod";
-import { resolveContextPath } from "iterate/next/lib";
+import { resolveContextPath } from "iterate/lib";
 import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { Input } from "@iterate-com/ui/components/input";
 import { ContextActivity } from "../../../../components/context-activity.tsx";

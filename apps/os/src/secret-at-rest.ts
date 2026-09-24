@@ -7,7 +7,7 @@
 // under `current` when told it happened, so a rotation completes one read at a time and the old key
 // can be dropped once every record has been touched.
 
-import type { SecretMaterial } from "iterate/next/api";
+import type { SecretMaterial } from "iterate/api";
 
 /** What the facet stores in place of the material. */
 export type EncryptedMaterial = {

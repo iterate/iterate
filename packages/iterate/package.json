@@ -23,90 +23,90 @@
     "node": ">=22.15"
   },
   "exports": {
-    "./next/sdk": "./src/next/sdk/index.ts",
-    "./next/app": "./src/next/app.ts",
-    "./next/app-server": "./src/next/app-server.ts",
-    "./next/app-session": "./src/next/app-session.ts",
-    "./next/client": "./src/next/client/live-state.ts",
-    "./next/react": "./src/next/client/react.tsx",
-    "./next/api": "./src/next/api.ts",
-    "./next/lib": "./src/next/lib.ts",
-    "./next/expression": "./src/next/expression.ts",
-    "./next/principal": "./src/next/principal.ts",
-    "./next/stream/processor": "./src/next/stream/processor.ts",
-    "./next/oauth-scopes": "./src/next/oauth-scopes.ts",
-    "./next/project-ingress": "./src/next/project-ingress.ts",
-    "./next/oauth": "./src/next/client/oauth.ts",
-    "./next/stream/run": "./src/next/stream/run.ts",
-    "./next/node": "./src/next-node.ts"
+    "./sdk": "./src/sdk/index.ts",
+    "./app": "./src/app.ts",
+    "./app-server": "./src/app-server.ts",
+    "./app-session": "./src/app-session.ts",
+    "./client": "./src/client/live-state.ts",
+    "./react": "./src/client/react.tsx",
+    "./api": "./src/api.ts",
+    "./lib": "./src/lib.ts",
+    "./expression": "./src/expression.ts",
+    "./principal": "./src/principal.ts",
+    "./stream/processor": "./src/stream/processor.ts",
+    "./oauth-scopes": "./src/oauth-scopes.ts",
+    "./project-ingress": "./src/project-ingress.ts",
+    "./oauth": "./src/client/oauth.ts",
+    "./stream/run": "./src/stream/run.ts",
+    "./node": "./src/node.ts"
   },
   "publishConfig": {
     "access": "public",
     "exports": {
-      "./next/sdk": {
-        "types": "./dist/next/sdk/index.d.ts",
-        "import": "./dist/next/sdk.mjs"
+      "./sdk": {
+        "types": "./dist/sdk/index.d.ts",
+        "import": "./dist/sdk.mjs"
       },
-      "./next/app": {
-        "types": "./dist/next/app.d.ts",
-        "import": "./dist/next/app.mjs"
+      "./app": {
+        "types": "./dist/app.d.ts",
+        "import": "./dist/app.mjs"
       },
-      "./next/app-server": {
-        "types": "./dist/next/app-server.d.ts",
-        "import": "./dist/next/app-server.mjs"
+      "./app-server": {
+        "types": "./dist/app-server.d.ts",
+        "import": "./dist/app-server.mjs"
       },
-      "./next/app-session": {
-        "types": "./dist/next/app-session.d.ts",
-        "import": "./dist/next/app-session.mjs"
+      "./app-session": {
+        "types": "./dist/app-session.d.ts",
+        "import": "./dist/app-session.mjs"
       },
-      "./next/client": {
-        "types": "./dist/next/client/live-state.d.ts",
-        "import": "./dist/next/client.mjs"
+      "./client": {
+        "types": "./dist/client/live-state.d.ts",
+        "import": "./dist/client.mjs"
       },
-      "./next/react": {
-        "types": "./dist/next/client/react.d.ts",
-        "import": "./dist/next/react.mjs"
+      "./react": {
+        "types": "./dist/client/react.d.ts",
+        "import": "./dist/react.mjs"
       },
-      "./next/api": {
-        "types": "./dist/next/api.d.ts",
-        "import": "./dist/next/api.mjs"
+      "./api": {
+        "types": "./dist/api.d.ts",
+        "import": "./dist/api.mjs"
       },
-      "./next/lib": {
-        "types": "./dist/next/lib.d.ts",
-        "import": "./dist/next/lib.mjs"
+      "./lib": {
+        "types": "./dist/lib.d.ts",
+        "import": "./dist/lib.mjs"
       },
-      "./next/expression": {
-        "types": "./dist/next/expression.d.ts",
-        "import": "./dist/next/expression.mjs"
+      "./expression": {
+        "types": "./dist/expression.d.ts",
+        "import": "./dist/expression.mjs"
       },
-      "./next/principal": {
-        "types": "./dist/next/principal.d.ts",
-        "import": "./dist/next/principal.mjs"
+      "./principal": {
+        "types": "./dist/principal.d.ts",
+        "import": "./dist/principal.mjs"
       },
-      "./next/stream/processor": {
-        "types": "./dist/next/stream/processor.d.ts",
-        "import": "./dist/next/stream/processor.mjs"
+      "./stream/processor": {
+        "types": "./dist/stream/processor.d.ts",
+        "import": "./dist/stream/processor.mjs"
       },
-      "./next/oauth-scopes": {
-        "types": "./dist/next/oauth-scopes.d.ts",
-        "import": "./dist/next/oauth-scopes.mjs"
+      "./oauth-scopes": {
+        "types": "./dist/oauth-scopes.d.ts",
+        "import": "./dist/oauth-scopes.mjs"
       },
-      "./next/project-ingress": {
-        "types": "./dist/next/project-ingress.d.ts",
-        "import": "./dist/next/project-ingress.mjs"
+      "./project-ingress": {
+        "types": "./dist/project-ingress.d.ts",
+        "import": "./dist/project-ingress.mjs"
       },
-      "./next/oauth": {
-        "types": "./dist/next/client/oauth.d.ts",
-        "import": "./dist/next/oauth.mjs"
+      "./oauth": {
+        "types": "./dist/client/oauth.d.ts",
+        "import": "./dist/oauth.mjs"
       },
-      "./next/stream/run": {
-        "types": "./dist/next/stream/run.d.ts",
-        "import": "./dist/next/stream/run.mjs",
-        "default": "./dist/next/stream/run.mjs"
+      "./stream/run": {
+        "types": "./dist/stream/run.d.ts",
+        "import": "./dist/stream/run.mjs",
+        "default": "./dist/stream/run.mjs"
       },
-      "./next/node": {
-        "types": "./dist/next-node.d.ts",
-        "import": "./dist/next-node.mjs"
+      "./node": {
+        "types": "./dist/node.d.ts",
+        "import": "./dist/node.mjs"
       }
     }
   },

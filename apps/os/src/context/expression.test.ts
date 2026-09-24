@@ -2,7 +2,7 @@
 // the step walk under a rewrite rule through `ItxExpressionResolver` over a fake built-ins scope, the
 // resolver releasing what its walk held, and what a context's `invoke` answer leaves of a session.
 // The codec, the walk's pipelining contract and the prototype hop are packages/iterate
-// src/next/expression.test.ts; rule MATCHING is itx-expression-rewriting.test.ts.
+// src/expression.test.ts; rule MATCHING is itx-expression-rewriting.test.ts.
 
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
@@ -18,7 +18,7 @@ import {
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
   walkSteps,
-} from "iterate/next/expression";
+} from "iterate/expression";
 import {
   BUILT_IN_ROOTS,
   ItxExpressionResolver,
@@ -82,7 +82,7 @@ test("walkSteps + resolve: calling the bare scope symbol is a loud error (the pa
 });
 
 // ── the resolver releases the sessions its walk held ── `ItxExpressionResolver#invoke` over the
-// step walk's `rpcSessionsSteppedPast` (iterate/next/expression.ts): a session-holding value a walk
+// step walk's `rpcSessionsSteppedPast` (iterate/expression.ts): a session-holding value a walk
 // stepped past is released once the answer is in, and a rejected answer is released too.
 test("the resolver releases what its walk stepped past once the answer is in; the answer stays the caller's", async () => {
   const order: string[] = [];

@@ -1,25 +1,25 @@
 {
-  // `iterate/next/*` — the SDK: Worker code (Durable Objects, WorkerEntrypoints, capnweb over
+  // `iterate/*` — the SDK: Worker code (Durable Objects, WorkerEntrypoints, capnweb over
   // workerd), typed against the REAL Cloudflare types in its own program, apart from the package's
   // Node/DOM program (tsconfig.json covers only the CLI entry points and what they import).
-  // `typecheck` runs it; `build` runs it with emitDeclarationOnly for dist/next/**/*.d.ts (the .mjs
-  // come from tsdown.config.ts's next entries).
+  // `typecheck` runs it; `build` runs it with emitDeclarationOnly for dist/**/*.d.ts (the .mjs
+  // come from tsdown.config.ts's neutral entries).
   "files": [
-    "src/next/sdk/index.ts",
-    "src/next/app.ts",
-    "src/next/app-server.ts",
-    "src/next/app-session.ts",
-    "src/next/client/live-state.ts",
-    "src/next/client/react.tsx",
-    "src/next/api.ts",
-    "src/next/lib.ts",
-    "src/next/expression.ts",
-    "src/next/principal.ts",
-    "src/next/stream/processor.ts",
-    "src/next/stream/run.ts",
-    "src/next/oauth-scopes.ts",
-    "src/next/project-ingress.ts",
-    "src/next/client/oauth.ts"
+    "src/sdk/index.ts",
+    "src/app.ts",
+    "src/app-server.ts",
+    "src/app-session.ts",
+    "src/client/live-state.ts",
+    "src/client/react.tsx",
+    "src/api.ts",
+    "src/lib.ts",
+    "src/expression.ts",
+    "src/principal.ts",
+    "src/stream/processor.ts",
+    "src/stream/run.ts",
+    "src/oauth-scopes.ts",
+    "src/project-ingress.ts",
+    "src/client/oauth.ts"
   ],
   "compilerOptions": {
     "target": "ES2022",
@@ -37,8 +37,8 @@
     "allowImportingTsExtensions": true,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "rootDir": "src/next",
-    "outDir": "dist/next",
+    "rootDir": "src",
+    "outDir": "dist",
     "skipLibCheck": true
   }
 }

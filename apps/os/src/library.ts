@@ -6,16 +6,11 @@
 // library.test.ts pins what every library file may import at runtime.
 
 import { z } from "zod";
-import {
-  keySortedForPrint,
-  InvokeHandle,
-  print,
-  type ItxExpression,
-} from "iterate/next/expression";
-import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/next/lib";
-import type { Caller } from "iterate/next/principal";
-import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
-import type { RunSettled, RunSettlement } from "iterate/next/stream/run";
+import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
+import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
+import type { Caller } from "iterate/principal";
+import type { EventInput, StreamEvent } from "iterate/stream/processor";
+import type { RunSettled, RunSettlement } from "iterate/stream/run";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";

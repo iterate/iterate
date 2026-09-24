@@ -84,11 +84,11 @@ ends the REPL visibly; it never silently repeats your commands.
 
 ## Node connections
 
-`iterate/next/node` exposes a connection owner for Iterate scripts and live
+`iterate/node` exposes a connection owner for Iterate scripts and live
 providers. It uses the same protocol and cleanup as the CLI:
 
 ```js
-import { connectIterate } from "iterate/next/node";
+import { connectIterate } from "iterate/node";
 
 using connection = await connectIterate({
   baseUrl: "https://os.iterate.com",
@@ -103,4 +103,4 @@ uses the published build when installed through `npx`.
 
 ## SDK
 
-The SDK exposes context APIs, stream processors, reactive clients, React bindings, and OAuth app sessions under `iterate/next/*`. The package exports source in this workspace and compiled JavaScript with declarations when packed.
+The SDK exposes context APIs, stream processors, reactive clients, React bindings, and OAuth app sessions under `iterate/*`. The package exports source in this workspace and compiled JavaScript with declarations when packed.

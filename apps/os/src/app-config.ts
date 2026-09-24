@@ -26,7 +26,7 @@ import {
   projectAddressOf,
   type IngressRouting,
   type ProjectAddress,
-} from "iterate/next/project-ingress";
+} from "iterate/project-ingress";
 import { TEST_LINK_EMAIL_DOMAIN } from "./test-link.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
@@ -454,7 +454,7 @@ export function platformAddressesOf(env: AppConfigEnv, request: Request): Platfo
   };
 }
 
-/** The project `url` is a host of: under the ingress routing (iterate/next/project-ingress:
+/** The project `url` is a host of: under the ingress routing (iterate/project-ingress:
  *  subdomains — a host under the wildcard; paths — `/<project>[/<app>]` on the platform origin), or
  *  one of the deployment's custom hostnames (a project's apex). The platform and MCP origins are the
  *  platform's own even when their zone also has a project wildcard. What worker.ts admits a project

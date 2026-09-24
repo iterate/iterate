@@ -6,8 +6,8 @@ import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-sa
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { newHttpBatchRpcSession } from "capnweb";
-import { authorizationCodeRequest } from "iterate/next/oauth";
-import type { IterateApi } from "iterate/next/api";
+import { authorizationCodeRequest } from "iterate/oauth";
+import type { IterateApi } from "iterate/api";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { claudeClient, signInWithPassword } from "../test-support/issuer.ts";
 import { test } from "../test-support/test.ts";

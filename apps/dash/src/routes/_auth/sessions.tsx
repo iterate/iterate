@@ -6,7 +6,7 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
-import type { GrantKind } from "iterate/next/api";
+import type { GrantKind } from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";

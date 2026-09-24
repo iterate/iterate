@@ -17,13 +17,13 @@
 //   ConsumedEvent<typeof SecretContract>                                           what reduce sees
 //   EventInput<typeof SecretContract>                                              what the verbs append
 import { z } from "zod";
-import { jsonEqual } from "iterate/next/lib";
+import { jsonEqual } from "iterate/lib";
 import {
   type ConsumedEvent,
   defineProcessorContract,
   type ProcessorState,
-} from "iterate/next/stream/processor";
-import type { SecretRefresh } from "iterate/next/api";
+} from "iterate/stream/processor";
+import type { SecretRefresh } from "iterate/api";
 
 /** The refresh strategies implemented (secrets.ts), by kind: what a `set` names, a `refreshed`
  *  reports and the catalog keeps — pinned to the SDK's `SecretRefresh`, so a strategy added there

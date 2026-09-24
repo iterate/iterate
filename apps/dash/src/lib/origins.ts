@@ -1,4 +1,4 @@
-import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
+import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 
 /** `value` as an http(s) origin, or null. What the issuer's `info()` reports — its platform and MCP
  *  origins — becomes an href or a copyable command only once parsed: a value that is not a URL, or

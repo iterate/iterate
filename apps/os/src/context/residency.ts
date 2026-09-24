@@ -17,8 +17,8 @@
 // its own clock. How these four relate to the three session-release mechanisms in the SDK and the
 // step walk: apps/os/docs/residency.md.
 
-import { reportIssue } from "iterate/next/lib";
-import type { StreamEventInput } from "iterate/next/stream/processor";
+import { reportIssue } from "iterate/lib";
+import type { StreamEventInput } from "iterate/stream/processor";
 import type { buildLibrary } from "../library.ts";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS, type FacetHost } from "./facet-host.ts";
 import { RESIDENCY_WATCHDOG_WINDOW_MS, decideQuietDeadline } from "./residency-watchdog.ts";

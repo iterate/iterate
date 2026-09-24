@@ -3,9 +3,9 @@
 // whether the walk reaches the facet or is refused FORBIDDEN. The same rules end to end, through a
 // person who signed in, are __workers-tests__/facet-public-methods.test.ts.
 import { expect, test } from "vitest";
-import { parse } from "iterate/next/expression";
-import { errorCode } from "iterate/next/lib";
-import { FacetDurableObject, StreamProcessorDurableObject } from "iterate/next/sdk";
+import { parse } from "iterate/expression";
+import { errorCode } from "iterate/lib";
+import { FacetDurableObject, StreamProcessorDurableObject } from "iterate/sdk";
 import { AccountDurableObject } from "../account/durable-object.ts";
 import { ProjectDurableObject } from "../project/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";

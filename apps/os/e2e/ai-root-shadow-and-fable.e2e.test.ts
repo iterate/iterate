@@ -11,7 +11,7 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, rejection, until } from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 

@@ -13,7 +13,7 @@ const root = path.resolve(import.meta.dirname, "..");
 
 async function processorSdkModule() {
   const bundled = await esbuild({
-    entryPoints: [createRequire(import.meta.url).resolve("iterate/next/sdk")],
+    entryPoints: [createRequire(import.meta.url).resolve("iterate/sdk")],
     bundle: true,
     format: "esm",
     platform: "neutral",
@@ -32,10 +32,10 @@ async function processorSdkModule() {
 const externalizeToProcessorJs: Plugin = {
   name: "externalize-to-processor-js",
   setup(pluginBuild) {
-    pluginBuild.onResolve(
-      { filter: /^(zod|iterate\/next\/sdk|iterate\/next\/stream\/processor)$/ },
-      () => ({ path: "./processor.js", external: true }),
-    );
+    pluginBuild.onResolve({ filter: /^(zod|iterate\/sdk|iterate\/stream\/processor)$/ }, () => ({
+      path: "./processor.js",
+      external: true,
+    }));
   },
 };
 

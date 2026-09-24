@@ -7,9 +7,9 @@
 // an entity (`itx.repos.get(path)`) is the library's (library.ts): straight to the path, never through `/`.
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
-import { codedError, resolveContextPath } from "iterate/next/lib";
-import type { WithItx } from "iterate/next/sdk";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import { codedError, resolveContextPath } from "iterate/lib";
+import type { WithItx } from "iterate/sdk";
+import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
 import type { EntityCreationAndDeletionState } from "./entity-state.ts";

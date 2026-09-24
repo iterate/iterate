@@ -12,8 +12,8 @@
 // not a worker.
 
 // The shapes a caller sees — the material, the client-auth method and the refresh strategy — are the
-// SDK's (`iterate/next/api`, where the dash and every client read them).
-import type { ClientAuth, SecretMaterial, SecretRefresh } from "iterate/next/api";
+// SDK's (`iterate/api`, where the dash and every client read them).
+import type { ClientAuth, SecretMaterial, SecretRefresh } from "iterate/api";
 import { SecretRefreshKind } from "./secret/contract.ts";
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never

@@ -1,4 +1,4 @@
-// next/api.ts — THE API AN APP DIALS: the shapes of apps/os's `/api` root, the session it vends and a
+// api.ts — THE API AN APP DIALS: the shapes of apps/os's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
 // platform's classes: apps/os asserts that `IterateRpcTarget` satisfies `IterateApi` and that
 // `IterateContextRpcTarget` satisfies `IterateContextApi` (src/session.ts, src/iterate-context.ts),

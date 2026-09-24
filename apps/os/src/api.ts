@@ -1,4 +1,4 @@
-import { OAuthScope } from "iterate/next/oauth-scopes";
+import { OAuthScope } from "iterate/oauth-scopes";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env, Handler } from "./env.ts";
 import { authorizationOf, providerFetch, recordGrantUse } from "./oauth.ts";
@@ -48,7 +48,7 @@ export function oauthResponse(
   // its token IN-BAND, `authenticate({ type: "bearer", token })` (capnweb's own pattern; session.ts,
   // bound to the socket by rpc.ts). Empty = the root and nothing else: no capability until that call
   // resolves through the same gate the header goes through. The HTTP form stays behind the gate —
-  // an app's sign-in probe (iterate/next/app) reads its 401.
+  // an app's sign-in probe (iterate/app) reads its 401.
   if (
     url.pathname === "/api" &&
     !request.headers.has("authorization") &&

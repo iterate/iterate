@@ -1,4 +1,4 @@
-// client/live-state.ts — THE CLIENT HALF of live state (`iterate/next/client`), framework-free, for
+// client/live-state.ts — THE CLIENT HALF of live state (`iterate/client`), framework-free, for
 // browsers and node test clients. Two concepts:
 //   live state store  — `createLiveStateStore`: the pure reduce — seed from the producer, apply each delta, heal on a gap
 //   live state client — `connectLiveState`: wire an itx session's `subscribe` + a seed read to the store

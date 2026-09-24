@@ -24,7 +24,7 @@
 import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import {
   collector,
   freshCtx,

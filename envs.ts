@@ -1,6 +1,6 @@
 /** Deployment configuration for OS and its first-party apps. Secrets live in Doppler. */
 
-import type { IngressRouting } from "./packages/iterate/src/next/project-ingress.ts";
+import type { IngressRouting } from "./packages/iterate/src/project-ingress.ts";
 
 /** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
  * dev/preview shares one account; use its preview credentials, not a preview slot. */

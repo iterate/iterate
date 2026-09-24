@@ -8,7 +8,7 @@
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
 import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";

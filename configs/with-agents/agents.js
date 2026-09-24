@@ -5,7 +5,7 @@ import { StreamProcessorDurableObject } from "./processor.js";
 // runtime/processor.ts
 import { z as z2 } from "./processor.js";
 
-// ../../packages/iterate/src/next/lib.ts
+// ../../packages/iterate/src/lib.ts
 function codedError(code, message, data) {
   return Object.assign(new Error(message), data === void 0 ? { code } : { code, data });
 }

@@ -19,7 +19,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import type { StreamEventInput } from "iterate/next/stream/processor";
+import type { StreamEventInput } from "iterate/stream/processor";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import {
   encodeRpcStubPagerAttachRequest,

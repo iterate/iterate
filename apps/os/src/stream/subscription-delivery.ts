@@ -39,10 +39,10 @@ import {
   walkSteps,
   FacetHandle,
   RpcStubHandle,
-} from "iterate/next/expression";
-import { errorCode, reportIssue, withTimeout } from "iterate/next/lib";
-import type { StreamPage } from "iterate/next/api";
-import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/next/stream/processor";
+} from "iterate/expression";
+import { errorCode, reportIssue, withTimeout } from "iterate/lib";
+import type { StreamPage } from "iterate/api";
+import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
 import { RECENT_EPHEMERALS_BUDGET_CHARS, type Stream, type SubscriptionCursor } from "./stream.ts";
 

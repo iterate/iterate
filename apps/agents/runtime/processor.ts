@@ -22,18 +22,18 @@
 // over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
 import { z } from "zod";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
   type ProcessEventArgs,
   type ReduceArgs,
   StreamProcessor,
-} from "iterate/next/stream/processor";
-import type { WithItx } from "iterate/next/sdk";
-import type { RewriteRuleListEntry } from "iterate/next/api";
-import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
-import type { RunSettlement } from "iterate/next/stream/run";
+} from "iterate/stream/processor";
+import type { WithItx } from "iterate/sdk";
+import type { RewriteRuleListEntry } from "iterate/api";
+import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
+import type { RunSettlement } from "iterate/stream/run";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
 import {
   AgentContract,

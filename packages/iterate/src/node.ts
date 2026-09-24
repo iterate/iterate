@@ -1,7 +1,7 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import type { IterateApi, SessionCredentials } from "./next/api.ts";
-import { withTimeout } from "./next/lib.ts";
+import type { IterateApi, SessionCredentials } from "./api.ts";
+import { withTimeout } from "./lib.ts";
 
 /** One connection to an Iterate deployment. Dispose the owner to close every child capability and its socket.
  * Operations are never retried: replaying a script could duplicate its effects. */

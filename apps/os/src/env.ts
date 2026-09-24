@@ -3,7 +3,7 @@
 // issuer's page files and the mailbox. The registry itself is the `CONTROL_PLANE` singleton Durable
 // Object, reached by binding (src/control-plane/edge.ts).
 
-import type { BrowserSession } from "iterate/next/app-session";
+import type { BrowserSession } from "iterate/app-session";
 import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 

@@ -8,7 +8,7 @@
 // alone — are __workers-tests__/forged-facet-inputs.test.ts.
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { signedInSession } from "./support.ts";
 
 /** A person's own processor with a method of its own (`hello`), loaded from source. */

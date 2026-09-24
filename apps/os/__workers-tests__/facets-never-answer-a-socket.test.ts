@@ -15,7 +15,7 @@
 
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { adminCredentials, openSession, stub } from "./support.ts";
 
 /** A stateful app hosted as a facet: `fetch()` serves plain HTTP AND would upgrade a WebSocket if

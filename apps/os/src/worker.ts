@@ -6,8 +6,8 @@
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
-import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
-import { forwardIssues } from "iterate/next/lib";
+import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
+import { forwardIssues } from "iterate/lib";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
@@ -119,7 +119,7 @@ function projectHostRequestTo(
 forwardIssues(captureIssueInPosthog);
 
 export { IterateContextDurableObject };
-export { BrowserSession } from "iterate/next/app-session";
+export { BrowserSession } from "iterate/app-session";
 // THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.

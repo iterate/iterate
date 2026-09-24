@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { z } from "zod";
-import { createIterateClient } from "iterate/next/app";
+import { createIterateClient } from "iterate/app";
 import { usePosthogIdentity } from "@iterate-com/ui/components/posthog";
 
 // Minting the device's access token needs the account scope on top of project access.

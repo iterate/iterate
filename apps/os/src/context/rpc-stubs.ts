@@ -5,16 +5,16 @@
 //   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import { codedError, errorCode } from "iterate/next/lib";
+import { codedError, errorCode } from "iterate/lib";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
   ITX_PRINCIPAL_HEADER,
   type Caller,
-} from "iterate/next/principal";
-import type { StreamEventInput } from "iterate/next/stream/processor";
-import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression";
+} from "iterate/principal";
+import type { StreamEventInput } from "iterate/stream/processor";
+import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { isRetryableTransportError } from "../retryable-error.ts";
 

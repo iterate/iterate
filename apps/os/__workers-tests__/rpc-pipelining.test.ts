@@ -3,7 +3,7 @@
 // native Workers-RPC call returns an `instanceof` of it. workers-types lags this export (worker.ts
 // casts around it) — if workerd ever drops or renames it, this fails LOUDLY instead of the
 // registration silently never matching (which would quietly re-await every native chain step).
-// The behavioral contract itself is pinned in packages/iterate/src/next/expression.test.ts ("pipelined
+// The behavioral contract itself is pinned in packages/iterate/src/expression.test.ts ("pipelined
 // RPC promise threading") and, for the capnweb one-shot batch where it is CORRECTNESS, by the e2e
 // tests' remote-capnweb call-then-call test.
 
@@ -12,7 +12,7 @@
 import "../src/iterate-context.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { walkSteps } from "iterate/next/expression";
+import { walkSteps } from "iterate/expression";
 import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {

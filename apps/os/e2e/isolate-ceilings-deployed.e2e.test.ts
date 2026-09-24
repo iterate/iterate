@@ -35,7 +35,7 @@
 // `.overloaded` + `.durableObjectReset` stamped, and the ctx recovers on the very next call.
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, rejection } from "./support/client.ts";
 import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
 import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";

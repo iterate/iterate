@@ -13,7 +13,7 @@
 //   OrganizationState = ProcessorState<typeof OrganizationContract>   the reduced state below
 //   ConsumedEvent<typeof OrganizationContract>                         what the reduce sees
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 
 /** What a member is to an organization: an owner runs it (rename, delete, members), a member

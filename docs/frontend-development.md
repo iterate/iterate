@@ -11,17 +11,17 @@ its contexts.** The session is a capnweb `RpcStub` — a capability handle you c
 like a local object; the calls travel over the tab's single `/api` WebSocket and
 the server answers or pushes.
 
-The client lives in the published **`iterate` package** under `iterate/next/*`
+The client lives in the published **`iterate` package** under `iterate/*`
 and is layered so every app shares one implementation:
 
-| Entry                     | What it is                                                                                                                                                                                                                              |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/next/react`      | The two React hooks below (`useLiveState`, `useIterateContext`) — the ONE file that imports React. The rendering half (`ContextView`, `AppShell`) lives in `@iterate-com/ui`, so the UI kit stays free of the SDK.                      |
-| `iterate/next/app`        | `createIterateClient` — the browser's one-socket session: login probe, the socket to the page's own `/api`, and reconnect on the next call. No React anywhere.                                                                          |
-| `iterate/next/client`     | The framework-free live-state client: `createLiveStateStore` (seed, apply deltas, heal a gap) and `connectLiveState` (wire a context's `subscribe` and a seed read to the store). Node test clients use the same code.                  |
-| `iterate/next/app-server` | The app Worker's half: `appAuth` (the OAuth client, the `/.auth/*` pages and the authenticated `/api` proxy), `appSession`, `issuerOriginOf`. With `BrowserSession` from `iterate/next/app-session`, the Durable Object each app binds. |
-| `iterate/next/api`        | The declared shapes of the platform's `/api`: `IterateApi`, `IterateSessionApi`, `IterateContextApi` — what an app types against.                                                                                                       |
-| `iterate/next/node`       | `connectIterate({ baseUrl, auth })` — the node one-shot dial (`ws`) for scripts and the CLI; `Disposable`, never retried.                                                                                                               |
+| Entry                | What it is                                                                                                                                                                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/react`      | The two React hooks below (`useLiveState`, `useIterateContext`) — the ONE file that imports React. The rendering half (`ContextView`, `AppShell`) lives in `@iterate-com/ui`, so the UI kit stays free of the SDK.                 |
+| `iterate/app`        | `createIterateClient` — the browser's one-socket session: login probe, the socket to the page's own `/api`, and reconnect on the next call. No React anywhere.                                                                     |
+| `iterate/client`     | The framework-free live-state client: `createLiveStateStore` (seed, apply deltas, heal a gap) and `connectLiveState` (wire a context's `subscribe` and a seed read to the store). Node test clients use the same code.             |
+| `iterate/app-server` | The app Worker's half: `appAuth` (the OAuth client, the `/.auth/*` pages and the authenticated `/api` proxy), `appSession`, `issuerOriginOf`. With `BrowserSession` from `iterate/app-session`, the Durable Object each app binds. |
+| `iterate/api`        | The declared shapes of the platform's `/api`: `IterateApi`, `IterateSessionApi`, `IterateContextApi` — what an app types against.                                                                                                  |
+| `iterate/node`       | `connectIterate({ baseUrl, auth })` — the node one-shot dial (`ws`) for scripts and the CLI; `Disposable`, never retried.                                                                                                          |
 
 In a browser the client needs zero configuration beyond its scopes (it dials
 the page's own `/api`, and the app Worker's `appAuth` gate forwards it to the
@@ -44,7 +44,7 @@ is the entire runtime-specific binding around the shared client.
 **Light mode only**, in every app and page: no dark palette, theme provider or `dark:` class. Strip them from anything shadcn generates. `dark:` never matches: `@iterate-com/ui/globals.css` switches it off.
 
 The backend surface is the platform's one API — declared in
-[`packages/iterate/src/next/api.ts`](../packages/iterate/src/next/api.ts) (never
+[`packages/iterate/src/api.ts`](../packages/iterate/src/api.ts) (never
 generated; `apps/os` asserts its classes satisfy it), and served by
 [`apps/os`](../apps/os/README.md).
 
@@ -69,11 +69,11 @@ generated; `apps/os` asserts its classes satisfy it), and served by
 The whole tab shares **one** WebSocket — `authenticate()`d with the session the
 app Worker's OAuth gate resolved from its `__Host-` cookie — and everything — the
 shell's project switcher, every page, every live subscription — rides it. The
-connection layer ([`packages/iterate/src/next/app.ts`](../packages/iterate/src/next/app.ts),
-exported as `iterate/next/app`) keeps it in module state (outside React), so it
+connection layer ([`packages/iterate/src/app.ts`](../packages/iterate/src/app.ts),
+exported as `iterate/app`) keeps it in module state (outside React), so it
 survives client-side navigation, and makes **reconnect cheap and quiet**:
 connecting tries for a while (`openSocketWithRetry` in
-[`client/socket.ts`](../packages/iterate/src/next/client/socket.ts), ≈16 s of
+[`client/socket.ts`](../packages/iterate/src/client/socket.ts), ≈16 s of
 attempts) before an error reaches the page, and the `api` a page holds is a proxy
 to the CURRENT connection — when the socket closes, the next call opens a fresh
 one and pipelines onto it, so a dropped connection costs a reconnect, not the
@@ -86,7 +86,7 @@ What reconnect does not do: a live subscription is bound to the socket it was
 made on. `useLiveState` and `useIterateContext` re-subscribe when the handle you
 pass them changes, and deliberately carry no reconnect/backoff/ping policy of
 their own — "that policy belongs to whoever owns the capnweb session"
-([`client/react.tsx`](../packages/iterate/src/next/client/react.tsx)).
+([`client/react.tsx`](../packages/iterate/src/client/react.tsx)).
 
 Rules of thumb (the LiveView analogy — the server owns durable reduced views,
 React owns local interaction):
@@ -101,8 +101,8 @@ React owns local interaction):
 ## The hooks
 
 A page gets its handles from the route context and its live data from one
-import, `import { … } from "iterate/next/react"`
-([`packages/iterate/src/next/client/react.tsx`](../packages/iterate/src/next/client/react.tsx)).
+import, `import { … } from "iterate/react"`
+([`packages/iterate/src/client/react.tsx`](../packages/iterate/src/client/react.tsx)).
 
 ### Get a handle
 
@@ -209,7 +209,7 @@ voice use), filled with the `_auth` loader's projects.
 </AppShell>
 ```
 
-`connectLiveState` from `iterate/next/client` is the low-level escape hatch under
+`connectLiveState` from `iterate/client` is the low-level escape hatch under
 both hooks, for a non-React consumer or a test that awaits a store; most UI wants
 the hooks.
 
@@ -220,20 +220,20 @@ The entire browser-facing API. A "handle" is a capnweb stub of a context
 
 | Symbol                                              | Kind      | What it gives you                                                                                                                                                                                |
 | --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `createIterateClient({ scopes })`                   | fn        | The app's one client (`iterate/next/app`). Create once per app.                                                                                                                                  |
+| `createIterateClient({ scopes })`                   | fn        | The app's one client (`iterate/app`). Create once per app.                                                                                                                                       |
 | `iterate.authenticate(next?)`                       | fn        | Probe `/api`, open the socket, resolve `{ api, info, signInFor }` — or leave for `/.auth/login` (never settles) when there is no session. Single-flight; a failure lets the next call try again. |
 | `api`                                               | stub      | The **session** (`IterateSessionApi`), proxied to the current connection: `projects.list/get/create`, `grants`, `organizations.list/get/create/…`, `user`, `logout()`.                           |
 | `info`                                              | data      | `{ principal, scopes, platformOrigin, ingressRouting, mcpOrigin }` — the granted `scopes` decide what a page offers (consent is task-based: optional scopes may be unticked).                    |
 | `signInFor(project)`                                | fn        | The page names a project this sign-in does not include: leave for `/.auth/login`, which offers to sign in again and returns to this URL.                                                         |
 | `useLiveState(itx, { key, name?, readSeed })`       | hook      | Subscribe to one producer's live state; seed through `readSeed`, apply pushed deltas, heal a gap. Never suspends. The LiveView primitive.                                                        |
 | `useIterateContext(itx, { consumes?, liveState? })` | hook      | The context, live: `events`, `caughtUp`, `error`, `processors`, `presence`, `liveState` — the data half of `ContextView`.                                                                        |
-| `connectLiveState(itx, opts)`                       | fn        | The framework-free client under both hooks (`iterate/next/client`): a store plus `dispose()`.                                                                                                    |
+| `connectLiveState(itx, opts)`                       | fn        | The framework-free client under both hooks (`iterate/client`): a store plus `dispose()`.                                                                                                         |
 | `createLiveStateStore()`                            | fn        | The pure reduce: `seed`, `apply` (gap ⇒ resync), `get`, `rev`, `subscribe`.                                                                                                                      |
 | `ContextView`, `AppShell`                           | component | The rendering half, from `@iterate-com/ui` — pure components, no SDK import.                                                                                                                     |
 | `LiveStateResult<S>` (type)                         | type      | `{ value, rev, status, error? }` — what `useLiveState` returns and each `useIterateContext().liveState` entry is.                                                                                |
 | `LiveStateStatus` (type)                            | type      | `"connecting" \| "live" \| "error"`.                                                                                                                                                             |
 | `IterateContextHandle` (type)                       | type      | The slice of a context the context hook reads; a capnweb context stub satisfies it structurally.                                                                                                 |
-| `IterateContextPresence` (type)                     | type      | One presence as the hook hands it out; events are `StreamEvent` (`iterate/next/stream/processor`), processor rows `SubscriptionListEntry` (`iterate/next/api`).                                  |
+| `IterateContextPresence` (type)                     | type      | One presence as the hook hands it out; events are `StreamEvent` (`iterate/stream/processor`), processor rows `SubscriptionListEntry` (`iterate/api`).                                            |
 
 Mutations have no hook — you call the capability on the handle
 (`context.secrets.set(...)`, `api.organizations.create({ name })`), then

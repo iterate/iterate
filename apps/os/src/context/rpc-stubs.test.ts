@@ -1,7 +1,7 @@
 // context/rpc-stubs.test.ts — the rpc stubs' unit pins: the borrowed table's lifetime rule (the
 // directory) and the relay's one-registration rule. Node: the pager layer is never entered (no sockets).
 
-import type { ItxExpression } from "iterate/next/expression";
+import type { ItxExpression } from "iterate/expression";
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
   type RpcStubFetchServer,

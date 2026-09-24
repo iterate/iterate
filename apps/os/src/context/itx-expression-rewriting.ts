@@ -33,15 +33,15 @@
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
-import type { Caller } from "iterate/next/principal";
+import type { Caller } from "iterate/principal";
 import {
   codedError,
   errorCode,
   jsonEqual,
   releaseRpcSessions,
   resolveContextPath,
-} from "iterate/next/lib";
-import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/next/api";
+} from "iterate/lib";
+import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/api";
 import {
   callOn,
   InvokeHandle,
@@ -58,7 +58,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   type ItxExpressionPrefix,
-} from "iterate/next/expression";
+} from "iterate/expression";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
 
 // ── built-in roots ── THE RESERVED ROOT'S KEYS, each with the one line `rewriteRules.list()` says

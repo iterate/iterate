@@ -1,7 +1,7 @@
 // context.e2e.test.ts — the CONTEXT across the /api hop: its built-in roots, the error grammar, and the
 // natural dotted client surface — deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb
 // stub (`itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`): only fixed members are real
-// methods along the path; the prototype hop (iterate/next/expression.ts) turns every unknown segment into
+// methods along the path; the prototype hop (iterate/expression.ts) turns every unknown segment into
 // ONE accumulated `invoke(expression)` dispatch. Pins:
 //   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
 //     and answers 421 (never the control plane); the codec's own charset gate is the unit lane's
@@ -18,7 +18,7 @@
 // eventually consistent, so a row here would measure KV propagation, not the pagination.
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
 import { fetchProjectHost, ingressHostname, subdomainsOnly } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
@@ -166,8 +166,8 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
 });
 
-// PINS iterate/next/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
-// packages/iterate/src/next/expression.test.ts "hides reserved path segments from the path proxies
+// PINS iterate/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// packages/iterate/src/expression.test.ts "hides reserved path segments from the path proxies
 // the hop hands out").
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure

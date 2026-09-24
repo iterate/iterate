@@ -8,8 +8,8 @@
 // hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The COMMANDS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { expect, test } from "vitest";
-import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/next/expression";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
+import type { StreamEvent } from "iterate/stream/processor";
 import {
   CoreContract,
   reduceCoreEvent,

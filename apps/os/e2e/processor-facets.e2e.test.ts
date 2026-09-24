@@ -28,7 +28,7 @@
 // subscribe handle's compare-and-set undo is __workers-tests__/do-doors.test.ts.)
 
 import { expect, test } from "vitest";
-import { errorCode } from "iterate/next/lib";
+import { errorCode } from "iterate/lib";
 import {
   durableCountsByType,
   freshCtx,

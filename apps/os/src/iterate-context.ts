@@ -20,7 +20,7 @@
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
-import { codedError, resolveContextPath } from "iterate/next/lib";
+import { codedError, resolveContextPath } from "iterate/lib";
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
@@ -32,10 +32,10 @@ import {
   installPrototypeInvokeFallback,
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
-} from "iterate/next/expression";
-import type { IterateContextApi } from "iterate/next/api";
-import type { Caller } from "iterate/next/principal";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+} from "iterate/expression";
+import type { IterateContextApi } from "iterate/api";
+import type { Caller } from "iterate/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -464,7 +464,7 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 
 /** The itx scope as `env.ITX.get()` types it — the Workers-RPC stub of a context, every dotted step
  *  pipelined. The platform's own facets extend the SDK's host with THIS scope, so they spell every
- *  root; an app's facet has the declared `IterateContextApi` (iterate/next/api). */
+ *  root; an app's facet has the declared `IterateContextApi` (iterate/api). */
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   Env,
@@ -539,6 +539,6 @@ export function itxEntrypointFor(
   return exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
 }
 
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): a context satisfies it, checked here.
+// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): a context satisfies it, checked here.
 const _iterateContextApi: IterateContextApi = null as unknown as IterateContextRpcTarget;
 void _iterateContextApi;

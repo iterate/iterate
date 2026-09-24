@@ -10,7 +10,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/next/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import { installAgents } from "../runtime/install.ts";
 import agentRuntime from "../../../configs/with-agents/agents.js?raw";
 import {

@@ -4,7 +4,7 @@
 // DEMO_BASE_URL, a deployment.
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { expect, type Page } from "@playwright/test";
-import { authorizationCodeRequest } from "iterate/next/oauth";
+import { authorizationCodeRequest } from "iterate/oauth";
 import { spinnerWaiter } from "middlewright";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { claudeClient, signInWithPassword } from "../test-support/issuer.ts";

@@ -16,7 +16,7 @@ import {
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { z } from "zod";
-import { createIterateClient } from "iterate/next/app";
+import { createIterateClient } from "iterate/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   DropdownMenuGroup,

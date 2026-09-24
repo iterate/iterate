@@ -7,7 +7,7 @@
 // ephemeral bumps the field in processEvent, and the engine re-projects after the batch and emits the
 // delta itself (the reduce never touches it).
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 
 // 'tick' is a durable event reduced into `ticks`; 'poke' is ephemeral and drives a runtime field only
 // (`processEvent`, never reduced). Both carry no payload. The reduce/processEvent event union is

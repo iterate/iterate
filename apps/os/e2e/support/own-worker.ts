@@ -5,7 +5,7 @@
 // Same config (support/worker-config.ts), same capnweb-over-WebSocket door.
 
 import { newWebSocketRpcSession } from "capnweb";
-import type { IngressRouting } from "iterate/next/project-ingress";
+import type { IngressRouting } from "iterate/project-ingress";
 import { createTestHarness } from "wrangler";
 import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
 
