@@ -63,13 +63,11 @@ producer attempt with “not observed”, never to a later replacement attempt.
 Links supplement the existing parent tree. They describe explicit prerequisites,
 not an inferred critical path; old runs without these records have no links.
 
-Expand the `pnpm preview ci-prepare` step to compare **Provision and deploy
-preview** with **Shared readiness: rollout, agent smoke and TUI**. Deployment
-contains slot acquisition/cleanup and each app's parallel build/deploy command
-and HTTP readiness check. Build/deploy command timings include any smoke checks
-owned by that app's deploy script; the subsequent shared readiness span includes
-the remaining rollout wait and concurrent smoke/TUI work. Overlapping app spans
-must not be added together as wall time.
+Expand the `pnpm preview deploy` step (preview-os-next.yml) to see the client
+apps' parallel **Build <app>** spans beside **Build OS**, then **Deploy OS
+preview** (which includes its `/version` smoke), then the parallel **Deploy
+<app>** spans, each including its app's smoke. Overlapping spans must not be
+added together as wall time.
 
 `traceOperation()` records these nested operations at their actual start/end
 points, preserving async parents across parallel work. Thrown errors and
