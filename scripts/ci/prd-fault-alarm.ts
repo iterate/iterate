@@ -1,23 +1,41 @@
-// Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the last half hour of os-prd's
-// Workers Logs and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
+// Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads os-prd's Workers Logs since its last
+// run and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
 // On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for ~2.5 hours:
 // ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and garple.com —
 // and our recovery kept most requests green, so only the logs knew.
+//
+// Each fault is an incident: a 5xx host, a healed facet's name, or an error message. A new one pages
+// at the top level, mentioning Jonas; its repeats go quietly into that page's thread, back in the
+// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. Until 2026-09-24 the
+// alarm held every page for an hour after any page while reading only the last half hour, so a
+// different 500 in that hour was never posted. The memory is the run's `prd-fault-alarm-state`
+// artifact: where the next read starts and the open incidents' threads. Without it a run reads the
+// last half hour and pages everything as new — a repeat, never a miss.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed.
 //
 //   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
-//   … run --at 2026-09-23T07:30:00Z --dry-run    # replay a window, post nothing
+//   … run --at 2026-09-23T07:30:00Z --dry-run    # replay the half hour to then, post nothing
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs, PRD_ACCOUNT_ID } from "../../envs.ts";
+import { newestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 const PRD_WORKER = osEnvs.prd!.workerName;
+
+/** Where one run leaves its state for the next: the workflow's `name:`, the artifact and its file. */
+export const stateArtifact = {
+  workflow: "Prd fault alarm (Depot CI)",
+  artifact: "prd-fault-alarm-state",
+  file: "state.json",
+};
 
 /** The prd account's Workers Logs API access. */
 type CloudflareCredentials = { accountId: string; apiToken: string };
@@ -25,80 +43,228 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
 /** One window's rows per signal: [label, count], biggest first. */
 export type FaultReading = Record<"serverErrors" | "heals" | "errors", [string, number][]>;
 
-/** Reads the last half hour of os-prd's Workers Logs and pages #error-pulse on a fault. */
-export async function run(options: { at?: string; dryRun?: boolean } = {}) {
+/** The logs one run reads: from where the last run stopped to now. */
+export type LogWindow = { from: Date; to: Date };
+
+/** What the alarm remembers between runs. `readUntil` is where the next read starts; each open
+ *  incident, by its key, holds the thread of the page that opened it, how often it was seen and the
+ *  count the channel last heard. */
+export const AlarmState = z.object({
+  readUntil: z.string(),
+  incidents: z.record(
+    z.string(),
+    z.object({ thread: z.string(), lastSeen: z.string(), count: z.number(), told: z.number() }),
+  ),
+});
+export type AlarmState = z.infer<typeof AlarmState>;
+
+/** Reads os-prd's Workers Logs since the last run and pages #error-pulse on a fault. */
+export async function run(
+  options: { at?: string; dryRun?: boolean; state?: string; stateOut?: string } = {},
+) {
   const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
   if (!accountId || !apiToken) throw new Error("run under doppler --project os --config prd");
-  const now = new Date();
-  return alarm({
-    now,
-    windowEnd: options.at ? new Date(options.at) : now,
+  // A replay reads its own half hour and neither reads nor keeps the state.
+  const state =
+    !options.at && options.state && existsSync(options.state)
+      ? AlarmState.parse(JSON.parse(readFileSync(options.state, "utf8")))
+      : null;
+  const outcome = await alarm({
+    window: options.at
+      ? { from: new Date(Date.parse(options.at) - 30 * 60_000), to: new Date(options.at) }
+      : logWindow(new Date(), state),
+    state,
     cloudflare: { accountId, apiToken },
     // A dry run posts nothing, so it needs no Slack token.
     slack: options.dryRun ? null : getSlackClient,
   });
+  // After every post: a run that failed to post keeps no state, so the next one reads its window
+  // again and posts what this one owed.
+  if (options.stateOut && !options.at && !options.dryRun) {
+    mkdirSync(dirname(options.stateOut), { recursive: true });
+    writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
+  }
+  return outcome.summary;
 }
 
 /**
- * Reads the half hour to `windowEnd` and, on a fault, pages #error-pulse unless a prd fault page
- * went out in the hour before `now`: a fault that lasts pages hourly, not every run. `slack: null`
- * posts nothing. Paged, it resolves to the page, so the run ends green: a scheduled run reports on
- * main's head commit, where red reads as "this commit broke". It throws only when it could not read
- * prd (readWindow) or post (the Slack client throws on an error).
+ * Reads `window` (logWindow) and posts each new incident's page and each open one's thread reply. `slack: null` posts nothing.
+ * It resolves to what it posted (or would post) and the next state, so a paged run ends green: a
+ * scheduled run reports on main's head commit, where red reads as "this commit broke". It throws
+ * only when it could not read prd (readWindow) or post (the Slack client throws on an error).
  */
 export async function alarm(input: {
-  now: Date;
-  windowEnd: Date;
+  window: LogWindow;
+  state: AlarmState | null;
   cloudflare: CloudflareCredentials;
   slack: (() => WebClient) | null;
 }) {
-  const reading = await readWindow(input.windowEnd, input.cloudflare);
-  const page = renderFaultPage(reading, input.windowEnd);
-  console.log(JSON.stringify({ windowEnd: input.windowEnd, reading }));
-  if (!page || !input.slack) return page || `${PRD_WORKER} is quiet`;
-  const slack = input.slack();
+  const { window } = input;
+  const reading = await readWindow(window, input.cloudflare);
+  console.log(JSON.stringify({ window, reading }));
+  const triage = triageIncidents(reading, window, input.state);
+  // Only a run that owes a post needs Slack: a quiet run stays green whatever its token does.
+  const slack = triage.page || triage.replies.length ? input.slack?.() : undefined;
   const channel = slackChannelIds["#error-pulse"];
-  const history = await slack.conversations.history({
-    channel,
-    oldest: String(input.now.getTime() / 1000 - 3600),
-  });
-  if (!history.messages?.some((m) => m.bot_id && m.text?.includes("prd fault page:")))
-    await slack.chat.postMessage({ channel, text: page });
-  return page;
+  const incidents = { ...triage.incidents };
+  if (triage.page && slack) {
+    const posted = await slack.chat.postMessage({ channel, text: triage.page.text });
+    // The client throws on an error, and every posted message has its ts.
+    for (const key of triage.page.keys) incidents[key] = { ...incidents[key]!, thread: posted.ts! };
+  }
+  for (const reply of triage.replies)
+    await slack?.chat.postMessage({
+      channel,
+      thread_ts: reply.thread,
+      text: reply.text,
+      reply_broadcast: reply.broadcast,
+    });
+  const summary = [triage.page?.text, ...triage.replies.map((reply) => reply.text)]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    summary: summary || `${PRD_WORKER} is quiet`,
+    next: { readUntil: window.to.toISOString(), incidents } satisfies AlarmState,
+  };
 }
 
-/** The page for one window, or null when prd is quiet. Pure. */
-export function renderFaultPage(reading: FaultReading, windowEnd: Date): string | null {
-  const total = (rows: [string, number][]) => rows.reduce((sum, [, n]) => sum + n, 0);
-  const tripped =
-    total(reading.serverErrors) > 0 || // prd answers no 5xx on purpose since #2844
-    total(reading.heals) >= 10 || // a lone blip heals a call or three; 2026-09-23 ran ~1,800
-    total(reading.errors) > 0; // every error is a page; expected ones are filtered in readWindow
-  if (!tripped) return null;
-  const line = (what: string, rows: [string, number][], label: (raw: string) => string) => {
-    const merged = new Map<string, number>();
-    for (const [raw, n] of rows) merged.set(label(raw), (merged.get(label(raw)) ?? 0) + n);
-    const top = [...merged].sort((a, b) => b[1] - a[1]).slice(0, 4);
-    return rows.length && `• ${total(rows)} ${what}: ${top.map((row) => row.join(" ")).join(", ")}`;
-  };
+/** The logs a run at `now` reads. Workers Logs can land a minute or so after the event, so a run
+ *  reads to two minutes ago; the next one starts there. Pure. */
+export function logWindow(now: Date, state: AlarmState | null): LogWindow {
+  const to = new Date(now.getTime() - 2 * 60_000);
+  const from = state ? Date.parse(state.readUntil) : to.getTime() - 30 * 60_000;
+  return { from: new Date(Math.max(from, to.getTime() - 24 * 3_600_000)), to };
+}
+
+/** The window's incidents: one per 5xx host, healed name or error message. Heals count only in a
+ *  burst (10 or more in the window) or as an incident already open. Pure. */
+function incidentsOf(reading: FaultReading, open: (key: string) => boolean) {
+  const signals = [
+    // prd answers no 5xx on purpose since #2844
+    [
+      "5xx responses",
+      reading.serverErrors,
+      (url: string) => url.replace(/^https?:\/\/([^/]+).*$/, "$1"),
+    ],
+    // a lone blip heals a call or three; 2026-09-23 ran ~1,800
+    ["platform-failure heals", reading.heals, (name: string) => name],
+    // every error is a page; expected ones are filtered in readWindow
+    [
+      "errors",
+      reading.errors,
+      (m: string) => m.replace(/reference = \w+/g, "reference = …").slice(0, 80),
+    ],
+  ] as const;
+  const incidents = new Map<string, { what: string; label: string; count: number }>();
+  for (const [what, rows, label] of signals)
+    for (const [raw, count] of rows) {
+      const key = `${what}: ${label(raw)}`;
+      const burst = rows.reduce((sum, [, n]) => sum + n, 0) >= 10;
+      if (what === "platform-failure heals" && !burst && !open(key)) continue;
+      const incident = incidents.get(key) ?? { what, label: label(raw), count: 0 };
+      incidents.set(key, { ...incident, count: incident.count + count });
+    }
+  return incidents;
+}
+
+/**
+ * What a window owes #error-pulse: one page for the incidents it opens (their thread is the page's,
+ * filled in once posted) and one reply per thread for the open incidents it saw again, broadcast to
+ * the channel once one grows tenfold since the channel last heard. Pure.
+ */
+export function triageIncidents(
+  reading: FaultReading,
+  window: LogWindow,
+  state: AlarmState | null,
+) {
+  const open = Object.fromEntries(
+    Object.entries(state?.incidents ?? {}).filter(
+      ([, incident]) => Date.parse(incident.lastSeen) > window.to.getTime() - 24 * 3_600_000,
+    ),
+  );
+  const seen = incidentsOf(reading, (key) => key in open);
+  const incidents: AlarmState["incidents"] = { ...open };
+  const opened: [string, { what: string; label: string; count: number }][] = [];
+  const threads = new Map<string, { lines: string[]; broadcast: boolean }>();
+  for (const [key, sighting] of seen) {
+    const before = open[key];
+    if (!before) {
+      opened.push([key, sighting]);
+      incidents[key] = {
+        thread: "",
+        lastSeen: window.to.toISOString(),
+        count: sighting.count,
+        told: sighting.count,
+      };
+      continue;
+    }
+    const count = before.count + sighting.count;
+    const broadcast = count >= 10 * before.told;
+    incidents[key] = {
+      thread: before.thread,
+      lastSeen: window.to.toISOString(),
+      count,
+      told: broadcast ? count : before.told,
+    };
+    const thread = threads.get(before.thread) ?? { lines: [], broadcast: false };
+    thread.lines.push(
+      `• ${sighting.count} more ${sighting.what}: ${sighting.label} (${count} in all)`,
+    );
+    thread.broadcast ||= broadcast;
+    threads.set(before.thread, thread);
+  }
+  const span = `${hhmm(window.from)}–${hhmm(window.to)} UTC`;
+  const page = opened.length
+    ? {
+        keys: opened.map(([key]) => key),
+        text: renderFaultPage(
+          opened.map(([, sighting]) => sighting),
+          window,
+          Boolean(state),
+        ),
+      }
+    : null;
+  const replies = [...threads].map(([thread, { lines, broadcast }]) => ({
+    thread,
+    broadcast,
+    text: [
+      broadcast ? `🚨 grew tenfold, ${span} ${onCallMention}` : `still failing, ${span}`,
+      ...lines,
+    ].join("\n"),
+  }));
+  return { page, replies, incidents };
+}
+
+/** The page opening `sightings`, biggest first per signal. Pure. */
+function renderFaultPage(
+  sightings: { what: string; label: string; count: number }[],
+  window: LogWindow,
+  remembered = true,
+): string {
+  const lines = ["5xx responses", "platform-failure heals", "errors"].map((what) => {
+    const rows = sightings.filter((s) => s.what === what).sort((a, b) => b.count - a.count);
+    const total = rows.reduce((sum, row) => sum + row.count, 0);
+    const top = rows.slice(0, 4).map((row) => `${row.label} ${row.count}`);
+    return rows.length && `• ${total} ${what}: ${top.join(", ")}${rows.length > 4 ? ", …" : ""}`;
+  });
   return [
-    // "prd fault page:" is how `alarm` finds the last page.
-    `🚨 prd fault page: ${PRD_WORKER}, 30 min to ${windowEnd.toISOString().slice(11, 16)} UTC ${onCallMention}`,
-    line("5xx responses", reading.serverErrors, (url) =>
-      url.replace(/^https?:\/\/([^/]+).*$/, "$1"),
-    ),
-    line("platform-failure heals", reading.heals, (name) => name),
-    line("errors", reading.errors, (m) =>
-      m.replace(/reference = \w+/g, "reference = …").slice(0, 80),
-    ),
+    `🚨 prd fault page: ${PRD_WORKER}, ${hhmm(window.from)}–${hhmm(window.to)} UTC ${onCallMention}`,
+    ...lines,
     `<https://dash.cloudflare.com/${PRD_ACCOUNT_ID}/workers-and-pages/observability|Workers Logs>`,
+    remembered
+      ? "Repeats go in this thread."
+      : "No state from the last run: an incident already paged pages again.",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
+function hhmm(date: Date) {
+  return date.toISOString().slice(11, 16);
+}
+
 async function readWindow(
-  windowEnd: Date,
+  window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
 ): Promise<FaultReading> {
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
@@ -114,7 +280,7 @@ async function readWindow(
           queryId: "prd-fault-alarm",
           view,
           ...(view === "events" && { limit: 100 }),
-          timeframe: { from: windowEnd.getTime() - 30 * 60_000, to: windowEnd.getTime() },
+          timeframe: { from: window.from.getTime(), to: window.to.getTime() },
           parameters: {
             datasets: ["cloudflare-workers"],
             ...parameters,
@@ -137,13 +303,16 @@ async function readWindow(
     if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
     return body.result;
   };
-  const rows = async (filters: object[], groupBy: string): Promise<[string, number][]> => {
+  // Without `groupBy`, one row: ["", the total].
+  const rows = async (filters: object[], groupBy?: string): Promise<[string, number][]> => {
     const result = z
       .object({
         calculations: z
           .array(
             z.object({
-              aggregates: z.array(z.object({ groupKey: z.string(), count: z.number() })),
+              aggregates: z.array(
+                z.object({ groupKey: z.string().default(""), count: z.number() }),
+              ),
             }),
           )
           .min(1),
@@ -151,12 +320,25 @@ async function readWindow(
       .parse(
         await query("calculations", filters, {
           calculations: [{ operator: "count" }],
-          groupBys: [{ type: "string", value: groupBy }],
+          groupBys: groupBy ? [{ type: "string", value: groupBy }] : [],
           orderBy: { value: "count", order: "desc" },
           limit: 2000,
         }),
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
+  };
+  // Every 5xx pages, so they are counted twice: by URL, and in all. The ones the URL rows miss
+  // (no URL logged, or past 2,000 groups) page as `unknown`.
+  const readServerErrors = async () => {
+    const status = [
+      { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
+    ];
+    const [byUrl, all] = await Promise.all([
+      rows(status, "$workers.event.request.url"),
+      rows(status),
+    ]);
+    const missed = (all[0]?.[1] ?? 0) - byUrl.reduce((sum, [, n]) => sum + n, 0);
+    return missed > 0 ? [...byUrl, ["unknown", missed] satisfies [string, number]] : byUrl;
   };
   // workerd#918: a Durable Object that answers before a request body is read can log
   // "Can't read from request stream after response has been sent." though the client got its
@@ -204,10 +386,7 @@ async function readWindow(
     return [...errors, ...apiUnreadBodyErrors];
   };
   const [serverErrors, heals, initialErrors, structuredErrors] = await Promise.all([
-    rows(
-      [{ key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" }],
-      "$workers.event.request.url",
-    ),
+    readServerErrors(),
     rows(
       [{ key: "event", operation: "includes", value: "platform-failure", type: "string" }],
       "name",
@@ -380,6 +559,18 @@ export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[])
       expected.delete(event.$metadata.requestId);
   }
   return expected;
+}
+
+/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
+export async function previousState(options: { out: string }) {
+  const state = await newestArtifactFile({
+    repository: process.env.GITHUB_REPOSITORY || "iterate/iterate",
+    ...stateArtifact,
+  });
+  if (!state) return "no previous state";
+  mkdirSync(dirname(options.out), { recursive: true });
+  writeFileSync(options.out, state);
+  return `previous state: ${state.length} bytes`;
 }
 
 if (isMainModule(import.meta.url))
