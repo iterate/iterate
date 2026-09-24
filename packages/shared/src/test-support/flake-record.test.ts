@@ -55,6 +55,11 @@ test("passing, unfinished and expected-fail tests map to nothing", () => {
   expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "passed" })).toBeNull();
   expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "skipped" })).toBeNull();
   expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "interrupted" })).toBeNull();
+  // Playwright calls a test whose first attempt failed and whose retry was cut short by a cancelled
+  // run "unexpected"; the retry never finished, so it is not a hard failure.
+  expect(
+    unknownFlakeRecordFromTelemetry({ ...firstTime, state: "interrupted", outcome: "unexpected" }),
+  ).toBeNull();
   expect(
     unknownFlakeRecordFromTelemetry({ ...firstTime, state: "failed", outcome: "expected" }),
   ).toBeNull();

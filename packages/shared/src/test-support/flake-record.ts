@@ -78,7 +78,7 @@ export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): Fla
   if (test.expectedState !== undefined && test.expectedState !== "passed") return null;
   const outcome = test.passedAfterRetry
     ? "retried-pass"
-    : test.state && testTelemetryFailed({ state: test.state, outcome: test.outcome })
+    : failedOutright(test)
       ? "unexpected-error"
       : null;
   if (!outcome) return null;
@@ -92,11 +92,14 @@ export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): Fla
   };
 }
 
-/** Whether a test failed: Playwright's unexpected outcome when it has one, otherwise vitest's final
- *  failed or timed-out state. The CI finalizer's failed count uses the same verdict. */
-export function testTelemetryFailed(test: { state: string; outcome?: string }): boolean {
-  if (test.outcome) return test.outcome === "unexpected";
-  return ["failed", "timedout"].includes(test.state.toLowerCase());
+/**
+ * The last attempt ran to a failure and, where the runner judges outcomes (Playwright), that was
+ * unexpected. A last attempt that was interrupted (a run cancelled during the retry) proves nothing,
+ * though Playwright still calls the test "unexpected" when an earlier attempt failed.
+ */
+function failedOutright(test: RetriedTestTelemetry) {
+  if (!test.state || !["failed", "timedout"].includes(test.state.toLowerCase())) return false;
+  return !test.outcome || test.outcome === "unexpected";
 }
 
 /**

@@ -13,8 +13,8 @@ import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import { testTelemetryFailed } from "@iterate-com/shared/test-support/flake-record";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
+import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 
 type MainE2eState = "green" | "red";
 
