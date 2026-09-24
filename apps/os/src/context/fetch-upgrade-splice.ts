@@ -32,6 +32,9 @@
  *  resume. A deploy's reset answers again within seconds (the rpc-stub pager's re-dial: 0.2–4 s
  *  on prd 2026-09-24). */
 export const FETCH_UPGRADE_RESUME_DEADLINE_MS = 30_000;
+/** How long after a re-dial found a new deploy a further reset still counts as that deploy's: the
+ *  runtime resets a context again seconds after a deploy's first reset (2–14 s on prd). */
+const DEPLOY_SETTLE_MS = 60_000;
 /** The re-dials after a drop, their delays from the drop: the first at once. The deadline, counted
  *  from the first drop the other end has not resumed since, bounds them all. */
 const REDIAL_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000];
@@ -321,7 +324,9 @@ export class FetchUpgradeSpliceEnd {
         downMs,
         dials: this.#dials,
         resent: this.#unacked.length,
-        deployReset: this.#deployReset,
+        deployReset:
+          this.#deployReset ||
+          (this.#deployChangedAt !== null && Date.now() - this.#deployChangedAt < DEPLOY_SETTLE_MS),
       });
     this.#dials = 0;
     this.#deployReset = false;
@@ -329,6 +334,10 @@ export class FetchUpgradeSpliceEnd {
 
   /** Whether a re-dial of this drop was answered on another deploy than the socket it replaced. */
   #deployReset = false;
+  /** When a re-dial last found the context on another deploy: the reset that follows a deploy's
+   *  first one on the same new deploy (prd 2026-09-24 20:40:22 → 20:40:27, and 20:11:59 →
+   *  20:12:13) is the deploy's too. */
+  #deployChangedAt: number | null = null;
 
   async #redialAfterDrop(): Promise<void> {
     if (this.#downSince === null) {
@@ -352,7 +361,10 @@ export class FetchUpgradeSpliceEnd {
         closeQuietly(dialed.socket, 1000, "closed");
         return;
       }
-      if (dialed.deployId !== this.#deployId) this.#deployReset = true;
+      if (dialed.deployId !== this.#deployId) {
+        this.#deployReset = true;
+        this.#deployChangedAt = Date.now();
+      }
       this.#deployId = dialed.deployId;
       this.#attach(dialed.socket);
       return;
