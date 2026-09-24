@@ -1,11 +1,37 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   TEST_TELEMETRY_INCOMPLETE_ERROR_NAME,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
+
+/**
+ * The workspaces `pnpm test` runs in the tree at `root`: every package in pnpm-workspace.yaml whose
+ * package.json has a `test` or `test:unit` script, by package name. The Test workflow's finalizer
+ * expects exactly these (`--expect-unit-workspaces`), read from the checked-out tree and not listed
+ * in test.yml, because Depot runs a pull request's workflow file from its merge ref but the job
+ * checks out the PR's head: a list in test.yml names main's workspaces, so every PR opened before a
+ * workspace was added failed its Test check on the missing one (2026-09-24, after #2969 added
+ * `@iterate-com/ci-reports`: 4 red Test jobs on PRs #2985, #2986 and #2991, every test green).
+ */
+export function unitTestWorkspaces(root: string): string[] {
+  const { packages } = z
+    .object({ packages: z.array(z.string()) })
+    .parse(parseYaml(readFileSync(join(root, "pnpm-workspace.yaml"), "utf8")));
+  return packages.flatMap((directory) => {
+    const { name, scripts } = z
+      .object({ name: z.string(), scripts: z.record(z.string(), z.string()).optional() })
+      .parse(JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8")));
+    return scripts?.test || scripts?.["test:unit"] ? [name] : [];
+  });
+}
 
 /**
  * What a CI job's telemetry artifacts fail to prove. A runner that never started leaves no
- * artifact, so the workflow names the workspaces it runs (`TEST_TELEMETRY_EXPECTED_WORKSPACES`) and
+ * artifact, so the job names the workspaces it runs (`unitTestWorkspaces`, or
+ * `TEST_TELEMETRY_EXPECTED_WORKSPACES`) and
  * each missing one is reported. A runner killed after it started leaves its pessimistic sentinel,
  * reported as incomplete. An artifact from another CI run, attempt or job is foreign: the newest
  * artifact's run is this job's.

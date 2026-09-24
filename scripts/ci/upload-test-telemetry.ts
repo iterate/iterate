@@ -2,7 +2,10 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
-import { analyzeTestTelemetryCompleteness } from "./test-telemetry-completeness.ts";
+import {
+  analyzeTestTelemetryCompleteness,
+  unitTestWorkspaces,
+} from "./test-telemetry-completeness.ts";
 import { writeFlakeSuiteSummaries } from "./flake-suite-summary.ts";
 
 const DEFAULT_ARTIFACT_ROOT = "test-results/ci-telemetry";
@@ -144,10 +147,14 @@ if (isMainModule(import.meta.url)) {
   if (!artifactRoot || artifactRoot.startsWith("--")) {
     throw new Error("--artifact-root requires a path");
   }
-  const expectedWorkspaces = (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES ?? "")
-    .split(",")
-    .map((workspace) => workspace.trim())
-    .filter(Boolean);
+  // `--expect-unit-workspaces`: the checked-out tree's test workspaces (the Test workflow);
+  // otherwise the list the workflow names (the preview lanes' `iterate-root,os`).
+  const expectedWorkspaces = process.argv.includes("--expect-unit-workspaces")
+    ? unitTestWorkspaces(process.cwd())
+    : (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")
+        .split(",")
+        .map((workspace) => workspace.trim())
+        .filter(Boolean);
   await finalizeTestTelemetry({
     artifactRoot,
     cancelled: process.argv.includes("--cancelled"),
