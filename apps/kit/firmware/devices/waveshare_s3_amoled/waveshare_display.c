@@ -8,10 +8,10 @@
  *
  * It draws with esp_lcd directly. LVGL for two canvases and a flush pipeline
  * cost 278 KB of flash, a 24 KB private heap in internal RAM, and a port task
- * on core 1 — the audio core — waking a thousand times a second. Two rectangles a second do not need a UI
- * runtime: the face and the light strip are pushed as bounded strips from a
- * 100 ms task pinned to core 0, the same pattern StackChan's renderer
- * proved.
+ * on core 1 — the audio core — waking a thousand times a second. Two rectangles
+ * a second do not need a UI runtime: the face and the light strip are pushed as
+ * bounded strips from a 100 ms task pinned to core 0, the same pattern
+ * StackChan's renderer proved.
  */
 #include "waveshare_display.h"
 

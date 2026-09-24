@@ -236,11 +236,12 @@ static struct iterate_kit_itx_transport transport;
 /*
  * EVERYTHING ELSE THE LOOP HOLDS, IN PSRAM — sixty-six kilobytes of it.
  *
- * Keeping it internal is what made a board drop its socket mid-sentence with
- * "esp-aes: Failed to allocate memory" while `heapFree` read 5,800,196. Internal RAM is the
- * only kind TLS, Wi-Fi and DMA can use, and this struct needs none of those
- * properties: it is counters, Cap'n Web's three fixed tables, a JSON token
- * arena, a stats buffer and two queue HANDLES.
+ * Internal RAM is scarce enough that the board with a camera, LVGL and esp-sr
+ * dropped its socket mid-sentence with "esp-aes: Failed to allocate memory"
+ * while `heapFree` read 5,800,196. It is the only kind TLS, Wi-Fi and DMA can
+ * use, and this struct needs none of those properties: it is counters, Cap'n
+ * Web's three fixed tables, a JSON token arena, a stats buffer and two queue
+ * HANDLES.
  *
  * Safe because nothing here is touched from an ISR — the audio ISRs belong to
  * the board drivers and never see it — and because atomics on this target
@@ -2222,9 +2223,10 @@ static size_t health_json(char *out, size_t capacity) {
    *
    * A dozen of the fields above were a particular board's hardware — DMA
    * ledgers, codec overruns, an I2C button's read failures, a face's frame
-   * count. They are the board's to name, so the board appends them, and a board that overflows
-   * fails the same way the shared table does: nothing is sent, because a
-   * truncated stats line is not a shorter document, it is no document.
+   * count. They are the board's to name, so the board appends them, and a board
+   * that overflows fails the same way the shared table does: nothing is sent,
+   * because a truncated stats line is not a shorter document, it is no
+   * document.
    */
   if (runtime.board->health != NULL) {
     const size_t appended =
@@ -2333,8 +2335,9 @@ static void park_with_fault(const char *what) {
  *
  * PARKS RATHER THAN RETURNS on failure — that is the caller's job, but it is
  * why this is a function: a board that `return`ed from here with the task
- * watchdog already subscribed was in a reboot loop, and from across a room a board rebooting every twenty seconds is indistinguishable from a dead
- * one and cannot be asked what went wrong.
+ * watchdog already subscribed was in a reboot loop, and from across a room a
+ * board rebooting every twenty seconds is indistinguishable from a dead one and
+ * cannot be asked what went wrong.
  *
  * The order INSIDE `start` is the board's own: one must raise its panel before
  * its codec because both resets hang off a single TCA9554, and doing it the
@@ -3038,9 +3041,10 @@ void iterate_kit_voice_loop_step(void) {
        * EVERY producer gates on outbox headroom: exhaustion is
        * SESSION-FATAL in this peer (finish_message terminalizes on
        * backpressure), and the measured drain is only ~25-50 messages/s.
-       * Mic frames flush every MIC_FLUSH_MS (at most 20 pushes/s), up to
-       * MIC_FRAMES_PER_APPEND frames per append; frames are skipped without
-       * headroom — the freshest-wins mic queue makes that loss honest.
+       * Mic frames flush every MIC_FLUSH_MS (about 20 pushes/s) in steady
+       * state, up to MIC_FRAMES_PER_APPEND frames per append; a backlog
+       * flushes every step. Frames are skipped without headroom — the
+       * freshest-wins mic queue makes that loss honest.
        */
       struct iterate_kit_spsc_ring_metrics outbox_metrics;
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
@@ -3084,7 +3088,8 @@ void iterate_kit_voice_loop_step(void) {
       /*
        * THE DOWNLINK WATCHDOG. Silence is evidence only while traffic is owed —
        * a wanted call not yet accepted, or an answer begun whose
-       * `lastFrameOfAnswer` has not come (iterate_kit_voice_stream_downlink_expected) — since the facet drops
+       * `lastFrameOfAnswer` has not come
+       * (iterate_kit_voice_stream_downlink_expected) — since the facet drops
        * idle silence and an accepted call with nothing owed delivers nothing.
        * Ten seconds of nothing in either state is a dead lane: recycle the
        * connection (make-before-break, one round trip); three recycles that

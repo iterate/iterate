@@ -140,10 +140,11 @@ iterate_kit_voice_playback_clock_empty(
      *
      * IT IS DONE HERE, NOT BY THE CALLER. When the owners did it beside this
      * call, a since-deleted host CLI (#2710) had one dry path — live audio —
-     * that never made the call at all: after a back-office wait its next answer was
-     * measured against the previous one, read as nine seconds late, and lost
-     * four frames in five for the rest of the turn (prd, 2026-09-09). A reset
-     * that lives in the decision cannot be skipped by a path that skips it.
+     * that never made the call at all: after a back-office wait its next answer
+     * was measured against the previous one, read as nine seconds late, and
+     * lost four frames in five for the rest of the turn (prd, 2026-09-09). A
+     * reset that lives in the decision cannot be skipped by a path that skips
+     * it.
      */
     forget_answer_timeline(clock);
     return ITERATE_KIT_VOICE_PLAYBACK_WAIT;

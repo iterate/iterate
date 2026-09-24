@@ -194,9 +194,10 @@ the blob's key as `Authorization: Bearer` on the upgrade: a personal access
 token the Kit page minted for the person who set the device up, scoped to the
 one project, revocable from that person's sessions list. Both transports send
 it, ESP-TLS on a board and OpenSSL on the Mac. The blob's project id is the
-project's `prj_<hex>` id; `projects.get` also accepts its slug (`prj-voice`). The mount's three calls, the subscription shape
-and the delivery contract are documented where they live:
-`components/core/include/iterate/kit/itx_mount.h` and `stream_subscription.h`.
+project's `prj_<hex>` id; `projects.get` also accepts its slug (`prj-voice`).
+The mount's three calls, the subscription shape and the delivery contract are
+documented where they live: `components/core/include/iterate/kit/itx_mount.h`
+and `stream_subscription.h`.
 
 The device keeps one authenticated WebSocket and Cap'n Web session. Stream
 `subscribe()` and live-state `subscribe()` create independent subscription

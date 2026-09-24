@@ -549,8 +549,9 @@ static const struct iterate_kit_board board = {
   .speaker = {
     /*
      * TURN IT UP. Every board here shipped at a volume somebody measured once
-     * and nobody could change without a reflash, and every one was reported
-     * as too quiet. The table keeps the measured 92 ceiling; the knob is a call away.
+     * and nobody could change without a reflash, and every one was reported as
+     * too quiet. The table keeps the measured 92 ceiling; the knob is a call
+     * away.
      */
     .context = NULL,
     .ceiling = WAVESHARE_AUDIO_VOLUME_CEILING,

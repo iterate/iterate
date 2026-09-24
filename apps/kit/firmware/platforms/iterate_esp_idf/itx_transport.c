@@ -462,8 +462,7 @@ static void remember_websocket_error(
     int32_t error) {
   /*
    * The lower taskless adapter exposes the errno/result at the point it loses
-   * framing trust. It cannot expose the managed client's callback-only TLS and
-   * HTTP tuple, so preserve the real domain and leave unavailable fields zero.
+   * framing trust: record the generation and the causal errno.
    */
   iterate_kit_atomic_saturating_increment_relaxed_u32(
       &transport->websocket_errors);

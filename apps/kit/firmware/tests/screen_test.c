@@ -28,13 +28,18 @@ static enum capnweb_status send_text(void *context, enum capnweb_text_fragment_k
   }
   return CAPNWEB_OK;
 }
-static void call(const char *method, const char *argument) {
+static void call_path(const char *path, const char *argument) {
   static unsigned id;
   char message[1024];
-  snprintf(message, sizeof(message), "[\"push\",[\"pipeline\",0,[\"screen\",\"%s\"],[%s]]]", method, argument);
+  snprintf(message, sizeof(message), "[\"push\",[\"pipeline\",0,[%s],[%s]]]", path, argument);
   assert(capnweb_session_receive(&session, message, strlen(message)) == CAPNWEB_OK);
   snprintf(message, sizeof(message), "[\"pull\",%u]", ++id);
   assert(capnweb_session_receive(&session, message, strlen(message)) == CAPNWEB_OK);
+}
+static void call(const char *method, const char *argument) {
+  char path[64];
+  snprintf(path, sizeof(path), "\"screen\",\"%s\"", method);
+  call_path(path, argument);
 }
 int main(void) {
   uint8_t pixels[12] = {0};
@@ -84,6 +89,10 @@ int main(void) {
   assert(submits == 2);
   state = ITERATE_KIT_SCREEN_FAILED;
   call("status", ""); assert(strstr(sent,"failed") && screen.uploads_completed == 1);
+  /* The peer serves plain Cap'n Web paths only: a flattened {path, args}
+   * envelope is an unknown method, never a nested dispatch. */
+  call_path("\"invokeCapability\"", "{\"path\":[[\"screen\",\"status\"]],\"args\":[[]]}");
+  assert(strstr(sent,"TypeError") && strstr(sent,"unknown device capability") && !strstr(sent,"failed"));
   capnweb_session_close(&session);
   puts("screen capability test passed");
 }

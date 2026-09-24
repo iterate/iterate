@@ -234,7 +234,8 @@ static void handle_spk_frame(
    * clear the buffer, then play THIS frame — so a late clear cannot discard
    * the answer that already replaced the one it was about.
    */
-  if (capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
+  if (capnweb_value_object_get(
+          payload, "clearSpeakerBufferBeforeFrame", &flag)) {
     (void)capnweb_value_get_boolean(&flag, &clear_first);
   }
   if (capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
@@ -703,11 +704,11 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
 
 /*
  * A PLAIN METHOD NAME ON THE CONVERSATION'S CONTEXT, exactly like
- * `setupVoiceAgent` on the project root. The OS has no `getProcessorRuntimeState`
- * built-in; anything that is not a built-in resolves through the context's
- * rewrite rules, so the voice worker owns this name the same way it owns setup.
- * The device keeps the call and the reply shape and expresses no opinion about
- * which worker answers.
+ * `setupVoiceAgent` on the project root. The OS has no
+ * `getProcessorRuntimeState` built-in; anything that is not a built-in resolves
+ * through the context's rewrite rules, so the voice worker owns this name the
+ * same way it owns setup. The device keeps the call and the reply shape and
+ * expresses no opinion about which worker answers.
  *
  * It is armed only on a board with a mouth (`observe_answer`), so a deployment
  * whose worker has not claimed the name yet costs the HAVPE nothing.
