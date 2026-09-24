@@ -12,47 +12,6 @@ import type { StreamEvent, SqlStorageHandle } from "iterate/next/stream/processo
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
-/** THE ONE way a test constructs a Stream: over a fresh node:sqlite store unless given one (a
- *  second incarnation reuses the first's). `batches` records each `fresh` batch the fan-out was fed;
- *  `onCommit` runs beside it. */
-function bareStream(
-  opts: {
-    storage?: DurableObjectStorageSlice;
-    batches?: StreamEvent[][];
-    onCommit?: (fresh: StreamEvent[]) => void;
-  } = {},
-): Stream {
-  return new Stream({
-    storage: opts.storage || nodeSqliteDurableObjectStorage(),
-    path: "/",
-    projectId: "prj_bare",
-    onCommit: (fresh) => {
-      opts.batches?.push(fresh);
-      opts.onCommit?.(fresh);
-    },
-  });
-}
-
-/** The persisted durable head. The stream writes no separate mark; the core checkpoint's offset
- *  (`reduce_checkpoints`, written every durable commit) IS the mark. `undefined` before the first commit. */
-const persistedDurableMark = (storage: DurableObjectStorageSlice): number | undefined => {
-  const row = storage.sql
-    .exec<{ offset: number }>(
-      "SELECT reduced_through_offset AS offset FROM reduce_checkpoints WHERE slug = 'core'",
-    )
-    .toArray()[0];
-  return row ? Number(row.offset) : undefined;
-};
-/** The incarnation counter, as `stream_meta` holds it. */
-const persistedIncarnation = (storage: DurableObjectStorageSlice): number =>
-  Number(
-    storage.sql
-      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'incarnation'")
-      .toArray()[0].value,
-  );
-const persistedEventRows = (storage: DurableObjectStorageSlice): number =>
-  Number(storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM events").toArray()[0].n);
-
 const CONFIGURED = "events.iterate.com/stream/subscription-configured";
 
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
@@ -62,9 +21,7 @@ test("waitForEvent: a registered waiter resolves with the committed event, fed f
   const pending = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 });
   const [receipt] = stream.append({ type: "ping", payload: { n: 1 } });
   const got = await pending;
-  expect(got.type).toBe("ping");
-  expect(got.offset).toBe(receipt.offset);
-  expect(got.payload).toEqual({ n: 1 });
+  expect(got).toMatchObject({ type: "ping", offset: receipt.offset, payload: { n: 1 } });
   // the resolving event was exactly the one the commit tail fanned out
   expect(batches.at(-1)?.some((e) => e.offset === got.offset)).toBe(true);
 });
@@ -80,7 +37,7 @@ test("waitForEvent: the type filter holds a waiter through non-matching commits"
   ]);
   expect(raced).toBe("waiting"); // a non-matching commit left it waiting
   const [receipt] = stream.append({ type: "wanted" });
-  expect((await pending).offset).toBe(receipt.offset);
+  expect(await pending).toMatchObject({ offset: receipt.offset });
 });
 
 test("waitForEvent: an explicit afterOffset resolves from history immediately — first match, paged scan", async () => {
@@ -96,8 +53,8 @@ test("waitForEvent: an explicit afterOffset resolves from history immediately �
   const [first] = stream.append({ type: "needle", payload: { which: "first" } });
   stream.append({ type: "needle", payload: { which: "second" } });
   const got = await stream.waitForEvent({ type: "needle", afterOffset: 0, timeoutMs: 5_000 });
-  expect(got.offset).toBe(first.offset); // the FIRST match in offset order, not the newest
-  expect(got.payload).toEqual({ which: "first" });
+  // the FIRST match in offset order, not the newest
+  expect(got).toMatchObject({ offset: first.offset, payload: { which: "first" } });
 });
 
 test("waitForEvent: the default afterOffset means the NEXT occurrence — history does not resolve it", async () => {
@@ -113,7 +70,7 @@ test("waitForEvent: the default afterOffset means the NEXT occurrence — histor
   const pending = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 });
   const [next] = stream.append({ type: "ping" });
   const got = await pending;
-  expect(got.offset).toBe(next.offset);
+  expect(got).toMatchObject({ offset: next.offset });
   expect(got.offset).toBeGreaterThan(past.offset);
 });
 
@@ -150,7 +107,7 @@ test("waitForEvent: a timed-out wait writes nothing — construction made the ta
   expect(persistedIncarnation(storage)).toBe(1);
   expect(persistedDurableMark(storage)).toBeUndefined();
   expect(persistedEventRows(storage)).toBe(0);
-  expect(stream.storage.incarnation).toBe(1);
+  expect(stream.storage).toMatchObject({ incarnation: 1 });
   expect(stream.highestAssignedOffset()).toBe(0);
 });
 
@@ -160,8 +117,7 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
   const pending = stream.waitForEvent({ type: "blip", timeoutMs: 5_000 });
   const [receipt] = stream.append({ type: "blip", ephemeral: true, payload: { live: 1 } });
   const got = await pending;
-  expect(got.offset).toBe(receipt.offset);
-  expect(got.ephemeral).toBe(true);
+  expect(got).toMatchObject({ offset: receipt.offset, ephemeral: true });
   // catchable only while waiting: the body never reached a row
   expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
 });
@@ -186,10 +142,9 @@ test("read() is durable-only by default; with includeEphemeral the ring's epheme
   });
   // A reader that persisted the proof and reads on sees the head's tail again (it is not provable),
   // and an ephemeral below the mark exactly once: it falls inside one page's span.
-  expect(stream.read(page.scannedThroughOffset, 500, { includeEphemeral: true }).events).toEqual([
-    e4,
-    e5,
-  ]);
+  expect(stream.read(page.scannedThroughOffset, 500, { includeEphemeral: true })).toMatchObject({
+    events: [e4, e5],
+  });
   expect(stream.read(2, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
     "d3",
     "e4",
@@ -213,7 +168,7 @@ test("a CUT page carries only the ephemerals inside its proven span; `limit` cou
   });
   const second = stream.read(first.scannedThroughOffset, 2, { includeEphemeral: true });
   expect(second.events.map((e) => e.offset)).toEqual([4, 5, 6]);
-  expect(second.atHead).toBe(true);
+  expect(second).toMatchObject({ atHead: true });
 });
 
 test("a refused batch leaves no phantom in the ring: an ephemeral is remembered only once its batch has landed", () => {
@@ -231,7 +186,7 @@ test("a refused batch leaves no phantom in the ring: an ephemeral is remembered 
   ]);
   // The offsets the refused batch would have taken are handed out again, to nothing's confusion.
   const [next] = stream.append({ type: "next", ephemeral: true });
-  expect(next.offset).toBe(2);
+  expect(next).toMatchObject({ offset: 2 });
   expect(stream.read(0, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
     "seed",
     "next",
@@ -285,8 +240,7 @@ test("waitForEvent: one event resolves MULTIPLE waiters, in registration order",
   });
   const [receipt] = stream.append({ type: "ping", payload: { n: 1 } });
   const [got1, got2] = await Promise.all([w1, w2]);
-  expect(got1.offset).toBe(receipt.offset);
-  expect(got2.offset).toBe(receipt.offset);
+  expect([got1, got2]).toMatchObject([{ offset: receipt.offset }, { offset: receipt.offset }]);
   expect(order).toEqual(["first", "second"]);
 });
 
@@ -305,8 +259,8 @@ test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit �
   const pending = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 });
   const [outer] = stream.append({ type: "ping", payload: { n: 1 } });
   const got = await pending;
-  expect(got.offset).toBe(outer.offset); // the OUTER commit's event, in offset order
-  expect(got.payload).toEqual({ n: 1 });
+  // the OUTER commit's event, in offset order
+  expect(got).toMatchObject({ offset: outer.offset, payload: { n: 1 } });
   expect(nestedReceipt).toBeDefined(); // the nested commit really happened…
   expect(nestedReceipt!.offset).toBeGreaterThan(outer.offset); // …at a later offset
 });
@@ -324,7 +278,7 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
   // The wake record is `appendBirthRecord()`'s / `appendWakeRecord()`'s (the DO's) — never append's: with no wake, the
   // first real append is the log's first row, and the fan-out sees exactly that one event.
   const [receipt] = stream.append({ type: "hello" });
-  expect(receipt.offset).toBe(1);
+  expect(receipt).toMatchObject({ offset: 1 });
   expect(stream.read(0).events.map((e) => [e.type, e.offset])).toEqual([["hello", 1]]);
   expect(batches).toHaveLength(1);
   expect(batches[0].map((e) => e.type)).toEqual(["hello"]);
@@ -402,8 +356,10 @@ test("the wake record settles what the last incarnation left open: every core `s
       },
     ],
   ]);
-  expect(second.coreReducedState.scriptRuns).toEqual({});
-  expect(second.coreReducedState.paused).toEqual({ reason: "a breaker" }); // the pause held; the settlement was exempt
+  // objectContaining compares each key it names with full equality: `{}` is an EMPTY table (toMatchObject's `{}` matches any)
+  expect(second).toMatchObject({ coreReducedState: expect.objectContaining({ scriptRuns: {} }) });
+  // the pause held; the settlement was exempt
+  expect(second.coreReducedState).toMatchObject({ paused: { reason: "a breaker" } });
   // a third incarnation finds nothing open: the wake record alone
   const third = bareStream({ storage });
   const headBeforeThird = third.highestAssignedOffset();
@@ -425,9 +381,11 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
     ["events.iterate.com/stream/created", 1],
     ["events.iterate.com/stream/woken", 2],
   ]);
-  expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
-  expect(page.events[1].payload).toEqual({ incarnation: 1, reason: "request" }); // no alarm was stored: a request woke it
-  expect(first.storage.incarnation).toBe(1);
+  expect(page.events).toMatchObject([
+    { payload: { projectId: "prj_bare", path: "/" } },
+    { payload: { incarnation: 1, reason: "request" } }, // no alarm was stored: a request woke it
+  ]);
+  expect(first.storage).toMatchObject({ incarnation: 1 });
   expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([
     [
       ["events.iterate.com/stream/created", 1],
@@ -441,13 +399,13 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
   });
   // the first user append lands at offset 3 — and prepends nothing (its batch is itself alone)
   const [hello] = first.append({ type: "hello" });
-  expect(hello.offset).toBe(3);
+  expect(hello).toMatchObject({ offset: 3 });
   expect(batches[1].map((e) => e.type)).toEqual(["hello"]);
   // a LATER incarnation over the same store: born once, so woken ONLY — as its first event
   const second = bareStream({ storage, batches }); // the SAME store
   second.appendBirthRecord();
   second.appendWakeRecord("request");
-  expect(second.storage.incarnation).toBe(2);
+  expect(second.storage).toMatchObject({ incarnation: 2 });
   const all = second.read(0).events;
   expect(all.map((e) => e.type)).toEqual([
     "events.iterate.com/stream/created",
@@ -457,7 +415,7 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
   ]);
   expect(all[3]).toMatchObject({ offset: 4, payload: { incarnation: 2 } });
   expect(batches[2].map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
-  expect(second.coreReducedState.incarnation).toBe(2);
+  expect(second.coreReducedState).toMatchObject({ incarnation: 2 });
 });
 
 test("a stream/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", () => {
@@ -465,7 +423,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
   stream.appendBirthRecord();
   stream.appendWakeRecord("request"); // created@1, woken@2
   stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @3
-  expect(stream.coreReducedState.paused).toEqual({ reason: "x" });
+  expect(stream.coreReducedState).toMatchObject({ paused: { reason: "x" } });
   expect(stream.read(0).events.map((e) => e.type)).toEqual([
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/woken",
@@ -488,9 +446,9 @@ test("a stream/paused event pauses the stream through its own core reduce: every
   ).toThrow(/stream paused/);
   // …while the bare resume lands: a paused stream must always accept its own resume
   const [resumed] = stream.append({ type: "events.iterate.com/stream/resumed" });
-  expect(resumed.offset).toBe(4);
+  expect(resumed).toMatchObject({ offset: 4 });
   expect(stream.coreReducedState.paused).toBeNull(); // the reduce reopened it
-  expect(stream.append({ type: "work" })[0].offset).toBe(5);
+  expect(stream.append({ type: "work" })[0]).toMatchObject({ offset: 5 });
 });
 
 test("a raw subscription-configured lands at the stream: a name is normalizeControlEvent's to refuse (core-processor.test.ts pins `core` and the prototype keys)", () => {
@@ -517,28 +475,35 @@ test("a malformed itx/rewrite-rule-configured (a match with an argless call step
     payload: { match: "itx.call()", target: "itx.kv" },
   });
   expect(stream.read(0).events.map((e) => e.offset)).toEqual([bad.offset]); // the log is the log
-  expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({}); // …but no rule was configured
+  // …but no rule was configured
+  expect(stream).toMatchObject({
+    coreReducedState: expect.objectContaining({ itxExpressionRewriteRules: {} }),
+  });
   const [good] = stream.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.fine", target: "itx.kv" },
   });
   // the table is a RECORD by canonical match; both halves parsed once, at the reduce
-  expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({
-    "itx.fine": { match: ["itx", "fine"], target: ["itx", "kv"] },
+  expect(stream.coreReducedState).toMatchObject({
+    itxExpressionRewriteRules: { "itx.fine": { match: ["itx", "fine"], target: ["itx", "kv"] } },
   });
-  expect(stream.append({ type: "work" })[0].offset).toBe(good.offset + 1);
+  expect(stream.append({ type: "work" })[0]).toMatchObject({ offset: good.offset + 1 });
 });
 
 test("a malformed subscription-configured (a target that does not parse) lands as a row but adds NO subscription — the next well-formed one reduces", () => {
   const stream = bareStream();
   stream.append({ type: CONFIGURED, payload: { name: "broken", target: "itx.broken(" } });
-  expect(stream.coreReducedState.subscriptions).toEqual({});
+  expect(stream).toMatchObject({
+    coreReducedState: expect.objectContaining({ subscriptions: {} }),
+  });
   const [good] = stream.append({
     type: CONFIGURED,
     payload: { name: "fine", target: "itx.whoami" },
   });
   expect(Object.keys(stream.coreReducedState.subscriptions)).toEqual(["fine"]);
-  expect(stream.coreReducedState.subscriptions.fine.configuredAtOffset).toBe(good.offset);
+  expect(stream.coreReducedState.subscriptions).toMatchObject({
+    fine: { configuredAtOffset: good.offset },
+  });
 });
 
 // ── EPHEMERALS COST ZERO WRITES (the header contract, pinned against real SQL) ──
@@ -561,11 +526,11 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
   expect(persistedEventRows(storage)).toBe(rowsBefore);
   // …and every batch reached onCommit with contiguous ranges (the fan-out saw all 50).
   expect(batches.slice(1).flat()).toHaveLength(50);
-  expect(batches.at(-1)![1].offset).toBe(51);
+  expect(batches.at(-1)![1]).toMatchObject({ offset: 51 });
   // The next DURABLE batch commits the mark PAST the ephemerals it never wrote — every offset
   // handed out this incarnation is covered by the durable row's transaction.
   const [d] = stream.append({ type: "durable" });
-  expect(d.offset).toBe(52);
+  expect(d).toMatchObject({ offset: 52 });
   expect(persistedDurableMark(storage)).toBe(52);
 });
 
@@ -584,12 +549,12 @@ test("across incarnations an ephemeral-only tail's offsets are REUSED by the nex
   second.appendBirthRecord();
   second.appendWakeRecord("request");
   const [d] = second.append({ type: "durable" });
-  expect(d.offset).toBe(5); // woken took 4, the durable 5 — both numbers the dead ephemerals held
+  expect(d).toMatchObject({ offset: 5 }); // woken took 4, the durable 5 — both numbers the dead ephemerals held
   expect(persistedDurableMark(storage)).toBe(5);
   // The log itself is exact: created, woken, durable (1, 2, 3) from the first life; woken, durable
   // (4, 5) from the second — the dead ephemerals left no gap a row could fill.
   expect(second.read(0).events.map((e) => e.offset)).toEqual([1, 2, 3, 4, 5]);
-  expect(second.read(0).events[3].type).toBe("events.iterate.com/stream/woken");
+  expect(second.read(0).events[3]).toMatchObject({ type: "events.iterate.com/stream/woken" });
 });
 
 test("read()'s short-page proof is the DURABLE mark, never the in-memory head (an ephemeral tail is not proven)", () => {
@@ -600,12 +565,12 @@ test("read()'s short-page proof is the DURABLE mark, never the in-memory head (a
   expect(stream.highestDurableOffset()).toBe(1);
   // A reader must never learn an offset a later incarnation could hand to a durable: the proof
   // stops at the mark. (A persisted checkpoint or cursor built from this read is therefore safe.)
-  expect(stream.read(0).scannedThroughOffset).toBe(1);
-  expect(stream.read(1).scannedThroughOffset).toBe(1);
+  expect(stream.read(0)).toMatchObject({ scannedThroughOffset: 1 });
+  expect(stream.read(1)).toMatchObject({ scannedThroughOffset: 1 });
   // The next durable batch moves both.
   stream.append({ type: "tick" }); // @4
   expect(stream.highestDurableOffset()).toBe(4);
-  expect(stream.read(0).scannedThroughOffset).toBe(4);
+  expect(stream.read(0)).toMatchObject({ scannedThroughOffset: 4 });
 });
 
 test("a warm ephemeral-only append runs NO SQL at all (no read, no write, no transaction)", () => {
@@ -640,7 +605,7 @@ test("idempotency: same key + same body echoes the EXISTING event (no row, no of
   const [a] = stream.append({ type: "order", payload: { n: 1 }, idempotencyKey: "k1" }); // @1
   // the retry: the same event comes back, nothing new lands
   const [again] = stream.append({ type: "order", payload: { n: 1 }, idempotencyKey: "k1" });
-  expect(again.offset).toBe(a.offset);
+  expect(again).toMatchObject({ offset: a.offset });
   expect(stream.highestAssignedOffset()).toBe(1);
   // a conflicting body under the key: refused, CODED — and the valid event beside it does NOT land
   let err: unknown;
@@ -666,7 +631,7 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
   stream.append({ type: "seed" }); // @1
   // "nothing has happened since I looked": the head is 1, so 2 is what the next event gets
   const [ok] = stream.append({ type: "next", offset: 2 });
-  expect(ok.offset).toBe(2);
+  expect(ok).toMatchObject({ offset: 2 });
   expect("offset" in (stream.read(1).events[0] as object)).toBe(true); // the receipt's offset — not a stored precondition
   // a stale expectation refuses the whole batch, coded, nothing written
   let err: unknown;
@@ -676,7 +641,7 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
     err = e;
   }
   expect(errorCode(err)).toBe("OFFSET_CONFLICT");
-  expect((err as { data?: unknown }).data).toEqual({ expected: 2, actual: 4 });
+  expect(err).toMatchObject({ data: { expected: 2, actual: 4 } });
   expect(stream.highestAssignedOffset()).toBe(2);
   expect(stream.read(0).events).toHaveLength(2);
   // sequential expectations inside one batch hold together
@@ -685,8 +650,8 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
   // a dedupe hit answers with the event it already has, whatever `offset` the retry hoped for
   stream.append({ type: "keyed", idempotencyKey: "k", payload: {} }); // @5
   expect(
-    stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 })[0].offset,
-  ).toBe(5);
+    stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 })[0],
+  ).toMatchObject({ offset: 5 });
 });
 
 test("a paused stream admits an idempotent replay of an explicitly configured subscription", () => {
@@ -705,7 +670,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
   };
   const [configured] = first.append(configureEvent);
   first.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
-  expect(first.coreReducedState.paused).toEqual({ reason: "operator" });
+  expect(first.coreReducedState).toMatchObject({ paused: { reason: "operator" } });
 
   // A fresh event is still refused…
   expect(() => first.append({ type: "mark" })).toThrow(/stream paused/);
@@ -719,5 +684,46 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
   expect(second.append(configureEvent)[0]).toMatchObject({ offset: configured.offset });
   second.append({ type: "events.iterate.com/stream/resumed" });
   expect(second.coreReducedState.paused).toBeNull();
-  expect(second.append({ type: "mark" })[0].type).toBe("mark");
+  expect(second.append({ type: "mark" })[0]).toMatchObject({ type: "mark" });
 });
+
+/** THE ONE way a test constructs a Stream: over a fresh node:sqlite store unless given one (a
+ *  second incarnation reuses the first's). `batches` records each `fresh` batch the fan-out was fed;
+ *  `onCommit` runs beside it. */
+function bareStream(
+  opts: {
+    storage?: DurableObjectStorageSlice;
+    batches?: StreamEvent[][];
+    onCommit?: (fresh: StreamEvent[]) => void;
+  } = {},
+): Stream {
+  return new Stream({
+    storage: opts.storage || nodeSqliteDurableObjectStorage(),
+    path: "/",
+    projectId: "prj_bare",
+    onCommit: (fresh) => {
+      opts.batches?.push(fresh);
+      opts.onCommit?.(fresh);
+    },
+  });
+}
+
+/** The persisted durable head. The stream writes no separate mark; the core checkpoint's offset
+ *  (`reduce_checkpoints`, written every durable commit) IS the mark. `undefined` before the first commit. */
+const persistedDurableMark = (storage: DurableObjectStorageSlice): number | undefined => {
+  const row = storage.sql
+    .exec<{ offset: number }>(
+      "SELECT reduced_through_offset AS offset FROM reduce_checkpoints WHERE slug = 'core'",
+    )
+    .toArray()[0];
+  return row ? Number(row.offset) : undefined;
+};
+/** The incarnation counter, as `stream_meta` holds it. */
+const persistedIncarnation = (storage: DurableObjectStorageSlice): number =>
+  Number(
+    storage.sql
+      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'incarnation'")
+      .toArray()[0].value,
+  );
+const persistedEventRows = (storage: DurableObjectStorageSlice): number =>
+  Number(storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM events").toArray()[0].n);

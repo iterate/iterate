@@ -29,36 +29,6 @@ const MiB = 1024 * 1024;
  *  `other` (a broken fixture — never a valid pin). */
 type ScenarioRun = { kind: "survived" | "oom" | "other"; facts: ScenarioFacts; tail: string };
 
-function runScenario(name: ScenarioName, args: Record<string, number>): ScenarioRun {
-  const child = spawnSync(
-    process.execPath,
-    [
-      `--max-old-space-size=${ISOLATE_BUDGET_MB}`,
-      "--experimental-strip-types",
-      "--disable-warning=ExperimentalWarning",
-      SCENARIOS,
-      name,
-      JSON.stringify(args),
-    ],
-    { encoding: "utf8", timeout: 110_000, maxBuffer: 64 * MiB },
-  );
-  const output = `${child.stdout}\n${child.stderr}`;
-  const report = /^\{.*\}$/m.exec(child.stdout)?.[0];
-  const kind = report ? "survived" : OOM_SIGNATURE.test(output) ? "oom" : "other";
-  return {
-    kind,
-    facts: report ? (JSON.parse(report) as ScenarioFacts) : {},
-    tail: output.trim().split("\n").slice(-12).join("\n"),
-  };
-}
-
-/** The one assertion every row makes: the child survived the budget. The failure message carries
- *  the classification (`oom` is the pinned bug; `other` is a broken fixture, never a valid pin). */
-const expectSurvived = (run: ScenarioRun, what: string) =>
-  expect(run.kind, `${what}: child ${run.kind} at ${ISOLATE_BUDGET_MB} MiB\n${run.tail}`).toBe(
-    "survived",
-  );
-
 /** 144 MiB of legal-sized events — more than the isolate, every one under the append ceiling. */
 const LOG_144_MIB = { eventCount: 24, eventChars: 6 * MiB };
 const CONTROL = { eventCount: 12, eventChars: 64 * 1024 };
@@ -141,7 +111,7 @@ test(
   () => {
     const run = runScenario("append-oversize", { eventChars: 9 * MiB });
     expectSurvived(run, "append-oversize");
-    expect(run.facts.refusedCode, run.tail).toBe("EVENT_TOO_LARGE");
+    expect(run.facts, run.tail).toMatchObject({ refusedCode: "EVENT_TOO_LARGE" });
   },
 );
 
@@ -204,7 +174,9 @@ test(
       eventChars: 64 * 1024,
     });
     expectSurvived(run, "accumulating-reducer");
-    expect(run.facts.firstPushErrorCode, run.tail).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
+    expect(run.facts, run.tail).toMatchObject({
+      firstPushErrorCode: "REDUCE_CHECKPOINT_TOO_LARGE",
+    });
     expect(Number(run.facts.persistedItems), run.tail).toBe(
       Number(run.facts.persistedBlobsThrough),
     ); // one row: the state holds exactly the durables its cursor claims
@@ -359,21 +331,11 @@ test(
       eventChars: 8 * MiB - 256,
     });
     expectSurvived(run, "wait-for-event-history-scan");
-    expect(run.facts.waitOutcome).toBe("WAIT_TIMEOUT");
+    expect(run.facts).toMatchObject({ waitOutcome: "WAIT_TIMEOUT" });
   },
 );
 
 // ── the core checkpoint cell: the control plane's ceiling ──
-
-/** ONE run (17,000 rows configured, then re-reduced after a version bump) feeds the two rows below
- *  — a memo, so the second row reads the first's facts instead of paying the run again. Under a
- *  second since `reduceCoreEventBatch` (was ~55 s when every configure copied the whole table). */
-let coreRowsRun: ScenarioRun | undefined;
-const runCoreRowsUntilCellCap = () =>
-  (coreRowsRun ||= runScenario("core-rows-until-cell-cap", {
-    maxRows: 20_000,
-    rowsPerAppend: 1000,
-  }));
 
 // ~17,000 subscription rows (~123 chars each) fill the core checkpoint cell; the configure that
 // would grow it past the ceiling is refused CODED — REDUCE_CHECKPOINT_TOO_LARGE, inside the commit's
@@ -386,7 +348,7 @@ test(
   () => {
     const run = runCoreRowsUntilCellCap();
     expectSurvived(run, "core-rows-until-cell-cap");
-    expect(run.facts.refusedCode, run.tail).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
+    expect(run.facts, run.tail).toMatchObject({ refusedCode: "REDUCE_CHECKPOINT_TOO_LARGE" });
     expect(Number(run.facts.rowsConfigured)).toBeGreaterThan(10_000);
   },
 );
@@ -443,3 +405,45 @@ createFailing(test, /read-object-dense-page: child oom at 128 MiB/, { timeoutMs:
     expectSurvived(run, "read-object-dense-page");
   },
 );
+
+function runScenario(name: ScenarioName, args: Record<string, number>): ScenarioRun {
+  const child = spawnSync(
+    process.execPath,
+    [
+      `--max-old-space-size=${ISOLATE_BUDGET_MB}`,
+      "--experimental-strip-types",
+      "--disable-warning=ExperimentalWarning",
+      SCENARIOS,
+      name,
+      JSON.stringify(args),
+    ],
+    { encoding: "utf8", timeout: 110_000, maxBuffer: 64 * MiB },
+  );
+  const output = `${child.stdout}\n${child.stderr}`;
+  const report = /^\{.*\}$/m.exec(child.stdout)?.[0];
+  const kind = report ? "survived" : OOM_SIGNATURE.test(output) ? "oom" : "other";
+  return {
+    kind,
+    facts: report ? (JSON.parse(report) as ScenarioFacts) : {},
+    tail: output.trim().split("\n").slice(-12).join("\n"),
+  };
+}
+
+/** The one assertion every row makes: the child survived the budget. The failure message carries
+ *  the classification (`oom` is the pinned bug; `other` is a broken fixture, never a valid pin). */
+function expectSurvived(run: ScenarioRun, what: string) {
+  expect(run, `${what}: child ${run.kind} at ${ISOLATE_BUDGET_MB} MiB\n${run.tail}`).toMatchObject({
+    kind: "survived",
+  });
+}
+
+/** ONE run (17,000 rows configured, then re-reduced after a version bump) feeds the two core-rows
+ *  tests above — a memo, so the second row reads the first's facts instead of paying the run again.
+ *  Under a second since `reduceCoreEventBatch` (was ~55 s when every configure copied the whole table). */
+let coreRowsRun: ScenarioRun | undefined;
+function runCoreRowsUntilCellCap() {
+  return (coreRowsRun ||= runScenario("core-rows-until-cell-cap", {
+    maxRows: 20_000,
+    rowsPerAppend: 1000,
+  }));
+}
