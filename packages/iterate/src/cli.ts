@@ -25,11 +25,14 @@ import {
   type StoredSession,
 } from "./config.ts";
 
+// Claude Code sets `CLAUDECODE=1`, not a bare `CLAUDE_CODE`; keep both spellings (as
+// lint-staged.config.cjs does).
 const isAgent =
   process.env.AGENT === "1" ||
   process.env.OPENCODE === "1" ||
   Boolean(process.env.OPENCODE_SESSION) ||
-  Boolean(process.env.CLAUDE_CODE);
+  Boolean(process.env.CLAUDE_CODE) ||
+  Boolean(process.env.CLAUDECODE);
 let configFlagOverride: string | undefined;
 const consumeCliStringFlag = (flagName: string): string | undefined => {
   const args = process.argv.slice(2);
