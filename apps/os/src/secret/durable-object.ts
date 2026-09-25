@@ -36,7 +36,7 @@ import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
-import type { SecretMaterial, SecretRefresh } from "iterate/api";
+import type { SecretHmacVerification, SecretMaterial, SecretRefresh } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { signClaims, verifyAdminSecret } from "../caller.ts";
 import {
@@ -84,7 +84,6 @@ import {
   substituteProjectSecrets,
   substituteSecretInFrame,
   verifySecretHmac,
-  type SecretHmacVerification,
   type SecretRecord,
 } from "../secrets.ts";
 import { SecretContract, type SecretState } from "./contract.ts";

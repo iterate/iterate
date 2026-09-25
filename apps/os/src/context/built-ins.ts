@@ -13,44 +13,31 @@
 
 import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
-import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import type { StreamEventInput } from "iterate/stream/processor";
 import {
   normalizedItxExpression,
   print,
   type ItxExpression,
-  type ItxExpressionInput,
   type ItxExpressionStep,
   InvokeHandle,
 } from "iterate/expression";
 import type {
   CollectSecretInput,
   CollectSecretLink,
-  FetchRouteInput,
-  RewriteRuleListEntry,
-  SecretCatalogEntry,
-  SecretMaterial,
+  EveryProjectBorrows,
+  FacetSpec,
+  IterateContextApi,
+  R2ObjectRecord,
   SecretRefresh,
-  StreamPage,
-  WaitForEventFilter,
+  WorkerSource,
 } from "iterate/api";
 import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
-import {
-  ScheduleKey,
-  ScheduleReceipt,
-  type ScheduledAppendInput,
-  type ScheduledAppend,
-} from "../stream/scheduled-appends.ts";
+import { ScheduleKey, ScheduleReceipt, type ScheduledAppend } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import {
-  assertSecretPath,
-  normalizeSecretRecord,
-  originsOf,
-  sha256Hex,
-  type SecretHmacVerification,
-} from "../secrets.ts";
+import { assertSecretPath, normalizeSecretRecord, originsOf, sha256Hex } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { IntegrationProvider } from "../integrations/contract.ts";
 import { tokenSecretPathOf } from "../integrations/connections.ts";
@@ -60,10 +47,9 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import {
   FetchRouteConfiguredPayload,
   matchFetchRoute,
-  type FetchRoute,
   type FetchRouteTable,
 } from "../fetch-routes.ts";
-import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { normalizeSecretOAuth } from "../secret-oauth.ts";
 import { isDeployReset } from "../retryable-error.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
@@ -79,37 +65,11 @@ import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
   prepareConfinedWorker,
-  type FacetSpec,
-  type WorkerCacheKey,
-  type WorkerSource,
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
-import {
-  projectScopedArtifacts,
-  type ArtifactsNamespace,
-  type ArtifactsScope,
-} from "./cf-artifacts.ts";
+import { projectScopedArtifacts, type ArtifactsNamespace } from "./cf-artifacts.ts";
 
-/** One row of `itx.subscriptions.list()`. */
-export type SubscriptionListEntry = {
-  name: string;
-  target: string;
-  consumes?: string[];
-  configuredAtOffset: number;
-  /** Where the cursor started (0 = the whole log); absent = at the configure. */
-  afterOffset?: number;
-  /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
-   *  lives in the log + the facet's kv memo, never here — a hosting row is source-less). Address-only
-   *  rows have none. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
-  /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
-  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
-  halted?: { afterOffset: number; attempts: number; error?: string };
-};
-
-/** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
- *  owner prefix stripped, dates as ISO strings, checksums as hex. */
 /** What a lend's borrower path is told of its lender (`itx.secrets.acceptLend`): the lend, the
  *  person (or the deployment itself, the operator's own secret), their secret's context and path,
  *  its pin, and the connection it is when it is one. */
@@ -122,34 +82,55 @@ export type BorrowedSecret = {
   integration?: { provider: string; account: string; externalId: string };
 };
 
-/** How a lend to every project went, project by project: how many borrow it, the projects that
- *  keep a secret of their own at its path, and the ones whose borrow failed (each reported as
- *  `itx.secrets.every-project-borrow`). */
-export type EveryProjectBorrows = {
-  borrowed: number;
-  kept: string[];
-  failed: { projectId: string; error: string }[];
-};
-
-type R2ObjectRecord = {
-  key: string;
-  version: string;
-  size: number;
-  etag: string;
-  httpEtag: string;
-  checksums: Record<string, string>;
-  uploaded: string;
-  httpMetadata: R2HTTPMetadata;
-  customMetadata: Record<string, string>;
-  range?: R2Range;
-  storageClass: string;
+/** THE PLATFORM'S OWN `itx.secrets` VERBS — deliberately NOT in the published `IterateContextApi`
+ *  (iterate/api): the other halves of an OAuth connect and of a lend, which the platform's own hops
+ *  call (`assertPlatformCaller`; `completeOAuth` is reached from the OAuth callback alone), and
+ *  `revokeLend`'s platform-only options (a published `revokeLend(path, lendId)` is this one with
+ *  them absent). */
+type PlatformSecretsVerbs = {
+  /** The platform's callback completes the attempt through here — the exchange in the secret's
+   *  facet, then the facts, on the secret's path like `set` and `delete`. You never call this:
+   *  the code and the nonce reach only the callback. */
+  completeOAuth(path: string, input: { code: string; nonce: string }): Promise<{ path: string }>;
+  revokeLend(
+    path: string,
+    lendId: string,
+    /** The platform's alone: why, and the borrower it must be lent to. */
+    options?: { reason?: LendRevokedReason; borrower?: string },
+  ): Promise<{ lendId: string }>;
+  /** The platform's half of a lend on the borrower's path (`lend` calls it): you never call it. */
+  acceptLend(path: string, input: BorrowedSecret): Promise<{ path: string }>;
+  /** The platform's, on the global root: a new project borrows every lend to every project
+   *  (session.ts `projects.create`). You never call it. */
+  borrowEveryProjectLends(projectId: string): Promise<EveryProjectBorrows>;
+  /** The platform's, on the deployment's secret: its lend to every project borrowed into one more
+   *  project (`borrowEveryProjectLends`). You never call it. */
+  lendToProject(
+    path: string,
+    lendId: string,
+    projectId: string,
+  ): Promise<"borrowed" | "kept" | "revoked">;
+  /** The platform's half of a revocation on the borrower's path: you never call it. */
+  dropLend(path: string, input: { lendId: string; reason: LendRevokedReason }): Promise<void>;
 };
 
 /** THE built-in scope, as one interface — the platform's kernel surface; the library's verbs
  *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
  *  class would leave every root unreachable. Exported for ONE reader: the edge `IterateContextRpcTarget`'s TYPE
- *  merges it in (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
+ *  merges it in (iterate-context.ts), so what rides the dotted hop is typed where a client holds it.
+ *
+ *  EVERY ROOT'S SHAPE IS THE PUBLISHED ONE (iterate/api `IterateContextApi[root]`), never declared
+ *  here: the docstrings below say how the platform implements each, the types say nothing new. So
+ *  the record's `satisfies` (below) checks the implementation against what apps are promised, and
+ *  the edge class's `implements IterateContextApi` (iterate-context.ts) checks what this interface
+ *  narrows. DELIBERATELY PLATFORM-ONLY — not reachable by app code, so not published:
+ *   - `builtins`, the fixed point (the app wall refuses it to loaded code);
+ *   - `cd` answering a handle on this side of the hop (the edge's `cd` is the published one);
+ *   - the secrets verbs of `PlatformSecretsVerbs` (a lend's and an OAuth connect's other halves);
+ *   - the brands `FacetHandle` / `RpcStubHandle` the physical `facets.get` / `rpcStubs.get`
+ *     answer (the delivery loop reads them), where the published type says `InvokeHandle`;
+ *   - `whoami` always a promise here (the published type also admits a fake's plain value). */
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record
    *  (the resolver strips it); here so a strongly typed holder (the scope a loaded worker's
@@ -157,7 +138,7 @@ export interface BuiltInScope extends LibraryRoots {
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. A project's `projectUrl` is its apex, `url()`'s answer (on the primary
    *  hostname when it has one), present when the call carries the platform origin. */
-  whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
+  whoami(): Promise<Awaited<ReturnType<IterateContextApi["whoami"]>>>;
   /** THE PUBLIC URL of this project over HTTP — the apex or a `routingSlug`'s host (both reach the
    *  config worker's `fetch`, which reads the slug from `x-iterate-routing-slug`), at `path`
    *  (default "/") — on the project's primary hostname when it has one (`<routingSlug>.<primary>/…`,
@@ -166,16 +147,11 @@ export interface BuiltInScope extends LibraryRoots {
    *  subdomains, `<origin>/projects/<slug>/<routingSlug>/…` under paths). Refused on a deployment with no project ingress, and on a call carrying no
    *  platform origin (a processor's own turn, a loaded worker: hold the URL a session handed you
    *  instead). Only a project's context has one. */
-  url(target?: { routingSlug?: string; path?: string }): Promise<string>;
+  url: IterateContextApi["url"];
   /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
    *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
    *  isolation. */
-  kv: {
-    get(key: string): Promise<string | null>;
-    put(key: string, value: string): Promise<{ ok: true }>;
-    delete(key: string): Promise<{ ok: true }>;
-    list(prefix?: string): Promise<{ keys: string[] }>;
-  };
+  kv: IterateContextApi["kv"];
   /** THE OBJECT STORE: the R2 bucket binding, verbatim, on the resource owner's slice of ONE bucket
    *  (`FILES`) — every key prefixed `<owner.id>/` as kv's are `<owner.id>:`, the prefix applied to
    *  every key and `prefix`/`startAfter` option and stripped from every key and prefix answered.
@@ -184,40 +160,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  `presign` is the one verb the binding lacks: a signed URL on the project host (file-urls.ts),
    *  a download or an upload, the platform serving the bytes itself — R2's own presigned URLs need
    *  S3 credentials this worker does not hold. Multipart uploads are not here yet. */
-  r2: {
-    head(key: string): Promise<R2ObjectRecord | null>;
-    get(
-      key: string,
-      options?: { range?: R2Range },
-    ): Promise<(R2ObjectRecord & { data: Uint8Array }) | null>;
-    put(
-      key: string,
-      value: ArrayBuffer | ArrayBufferView | string | null,
-      options?: {
-        httpMetadata?: R2HTTPMetadata;
-        customMetadata?: Record<string, string>;
-        storageClass?: string;
-      },
-    ): Promise<R2ObjectRecord>;
-    delete(keys: string | string[]): Promise<void>;
-    list(options?: {
-      limit?: number;
-      prefix?: string;
-      cursor?: string;
-      delimiter?: string;
-      startAfter?: string;
-    }): Promise<{
-      objects: R2ObjectRecord[];
-      delimitedPrefixes: string[];
-      truncated: boolean;
-      cursor?: string;
-    }>;
-    presign(input: {
-      key: string;
-      method?: "GET" | "PUT";
-      expiresInSeconds?: number;
-    }): Promise<{ url: string; expiresAt: string }>;
-  };
+  r2: IterateContextApi["r2"];
   /** THE SECRETS (src/secret/): a secret as a DOMAIN OBJECT — the context at `/secrets/<name>`
    *  under the resource owner's root (a project's; a global user's or organization's own — never a
    *  catalog shared across users), whose `secret` facet is the material's one keeper. A secret IS
@@ -236,78 +179,11 @@ export interface BuiltInScope extends LibraryRoots {
    *  (`source.principal`), and cross-posts it to the owner's root, whose catalog `list()` reads; the
    *  value never enters a log. The facet's own facts: `secret/used` per dispatch, `secret/refreshed`
    *  per refresh outcome. The secret's state (whether material is stored, by the offset of the fact
-   *  that says so) is `itx.cd(path).facets.get("secret").snapshot()`. */
-  secrets: {
-    set(
-      path: string,
-      material: SecretMaterial,
-      /** `merge`: the material's fields go over the ones already stored, whose pin must be `urls`
-       *  (a strategy added to a secret someone else filled — a project's own GitHub App's). */
-      options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean },
-    ): Promise<{ path: string }>;
-    /** OAUTH, THE FIRST TOKENS (secret-oauth.ts): hand back the provider's authorize URL for the
-     *  project's own OAuth client, or for an integration's `client` — send a human there. The
-     *  provider redirects the human to the platform's callback (`/.secrets/oauth/callback`, or an
-     *  integration's `/api/integrations/<provider>/callback`; the human must be signed in to Iterate
-     *  as someone who reaches the secret's owner — a project's member, the user themself for a
-     *  user's own secret), the secret's facet exchanges the code, `secret/set` lands, and the
-     *  callback redirects to `next` (on the platform's or the Dash's origin) when given. Until then
-     *  nothing is stored at `path` but the attempt. */
-    beginOAuth(path: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
-    /** The platform's callback completes the attempt through here — the exchange in the secret's
-     *  facet, then the facts, on the secret's path like `set` and `delete`. You never call this:
-     *  the code and the nonce reach only the callback. */
-    completeOAuth(path: string, input: { code: string; nonce: string }): Promise<{ path: string }>;
-    /** Forget the value: the facet clears it, `secret/deleted` lands on the path and on the owner's
-     *  root, and the `secret` processor row goes (the facet's storage with it). A secret never set
-     *  has nothing to delete (thrown); one already deleted answers at once; a deleted secret can be
-     *  set again. */
-    delete(path: string): Promise<{ path: string }>;
-    list(): Promise<SecretCatalogEntry[]>;
-    collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
-    /** VERIFY — a webhook's signature checked against a secret WITHOUT revealing it: is
-     *  `signature` (hex, either case) the HMAC-SHA256 of `payload` (a string is its UTF-8 bytes)
-     *  under the secret's material — the whole value, or the string at `field` of an object material?
-     *  Runs in the secret's facet on its own context; one bit comes back. Constant-time, and a
-     *  secret never set (or a material with no key at the field) answers false, never a description
-     *  — the candidate comes from an unauthenticated request. The caller assembles the signed bytes the
-     *  provider's scheme names (Stripe `${t}.${body}` with its own tolerance check on `t`, GitHub the
-     *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
-    verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
-    /** LEND a person's own secret to a project they are a member of, as one of the project's paths
-     *  (`as`, `/secrets/<name>`): the project's code spells `getSecret("<as>")` and every use is
-     *  forwarded to this secret, which dispatches it — the material never leaves. On the lender's
-     *  own context (`session.user`). `secret/lent` lands here and `secret/borrowed` there; the lend
-     *  ends with `revokeLend`, the borrower's `delete` of its path, or the lender leaving the
-     *  project (`secret/lend-revoked { reason }` on both sides). The OPERATOR lends the
-     *  deployment's own secret (`global:/secrets/<name>`, on `session.global`) to one project, or
-     *  `to: "every-project"`: every project borrows it now (`everyProject` counts them) and each
-     *  one created later does too; a project whose path holds a secret of its own keeps it. */
-    lend(
-      path: string,
-      input: { to: string; as: string },
-    ): Promise<{ lendId: string; everyProject?: EveryProjectBorrows }>;
-    revokeLend(
-      path: string,
-      lendId: string,
-      /** The platform's alone: why, and the borrower it must be lent to. */
-      options?: { reason?: LendRevokedReason; borrower?: string },
-    ): Promise<{ lendId: string }>;
-    /** The platform's half of a lend on the borrower's path (`lend` calls it): you never call it. */
-    acceptLend(path: string, input: BorrowedSecret): Promise<{ path: string }>;
-    /** The platform's, on the global root: a new project borrows every lend to every project
-     *  (session.ts `projects.create`). You never call it. */
-    borrowEveryProjectLends(projectId: string): Promise<EveryProjectBorrows>;
-    /** The platform's, on the deployment's secret: its lend to every project borrowed into one more
-     *  project (`borrowEveryProjectLends`). You never call it. */
-    lendToProject(
-      path: string,
-      lendId: string,
-      projectId: string,
-    ): Promise<"borrowed" | "kept" | "revoked">;
-    /** The platform's half of a revocation on the borrower's path: you never call it. */
-    dropLend(path: string, input: { lendId: string; reason: LendRevokedReason }): Promise<void>;
-  };
+   *  that says so) is `itx.cd(path).facets.get("secret").snapshot()`. `set`'s `merge` lays the
+   *  material's fields over the stored ones; `beginOAuth` hands back the provider's authorize URL
+   *  (secret-oauth.ts); `verifyHmac` checks a webhook's signature in the secret's facet, one bit
+   *  back; `lend` / `revokeLend` lend a person's (or the operator's) secret to a project. */
+  secrets: Omit<IterateContextApi["secrets"], "revokeLend"> & PlatformSecretsVerbs;
   /** THE INTEGRATIONS (src/integrations/): connect this context's owner — a project's root, or a
    *  person's own context (`session.user`) — to a provider, through this deployment's app.
    *  `connect(provider, { scopes?, connection?, next? })` answers where to send the human and the
@@ -315,16 +191,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  `requestFromUser(provider, { scopes, lendTo? })` answers a Dash link that asks the signed-in
    *  person to connect it and lend it to this project — as the path `lendTo` (`/secrets/<name>`,
    *  what the agent's code will spell) when given — for an agent or the CLI. */
-  integrations: {
-    connect(
-      provider: IntegrationProvider,
-      options?: { scopes?: string[]; connection?: string; next?: string },
-    ): Promise<{ authorizationUrl: string; connection: string }>;
-    requestFromUser(
-      provider: "google" | "cloudflare",
-      options?: { scopes?: string[]; lendTo?: string },
-    ): Promise<{ url: string }>;
-  };
+  integrations: IterateContextApi["integrations"];
   /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` mapping a
    *  request on the project's hosts to an itx expression, the route's `target` — `iterate tunnel`'s
    *  lent stub, a facet, a loaded worker. `set(name, route)` validates the route and appends
@@ -335,33 +202,26 @@ export interface BuiltInScope extends LibraryRoots {
    *  The config worker asks `match`, enforces `authRequirement` itself and forwards a match to
    *  `route.target` with `x-itx-expression` through `env.ITX.fetch` (configs/default/worker.ts).
    *  Only on a project's root. */
-  fetchRoutes: {
-    set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
-    list(): Promise<FetchRoute[]>;
-    match(request: {
-      url: string;
-      headers: Headers | Record<string, string> | [string, string][];
-    }): Promise<FetchRoute | null>;
-  };
+  fetchRoutes: IterateContextApi["fetchRoutes"];
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
    *  `autorag(id)` — no wrapper, so `itx.ai` reads exactly like `env.AI` and a rewrite rule can pin a
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical binding stays `itx.builtins.ai`. */
-  ai: Ai;
+  ai: IterateContextApi["ai"];
   /** Cloudflare Browser Run: `.quickAction(action, options)` returns the
    *  action's RESULT; `.fetch(input, init)` is the raw CDP endpoint. */
-  browser: ReturnType<typeof cfBrowser>;
-  /** THE ARTIFACTS PROXY (cf-artifacts.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
+  browser: IterateContextApi["browser"];
+  /** THE ARTIFACTS PROXY (cf-artifacts.ts `projectScopedArtifacts`): Cloudflare Artifacts, project-scoped and
    *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
    *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
    *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
    *  learns its remote here, then speaks git-over-HTTPS from inside its own worker. */
-  cfArtifacts: ArtifactsScope;
+  cfArtifacts: IterateContextApi["cfArtifacts"];
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  append: IterateContextApi["append"];
   /** RESET THIS CONTEXT — Cloudflare's `ctx.abort`, asked for: the Durable Object's in-memory state
    *  is discarded and the next call builds a fresh incarnation from durable storage (a new
    *  `itx/woken`). The FACT comes first — `itx/aborted { reason?, callerPath?, app? }`,
@@ -375,62 +235,44 @@ export interface BuiltInScope extends LibraryRoots {
    *  (dispatch.ts `itxAnswerDetachedFromSession`), so its next call reaches the fresh
    *  incarnation. A context root, so it resets the context it is spelled at; another context of
    *  the project is `itx.cd(path).abort()`. */
-  abort(reason?: string): Promise<StreamEvent>;
+  abort: IterateContextApi["abort"];
   /** Durable batches appended after a deadline or on a fixed interval (missed ticks coalesce). Setting a key
    *  replaces it; cancelling cannot retract an occurrence already committed. Pause holds work
    *  until resume; set is refused while paused, while cancel remains available. Failure remains
    *  visible until replacement or cancellation. */
-  schedules: {
-    set(
-      input: ScheduledAppendInput,
-      options?: { idempotencyKey?: string },
-    ): Promise<ScheduleReceipt>;
-    cancel(schedule: ScheduleKey | ScheduleReceipt): Promise<StreamEvent[]>;
-    list(): ScheduledAppend[];
-    get(key: ScheduleKey): ScheduledAppend | null;
-  };
+  schedules: IterateContextApi["schedules"];
   /** Read a page of the durable log — `itx.readEvents(afterOffset?, limit?)`, the twin of `append`
    *  (non-minting: a probe never wakes storage). `{ includeEphemeral: true }` merges in the
    *  ephemerals this incarnation still holds (stream.ts, the recent-ephemerals ring). */
-  readEvents(
-    afterOffset?: number,
-    limit?: number,
-    options?: { includeEphemeral?: boolean },
-  ): Promise<StreamPage>;
+  readEvents: IterateContextApi["readEvents"];
   /** Wait for the next event matching `filter` (Stream.waitForEvent owns the contract: type filter,
    *  afterOffset default = the head, 30s/120s timeout → WAIT_TIMEOUT). A root, so the edge declares
    *  nothing for it. */
-  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
+  waitForEvent: IterateContextApi["waitForEvent"];
   /** Another context of THIS project, every call routed through ITS table (`resolveContextPath`
    *  resolves the path, as the edge `cd` does). */
   cd(path: string): InvokeHandle;
   /** Egress: `getSecret("/secrets/NAME")` placeholders substituted, then the terminal `fetch` — where
    *  a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land too. */
-  fetch(request: Request): Promise<Response>;
+  fetch: IterateContextApi["fetch"];
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
    *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(match, stub)` lends the stub
    *  under the key = the canonical match and configures the pure-data rule `match ⇒
    *  itx.builtins.rpcStubs.get('<match>')`. */
-  rpcStubs: {
+  rpcStubs: Omit<IterateContextApi["rpcStubs"], "get"> & {
     /** One stub by key: a pipelinable handle over its transport (borrowed, or paged then borrowed).
      *  Deep dots walk; a root call reaches the bare lent callable; offline ⇒ RPC_STUB_OFFLINE at call
      *  time. Branded `RpcStubHandle`: the subscription delivery loop reads the brand to know the
      *  callee owns its own progress. */
     get(rpcStubKey: string): RpcStubHandle;
-    /** PRESENCE — the keys borrowed or pager-backed right now. */
-    list(): string[];
   };
   /** The rewrite-rule table, read — THE EFFECTIVE table: the context's own rows (`origin:
    *  "context"`, a mask shown as `target: null`) plus the implicit platform rows (`origin:
    *  "platform"`) for every root the context has not re-set. Written by `itx.provide` on the edge,
    *  never a verb here. `resolve(call)` is the PURE half of `invoke`: the chain of rewrites, each
    *  printed, nothing dispatched — `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
-  rewriteRules: {
-    list(depth?: number): Promise<RewriteRuleListEntry[]>;
-    get(match: string): Promise<RewriteRuleListEntry | null>;
-    resolve(call: ItxExpressionInput): string[];
-  };
+  rewriteRules: IterateContextApi["rewriteRules"];
   /** The facets of this context. `get(name)` ADDRESSES one that is already running (a processor, a
    *  named instance) — no source; `get(name, { source, cacheKey?, className })` LOADS the class and
    *  hosts it as the durable facet `name` (own storage) — the mirror of Cloudflare's
@@ -438,24 +280,18 @@ export interface BuiltInScope extends LibraryRoots {
    *  restarts the facet, its storage surviving). A facet leaves with the subscription that hosted it
    *  (`subscription-configured { name, target: null }`) — there is no delete verb. A caller reaches
    *  only what the facet's class lists in `static publicMethods` (context/facet-public-methods.ts);
-   *  anything else is refused FORBIDDEN. */
-  facets: {
+   *  anything else is refused FORBIDDEN. `abort(name)` is `ctx.facets.abort(name)` from the HOST
+   *  (facet-host.ts `abort`), so it resets any facet, one that would never answer a call included,
+   *  and starts it again from its startup memo before it answers. */
+  facets: Omit<IterateContextApi["facets"], "get"> & {
+    /** The physical host's handle, branded (the published `get<Facet>` is the caller's assertion
+     *  over it). */
     get(name: string, spec?: FacetSpec): FacetHandle;
-    /** RESET ONE FACET — `ctx.facets.abort(name)` from the HOST (facet-host.ts `abort`), so it works
-     *  on any facet, a class of this worker or a loaded one, an SDK host or not, and on one that
-     *  would never answer a call: its instance goes and every call in flight on it rejects
-     *  FACET_ABORTED; its storage stays; a fresh instance is started from its startup memo before
-     *  this answers. This context's incarnation is untouched. The fact is `itx/facet-aborted {
-     *  name, reason?, callerPath?, app? }`. NO_FACET for a name never hosted here. */
-    abort(name: string, reason?: string): Promise<StreamEvent>;
   };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
    *  cursors. Read-only — `subscribe` lives on the edge as sugar over the `subscription-configured`
    *  event, never a verb here. */
-  subscriptions: {
-    list(): SubscriptionListEntry[];
-    get(name: string): SubscriptionListEntry | null;
-  };
+  subscriptions: IterateContextApi["subscriptions"];
   /** THE PROCESSORS LAYER — the third of the onion's three, each on the one below: `rpcStubs` (a live
    *  value), `subscriptions` (a delivery to a target), `processors` (a subscription whose target is a
    *  hosted facet's `processEventBatch`). `enable(name, spec)` hosts `className` (the
@@ -467,19 +303,10 @@ export interface BuiltInScope extends LibraryRoots {
    *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
    *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
    *  so loaded code (`withItx(env.ITX, (itx) => itx.processors.enable(…))`) and a sibling
-   *  (`itx.cd(p).processors…`) do it through the same built-in as a client. */
-  processors: {
-    enable(
-      name: string,
-      spec?: (FacetSpec & { consumes?: string[] }) | { consumes?: string[] },
-    ): Promise<{ name: string }>;
-    disable(name: string): Promise<void>;
-    list(): SubscriptionListEntry[];
-    /** A hosted processor's claim on this context's alarm: "revive me by `at`" — the engine holds
-     *  one while a `runInBackground` attempt is in flight (packages/iterate stream/processor.ts rule
-     *  3) — or `null` to release it. Durable on the context (a kv row), never a log event. */
-    claim(name: string, at: number | null): Promise<void>;
-  };
+   *  (`itx.cd(p).processors…`) do it through the same built-in as a client. A hosted processor's
+   *  `claim(name, at)` is its claim on this context's alarm — "revive me by `at`" while a
+   *  `runInBackground` attempt is in flight, `null` to release — durable as a kv row, never an event. */
+  processors: IterateContextApi["processors"];
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
    *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "worker.js": code,
@@ -488,14 +315,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
    *  the default export); `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as
    *  `this.ctx.props` (a url, a key name, …). No name and no `list`: a stateless worker is its spec. */
-  workers: {
-    get(spec: {
-      source: WorkerSource;
-      cacheKey?: WorkerCacheKey;
-      className?: string;
-      props?: unknown;
-    }): InvokeHandle;
-  };
+  workers: IterateContextApi["workers"];
 }
 
 // THE ONE LIST: `keyof BuiltInScope` (minus the reserved root itself, which names the record, not a
@@ -508,6 +328,19 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
   : never;
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
+
+// THE PUBLISHED LIST: every built-in root is a root of iterate/api's `IterateContextApi`, and every
+// root declared there is a built-in but the edge's own verbs (iterate-context.ts `invoke`,
+// `subscribe`, `provide`) — a root published and never implemented, or implemented and never
+// published, fails to typecheck right here.
+type EdgeOnlyRoot = "invoke" | "subscribe" | "provide";
+type RootsArePublished = [BuiltInRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
+  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [BuiltInRoot]
+    ? true
+    : never
+  : never;
+const _rootsArePublished: RootsArePublished = true;
+void _rootsArePublished;
 
 /** An `R2Object` as data, the owner prefix off its key. */
 function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
@@ -1775,7 +1608,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     workers: {
       get: (spec: {
         source: WorkerSource;
-        cacheKey?: WorkerCacheKey;
+        cacheKey?: string;
         className?: string;
         props?: unknown;
       }) =>

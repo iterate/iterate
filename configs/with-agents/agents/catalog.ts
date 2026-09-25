@@ -6,6 +6,7 @@ import {
   type ReduceArgs,
   type ProcessorState,
 } from "iterate/stream/processor";
+import type { AgentsApi } from "iterate/api";
 import { StreamProcessorDurableObject } from "iterate/sdk";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
@@ -64,7 +65,13 @@ const Certificate = z.discriminatedUnion("type", [
   }),
 ]);
 
-export class AgentCollectionDurableObject extends StreamProcessorDurableObject<AgentCatalogState> {
+/** The agents app's collection facet — what the `itx.agents` rule names (install.ts): the
+ *  published `AgentsApi` (iterate/api) at the project's root, plus `at(base)` and `announce`, the
+ *  app's own plumbing between an agent's context and the root. */
+export class AgentCollectionDurableObject
+  extends StreamProcessorDurableObject<AgentCatalogState>
+  implements AgentsApi
+{
   /** The processor's reads, and `itx.agents`: the collection's verbs, `at(base)` (the collection an
    *  agent's own `itx.agents` rule reaches, collection.ts) and `announce` (a certificate from an
    *  agent context). */

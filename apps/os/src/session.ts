@@ -91,7 +91,7 @@ export interface SessionInput {
  *  `authenticate({ type: "bearer", token })`, or `authenticate({ type: "admin-secret", secret })`,
  *  the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
-export class IterateRpcTarget extends RpcTarget {
+export class IterateRpcTarget extends RpcTarget implements IterateApi {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   /** The authority the transport already resolved (a credential on the upgrade), or null (a bare
@@ -113,7 +113,7 @@ export class IterateRpcTarget extends RpcTarget {
     this.#sessionTeardown.disposeAll();
   }
 
-  async authenticate(input: unknown): Promise<SessionRpcTarget> {
+  async authenticate(input: unknown) {
     const credentials = SessionCredentials.safeParse(input);
     if (!credentials.success)
       throw codedError(
@@ -1373,10 +1373,6 @@ export class SessionTeardown {
     this.#undoByKey.clear();
   }
 }
-
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): this root satisfies it, checked here.
-const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
-void _iterateApi;
 
 /** An invitation link's secret: 32 random bytes, base64url — the one path segment of
  *  `/invitations/<token>`, unguessable. The control plane keeps only its `sha256Hex` (`token_hash`),

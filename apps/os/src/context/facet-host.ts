@@ -23,6 +23,7 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import type { FacetProps } from "iterate/sdk";
+import type { FacetSpec } from "iterate/api";
 import {
   CoreContract,
   facetIsPushedByARow,
@@ -45,7 +46,6 @@ import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
   prepareConfinedWorker,
-  type FacetSpec,
 } from "./worker-loader.ts";
 
 /** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the

@@ -20,7 +20,7 @@
 // Dash's, nowhere else (`nextUrlOf`).
 
 import * as oauth from "oauth4webapi";
-import type { ClientAuth } from "iterate/api";
+import type { ClientAuth, OAuthIntegrationProvider, SecretOAuthClient } from "iterate/api";
 import { consentAccountRefusal } from "./integrations/rules.ts";
 import {
   clientAuthOf,
@@ -36,39 +36,11 @@ export const SECRET_OAUTH_TTL_MS = 10 * 60_000;
 
 /** The providers an integration connects through OAuth, whose callback is
  *  `/api/integrations/<provider>/callback`. */
-export const OAUTH_INTEGRATION_PROVIDERS = ["slack", "google", "cloudflare"] as const;
-export type OAuthIntegrationProvider = (typeof OAUTH_INTEGRATION_PROVIDERS)[number];
-/** Whose app an integration's connect goes through (the header above). */
-export type SecretOAuthClient =
-  | { platform: OAuthIntegrationProvider }
-  | { project: OAuthIntegrationProvider };
-
-/** What `itx.secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
- *  (the project's own in the clear, or an integration's `client`), the scope, the pin, any extra
- *  authorize parameters the provider needs (Google: `access_type=offline`, `prompt=consent` for a
- *  refresh token), and where the human lands afterwards. */
-export type SecretOAuthOptions = {
-  authorizationEndpoint: string;
-  tokenEndpoint: string;
-  /** Exactly one of `clientId` and `client`. */
-  clientId?: string;
-  /** Absent for a public client (PKCE alone), and with `client`. */
-  clientSecret?: string;
-  client?: SecretOAuthClient;
-  /** An absolute URL on the platform's origin or the Dash's. */
-  next?: string;
-  /** How the token endpoint wants the client credential — `ClientAuth` (secrets.ts). */
-  clientAuth?: ClientAuth;
-  scope?: string;
-  /** The origins the tokens may be sent to; defaults to the token endpoint's, which it must include. */
-  urls?: string[];
-  extra?: Record<string, string>;
-  /** The account the tokens must be for — an existing connection's, asked for more: the provider's
-   *  id for it (a Slack team, an OpenID `sub`), read off the token response. Another account's
-   *  tokens are refused before anything is stored (integrations/rules.ts `consentAccountRefusal`). */
-  expectAccount?: string;
-};
-
+export const OAUTH_INTEGRATION_PROVIDERS = [
+  "slack",
+  "google",
+  "cloudflare",
+] as const satisfies readonly OAuthIntegrationProvider[];
 /** The options validated and normalized — the shape the pending attempt and the exchange read. */
 export type NormalizedSecretOAuthOptions = {
   authorizationEndpoint: string;

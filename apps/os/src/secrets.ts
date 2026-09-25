@@ -14,7 +14,12 @@
 
 // The shapes a caller sees — the material, the client-auth method and the refresh strategy — are the
 // SDK's (`iterate/api`, where the dash and every client read them).
-import type { ClientAuth, SecretMaterial, SecretRefresh } from "iterate/api";
+import type {
+  ClientAuth,
+  SecretHmacVerification,
+  SecretMaterial,
+  SecretRefresh,
+} from "iterate/api";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
 import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
@@ -387,16 +392,6 @@ export async function substituteProjectSecrets(
   }
   return changed ? new Request(base, { headers }) : base;
 }
-
-/** What `itx.secrets.verifyHmac(path, …)` takes: the bytes a webhook signed (a string is its UTF-8),
- *  the hex HMAC-SHA256 it sent, and which field of a JSON material is the key (the whole material
- *  when omitted). Stripe signs `${t}.${body}`, GitHub the body (`sha256=<hex>`), Slack `v0:${t}:${body}`;
- *  the caller assembles the signed bytes and strips the scheme prefix. */
-export type SecretHmacVerification = {
-  payload: string | Uint8Array;
-  signature: string;
-  field?: string;
-};
 
 /** The material as an HMAC key: the whole value when it is a string and no field is named, else the
  *  string at `field` of an object material. Anything else — an object with no field named, a field

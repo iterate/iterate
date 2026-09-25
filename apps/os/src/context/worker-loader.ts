@@ -22,11 +22,8 @@
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
 import { codedError } from "iterate/lib";
-import {
-  normalizedItxExpression,
-  type ItxExpression,
-  type ItxExpressionInput,
-} from "iterate/expression";
+import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
+import type { FacetSpec, WorkerSource } from "iterate/api";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { isDeployReset } from "../retryable-error.ts";
 import { readPackage, resolveModules } from "./module-resolution.ts";
@@ -34,19 +31,6 @@ import { readPackage, resolveModules } from "./module-resolution.ts";
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
  *  resolves the rest into what the loader takes). */
 export type WorkerModules = Record<string, string>;
-/** A worker/facet SOURCE: the modules, literally — or an itx expression that PRODUCES them (a
- *  files record, or one string — a bundle, as the voice install's KV entries are — loaded as `worker.js`), evaluated only when no isolate is warm under the
- *  caller's `cacheKey` (header). Stored where it is named: a facet's startup memo, a subscription's
- *  target, a rewrite rule's target. */
-export type WorkerSource = WorkerModules | ItxExpressionInput;
-
-/** Cloudflare's loader id for the cache; REQUIRED when `source` is a producer expression (the caller
- *  owns "same key ⇒ same code"), optional beside literal modules (it then replaces the content hash). */
-export type WorkerCacheKey = string;
-
-/** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `processors.enable(name, spec)`:
- *  the source (modules, or a producer expression with its `cacheKey`) and the exported class. */
-export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
 /** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
  *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
  *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
@@ -154,7 +138,7 @@ type PrepareConfinedWorkerOptions = {
    *  (worker-loader.test.ts). */
   owner: string | readonly [iterateContextName: string, className: string];
   source: WorkerSource;
-  cacheKey?: WorkerCacheKey;
+  cacheKey?: string;
   /** Evaluate a producer expression through the owning context's dispatch — inside `getCode`, so
    *  only on a cold isolate. */
   invoke: (call: ItxExpression) => Promise<unknown>;

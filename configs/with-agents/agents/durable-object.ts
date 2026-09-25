@@ -2,16 +2,20 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
+import type { AgentHandleApi } from "iterate/api";
 import type { AgentState, FileAttachment } from "./contract.ts";
 import { AgentProcessor, STREAM_IDLE_BUDGET_MS } from "./processor.ts";
 import { AgentAiSink } from "./ai-transport.ts";
 import { AI_TRANSPORT_SOURCE } from "./ai-transport-source.ts";
 
-export class AgentDurableObject extends StreamProcessorDurableObject<
-  AgentState,
-  { ITX: ItxEntrypointService },
-  ItxEntrypointScope
-> {
+export class AgentDurableObject
+  extends StreamProcessorDurableObject<
+    AgentState,
+    { ITX: ItxEntrypointService },
+    ItxEntrypointScope
+  >
+  implements Pick<AgentHandleApi, "message">
+{
   /** The processor's reads, and a person's words (`message`) — `itx.agents.get(path).message(…)`
    *  reaches it through the collection (collection.ts). */
   static override publicMethods = [...super.publicMethods, "message"];
@@ -93,18 +97,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
    *  each stored first under this agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. The event is answered
    *  so a caller can wait for what follows it. */
-  async message(
-    input:
-      | string
-      | {
-          message: string;
-          files?: {
-            contentType: string;
-            filename: string;
-            data: Uint8Array | ArrayBuffer | string;
-          }[];
-        },
-  ): Promise<StreamEvent> {
+  async message(input: Parameters<AgentHandleApi["message"]>[0]) {
     const path = await this.#created();
     const { message, files = [] } = typeof input === "string" ? { message: input } : input;
     const attachments: FileAttachment[] = [];

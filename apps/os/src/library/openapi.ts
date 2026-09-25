@@ -9,29 +9,14 @@
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import type {
+  OpenApiConnectionApi,
+  OpenApiConnectOptions,
+  OpenApiDocument,
+  OpenApiOperation,
+} from "iterate/api";
 import type { LibraryItx } from "../library.ts";
 import { refuseUnlessOk, subclassWithMethods } from "./connection.ts";
-
-/** Options for `connectToOpenApi`: `baseUrl` overrides the document's first server; `headers` ride on
- *  every operation call (and on the spec fetch only when the spec shares the API's host). */
-export type OpenApiConnectOptions = { baseUrl?: string; headers?: Record<string, string> };
-
-/** An OpenAPI 3 document — only `openapi`, `servers` and `paths` are read. */
-export type OpenApiDocument = {
-  openapi: string;
-  servers?: Array<{ url?: string }>;
-  paths?: Record<string, Record<string, unknown>>;
-};
-
-/** One operation the connection grew a method for. */
-type OpenApiOperation = {
-  operationId: string;
-  method: string;
-  path: string;
-  parameters: Array<{ name: string; in: string; required?: boolean }>;
-  hasRequestBody: boolean;
-  summary?: string;
-};
 
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 
@@ -63,7 +48,7 @@ export async function connectToOpenApi(
 
 /** A connected OpenAPI service. `call(operationId, input)` is the generic entry point; the operations are
  *  its methods too. */
-export class OpenApiConnectionRpcTarget extends RpcTarget {
+export class OpenApiConnectionRpcTarget extends RpcTarget implements OpenApiConnectionApi {
   readonly #itx: LibraryItx;
   readonly #operations: Map<string, OpenApiOperation>;
   readonly #requestBaseUrl: URL;
@@ -81,12 +66,12 @@ export class OpenApiConnectionRpcTarget extends RpcTarget {
     this.#headers = headers;
   }
   /** Every operation the document declares with an `operationId`. */
-  operations(): OpenApiOperation[] {
+  operations() {
     return [...this.#operations.values()];
   }
   /** Run one operation: the input object's fields become path, query and header parameters, the
    *  rest the JSON body; the answer is JSON when the response says so, else its text. */
-  async call(operationId: string, input?: Record<string, unknown>): Promise<unknown> {
+  async call(...[operationId, input]: Parameters<OpenApiConnectionApi["call"]>) {
     const operation = this.#operations.get(operationId);
     if (!operation) throw new Error(`connectToOpenApi: no operation "${operationId}"`);
     const fields = { ...(input || {}) };

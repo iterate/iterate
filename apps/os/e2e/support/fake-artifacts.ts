@@ -5,7 +5,7 @@
 // v2 to over HTTP — the same wire codec as against Cloudflare Artifacts, run locally. Keyed by the
 // repo's context PATH (`/repos/config`); the Artifacts NAME behind it is derived exactly as the
 // platform derives it (src/context/cf-artifacts.ts `repoArtifactName`) and is the remote's URL path. The
-// shapes are `ArtifactsScope`'s: `create` / `get(path).{createToken, remote}` / `list` / `delete`.
+// shapes are `CfArtifactsApi`'s (iterate/api): `create` / `get(path).{createToken, remote}` / `list` / `delete`.
 // `snapshots` counts the FULL fetches the remote served (a `command=fetch`, never an `ls-refs`) —
 // what the repo facet's memo avoids. The remote's own side — `remoteTip`, `remoteFiles`,
 // `pushFromOutside` — is for a test's eyes, and is never on the real proxy.
