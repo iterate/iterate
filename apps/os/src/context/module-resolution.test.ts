@@ -125,7 +125,8 @@ const esmFiles = {
   "/lib-a@^1.0.0": `export * from "/lib-a@1.2.3/es2022/lib-a.mjs";`,
   // a cycle, a builtin mangled into a path, a platform package left external, a relative import
   "/lib-a@1.2.3/es2022/lib-a.mjs": `import "/lib-b@2.0.0/es2022/lib-b.mjs"; import { DurableObject } from "/cloudflare:workers?target=es2022"; import { z } from "zod"; import "./util.mjs"; export const a = 1;`,
-  "/lib-a@1.2.3/es2022/util.mjs": `export const util = 1;`,
+  // a builtin esm.sh left external (named in `external`), as it answers a package's own entry
+  "/lib-a@1.2.3/es2022/util.mjs": `import { RpcTarget } from "cloudflare:workers"; export const util = RpcTarget;`,
   "/lib-b@2.0.0/es2022/lib-b.mjs": `import "/lib-a@1.2.3/es2022/lib-a.mjs"; export const b = 2;`,
 };
 
@@ -138,7 +139,9 @@ test("the graph is crawled once, rewritten to relative names, and locked in the 
   };
   const modules = await resolve(source, { fetch: first.fetch, store });
   expect(first.fetched).toHaveLength(4);
-  expect(first.fetched[0]).toBe("/lib-a@^1.0.0?target=es2022&external=iterate%2Czod");
+  expect(first.fetched[0]).toBe(
+    "/lib-a@^1.0.0?target=es2022&external=cloudflare%3Aemail%2Ccloudflare%3Asockets%2Ccloudflare%3Aworkers%2Citerate%2Czod",
+  );
   expect(modules["worker.js"]).toContain(`from "./node_modules/lib-a.js"`);
   const libA = modules["node_modules/.esm/lib-a@1.2.3/es2022/lib-a.js"]!;
   expect(libA).toContain(`from "cloudflare:workers"`);
@@ -201,7 +204,7 @@ test("a pkg.pr.new version resolves through esm.sh's /pr/ route, a PR ref pinned
   const modules = await resolve(source("https://pkg.pr.new/acme/shop/@acme/sdk@1234"), esm);
   expect(esm.fetched.slice(0, 2)).toEqual([
     "/acme/shop/@acme/sdk@1234",
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a?target=es2022&external=iterate%2Czod",
+    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a?target=es2022&external=cloudflare%3Aemail%2Ccloudflare%3Asockets%2Ccloudflare%3Aworkers%2Citerate%2Czod",
   ]);
   expect(modules["worker.js"]).toContain(`from "./node_modules/@acme/sdk.js"`);
   expectLinked(modules);

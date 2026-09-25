@@ -94,6 +94,7 @@ function project() {
     files,
     commits,
     whoami: vi.fn().mockResolvedValue({ path: "/" }),
+    waitForEvent: vi.fn().mockResolvedValue({ type: "events.iterate.com/project/created" }),
     processors: { enable: vi.fn().mockResolvedValue({ name: "agents" }) },
     secrets: {
       list: vi.fn().mockResolvedValue([{ path: "/secrets/openai" }]),

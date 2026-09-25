@@ -81,10 +81,21 @@ export async function ensureAgents(
   project: InstallTarget & {
     rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
     repos: { get(path: string): Pick<RepoHandle, "readFile" | "commitFiles" | "modules"> };
+    waitForEvent: IterateContextApi["waitForEvent"];
   },
   version: string,
 ) {
   if ((await project.rewriteRules.get("itx.agents"))?.target) return;
+  // A project created a moment ago may still be seeding its config repo: the project's creation
+  // creates it and commits the seed onto an unborn `main`, so a commit here first would refuse the
+  // seed. Install once creation has settled (at once for a project created earlier).
+  const settled = await project.waitForEvent({
+    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  if (settled.type !== "events.iterate.com/project/created")
+    throw new Error("The project's creation failed, so there is no config repo to install into");
   const repo = project.repos.get("/repos/config");
   const commit = (await repo.readFile("agents/package.json"))
     ? undefined

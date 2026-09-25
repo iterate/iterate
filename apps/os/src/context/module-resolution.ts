@@ -47,6 +47,9 @@ export type ResolveOptions = {
 /** Where an entry is looked for when package.json names no `main`, in order. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
 const ESM_ORIGIN = "https://esm.sh";
+/** The runtime's own modules, external to esm.sh like the platform packages: its bundler cannot
+ *  find them, and a package importing one from its entry is refused (404) unless it is named. */
+const WORKERD_BUILTINS = ["cloudflare:email", "cloudflare:sockets", "cloudflare:workers"];
 
 const isRelative = (specifier: string) => specifier.startsWith("./") || specifier.startsWith("../");
 
@@ -308,7 +311,7 @@ async function lockedDependencyGraph(
   const lockInput = {
     specifiers,
     ranges: Object.fromEntries(packages.map((name) => [name, dependencies[name]!])),
-    externals: platformPackages(opts.platform),
+    externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
   const key = `module-lock-1/${await sha256(JSON.stringify(lockInput))}`;
