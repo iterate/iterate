@@ -32,7 +32,7 @@ export default async function ensureResources(options: { env?: string } = {}) {
   }
   // The control plane's D1 (the wrangler generator binds `<resourceNamePrefix>-db` as DB); the deploy
   // migrates it (scripts/d1.ts).
-  resources.dbId = (await ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`)).uuid;
+  resources.dbId = (await ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`, "weur")).uuid;
   // The one R2 bucket behind `itx.r2` (the wrangler generator names it `<resourceNamePrefix>-files`).
   const bucketName = `${ctx.env.resourceNamePrefix}-files`;
   const buckets = await ctx.cf<{ buckets: { name: string }[] }>("/r2/buckets?per_page=1000");

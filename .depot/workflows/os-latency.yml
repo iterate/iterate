@@ -6,7 +6,10 @@
 # and judge the run. No run deletes the preview: a brand-new one answers Cloudflare's `internal
 # error` for seconds after it is created (main-os-e2e.yml), and a preview redeployed in place is what
 # production is. Every perf row mints its own people and projects, so nothing it measures reads what
-# earlier runs left.
+# earlier runs left. The preview's D1 is created near whoever creates it (apps/os/scripts/d1.ts), and
+# every uncached control-plane read the suite times is a round trip to it: to start the preview over,
+# delete it (`pnpm --dir apps/os preview delete --name latency`) and let this workflow's deploy create
+# it again, never a laptop's `preview reset`, which places the D1 near the laptop.
 #
 # The judge (scripts/ci/os-latency-guard.ts) records every measurement to PostHog (`os latency
 # measured`) and pages Slack #error-pulse when a metric crosses its budget or regresses sharply
