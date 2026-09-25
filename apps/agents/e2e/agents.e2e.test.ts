@@ -139,9 +139,9 @@ test("the loop: a person's words → the model → a script run against itx → 
   // (17 of the 18 events, twice on main).
   const log = await until("the settle that ends the turn", async () => {
     const all = await readAll(support);
-    const count = (type: string) =>
-      all.filter((e) => e.type === `events.iterate.com/${type}`).length;
-    return count("agent/web-message-sent") === 2 && count("itx/run-settled") === 1
+    const count = (type: string) => all.filter((e) => e.type === type).length;
+    return count("events.iterate.com/agent/web-message-sent") === 2 &&
+      count("events.iterate.com/itx/run-settled") === 1
       ? all
       : undefined;
   }).catch(async (error: unknown) => {

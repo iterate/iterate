@@ -9,6 +9,7 @@ Repo-wide rules:
 - Use `node:` prefix for Node imports
 - Prefer named exports
 - Identifier naming (no all-caps acronyms, greppable names): [identifiers](identifiers.md)
+- Event types: the full `events.iterate.com/…` literal where used, never a constant: [coding style](coding-style.md#event-types)
 - Use pnpm for packages
 - Use dedent for template strings
 - Unit tests: `*.test.ts` next to source

@@ -34,11 +34,6 @@ import {
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
 import { localOnly } from "./support/project-host.ts";
 
-const CREATED = "events.iterate.com/repo/created";
-const FAILED = "events.iterate.com/repo/create-failed";
-const DELETED = "events.iterate.com/repo/deleted";
-const COMMITTED = "events.iterate.com/repo/commit-completed";
-
 test("itx.repos.create(path) lands the request and the certificate on the repo's path AND on /, the catalog lists it; a repo not created refuses; any path can host one", async ({
   onTestFinished,
 }) => {
@@ -53,9 +48,11 @@ test("itx.repos.create(path) lands the request and the certificate on the repo's
     /not created — itx\.repos\.create\("\/repos\/config"\) first/,
   );
   expect((await rejection(repo.readFile("worker.ts"))).message).toMatch(/not created/);
-  expect((await readAll(itx.cd("/repos/config"))).filter((e) => e.type === CREATED)).toHaveLength(
-    0,
-  );
+  expect(
+    (await readAll(itx.cd("/repos/config"))).filter(
+      (e) => e.type === "events.iterate.com/repo/created",
+    ),
+  ).toHaveLength(0);
 
   expect(await itx.repos.create("/repos/config")).toEqual({ path: "/repos/config" });
   expect(artifacts).toMatchObject({ created: ["/repos/config"] }); // by its path
@@ -67,20 +64,25 @@ test("itx.repos.create(path) lands the request and the certificate on the repo's
       .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload?.name),
   ).toEqual(["repo"]);
-  expect(own.filter((e) => e.type === CREATED).map((e) => e.payload)).toEqual([
-    { path: "/repos/config" },
-  ]);
+  expect(
+    own.filter((e) => e.type === "events.iterate.com/repo/created").map((e) => e.payload),
+  ).toEqual([{ path: "/repos/config" }]);
   const root = await readAll(itx);
   expect(repoFactTypes(root)).toEqual(["repo/created"]); // only the certificate crosses to /
-  expect(root.filter((e) => e.type === CREATED).map((e) => e.payload)).toEqual([
-    { path: "/repos/config" },
-  ]);
+  expect(
+    root.filter((e) => e.type === "events.iterate.com/repo/created").map((e) => e.payload),
+  ).toEqual([{ path: "/repos/config" }]);
   expect(await itx.repos.list()).toEqual([
     { path: "/repos/config", createdAt: expect.any(String) },
   ]);
   // The state references the certificate by OFFSET, never by copied payload.
   expect(await itx.cd("/repos/config").facets.get("repo").snapshot()).toMatchObject({
-    state: { creation: { status: "created", offset: own.find((e) => e.type === CREATED).offset } },
+    state: {
+      creation: {
+        status: "created",
+        offset: own.find((e) => e.type === "events.iterate.com/repo/created").offset,
+      },
+    },
   });
 
   // Created once: a second create answers at once, appends nothing.
@@ -115,14 +117,19 @@ test("provisioning fails: create-failed lands on the repo's path with the proxy'
   const own = await readAll(itx.cd("/repos/flaky"));
   expect(repoFactTypes(own)).toEqual(["repo/create-requested", "repo/create-failed"]);
   // The error is ON the failure event — what the Artifacts proxy threw — never copied into state.
-  expect(own.filter((e) => e.type === FAILED).map((e) => e.payload)).toEqual([
-    { error: "artifacts down" },
-  ]);
+  expect(
+    own.filter((e) => e.type === "events.iterate.com/repo/create-failed").map((e) => e.payload),
+  ).toEqual([{ error: "artifacts down" }]);
   expect(repoFactTypes(await readAll(itx))).toEqual([]); // no certificate crossed: the catalog is empty
   expect(await itx.repos.list()).toEqual([]);
   expect((await rejection(repo.tip())).message).toMatch(/not created/);
   expect(await itx.cd("/repos/flaky").facets.get("repo").snapshot()).toMatchObject({
-    state: { creation: { status: "failed", offset: own.find((e) => e.type === FAILED).offset } },
+    state: {
+      creation: {
+        status: "failed",
+        offset: own.find((e) => e.type === "events.iterate.com/repo/create-failed").offset,
+      },
+    },
   });
 
   expect(await itx.repos.create("/repos/flaky")).toEqual({ path: "/repos/flaky" }); // a new attempt
@@ -136,7 +143,10 @@ test("provisioning fails: create-failed lands on the repo's path with the proxy'
   expect(repoFactTypes(await readAll(itx))).toEqual(["repo/created"]);
   expect(await itx.cd("/repos/flaky").facets.get("repo").snapshot()).toMatchObject({
     state: {
-      creation: { status: "created", offset: retried.find((e) => e.type === CREATED).offset },
+      creation: {
+        status: "created",
+        offset: retried.find((e) => e.type === "events.iterate.com/repo/created").offset,
+      },
     },
   });
 });
@@ -165,13 +175,17 @@ localOnly(
       message: "write worker.ts",
       changedPaths: ["worker.ts"],
     };
-    const committed = (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED);
+    const committed = (await readAll(itx.cd("/repos/config"))).filter(
+      (e) => e.type === "events.iterate.com/repo/commit-completed",
+    );
     expect(committed.map((e) => e.payload)).toEqual([fact]);
     // …and cross-posted to `/`, where the project processor follows the config repo's commits with
     // the apex (website-publication.e2e.test.ts is that proof).
-    expect((await readAll(itx)).filter((e) => e.type === COMMITTED).map((e) => e.payload)).toEqual([
-      fact,
-    ]);
+    expect(
+      (await readAll(itx))
+        .filter((e) => e.type === "events.iterate.com/repo/commit-completed")
+        .map((e) => e.payload),
+    ).toEqual([fact]);
     // The first read after a commit fetches the tip; reads at the same tip fetch nothing more (an
     // ls-refs each, which is not a fetch).
     expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
@@ -244,7 +258,9 @@ localOnly(
       await repo.commitFiles({ message: "noop", changes: [{ path: "c.txt", content: "c" }] }),
     ).toEqual({ commitOid: second.commitOid, changedPaths: [] });
     expect(
-      (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED),
+      (await readAll(itx.cd("/repos/config"))).filter(
+        (e) => e.type === "events.iterate.com/repo/commit-completed",
+      ),
     ).toHaveLength(2);
   },
 );
@@ -261,7 +277,9 @@ localOnly(
     const repo = itx.repos.get("/repos/config");
     const first = await repo.writeFile("worker.ts", "export default 1;\n");
     const facts = async (ctx: any) =>
-      (await readAll(ctx)).filter((e) => e.type === COMMITTED).map((e) => e.payload);
+      (await readAll(ctx))
+        .filter((e) => e.type === "events.iterate.com/repo/commit-completed")
+        .map((e) => e.payload);
     const fact = {
       path: "/repos/config",
       commitOid: first.commitOid,
@@ -352,7 +370,9 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
     );
     expect(await repo.tip()).toBe(first.commitOid);
     expect(
-      (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED),
+      (await readAll(itx.cd("/repos/config"))).filter(
+        (e) => e.type === "events.iterate.com/repo/commit-completed",
+      ),
     ).toHaveLength(1);
     expect(await repo.readFile("notes/log.md")).toBe("# log\n");
     expect(await repo.listFiles()).toEqual({
@@ -398,9 +418,9 @@ localOnly(
       "repo/delete-requested",
       "repo/deleted",
     ]);
-    expect(own.filter((e) => e.type === DELETED).map((e) => e.payload)).toEqual([
-      { path: "/repos/gone" },
-    ]);
+    expect(
+      own.filter((e) => e.type === "events.iterate.com/repo/deleted").map((e) => e.payload),
+    ).toEqual([{ path: "/repos/gone" }]);
     expect(repoFactTypes(await readAll(itx))).toEqual(["repo/created", "repo/deleted"]); // both certificates cross to /
     // The row went with the deletion — `processors.disable`, one `{ target: null }` fact after the
     // certificate — and the facet's storage with it.
@@ -419,7 +439,10 @@ localOnly(
     expect(await itx.cd("/repos/gone").facets.get("repo").snapshot()).toMatchObject({
       state: {
         creation: { status: "created" },
-        deletion: { status: "deleted", offset: own.find((e) => e.type === DELETED).offset },
+        deletion: {
+          status: "deleted",
+          offset: own.find((e) => e.type === "events.iterate.com/repo/deleted").offset,
+        },
       },
     });
     // Dies once: a second delete answers at once, appends nothing and asks the proxy nothing; and a

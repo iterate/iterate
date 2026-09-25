@@ -336,8 +336,6 @@ test("itx.llm.run('special') rewrites past the plain itx.llm.run rule; pinned ar
 
 // ── the table under stress ──
 
-const REWRITE_RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
-
 test("the table is a MAP under concurrency: 5 concurrent re-sets of ONE match leave exactly one row — the last-committed target — and the match follows it", async () => {
   const itx = openItx(freshCtx("map"));
   // five distinguishable client rpc stubs, each behind its own rule
@@ -346,7 +344,9 @@ test("the table is a MAP under concurrency: 5 concurrent re-sets of ONE match le
   // five concurrent re-sets of itx.race — one event each, one row survives: the LAST committed
   await Promise.all(Array.from({ length: 5 }, (_, i) => itx.provide("itx.race", `itx.probe${i}`)));
   const configured = (await readAll(itx)).filter(
-    (e) => e.type === REWRITE_RULE_CONFIGURED && ruleMatchAtRest(e) === "itx.race",
+    (e) =>
+      e.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+      ruleMatchAtRest(e) === "itx.race",
   );
   expect(configured).toHaveLength(5); // every re-set appended exactly one event
   const lastTarget = (configured.at(-1)!.payload.target as string[]).join("."); // at rest the parsed form; `get()` prints
@@ -385,7 +385,7 @@ test("300 rules: the NEWEST rule still rewrites", async () => {
   const itx = openItx(ctx);
   // Rules are event-sourced — append all 300 rewrite-rule-configured events in ONE commit.
   const rules = Array.from({ length: 300 }, (_, i) => ({
-    type: REWRITE_RULE_CONFIGURED,
+    type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: `itx.m${i}`, target: ["itx", "whoami"] },
   }));
   expect(await itx.append(...rules)).toHaveLength(300);
@@ -400,18 +400,21 @@ test("malformed rewrite-rule events are REFUSED at the append boundary — no de
   // An unparseable target:
   const unparseable = await rejection(
     itx.append({
-      type: REWRITE_RULE_CONFIGURED,
+      type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.broken", target: "((((" },
     }),
     "an unparseable target",
   );
   expect(unparseable.message).toMatch(/expected|itx/i);
   // NO payload at all:
-  await rejection(itx.append({ type: REWRITE_RULE_CONFIGURED }), "a payload-less rewrite rule");
+  await rejection(
+    itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured" }),
+    "a payload-less rewrite rule",
+  );
   // wrong shapes inside the payload:
   await rejection(
     itx.append({
-      type: REWRITE_RULE_CONFIGURED,
+      type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: 42, target: ["not", "a", "string"] },
     }),
     "wrong payload shapes",

@@ -45,9 +45,6 @@ import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 // ── the spine: reduces and the facet address ──
 
-/** ONE event type for the rewrite-rule table: a set and an un-set (`target: null`) alike. */
-const RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
-
 test("facet spine: cold catch-up + driven reduces + the subscriptions table lists the processor", async () => {
   const itx = openItx(freshCtx("facet"));
 
@@ -58,7 +55,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   const s1 = await itx.invoke("itx.facets.get('tally').snapshot()");
   // Cold catch-up counts the pre-enable rule and tally's own enablement.
   // Both are subscriptions, NOT rewrite rules (an enablement is a subscription).
-  expect(s1.state?.counts?.[RULE_CONFIGURED]).toBe(1);
+  expect(s1.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
   expect(s1.state?.counts?.["events.iterate.com/itx/subscription-configured"]).toBe(1);
 
   // two more rules + one un-set AFTER enabling — the push path
@@ -71,7 +68,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   // checkpoint sits at or past the 8 durable events (created, woken, config, before, configured, a,
   // b, a-unset) — live-state deltas are ephemerals in the SAME offset space, so the exact position
   // depends on how many the core reduce emitted; the counts pin the real reduce.
-  expect(s2.state?.counts?.[RULE_CONFIGURED]).toBe(4);
+  expect(s2.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(4);
   expect(s2.offset).toBeGreaterThanOrEqual(8);
 
   // the subscriptions table lists the processor: ONE row whose target is the facet's
@@ -126,11 +123,11 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
   // An enablement is one subscription-configured event, not a rewrite rule.
   // Checkpoints sit at or past offset 7 (live-state deltas share the offset space).
   const su = await itx.invoke("itx.facets.get('user-tally').snapshot()");
-  expect(su.state?.counts?.[RULE_CONFIGURED]).toBe(3);
+  expect(su.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(3);
   expect(su.offset).toBeGreaterThanOrEqual(7);
 
   const sb = await itx.invoke("itx.facets.get('tally').snapshot()");
-  expect(sb.state?.counts?.[RULE_CONFIGURED]).toBe(3);
+  expect(sb.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(3);
   expect(sb.offset).toBeGreaterThanOrEqual(7);
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a count only one processor has is a different reduce
   expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log
@@ -364,8 +361,6 @@ test("the raw event agrees with processors.disable — a hand-appended subscript
 
 // ── policy as a facet processor: the breaker pauses the stream ──
 
-const PAUSED = "events.iterate.com/itx/paused";
-
 test("a burst past the breaker's capacity pauses the stream (the facet appends `paused` with its reason); appends refuse with STREAM_PAUSED; an operator's `resumed` restores flow", async () => {
   const itx = openItx(freshCtx("breaker"));
   // processors.enable("breaker", { source: SOURCES.breaker, className: "BreakerDurableObject" })
@@ -373,7 +368,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   // The breaker's own enablement (subscription-configured) is a durable non-control event: the bucket
   // (capacity 5) is at 4 once it has reduced its own row. Nothing paused yet.
   await itx.append({ type: "warm" }); // 3 left
-  expect((await readAll(itx)).some((e) => e.type === PAUSED)).toBe(false);
+  expect((await readAll(itx)).some((e) => e.type === "events.iterate.com/itx/paused")).toBe(false);
 
   // ONE batch of 8 durable events — more than the bucket holds. The crossing happens mid-batch; the
   // breaker's processEvent trips exactly once (the crossing), appending `paused`.
@@ -381,7 +376,11 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
     ...Array.from({ length: 8 }, (_, i) => ({ type: "burst", payload: { i } })),
   );
   expect(burst).toHaveLength(8); // the burst itself was admitted — policy reads the REDUCE, after the commit
-  const paused = await itx.waitForEvent({ type: PAUSED, afterOffset: 0, timeoutMs: 20_000 });
+  const paused = await itx.waitForEvent({
+    type: "events.iterate.com/itx/paused",
+    afterOffset: 0,
+    timeoutMs: 20_000,
+  });
   expect(paused).toMatchObject({
     payload: { reason: "breaker: durable events exceeded the bucket" },
   });
@@ -405,7 +404,9 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   const [after] = await itx.append({ type: "after" });
   expect(after.offset).toBeGreaterThan(paused.offset); // flow restored
   // the bucket is in debt (no second crossing) — the ONE trip is the only `paused` in the log
-  expect((await readAll(itx)).filter((e) => e.type === PAUSED)).toHaveLength(1);
+  expect(
+    (await readAll(itx)).filter((e) => e.type === "events.iterate.com/itx/paused"),
+  ).toHaveLength(1);
   // and the breaker's reduced state is the pure reduce of the log: tokens below zero, replayable
   const snap = await itx.invoke("itx.facets.get('breaker').snapshot()");
   expect(snap.state.tokens).toBeLessThan(0);

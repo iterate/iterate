@@ -82,10 +82,11 @@ test("consumesEvent: undefined consumes = every durable event, no ephemerals (a 
 });
 
 test("consumesEvent: the wake record (itx/woken) is an ordinary durable event: swept by default and by \"*\" like any other — that a wake makes no LOOP is the delivery loop's and the alarm's to keep, never a carve-out here", () => {
-  const t = "events.iterate.com/itx/woken";
-  expect(consumesEvent(undefined, { type: t })).toBe(true);
-  expect(consumesEvent(["*"], { type: t })).toBe(true);
-  expect(consumesEvent([t], { type: t })).toBe(true);
+  expect(consumesEvent(undefined, { type: "events.iterate.com/itx/woken" })).toBe(true);
+  expect(consumesEvent(["*"], { type: "events.iterate.com/itx/woken" })).toBe(true);
+  expect(
+    consumesEvent(["events.iterate.com/itx/woken"], { type: "events.iterate.com/itx/woken" }),
+  ).toBe(true);
 });
 
 test("consumesEvent: a NAMED type opts that type in, INCLUDING when ephemeral", () => {
@@ -98,10 +99,21 @@ test("consumesEvent: a NAMED type opts that type in, INCLUDING when ephemeral", 
 test("consumesEvent: a live-state delta is an ephemeral like any other here: never swept by default or '*', delivered when NAMED", () => {
   // (That no PROCESSOR may reduce a delta is the engine's `reducesEvent`, not this rule: a
   // SUBSCRIPTION names the type to watch live state.)
-  const t = "events.iterate.com/itx/live-state-changed";
-  expect(consumesEvent(undefined, { type: t, ephemeral: true })).toBe(false);
-  expect(consumesEvent(["*"], { type: t, ephemeral: true })).toBe(false);
-  expect(consumesEvent([t], { type: t, ephemeral: true })).toBe(true);
+  expect(
+    consumesEvent(undefined, {
+      type: "events.iterate.com/itx/live-state-changed",
+      ephemeral: true,
+    }),
+  ).toBe(false);
+  expect(
+    consumesEvent(["*"], { type: "events.iterate.com/itx/live-state-changed", ephemeral: true }),
+  ).toBe(false);
+  expect(
+    consumesEvent(["events.iterate.com/itx/live-state-changed"], {
+      type: "events.iterate.com/itx/live-state-changed",
+      ephemeral: true,
+    }),
+  ).toBe(true);
 });
 
 // ── the concurrency contract ──

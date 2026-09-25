@@ -40,9 +40,6 @@ import {
   registerProject,
 } from "./support/project-host.ts";
 
-const SET = "events.iterate.com/secret/set";
-const DELETED = "events.iterate.com/secret/deleted";
-
 test("set / list / delete: paths, pins and strategy kinds are listed, values never are; each change is one fact on the secret's path, cross-posted to the root, without the value; a bad path, a missing pin and a bad URL are refused", async () => {
   const itx = openItx(freshCtx("secrets"));
   expect(await itx.secrets.list()).toEqual([]);
@@ -68,16 +65,28 @@ test("set / list / delete: paths, pins and strategy kinds are listed, values nev
   ]);
   // the facts: each secret's own log holds its own; the root's log holds every one, cross-posted
   expect(await changesOf(itx.cd("/secrets/api.key_v-2"))).toEqual([
-    [SET, { path: "/secrets/api.key_v-2", urls: ["https://api.example.com"] }],
-    [DELETED, { path: "/secrets/api.key_v-2" }],
+    [
+      "events.iterate.com/secret/set",
+      { path: "/secrets/api.key_v-2", urls: ["https://api.example.com"] },
+    ],
+    ["events.iterate.com/secret/deleted", { path: "/secrets/api.key_v-2" }],
   ]);
   expect(await changesOf(itx.cd("/secrets/stripe"))).toEqual([
-    [SET, { path: "/secrets/stripe", urls: ["https://api.stripe.com"] }],
+    [
+      "events.iterate.com/secret/set",
+      { path: "/secrets/stripe", urls: ["https://api.stripe.com"] },
+    ],
   ]);
   expect(await changesOf(itx)).toEqual([
-    [SET, { path: "/secrets/api.key_v-2", urls: ["https://api.example.com"] }],
-    [SET, { path: "/secrets/stripe", urls: ["https://api.stripe.com"] }],
-    [DELETED, { path: "/secrets/api.key_v-2" }],
+    [
+      "events.iterate.com/secret/set",
+      { path: "/secrets/api.key_v-2", urls: ["https://api.example.com"] },
+    ],
+    [
+      "events.iterate.com/secret/set",
+      { path: "/secrets/stripe", urls: ["https://api.stripe.com"] },
+    ],
+    ["events.iterate.com/secret/deleted", { path: "/secrets/api.key_v-2" }],
   ]);
   const logs = JSON.stringify([
     await readAll(itx),
@@ -116,12 +125,14 @@ test("an authenticated session's set is attributed — the fact on the secret's 
   const itx = api.projects.get(projectId);
   await itx.secrets.set("/secrets/token", "t0p", { urls: ["https://api.example.com"] });
   const payload = { path: "/secrets/token", urls: ["https://api.example.com"] };
-  const change = (await readAll(itx.cd("/secrets/token"))).find((e) => e.type === SET);
+  const change = (await readAll(itx.cd("/secrets/token"))).find(
+    (e) => e.type === "events.iterate.com/secret/set",
+  );
   expect(change?.payload).toEqual(payload);
   expect(change?.source?.principal).toEqual(principal);
   expect(JSON.stringify(change)).not.toContain("t0p");
   // the cross-post on the root: the same fact, the same payload, the same caller
-  const crossPosted = (await readAll(itx)).find((e) => e.type === SET);
+  const crossPosted = (await readAll(itx)).find((e) => e.type === "events.iterate.com/secret/set");
   expect(crossPosted?.payload).toEqual(payload);
   expect(crossPosted?.source?.principal).toEqual(principal);
   expect(JSON.stringify(crossPosted)).not.toContain("t0p");
@@ -134,7 +145,7 @@ test("a secret is its path: after a set the `secret` processor row is on /secret
   await itx.secrets.set("/secrets/x", "the-first-value", { urls });
   // the row is the secret's, not the root's; the facet's state points at the fact that set it
   expect(await processorNames(x)).toEqual(["secret"]);
-  const set1 = (await readAll(x)).find((e) => e.type === SET);
+  const set1 = (await readAll(x)).find((e) => e.type === "events.iterate.com/secret/set");
   expect(set1?.payload).toEqual({ path: "/secrets/x", urls });
   const snapshot1 = await x.facets.get("secret").snapshot();
   expect(snapshot1).toMatchObject({ state: { material: { offset: set1.offset }, deletion: null } });
@@ -143,12 +154,14 @@ test("a secret is its path: after a set the `secret` processor row is on /secret
   expect(await itx.secrets.delete("/secrets/x")).toEqual({ path: "/secrets/x" });
   expect(await processorNames(x)).toEqual([]);
   expect(await itx.secrets.list()).toEqual([]);
-  const deleted = (await readAll(x)).find((e) => e.type === DELETED);
+  const deleted = (await readAll(x)).find((e) => e.type === "events.iterate.com/secret/deleted");
   expect(deleted?.payload).toEqual({ path: "/secrets/x" });
   expect(deleted.offset).toBeGreaterThan(set1.offset);
   // a second delete answers at once — no second fact
   expect(await itx.secrets.delete("/secrets/x")).toEqual({ path: "/secrets/x" });
-  expect((await readAll(x)).filter((e) => e.type === DELETED)).toHaveLength(1);
+  expect(
+    (await readAll(x)).filter((e) => e.type === "events.iterate.com/secret/deleted"),
+  ).toHaveLength(1);
   // a path never set has nothing to delete
   await expect(itx.secrets.delete("/secrets/never")).rejects.toThrow(
     "secret /secrets/never: never set — nothing to delete",
@@ -158,7 +171,7 @@ test("a secret is its path: after a set the `secret` processor row is on /secret
     path: "/secrets/x",
   });
   expect(await processorNames(x)).toEqual(["secret"]);
-  const set2 = (await readAll(x)).filter((e) => e.type === SET).at(-1);
+  const set2 = (await readAll(x)).filter((e) => e.type === "events.iterate.com/secret/set").at(-1);
   expect(set2.offset).toBeGreaterThan(deleted.offset);
   expect(await x.facets.get("secret").snapshot()).toMatchObject({
     state: { material: { offset: set2.offset }, deletion: null },
@@ -167,9 +180,9 @@ test("a secret is its path: after a set the `secret` processor row is on /secret
     { path: "/secrets/x", urls, createdAt: expect.any(String) },
   ]);
   expect(await changesOf(itx)).toEqual([
-    [SET, { path: "/secrets/x", urls }],
-    [DELETED, { path: "/secrets/x" }],
-    [SET, { path: "/secrets/x", urls }],
+    ["events.iterate.com/secret/set", { path: "/secrets/x", urls }],
+    ["events.iterate.com/secret/deleted", { path: "/secrets/x" }],
+    ["events.iterate.com/secret/set", { path: "/secrets/x", urls }],
   ]);
   const logs = JSON.stringify([await readAll(itx), await readAll(x)]);
   expect(logs).not.toContain("the-first-value");
@@ -390,8 +403,11 @@ test("the catalog is the PROJECT's: a secret set from one nested context is list
   // the facts live on the SECRET's log and, cross-posted, on the ROOT's — whichever context wrote
   // them; the writers' own logs hold none
   const facts = [
-    [SET, { path: "/secrets/shared", urls: ["https://api.example.com"] }],
-    [DELETED, { path: "/secrets/shared" }],
+    [
+      "events.iterate.com/secret/set",
+      { path: "/secrets/shared", urls: ["https://api.example.com"] },
+    ],
+    ["events.iterate.com/secret/deleted", { path: "/secrets/shared" }],
   ];
   expect(await changesOf(root.cd("/secrets/shared"))).toEqual(facts);
   expect(await changesOf(root)).toEqual(facts);
@@ -483,7 +499,7 @@ test("verifyHmac: a webhook's HMAC-SHA256 hex signature is checked inside the se
   const events = await readAll(itx.cd("/secrets/hook"));
   expect(
     events.filter((e) => e.type.startsWith("events.iterate.com/secret/")).map((e) => e.type),
-  ).toEqual([SET]);
+  ).toEqual(["events.iterate.com/secret/set"]);
   expect(JSON.stringify(events)).not.toContain("whsec_test_key");
   await itx.secrets.delete("/secrets/hook");
   expect(await itx.secrets.verifyHmac("/secrets/hook", { payload, signature })).toBe(false); // deleted: no key
@@ -502,7 +518,9 @@ test("loaded code may write a secret: a script run in a child context (through i
   const row = { path: "/secrets/fromscript", urls, createdAt: expect.any(String) };
   expect(await child.run("async (itx) => itx.secrets.list()")).toEqual([row]);
   expect(await itx.secrets.list()).toEqual([row]);
-  const set = (await readAll(itx.cd("/secrets/fromscript"))).find((e) => e.type === SET);
+  const set = (await readAll(itx.cd("/secrets/fromscript"))).find(
+    (e) => e.type === "events.iterate.com/secret/set",
+  );
   expect(set?.payload).toEqual({ path: "/secrets/fromscript", urls });
   expect(set?.source?.principal).toBeUndefined(); // loaded code speaks for the project
   expect(await child.run('async (itx) => itx.secrets.delete("/secrets/fromscript")')).toEqual({
@@ -548,5 +566,9 @@ function usedFacts(secret: any, expected = 1): Promise<unknown[]> {
 /** The `secret/set` and `secret/deleted` facts on a context's log as `[type, payload]`, oldest first. */
 const changesOf = async (itx: any): Promise<unknown[]> =>
   (await readAll(itx))
-    .filter((e) => e.type === SET || e.type === DELETED)
+    .filter(
+      (e) =>
+        e.type === "events.iterate.com/secret/set" ||
+        e.type === "events.iterate.com/secret/deleted",
+    )
     .map((e) => [e.type, e.payload]);

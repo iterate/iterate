@@ -5,8 +5,6 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "./support/client.ts";
 
-const PING = "events.iterate.com/test/ping-sent";
-const PONG = "events.iterate.com/test/pong-sent";
 test("a fresh context has no implicit worker subscription; an explicit cross-context target delivers", async () => {
   const root = openItx(freshCtx("config-explicit"));
   const child = root.cd("/child");
@@ -21,15 +19,19 @@ test("a fresh context has no implicit worker subscription; an explicit cross-con
       ["get", { source: "itx.kv.get('config.js')", cacheKey: "kv:v1" }],
       "processEventBatch",
     ],
-    consumes: [PING],
+    consumes: ["events.iterate.com/test/ping-sent"],
   });
-  const [ping] = await child.append({ type: PING });
+  const [ping] = await child.append({ type: "events.iterate.com/test/ping-sent" });
   await until("the explicit worker answered on the root", async () =>
     (await readAll(root)).find(
-      (event) => event.type === PONG && event.payload?.pinged === ping.offset,
+      (event) =>
+        event.type === "events.iterate.com/test/pong-sent" && event.payload?.pinged === ping.offset,
     ),
   );
-  expect((await readAll(root)).find((event) => event.type === PONG)?.payload).toEqual({
+  expect(
+    (await readAll(root)).find((event) => event.type === "events.iterate.com/test/pong-sent")
+      ?.payload,
+  ).toEqual({
     version: "kv",
     from: "/child",
     pinged: ping.offset,
@@ -48,13 +50,13 @@ test("a repo-backed worker changes when its explicit subscription spec is update
   await root.subscribe({
     name: "config",
     target: ["itx", "workers", ["get", spec], "processEventBatch"],
-    consumes: [PING, "events.iterate.com/repo/commit-completed"],
+    consumes: ["events.iterate.com/test/ping-sent", "events.iterate.com/repo/commit-completed"],
   });
-  const [ping1] = await root.append({ type: PING });
+  const [ping1] = await root.append({ type: "events.iterate.com/test/ping-sent" });
   await until("v1 answered", async () =>
     (await readAll(root)).find(
       (event) =>
-        event.type === PONG &&
+        event.type === "events.iterate.com/test/pong-sent" &&
         event.payload?.pinged === ping1.offset &&
         event.payload?.version === "v1",
     ),
@@ -65,11 +67,11 @@ test("a repo-backed worker changes when its explicit subscription spec is update
     type: "events.iterate.com/repo/commit-completed",
     payload: { commitOid: second.commitOid },
   });
-  const [stillOld] = await root.append({ type: PING });
+  const [stillOld] = await root.append({ type: "events.iterate.com/test/ping-sent" });
   await until("the existing spec remains selected", async () =>
     (await readAll(root)).find(
       (event) =>
-        event.type === PONG &&
+        event.type === "events.iterate.com/test/pong-sent" &&
         event.payload?.pinged === stillOld.offset &&
         event.payload?.version === "v1",
     ),
@@ -82,13 +84,13 @@ test("a repo-backed worker changes when its explicit subscription spec is update
       ["get", { ...spec, cacheKey: second.commitOid }],
       "processEventBatch",
     ],
-    consumes: [PING],
+    consumes: ["events.iterate.com/test/ping-sent"],
   });
-  const [ping2] = await root.append({ type: PING });
+  const [ping2] = await root.append({ type: "events.iterate.com/test/ping-sent" });
   await until("v2 answered", async () =>
     (await readAll(root)).find(
       (event) =>
-        event.type === PONG &&
+        event.type === "events.iterate.com/test/pong-sent" &&
         event.payload?.pinged === ping2.offset &&
         event.payload?.version === "v2",
     ),
@@ -98,8 +100,8 @@ test("a repo-backed worker changes when its explicit subscription spec is update
 const source = (version: string) => `import { ConfigWorker } from "./processor.js";
 export default class extends ConfigWorker {
   async processEvent({ event, itx }) {
-    if (event.type === ${JSON.stringify(PING)}) await itx.append({
-      type: ${JSON.stringify(PONG)},
+    if (event.type === "events.iterate.com/test/ping-sent") await itx.append({
+      type: "events.iterate.com/test/pong-sent",
       payload: { version: ${JSON.stringify(version)}, from: event.path, pinged: event.offset },
       idempotencyKey: "pong:" + event.path + ":" + event.offset
     });

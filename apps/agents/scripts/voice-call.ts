@@ -33,8 +33,6 @@ const OUT = args.get("out") || `/tmp/voice-call-${Date.now().toString(36)}.wav`;
 const LISTEN_MS = Number(args.get("listen-ms") || 12_000);
 const FRAME_MS = 50;
 const BYTES_PER_MS = 32; // 16 kHz mono PCM16
-const T = "events.iterate.com/voice-agent/";
-
 const now = () => Date.now();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -126,54 +124,56 @@ async function main(): Promise<void> {
   await itx.subscribe({
     name: "device",
     consumes: [
-      `${T}call-started`,
-      `${T}conversation-accepted`,
-      `${T}conversation-ended`,
-      `${T}spk-frame`,
-      `${T}utterance-transcribed`,
-      `${T}answer-transcribed`,
-      `${T}delegation-requested`,
-      `${T}provider-error-reported`,
-      `${T}provider-disconnected`,
+      "events.iterate.com/voice-agent/call-started",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/utterance-transcribed",
+      "events.iterate.com/voice-agent/answer-transcribed",
+      "events.iterate.com/voice-agent/delegation-requested",
+      "events.iterate.com/voice-agent/provider-error-reported",
+      "events.iterate.com/voice-agent/provider-disconnected",
     ],
     target: (events: any[]) => {
       for (const raw of events) {
         const event = JSON.parse(JSON.stringify(raw));
-        const kind = String(event.type).slice(T.length);
         const p = event.payload ?? {};
-        switch (kind) {
-          case "spk-frame":
+        switch (event.type) {
+          case "events.iterate.com/voice-agent/spk-frame":
             marks.firstSpkFrame ??= at();
             if (p.pcm) speaker.push(Buffer.from(p.pcm, "base64"));
             if (p.lastFrameOfAnswer) marks[`answerDone#${speaker.length}`] = at();
             break;
-          case "conversation-accepted":
+          case "events.iterate.com/voice-agent/conversation-accepted":
             marks.accepted = at();
             marks.handshakeTookMs = p.handshakeTookMs;
             marks.upgradeTookMs = p.upgradeTookMs;
             accepted?.();
             break;
-          case "conversation-ended":
+          case "events.iterate.com/voice-agent/conversation-ended":
             ended = String(p.reason);
             marks.ended = at();
             break;
-          case "utterance-transcribed":
+          case "events.iterate.com/voice-agent/utterance-transcribed":
             transcript.push(`listener: ${p.text}`);
             console.log(`[${at()}ms] listener: ${p.text}`);
             break;
-          case "answer-transcribed":
+          case "events.iterate.com/voice-agent/answer-transcribed":
             transcript.push(`assistant: ${p.text}`);
             console.log(`[${at()}ms] assistant: ${p.text}`);
             break;
-          case "delegation-requested":
+          case "events.iterate.com/voice-agent/delegation-requested":
             console.log(
               `[${at()}ms] delegation ${p.delegationId} with ${p.transcript?.length ?? 0} turns`,
             );
             break;
           default:
-            marks[kind] ??= at();
-            if (kind === "provider-error-reported" || kind === "provider-disconnected")
-              console.log(`[${at()}ms] ${kind}: ${JSON.stringify(p).slice(0, 300)}`);
+            marks[event.type] ??= at();
+            if (
+              event.type === "events.iterate.com/voice-agent/provider-error-reported" ||
+              event.type === "events.iterate.com/voice-agent/provider-disconnected"
+            )
+              console.log(`[${at()}ms] ${event.type}: ${JSON.stringify(p).slice(0, 300)}`);
         }
       }
     },
@@ -191,7 +191,7 @@ async function main(): Promise<void> {
     pending++;
     Promise.resolve(
       itx.append({
-        type: `${T}mic-frame`,
+        type: "events.iterate.com/voice-agent/mic-frame",
         ephemeral: true,
         payload: {
           activation,
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
       // Nothing to say into the microphone: hand the model a fact to paraphrase once the call is live.
       void acceptedPromise.then(() =>
         itx.append({
-          type: `${T}commentary-added`,
+          type: "events.iterate.com/voice-agent/commentary-added",
           payload: { activation, delegationId: null, content: SAY },
         }),
       );
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
   while (pending > 0) await sleep(20);
 
   await itx.append({
-    type: `${T}conversation-ended`,
+    type: "events.iterate.com/voice-agent/conversation-ended",
     payload: { activation, reason: "voice-call script done" },
   });
   marks.terminalSent = at();

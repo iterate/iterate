@@ -47,7 +47,7 @@ import {
   type Caller,
 } from "./caller.ts";
 import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
-import { normalizeControlEvent, ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
+import { normalizeControlEvent } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   FETCH_UPGRADE_RESUMABLE_HEADER,
@@ -332,7 +332,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
-      const events = freshEvents.filter((event) => event.type !== ALARM_TRACE_EVENT);
+      const events = freshEvents.filter(
+        (event) => event.type !== "events.iterate.com/itx/alarm-trace",
+      );
       if (events.length === 0) return;
       this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
@@ -864,7 +866,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // Straight onto the stream, not through `append` (a trace is not activity); a trace
     // must never fail an alarm pass.
     try {
-      this.#stream.append({ type: ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
+      this.#stream.append({
+        type: "events.iterate.com/itx/alarm-trace",
+        ephemeral: true,
+        payload: trace,
+      });
     } catch (error) {
       reportIssue("iterate-context.alarm-trace", error, { reason });
     }

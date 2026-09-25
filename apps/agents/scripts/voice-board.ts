@@ -32,8 +32,6 @@ const PROJECT = process.env.PROJECT || "prj-voice";
 const DEVICE = args.get("device") || "home_assistant_voice_preview_edition";
 const PROMPT = args.get("prompt") || "Hello there. Please reply with the single word banana.";
 const EXPECT = new RegExp(args.get("expect") || "banana", "i");
-const T = "events.iterate.com/voice-agent/";
-
 type Health = Record<string, unknown> & {
   callActive?: boolean;
   conversation?: string;
@@ -96,24 +94,29 @@ async function main(): Promise<void> {
   await call.subscribe({
     name: `voice-board-${askedAt}`,
     consumes: [
-      `${T}spk-frame`,
-      `${T}utterance-transcribed`,
-      `${T}answer-transcribed`,
-      `${T}provider-error-reported`,
-      `${T}provider-disconnected`,
-      `${T}conversation-ended`,
+      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/utterance-transcribed",
+      "events.iterate.com/voice-agent/answer-transcribed",
+      "events.iterate.com/voice-agent/provider-error-reported",
+      "events.iterate.com/voice-agent/provider-disconnected",
+      "events.iterate.com/voice-agent/conversation-ended",
     ],
     target: (events: any[]) => {
       for (const raw of events) {
         const event = JSON.parse(JSON.stringify(raw));
-        const kind = String(event.type).slice(T.length);
         const p = event.payload ?? {};
-        if (kind === "spk-frame" && p.lastFrameOfAnswer) answers += 1;
-        else if (kind === "utterance-transcribed") heardUs += ` ${p.text}`;
-        else if (kind === "answer-transcribed") saidBack += ` ${p.text}`;
-        else if (kind === "provider-error-reported" || kind === "provider-disconnected")
-          errors.push(`${kind}: ${JSON.stringify(p).slice(0, 200)}`);
-        else if (kind === "conversation-ended" && !ending)
+        if (event.type === "events.iterate.com/voice-agent/spk-frame" && p.lastFrameOfAnswer)
+          answers += 1;
+        else if (event.type === "events.iterate.com/voice-agent/utterance-transcribed")
+          heardUs += ` ${p.text}`;
+        else if (event.type === "events.iterate.com/voice-agent/answer-transcribed")
+          saidBack += ` ${p.text}`;
+        else if (
+          event.type === "events.iterate.com/voice-agent/provider-error-reported" ||
+          event.type === "events.iterate.com/voice-agent/provider-disconnected"
+        )
+          errors.push(`${event.type}: ${JSON.stringify(p).slice(0, 200)}`);
+        else if (event.type === "events.iterate.com/voice-agent/conversation-ended" && !ending)
           errors.push(`ended: ${String(p.reason)}`);
       }
     },

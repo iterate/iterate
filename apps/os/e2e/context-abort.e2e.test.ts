@@ -20,7 +20,6 @@ import { freshCtx, openItx, readAll, rejection, sleep, until } from "./support/c
 import { oauthSession } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
-const ABORTED = "events.iterate.com/itx/aborted";
 /** A loaded worker that says whatever the test hands it through its own `env.ITX` — loaded code. */
 const SAY = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -68,7 +67,7 @@ test("itx.abort() resolves for its caller with the durable fact; the next call w
 
   const aborted = await itx.abort("e2e: reset on request");
   expect(aborted).toMatchObject({
-    type: ABORTED,
+    type: "events.iterate.com/itx/aborted",
     path: "/",
     payload: { reason: "e2e: reset on request" },
     source: { principal: { actor: "admin" } },
@@ -78,7 +77,7 @@ test("itx.abort() resolves for its caller with the durable fact; the next call w
   expect(await itx.me()).toEqual({ projectId: ctx, path: "/" }); // a durable rule, reduced again
   const events = await readAll(itx);
   expect(wakes(events)).toBe(wakesBefore + 1);
-  const at = events.findIndex((event) => event.type === ABORTED);
+  const at = events.findIndex((event) => event.type === "events.iterate.com/itx/aborted");
   expect(events[at]).toMatchObject({
     offset: aborted.offset,
     payload: { reason: "e2e: reset on request" },
@@ -100,7 +99,7 @@ test("cd(path).abort() resets that context only — through the root's own cd to
   // A DO → DO hop: the root's built-in `cd` carries the call to the child, which answers first.
   const aborted = await root.invoke("itx.cd('/child').abort('child only')");
   expect(aborted).toMatchObject({
-    type: ABORTED,
+    type: "events.iterate.com/itx/aborted",
     path: "/child",
     payload: { reason: "child only", callerPath: "/" },
   });
@@ -114,7 +113,7 @@ test("cd(path).abort() resets that context only — through the root's own cd to
 
   const rootEvents = await readAll(root);
   expect(wakes(rootEvents)).toBe(rootWakes);
-  expect(rootEvents.some((event) => event.type === ABORTED)).toBe(false);
+  expect(rootEvents.some((event) => event.type === "events.iterate.com/itx/aborted")).toBe(false);
 });
 
 test("a waitForEvent pending on the reset context rejects for its waiter with the reset's message", async () => {
@@ -142,11 +141,15 @@ test("scope: a user's session aborts only the projects it reaches — another pr
   const spelled = api.projects.get(projectId).cd(`/${otherId}.iterate/`);
   expect(await spelled.whoami()).toMatchObject({ projectId, path: `/${otherId}.iterate` });
   expect(await spelled.abort("spelled")).toMatchObject({
-    type: ABORTED,
+    type: "events.iterate.com/itx/aborted",
     path: `/${otherId}.iterate`,
     source: { principal },
   });
-  expect((await readAll(openItx(otherId))).some((event) => event.type === ABORTED)).toBe(false);
+  expect(
+    (await readAll(openItx(otherId))).some(
+      (event) => event.type === "events.iterate.com/itx/aborted",
+    ),
+  ).toBe(false);
 });
 
 test("scope: loaded code aborts its own context and those below it, never above — cd goes down only, itx.builtins is not its word", async () => {
@@ -164,10 +167,16 @@ test("scope: loaded code aborts its own context and those below it, never above 
   });
   // Below its own context it may: the fact says loaded code asked, and from where.
   expect(await worker().say("itx.cd('./y').abort('down')")).toMatchObject({
-    ok: { type: ABORTED, path: "/x/y", payload: { reason: "down", callerPath: "/x", app: true } },
+    ok: {
+      type: "events.iterate.com/itx/aborted",
+      path: "/x/y",
+      payload: { reason: "down", callerPath: "/x", app: true },
+    },
   });
   for (const itx of [root, root.cd("/x")])
-    expect((await readAll(itx)).some((event) => event.type === ABORTED)).toBe(false);
+    expect(
+      (await readAll(itx)).some((event) => event.type === "events.iterate.com/itx/aborted"),
+    ).toBe(false);
 });
 
 test("itx.facets.abort(name) resets that facet from the host: a call hung on it rejects FACET_ABORTED, the next call starts it fresh with its storage, and the context's incarnation is the same", async () => {
@@ -213,12 +222,18 @@ test("a rewrite rule masks abort like any name, a jail's bare null takes both ve
     error: expect.stringMatching(/is masked/),
   });
   const jailPage = await jail.builtins.readEvents(0, 500);
-  expect(jailPage.events.some((event: { type: string }) => event.type === ABORTED)).toBe(false);
-  expect((await readAll(root)).some((event) => event.type === ABORTED)).toBe(false);
+  expect(
+    jailPage.events.some(
+      (event: { type: string }) => event.type === "events.iterate.com/itx/aborted",
+    ),
+  ).toBe(false);
+  expect(
+    (await readAll(root)).some((event) => event.type === "events.iterate.com/itx/aborted"),
+  ).toBe(false);
 
   // Rules govern names; the session holds the project, and its physical spelling is not a name.
   expect(await root.builtins.abort("physical")).toMatchObject({
-    type: ABORTED,
+    type: "events.iterate.com/itx/aborted",
     payload: { reason: "physical" },
   });
 });
