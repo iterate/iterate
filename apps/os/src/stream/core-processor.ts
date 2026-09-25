@@ -2,24 +2,24 @@
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY in its handlers, event-sourced
 // from the context's own control events and nothing else:
 //
-//   future event batches     stream/append-scheduled · append-schedule-{cancelled,completed,failed} → schedules
-//   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
-//   which incarnation runs    stream/woken { incarnation }                  → incarnation
-//   what reset it             context/aborted, then stream/woken            → wokenAfterContextAbortedOffset
-//   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
-//   where the project apex goes project/ingress-configured { target|null } → ingressTarget
-//   which requests go where   fetch-route/configured { fetchRouteName, … } → fetchRoutes (every `match`)
+//   future event batches      itx/schedule-set · schedule-{cancelled,fired,failed} → schedules
+//   who this context is       itx/created { projectId, path } → projectId · path · createdAt
+//   which incarnation runs    itx/woken { incarnation } → incarnation
+//   what reset it             itx/aborted, then itx/woken → wokenAfterContextAbortedOffset
+//   may appends land          itx/paused { reason } · itx/resumed → paused (one `if` in Stream.append)
+//   where the project apex goes itx/ingress-configured { target|null } → ingressTarget
+//   which requests go where   itx/fetch-route-configured { fetchRouteName, … } → fetchRoutes (every `match`)
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
-//   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
-//                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
-//   which scripts are running context/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
+//   who is sent each commit   itx/subscription-configured { name, target|null, ifConfiguredAtOffset? }
+//                             | -delivery-halted | -delivery-resumed → subscriptions (the delivery loop)
+//   which scripts are running itx/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
 // ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch form
 // (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
 // inside every commit, because its readers (Stream.append, the dispatcher, the delivery loop) are
 // all synchronous. The COMMANDS that append these events live beside the code that reads each slice
 // (context/itx-expression-rewriting.ts for the rules, `normalizeControlEvent` below normalizes literal rows). Control is
-// ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
+// ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/itx/paused', payload: { reason } })`
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
 // trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
@@ -61,6 +61,7 @@ import {
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
+import { CoreEventCatalog } from "./core-events.ts";
 import {
   ScheduledAppendInput,
   ScheduledAppendCancelled,
@@ -264,16 +265,16 @@ export type Subscription = {
  *  type, not a schema-derived one: the fold runs synchronously inside every commit and casts what
  *  the append boundary already parsed (the header). */
 export type CoreState = {
-  /** From the birth certificate (stream/created, offset 1). */
+  /** From the birth certificate (itx/created, offset 1). */
   projectId?: string;
   path?: string;
   createdAt?: string;
-  /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
+  /** From the wake record (itx/woken) — growth across idle is the hibernation tell. */
   incarnation?: number;
-  /** The newest `context/aborted` (`itx.abort()`'s record) since the last wake record: the reset it
+  /** The newest `itx/aborted` (`itx.abort()`'s record) since the last wake record: the reset it
    *  asked for is still to come. */
   contextAbortedOffset?: number;
-  /** Set by the wake record: the `context/aborted` whose reset began this incarnation — a recorded,
+  /** Set by the wake record: the `itx/aborted` whose reset began this incarnation — a recorded,
    *  deliberate reset (the fetch-upgrade 101s name it, context/rpc-stubs.ts). */
   wokenAfterContextAbortedOffset?: number;
   paused: { reason: string } | null;
@@ -294,7 +295,7 @@ export type CoreState = {
    *  request — straight from memory. */
   fetchRoutes: FetchRouteTable;
   schedules: Record<string, ScheduledAppend>;
-  /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`context/run-requested`)
+  /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`itx/run-requested`)
    *  and not yet settled — what is running right now, or what a restart left open (never re-run:
    *  the wake record settles it `interrupted`, stream.ts). The code stays on the request event. */
   scriptRuns: Record<number, OpenScriptRun>;
@@ -328,16 +329,18 @@ function parseSubscriptionName(name: string): string {
 export const CoreContract = {
   slug: "core",
   version: "15.0.0",
-  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas:
-   *  iterate/stream/run). A processor that consumes them names the contract in its
-   *  `processorDeps` (the agent); the runner and `itx.run` read them here. */
+  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas: iterate/stream/run
+   *  and core-events.ts). A processor that consumes them names a catalog in its `processorDeps`
+   *  (the agent names RunContract, the Project CoreEventCatalog); the runner and `itx.run` read them
+   *  here. */
   events: {
-    "events.iterate.com/context/run-requested": {
+    ...CoreEventCatalog.events,
+    "events.iterate.com/itx/run-requested": {
       description:
         "A script this context is asked to run once, against its own itx, by whoever appended it (source.principal); the event's offset is the run.",
       payloadSchema: RunRequested,
     },
-    "events.iterate.com/context/run-settled": {
+    "events.iterate.com/itx/run-settled": {
       description:
         "What the requested script returned, or how it failed; a run the context's restart interrupted is settled here too, never re-run.",
       payloadSchema: RunSettled,
@@ -393,58 +396,58 @@ export function reduceCoreEvent(
     return { ...state, subscriptions };
   };
   switch (event.type) {
-    case "events.iterate.com/project/ingress-configured": {
+    case "events.iterate.com/itx/ingress-configured": {
       const target = payload.target as ItxExpression | null;
       return jsonEqual(state.ingressTarget, target)
         ? undefined
         : { ...state, ingressTarget: target };
     }
-    case "events.iterate.com/fetch-route/configured": {
+    case "events.iterate.com/itx/fetch-route-configured": {
       const fetchRoutes = reduceFetchRouteConfigured(state.fetchRoutes, event, (table) =>
         draftOf(table, draftTables),
       );
       return fetchRoutes && { ...state, fetchRoutes };
     }
-    case "events.iterate.com/stream/append-scheduled":
-    case "events.iterate.com/stream/append-schedule-cancelled":
-    case "events.iterate.com/stream/append-schedule-completed":
-    case "events.iterate.com/stream/append-schedule-failed": {
+    case "events.iterate.com/itx/schedule-set":
+    case "events.iterate.com/itx/schedule-cancelled":
+    case "events.iterate.com/itx/schedule-fired":
+    case "events.iterate.com/itx/schedule-failed": {
       const schedules = reduceScheduledAppends(state.schedules, event);
       return schedules === state.schedules ? undefined : { ...state, schedules };
     }
-    case "events.iterate.com/context/run-requested": {
+    case "events.iterate.com/itx/run-requested": {
       // the code is the event's to keep; the row is its offset's
       if (state.scriptRuns[event.offset]) return undefined;
       const scriptRuns = draftOf(state.scriptRuns, draftTables);
       scriptRuns[event.offset] = { requestedAt: event.createdAt };
       return { ...state, scriptRuns };
     }
-    case "events.iterate.com/context/run-settled": {
+    case "events.iterate.com/itx/run-settled": {
       const requestOffset = payload.requestOffset as number;
       if (!state.scriptRuns[requestOffset]) return undefined; // settled twice, or never requested
       const scriptRuns = draftOf(state.scriptRuns, draftTables);
       delete scriptRuns[requestOffset];
       return { ...state, scriptRuns };
     }
-    case "events.iterate.com/stream/created":
+    case "events.iterate.com/itx/created":
       return {
         ...state,
         projectId: payload.projectId as string,
         path: payload.path as string,
         createdAt: event.createdAt,
       };
-    case "events.iterate.com/stream/woken":
+    case "events.iterate.com/itx/woken":
       return {
         ...state,
         incarnation: payload.incarnation as number,
         wokenAfterContextAbortedOffset: state.contextAbortedOffset,
         contextAbortedOffset: undefined,
       };
-    case "events.iterate.com/context/aborted":
+    case "events.iterate.com/itx/aborted":
       return { ...state, contextAbortedOffset: event.offset };
-    case "events.iterate.com/stream/paused":
+    case "events.iterate.com/itx/paused":
       return { ...state, paused: { reason: (payload.reason as string | undefined) ?? "paused" } };
-    case "events.iterate.com/stream/resumed":
+    case "events.iterate.com/itx/resumed":
       return { ...state, paused: null };
 
     case "events.iterate.com/itx/rewrite-rule-configured": {
@@ -523,7 +526,7 @@ export function reduceCoreEvent(
       return withRule({ match: matchPrefix, target, ...description });
     }
 
-    case "events.iterate.com/stream/subscription-configured": {
+    case "events.iterate.com/itx/subscription-configured": {
       const name = payload.name as string;
       if (payload.target === null) {
         // The same compare-and-set for a subscription handle's undo: `ifConfiguredAtOffset` is the
@@ -554,7 +557,7 @@ export function reduceCoreEvent(
         ...(hostedFacet && { hostedFacet }),
       });
     }
-    case "events.iterate.com/stream/subscription-delivery-halted": {
+    case "events.iterate.com/itx/subscription-delivery-halted": {
       const row = state.subscriptions[payload.name as string];
       if (!row) return undefined;
       return withSubscription(payload.name as string, {
@@ -566,7 +569,7 @@ export function reduceCoreEvent(
         },
       });
     }
-    case "events.iterate.com/stream/subscription-delivery-resumed": {
+    case "events.iterate.com/itx/subscription-delivery-resumed": {
       const row = state.subscriptions[payload.name as string];
       if (!row) return undefined;
       const { halted: _cleared, ...kept } = row;
@@ -648,17 +651,17 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
  *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
-export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
+export const ALARM_TRACE_EVENT = "events.iterate.com/itx/alarm-trace" as const;
 
 /** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
  *  loop (the halted fact) and the DO's alarm (the trace) straight through `Stream.append`.
  *  `normalizeControlEvent` refuses them, so no caller rewrites who a context is (`created` feeds
  *  `implicitRootsAt`), which incarnation runs, or halts a subscription row it does not own. */
 export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
-  "events.iterate.com/stream/created",
-  "events.iterate.com/stream/woken",
-  "events.iterate.com/stream/subscription-delivery-halted",
-  STREAM_ALARM_TRACE_EVENT,
+  "events.iterate.com/itx/created",
+  "events.iterate.com/itx/woken",
+  "events.iterate.com/itx/subscription-delivery-halted",
+  ALARM_TRACE_EVENT,
 ]);
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
@@ -677,34 +680,34 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
   // instead of being dropped, and the event is stored as sent (an idempotent retry compares the
   // stored payload with `jsonEqual`).
-  if (event.type === "events.iterate.com/stream/paused") {
+  if (event.type === "events.iterate.com/itx/paused") {
     z.strictObject({ reason: z.string().optional() }).optional().parse(event.payload);
     return event;
   }
-  if (event.type === "events.iterate.com/stream/resumed") {
+  if (event.type === "events.iterate.com/itx/resumed") {
     z.strictObject({}).optional().parse(event.payload);
     return event;
   }
-  if (event.type === "events.iterate.com/stream/subscription-delivery-resumed") {
+  if (event.type === "events.iterate.com/itx/subscription-delivery-resumed") {
     z.strictObject({
       name: z.string().transform(parseSubscriptionName),
       afterOffset: z.number().int().nonnegative().optional(),
     }).parse(event.payload);
     return event;
   }
-  if (event.type === "events.iterate.com/project/ingress-configured") {
+  if (event.type === "events.iterate.com/itx/ingress-configured") {
     if (event.ephemeral) throw new Error("ingress configuration must be durable");
     return { ...event, payload: normalizeIngressConfigured(event.payload) };
   }
-  if (event.type === "events.iterate.com/fetch-route/configured") {
+  if (event.type === "events.iterate.com/itx/fetch-route-configured") {
     if (event.ephemeral) throw new Error("a fetch route must be durable");
     return { ...event, payload: FetchRouteConfiguredPayload.parse(event.payload) };
   }
   // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
   // its own message — this prefix check runs first and must not throw a TypeError of its own.
-  if (String(event.type).startsWith("events.iterate.com/stream/append-schedule")) {
+  if (String(event.type).startsWith("events.iterate.com/itx/schedule-")) {
     if (event.ephemeral) throw new Error("scheduled append control events must be durable");
-    if (event.type === "events.iterate.com/stream/append-scheduled") {
+    if (event.type === "events.iterate.com/itx/schedule-set") {
       const payload = ScheduledAppendInput.parse(event.payload);
       return {
         ...event,
@@ -714,28 +717,28 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
         },
       };
     }
-    if (event.type === "events.iterate.com/stream/append-schedule-cancelled")
+    if (event.type === "events.iterate.com/itx/schedule-cancelled")
       return { ...event, payload: ScheduledAppendCancelled.parse(event.payload) };
     if (
-      event.type === "events.iterate.com/stream/append-schedule-completed" ||
-      event.type === "events.iterate.com/stream/append-schedule-failed"
+      event.type === "events.iterate.com/itx/schedule-fired" ||
+      event.type === "events.iterate.com/itx/schedule-failed"
     )
       return { ...event, payload: ScheduledAppendSettled.parse(event.payload) };
     throw new Error(`unknown scheduled append control event: ${event.type}`);
   }
-  if (event.type === "events.iterate.com/context/run-requested") {
+  if (event.type === "events.iterate.com/itx/run-requested") {
     if (event.ephemeral)
       throw new Error("a run's request is durable: the scriptRuns table is rebuilt from the log");
     return { ...event, payload: RunRequested.parse(event.payload) };
   }
-  if (event.type === "events.iterate.com/context/run-settled") {
+  if (event.type === "events.iterate.com/itx/run-settled") {
     if (event.ephemeral)
       throw new Error(
         "a run's settlement is durable: the scriptRuns table is rebuilt from the log",
       );
     return { ...event, payload: RunSettled.parse(event.payload) };
   }
-  if (event.type === "events.iterate.com/stream/subscription-configured")
+  if (event.type === "events.iterate.com/itx/subscription-configured")
     return {
       ...event,
       payload: normalizeSubscriptionConfigured(

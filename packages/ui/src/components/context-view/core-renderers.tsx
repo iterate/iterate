@@ -1,6 +1,6 @@
 // The platform's own events, as sentences — what every context's log carries whatever the app:
 // the stream's lifecycle, its subscriptions, live state, the context's script runs. The view lays
-// an app's renderers over these (the app's win), so a page never shows `stream/woken {"incarnation"…}`.
+// an app's renderers over these (the app's win), so a page never shows `itx/woken {"incarnation"…}`.
 import { mono, record, str } from "./renderer-helpers.tsx";
 import type { EventInspectors, EventRenderers } from "./types.tsx";
 
@@ -12,10 +12,10 @@ const quiet = (text: string) => <span className="text-muted-foreground">{text}</
  *  folds a run of these into one quiet row; the birth, a pause and a script run are not housekeeping. */
 export function isHousekeeping(type: string): boolean {
   return (
-    type === "events.iterate.com/stream/woken" ||
-    type.startsWith("events.iterate.com/stream/subscription-") ||
-    type.startsWith("events.iterate.com/stream/append-schedule") ||
-    type === "events.iterate.com/live-state/changed"
+    type === "events.iterate.com/itx/woken" ||
+    type.startsWith("events.iterate.com/itx/subscription-") ||
+    type.startsWith("events.iterate.com/itx/schedule-") ||
+    type === "events.iterate.com/itx/live-state-changed"
   );
 }
 
@@ -24,11 +24,11 @@ export function housekeepingSummary(types: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const type of types) {
     const label =
-      type === "events.iterate.com/stream/woken"
+      type === "events.iterate.com/itx/woken"
         ? "woke"
-        : type.startsWith("events.iterate.com/stream/subscription-")
+        : type.startsWith("events.iterate.com/itx/subscription-")
           ? "subscriptions"
-          : type === "events.iterate.com/live-state/changed"
+          : type === "events.iterate.com/itx/live-state-changed"
             ? "live state"
             : "scheduled appends";
     counts.set(label, (counts.get(label) || 0) + 1);
@@ -38,12 +38,12 @@ export function housekeepingSummary(types: readonly string[]): string {
 
 /** The inspector's rich bodies for the platform's events: a script run's code, its result. */
 export const coreEventInspectors: EventInspectors = {
-  "events.iterate.com/context/run-requested": (e) => (
+  "events.iterate.com/itx/run-requested": (e) => (
     <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-words">
       {str(record(e.payload).code)}
     </pre>
   ),
-  "events.iterate.com/context/run-settled": (e) => {
+  "events.iterate.com/itx/run-settled": (e) => {
     const s = record(record(e.payload).settlement);
     return s.status === "succeeded" ? (
       <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-words">
@@ -58,14 +58,14 @@ export const coreEventInspectors: EventInspectors = {
 };
 
 export const coreEventRenderers: EventRenderers = {
-  "events.iterate.com/stream/created": () => quiet("The context was born"),
-  "events.iterate.com/stream/woken": (e) => {
+  "events.iterate.com/itx/created": () => quiet("The context was born"),
+  "events.iterate.com/itx/woken": (e) => {
     const p = record(e.payload);
     return quiet(`Woke (${str(p.reason, "?")}, incarnation ${String(p.incarnation)})`);
   },
-  "events.iterate.com/stream/paused": (e) => quiet(`Paused ${str(record(e.payload).reason)}`),
-  "events.iterate.com/stream/resumed": () => quiet("Resumed"),
-  "events.iterate.com/stream/subscription-configured": (e) => {
+  "events.iterate.com/itx/paused": (e) => quiet(`Paused ${str(record(e.payload).reason)}`),
+  "events.iterate.com/itx/resumed": () => quiet("Resumed"),
+  "events.iterate.com/itx/subscription-configured": (e) => {
     const p = record(e.payload);
     const consumes = Array.isArray(p.consumes) ? p.consumes.map(String) : [];
     return (
@@ -75,12 +75,12 @@ export const coreEventRenderers: EventRenderers = {
       </span>
     );
   },
-  "events.iterate.com/live-state/changed": () => quiet("Live state changed"),
-  "events.iterate.com/context/run-requested": (e) => {
+  "events.iterate.com/itx/live-state-changed": () => quiet("Live state changed"),
+  "events.iterate.com/itx/run-requested": (e) => {
     const code = str(record(e.payload).code);
     return <>Ran a script {mono((code.split("\n")[0] || "").slice(0, 100))}</>;
   },
-  "events.iterate.com/context/run-settled": (e) => {
+  "events.iterate.com/itx/run-settled": (e) => {
     const p = record(e.payload);
     const s = record(p.settlement);
     return s.status === "succeeded" ? (

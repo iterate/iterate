@@ -31,7 +31,7 @@ const TERMINAL_WAIT_MS = 30_000;
  *  on within seconds. Remove when a call on a replaced instance fails. */
 const TERMINAL_WAIT_SLICE_MS = 5_000;
 /** Each incarnation's first event (stream.ts `appendWakeRecord`). */
-const WOKEN = "events.iterate.com/stream/woken";
+const WOKEN = "events.iterate.com/itx/woken";
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";

@@ -11,7 +11,7 @@
 // itself and send each verb as one dotted expression the DO resolves from scratch.
 //
 // Each row holds one such handle across three 12 s idles and reads the context's log: every
-// incarnation appends one `stream/woken` on wake, so an actor evicted between reads shows three or
+// incarnation appends one `itx/woken` on wake, so an actor evicted between reads shows three or
 // more wakes, exactly as the control row that holds nothing does. The handle must still answer at
 // the end: a path outlives every incarnation.
 //
@@ -520,7 +520,7 @@ test(
     );
     const woken = (await readAll(openItx(ctx))).filter(
       (e: any) =>
-        e.type === "events.iterate.com/stream/woken" &&
+        e.type === "events.iterate.com/itx/woken" &&
         e.offset > sleep28.offset &&
         e.offset < slept.offset,
     );
@@ -578,7 +578,7 @@ test("a collection's refusal keeps neither the project root nor its project face
 /** The context's incarnations across EVICTION_IDLES idles (support/client.ts `idleAcrossEvictions`). */
 async function wakesAcrossIdles(itx: any): Promise<number> {
   const events = await idleAcrossEvictions(itx);
-  return events.filter((event) => event.type === "events.iterate.com/stream/woken").length;
+  return events.filter((event) => event.type === "events.iterate.com/itx/woken").length;
 }
 
 /** The handle still answers after the actor was evicted underneath it — never a dead-stub error. */

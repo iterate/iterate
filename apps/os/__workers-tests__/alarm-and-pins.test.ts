@@ -38,7 +38,7 @@ import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
+import { ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
 import {
   adminCredentials,
   Echo,
@@ -164,11 +164,11 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
   // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
   await context.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "a", target, consumes: ["demo/ping"] },
   });
   await context.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "b", target, consumes: ["demo/ping"] },
   });
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
@@ -177,7 +177,7 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
 
   // Remove ONE of the two rows. The other still hosts the facet.
   await context.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "a", target: null },
   });
   const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
@@ -206,7 +206,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   expect(before).toMatchObject({ state: { n: await durableCount(ctx) } });
   // The same name and class, NEW source: counts by 10.
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "counter",
       target: [
@@ -257,7 +257,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   const rowsBefore = await durableCount(ctx);
   const observed = s.invoke([
     "itx",
-    ["waitForEvent", { type: STREAM_ALARM_TRACE_EVENT, timeoutMs: 10_000 }],
+    ["waitForEvent", { type: ALARM_TRACE_EVENT, timeoutMs: 10_000 }],
   ]) as Promise<StreamEvent>;
   await new Promise((r) => setTimeout(r, 100)); // the waiter is registered
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
@@ -268,14 +268,14 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
     vi.useRealTimers();
   }
   const trace = await observed;
-  expect(trace).toMatchObject({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true });
+  expect(trace).toMatchObject({ type: ALARM_TRACE_EVENT, ephemeral: true });
   expect(trace.payload).toMatchObject({ reason: "alarm-fired", dueSchedules: 1 });
   const ring = (
     (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
     }
   ).events
-    .filter((event) => event.type === STREAM_ALARM_TRACE_EVENT)
+    .filter((event) => event.type === ALARM_TRACE_EVENT)
     .map((event) => event.payload as unknown as AlarmTrace);
   expect(ring.map((t) => t.reason)).toEqual(["alarm-fired", "alarm-pass"]);
   // The tick and its completion are the pass's two durable rows; the traces took none.
@@ -337,7 +337,7 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet is owed nothing: it is not a pin
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
-      (event) => event.type === "events.iterate.com/stream/woken",
+      (event) => event.type === "events.iterate.com/itx/woken",
     );
   const before = (await wokens()).length;
   // A due schedule fires into an evicted actor: the fresh incarnation's wake record materializes
@@ -373,7 +373,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm —
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
-      (event) => event.type === "events.iterate.com/stream/woken",
+      (event) => event.type === "events.iterate.com/itx/woken",
     );
   const before = (await wokens()).length;
   // A due schedule (set on the quiet incarnation, which is then evicted) fires for real and wakes a
@@ -419,7 +419,7 @@ test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscr
     (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
     }
-  ).events.filter((event) => event.type === STREAM_ALARM_TRACE_EVENT);
+  ).events.filter((event) => event.type === ALARM_TRACE_EVENT);
   expect(ring).toEqual([]); // no pass ran: nothing was due
 });
 test("A BORROW RACES THE RELEASE: a stub invoke fired concurrently with the pins' release still answers", async () => {
@@ -524,7 +524,7 @@ test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried fr
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "fail"]]);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "flaky",
       target: ["itx", "workers", ["get", { source: { "cap.js": FLAKY_SRC } }], "processEventBatch"],
@@ -592,7 +592,7 @@ async function durableCount(ctx: string): Promise<number> {
 async function enableCounter(ctx: string, name = "counter"): Promise<void> {
   const s = stub(ctx);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name,
       target: [
@@ -609,7 +609,7 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
  *  row hosted, storage included, before the append returns. */
 async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name, target: null },
   });
 }

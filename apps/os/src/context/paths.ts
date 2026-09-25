@@ -63,7 +63,7 @@ export function resourceScope(projectId: string, path: string): ResourceScope {
   };
 }
 
-/** The ancestors a context announces itself to (`context/child-created`), root first: `/a/b/c`
+/** The ancestors a context announces itself to (`itx/child-created`), root first: `/a/b/c`
  *  → `/`, `/a`, `/a/b`; `/` has none. */
 export function ancestorPathsOf(path: string): string[] {
   const segments = resolveContextPath("/", path).split("/").filter(Boolean);

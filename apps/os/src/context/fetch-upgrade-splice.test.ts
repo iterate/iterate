@@ -156,7 +156,7 @@ test("the visitor closes while the context is down: its code and reason reach th
   });
 });
 
-// `itx.abort()` records `context/aborted` and then resets the context: a deliberate reset, not a
+// `itx.abort()` records `itx/aborted` and then resets the context: a deliberate reset, not a
 // platform failure. The incarnation it began names that record on every 101 it answers, and an end
 // whose re-dial finds a record its old socket's incarnation did not name reports it.
 test("a recorded itx.abort() resets the context: both ends resume and report the abort's record; a later drop in the same incarnation is a platform failure again", async () => {
@@ -352,7 +352,7 @@ function socketPair(): [FakeSocket, FakeSocket] {
  *  delivered, as a dead socket does in the runtime. */
 class FakeContext {
   deployId = "deploy-1";
-  /** The `context/aborted` whose reset began this incarnation (null: none). */
+  /** The `itx/aborted` whose reset began this incarnation (null: none). */
   contextAbortedOffset: number | null = null;
   dials = 0;
   swallowNextFrames = 0;

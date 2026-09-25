@@ -12,7 +12,7 @@ test.for([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", v
     const ctx = `prj_schedule_source_${Object.keys(source)[0]}`;
     const s = stub(ctx);
     await s.append({
-      type: "events.iterate.com/stream/append-scheduled",
+      type: "events.iterate.com/itx/schedule-set",
       payload: { key: "reminder", when: { at }, events: [{ type: "reminder/due" }] },
       source,
     });
@@ -69,12 +69,12 @@ test("paused deadlines remain pending across eviction and resume without an alar
     "schedules",
     ["set", { key: "paused", when: { at }, events: [{ type: "due" }] }],
   ]);
-  await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
+  await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "maintenance" } });
   await evictDurableObject(s);
   await fire(ctx);
   expect((await read(ctx)).events.filter((event) => event.type === "due")).toEqual([]);
   expect(await s.invoke("itx.schedules.get('paused')")).not.toBeNull();
-  await s.append({ type: "events.iterate.com/stream/resumed" });
+  await s.append({ type: "events.iterate.com/itx/resumed" });
   expect(await fire(ctx)).toBe(true);
   expect((await read(ctx)).events.filter((event) => event.type === "due")).toHaveLength(1);
 });
@@ -114,7 +114,7 @@ test("more than one alarm budget of due work drains in bounded batches", async (
   const s = stub(ctx);
   await s.append(
     ...Array.from({ length: 33 }, (_, i) => ({
-      type: "events.iterate.com/stream/append-scheduled",
+      type: "events.iterate.com/itx/schedule-set",
       payload: { key: `s${i}`, when: { at }, events: [{ type: "batch/due", payload: { i } }] },
     })),
   );
@@ -134,7 +134,7 @@ test("a two-due plus one-future pass leaves only the future alarm", async () => 
   const future = "2035-01-01T01:00:00Z";
   await s.append(
     ...[at, at, future].map((deadline, i) => ({
-      type: "events.iterate.com/stream/append-scheduled",
+      type: "events.iterate.com/itx/schedule-set",
       payload: { key: `s${i}`, when: { at: deadline }, events: [{ type: "quiet/due" }] },
     })),
   );
@@ -160,8 +160,7 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   expect(afterFirstTick.filter((event) => event.type === "tick")).toHaveLength(1);
   // The incarnation the alarm constructed says so: the stored alarm was the tick's, and due.
   expect(
-    afterFirstTick.filter((event) => event.type === "events.iterate.com/stream/woken").at(-1)
-      ?.payload,
+    afterFirstTick.filter((event) => event.type === "events.iterate.com/itx/woken").at(-1)?.payload,
   ).toMatchObject({ reason: "alarm" });
   expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
     nextAt: new Date(firstAt + 70_000).toISOString(),
@@ -207,7 +206,7 @@ test("a failed interval stays parked across later alarms", async () => {
   });
   expect(
     (await read(ctx)).events.filter(
-      (event) => event.type === "events.iterate.com/stream/append-schedule-failed",
+      (event) => event.type === "events.iterate.com/itx/schedule-failed",
     ),
   ).toHaveLength(1);
 });
@@ -240,7 +239,7 @@ test.for(["once", "interval"])(
           events: [
             { type: "postcommit/due" },
             {
-              type: "events.iterate.com/stream/subscription-configured",
+              type: "events.iterate.com/itx/subscription-configured",
               payload: { name: "deadlines", target: null },
             },
           ],
@@ -272,12 +271,10 @@ test.for(["once", "interval"])(
     const events = (await read(ctx)).events;
     expect(events.filter((event) => event.type === "postcommit/due")).toHaveLength(1);
     expect(
-      events.filter(
-        (event) => event.type === "events.iterate.com/stream/append-schedule-completed",
-      ),
+      events.filter((event) => event.type === "events.iterate.com/itx/schedule-fired"),
     ).toHaveLength(1);
     expect(
-      events.filter((event) => event.type === "events.iterate.com/stream/append-schedule-failed"),
+      events.filter((event) => event.type === "events.iterate.com/itx/schedule-failed"),
     ).toEqual([]);
     expect(await s.invoke("itx.schedules.get('remove-facet')")).toEqual(
       kind === "once"

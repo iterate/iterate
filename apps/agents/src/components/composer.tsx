@@ -199,7 +199,7 @@ function AgentPillComposer({
             onValueChange={raw.onValueChange}
             onSubmit={submit}
             focusOnMount
-            placeholder={"type: events.iterate.com/notes/added\npayload:\n  text: hello"}
+            placeholder={"type: events.iterate.com/note/added\npayload:\n  text: hello"}
             className="min-w-0 flex-1 px-2 py-1.5"
           />
         ) : (
@@ -301,7 +301,7 @@ export function AgentComposer({
   const [message, setMessage] = useState("");
   const attachments = useComposerAttachments();
   const [rawText, setRawText] = useState(
-    "type: events.iterate.com/notes/added\npayload:\n  text: Hello from the agents page\n",
+    "type: events.iterate.com/note/added\npayload:\n  text: Hello from the agents page\n",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string>();

@@ -19,7 +19,7 @@ import { applyPatch, type PatchOp } from "../lib.ts";
 // the producer — no second diff implementation. No capnweb import: a caller wires the transport and
 // hands deltas in, so the same store backs a node test client and the React hook (client/react.tsx).
 
-/** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
+/** One live-state delta off the wire — the payload of an `events.iterate.com/itx/live-state-changed`
  *  ephemeral event, delivered raw to the subscriber. `patch: null` = the change was too large to
  *  send — the rev moved, re-read the seed. */
 export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] | null };
@@ -101,7 +101,7 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
 
 // ── live state client ── wire an itx session's `subscribe` + a seed read to a LiveStateStore.
 // This is the whole cleanroom client: a subscription that consumes the one live-state event type
-// (`itx.subscribe({ target, consumes: ["events.iterate.com/live-state/changed"] })`) delivers every
+// (`itx.subscribe({ target, consumes: ["events.iterate.com/itx/live-state-changed"] })`) delivers every
 // key's deltas in batches; this filters the watched `key` and reduces each delta into the store; a
 // `readSeed` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
 // the store above and the React hook stay pure.
@@ -177,7 +177,7 @@ export async function connectLiveState<S>(
   };
   const subscription = await itx.subscribe({
     name: opts.name,
-    consumes: ["events.iterate.com/live-state/changed"],
+    consumes: ["events.iterate.com/itx/live-state-changed"],
     // A batch of live-state deltas (every key's); keep the watched key's.
     target: (events: unknown[]) => {
       if (disposed) return;

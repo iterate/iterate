@@ -502,7 +502,7 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
 export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, base: string): void {
   if (
     event.type !== "events.iterate.com/itx/rewrite-rule-configured" &&
-    event.type !== "events.iterate.com/stream/subscription-configured"
+    event.type !== "events.iterate.com/itx/subscription-configured"
   )
     return;
   const target = (event.payload as { target?: unknown } | undefined)?.target;
@@ -554,7 +554,7 @@ export function builtInsGetStep(
 }
 
 /** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
- *  whole table — the census a `stream/resumed` commit compares against the registry's presence. */
+ *  whole table — the census an `itx/resumed` commit compares against the registry's presence. */
 export function rpcStubKeysNamed(args: {
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;

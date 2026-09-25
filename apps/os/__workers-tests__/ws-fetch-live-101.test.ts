@@ -133,7 +133,7 @@ test("a lent-stub WebSocket outlives a context reset (what every deploy does): t
     "fetch-upgrade.context-abort-resumed",
     "fetch-upgrade.context-abort-resumed",
   ]);
-  expect(aborted).toMatchObject({ type: "events.iterate.com/context/aborted" });
+  expect(aborted).toMatchObject({ type: "events.iterate.com/itx/aborted" });
   eyeball.close(1000, "done");
 });
 

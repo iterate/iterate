@@ -2,7 +2,7 @@
 // context at any path (`/repos/<name>` is the convention, not a rule; the physical tier,
 // `itx.cfArtifacts`, knows the repo by that same path), addressed as `itx.repos.get(path)` (src/library.ts)
 // and born through the collection, `itx.repos.create(path)` (src/project/collection.ts): it enables the
-// `repo` processor row on that path (a `stream/subscription-configured` fact), lands
+// `repo` processor row on that path (an `itx/subscription-configured` fact), lands
 // `repo/create-requested` there and waits for the terminal fact. The processor (src/project/entity-lifecycle.ts)
 // runs the saga from state at head: it provisions the Artifacts repo and lands `repo/created` — the
 // birth certificate, cross-posted to `/`, where the `project` facet (src/project/) folds every
@@ -64,7 +64,7 @@ test("itx.repos.create(path) lands the request and the certificate on the repo's
   // The processor row `create` enabled, on the path, named after the facet.
   expect(
     own
-      .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
+      .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload?.name),
   ).toEqual(["repo"]);
   expect(own.filter((e) => e.type === CREATED).map((e) => e.payload)).toEqual([
@@ -270,11 +270,11 @@ localOnly(
     };
     expect(await facts(itx)).toEqual([fact]);
 
-    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await itx.append({ type: "events.iterate.com/itx/paused" });
     await expect(repo.writeFile("worker.ts", "export default 2;\n")).rejects.toThrow();
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 2;\n" }); // the push landed
     expect(await facts(itx)).toEqual([fact]); // no fact for it anywhere yet
-    await itx.append({ type: "events.iterate.com/stream/resumed" });
+    await itx.append({ type: "events.iterate.com/itx/resumed" });
 
     const healed = await repo.writeFile("worker.ts", "export default 2;\n");
     expect(healed).toEqual({ commitOid: artifacts.remoteTip("/repos/config"), changedPaths: [] });
@@ -292,10 +292,10 @@ localOnly(
 
     // A DIFFERENT commit after a lost fact settles the debt first, then lands its own: both facts,
     // in order — the debt is never overwritten by the commit that follows it.
-    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await itx.append({ type: "events.iterate.com/itx/paused" });
     await expect(repo.writeFile("worker.ts", "export default 3;\n")).rejects.toThrow();
     const lost = artifacts.remoteTip("/repos/config");
-    await itx.append({ type: "events.iterate.com/stream/resumed" });
+    await itx.append({ type: "events.iterate.com/itx/resumed" });
     const fourth = await repo.writeFile("worker.ts", "export default 4;\n");
     expect(fourth).toMatchObject({ changedPaths: ["worker.ts"] });
     expect((await facts(itx)).map((f) => f.commitOid)).toEqual([
@@ -407,7 +407,7 @@ localOnly(
     expect(await processorNames(itx.cd("/repos/gone"))).toEqual([]);
     expect(
       own
-        .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
+        .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
         .map((e) => [e.payload?.name, e.payload?.target === null]),
     ).toEqual([
       ["repo", false],

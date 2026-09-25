@@ -1,6 +1,6 @@
 // src/organization/contract.ts — THE ORGANIZATION: its context, `/organizations/<orgId>` in the
 // deployment-global namespace, where the FACTS about it land — created, renamed, deleted, a member
-// added or removed, an invitation link created, accepted or revoked, a project created in it — each
+// added or removed, an invitation link created, accepted or revoked, a project added to it — each
 // landed by the session on the context (session.ts `foldPlatformFacts`) right after the
 // control-plane database writes the row,
 // stamped with whoever asked: the audit lives where it happened, attributed to who asked and through
@@ -65,7 +65,7 @@ export const OrganizationContract = defineProcessorContract({
   // is what re-reduces every existing root log.
   version: "4",
   description:
-    "The organization's record: created, renamed, deleted, its members, its pending invitation links, every project created in it, and the catalog of its own secrets.",
+    "The organization's record: created, renamed, deleted, its members, its pending invitation links, every project added to it, and the catalog of its own secrets.",
   /** THE REDUCED STATE — the organization's record, folded from the facts below: what a member
    *  reads through live state. */
   stateSchema: z.object({
@@ -90,7 +90,7 @@ export const OrganizationContract = defineProcessorContract({
         }),
       )
       .default({}),
-    /** Every project created in the organization, by id: its slug and when. Bounded per
+    /** Every project added to the organization, by id: its slug and when. Bounded per
      *  organization — what the dash's tree lists under it. */
     projects: z
       .record(z.string(), z.object({ slug: z.string(), createdAt: z.string() }))
@@ -141,8 +141,9 @@ export const OrganizationContract = defineProcessorContract({
       description: "An owner withdrew an invitation link before anyone used it (platform fact).",
       payloadSchema: z.object({ invitationId: z.string().min(1) }),
     },
-    "events.iterate.com/organization/project-created": {
-      description: "A project was created in the organization (platform fact).",
+    "events.iterate.com/organization/project-added": {
+      description:
+        "A project joined the organization's catalog (platform fact). It lands before, and whatever becomes of, the project's own `project/created`.",
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
     },
   },
@@ -158,7 +159,7 @@ export const OrganizationContract = defineProcessorContract({
     "events.iterate.com/organization/invitation-created",
     "events.iterate.com/organization/invitation-accepted",
     "events.iterate.com/organization/invitation-revoked",
-    "events.iterate.com/organization/project-created",
+    "events.iterate.com/organization/project-added",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
   ],

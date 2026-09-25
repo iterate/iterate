@@ -1,6 +1,6 @@
 /**
  * The voice events both processors on a call's context declare: the relay (voice-agent.ts) raises
- * `delegation-requested` and speaks `thinking`/`commentary`; the delegate (voice-delegate.ts)
+ * `delegation-requested` and speaks `thinking-added`/`commentary-added`; the delegate (voice-delegate.ts)
  * answers the one with the others. Declared once so the two contracts cannot drift apart.
  */
 import { z } from "./processor.js";
@@ -44,5 +44,5 @@ export const VOICE_DELEGATE_CONSUMES = [
   "events.iterate.com/agent/context-added",
   "events.iterate.com/voice-agent/delegation-requested",
   /* Its own answer: consumed so the pending row it settles leaves the fold. */
-  "events.iterate.com/voice-agent/commentary",
+  "events.iterate.com/voice-agent/commentary-added",
 ] as const;

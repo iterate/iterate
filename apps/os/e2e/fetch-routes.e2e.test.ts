@@ -85,11 +85,11 @@ test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it ap
       code: "INVALID_INPUT",
     });
   // The route's own facts, not the log's head: the root's log also takes facts nobody here asked
-  // for, e.g. a child context's `context/child-created` landing between two reads.
+  // for, e.g. a child context's `itx/child-created` landing between two reads.
   const routeFacts = async () =>
     (await itx.readEvents()).events.filter(
       (event: { type: string; offset: number }) =>
-        event.type === "events.iterate.com/fetch-route/configured",
+        event.type === "events.iterate.com/itx/fetch-route-configured",
     );
   const route = { requestMatcher: { url: { pathname: "/api/*" } }, target: "itx.api" };
   await itx.fetchRoutes.set("api", route);

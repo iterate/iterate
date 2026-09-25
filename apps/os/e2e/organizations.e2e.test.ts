@@ -63,7 +63,7 @@ test("projects.create({ project, orgId }) lands the project in that organization
     role: "owner",
   });
   expect(await api.organizations.list()).toContainEqual({ ...org, projects: 1 });
-  // the organization's record: `organization/project-created` folded on it before the answer
+  // the organization's record: `organization/project-added` folded on it before the answer
   using organization = await api.organizations.get(org.id);
   expect((await record(organization)).projects?.[projectId]).toEqual({
     slug,

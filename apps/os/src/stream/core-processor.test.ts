@@ -35,10 +35,12 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
     schedules: {},
     scriptRuns: {},
   });
-  // the events it OWNS beyond its control events: the run pair, schemas right here
+  // the events it OWNS beyond its control events: the apex target (core-events.ts, which the
+  // Project contract depends on) and the run pair
   expect(Object.keys(CoreContract.events)).toEqual([
-    "events.iterate.com/context/run-requested",
-    "events.iterate.com/context/run-settled",
+    "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/itx/run-requested",
+    "events.iterate.com/itx/run-settled",
   ]);
 });
 
@@ -65,7 +67,7 @@ test("scriptRuns: a malformed payload (an empty code, a missing settlement) is r
   expect(() =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/context/run-requested",
+        type: "events.iterate.com/itx/run-requested",
         payload: { code: "" },
       },
       "/",
@@ -74,7 +76,7 @@ test("scriptRuns: a malformed payload (an empty code, a missing settlement) is r
   expect(() =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/context/run-settled",
+        type: "events.iterate.com/itx/run-settled",
         payload: { requestOffset: 5 },
       },
       "/",
@@ -85,19 +87,19 @@ test("scriptRuns: the append boundary (normalizeControlEvent) parses both payloa
   expect(
     normalizeControlEvent(
       {
-        type: "events.iterate.com/context/run-requested",
+        type: "events.iterate.com/itx/run-requested",
         payload: { code: "async (itx) => 1", extra: "dropped" },
       },
       "/",
     ),
   ).toEqual({
-    type: "events.iterate.com/context/run-requested",
+    type: "events.iterate.com/itx/run-requested",
     payload: { code: "async (itx) => 1" },
   });
   expect(() =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/context/run-settled",
+        type: "events.iterate.com/itx/run-settled",
         payload: {
           requestOffset: 5,
           settlement: { status: "failed", error: "x", failureKind: "expired" },
@@ -109,7 +111,7 @@ test("scriptRuns: the append boundary (normalizeControlEvent) parses both payloa
   expect(() =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/context/run-requested",
+        type: "events.iterate.com/itx/run-requested",
         ephemeral: true,
         payload: { code: "async (itx) => 1" },
       },
@@ -119,20 +121,20 @@ test("scriptRuns: the append boundary (normalizeControlEvent) parses both payloa
 });
 
 test.each([
-  ["events.iterate.com/stream/created", { projectId: "prj_other", path: "/elsewhere" }],
-  ["events.iterate.com/stream/woken", { incarnation: 99 }],
+  ["events.iterate.com/itx/created", { projectId: "prj_other", path: "/elsewhere" }],
+  ["events.iterate.com/itx/woken", { incarnation: 99 }],
   [
-    "events.iterate.com/stream/subscription-delivery-halted",
+    "events.iterate.com/itx/subscription-delivery-halted",
     { name: "someone-elses", afterOffset: 1, attempts: 1 },
   ],
-  ["events.iterate.com/stream/trace/alarm", {}],
+  ["events.iterate.com/itx/alarm-trace", {}],
 ])("%s is the platform's own record: the append boundary refuses it", (type, payload) => {
   expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
 });
 
 test("an operator's pause, resume and delivery resume are parsed at the append boundary: the reduce's casts are true", () => {
   // stored as sent: a bare pause stays bare, so a keyed retry still matches the committed event
-  const paused = "events.iterate.com/stream/paused";
+  const paused = "events.iterate.com/itx/paused";
   expect(normalizeControlEvent({ type: paused }, "/")).toEqual({ type: paused });
   expect(normalizeControlEvent({ type: paused, payload: { reason: "breaker" } }, "/")).toEqual({
     type: paused,
@@ -140,10 +142,10 @@ test("an operator's pause, resume and delivery resume are parsed at the append b
   });
   for (const payload of [{ reason: 42 }, { reason: "breaker", extra: 1 }])
     expect(() => normalizeControlEvent({ type: paused, payload }, "/")).toThrow();
-  const resumed = "events.iterate.com/stream/resumed";
+  const resumed = "events.iterate.com/itx/resumed";
   expect(normalizeControlEvent({ type: resumed }, "/")).toEqual({ type: resumed });
   expect(() => normalizeControlEvent({ type: resumed, payload: { extra: 1 } }, "/")).toThrow();
-  const deliveryResumed = "events.iterate.com/stream/subscription-delivery-resumed";
+  const deliveryResumed = "events.iterate.com/itx/subscription-delivery-resumed";
   expect(
     normalizeControlEvent({ type: deliveryResumed, payload: { name: "s", afterOffset: 0 } }, "/"),
   ).toEqual({ type: deliveryResumed, payload: { name: "s", afterOffset: 0 } });
@@ -166,16 +168,16 @@ test("an operator's pause, resume and delivery resume are parsed at the append b
 // ── identity, incarnation, the pause latch ──
 
 test("created → projectId, path, createdAt (the birth certificate's own timestamp)", () => {
-  const born = at(1, "events.iterate.com/stream/created", { projectId: "prj_t", path: "/" });
+  const born = at(1, "events.iterate.com/itx/created", { projectId: "prj_t", path: "/" });
   const s = reduceAll([born]);
   expect(s).toMatchObject({ projectId: "prj_t", path: "/", createdAt: born.createdAt });
 });
 
 test("woken → incarnation; every wake overwrites (growth across idle is the hibernation tell); identity untouched", () => {
   const s = reduceAll([
-    at(1, "events.iterate.com/stream/created", { projectId: "prj_t", path: "/" }),
-    at(2, "events.iterate.com/stream/woken", { incarnation: 1 }),
-    at(3, "events.iterate.com/stream/woken", { incarnation: 2 }),
+    at(1, "events.iterate.com/itx/created", { projectId: "prj_t", path: "/" }),
+    at(2, "events.iterate.com/itx/woken", { incarnation: 1 }),
+    at(3, "events.iterate.com/itx/woken", { incarnation: 2 }),
   ]);
   expect(s).toMatchObject({ incarnation: 2, projectId: "prj_t" });
 });
@@ -183,17 +185,17 @@ test("woken → incarnation; every wake overwrites (growth across idle is the hi
 test.each([
   {
     log: "aborted, then woken (the reset itx.abort() asked for)",
-    types: ["context/aborted", "stream/woken"],
+    types: ["itx/aborted", "itx/woken"],
     wokenAfterContextAbortedOffset: 2,
   },
   {
     log: "aborted, woken, woken again (a later wake: hibernation, a platform reset)",
-    types: ["context/aborted", "stream/woken", "stream/woken"],
+    types: ["itx/aborted", "itx/woken", "itx/woken"],
     wokenAfterContextAbortedOffset: undefined,
   },
   {
     log: "woken, then aborted (the reset still to come)",
-    types: ["stream/woken", "context/aborted"],
+    types: ["itx/woken", "itx/aborted"],
     wokenAfterContextAbortedOffset: undefined,
   },
 ])("$log → wokenAfterContextAbortedOffset $wokenAfterContextAbortedOffset", (row) => {
@@ -202,7 +204,7 @@ test.each([
       at(
         index + 2,
         `events.iterate.com/${type}`,
-        type === "stream/woken" ? { incarnation: index } : {},
+        type === "itx/woken" ? { incarnation: index } : {},
       ),
     ),
   );
@@ -210,23 +212,23 @@ test.each([
 });
 
 test("pause is a latch: paused → resumed round-trips; reason carried", () => {
-  const paused = reduceAll([at(1, "events.iterate.com/stream/paused", { reason: "maintenance" })]);
+  const paused = reduceAll([at(1, "events.iterate.com/itx/paused", { reason: "maintenance" })]);
   expect(paused).toMatchObject({ paused: { reason: "maintenance" } });
-  expect(reduceAll([at(2, "events.iterate.com/stream/resumed")], paused).paused).toBeNull();
+  expect(reduceAll([at(2, "events.iterate.com/itx/resumed")], paused).paused).toBeNull();
 });
 
 test('paused without a reason defaults to "paused" in the reduce (the state guarantee)', () => {
-  expect(reduceAll([at(1, "events.iterate.com/stream/paused")])).toMatchObject({
+  expect(reduceAll([at(1, "events.iterate.com/itx/paused")])).toMatchObject({
     paused: { reason: "paused" },
   });
-  expect(reduceAll([at(1, "events.iterate.com/stream/paused", {})])).toMatchObject({
+  expect(reduceAll([at(1, "events.iterate.com/itx/paused", {})])).toMatchObject({
     paused: { reason: "paused" },
   });
 });
 
-// ── the ingress target — project/ingress-configured, normalized at the append boundary ──
+// ── the ingress target — itx/ingress-configured, normalized at the append boundary ──
 
-const ingressType = "events.iterate.com/project/ingress-configured";
+const ingressType = "events.iterate.com/itx/ingress-configured";
 const ingressTarget: ItxExpression = [
   "itx",
   "workers",
@@ -269,9 +271,9 @@ test("ingress target: an ephemeral configuration cannot be published", () => {
   ).toThrow("must be durable");
 });
 
-// ── the fetch routes — fetch-route/configured, folded by src/fetch-routes.ts ──
+// ── the fetch routes — itx/fetch-route-configured, folded by src/fetch-routes.ts ──
 
-const routeType = "events.iterate.com/fetch-route/configured";
+const routeType = "events.iterate.com/itx/fetch-route-configured";
 const blogRoute = {
   fetchRouteName: "tunnel-blog",
   requestMatcher: { routingSlug: "blog" },
@@ -341,32 +343,6 @@ test("fetch routes: the append boundary parses the fact and refuses a malformed 
   expect(() =>
     normalizeControlEvent({ type: routeType, payload: blogRoute, ephemeral: true }, "/"),
   ).toThrow("must be durable");
-});
-
-test("fetch routes: a root whose core checkpoint was written by 14.0.0, when the table was `ingressRoutes`, re-reduces its log on the next wake into `fetchRoutes`; an `ingress-route/configured` fact is not read", () => {
-  const storage = nodeSqliteDurableObjectStorage();
-  const deps = { storage, path: "/", projectId: "prj_t", onCommit: () => {} };
-  const before = new Stream(deps);
-  before.append(
-    { type: "events.iterate.com/ingress-route/configured", payload: { ...blogRoute } },
-    normalizeControlEvent(
-      { type: routeType, payload: { ...blogRoute, fetchRouteName: "api" } },
-      "/",
-    ),
-  );
-  const { fetchRoutes, ...rest } = before.coreReducedState;
-  expect(Object.keys(fetchRoutes)).toEqual(["api"]);
-  before.storage.reduceCheckpoints.write(
-    CoreContract.slug,
-    { reducerVersion: "14.0.0", reducedThroughOffset: before.highestDurableOffset() },
-    { ...rest, ingressRoutes: { "tunnel-blog": fetchRoutes.api } },
-    true,
-  );
-  const after = new Stream(deps).coreReducedState;
-  expect(after.fetchRoutes).toMatchObject({
-    api: { target: ["itx", "tunnels", "blog"], configuredOffset: 2 },
-  });
-  expect(after).not.toHaveProperty("ingressRoutes");
 });
 
 test(
@@ -528,7 +504,7 @@ test("rewrite rules: a removal with `ifTarget` (a handle's undo) applies only wh
 // ── the subscriptions table — by name ──
 
 test("subscriptions table: configured: a row is `{ target (parsed), consumes?, configuredAtOffset }` — the event's own offset is its identity", () => {
-  const e = at(3, "events.iterate.com/stream/subscription-configured", {
+  const e = at(3, "events.iterate.com/itx/subscription-configured", {
     name: "tab",
     target: "itx.rpcStubs.get('subscription:tab')",
     consumes: ["mark"],
@@ -548,12 +524,12 @@ test("subscriptions table: configured: a row is `{ target (parsed), consumes?, c
 
 test("subscriptions table: configured with `afterOffset` stores it on the row (where cursor delivery starts — 0 = the whole log); without it, no key at all (= from the configure offset)", () => {
   const s = reduceAll([
-    at(4, "events.iterate.com/stream/subscription-configured", {
+    at(4, "events.iterate.com/itx/subscription-configured", {
       name: "history",
       target: "itx.digest.processEventBatch",
       afterOffset: 0,
     }),
-    at(5, "events.iterate.com/stream/subscription-configured", {
+    at(5, "events.iterate.com/itx/subscription-configured", {
       name: "now",
       target: "itx.digest.processEventBatch",
     }),
@@ -564,7 +540,7 @@ test("subscriptions table: configured with `afterOffset` stores it on the row (w
 
 test("subscriptions table: configured without `consumes` stores no `consumes` key at all (absent = every durable event)", () => {
   const s = reduceAll([
-    at(1, "events.iterate.com/stream/subscription-configured", {
+    at(1, "events.iterate.com/itx/subscription-configured", {
       name: "all",
       target: "itx.facets.get('tally').processEventBatch",
     }),
@@ -574,12 +550,12 @@ test("subscriptions table: configured without `consumes` stores no `consumes` ke
 
 test("subscriptions table: configured with the SAME NAME REPLACES the row — no shadow stack, the old target and filter are gone", () => {
   const s = reduceAll([
-    at(1, "events.iterate.com/stream/subscription-configured", {
+    at(1, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.old.processEventBatch",
       consumes: ["a"],
     }),
-    at(2, "events.iterate.com/stream/subscription-configured", {
+    at(2, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.new.processEventBatch",
     }),
@@ -592,14 +568,14 @@ test("subscriptions table: configured with the SAME NAME REPLACES the row — no
 
 test("subscriptions table: configured with a NULL target drops the row; dropping an unknown name → undefined (keep the state), never a throw or a phantom row", () => {
   const s = reduceAll([
-    at(1, "events.iterate.com/stream/subscription-configured", { name: "a", target: "itx.x.f" }),
-    at(2, "events.iterate.com/stream/subscription-configured", { name: "b", target: "itx.y.f" }),
-    at(3, "events.iterate.com/stream/subscription-configured", { name: "a", target: null }),
+    at(1, "events.iterate.com/itx/subscription-configured", { name: "a", target: "itx.x.f" }),
+    at(2, "events.iterate.com/itx/subscription-configured", { name: "b", target: "itx.y.f" }),
+    at(3, "events.iterate.com/itx/subscription-configured", { name: "a", target: null }),
   ]);
   expect(Object.keys(s.subscriptions)).toEqual(["b"]);
   expect(
     reduceCoreEvent({
-      event: at(4, "events.iterate.com/stream/subscription-configured", {
+      event: at(4, "events.iterate.com/itx/subscription-configured", {
         name: "ghost",
         target: null,
       }),
@@ -610,12 +586,12 @@ test("subscriptions table: configured with a NULL target drops the row; dropping
 
 test("subscriptions table: a null target with `ifConfiguredAtOffset` (a handle's undo) drops only the row configured at that offset — a same-name replace survives the stale undo, identity kept", () => {
   const configure = (offset: number) =>
-    at(offset, "events.iterate.com/stream/subscription-configured", {
+    at(offset, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.digest.processEventBatch",
     });
   const remove = (offset: number, ifConfiguredAtOffset: number) =>
-    at(offset, "events.iterate.com/stream/subscription-configured", {
+    at(offset, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: null,
       ifConfiguredAtOffset,
@@ -632,14 +608,14 @@ test("subscriptions table: a null target with `ifConfiguredAtOffset` (a handle's
 
 test("subscriptions table: delivery-halted sets `halted { afterOffset, attempts, error? }` on the row (the loop's fact); unknown name → no-op", () => {
   const configured = reduceAll([
-    at(1, "events.iterate.com/stream/subscription-configured", {
+    at(1, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.digest.processEventBatch",
     }),
   ]);
   const halted = reduceAll(
     [
-      at(2, "events.iterate.com/stream/subscription-delivery-halted", {
+      at(2, "events.iterate.com/itx/subscription-delivery-halted", {
         name: "digest",
         afterOffset: 7,
         attempts: 15,
@@ -654,7 +630,7 @@ test("subscriptions table: delivery-halted sets `halted { afterOffset, attempts,
   // without `error` the key is absent, not undefined-valued
   const rehalted = reduceAll(
     [
-      at(3, "events.iterate.com/stream/subscription-delivery-halted", {
+      at(3, "events.iterate.com/itx/subscription-delivery-halted", {
         name: "digest",
         afterOffset: 9,
         attempts: 1,
@@ -667,7 +643,7 @@ test("subscriptions table: delivery-halted sets `halted { afterOffset, attempts,
   // a halt for a name that has no row is dropped on the floor
   expect(
     reduceCoreEvent({
-      event: at(4, "events.iterate.com/stream/subscription-delivery-halted", {
+      event: at(4, "events.iterate.com/itx/subscription-delivery-halted", {
         name: "nobody",
         afterOffset: 1,
         attempts: 1,
@@ -679,11 +655,11 @@ test("subscriptions table: delivery-halted sets `halted { afterOffset, attempts,
 
 test("subscriptions table: delivery-resumed CLEARS `halted` and records `resumed { afterOffset?, atOffset }` — atOffset is the resume event's own offset; unknown name → no-op", () => {
   const halted = reduceAll([
-    at(1, "events.iterate.com/stream/subscription-configured", {
+    at(1, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.digest.processEventBatch",
     }),
-    at(2, "events.iterate.com/stream/subscription-delivery-halted", {
+    at(2, "events.iterate.com/itx/subscription-delivery-halted", {
       name: "digest",
       afterOffset: 7,
       attempts: 15,
@@ -691,7 +667,7 @@ test("subscriptions table: delivery-resumed CLEARS `halted` and records `resumed
   ]);
   const sought = reduceAll(
     [
-      at(3, "events.iterate.com/stream/subscription-delivery-resumed", {
+      at(3, "events.iterate.com/itx/subscription-delivery-resumed", {
         name: "digest",
         afterOffset: 8,
       }),
@@ -702,7 +678,7 @@ test("subscriptions table: delivery-resumed CLEARS `halted` and records `resumed
   expect(sought.subscriptions.digest).toMatchObject({ resumed: { afterOffset: 8, atOffset: 3 } });
   // a plain un-halt (no seek): `resumed` carries only the generation
   const plain = reduceAll(
-    [at(4, "events.iterate.com/stream/subscription-delivery-resumed", { name: "digest" })],
+    [at(4, "events.iterate.com/itx/subscription-delivery-resumed", { name: "digest" })],
     sought,
   );
   expect(plain.subscriptions.digest.resumed).not.toHaveProperty("afterOffset");
@@ -714,7 +690,7 @@ test("subscriptions table: delivery-resumed CLEARS `halted` and records `resumed
   expect(print(plain.subscriptions.digest.target)).toBe("itx.digest.processEventBatch");
   expect(
     reduceCoreEvent({
-      event: at(5, "events.iterate.com/stream/subscription-delivery-resumed", { name: "nobody" }),
+      event: at(5, "events.iterate.com/itx/subscription-delivery-resumed", { name: "nobody" }),
       state: plain,
     }),
   ).toBeUndefined();
@@ -723,7 +699,7 @@ test("subscriptions table: delivery-resumed CLEARS `halted` and records `resumed
 test("subscriptions table: a malformed target THROWS at the reduce (no row) — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
   expect(() =>
     reduceCoreEvent({
-      event: at(1, "events.iterate.com/stream/subscription-configured", {
+      event: at(1, "events.iterate.com/itx/subscription-configured", {
         name: "broken",
         target: "itx.broken(", // does not parse
       }),
@@ -731,7 +707,7 @@ test("subscriptions table: a malformed target THROWS at the reduce (no row) — 
     }),
   ).toThrow();
   const s = reduceAll([
-    at(2, "events.iterate.com/stream/subscription-configured", {
+    at(2, "events.iterate.com/itx/subscription-configured", {
       name: "fine",
       target: "itx.whoami",
     }),
@@ -748,14 +724,14 @@ test("an EPHEMERAL event is never reduced, whatever its type — the state is re
     ephemeral: true,
   });
   for (const e of [
-    ephemeral("events.iterate.com/stream/created", { projectId: "p", path: "/" }),
-    ephemeral("events.iterate.com/stream/woken", { incarnation: 9 }),
-    ephemeral("events.iterate.com/stream/paused", { reason: "x" }),
+    ephemeral("events.iterate.com/itx/created", { projectId: "p", path: "/" }),
+    ephemeral("events.iterate.com/itx/woken", { incarnation: 9 }),
+    ephemeral("events.iterate.com/itx/paused", { reason: "x" }),
     ephemeral("events.iterate.com/itx/rewrite-rule-configured", {
       match: "itx.blip",
       target: "itx.kv",
     }),
-    ephemeral("events.iterate.com/stream/subscription-configured", {
+    ephemeral("events.iterate.com/itx/subscription-configured", {
       name: "blip",
       target: "itx.whoami",
     }),
@@ -1082,7 +1058,7 @@ const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
     row: "a halted row: the loop skips it until an operator resumes it",
     log: [
       configured(1, "p", "itx.facets.get('f').processEventBatch"),
-      at(2, "events.iterate.com/stream/subscription-delivery-halted", {
+      at(2, "events.iterate.com/itx/subscription-delivery-halted", {
         name: "p",
         afterOffset: 1,
         attempts: 1,
@@ -1137,7 +1113,7 @@ test("configure: builds ONE subscription-configured with the target STORED AS TH
     consumes: ["mark", "tick"],
   });
   expect(event).toEqual({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "tally",
       target: ["itx", "facets", ["get", "tally"], "processEventBatch"], // the parsed form at rest — a target may carry a whole source as data
@@ -1151,7 +1127,7 @@ test("configure: builds ONE subscription-configured with the target STORED AS TH
 test("configure: omits `consumes` from the payload when none was given", () => {
   const { configure } = setup();
   expect(configure({ name: "all", target: "itx.digest.processEventBatch" })).toEqual({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "all",
       target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, on append
@@ -1171,7 +1147,7 @@ test.each([
   const { configure, rows } = setup();
   const event = configure({ name: "h", target: "itx.digest.processEventBatch", afterOffset });
   expect(event).toEqual({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "h", target: ["itx", "digest", "processEventBatch"], ...payloadHas },
   });
   expect(rows()).toEqual({
@@ -1208,7 +1184,7 @@ test("configure: the SAME NAME REPLACES the row — target and filter of the new
 test("configure: a HALTED row re-configured identically gets a fresh row that carries no halt", () => {
   const { configure, append, rows } = setup();
   configure({ name: "digest", target: "itx.digest.processEventBatch" });
-  append("events.iterate.com/stream/subscription-delivery-halted", {
+  append("events.iterate.com/itx/subscription-delivery-halted", {
     name: "digest",
     afterOffset: 1,
     attempts: 15,
@@ -1222,7 +1198,7 @@ test("configure: a NULL target is the removal: the same event, target null (and 
   const { configure, events, rows } = setup();
   configure({ name: "tab", target: "itx.rpcStubs.get('subscription:tab')" });
   expect(configure({ name: "tab", target: null, consumes: ["ignored"] })).toEqual({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "tab", target: null },
   });
   expect(rows()).toEqual({});
@@ -1268,7 +1244,7 @@ test("configure: the stored target IS the parsed form: an array target is stored
   for (const [i, target] of targets.entries()) {
     const event = configure({ name: `odd${i}`, target });
     expect(event).toEqual({
-      type: "events.iterate.com/stream/subscription-configured",
+      type: "events.iterate.com/itx/subscription-configured",
       payload: { name: `odd${i}`, target },
     });
     expect(rows()[`odd${i}`]).toEqual(expect.objectContaining({ target }));
@@ -1338,11 +1314,11 @@ function reduceAll(events: StreamEvent[], initial = CoreContract.initialState())
 }
 
 function requested(offset: number) {
-  return at(offset, "events.iterate.com/context/run-requested", { code: "async (itx) => 1" });
+  return at(offset, "events.iterate.com/itx/run-requested", { code: "async (itx) => 1" });
 }
 
 function settled(offset: number, requestOffset: number) {
-  return at(offset, "events.iterate.com/context/run-settled", {
+  return at(offset, "events.iterate.com/itx/run-settled", {
     requestOffset,
     settlement: { status: "succeeded", result: 1 },
   });
@@ -1350,7 +1326,7 @@ function settled(offset: number, requestOffset: number) {
 
 /** A durable subscription-configured for `name` (default target: a plain method). */
 function configured(offset: number, name: string, target: string | null = "itx.x.f"): StreamEvent {
-  return at(offset, "events.iterate.com/stream/subscription-configured", { name, target });
+  return at(offset, "events.iterate.com/itx/subscription-configured", { name, target });
 }
 
 /** A durable rewrite-rule-configured for `match`. */
@@ -1390,7 +1366,7 @@ function setup() {
   }) => {
     const event = normalizeControlEvent(
       {
-        type: "events.iterate.com/stream/subscription-configured",
+        type: "events.iterate.com/itx/subscription-configured",
         payload: input,
       },
       "/",

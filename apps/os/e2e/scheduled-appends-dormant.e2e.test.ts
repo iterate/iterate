@@ -60,7 +60,7 @@ platformHeldTheAlarm(
       });
       const armedFor = ring.find(
         (event: { type: string; payload: { reason?: string; dueSchedules?: number } }) =>
-          event.type === "events.iterate.com/stream/trace/alarm" &&
+          event.type === "events.iterate.com/itx/alarm-trace" &&
           event.payload.reason === "alarm-fired" &&
           (event.payload.dueSchedules ?? 0) > 0,
       )?.payload.alarm.before;
@@ -79,7 +79,7 @@ platformHeldTheAlarm(
     // were disposed). The reconnect's own wake comes after `due` and is not counted.
     const wakesBeforeDue = events
       .filter(
-        (event) => event.type === "events.iterate.com/stream/woken" && event.offset < due[0].offset,
+        (event) => event.type === "events.iterate.com/itx/woken" && event.offset < due[0].offset,
       )
       .map((event) => event.payload.reason);
     expect(wakesBeforeDue).toEqual(["request", "alarm"]);

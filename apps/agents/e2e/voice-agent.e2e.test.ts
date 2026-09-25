@@ -174,12 +174,13 @@ export default class extends WorkerEntrypoint {
       });
       const commentary = await until("delegated clock result", () =>
         received.find(
-          (event) => event.type === `${T}commentary` && event.payload.delegationId === "clock",
+          (event) =>
+            event.type === `${T}commentary-added` && event.payload.delegationId === "clock",
         ),
       );
       expect(
         received
-          .filter((event) => event.type === `${T}thinking`)
+          .filter((event) => event.type === `${T}thinking-added`)
           .map((event) => event.payload.content),
       ).toEqual(["Checking the clock"]);
       const content = String(commentary.payload.content);
@@ -190,7 +191,7 @@ export default class extends WorkerEntrypoint {
       expect(Date.parse(clock.time)).toBeLessThanOrEqual(Date.now());
       expect(
         received.filter((event) =>
-          ["conversation-ended", "provider-error", "provider-disconnected"].some(
+          ["conversation-ended", "provider-error-reported", "provider-disconnected"].some(
             (type) => event.type === T + type,
           ),
         ),
@@ -219,14 +220,14 @@ export default class extends WorkerEntrypoint {
         },
       });
       const isWebsiteAnswer = (event: (typeof received)[number]) =>
-        event.type === `${T}commentary` && event.payload.delegationId === "website";
+        event.type === `${T}commentary-added` && event.payload.delegationId === "website";
       // What the delegation said so far, a short line an event, each at its time since the request:
       // a wait that runs out names the script it was on, and a wrong answer names what it was given.
       const websiteSteps = (events: typeof received) => {
         const asked = events.slice(websiteAsked);
         const t0 = Date.parse(String(asked[0]?.createdAt));
         return asked
-          .filter((event) => !event.type.endsWith("-frame") && event.type !== `${T}thinking`)
+          .filter((event) => !event.type.endsWith("-frame") && event.type !== `${T}thinking-added`)
           .map((event) => {
             const { role, content } = event.payload as { role?: string; content?: unknown };
             const said =
@@ -251,7 +252,7 @@ export default class extends WorkerEntrypoint {
           .slice(websiteAsked)
           .filter(
             (event) =>
-              event.type === `${T}thinking` ||
+              event.type === `${T}thinking-added` ||
               event.type === "events.iterate.com/agent/context-added",
           ).length;
       let websiteAnswer: (typeof received)[number] | undefined;

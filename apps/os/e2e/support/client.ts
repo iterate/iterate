@@ -268,17 +268,17 @@ export const readAll = async (itx: any): Promise<any[]> => {
 };
 
 /** A log as its repo facts' short type names, in order (`repo/created`, …; a processor row's
- *  `stream/…` fact is not one). */
+ *  `itx/…` fact is not one). */
 export const repoFactTypes = (log: { type: string }[]): string[] =>
   log
-    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
+    .filter((e) => e.type.startsWith("events.iterate.com/repo/"))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 
 /** What the `tally` fixture (support/sources.ts) has reduced so far. */
 export const tallySnapshot = (itx: any): Promise<any> =>
   itx.invoke("itx.facets.get('tally').snapshot()");
 
-/** What a "*" processor reduces: every durable event, each incarnation's `stream/woken` included
+/** What a "*" processor reduces: every durable event, each incarnation's `itx/woken` included
  *  (processor.ts `consumesEvent`). */
 export const durableCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
@@ -394,7 +394,7 @@ export const untilValue = async <T>(
 export const EVICTION_IDLES = 3;
 
 /** Wake the context EVICTION_IDLES times with an idle gap between, then read its log — one
- *  `stream/woken` per incarnation. The platform evicts an idle actor in ~10 s (measured 2026-09-22:
+ *  `itx/woken` per incarnation. The platform evicts an idle actor in ~10 s (measured 2026-09-22:
  *  0/6 at 10 s, 48/48 at 12 s+), so each 12 s gap should cost one eviction. */
 export async function idleAcrossEvictions(itx: any): Promise<any[]> {
   for (let i = 0; i < EVICTION_IDLES; i++) {

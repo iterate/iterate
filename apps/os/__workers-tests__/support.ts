@@ -77,7 +77,7 @@ export async function publishConfigWorker(itx: any, target: unknown): Promise<vo
     afterOffset: 0,
     timeoutMs: 30_000,
   });
-  await itx.append({ type: "events.iterate.com/project/ingress-configured", payload: { target } });
+  await itx.append({ type: "events.iterate.com/itx/ingress-configured", payload: { target } });
 }
 
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into

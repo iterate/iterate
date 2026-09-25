@@ -76,7 +76,7 @@ export type FetchUpgradeSpliceEvent =
       /** the DO answered the re-dial on another deploy: a deploy's reset, expected */
       deployReset: boolean;
       /** the DO answered the re-dial on an incarnation a recorded `itx.abort()` began: the offset of
-       *  its `context/aborted` event — a deliberate reset, expected */
+       *  its `itx/aborted` event — a deliberate reset, expected */
       contextAbortedOffset: number | null;
     }
   | {
@@ -90,7 +90,7 @@ export type FetchUpgradeSpliceEvent =
 
 type FetchUpgradeSide = "eyeball" | "leg";
 
-/** A re-dial's answer: the DO socket, open, the deploy that answered it, and the `context/aborted`
+/** A re-dial's answer: the DO socket, open, the deploy that answered it, and the `itx/aborted`
  *  event whose reset began the incarnation that answered it (null: none did). */
 type Redialed = {
   socket: SpliceSocket;
@@ -111,7 +111,7 @@ export class FetchUpgradeSpliceEnd {
   #socket: SpliceSocket | null = null;
   /** The deploy the DO socket was answered on: a re-dial answered on another is a deploy's reset. */
   #deployId: string | null;
-  /** The `context/aborted` the DO socket's incarnation began after: a re-dial answered after another
+  /** The `itx/aborted` the DO socket's incarnation began after: a re-dial answered after another
    *  is a recorded `itx.abort()`'s reset. */
   #contextAbortedOffset: number | null;
   #ended = false;
@@ -369,7 +369,7 @@ export class FetchUpgradeSpliceEnd {
    *  first one on the same new deploy (prd 2026-09-24 20:40:22 → 20:40:27, and 20:11:59 →
    *  20:12:13) is the deploy's too. */
   #deployChangedAt: number | null = null;
-  /** The `context/aborted` a re-dial of this drop found newly behind the context: its reset was the
+  /** The `itx/aborted` a re-dial of this drop found newly behind the context: its reset was the
    *  one `itx.abort()` asked for. */
   #contextAbortReset: number | null = null;
 
@@ -497,7 +497,7 @@ function truncateCloseReason(reason: string): string {
 
 /** THE LOG LINE for what an end reports. A resume after a deploy's reset is expected on every deploy
  *  under traffic (info), and one after a recorded `itx.abort()` is the reset someone asked for (info,
- *  naming its `context/aborted`); any other healed a platform failure (the prd fault alarm pages on
+ *  naming its `itx/aborted`); any other healed a platform failure (the prd fault alarm pages on
  *  a burst of `platform-failure` heals). Giving up is the other end gone — a tunnel killed outright,
  *  a laptop asleep — or a platform failure that outlasted the deadline: a warn, with its reason. */
 export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): void {

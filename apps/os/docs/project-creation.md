@@ -25,7 +25,7 @@ resulting pinned revision. `worker.ts` must be executable JavaScript; a `.ts` ex
 cause transpilation. Probe a candidate with `itx.workers.get({ source }).fetch(...)` before
 committing it.
 
-An explicit `project/ingress-configured` remains in effect until the next config commit. Loading a
+An explicit `itx/ingress-configured` remains in effect until the next config commit. Loading a
 worker alone does not create a route.
 
 `src/project/templates.test.ts` covers template copying, ordering, failures, and recovery;

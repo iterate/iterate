@@ -414,7 +414,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     )
       throw codedError(
         "FORBIDDEN",
-        "loaded code writes a subscription row with itx.append({ type: 'events.iterate.com/stream/subscription-configured', payload: { name, target, consumes } }); subscribe lends a live callback only",
+        "loaded code writes a subscription row with itx.append({ type: 'events.iterate.com/itx/subscription-configured', payload: { name, target, consumes } }); subscribe lends a live callback only",
       );
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only an ABSENT name gets a minted one; an empty-string name is a caller bug that must reach the reduce and be refused there (parseSubscriptionName), never silently become a fresh row per call
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
@@ -428,7 +428,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
       // first, so a name the reduce rejects throws with nothing lent).
       const row: StreamEventInput = {
-        type: "events.iterate.com/stream/subscription-configured",
+        type: "events.iterate.com/itx/subscription-configured",
         payload: {
           name,
           target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
@@ -452,7 +452,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     // recalled — the same order as `provide`, for the same reason.
     const target = input.target as ItxExpressionInput | null; // the live-object branch returned above, so this is an expression or null
     const [committed] = (await this.#append({
-      type: "events.iterate.com/stream/subscription-configured",
+      type: "events.iterate.com/itx/subscription-configured",
       payload: { name, target, ...delivery },
     })) as StreamEvent[]; // `append` answers the committed events; `invoke` is untyped over RPC
     this.#sessionTeardown.dispose(sessionTeardownKey);
@@ -497,7 +497,7 @@ export class IterateContextRpcTarget extends RpcTarget {
   #removeSubscriptionInBackground(name: string, configuredAtOffset: number): void {
     this.#waitUntil(
       this.#append({
-        type: "events.iterate.com/stream/subscription-configured",
+        type: "events.iterate.com/itx/subscription-configured",
         payload: { name, target: null, ifConfiguredAtOffset: configuredAtOffset },
       }).catch(() => undefined),
     );

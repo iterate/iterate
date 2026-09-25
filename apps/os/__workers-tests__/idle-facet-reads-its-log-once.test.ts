@@ -20,7 +20,7 @@ import { stub, until } from "./support.ts";
 test("a processor a row pushes, read between commits it does not consume, reads its log once; one appended after is applied before the next read", async () => {
   const ctx = "prj_idle_facet_reads_once";
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "tally",
       target: ["itx", "facets", ["get", "tally", COUNTING_TALLY_SPEC], "processEventBatch"],

@@ -6,16 +6,16 @@ import { housekeepingSummary } from "./core-renderers.tsx";
 import type { ContextViewEvent } from "./types.tsx";
 
 const log: ContextViewEvent[] = [
-  at(1, "stream/created", { path: "/" }),
-  at(2, "stream/woken", { incarnation: 1 }),
-  at(3, "stream/subscription-configured", { name: "account" }),
+  at(1, "itx/created", { path: "/" }),
+  at(2, "itx/woken", { incarnation: 1 }),
+  at(3, "itx/subscription-configured", { name: "account" }),
   at(4, "account/authenticated", { credential: "cookie" }),
   at(5, "account/authenticated", { credential: "cookie" }),
   at(6, "account/authenticated", { credential: "cookie" }),
   at(7, "account/authenticated", { credential: "admin-secret" }),
-  at(8, "stream/woken", { incarnation: 2 }, "2026-09-23T12:00:00.000Z"),
-  at(9, "stream/subscription-configured", { name: "sub-1" }, "2026-09-23T12:00:00.000Z"),
-  at(10, "live-state/changed", undefined, "2026-09-23T12:00:01.000Z"),
+  at(8, "itx/woken", { incarnation: 2 }, "2026-09-23T12:00:00.000Z"),
+  at(9, "itx/subscription-configured", { name: "sub-1" }, "2026-09-23T12:00:00.000Z"),
+  at(10, "itx/live-state-changed", undefined, "2026-09-23T12:00:01.000Z"),
   at(11, "account/personal-access-token-minted", { id: "pat_a" }, "2026-09-23T12:00:02.000Z"),
 ];
 
@@ -102,7 +102,7 @@ test("whoBefore: carries the last named actor over housekeeping, starts afresh a
   const items = foldEvents(
     [
       named(1, "user_a"),
-      at(2, "stream/woken", { incarnation: 2 }),
+      at(2, "itx/woken", { incarnation: 2 }),
       named(3, "user_a"),
       named(4, "user_b"),
       named(5, "user_b", "2026-09-23T12:00:00.000Z"),

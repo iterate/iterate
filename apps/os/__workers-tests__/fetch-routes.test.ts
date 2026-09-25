@@ -121,7 +121,9 @@ test("itx.fetchRoutes.set validates the route before it appends and is idempoten
   // the root's own route events (other contexts' announcements land on the root too)
   const lastRouteEvent = async () =>
     (await itx.readEvents()).events
-      .filter((event: { type: string }) => event.type.startsWith("events.iterate.com/fetch-route/"))
+      .filter((event: { type: string }) =>
+        event.type.startsWith("events.iterate.com/itx/fetch-route-"),
+      )
       .at(-1);
   const rowsBeforeTheFirstRoute = (await itx.subscriptions.list()).map(
     (row: { name: string }) => row.name,

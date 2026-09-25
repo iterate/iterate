@@ -89,3 +89,102 @@ using connection = await connectIterate({
 using project = await connection.session.projects.get("my-project");
 console.log(await project.run("async (itx) => await itx.whoami()"));
 ```
+
+## Event types
+
+A platform event type is `events.iterate.com/<namespace>/<event>`: one namespace segment and one
+event segment, both lowercase kebab-case, and never a third segment.
+
+Every type under `events.iterate.com/` follows these rules, test types included. A type without
+that prefix belongs to whoever appends it and is opaque to the platform: tests use types like
+`demo/ping` on purpose, and a project may use its own domain (`events.garple.com/sales/…`).
+
+### Namespaces
+
+- **`itx`** holds the context engine's own events: everything the core contract
+  (`apps/os/src/stream/core-processor.ts`) reduces, validates or refuses, plus the records the
+  Stream, the context Durable Object and the SDK processor host write themselves. Where the schema
+  and the reduce live decides it, not which contexts hold the event: fetch routes and the apex
+  ingress target are core state, so they are `itx` even though only a project root's copy is read.
+  A domain processor may consume an `itx` event (the agent consumes `itx/run-*`, the Project
+  processor `itx/ingress-configured`); it names the core's catalog in its `processorDeps` rather than
+  defining the event itself. The core's checkpoint slug is `core`: it is a storage key, not a type
+  prefix.
+- **A domain namespace** is the singular name of the kind of context whose log the event belongs
+  to, which is the defining contract's slug when there is one: `account`, `organization`,
+  `project`, `repo`, `workspace`, `secret`, `agent`, `voice-agent`, `flake-dashboard`. A fact
+  cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
+- **An integration** uses its own name as its namespace, for example `chrome`.
+- **`test`** holds types that only tests append. Production code never matches a `test/*` type. A
+  test contract may keep a slug of its own (`counter`), but its events go under `test/`. A test must
+  not borrow a production namespace for a type that does not exist.
+
+### Event names
+
+- **A fact is past tense**: `<object>-<verb-ed>`, or a bare `<verb-ed>` when the object is the
+  namespace's own subject (`itx/created` is the context, `agent/paused` is the agent). The object
+  comes first and is singular.
+- **Spell words out.** Clipped words are not allowed (`spk`); a real word is (`mic`), and so is an
+  acronym the API already spells (`llm`, `rpc`, `itx`).
+- **Asking and answering.** `<x>-requested` asks, and its offset identifies the ask. The answer
+  takes one of three shapes:
+  - `<x>-settled` is the one terminal fact when the asker reads a result. It names
+    `requestOffset` and carries the outcome: succeeded, failed or cancelled, a status, or an error.
+    Examples: `itx/run-*`, `agent/llm-request-*`, `project/hostname-add-*`.
+  - `<verb-ed>` or `<verb>-failed` is used when success is a fact that other logs wait on, like a
+    certificate: `create-requested` → `created` or `create-failed`, `delete-requested` → `deleted`,
+    `hostname-remove-requested` → `hostname-removed`. A failure that is retried rather than
+    reported gets no `-failed` fact.
+  - An answer that is also a fact of its own names the ask by id:
+    `voice-agent/delegation-requested` is answered by one `commentary-added` carrying its
+    `delegationId`.
+- **One verb pair per kind of change:**
+  - `added` / `removed` for membership in a set: `organization/member-added`,
+    `organization/project-added`, hostnames.
+  - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, agents.
+  - `set` / `deleted` for a keyed value: `secret/*`.
+  - `set` / `cancelled` for a schedule: `itx/schedule-*`. Each occurrence is `fired` or `failed`.
+  - `-configured` for one fact that sets a row or clears it with `null`
+    (`itx/subscription-configured`, `itx/rewrite-rule-configured`, `itx/fetch-route-configured`),
+    sets a singleton (`itx/ingress-configured`), or merges a partial configuration
+    (`agent/configured`: omitted keys keep their values).
+- **Things the platform does on its own** are plain facts about the object: `itx/schedule-fired`,
+  `itx/schedule-failed`, `itx/subscription-delivery-halted`.
+- **Ephemeral events.** An ephemeral event that records something happening is named like any other
+  fact: `itx/rpc-stub-attached`, `itx/live-state-changed`, `chrome/navigated`. Three kinds may be
+  singular nouns: a sequenced slice of a live stream is a `<stream>-frame`
+  (`voice-agent/mic-frame`, `agent/llm-response-frame`), a heartbeat (`voice-agent/keepalive`), and
+  a diagnostic record (`itx/alarm-trace`). A durable event is never a noun.
+- **Families and prefixes.** Code matches some families by prefix: `…/itx/run-`,
+  `…/itx/subscription-`, `…/itx/schedule-`, `…/project/hostname-`. Before naming a new type, check
+  it doesn't join one of these families by accident. Never match `…/itx/` as a whole: it is not a
+  permission boundary, and it catches live-state deltas, stub presence and child
+  announcements.
+- **Code follows the type.** A constant, schema, test fixture or idempotency key built from a type
+  follows its name (`itx/child-created:<path>`). Broader concepts, modules and Workers log
+  event names keep theirs: the Stream, scheduled appends, `core`, `scheduled-append.completed`.
+- **Renaming.** A rename has to serve one of these rules, not taste. If a type is stored outside the
+  platform's Durable Objects (device firmware, a published SDK, a project's config repo, CI state),
+  rename it only in a change that migrates that store too.
+
+| Namespace                                                           | Defined in                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `itx`                                                               | `apps/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `apps/os/src/context/built-ins.ts`, `apps/os/src/fetch-routes.ts`, `apps/os/src/iterate-context-durable-object.ts`, `packages/iterate/src/stream/{run,processor}.ts` |
+| `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `apps/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
+| `agent`                                                             | `apps/agents/runtime/contract.ts`                                                                                                                                                                                                                                                                          |
+| `voice-agent`                                                       | `apps/agents/voice/voice-agent.ts`, `apps/agents/voice/events.ts`                                                                                                                                                                                                                                          |
+| `flake-dashboard`                                                   | `scripts/ci/flake-dashboard/contract.ts`                                                                                                                                                                                                                                                                   |
+| `chrome`                                                            | `apps/browser-extension/panel.js`                                                                                                                                                                                                                                                                          |
+| `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
+
+Two types break these rules until the Kit firmware migrates:
+
+- `voice-agent/spk-frame` will become `voice-agent/speaker-frame`.
+- `voice-agent/conversation-ended` will become `voice-agent/call-ended`. It pairs with `call-started`
+  and names the activation; the provider session is the `conversation`.
+
+`note/added` is only an example in the Agents composer; no contract defines `note`.
+`email/received` is only an integration's transcript in an agent UI test; no contract defines
+`email`.
+`capability-host/script-run-*` is never written to a log: the agent UI's adapter builds it in
+memory.

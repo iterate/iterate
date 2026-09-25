@@ -245,7 +245,7 @@ export interface BuiltInScope extends LibraryRoots {
   /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` saying which
    *  requests on the project's hosts go to which itx expression — `iterate tunnel`'s lent stub, a
    *  facet, a loaded worker. `set(name, route)` validates the route and appends
-   *  `fetch-route/configured` on `/` (`null` deletes it; the same route again appends nothing);
+   *  `itx/fetch-route-configured` on `/` (`null` deletes it; the same route again appends nothing);
    *  `list()` is the table; `match({ method, url, headers })` the first route whose matcher holds —
    *  by priority, highest first, then by name — or null (`routingSlug` against the edge's
    *  `x-iterate-routing-slug`, `url` a `URLPattern` against the URL the app sees, `headers` exact).
@@ -286,7 +286,7 @@ export interface BuiltInScope extends LibraryRoots {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** RESET THIS CONTEXT — Cloudflare's `ctx.abort`, asked for: the Durable Object's in-memory state
    *  is discarded and the next call builds a fresh incarnation from durable storage (a new
-   *  `stream/woken`). The FACT comes first — `context/aborted { reason?, callerPath?, app? }`,
+   *  `itx/woken`). The FACT comes first — `itx/aborted { reason?, callerPath?, app? }`,
    *  attributed like any append (`source.principal`) and durable before anything resets — then the
    *  answer (that event), then the reset, one zero-delay turn after the answer left
    *  (iterate-context-durable-object.ts `#abortAfterTheAnswer`). SURVIVES: the log and everything
@@ -367,7 +367,7 @@ export interface BuiltInScope extends LibraryRoots {
      *  on any facet, a class of this worker or a loaded one, an SDK host or not, and on one that
      *  would never answer a call: its instance goes and every call in flight on it rejects
      *  FACET_ABORTED; its storage stays; a fresh instance is started from its startup memo before
-     *  this answers. This context's incarnation is untouched. The fact is `context/facet-aborted {
+     *  this answers. This context's incarnation is untouched. The fact is `itx/facet-aborted {
      *  name, reason?, callerPath?, app? }`. NO_FACET for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
   };
@@ -976,7 +976,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return { fetchRouteName };
         // Read-your-writes by construction: the core reduce folds the fact in the commit that
         // appends it, so the next `match` (the very next request) sees this route.
-        await append({ type: "events.iterate.com/fetch-route/configured", payload });
+        await append({ type: "events.iterate.com/itx/fetch-route-configured", payload });
         return { fetchRouteName };
       },
       list: async () => {
@@ -1041,7 +1041,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts), then durable, then
       // the answer; the reset is the DO's, after it.
       const [aborted] = await append({
-        type: "events.iterate.com/context/aborted",
+        type: "events.iterate.com/itx/aborted",
         payload: { reason, callerPath, app },
       });
       // The runtime logs this message as an error line (uncatchable); the prd fault alarm
@@ -1056,7 +1056,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       get: (key) => deps.schedules.get(ScheduleKey.parse(key)),
       set: async (input, options) => {
         const [definition] = await append({
-          type: "events.iterate.com/stream/append-scheduled",
+          type: "events.iterate.com/itx/schedule-set",
           payload: input,
           idempotencyKey: options?.idempotencyKey,
         });
@@ -1068,7 +1068,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       cancel: (schedule) => {
         const receipt = ScheduleReceipt.safeParse(schedule);
         return append({
-          type: "events.iterate.com/stream/append-schedule-cancelled",
+          type: "events.iterate.com/itx/schedule-cancelled",
           payload: receipt.success
             ? { key: receipt.data.key, ifScheduledAtOffset: receipt.data.scheduledAtOffset }
             : { key: ScheduleKey.parse(schedule) },
@@ -1133,7 +1133,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
         await deps.facets.abort(name, reason);
         const [aborted] = await append({
-          type: "events.iterate.com/context/facet-aborted",
+          type: "events.iterate.com/itx/facet-aborted",
           payload: { name, reason, callerPath, app },
         });
         return aborted;
@@ -1176,7 +1176,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         )
           return { name };
         await append({
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: {
             name,
             target: [
@@ -1193,7 +1193,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
       disable: async (name) => {
         await append({
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: { name, target: null },
         });
       },

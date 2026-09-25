@@ -1,7 +1,7 @@
 // live-state-chains-client-side.e2e.test.ts — LIVE STATE, client-chained: each change event says
 // "I am the diff relative to rev X"; the stream keeps NO per-key state — a delta is an ordinary
 // ephemeral event like any other. Live state is not a subscription MODE: a client subscribes to the
-// one event type (`consumes: ["events.iterate.com/live-state/changed"]`), receives every key's deltas
+// one event type (`consumes: ["events.iterate.com/itx/live-state-changed"]`), receives every key's deltas
 // in ordinary event batches, and keeps its key. The client is THE SHIPPED ONE (src/client:
 // `connectLiveState` over `createLiveStateStore`): subscribe → read the producer's seed {rev, state}
 // → apply payloads whose `from` matches the held rev, re-read the seed on any mismatch. Proves: the
@@ -146,7 +146,7 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   expect(store.get()).toEqual({ ticks: 2, lastPokeMs: pokedAt });
 });
 
-test("a payload-less live-state/changed event never rejects an append that already committed", async () => {
+test("a payload-less itx/live-state-changed event never rejects an append that already committed", async () => {
   // A commit-then-reject would be a lie in the ONE place clients decide between "safe to retry" and
   // "already happened". The DO never reads `payload.key` — the tab receives every key's deltas as
   // EVENTS and filters `payload.key` itself, so a bare event is the SUBSCRIBER's to skip.
@@ -154,7 +154,7 @@ test("a payload-less live-state/changed event never rejects an append that alrea
   const seen: unknown[] = [];
   await itx.subscribe({
     name: "watch",
-    consumes: ["events.iterate.com/live-state/changed"],
+    consumes: ["events.iterate.com/itx/live-state-changed"],
     target: (events: { payload?: { key?: string } }[]) => {
       for (const e of events)
         if (e.payload?.key === "avatar") seen.push(JSON.parse(JSON.stringify(e.payload)));
@@ -162,14 +162,14 @@ test("a payload-less live-state/changed event never rejects an append that alrea
   });
   // Delivery itself works: a WELL-FORMED change payload for the watched key is delivered.
   await itx.append({
-    type: "events.iterate.com/live-state/changed",
+    type: "events.iterate.com/itx/live-state-changed",
     ephemeral: true,
     payload: { key: "avatar", from: 0, to: 1, patch: [] },
   });
   await until("well-formed change delivered", () => seen.length >= 1);
   // A BARE change event (no payload) still commits-and-resolves.
   const [bare] = await itx.append({
-    type: "events.iterate.com/live-state/changed",
+    type: "events.iterate.com/itx/live-state-changed",
     ephemeral: true,
   });
   expect(bare.offset).toBeGreaterThan(0);

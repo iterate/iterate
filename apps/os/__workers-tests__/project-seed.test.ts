@@ -119,7 +119,7 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
       payload: { hostname },
     });
     await project.waitForEvent({
-      type: "events.iterate.com/project/hostname-add-answered",
+      type: "events.iterate.com/project/hostname-add-settled",
       afterOffset: asked.offset,
       timeoutMs: 10_000,
     });
@@ -173,7 +173,7 @@ test("apply never takes a hostname another project holds: the restore fails nami
     payload: { hostname: "www.held.test" },
   });
   await holder.waitForEvent({
-    type: "events.iterate.com/project/hostname-add-answered",
+    type: "events.iterate.com/project/hostname-add-settled",
     afterOffset: asked.offset,
     timeoutMs: 10_000,
   });

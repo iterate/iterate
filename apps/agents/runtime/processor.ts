@@ -123,7 +123,7 @@ function fileHintLine(file: FileAttachment): string {
   return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
 }
 
-/** The chunk-coalescing window: how much streamed output rides one `llm-response-chunks`
+/** The chunk-coalescing window: how much streamed output rides one `llm-response-frame`
  *  append — ~7 repaints a second, and one commit per window instead of per token. */
 const CHUNK_WINDOW_MS = 150;
 /** A window that grew past this lands early rather than as one oversized append. */
@@ -590,7 +590,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { activity: outcome.status },
           });
         consequences.push({
-          type: "events.iterate.com/context/run-requested",
+          type: "events.iterate.com/itx/run-requested",
           idempotencyKey: this.idempotencyKey("run-requested", event),
           payload: { code: outcome.code },
         });
@@ -609,7 +609,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
     // THE CONTEXT ran the script (whoever asked — this loop, or anything else on this context);
     // its settlement is the model's next input.
-    if (event?.type === "events.iterate.com/context/run-settled") {
+    if (event?.type === "events.iterate.com/itx/run-settled") {
       const rendered = renderScriptSettlement(event.payload.settlement);
       if (rendered)
         blockProcessorWhile(() =>
@@ -787,7 +787,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   }
 
   /** The model over the conversation up to the request, STREAMED: each coalescing window of provider
-   *  events is one ephemeral `llm-response-chunks` (a feed renders the answer as it is written); ONE
+   *  events is one ephemeral `llm-response-frame` (a feed renders the answer as it is written); ONE
    *  batch then settles the request, lands the assistant's words and reports the cost, so an eviction
    *  between them is impossible. An interruption settles the request itself (processEvent) — an
    *  aborted stream ends here silently, and a success that raced it loses on the settle key. */
@@ -858,7 +858,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         windows = windows
           .then(() =>
             append({
-              type: "events.iterate.com/agent/llm-response-chunks",
+              type: "events.iterate.com/agent/llm-response-frame",
               ephemeral: true,
               payload,
             }),

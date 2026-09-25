@@ -20,7 +20,7 @@ test("a userspace facet schedules a durable timeout batch, then consumes it with
   expect(
     (await readAll(itx)).find((event) => event.offset === definition.scheduledAtOffset),
   ).toMatchObject({
-    type: "events.iterate.com/stream/append-scheduled",
+    type: "events.iterate.com/itx/schedule-set",
     payload: { key: JSON.stringify(["deadlines", "invoice"]), when: { at } },
   });
   const due = await itx.waitForEvent({
@@ -45,7 +45,7 @@ test("a userspace facet schedules a durable timeout batch, then consumes it with
     },
   });
   expect(
-    events.filter((event) => event.type === "events.iterate.com/stream/append-schedule-completed"),
+    events.filter((event) => event.type === "events.iterate.com/itx/schedule-fired"),
   ).toHaveLength(1);
 });
 
@@ -125,9 +125,7 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
     state: { reminded: ["123"] },
   });
   const events = await readAll(itx);
-  const definition = events.find(
-    (event) => event.type === "events.iterate.com/stream/append-scheduled",
-  )!;
+  const definition = events.find((event) => event.type === "events.iterate.com/itx/schedule-set")!;
   expect(definition.source.processor.whileProcessing).toMatchObject({ offset: opened.offset });
   expect(due.source.schedule).toMatchObject({ scheduledAtOffset: definition.offset });
   expect(due.source.schedule.definedBy.processor).toMatchObject({ slug: "reminders" });
@@ -158,7 +156,7 @@ test("pause holds a deadline until resume; session attribution names the definit
   const held = await itx.schedules.get("held");
   expect(held).toMatchObject({ source: { principal: { actor: "admin" } } });
   const [paused] = await itx.append({
-    type: "events.iterate.com/stream/paused",
+    type: "events.iterate.com/itx/paused",
     payload: { reason: "maintenance" },
   });
   expect(Date.parse(paused.createdAt), "the pause must land before the deadline").toBeLessThan(
@@ -174,7 +172,7 @@ test("pause holds a deadline until resume; session attribution names the definit
       events: [{ type: "new/due" }],
     }),
   ).rejects.toMatchObject({ code: "STREAM_PAUSED" });
-  await itx.append({ type: "events.iterate.com/stream/resumed" });
+  await itx.append({ type: "events.iterate.com/itx/resumed" });
   const due = await itx.waitForEvent({
     type: "held/due",
     afterOffset: definition.scheduledAtOffset,
@@ -236,13 +234,13 @@ test("client-visible validation and capacity refusals commit nothing; a past dea
     itx.schedules.set({
       key: "resume",
       when: { at: "2035-01-01T00:00:00Z" },
-      events: [{ type: "events.iterate.com/stream/resumed" }],
+      events: [{ type: "events.iterate.com/itx/resumed" }],
     }),
   ).rejects.toThrow();
   await expect(
     itx.append(
       ...Array.from({ length: 101 }, (_, i) => ({
-        type: "events.iterate.com/stream/append-scheduled",
+        type: "events.iterate.com/itx/schedule-set",
         payload: {
           key: `s${i}`,
           when: { at: "2035-01-01T00:00:00Z" },

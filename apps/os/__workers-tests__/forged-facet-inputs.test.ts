@@ -127,7 +127,7 @@ const contract = defineProcessorContract({
 class TallyProcessor extends StreamProcessor {
   contract = contract;
   reduce({ state, event }) {
-    return event.type === "events.iterate.com/test/tick" ? { ticks: state.ticks + 1 } : state;
+    return event.type === "events.iterate.com/test/ticked" ? { ticks: state.ticks + 1 } : state;
   }
 }
 export class TallyDurableObject extends StreamProcessorDurableObject {
@@ -145,7 +145,7 @@ test("a project member pushes forged ticks into their own loaded processor's fac
   expect(before).toMatchObject({ state: { ticks: 1 } });
   const forgedThrough = before.offset + FORGED_RANGE_LENGTH;
   const forgedTicks = [1, 2, 3, 4, 5].map((n) =>
-    forgedEvent(before.offset + n, "events.iterate.com/test/tick", {}),
+    forgedEvent(before.offset + n, "events.iterate.com/test/ticked", {}),
   );
 
   await attempted(() =>
@@ -323,7 +323,7 @@ async function projectWithTally(email: string, slug: string) {
   const tick = async () => {
     const [appended] = (await tally.invoke([
       "itx",
-      ["append", { type: "events.iterate.com/test/tick" }],
+      ["append", { type: "events.iterate.com/test/ticked" }],
     ])) as { offset: number }[];
     await facet(["waitUntilProcessed", { offset: appended!.offset }]);
   };

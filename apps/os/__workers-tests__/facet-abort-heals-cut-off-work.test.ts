@@ -106,12 +106,12 @@ test("a push hung on a facet that itx.facets.abort resets is caught up by the fr
   const { probe, read } = await hostedOn(ctx);
   const [owed] = (await stub(ctx).append({ type: "pin/hang" })) as { offset: number }[];
   await until("the hanging push is on the facet", async () => (await probe()).seen.length === 2);
-  const wakesBefore = (await read()).filter((e) => e.type === "events.iterate.com/stream/woken");
+  const wakesBefore = (await read()).filter((e) => e.type === "events.iterate.com/itx/woken");
 
   const errors = consoleErrors();
   const aborted = await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick"]]);
   expect(aborted).toMatchObject({
-    type: "events.iterate.com/context/facet-aborted",
+    type: "events.iterate.com/itx/facet-aborted",
     payload: { name, reason: "unstick" },
   });
   // Seconds, not the 60 s watchdog: the fresh instance reads the owed span from the log.
@@ -126,7 +126,7 @@ test("a push hung on a facet that itx.facets.abort resets is caught up by the fr
     ((await stub(ctx).invoke(["itx", "subscriptions", ["get", name]])) as { halted?: unknown })
       .halted,
   ).toBeUndefined();
-  expect(events.filter((e) => e.type === "events.iterate.com/stream/woken")).toEqual(wakesBefore);
+  expect(events.filter((e) => e.type === "events.iterate.com/itx/woken")).toEqual(wakesBefore);
   expect(issueLines(errors)).toEqual([]);
 });
 
@@ -164,7 +164,7 @@ test("a catch-up hung on a facet that itx.facets.abort resets runs again on the 
   const errors = consoleErrors();
   // An operator's resume: a facet row resumes by catching up from the log (subscription-delivery.ts).
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-delivery-resumed",
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
     payload: { name },
   });
   await until("the catch-up hangs", async () => (await probe()).catchups.length === before + 1);
@@ -191,7 +191,7 @@ test("a push hung on a facet whose row is removed is that removal — logged, ne
     logs.mockRestore();
   });
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name, target: null },
   });
   const removal = await until("the cut-off push is logged as the removal", async () =>
@@ -212,7 +212,7 @@ test("a claim released after its facet was deleted leaves no facet-ran row for a
   const { probe } = await hostedOn(ctx);
   await probe();
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name, target: null },
   });
   expect(await ranRow(ctx)).toBeUndefined(); // the deletion took it
@@ -229,7 +229,7 @@ const ranRow = (ctx: string) =>
 
 async function hostedOn(ctx: string) {
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name,
       target: [

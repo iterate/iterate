@@ -2,9 +2,9 @@ import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-
 import { z } from "zod";
 
 export const flakeEventTypes = {
-  created: "events.iterate.com/flakes/created",
-  runRecorded: "events.iterate.com/flakes/run-recorded",
-  transitionProposed: "events.iterate.com/flakes/transition-proposed",
+  created: "events.iterate.com/flake-dashboard/created",
+  runRecorded: "events.iterate.com/flake-dashboard/run-recorded",
+  transitionProposed: "events.iterate.com/flake-dashboard/transition-proposed",
 } as const;
 
 const StreamOffset = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);

@@ -135,7 +135,7 @@ const reduceRows: {
   },
   {
     name: "a hostname's add is owed at its offset; the answer settles it; a re-add (the re-check) is owed again and keeps what Cloudflare said",
-    events: [hostname("add-requested"), answered(1, "pending"), hostname("add-requested")],
+    events: [hostname("add-requested"), addSettled(1, "pending"), hostname("add-requested")],
     state: {
       ...empty,
       hostnames: {
@@ -151,9 +151,9 @@ const reduceRows: {
     name: "a failed add keeps its words; a failed re-check keeps the last observation",
     events: [
       hostname("add-requested"),
-      answered(1, "active"),
+      addSettled(1, "active"),
       hostname("add-requested"),
-      answered(3, null, "boom"),
+      addSettled(3, null, "boom"),
     ],
     state: {
       ...empty,
@@ -167,16 +167,16 @@ const reduceRows: {
     events: [
       hostname("add-requested"),
       hostname("remove-requested"),
-      answered(1, "active"),
+      addSettled(1, "active"),
       removed(2),
-      answered(1, "active"),
+      addSettled(1, "active"),
       hostname("remove-requested"),
     ],
     state: empty,
   },
   {
     name: "an answer settles only its own request: an add asked while another ran stays owed, with the older answer's observation",
-    events: [hostname("add-requested"), hostname("add-requested"), answered(1, "pending")],
+    events: [hostname("add-requested"), hostname("add-requested"), addSettled(1, "pending")],
     state: {
       ...empty,
       hostnames: {
@@ -192,7 +192,7 @@ const reduceRows: {
     name: "an add asked while a remove ran survives the removal, owed from nothing",
     events: [
       hostname("add-requested"),
-      answered(1, "active"),
+      addSettled(1, "active"),
       hostname("remove-requested"),
       hostname("add-requested"),
       removed(3),
@@ -245,8 +245,8 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "project/ingress-configured:aaa",
-    "project/ingress-configured:bbb",
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:bbb",
   ]);
   // The target names the commit twice: the source read at it, the cache keyed by it.
   expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"commitOid":"bbb"');
@@ -279,7 +279,7 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     runInBackground,
   );
   await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual(["project/ingress-configured:aaa"]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa"]);
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),
@@ -498,7 +498,7 @@ function configRepoTarget(commitOid: string) {
 }
 
 function ingressAt(target: unknown[] | null) {
-  return { type: "events.iterate.com/project/ingress-configured", payload: { target } };
+  return { type: "events.iterate.com/itx/ingress-configured", payload: { target } };
 }
 
 function hostname(verb: "add-requested" | "remove-requested") {
@@ -508,9 +508,9 @@ function hostname(verb: "add-requested" | "remove-requested") {
   };
 }
 
-function answered(requestOffset: number, status: string | null, error: string | null = null) {
+function addSettled(requestOffset: number, status: string | null, error: string | null = null) {
   return {
-    type: "events.iterate.com/project/hostname-add-answered",
+    type: "events.iterate.com/project/hostname-add-settled",
     payload: {
       hostname: "www.acme.test",
       requestOffset,

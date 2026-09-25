@@ -118,11 +118,11 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   expect(
     events.find(
       (e) =>
-        e.type === "events.iterate.com/project/ingress-configured" &&
+        e.type === "events.iterate.com/itx/ingress-configured" &&
         e.payload.target[2][1].cacheKey === commit.commitOid,
     ),
   ).toBeDefined();
-  const requested = events.filter((e) => e.type === "events.iterate.com/context/run-requested");
+  const requested = events.filter((e) => e.type === "events.iterate.com/itx/run-requested");
   expect(requested.length).toBe(8);
   expect(
     requested.every(
@@ -131,7 +131,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   ).toBe(true);
   expect(
     events
-      .filter((e) => e.type === "events.iterate.com/context/run-settled")
+      .filter((e) => e.type === "events.iterate.com/itx/run-settled")
       .every((e) => e.payload.settlement.status === "succeeded"),
   ).toBe(true);
 
@@ -155,7 +155,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   const afterSecond = await readAll(root);
   const secondGrantId = second.id;
   expect(
-    afterSecond.filter((e) => e.type === "events.iterate.com/context/run-requested").at(-1)?.source,
+    afterSecond.filter((e) => e.type === "events.iterate.com/itx/run-requested").at(-1)?.source,
   ).toEqual({ principal, grant: secondGrantId });
 
   const otherEvents = await readAll(openItx(other));

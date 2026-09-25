@@ -44,7 +44,7 @@ export type LibraryItx = Pick<BuiltInScope, "fetch" | "r2" | "builtins">;
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
 export interface LibraryRoots {
   /** A script — the text of `async (itx) => { … }` — run ONCE against this context, ON THE LOG:
-   *  `run` appends `context/run-requested { code }` (attributed to the caller), the context's
+   *  `run` appends `itx/run-requested { code }` (attributed to the caller), the context's
    *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
    *  whose `run` hands the script the scope of one `withItx` round trip), and `run` resolves with
    *  the `run-settled` event's result — or rejects with its error. So every script that ever ran is
@@ -219,7 +219,7 @@ export function buildLibrary(
 }
 
 // ── run ── `itx.run(script)`: a request on the log, its settlement awaited. `runScript` appends
-// `context/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
+// `itx/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
 // context DO's runner (iterate-context-durable-object.ts `#executeRun`), which calls `executeScript`
 // below at the request's commit — so a literal `run-requested` appended by anyone (a client over
 // /api, the agent's loop, a schedule) runs exactly as `itx.run` does, and both leave the same pair
@@ -348,7 +348,7 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
   // rows say what its code may spell, never whether the runner may write its request (a jail's bare
   // null must not wall the platform's own plumbing).
   const [requested] = await itx.builtins.append({
-    type: "events.iterate.com/context/run-requested",
+    type: "events.iterate.com/itx/run-requested",
     payload: { code: script },
   });
   const requestOffset = requested!.offset; // the run's identity: its settlement names it
@@ -363,7 +363,7 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
     let settled;
     try {
       settled = await itx.builtins.waitForEvent({
-        type: "events.iterate.com/context/run-settled",
+        type: "events.iterate.com/itx/run-settled",
         afterOffset,
         timeoutMs: Math.min(120_000, Math.max(0, waitUntil - Date.now())),
       });

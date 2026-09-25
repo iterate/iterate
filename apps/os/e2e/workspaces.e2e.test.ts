@@ -2,7 +2,7 @@
 // (src/workspace/durable-object.ts) on `itx.cd(path)`, addressed as `itx.workspaces.get(path)`
 // (src/library.ts, nothing appended to get it) and born through the collection,
 // `itx.workspaces.create(path)` (src/project/collection.ts): it enables the `workspace` processor
-// row on that path (a `stream/subscription-configured` fact), lands `workspace/create-requested` there
+// row on that path (an `itx/subscription-configured` fact), lands `workspace/create-requested` there
 // and waits for the terminal fact. The processor (src/project/entity-lifecycle.ts) runs the saga from state
 // at head — nothing to provision, so it lands `workspace/created`, the birth certificate, on `/` (the
 // catalog `itx.workspaces.list()` reads) and on the path; a create on a created workspace answers at
@@ -134,7 +134,7 @@ test("itx.workspaces.create(path) lands the request and ONE certificate on its p
   // The processor row `create` enabled, on the path, named after the facet.
   expect(
     events
-      .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
+      .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload?.name),
   ).toEqual(["workspace"]);
   // The state references the certificate by OFFSET, never by copied payload.
@@ -407,7 +407,7 @@ test("the project facet's collection refuses a creation whose creator is not an 
     ).toMatchObject({ code: "INVALID_INPUT" });
   const written = (await readAll(itx.cd("/w"))).map((e) => e.type);
   for (const type of [
-    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/itx/subscription-configured",
     "events.iterate.com/itx/rewrite-rule-configured",
     "events.iterate.com/workspace/create-requested",
   ])
@@ -417,7 +417,7 @@ test("the project facet's collection refuses a creation whose creator is not an 
 /** The same for the workspace's own facts. */
 const workspaceTypes = (log: { type: string }[]) =>
   log
-    .filter((e) => e.type.startsWith("events.iterate.com/workspace"))
+    .filter((e) => e.type.startsWith("events.iterate.com/workspace/"))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 
 /** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.cfArtifacts` lent to

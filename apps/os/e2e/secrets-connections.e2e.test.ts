@@ -319,11 +319,11 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
     headers: { authorization: `Bearer ${(await oauthSession(projectId, projectMember)).token}` },
   };
   const secret = itx.cd("/secrets/petshop");
-  await secret.append({ type: "events.iterate.com/stream/paused" });
+  await secret.append({ type: "events.iterate.com/itx/paused" });
   const refused = await fetch(back, member);
   expect(refused, await refused.text()).toMatchObject({ status: 400 });
   expect(await itx.secrets.list()).toEqual([]); // no fact yet — the tokens are in the facet
-  await secret.append({ type: "events.iterate.com/stream/resumed" });
+  await secret.append({ type: "events.iterate.com/itx/resumed" });
   const done = await fetch(back, member);
   const said = await done.text();
   expect(done, said).toMatchObject({ status: 200 });

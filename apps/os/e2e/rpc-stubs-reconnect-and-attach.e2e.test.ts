@@ -16,7 +16,7 @@
 //   • RED (`createFailing`): two sessions providing the IDENTICAL rule share one identity — disposing the
 //     first removes the second's row
 //   • the rule / the row is appended INSIDE the pager attach: its offset is BELOW the key's ephemeral
-//     `rpc-stub/attached` (the presence fact)
+//     `itx/rpc-stub-attached` (the presence fact)
 //   • a paused stream's refusal of a provide or a subscribe crosses /api CODED (STREAM_PAUSED); after
 //     resume the same calls land (the attach's atomicity at the DO — 409 + code, no socket, no
 //     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
@@ -182,12 +182,12 @@ createFailing(
 );
 
 // ── the attach carries the rule: the ORDER of two events on the shared offset sequence.
-// `rpc-stub/attached` (the ephemeral presence fact) is appended AFTER the events the attach carried,
+// `itx/rpc-stub-attached` (the ephemeral presence fact) is appended AFTER the events the attach carried,
 // so the rule / the row has a LOWER offset than the key's `attached` ──
 
-const ATTACHED = "events.iterate.com/rpc-stub/attached";
+const ATTACHED = "events.iterate.com/itx/rpc-stub-attached";
 
-test("provide(match, stub): the rule is appended INSIDE the pager attach — its offset is below the key's rpc-stub/attached", async () => {
+test("provide(match, stub): the rule is appended INSIDE the pager attach — its offset is below the key's itx/rpc-stub-attached", async () => {
   const ctx = freshCtx("attach-rule");
   const { observer, attachedOffsetOf } = await watchAttached(ctx);
 
@@ -209,7 +209,7 @@ test("provide(match, stub): the rule is appended INSIDE the pager attach — its
   expect(await observer.invoke("itx.pinned.hello()")).toBe("hello-from-pinned");
 });
 
-test("subscribe({ target: fn }): the row is appended INSIDE the pager attach — its offset is below the key's rpc-stub/attached", async () => {
+test("subscribe({ target: fn }): the row is appended INSIDE the pager attach — its offset is below the key's itx/rpc-stub-attached", async () => {
   const ctx = freshCtx("attach-row");
   const { observer, attachedOffsetOf } = await watchAttached(ctx);
 
@@ -220,7 +220,7 @@ test("subscribe({ target: fn }): the row is appended INSIDE the pager attach —
   );
   const rowEvent = (await readAll(observer)).find(
     (e) =>
-      e.type === "events.iterate.com/stream/subscription-configured" && e.payload?.name === "live",
+      e.type === "events.iterate.com/itx/subscription-configured" && e.payload?.name === "live",
   );
   expect(rowEvent?.payload.target).toEqual([
     "itx",
@@ -239,7 +239,7 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED �
   // the coded capnweb error a client classifies by; the attach itself is pinned at the DO.
   const ctx = freshCtx("attach-refused");
   const itx = openItx(ctx);
-  await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
+  await itx.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
 
   const provideError = await rejection(
     itx.provide("itx.refused", new Tools("refused")),
@@ -252,7 +252,7 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED �
   );
   expect(errorCode(subscribeError)).toBe("STREAM_PAUSED");
 
-  await itx.append({ type: "events.iterate.com/stream/resumed" });
+  await itx.append({ type: "events.iterate.com/itx/resumed" });
   await itx.provide("itx.refused", new Tools("resumed"));
   const marks = collector();
   await itx.subscribe({ name: "refused", target: marks.fn, consumes: ["mark"] });
@@ -261,7 +261,7 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED �
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
 });
 
-/** A live watcher of presence: the ephemeral `rpc-stub/attached` events, WITH their offsets. */
+/** A live watcher of presence: the ephemeral `itx/rpc-stub-attached` events, WITH their offsets. */
 async function watchAttached(ctx: string) {
   const observer = openItx(ctx);
   const seen = collector();

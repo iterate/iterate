@@ -45,7 +45,7 @@ test("copies the pinned subdirectory into a fresh root commit and subscribes bef
   expect(fixture).toMatchObject({
     order: [
       "subscription",
-      "events.iterate.com/project/ingress-configured",
+      "events.iterate.com/itx/ingress-configured",
       "events.iterate.com/project/created",
     ],
   });
@@ -138,7 +138,7 @@ test("a commit that lands before the seed is the project's config: the seed is r
   );
   expect(fixture.files()).toEqual({ "worker.ts": "the agent's edit" });
   expect(fixture).toMatchObject({
-    order: ["events.iterate.com/project/ingress-configured", "events.iterate.com/project/created"],
+    order: ["events.iterate.com/itx/ingress-configured", "events.iterate.com/project/created"],
   });
   expect(fixture.append).toHaveBeenCalledWith(
     expect.objectContaining({

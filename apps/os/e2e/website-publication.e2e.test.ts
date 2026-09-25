@@ -62,7 +62,7 @@ localOnly(
       // The processor's ingress facts are keyed by the commit: exactly one per commit on `/`, each
       // loading the repo's modules at that commit.
       const published = (await readAll(root)).filter(
-        (e) => e.type === "events.iterate.com/project/ingress-configured",
+        (e) => e.type === "events.iterate.com/itx/ingress-configured",
       );
       expect(published.map((e) => e.payload.target[2][1].cacheKey)).toEqual([
         expect.any(String), // the seed's
@@ -85,7 +85,7 @@ localOnly(
       // An explicit publication from the root still works — the apex goes where it is pointed, until
       // the next commit moves it again.
       await root.append({
-        type: "events.iterate.com/project/ingress-configured",
+        type: "events.iterate.com/itx/ingress-configured",
         payload: {
           target: [
             "itx",

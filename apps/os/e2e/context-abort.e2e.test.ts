@@ -1,11 +1,11 @@
 // e2e/context-abort.e2e.test.ts — A RESET ON REQUEST: `itx.abort(reason?)` resets the context it is
 // spelled at (Cloudflare's `ctx.abort`: its in-memory state is discarded and the next call builds a
 // fresh incarnation from durable storage); `itx.facets.abort(name, reason?)` resets one facet from
-// the host and leaves the context alone. Each records its fact first — `context/aborted`,
-// `context/facet-aborted` — and the caller's own call RESOLVES with it: the reset is what it asked
+// the host and leaves the context alone. Each records its fact first — `itx/aborted`,
+// `itx/facet-aborted` — and the caller's own call RESOLVES with it: the reset is what it asked
 // for (iterate-context-durable-object.ts `#abortAfterTheAnswer`). The rows:
 //   • the caller's call resolves, the fact is durable, the next call wakes a fresh incarnation
-//     (one more `stream/woken`) over the same log, tables and kv
+//     (one more `itx/woken`) over the same log, tables and kv
 //   • `cd(path).abort()` resets that context and not the one the call came through
 //   • a `waitForEvent` pending on the reset context rejects for its waiter
 //   • SCOPE: a session aborts only the projects it reaches (another project's id is FORBIDDEN, and a
@@ -20,7 +20,7 @@ import { freshCtx, openItx, readAll, rejection, sleep, until } from "./support/c
 import { oauthSession } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
-const ABORTED = "events.iterate.com/context/aborted";
+const ABORTED = "events.iterate.com/itx/aborted";
 /** A loaded worker that says whatever the test hands it through its own `env.ITX` — loaded code. */
 const SAY = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -183,7 +183,7 @@ test("itx.facets.abort(name) resets that facet from the host: a call hung on it 
   const wakesBefore = wakes(await readAll(itx));
 
   expect(await itx.facets.abort("counter", "stuck")).toMatchObject({
-    type: "events.iterate.com/context/facet-aborted",
+    type: "events.iterate.com/itx/facet-aborted",
     path: "/",
     payload: { name: "counter", reason: "stuck" },
     source: { principal: { actor: "admin" } },
@@ -223,6 +223,6 @@ test("a rewrite rule masks abort like any name, a jail's bare null takes both ve
   });
 });
 
-/** One `stream/woken` per incarnation: the count is how many times the context started. */
+/** One `itx/woken` per incarnation: the count is how many times the context started. */
 const wakes = (events: { type: string }[]) =>
-  events.filter((event) => event.type === "events.iterate.com/stream/woken").length;
+  events.filter((event) => event.type === "events.iterate.com/itx/woken").length;

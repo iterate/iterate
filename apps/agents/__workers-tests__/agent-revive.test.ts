@@ -86,7 +86,7 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   expect(short(log).filter((t) => t === "agent/llm-request-requested")).toHaveLength(1);
   const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested")!;
   const between = log.filter((e) => e.offset > requested.offset && e.offset < settled.offset);
-  expect(between.map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
+  expect(between.map((e) => e.type)).toEqual(["events.iterate.com/itx/woken"]);
   expect(between[0]!.payload).toMatchObject({ reason: "alarm" });
   // Settled, nothing in flight: the claim is released and the context owes no alarm.
   await until(

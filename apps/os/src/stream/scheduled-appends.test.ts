@@ -9,7 +9,7 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
   const [first] = stream.append(scheduled());
   const [second] = stream.append(scheduled("reminder", "2031-01-01T00:00:00Z"));
   stream.append({
-    type: "events.iterate.com/stream/append-schedule-cancelled",
+    type: "events.iterate.com/itx/schedule-cancelled",
     payload: { key: "reminder", ifScheduledAtOffset: first.offset },
   });
   expect(create().stream.coreReducedState.schedules).toMatchObject({
@@ -19,7 +19,7 @@ test("a schedule, replacement, stale cancellation and atomic completion reconstr
     { type: "reminder", payload: { n: 1 } },
     { type: "audit" },
     {
-      type: "events.iterate.com/stream/append-schedule-completed",
+      type: "events.iterate.com/itx/schedule-fired",
       payload: { key: "reminder", scheduledAtOffset: second.offset },
     },
   );
@@ -51,14 +51,14 @@ test("scheduled work survives an alarm pass; pause holds it and resume rearms", 
   expect(alarms).toHaveLength(1);
   await coordinator.pass(async () => {
     stream.append({
-      type: "events.iterate.com/stream/paused",
+      type: "events.iterate.com/itx/paused",
       payload: { reason: "maintenance" },
     });
   });
   expect(stream.nextScheduledAppendAt()).toBeNull();
   expect(alarms).toHaveLength(1); // the pass spent its alarm; a paused schedule wants none
   expect(deletes).toEqual([]);
-  stream.append({ type: "events.iterate.com/stream/resumed" });
+  stream.append({ type: "events.iterate.com/itx/resumed" });
   expect(alarms).toHaveLength(2);
 });
 
@@ -66,9 +66,9 @@ test("cancellation works while paused; idempotent retries do not resurrect a com
   const { stream } = setup();
   const input = { ...scheduled(), idempotencyKey: "request-1" };
   stream.append(input);
-  stream.append({ type: "events.iterate.com/stream/paused" });
+  stream.append({ type: "events.iterate.com/itx/paused" });
   stream.append({
-    type: "events.iterate.com/stream/append-schedule-cancelled",
+    type: "events.iterate.com/itx/schedule-cancelled",
     payload: { key: "reminder" },
   });
   stream.append(input);
@@ -82,7 +82,7 @@ test.each([
   { events: [{ type: "x", ephemeral: true }] },
   { events: [{ type: "x", offset: 4 }] },
   { events: [{ type: "x", source: { principal: { actor: "admin" } } }] },
-  { events: [{ type: "events.iterate.com/stream/append-scheduled" }] },
+  { events: [{ type: "events.iterate.com/itx/schedule-set" }] },
   { events: [{ type: "x", payload: { blob: "x".repeat(65_536) } }] },
 ])("invalid durable definitions are refused before commit: %j", (override) => {
   const input = scheduled();
@@ -111,7 +111,7 @@ test("a failing SQL write rolls back both occurrence events and completion", () 
       { type: "reminder" },
       { type: "audit" },
       {
-        type: "events.iterate.com/stream/append-schedule-completed",
+        type: "events.iterate.com/itx/schedule-fired",
         payload: { key: "reminder", scheduledAtOffset: definition.offset },
       },
     ),
@@ -136,7 +136,7 @@ test("a due-work pass writes nothing until it completes, then arms once for what
   await coordinator.pass(async () => {
     for (const row of [a, b])
       stream.append({
-        type: "events.iterate.com/stream/append-schedule-completed",
+        type: "events.iterate.com/itx/schedule-fired",
         payload: { key: row.payload!.key, scheduledAtOffset: row.offset },
       });
     otherDeadlines.push(retryAt); // a delivery's retry, reported mid-pass
@@ -159,14 +159,14 @@ test.each([
   "woken",
   "subscription-delivery-halted",
   "subscription-delivery-resumed",
-  "trace/alarm",
+  "alarm-trace",
 ])("runtime control %s cannot be scheduled", (type) => {
   const input = scheduled();
   expect(() =>
     normalizeControlEvent(
       {
         ...input,
-        payload: { ...input.payload, events: [{ type: `events.iterate.com/stream/${type}` }] },
+        payload: { ...input.payload, events: [{ type: `events.iterate.com/itx/${type}` }] },
       },
       "/",
     ),
@@ -178,7 +178,7 @@ test("aggregate definition size is bounded before the batch commits", () => {
   const definitions = Array.from({ length: 17 }, (_, i) =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/stream/append-scheduled",
+        type: "events.iterate.com/itx/schedule-set",
         payload: {
           key: `large${i}`,
           when: { at: "2035-01-01T00:00:00Z" },
@@ -199,7 +199,7 @@ test("a nearly full definition budget still permits bounded terminal failure dia
     ...Array.from({ length: 16 }, (_, i) =>
       normalizeControlEvent(
         {
-          type: "events.iterate.com/stream/append-scheduled",
+          type: "events.iterate.com/itx/schedule-set",
           payload: {
             key: `large${i}`,
             when: { at: "2035-01-01T00:00:00Z" },
@@ -212,7 +212,7 @@ test("a nearly full definition budget still permits bounded terminal failure dia
   );
   stream.append(
     ...definitions.map((definition) => ({
-      type: "events.iterate.com/stream/append-schedule-failed",
+      type: "events.iterate.com/itx/schedule-failed",
       payload: {
         key: definition.payload!.key,
         scheduledAtOffset: definition.offset,
@@ -227,7 +227,7 @@ test("relative deadlines resolve once from the committed definition, including r
   const { stream, create } = setup();
   const input = normalizeControlEvent(
     {
-      type: "events.iterate.com/stream/append-scheduled",
+      type: "events.iterate.com/itx/schedule-set",
       idempotencyKey: "relative-request",
       payload: {
         key: ["facet-a", "deadline"],
@@ -252,7 +252,7 @@ test("relative deadlines resolve once from the committed definition, including r
 
 test("interval completion coalesces missed ticks, retains cadence and ignores duplicate occurrences", () => {
   const input = {
-    type: "events.iterate.com/stream/append-scheduled",
+    type: "events.iterate.com/itx/schedule-set",
     payload: { key: "tick", when: { everyMs: 1000 }, events: [{ type: "tick" }] },
     offset: 1,
     path: "/",
@@ -263,7 +263,7 @@ test("interval completion coalesces missed ticks, retains cadence and ignores du
   });
   expect(state.schedules).toMatchObject({ tick: { nextAt: "2030-01-01T00:00:01.000Z" } });
   const completed = {
-    type: "events.iterate.com/stream/append-schedule-completed",
+    type: "events.iterate.com/itx/schedule-fired",
     payload: { key: "tick", scheduledAtOffset: 1, at: state.schedules.tick.nextAt },
     offset: 3,
     path: "/",
@@ -290,7 +290,7 @@ test.each([
   expect(() =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/stream/append-scheduled",
+        type: "events.iterate.com/itx/schedule-set",
         payload: { key: "invalid", when, events: [{ type: "due" }] },
       },
       "/",
@@ -305,7 +305,7 @@ test("replacing an interval anchors its new cadence and ignores the old completi
     const [old] = stream.append(
       normalizeControlEvent(
         {
-          type: "events.iterate.com/stream/append-scheduled",
+          type: "events.iterate.com/itx/schedule-set",
           payload: { key: "tick", when: { everyMs: 1000 }, events: [{ type: "old/tick" }] },
         },
         "/",
@@ -316,7 +316,7 @@ test("replacing an interval anchors its new cadence and ignores the old completi
     const [replacement] = stream.append(
       normalizeControlEvent(
         {
-          type: "events.iterate.com/stream/append-scheduled",
+          type: "events.iterate.com/itx/schedule-set",
           payload: { key: "tick", when: { everyMs: 5000 }, events: [{ type: "new/tick" }] },
         },
         "/",
@@ -324,11 +324,11 @@ test("replacing an interval anchors its new cadence and ignores the old completi
     );
     stream.append(
       {
-        type: "events.iterate.com/stream/append-schedule-completed",
+        type: "events.iterate.com/itx/schedule-fired",
         payload: { key: "tick", scheduledAtOffset: old.offset, at: oldAt },
       },
       {
-        type: "events.iterate.com/stream/append-schedule-cancelled",
+        type: "events.iterate.com/itx/schedule-cancelled",
         payload: { key: "tick", ifScheduledAtOffset: old.offset },
       },
     );
@@ -353,7 +353,7 @@ test("a batch can replace a full schedule set without transient capacity failure
   const { stream } = setup();
   stream.append(...Array.from({ length: 100 }, (_, i) => scheduled(`old${i}`)));
   stream.append(scheduled("new"), {
-    type: "events.iterate.com/stream/append-schedule-cancelled",
+    type: "events.iterate.com/itx/schedule-cancelled",
     payload: { key: "old0" },
   });
   expect(Object.keys(stream.coreReducedState.schedules)).toHaveLength(100);
@@ -364,7 +364,7 @@ test("a batch can replace a full schedule set without transient capacity failure
 function scheduled(key = "reminder", at = "2030-01-01T00:00:00Z") {
   return normalizeControlEvent(
     {
-      type: "events.iterate.com/stream/append-scheduled",
+      type: "events.iterate.com/itx/schedule-set",
       payload: {
         key,
         when: { at },

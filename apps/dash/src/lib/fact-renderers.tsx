@@ -69,11 +69,11 @@ const platformFactRenderers: EventRenderers = {
       </>
     );
   },
-  "events.iterate.com/organization/project-created": (e) => {
+  "events.iterate.com/organization/project-added": (e) => {
     const p = record(e.payload);
     return (
       <>
-        Created the project <strong>{str(p.slug)}</strong> {mono(str(p.projectId))}
+        Added the project <strong>{str(p.slug)}</strong> {mono(str(p.projectId))}
       </>
     );
   },

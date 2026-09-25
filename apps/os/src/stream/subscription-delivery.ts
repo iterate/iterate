@@ -263,7 +263,7 @@ export class SubscriptionDelivery {
     const durable = freshEvents.some((event) => !event.ephemeral);
     for (const event of freshEvents) {
       switch (event.type) {
-        case "events.iterate.com/stream/subscription-delivery-resumed": {
+        case "events.iterate.com/itx/subscription-delivery-resumed": {
           // An operator's resume is itself the wake: deliver that name NOW, whatever its `consumes`
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
           // retry armed — without this it would wait for the next matching commit).
@@ -281,7 +281,7 @@ export class SubscriptionDelivery {
           );
           break;
         }
-        case "events.iterate.com/stream/subscription-configured": {
+        case "events.iterate.com/itx/subscription-configured": {
           // A configured row REPLACES (a `null` target REMOVES; only the forget runs): everything
           // remembered under this name belonged to the old target. A row that owns its progress is
           // evaluated right away, whatever its `consumes` says — a processor's facet is materialized
@@ -656,7 +656,7 @@ export class SubscriptionDelivery {
     if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
     // A halted row owes nothing; the fact's own commit reconciles the alarm.
     this.#stream.append({
-      type: "events.iterate.com/stream/subscription-delivery-halted",
+      type: "events.iterate.com/itx/subscription-delivery-halted",
       payload: {
         name,
         afterOffset,

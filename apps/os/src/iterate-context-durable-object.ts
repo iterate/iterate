@@ -47,7 +47,7 @@ import {
   type Caller,
 } from "./caller.ts";
 import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
-import { normalizeControlEvent, STREAM_ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
+import { normalizeControlEvent, ALARM_TRACE_EVENT } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   FETCH_UPGRADE_RESUMABLE_HEADER,
@@ -98,7 +98,7 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `stream/trace/alarm` event,
+/** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `itx/alarm-trace` event,
  *  appended as the pass starts (`alarm-fired`, with what was armed and every deadline it found)
  *  and as it ends (`alarm-pass` with what it armed next, or `alarm-abandoned` with what it threw).
  *  Only a pass traces: a reconcile outside one — a commit, a claim, a delivery settling —
@@ -107,7 +107,7 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  `waitForEvent` sees it live, `readEvents(…, { includeEphemeral: true })` reads it back from the
  *  stream's recent-ephemerals ring. NEVER an input: the DO's commit
  *  hook hands no trace to subscription delivery, and appending one moves no clock — either would
- *  trace the tracing. Gone with the incarnation, as every ephemeral is (its `stream/woken` names
+ *  trace the tracing. Gone with the incarnation, as every ephemeral is (its `itx/woken` names
  *  the incarnation). */
 export type AlarmTrace = {
   at: number;
@@ -216,7 +216,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // report: a watcher re-seeds from list().
     onPresence: (kind, rpcStubKey) => {
       void this.append({
-        type: `events.iterate.com/rpc-stub/${kind}`,
+        type: `events.iterate.com/itx/rpc-stub-${kind}`,
         ephemeral: true,
         payload: { rpcStubKey },
       }).catch(() => undefined);
@@ -248,7 +248,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       }).catch(() => undefined);
     for (const name of subscriptionNames)
       void this.append({
-        type: "events.iterate.com/stream/subscription-configured",
+        type: "events.iterate.com/itx/subscription-configured",
         payload: { name, target: null },
       }).catch(() => undefined);
   }
@@ -270,12 +270,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** A stub whose LAST pager closed DURING a pause had its un-set refused — the un-set is an ordinary
-   *  append and `stream/paused` refuses ordinary appends — so on the `resumed` commit every key a row
+   *  append and `itx/paused` refuses ordinary appends — so on the `resumed` commit every key a row
    *  still names that has NO transport right now (neither borrowed nor pager-backed) is un-set then.
    *  Scheduled off the commit's own turn: the un-sets are appends of their own. */
   #unsetWhatNamesDeadRpcStubsOnResume(committedEvents: StreamEvent[]): void {
-    if (!committedEvents.some((event) => event.type === "events.iterate.com/stream/resumed"))
-      return;
+    if (!committedEvents.some((event) => event.type === "events.iterate.com/itx/resumed")) return;
     const present = new Set(this.#rpcStubs.listRpcStubKeys());
     for (const rpcStubKey of rpcStubKeysNamed(this.#rowsForRpcStubCensus()))
       if (!present.has(rpcStubKey)) queueMicrotask(() => this.#unsetWhatNamesRpcStub(rpcStubKey));
@@ -333,13 +332,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
-      const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
+      const events = freshEvents.filter((event) => event.type !== ALARM_TRACE_EVENT);
       if (events.length === 0) return;
       this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
-      if (events.some((event) => event.type === "events.iterate.com/stream/woken"))
+      if (events.some((event) => event.type === "events.iterate.com/itx/woken"))
         this.#announceToAncestors();
       this.#alarmCoordinator.reconcile();
     },
@@ -357,8 +356,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const announced = Promise.all(
       ancestorPaths.map((ancestorPath) =>
         this.#sibling(ancestorPath).append({
-          type: "events.iterate.com/context/child-created",
-          idempotencyKey: `context/child-created:${path}`,
+          type: "events.iterate.com/itx/child-created",
+          idempotencyKey: `itx/child-created:${path}`,
           payload: { childPath: path },
         }),
       ),
@@ -468,7 +467,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
   });
 
-  // ── the runner: `context/run-requested` → the script in a confined isolate → `run-settled` ──
+  // ── the runner: `itx/run-requested` → the script in a confined isolate → `run-settled` ──
 
   /** The script runs THIS incarnation is executing, by the request's offset, so a commit's fan-out
    *  never starts one twice. The durable ground is core state `scriptRuns`; a run a dead
@@ -485,7 +484,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  is still listening. */
   #startRequestedRuns(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
-      if (event.type !== "events.iterate.com/context/run-requested") continue;
+      if (event.type !== "events.iterate.com/itx/run-requested") continue;
       const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
       if (
         this.#scriptRunsInFlight.has(event.offset) ||
@@ -501,8 +500,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const settle = (settlement: RunSettlement) =>
       this.#appendAndRunCommittedEffects([
         {
-          type: "events.iterate.com/context/run-settled",
-          idempotencyKey: `context/run-settled:${requestOffset}`,
+          type: "events.iterate.com/itx/run-settled",
+          idempotencyKey: `itx/run-settled:${requestOffset}`,
           payload: { requestOffset, settlement },
         },
       ]);
@@ -865,7 +864,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // Straight onto the stream, not through `append` (a trace is not activity); a trace
     // must never fail an alarm pass.
     try {
-      this.#stream.append({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
+      this.#stream.append({ type: ALARM_TRACE_EVENT, ephemeral: true, payload: trace });
     } catch (error) {
       reportIssue("iterate-context.alarm-trace", error, { reason });
     }
@@ -983,7 +982,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
                   },
                 },
               })),
-              { type: "events.iterate.com/stream/append-schedule-completed", payload },
+              { type: "events.iterate.com/itx/schedule-fired", payload },
             ]);
             console.log({
               event: "scheduled-append.completed",
@@ -1005,7 +1004,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             }
             this.#appendAndRunCommittedEffects([
               {
-                type: "events.iterate.com/stream/append-schedule-failed",
+                type: "events.iterate.com/itx/schedule-failed",
                 payload: { ...payload, error: String(error).slice(0, 2000) },
               },
             ]);

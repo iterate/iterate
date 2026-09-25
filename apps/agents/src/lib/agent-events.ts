@@ -3,7 +3,7 @@
 // into messages and activities (an LLM step that wrote a script, the code step that ran it, grouped
 // into rounds). Two differences are adapted here: an attachment carries no `url` on apps/os (the
 // page signs one when it renders); and a SCRIPT is the CONTEXT's on apps/os —
-// `context/run-requested` / `context/run-settled`, identified by the request's offset
+// `itx/run-requested` / `itx/run-settled`, identified by the request's offset
 // (apps/os/src/stream/core-processor.ts) — where the shared reducer reads
 // `capability-host/script-run-*` with an `executionId`. `adaptContextRuns` renames the one into the
 // other and fills in the fields a failed settlement lacks under the shared reducer's strict schema.
@@ -43,11 +43,11 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
   return { ...event, payload, streamPath };
 }
 
-/** apps/os's script events as the shared reducer reads them. A `context/run-requested` the agent
+/** apps/os's script events as the shared reducer reads them. An `itx/run-requested` the agent
  *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
  *  stamp) is the shared reducer's `script-run-requested` with the id it keys on,
  *  `agent-output:<that offset>`, and one any other caller asked for (`itx.run` on the agent's path)
- *  is `run:<its offset>`; its `context/run-settled` names the request by offset, so the settlement
+ *  is `run:<its offset>`; its `itx/run-settled` names the request by offset, so the settlement
  *  takes the same id. `expiresAt` is the run's deadline — apps/os's runner settles a script
  *  still running ten minutes after it started as failed (`deadline`, apps/os/src/library.ts
  *  RUN_DEADLINE_MS) — which the reducer's inferred close needs; the request's offset rides along as
@@ -55,7 +55,7 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
 export function adaptContextRuns(events: readonly Event[]): Event[] {
   const executionIdByRequestOffset = new Map<number, string>();
   return events.map((event) => {
-    if (event.type === "events.iterate.com/context/run-requested") {
+    if (event.type === "events.iterate.com/itx/run-requested") {
       const payload = isRecord(event.payload) ? event.payload : {};
       const askedWhile = event.source?.processor?.whileProcessing?.offset;
       const executionId =
@@ -74,7 +74,7 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
         },
       };
     }
-    if (event.type === "events.iterate.com/context/run-settled") {
+    if (event.type === "events.iterate.com/itx/run-settled") {
       const payload = isRecord(event.payload) ? event.payload : {};
       const requestOffset = typeof payload.requestOffset === "number" ? payload.requestOffset : NaN;
       return {

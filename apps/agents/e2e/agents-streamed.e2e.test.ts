@@ -13,7 +13,7 @@ test("streamed: the answer reaches a live subscriber as ephemeral chunk windows 
   const windows = collector();
   await support.subscribe({
     name: "chunks",
-    consumes: ["events.iterate.com/agent/llm-response-chunks"],
+    consumes: ["events.iterate.com/agent/llm-response-frame"],
     target: windows.fn,
   });
   await itx.agents.create("/agents/support");
@@ -25,7 +25,7 @@ test("streamed: the answer reaches a live subscriber as ephemeral chunk windows 
   await until("the chunk window", () => windows.invocations.length >= 1);
   // The fake answers whole, so its answer is ONE window: the request it belongs to, the provider's
   // chunk verbatim (Workers AI's `{ response }`), the first sequence number.
-  expect(windows.types()).toEqual(["events.iterate.com/agent/llm-response-chunks"]);
+  expect(windows.types()).toEqual(["events.iterate.com/agent/llm-response-frame"]);
   // Exact: the chunk is verbatim, so an extra key on the window must fail.
   const { payload: chunkWindow } = windows.invocations[0]!.events[0]!;
   expect(chunkWindow).toEqual({
@@ -34,7 +34,7 @@ test("streamed: the answer reaches a live subscriber as ephemeral chunk windows 
     sequence: 0,
   });
   // Ephemeral: the durable log holds no chunk row, and the settlement carries the text.
-  expect(log.filter((e) => e.type === "events.iterate.com/agent/llm-response-chunks")).toEqual([]);
+  expect(log.filter((e) => e.type === "events.iterate.com/agent/llm-response-frame")).toEqual([]);
   expect(
     log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled")!.payload,
   ).toMatchObject({ result: { status: "succeeded", text: "Four words, no code." } });

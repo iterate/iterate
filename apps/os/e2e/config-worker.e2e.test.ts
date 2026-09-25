@@ -5,8 +5,8 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "./support/client.ts";
 
-const PING = "events.iterate.com/config-ping";
-const PONG = "events.iterate.com/config-pong";
+const PING = "events.iterate.com/test/ping-sent";
+const PONG = "events.iterate.com/test/pong-sent";
 test("a fresh context has no implicit worker subscription; an explicit cross-context target delivers", async () => {
   const root = openItx(freshCtx("config-explicit"));
   const child = root.cd("/child");

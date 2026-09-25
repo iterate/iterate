@@ -15,6 +15,7 @@ import { defineProcessorContract, type ProcessorState } from "iterate/stream/pro
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
+import { CoreEventCatalog } from "../stream/core-events.ts";
 
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
@@ -60,7 +61,7 @@ export const ProjectContract = defineProcessorContract({
       .object({ commitOid: z.string().min(1), offset: z.number().int().positive() })
       .nullable()
       .default(null),
-    /** The config repo's commit the apex was last pointed at: the latest `project/ingress-configured`
+    /** The config repo's commit the apex was last pointed at: the latest `itx/ingress-configured`
      *  whose target is the one the processor writes for a commit (processor.ts
      *  `configRepoIngressTarget`). The publication the tip owes is done once this is the tip's
      *  commit. A target set by hand, or none, leaves it as it was. Null until the first. */
@@ -102,10 +103,10 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
-        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-answered. Again for a hostname already added re-reads Cloudflare's status.",
+        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
       payloadSchema: z.object({ hostname: z.string().min(1) }),
     },
-    "events.iterate.com/project/hostname-add-answered": {
+    "events.iterate.com/project/hostname-add-settled": {
       description:
         "The answer to the add at `requestOffset`: Cloudflare's status and the DNS records the owner adds, or why it failed (taken, reserved, malformed, Cloudflare's refusal). A failed first add releases the claim.",
       payloadSchema: z.object({
@@ -128,20 +129,16 @@ export const ProjectContract = defineProcessorContract({
         requestOffset: z.number().int().positive(),
       }),
     },
-    "events.iterate.com/project/ingress-configured": {
-      description:
-        "Where the project's apex points: an itx expression, or null for nowhere. The core's control event: the append validates it and the core's reduce serves the apex from it (stream/core-processor.ts). The saga points it at the seed commit and the processor at every later commit of the config repo, each append keyed by its commit.",
-      payloadSchema: z.object({ target: z.array(z.unknown()).nullable() }),
-    },
   },
-  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them.
-  processorDeps: [RepoContract, WorkspaceContract, SecretContract],
+  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, and the
+  // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
+  processorDeps: [RepoContract, WorkspaceContract, SecretContract, CoreEventCatalog],
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
     "events.iterate.com/project/hostname-add-requested",
-    "events.iterate.com/project/hostname-add-answered",
+    "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-remove-requested",
     "events.iterate.com/project/hostname-removed",
     "events.iterate.com/repo/created",
@@ -151,16 +148,16 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
     "events.iterate.com/repo/commit-completed",
-    "events.iterate.com/project/ingress-configured",
+    "events.iterate.com/itx/ingress-configured",
   ],
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
-    "events.iterate.com/project/hostname-add-answered",
+    "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",
     // the core's: the saga points the project's apex at the seeded config repo's commit, and the
     // processor re-points it at every later commit of the config repo (a commit IS its publication)
-    "events.iterate.com/project/ingress-configured",
+    "events.iterate.com/itx/ingress-configured",
   ],
 });
 

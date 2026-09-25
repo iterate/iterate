@@ -100,7 +100,7 @@ function disposeRpcStub(x: unknown): void {
 export class RpcStubDirectory {
   readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
   /** PRESENCE as it changes: a key gained its (only) pager, or lost its last one. The DO turns these
-   *  into the two ephemeral `rpc-stub/attached` / `rpc-stub/detached` events — live watchers see
+   *  into the two ephemeral `itx/rpc-stub-attached` / `itx/rpc-stub-detached` events — live watchers see
    *  presence move; the log never claims a socket is open. A REPLACED pager (same key, new socket)
    *  is neither: the key never lost presence. */
   readonly #onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
@@ -911,10 +911,10 @@ type FetchUpgradeResume = z.infer<typeof FetchUpgradeResume>;
  *  re-dialing end can tell a deploy's reset from a platform failure. */
 const FETCH_UPGRADE_DEPLOY_ID_HEADER = "x-itx-deploy-id";
 /** On every upgrade socket's 101 from a context whose incarnation began with the reset a recorded
- *  `itx.abort()` asked for: that `context/aborted` event's offset, so a re-dialing end can tell the
+ *  `itx.abort()` asked for: that `itx/aborted` event's offset, so a re-dialing end can tell the
  *  deliberate reset from a platform failure (fetch-upgrade-splice.ts). Absent otherwise. */
 const FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER = "x-itx-context-aborted-offset";
-/** The `context/aborted` offset a DO's 101 names (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). */
+/** The `itx/aborted` offset a DO's 101 names (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). */
 const contextAbortedOffsetOf = (response: Response): number | null => {
   const offset = response.headers.get(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
   return offset ? Number(offset) : null;
@@ -1138,7 +1138,7 @@ export class RpcStubFetchServer {
   /** This DO's deploy and path: what a resumable upgrade's 101 says (`FetchUpgradeResume`). */
   readonly #deployId: string;
   readonly #path: string;
-  /** The `context/aborted` whose reset began this incarnation, or null: what every 101 names
+  /** The `itx/aborted` whose reset began this incarnation, or null: what every 101 names
    *  (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). Read per answer: the wake record lands after
    *  construction. */
   readonly #contextAbortedOffset: () => number | null;

@@ -2,7 +2,7 @@
  * The project's agent, as a small facet processor on the conversation context beside the voice
  * relay. The voice facet emits `delegation-requested` when the live model hands off a
  * request; this facet consumes it, runs one chat-model turn (delegation-turn.ts: a model over the
- * words so far, one script tool against `itx`), and emits the answer as `commentary` naming the
+ * words so far, one script tool against `itx`), and emits the answer as `commentary-added` naming the
  * same delegationId. The voice facet forwards that commentary to the live model to speak.
  *
  * Separate from the relay on purpose: the turn's answer is durable, so an eviction mid-turn is
@@ -52,7 +52,7 @@ const ContextMessage = z.object({
 });
 
 const VoiceDelegateState = z.object({
-  /** Raised by `delegation-requested`, removed by the `commentary` that answers it; newest first.
+  /** Raised by `delegation-requested`, removed by the `commentary-added` that answers it; newest first.
    * The recovery ground: a pending row still here after an eviction is re-run. */
   pending: z.array(PendingDelegation).max(MAX_PENDING_DELEGATIONS).default([]),
   /** Additional conversation context, supplied as ordinary Markdown messages. */
@@ -74,14 +74,14 @@ const VoiceDelegateContract = defineProcessorContract({
       description: "The live model handed a request to the backend, with the words said so far.",
       payloadSchema: DelegationRequestedPayload,
     },
-    "events.iterate.com/voice-agent/thinking": thinkingEvent,
-    "events.iterate.com/voice-agent/commentary": commentaryEvent,
+    "events.iterate.com/voice-agent/thinking-added": thinkingEvent,
+    "events.iterate.com/voice-agent/commentary-added": commentaryEvent,
   },
   consumes: [...VOICE_DELEGATE_CONSUMES],
   emits: [
     "events.iterate.com/agent/context-added",
-    "events.iterate.com/voice-agent/commentary",
-    "events.iterate.com/voice-agent/thinking",
+    "events.iterate.com/voice-agent/commentary-added",
+    "events.iterate.com/voice-agent/thinking-added",
   ],
 });
 type VoiceDelegateContract = typeof VoiceDelegateContract;
@@ -129,7 +129,7 @@ export class VoiceDelegateProcessor extends StreamProcessor<
         };
       }
 
-      case "events.iterate.com/voice-agent/commentary": {
+      case "events.iterate.com/voice-agent/commentary-added": {
         const { delegationId } = event.payload;
         if (!delegationId) return state;
         const pending = state.pending.filter((row) => row.delegationId !== delegationId);
@@ -175,14 +175,14 @@ export class VoiceDelegateProcessor extends StreamProcessor<
             ),
           progress: (note) =>
             append({
-              type: "events.iterate.com/voice-agent/thinking",
+              type: "events.iterate.com/voice-agent/thinking-added",
               payload: { activation, delegationId: null, content: note },
             }),
         },
         context,
       );
       await append({
-        type: "events.iterate.com/voice-agent/commentary",
+        type: "events.iterate.com/voice-agent/commentary-added",
         idempotencyKey: this.idempotencyKey(`commentary:${delegationId}`),
         payload: {
           activation,

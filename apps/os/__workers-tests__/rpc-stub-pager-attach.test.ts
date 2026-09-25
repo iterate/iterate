@@ -116,7 +116,7 @@ test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach 
 test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, and leaves no socket, no presence, no rule; after resume the same attach lands", async () => {
   const ctx = "prj_pager_attach_refused";
   const s = stub(ctx);
-  await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
+  await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
 
   const refused = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
   expect(refused).toMatchObject({ status: 409 });
@@ -129,7 +129,7 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
   expect(await presence(ctx)).toEqual([]);
   expect(await ruleAt(ctx, "itx.k2")).toBeNull();
 
-  await s.append({ type: "events.iterate.com/stream/resumed" });
+  await s.append({ type: "events.iterate.com/itx/resumed" });
   const ok = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
   expect(ok).toMatchObject({ status: 101 });
   ok.webSocket!.accept();
@@ -158,13 +158,13 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   pager.webSocket!.accept();
   expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.rpcStubs.get('itx.k5')");
 
-  await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "test" } });
+  await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
   pager.webSocket!.close(1000, "session died while paused");
   await until("the pager is gone", async () => (await transportState(ctx)).rpcStubPagers === 0);
   // the un-set was refused by the pause: the row stands (the window)
   expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.rpcStubs.get('itx.k5')");
 
-  await s.append({ type: "events.iterate.com/stream/resumed" });
+  await s.append({ type: "events.iterate.com/itx/resumed" });
   await until("the rule un-set after resume", async () => (await ruleAt(ctx, "itx.k5")) === null);
 });
 

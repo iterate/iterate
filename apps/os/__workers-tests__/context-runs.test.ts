@@ -1,5 +1,5 @@
 // __workers-tests__/context-runs.test.ts — THE CONTEXT'S SCRIPT RUNS, pinned at the DO: `itx.run(script)`
-// is a `context/run-requested` on the log (attributed to the caller; the event's offset IS the run),
+// is an `itx/run-requested` on the log (attributed to the caller; the event's offset IS the run),
 // the context's own runner (iterate-context-durable-object.ts `#startRequestedRuns` / `#executeRun`)
 // at that commit, and a `run-settled` naming that offset, which the caller's wait resolves on. A
 // LITERAL request appended by anyone runs the same way. A run the context's restart interrupted is
@@ -21,8 +21,8 @@ test("itx.run: the request lands first, stamped with the caller; the runner sett
   });
   const pair = await runEvents(ROOT);
   expect(pair.map((e) => e.type.replace("events.iterate.com/", ""))).toEqual([
-    "context/run-requested",
-    "context/run-settled",
+    "itx/run-requested",
+    "itx/run-settled",
   ]);
   const [requested, settled] = pair as [StreamEvent, StreamEvent];
   expect(requested.source?.principal).toEqual({ actor: "admin" }); // who asked
@@ -52,11 +52,11 @@ test("itx.run: the request lands first, stamped with the caller; the runner sett
 test("a LITERAL run-requested appended by a Workers-RPC caller runs exactly as itx.run does: the runner starts at the commit and settles it naming that offset; two requests are two rows, each settled on its own", async () => {
   const before = (await runEvents(ROOT)).length;
   const [first] = (await stub(ROOT).append({
-    type: "events.iterate.com/context/run-requested",
+    type: "events.iterate.com/itx/run-requested",
     payload: { code: "async (itx) => (await itx.whoami()).path" },
   })) as [StreamEvent];
   const [second] = (await stub(ROOT).append({
-    type: "events.iterate.com/context/run-requested",
+    type: "events.iterate.com/itx/run-requested",
     payload: { code: "async () => 2" },
   })) as [StreamEvent];
   const settledFor = async (requestOffset: number) =>
@@ -64,7 +64,7 @@ test("a LITERAL run-requested appended by a Workers-RPC caller runs exactly as i
       .slice(before)
       .find(
         (e) =>
-          e.type === "events.iterate.com/context/run-settled" &&
+          e.type === "events.iterate.com/itx/run-settled" &&
           (e.payload as { requestOffset: number }).requestOffset === requestOffset,
       );
   expect(await until("the first is settled", () => settledFor(first.offset))).toMatchObject({
@@ -84,7 +84,7 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   // through `itx.run` the same death ends the caller's wait with a transport error and the log
   // reads the same.
   const [parked] = (await stub(ROOT).append({
-    type: "events.iterate.com/context/run-requested",
+    type: "events.iterate.com/itx/run-requested",
     payload: {
       code: "async (itx) => { const n = Number(await itx.kv.get('starts')) || 0; await itx.kv.put('starts', String(n + 1)); await new Promise((r) => setTimeout(r, 60_000)); return 'never' }",
     },
@@ -100,8 +100,8 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   // the next request (a read) wakes a new incarnation: its wake record closes the run
   const after = (await runEvents(ROOT)).slice(before);
   expect(after.map((e) => e.type.replace("events.iterate.com/", ""))).toEqual([
-    "context/run-requested",
-    "context/run-settled",
+    "itx/run-requested",
+    "itx/run-settled",
   ]);
   expect(after[1]!.payload).toMatchObject({
     requestOffset: parked.offset,
@@ -110,7 +110,7 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   // the SAME batch as the wake record: right behind it
   const log = await read(ROOT);
   expect(log.find((e) => e.offset === after[1]!.offset - 1)).toMatchObject({
-    type: "events.iterate.com/stream/woken",
+    type: "events.iterate.com/itx/woken",
   });
   await new Promise((r) => setTimeout(r, 500));
   expect(await itx.kv.get("starts")).toBe("1"); // not run again
@@ -143,7 +143,7 @@ test.for([
   async ([name, code, result]) => {
     const ctx = `prj_run_result_${name.replaceAll(" ", "_")}`;
     const [requested] = (await stub(ctx).append({
-      type: "events.iterate.com/context/run-requested",
+      type: "events.iterate.com/itx/run-requested",
       payload: { code },
     })) as [StreamEvent];
     const settled = await until("the run is settled", async () =>
@@ -183,7 +183,7 @@ async function read(ctx: string): Promise<StreamEvent[]> {
 }
 
 async function runEvents(ctx: string) {
-  return (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/context/run-"));
+  return (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/itx/run-"));
 }
 
 async function openScriptRuns(ctx: string) {

@@ -61,7 +61,7 @@ const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }))
 /** What the page's subscription receives: every durable event (the Events view is the whole log)
  *  and, named — a wildcard never sweeps an ephemeral — the streamed chunk windows the feed folds
  *  into the answer being written. */
-const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-chunks"];
+const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-frame"];
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
   // THE PAGE IS A LINK: the agent, the tab, the two trace inspectors — and the context view's every

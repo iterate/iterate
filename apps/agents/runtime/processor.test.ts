@@ -204,11 +204,11 @@ test.for<{
       user("hi"),
       llmRequested(4),
       {
-        type: "events.iterate.com/context/run-requested",
+        type: "events.iterate.com/itx/run-requested",
         payload: { code: "async (itx) => 1" },
       },
       {
-        type: "events.iterate.com/context/run-settled",
+        type: "events.iterate.com/itx/run-settled",
         payload: {
           requestOffset: 6,
           settlement: { status: "succeeded", result: 1 },

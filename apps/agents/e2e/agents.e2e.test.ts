@@ -59,9 +59,7 @@ test("a fully masked visitor sandbox can receive a prose reply without gaining t
       : undefined;
   });
   expect(assistantWords(log)).toContain("Here is a domain from the catalogue.");
-  expect(log.some((event) => event.type === "events.iterate.com/context/run-requested")).toBe(
-    false,
-  );
+  expect(log.some((event) => event.type === "events.iterate.com/itx/run-requested")).toBe(false);
   await expect(itx.cd(`${path}/sandbox`).kv.get("anything")).rejects.toMatchObject({
     code: "NO_ITX_EXPRESSION_MATCH",
   });
@@ -106,7 +104,7 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   // One explicit processor row for the agent; no automatic config subscription.
   expect(
     own
-      .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
+      .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload.name),
   ).toEqual(["agent"]);
   expect(short(await readAll(itx))).toEqual(["agent/created"]); // only the certificate crosses to /
@@ -143,7 +141,7 @@ test("the loop: a person's words → the model → a script run against itx → 
     const all = await readAll(support);
     const count = (type: string) =>
       all.filter((e) => e.type === `events.iterate.com/${type}`).length;
-    return count("agent/web-message-sent") === 2 && count("context/run-settled") === 1
+    return count("agent/web-message-sent") === 2 && count("itx/run-settled") === 1
       ? all
       : undefined;
   }).catch(async (error: unknown) => {
@@ -169,9 +167,9 @@ test("the loop: a person's words → the model → a script run against itx → 
     "agent/llm-request-settled",
     "agent/context-added", // the assistant's raw answer: prose + a tag
     "agent/summary-updated", // the tag's status
-    "context/run-requested", // the tag's body
+    "itx/run-requested", // the tag's body
     "agent/web-message-sent", // the prose outside the tag
-    "context/run-settled",
+    "itx/run-settled",
     "agent/context-added", // the developer: the script's result
     "agent/llm-request-requested",
     "agent/llm-request-settled",
@@ -187,11 +185,11 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
     { activity: "Storing the answer" },
   ]);
-  expect(said("events.iterate.com/context/run-requested")[0]).toMatchObject({
+  expect(said("events.iterate.com/itx/run-requested")[0]).toMatchObject({
     code: 'async (itx) => {\nawait itx.kv.put("answer", "42")\nreturn { stored: true }\n}',
   });
   expect(await itx.kv.get("answer")).toBe("42"); // the script ran against the project's itx
-  const settledScript = log.find((e) => e.type === "events.iterate.com/context/run-settled");
+  const settledScript = log.find((e) => e.type === "events.iterate.com/itx/run-settled");
   expect(settledScript.payload).toMatchObject({
     settlement: {
       status: "succeeded",
@@ -294,7 +292,7 @@ test("a script that returns nothing ends the turn: no result item, no further re
   await configureModel(support);
   await agent.message("Write the note.");
   // a wait that runs out names the turn's log so far (which hop it stopped at)
-  const isSettlement = (e: { type: string }) => e.type === "events.iterate.com/context/run-settled";
+  const isSettlement = (e: { type: string }) => e.type === "events.iterate.com/itx/run-settled";
   const settled = (
     await untilValue(
       "the script's settlement",
@@ -653,7 +651,7 @@ jailFlake(
       const depthRefusalIn = (log: { offset: number; type: string; payload?: any }[]) =>
         log.find(
           (e) =>
-            /\/(context\/run-settled|agent\/llm-request-settled)$/.test(e.type) &&
+            /\/(itx\/run-settled|agent\/llm-request-settled)$/.test(e.type) &&
             JSON.stringify(e.payload).includes("Subrequest depth limit exceeded"),
         );
       const log = await until(
@@ -677,7 +675,7 @@ jailFlake(
           `the platform refused a hop at offset ${depthRefusal.offset}: Subrequest depth limit exceeded — the turn: ${turnSummary(log)}`,
         );
       const settled = log
-        .filter((e) => e.type === "events.iterate.com/context/run-settled")
+        .filter((e) => e.type === "events.iterate.com/itx/run-settled")
         .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
       expect(assistantWords(log).at(-1)).toBe("Done probing."); // the turn ended on the fake's words
       // a mismatch names every settlement — which script answered what
@@ -801,7 +799,7 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
       await context.whoami();
     }
     return (await readAll(context)).filter(
-      (event: { type: string }) => event.type === "events.iterate.com/stream/woken",
+      (event: { type: string }) => event.type === "events.iterate.com/itx/woken",
     );
   };
   const [rootWakes, agentWakes] = await Promise.all([
@@ -819,7 +817,7 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
 function turnSummary(log: { offset: number; type: string; payload?: any }[]): string {
   return JSON.stringify(
     log
-      .filter((e) => /\/(agent\/(llm-request-settled|paused)|context\/run-settled)$/.test(e.type))
+      .filter((e) => /\/(agent\/(llm-request-settled|paused)|itx\/run-settled)$/.test(e.type))
       .map((e) => [
         e.offset,
         e.type.replace("events.iterate.com/", ""),

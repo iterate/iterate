@@ -289,10 +289,10 @@ createFailing(test, /until\(the rule disposed while paused is gone after resume\
   async () => {
     const itx = openItx(freshCtx("expression-dispose-paused"));
     const handle = await itx.provide("itx.paused", "itx.builtins.whoami");
-    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await itx.append({ type: "events.iterate.com/itx/paused" });
     handle[Symbol.dispose]();
     await sleep(500);
-    await itx.append({ type: "events.iterate.com/stream/resumed" });
+    await itx.append({ type: "events.iterate.com/itx/resumed" });
     await until(
       "the rule disposed while paused is gone after resume",
       async () => ((await itx.rewriteRules.get("itx.paused")) === null ? true : undefined),

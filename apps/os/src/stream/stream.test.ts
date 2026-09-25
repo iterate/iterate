@@ -12,7 +12,7 @@ import type { StreamEvent, SqlStorageHandle } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
-const CONFIGURED = "events.iterate.com/stream/subscription-configured";
+const CONFIGURED = "events.iterate.com/itx/subscription-configured";
 
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
   const batches: StreamEvent[][] = [];
@@ -299,7 +299,7 @@ test('the wake record says WHY, from the handler that ran first: a birth is a re
   third.appendWakeRecord("request");
   const wokens = bareStream({ storage })
     .read(0)
-    .events.filter((e) => e.type === "events.iterate.com/stream/woken")
+    .events.filter((e) => e.type === "events.iterate.com/itx/woken")
     .map((e) => e.payload);
   expect(wokens).toEqual([
     { incarnation: 1, reason: "request" },
@@ -314,18 +314,18 @@ test("the wake record settles what the last incarnation left open: every core `s
   first.appendBirthRecord();
   first.append(
     {
-      type: "events.iterate.com/context/run-requested",
+      type: "events.iterate.com/itx/run-requested",
       payload: { code: "async (itx) => 1" }, // lands at 3
     },
     {
-      type: "events.iterate.com/context/run-requested",
+      type: "events.iterate.com/itx/run-requested",
       payload: { code: "async (itx) => 2" }, // lands at 4
     },
     {
-      type: "events.iterate.com/context/run-settled",
+      type: "events.iterate.com/itx/run-settled",
       payload: { requestOffset: 3, settlement: { status: "succeeded", result: 1 } },
     },
-    { type: "events.iterate.com/stream/paused", payload: { reason: "a breaker" } },
+    { type: "events.iterate.com/itx/paused", payload: { reason: "a breaker" } },
   );
   expect(Object.keys(first.coreReducedState.scriptRuns)).toEqual(["4"]);
   // the incarnation dies with the request at 4 open (its executor with it); the next one's first request records the wake
@@ -342,10 +342,10 @@ test("the wake record settles what the last incarnation left open: every core `s
       e.payload,
     ]);
   expect(tail).toEqual([
-    [1, "stream/woken", { incarnation: 2, reason: "request" }],
+    [1, "itx/woken", { incarnation: 2, reason: "request" }],
     [
       2, // the SAME batch: right behind the wake record
-      "context/run-settled",
+      "itx/run-settled",
       {
         requestOffset: 4,
         settlement: {
@@ -365,7 +365,7 @@ test("the wake record settles what the last incarnation left open: every core `s
   const headBeforeThird = third.highestAssignedOffset();
   third.appendWakeRecord("request");
   expect(third.read(headBeforeThird).events.map((e) => e.type)).toEqual([
-    "events.iterate.com/stream/woken",
+    "events.iterate.com/itx/woken",
   ]);
 });
 
@@ -378,8 +378,8 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
   // the birth certificate + the wake record, one durable batch, both fanned out
   const page = first.read(0);
   expect(page.events.map((e) => [e.type, e.offset])).toEqual([
-    ["events.iterate.com/stream/created", 1],
-    ["events.iterate.com/stream/woken", 2],
+    ["events.iterate.com/itx/created", 1],
+    ["events.iterate.com/itx/woken", 2],
   ]);
   expect(page.events).toMatchObject([
     { payload: { projectId: "prj_bare", path: "/" } },
@@ -388,8 +388,8 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
   expect(first.storage).toMatchObject({ incarnation: 1 });
   expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([
     [
-      ["events.iterate.com/stream/created", 1],
-      ["events.iterate.com/stream/woken", 2],
+      ["events.iterate.com/itx/created", 1],
+      ["events.iterate.com/itx/woken", 2],
     ],
   ]);
   expect(first.coreReducedState).toMatchObject({
@@ -408,26 +408,26 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
   expect(second.storage).toMatchObject({ incarnation: 2 });
   const all = second.read(0).events;
   expect(all.map((e) => e.type)).toEqual([
-    "events.iterate.com/stream/created",
-    "events.iterate.com/stream/woken",
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/woken",
     "hello",
-    "events.iterate.com/stream/woken",
+    "events.iterate.com/itx/woken",
   ]);
   expect(all[3]).toMatchObject({ offset: 4, payload: { incarnation: 2 } });
-  expect(batches[2].map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
+  expect(batches[2].map((e) => e.type)).toEqual(["events.iterate.com/itx/woken"]);
   expect(second.coreReducedState).toMatchObject({ incarnation: 2 });
 });
 
-test("a stream/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", () => {
+test("an itx/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", () => {
   const stream = bareStream();
   stream.appendBirthRecord();
   stream.appendWakeRecord("request"); // created@1, woken@2
-  stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @3
+  stream.append({ type: "events.iterate.com/itx/paused", payload: { reason: "x" } }); // @3
   expect(stream.coreReducedState).toMatchObject({ paused: { reason: "x" } });
   expect(stream.read(0).events.map((e) => e.type)).toEqual([
-    "events.iterate.com/stream/created",
-    "events.iterate.com/stream/woken",
-    "events.iterate.com/stream/paused",
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/woken",
+    "events.iterate.com/itx/paused",
   ]);
   // a non-control append is refused on append, CODED, committing nothing and burning no offset
   let err: unknown;
@@ -441,11 +441,11 @@ test("a stream/paused event pauses the stream through its own core reduce: every
   expect(stream.read(0).events).toHaveLength(3);
   expect(stream.highestAssignedOffset()).toBe(3); // the refusal burnt no offset
   // a batch MIXING the resume with a non-control event is refused WHOLESALE…
-  expect(() =>
-    stream.append({ type: "events.iterate.com/stream/resumed" }, { type: "work" }),
-  ).toThrow(/stream paused/);
+  expect(() => stream.append({ type: "events.iterate.com/itx/resumed" }, { type: "work" })).toThrow(
+    /stream paused/,
+  );
   // …while the bare resume lands: a paused stream must always accept its own resume
-  const [resumed] = stream.append({ type: "events.iterate.com/stream/resumed" });
+  const [resumed] = stream.append({ type: "events.iterate.com/itx/resumed" });
   expect(resumed).toMatchObject({ offset: 4 });
   expect(stream.coreReducedState.paused).toBeNull(); // the reduce reopened it
   expect(stream.append({ type: "work" })[0]).toMatchObject({ offset: 5 });
@@ -554,7 +554,7 @@ test("across incarnations an ephemeral-only tail's offsets are REUSED by the nex
   // The log itself is exact: created, woken, durable (1, 2, 3) from the first life; woken, durable
   // (4, 5) from the second — the dead ephemerals left no gap a row could fill.
   expect(second.read(0).events.map((e) => e.offset)).toEqual([1, 2, 3, 4, 5]);
-  expect(second.read(0).events[3]).toMatchObject({ type: "events.iterate.com/stream/woken" });
+  expect(second.read(0).events[3]).toMatchObject({ type: "events.iterate.com/itx/woken" });
 });
 
 test("read()'s short-page proof is the DURABLE mark, never the in-memory head (an ephemeral tail is not proven)", () => {
@@ -660,7 +660,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
   first.appendBirthRecord();
   first.appendWakeRecord("request");
   const configureEvent = {
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "config",
       target: "itx.workers.get({ source: { 'cap.js': 'test-source' } }).processEventBatch",
@@ -669,7 +669,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
     idempotencyKey: "config-subscription",
   };
   const [configured] = first.append(configureEvent);
-  first.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  first.append({ type: "events.iterate.com/itx/paused", payload: { reason: "operator" } });
   expect(first.coreReducedState).toMatchObject({ paused: { reason: "operator" } });
 
   // A fresh event is still refused…
@@ -682,7 +682,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
   second.appendBirthRecord();
   second.appendWakeRecord("request");
   expect(second.append(configureEvent)[0]).toMatchObject({ offset: configured.offset });
-  second.append({ type: "events.iterate.com/stream/resumed" });
+  second.append({ type: "events.iterate.com/itx/resumed" });
   expect(second.coreReducedState.paused).toBeNull();
   expect(second.append({ type: "mark" })[0]).toMatchObject({ type: "mark" });
 });

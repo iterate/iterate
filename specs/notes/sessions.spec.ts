@@ -88,7 +88,7 @@ test("the Notes app works through a project config worker, and its session there
     timeoutMs: 60_000,
   });
   await fixture.itx.append({
-    type: "events.iterate.com/project/ingress-configured",
+    type: "events.iterate.com/itx/ingress-configured",
     payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
   });
   // On its own origin: one note.
