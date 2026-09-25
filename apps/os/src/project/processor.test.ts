@@ -388,11 +388,12 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   let calls = 0;
+  let answer: { offset: number }[] = [];
   const append = async (...events: unknown[]) => {
     calls += 1;
     if (calls === 1) await held; // the first append stays in flight
     appended.push(...(events as typeof appended));
-    return [];
+    return answer;
   };
   deliver(processor, { ...empty, configRepoTip: tip("aaa", 5) }, append);
   // A second commit lands while the first publication is in flight: dropped by the guard, kept as the newest tip.
@@ -402,8 +403,8 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa@5",
-    "itx/ingress-configured:bbb@7",
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:bbb",
   ]);
   // The target names the commit twice: the source read at it, the cache keyed by it.
   expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"commitOid":"bbb"');
@@ -412,12 +413,16 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
   expect(appended).toHaveLength(2);
-  // A forced pull back to the first commit is a new fact: published again, under its own key.
+  // A forced pull back to the first commit is a new fact: the commit's key answers its first
+  // publication (an older event), so it is published again under the fact's own key.
+  answer = [{ offset: 6 }];
   deliver(processor, { ...empty, configRepoTip: tip("aaa", 9) }, append);
   await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
   expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa@5",
-    "itx/ingress-configured:bbb@7",
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:bbb",
+    "itx/ingress-configured:aaa",
     "itx/ingress-configured:aaa@9",
   ]);
 });
@@ -444,7 +449,7 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     runInBackground,
   );
   await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa@1"]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa"]);
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),

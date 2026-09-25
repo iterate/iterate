@@ -64,21 +64,27 @@ test.for([
     name: "a read answered 5xx twice fails with the second answer",
     send: "tipOf",
     statuses: [502, 503],
-    outcome: { error: "git-upload-pack responded 503 for https://artifacts.example/prj.git" },
+    outcome: {
+      error: "git-upload-pack responded 503 for https://artifacts.example/prj.git: unavailable",
+    },
     retries: [{ name: "git-upload-pack", status: 502, attempt: 1, retryInMs: 1_000 }],
   },
   {
     name: "a read answered 4xx fails at once: an answer about the request",
     send: "tipOf",
     statuses: [401],
-    outcome: { error: "git-upload-pack responded 401 for https://artifacts.example/prj.git" },
+    outcome: {
+      error: "git-upload-pack responded 401 for https://artifacts.example/prj.git: unavailable",
+    },
     retries: [],
   },
   {
     name: "a push answered 503 is never sent twice",
     send: "push",
     statuses: [503],
-    outcome: { error: "git-receive-pack responded 503 for https://artifacts.example/prj.git" },
+    outcome: {
+      error: "git-receive-pack responded 503 for https://artifacts.example/prj.git: unavailable",
+    },
     retries: [],
   },
 ] as const)("Artifacts 5xx: $name", async ({ send, statuses, outcome, retries }) => {
@@ -298,6 +304,7 @@ test("redactRemote drops a credential whatever the scheme or its case", () => {
   expect(redactRemote("HTTPS://x:TOKEN@github.com/a/b.git")).toBe("HTTPS://github.com/a/b.git");
   expect(redactRemote("ftp://u:TOKEN@example.com/r.git")).toBe("ftp://example.com/r.git");
   expect(redactRemote("https://github.com/a/b.git")).toBe("https://github.com/a/b.git");
+  expect(redactRemote("https://x:p@ss@github.com/a/b.git")).toBe("https://github.com/a/b.git");
 });
 
 /** `user:password` as a Basic header value, UTF-8 first. */

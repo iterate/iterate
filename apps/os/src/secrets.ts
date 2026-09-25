@@ -189,6 +189,13 @@ const SECRET_PLACEHOLDER = new RegExp(
   "g",
 );
 
+/** Whether `value` is exactly one placeholder (`getSecret("/secrets/x")`, or with a field) and
+ *  nothing else: what a git origin's password may be, so an origin never holds a token. */
+export function isSecretPlaceholder(value: string): boolean {
+  const [match] = [...value.matchAll(SECRET_PLACEHOLDER)];
+  return match?.index === 0 && match[0].length === value.length;
+}
+
 /** The placeholder as a caller wrote it, for a refusal that names it. */
 const placeholderOf = (path: string, field: string | undefined): string =>
   !field ? `getSecret("${path}")` : `getSecret("${path}", { field: "${field}" })`;

@@ -50,9 +50,11 @@ await repo.pull(); // { status: "updated", commitOid, previousOid }, or "up-to-d
 await repo.push({ force: true }); // iterate's main wins
 ```
 
-The remote is reached through the context's egress. Its userinfo becomes a Basic credential, as git
-and curl send it, and egress substitutes a secret placeholder inside that credential (`secrets.ts`),
-so origin stores a placeholder, never a token. A GitHub connection's secret is pinned to
+The remote is reached through the CALLER's egress, its own `itx.fetch` through its own rules
+(`library.ts`), never the repo's: a context that may not fetch reaches no remote through a repo. The
+URL's userinfo becomes a Basic credential, as git and curl send it, and egress substitutes a secret
+placeholder inside that credential (`secrets.ts`). An origin's credential must be a plain user name
+and one placeholder, so an origin stored on the log never holds a token. A GitHub connection's secret is pinned to
 `https://github.com` as well as the API, for git over HTTP. The Dash's project overview links the
 config repo (Config repo). A project's own code, such as a processor on the GitHub connection's log,
 keeps the two in step: it pulls on a push webhook and pushes on `repo/commit-completed`.

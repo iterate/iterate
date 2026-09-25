@@ -32,6 +32,7 @@ import type { EventInput, ReduceArgs } from "iterate/stream/processor";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { assertCreated, EntityLifecycleProcessor } from "../project/entity-lifecycle.ts";
+import { isSecretPlaceholder } from "../secrets.ts";
 import {
   ZERO_OID,
   buildPack,
@@ -71,9 +72,12 @@ type Transport = ReturnType<typeof createGitWireTransport>;
 /** A git token as this facet keeps it: reused until `until` (epoch ms) minus the margin. */
 type StoredToken = { token: string; until: number };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
-/** A commit's fact, owed from the moment its push is sent until both appends have landed; a pull's
- *  carries a key of its own, since a pull can return main to a commit published before. */
-type OwedFact = CommitCompleted & { key?: string };
+/** The caller's own `itx.fetch`, which a pull or push reaches its remote through. */
+type Egress = (request: Request) => Promise<Response>;
+/** A commit's fact, owed from the moment its push is sent until both appends have landed, under the
+ *  key of that one update of main: a pull can return main to a commit published before, and a commit
+ *  can be made again with the same oid, and each is published again. */
+type OwedFact = CommitCompleted & { key: string };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
 function filePath(path: string): string {
@@ -394,7 +398,13 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     toPush.push({ payload: commitBytes, type: "commit" });
     // The fact this push will owe, kept in storage until it has landed on both logs — so a retry after
     // a lost append lands the same event (above), never a different one under the same key.
-    const committed: OwedFact = { path, commitOid, message: input.message, changedPaths };
+    const committed: OwedFact = {
+      path,
+      commitOid,
+      message: input.message,
+      changedPaths,
+      key: occurrenceKey(path, commitOid),
+    };
     await this.ctx.storage.put("commit-fact", committed);
     const refused = await transport.push({
       newOid: commitOid,
@@ -436,14 +446,13 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
 
   /** THE COMMIT'S FACT: cross-posted to `/` FIRST — the project processor follows the config repo's
    *  commits with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
-   *  published anyway — then on this path. Keyed by the commit on both (a pull's by its own key), so
-   *  landing it again (an owed fact on a retry) lands nothing where it stands. Owed no more once both
-   *  have landed. */
+   *  published anyway — then on this path. Keyed by the update of main on both, so landing it again
+   *  (an owed fact on a retry) lands nothing where it stands. Owed no more once both have landed. */
   async #commitFact({ key, ...payload }: OwedFact): Promise<void> {
     const committed: EventInput<typeof RepoContract> = {
       type: "events.iterate.com/repo/commit-completed",
       payload,
-      idempotencyKey: key || `repo/commit-completed:${payload.path}:${payload.commitOid}`,
+      idempotencyKey: key,
     };
     await this.withItx((itx) => itx.cd("/").append(committed));
     await this.withItx((itx) => itx.append(committed));
@@ -488,10 +497,13 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const origin = z.string().min(1).nullable().parse(url);
     if (origin) {
       const { userinfo } = gitRemoteOf(origin);
-      if (userinfo && !/^getSecret\(.*\)$/s.test(userinfo.password))
+      if (
+        userinfo &&
+        !(/^[a-z][a-z0-9-]{0,31}$/.test(userinfo.user) && isSecretPlaceholder(userinfo.password))
+      )
         throw codedError(
           "INVALID_INPUT",
-          `repo ${path}: an origin's credential is a secret placeholder (user:getSecret("/secrets/…")), never a token — ${redactRemote(origin)}`,
+          `repo ${path}: an origin's credential is a plain user name and a secret placeholder (x-access-token:getSecret("/secrets/…")), never a token — ${redactRemote(origin)}`,
         );
     }
     await this.withItx((itx) =>
@@ -505,12 +517,12 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  refused `NOT_FAST_FORWARD` unless theirs contains ours, or `force` says to reset main to the
    *  remote's (an ancestor of ours included). A pull that moves main lands the commit's fact like
    *  `commitFiles` (so `/repos/config` publishes), owed until it lands. */
-  pull(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult> {
-    return this.#serialized(() => this.#pull(options));
+  pull(options?: { remote?: string; force?: boolean }, egress?: Egress): Promise<RepoSyncResult> {
+    return this.#serialized(() => this.#pull(options, egress));
   }
-  async #pull(options: unknown): Promise<RepoSyncResult> {
+  async #pull(options: unknown, egress: Egress | undefined): Promise<RepoSyncResult> {
     const path = await this.#created();
-    const { remote, force } = await this.#syncOptions(options);
+    const { remote, force } = await this.#syncOptions(options, egress);
     const artifacts = await this.#transport("write");
     const [ours = null, theirs = null] = await Promise.all([
       artifacts.tipOf(REF),
@@ -537,7 +549,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       commitOid: theirs,
       message: parseCommit(after.objects.get(theirs)!.payload).message,
       changedPaths: changedPathsOf(before?.manifest || new Map(), after.manifest),
-      key: `repo/commit-completed:${path}:${theirs}:pull:${crypto.randomUUID()}`,
+      key: occurrenceKey(path, theirs),
     };
     await this.ctx.storage.put("commit-fact", committed);
     const refused = await artifacts.push({
@@ -559,9 +571,12 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  unchanged to its receive-pack, compare-and-swapped on the remote's tip. Up to date when the
    *  remote's main already contains ours; refused `NOT_FAST_FORWARD` unless ours contains theirs, or
    *  `force` says to overwrite it. */
-  async push(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult> {
+  async push(
+    options?: { remote?: string; force?: boolean },
+    egress?: Egress,
+  ): Promise<RepoSyncResult> {
     const path = await this.#created();
-    const { remote, force } = await this.#syncOptions(options);
+    const { remote, force } = await this.#syncOptions(options, egress);
     const artifacts = await this.#transport("read");
     const [ours = null, theirs = null] = await Promise.all([
       artifacts.tipOf(REF),
@@ -587,13 +602,17 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return { status: "updated", commitOid: ours, previousOid: theirs };
   }
 
-  /** A pull's or push's options, and the remote they name (or origin) as a transport through this
-   *  context's egress: the request reaches the remote with the URL's userinfo as its credential,
-   *  where egress substitutes a secret placeholder. The body is read — no more than the cap — before
-   *  the call ends, so nothing of the egress outlives it. A caller that may pull or push may already
-   *  commit to the repo, and a commit to /repos/config publishes code that runs with the root's
-   *  egress: this reaches nothing that caller could not. */
-  async #syncOptions(options: unknown) {
+  /** A pull's or push's options, and the remote they name (or origin) as a transport through the
+   *  CALLER's egress — `egress` is the caller's own `itx.fetch`, which `itx.repos.get(path)` hands
+   *  in (library.ts), never this repo's: a caller that may not fetch reaches no remote through a
+   *  repo. The request carries the URL's userinfo as its credential, where egress substitutes a
+   *  secret placeholder; its body is read, no more than the cap, before the call ends. */
+  async #syncOptions(options: unknown, egress: Egress | undefined) {
+    if (!egress)
+      throw codedError(
+        "INVALID_INPUT",
+        `repo ${this.#path}: a pull or push goes through its caller's egress — call it on itx.repos.get(path)`,
+      );
     const { remote: named, force = false } =
       z
         .object({ remote: z.string().optional(), force: z.boolean().optional() })
@@ -610,15 +629,14 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const transport = createGitWireTransport({
       remote: remoteUrl,
       authorization,
-      fetch: (request) =>
-        this.withItx(async (itx) => {
-          const response = await itx.fetch(request);
-          return new Response(await readCapped(response, MAX_PACK_OBJECT_BYTES), {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers,
-          });
-        }),
+      fetch: async (request) => {
+        const response = await egress(request);
+        return new Response(await readCapped(response, MAX_PACK_OBJECT_BYTES), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      },
     });
     return { force, remote: { transport, shown: redactRemote(url) } };
   }
@@ -653,6 +671,12 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     }
     return entries;
   }
+}
+
+/** The key of one update of main to `commitOid`, fresh for each: its fact is published once, and a
+ *  later update to the same oid is published again. */
+function occurrenceKey(path: string, commitOid: string): string {
+  return `repo/commit-completed:${path}:${commitOid}:${crypto.randomUUID()}`;
 }
 
 /** An untrusted pack's objects by oid, each object and all of them bounded (git-wire.ts). */

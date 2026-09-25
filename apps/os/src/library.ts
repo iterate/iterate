@@ -496,6 +496,18 @@ function entityHandle(
       });
       return context.invoke([["append", ...parsed]]);
     }
+    // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
+    // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
+    // caller that may not fetch reaches no remote, and no project secret, through a repo.
+    if (name === "repo" && Array.isArray(first) && (first[0] === "pull" || first[0] === "push")) {
+      const callerContext = await itx.builtins.cd(originOf(caller, ownPath));
+      return context.invoke([
+        "facets",
+        ["get", name],
+        [first[0], first[1], (request: Request) => callerContext.invoke([["fetch", request]])],
+        ...rest,
+      ]);
+    }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
 }

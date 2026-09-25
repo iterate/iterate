@@ -442,6 +442,44 @@ test("against real Artifacts: a forced pull makes main a public GitHub repo's ow
   }
 }, 60_000);
 
+// A PULL OR PUSH GOES THROUGH ITS CALLER'S EGRESS, never the repo's own (whose parent link leads to
+// its creator, the root): a child context holding a repo but no `itx.fetch` of its own reaches no
+// remote through it, and one its owner lends egress does (library.ts). Local only: the remote is the
+// fake git server on this machine.
+localOnly(
+  "a child context with a repo but no egress of its own cannot pull through it; lent the root's egress, it can",
+  async ({ onTestFinished }) => {
+    const itx = openItx(freshCtx("repo-egress"));
+    const artifacts = await FakeArtifacts.start();
+    onTestFinished(() => artifacts.close());
+    await itx.cd("/repos/data").provide("itx.cfArtifacts", artifacts);
+    await itx.repos.create("/repos/data");
+    await artifacts.create("/github/data");
+    await artifacts.pushFromOutside("/github/data", {
+      message: "remote",
+      changes: [{ path: "a.md", content: "a\n" }],
+    });
+    const remote = artifacts.get("/github/data").remote();
+    const child = itx.cd("/child");
+    const lend = (root: string) =>
+      child.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: `itx.${root}`, target: `itx.builtins.cd('/').${root}` },
+      });
+    await lend("repos");
+    // the child's own rules answer its egress: no rewrite rule matches `itx.fetch` there
+    const refused = await rejection(child.repos.get("/repos/data").pull({ remote }));
+    expect(refused.message).toMatch(/git-upload-pack responded 404 .*no rewrite rule matches/);
+    expect(artifacts.remoteTip("/repos/data")).toBeNull();
+
+    await lend("fetch");
+    expect(await child.repos.get("/repos/data").pull({ remote })).toMatchObject({
+      status: "updated",
+      commitOid: artifacts.remoteTip("/github/data"),
+    });
+  },
+);
+
 // LOCAL ONLY: the row reads the repo back from the fake git remote on this machine's loopback, which a
 // deployed worker cannot reach (the platform answers 403 — see localOnly).
 localOnly(

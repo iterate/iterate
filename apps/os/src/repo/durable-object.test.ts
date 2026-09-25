@@ -306,15 +306,27 @@ test("an origin holds a secret placeholder, never a token: a literal credential 
     `HTTPS://x-access-token:${token}@github.com/acme/config.git`,
     `https://${token}@github.com/acme/config.git`,
     `ftp://x:${token}@example.com/r.git`,
+    `https://${token}:getSecret("/secrets/git")@github.com/acme/config.git`,
+    `https://x:getSecret(${token})@github.com/acme/config.git`,
+    `https://x:getSecret("/secrets/git")${token}@github.com/acme/config.git`,
+    `https://x:p@${token}@github.com/acme/config.git`,
   ]) {
     const refused = await repo.setOrigin(origin).then(
       () => "set",
       (error: Error) => error.message,
     );
     expect(refused).toMatch(/placeholder|not an http\(s\) git URL/);
+    expect(refused).not.toContain("literalSecret");
     expect(refused).not.toContain(token);
   }
   expect(appended).toEqual([]);
+});
+
+test("a pull or push handed no caller's egress is refused before it reaches any remote", async () => {
+  const { artifacts, remote } = await withRemote();
+  const repo = repoFacet(artifacts);
+  for (const call of [repo.pull({ remote }), repo.push({ remote })])
+    expect(await refusal(call)).toMatchObject({ code: "INVALID_INPUT" });
 });
 
 test("origin-set is reduced into the repo's state: set, replaced, forgotten; a payload that is no origin is skipped", () => {
@@ -361,9 +373,8 @@ function repoFacet(
   return repo;
 }
 
-/** A repo facet over `artifacts` whose context answers what pull and push use: `fetch` (the egress,
- *  here straight to the fake server, each request recorded as the remote saw it) and the two appends
- *  of a commit's fact (on `/`, then on the repo's path), recorded. */
+/** A repo facet over `artifacts` whose context answers the two appends of a commit's fact (on `/`,
+ *  then on the repo's path), recorded, and whose pull and push are handed the caller's egress. */
 function syncingRepo(artifacts: FakeArtifacts, origin: string | null = null) {
   const appended: { at: string; type: string; payload: unknown }[] = [];
   const requests: { url: string; authorization: string | null }[] = [];
@@ -381,16 +392,18 @@ function syncingRepo(artifacts: FakeArtifacts, origin: string | null = null) {
   const repo = repoFacet(
     artifacts,
     memoryStorage(),
-    {
-      fetch: async (request: Request) => {
-        requests.push({ url: request.url, authorization: request.headers.get("authorization") });
-        return fetch(request);
-      },
-      append: record(path),
-      cd: (to: string) => ({ append: record(to) }),
-    },
+    { append: record(path), cd: (to: string) => ({ append: record(to) }) },
     origin,
   );
+  // The caller's egress, which `itx.repos.get(path)` hands a pull or push (library.ts): here
+  // straight to the fake server, each request recorded as the remote saw it.
+  const egress = async (request: Request) => {
+    requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+    return fetch(request);
+  };
+  const [pull, push] = [repo.pull.bind(repo), repo.push.bind(repo)];
+  repo.pull = (options) => pull(options, egress);
+  repo.push = (options) => push(options, egress);
   /** The next append on `at` throws, as a root refusing it would. */
   const failNextAppendAt = (at: string) => {
     failAt = at;

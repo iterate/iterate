@@ -491,6 +491,15 @@ export async function parsePack(
   const resolved = new Map<Entry, { payload: Uint8Array; type: GitObjectType }>();
   const byOid = new Map<string, { payload: Uint8Array; type: GitObjectType }>();
   const resolving = new Set<Entry>();
+  /** The bytes delta results have taken: a result's size is reserved from what is left of the total
+   *  before it is allocated (applyDelta refuses a result past the bound it is handed). */
+  let deltaBytes = 0;
+  const delta = (base: Uint8Array, program: Uint8Array): Uint8Array => {
+    const bound = maxTotalObjectBytes - declaredBytes - deltaBytes;
+    const out = applyDelta(base, program, Math.min(maxObjectBytes ?? Infinity, bound));
+    deltaBytes += out.byteLength;
+    return out;
+  };
   const resolve = (entry: Entry): { payload: Uint8Array; type: GitObjectType } => {
     const done = resolved.get(entry);
     if (done) return done;
@@ -506,17 +515,14 @@ export async function parsePack(
           throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
         }
         const baseResolved = resolve(base);
-        out = {
-          payload: applyDelta(baseResolved.payload, entry.payload, maxObjectBytes),
-          type: baseResolved.type,
-        };
+        out = { payload: delta(baseResolved.payload, entry.payload), type: baseResolved.type };
       } else {
         const base = byOid.get(entry.baseOid!);
         if (!base) {
           // Retryable: a later pass may have hashed this base by then.
           throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
         }
-        out = { payload: applyDelta(base.payload, entry.payload, maxObjectBytes), type: base.type };
+        out = { payload: delta(base.payload, entry.payload), type: base.type };
       }
       resolved.set(entry, out);
       return out;
@@ -777,7 +783,7 @@ function decodeUserinfo(part: string): string {
 /** A remote as it may be shown: everything up to its last `@` dropped after the scheme, whatever the
  *  scheme or its case, so no credential in it is ever echoed. */
 export function redactRemote(remote: string): string {
-  return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[^@]*@(?=[^@]*$)/i, "$1");
+  return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[\s\S]*@(?=[^@]*$)/i, "$1");
 }
 
 /** Whether `target` is `from` or one of its ancestors, walking every parent through the commits in
@@ -855,8 +861,13 @@ export function createGitWireTransport(input: {
         );
         if (!response.ok) {
           failedStatus = response.status;
-          await response.body?.cancel(); // an unread body keeps its connection open
-          throw new Error(`${service} responded ${response.status} for ${input.remote}`);
+          // The answer's first words say why (a refusal from GitHub, or from the caller's own rules
+          // for egress); read no further than a few KiB, since an unread body keeps its connection.
+          const why = await readCapped(response, 4_096).catch(() => new Uint8Array());
+          const text = textDecoder.decode(why.subarray(0, 200)).trim();
+          throw new Error(
+            `${service} responded ${response.status} for ${input.remote}${text ? `: ${text}` : ""}`,
+          );
         }
         return readCapped(response, MAX_RESPONSE_BYTES);
       },
@@ -872,7 +883,10 @@ export function createGitWireTransport(input: {
   };
   return {
     fetchObjects: async (request: { deepen: number; wants: string[] }): Promise<RawGitObject[]> =>
-      parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request)))),
+      parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request))), {
+        maxObjectBytes: MAX_RESPONSE_BYTES,
+        maxTotalObjectBytes: MAX_RESPONSE_BYTES,
+      }),
     fetchPack: async (request: { wants: string[]; haves: string[] }): Promise<Uint8Array> =>
       demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request))),
     tipOf: async (ref: string): Promise<string | undefined> =>

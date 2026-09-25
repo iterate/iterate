@@ -145,11 +145,18 @@ function ProjectOverview() {
 /** What the config repo's section is doing, one action at a time. */
 type ConfigRepoAction = "link" | "pull" | "push" | "replace" | "force-push" | "unlink";
 
+/** A choice the sheet waits on, with the remote it is about: after a pull (`diverged`) or a push
+ *  (`behind`) against it that was not a fast-forward, or replacing iterate's main with it
+ *  (`replace`, the confirm). Its actions use that remote, whatever origin is by then. */
+type ConfigRepoChoice = {
+  kind: "diverged" | "behind" | "replace";
+  remote: ReturnType<typeof describeOrigin>;
+};
+
 /** The config repo's remote, git's `origin`, read again after every action, and its main pulled and
  *  pushed by hand. Every pull and push names the remote the page shows, so a link changed elsewhere
- *  since is never the one acted on. One sheet, one step at a time: `link` (`?configRepo=link`), and
- *  the choices a pull (`diverged`) or push (`behind`) that is not a fast-forward leaves, or replacing
- *  iterate's main (`replace`, the confirm). */
+ *  since is never the one acted on, and a pending choice goes when a read finds origin changed. The
+ *  sheet links it (`?configRepo=link`) or holds the pending choice. */
 function ConfigRepo({
   project,
   githubConnections,
@@ -164,7 +171,7 @@ function ConfigRepo({
   const [busy, setBusy] = useState<ConfigRepoAction | null>(null);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [step, setStep] = useState<"diverged" | "behind" | "replace" | null>(null);
+  const [choice, setChoice] = useState<ConfigRepoChoice | null>(null);
   const firstField = useRef<HTMLInputElement>(null);
   const configRepo = useCallback(
     () => api.projects.get(project.id).repos.get("/repos/config"),
@@ -175,7 +182,10 @@ function ConfigRepo({
       configRepo()
         .origin()
         .then(
-          (origin) => setRead({ origin }),
+          (origin) => {
+            setRead({ origin });
+            setChoice((pending) => (pending?.remote.url === origin ? pending : null));
+          },
           (caught: unknown) => setError(messageOf(caught)),
         ),
     [configRepo],
@@ -183,34 +193,33 @@ function ConfigRepo({
   useEffect(() => void readOrigin(), [readOrigin]);
 
   const remote = read?.origin ? describeOrigin(read.origin) : null;
-  const sheet = step || (search.configRepo === "link" ? "link" : null);
+  const linking = !choice && search.configRepo === "link";
   const closeSheet = async () => {
-    setStep(null);
+    setChoice(null);
     setError(null);
     await navigate({ search: {}, replace: true });
   };
+  /** Pull or push main against `url`: the outcome said and the sheet closed, or, when it is not a
+   *  fast-forward (only an unforced one throws that), the sheet on the choice about that remote. */
   const sync = async (verb: "pull" | "push", url: string, force?: true) => {
-    const result = await configRepo()[verb]({ remote: url, force });
-    setOutcome(
-      result.status === "up-to-date"
-        ? "Already up to date"
-        : `${verb === "pull" ? "Pulled" : "Pushed"} ${(result.commitOid || "").slice(0, 7)}`,
-    );
+    try {
+      const result = await configRepo()[verb]({ remote: url, force });
+      setOutcome(
+        result.status === "up-to-date"
+          ? "Already up to date"
+          : `${verb === "pull" ? "Pulled" : "Pushed"} ${(result.commitOid || "").slice(0, 7)}`,
+      );
+      await closeSheet();
+    } catch (caught) {
+      if (errorCode(caught) !== "NOT_FAST_FORWARD") throw caught;
+      setChoice({ kind: verb === "pull" ? "diverged" : "behind", remote: describeOrigin(url) });
+    }
   };
-  /** Success closes the sheet. A pull or push that is not a fast-forward opens it on the choice
-   *  instead: only an unforced one throws that, and every action but "push" pulls. */
   const run = async (action: ConfigRepoAction, work: () => Promise<unknown>) => {
     setBusy(action);
     setError(null);
     setOutcome(null);
-    try {
-      await work();
-      await closeSheet();
-    } catch (caught) {
-      if (errorCode(caught) === "NOT_FAST_FORWARD")
-        setStep(action === "push" ? "behind" : "diverged");
-      else setError(messageOf(caught));
-    }
+    await work().catch((caught: unknown) => setError(messageOf(caught)));
     await readOrigin();
     setBusy(null);
   };
@@ -231,23 +240,23 @@ function ConfigRepo({
       {label}
     </Button>
   );
-  const choice =
-    step && remote
-      ? {
-          diverged: {
-            title: `${remote.name}'s main and iterate's have diverged`,
-            description: `Each has commits the other lacks: keep ${remote.name}'s, or push iterate's over it.`,
-          },
-          behind: {
-            title: `${remote.name} has commits iterate's main doesn't`,
-            description: `Pushing anyway overwrites ${remote.name}'s main with iterate's, and those commits go.`,
-          },
-          replace: {
-            title: `Replace iterate's main with ${remote.name}'s?`,
-            description: `iterate's own commits since the two diverged are dropped from main, and the project republishes ${remote.name}'s version.`,
-          },
-        }[step]
-      : null;
+  const name = choice?.remote.name;
+  const copy =
+    choice &&
+    {
+      diverged: {
+        title: `${name}'s main and iterate's have diverged`,
+        description: `Each has commits the other lacks: keep ${name}'s, or push iterate's over it.`,
+      },
+      behind: {
+        title: `${name} has commits iterate's main doesn't`,
+        description: `Pushing anyway overwrites ${name}'s main with iterate's, and those commits go.`,
+      },
+      replace: {
+        title: `Replace iterate's main with ${name}'s?`,
+        description: `iterate's own commits since the two diverged are dropped from main, and the project republishes ${name}'s version.`,
+      },
+    }[choice.kind];
 
   return (
     <section aria-labelledby="config-repo-heading" className="flex flex-col gap-3">
@@ -266,7 +275,11 @@ function ConfigRepo({
             <>
               {actionButton("pull", "Pull now", () => sync("pull", remote.url))}
               {actionButton("push", "Push now", () => sync("push", remote.url))}
-              <Button variant="outline" disabled={Boolean(busy)} onClick={() => setStep("replace")}>
+              <Button
+                variant="outline"
+                disabled={Boolean(busy)}
+                onClick={() => setChoice({ kind: "replace", remote })}
+              >
                 Replace with {remote.name}&apos;s
               </Button>
               {actionButton("unlink", "Unlink", () => configRepo().setOrigin(null))}
@@ -291,12 +304,15 @@ function ConfigRepo({
           {outcome}
         </p>
       ) : null}
-      {sheet ? null : <Failure error={error} />}
-      <Sheet open={Boolean(sheet)} onOpenChange={(open) => !open && !busy && void closeSheet()}>
+      {choice || linking ? null : <Failure error={error} />}
+      <Sheet
+        open={Boolean(choice) || linking}
+        onOpenChange={(open) => !open && !busy && void closeSheet()}
+      >
         <SheetContent
           side="right"
           showCloseButton={!busy}
-          initialFocus={sheet === "link" ? firstField : undefined}
+          initialFocus={linking ? firstField : undefined}
           className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           <form
@@ -307,15 +323,15 @@ function ConfigRepo({
             }}
           >
             <SheetHeader className="border-b">
-              <SheetTitle>{choice ? choice.title : "Link the config repo"}</SheetTitle>
+              <SheetTitle>{copy ? copy.title : "Link the config repo"}</SheetTitle>
               <SheetDescription>
-                {choice
-                  ? `${choice.description} Cancel keeps the link and moves nothing.`
+                {copy
+                  ? `${copy.description} Cancel keeps the link and moves nothing.`
                   : "iterate keeps the remote as the repo's origin and pulls its main."}
               </SheetDescription>
             </SheetHeader>
             <FieldGroup className="flex-1 p-4">
-              {sheet === "link" ? (
+              {linking ? (
                 <>
                   {githubConnections.map((row) => (
                     <GithubRepositories
@@ -355,30 +371,30 @@ function ConfigRepo({
                   </Field>
                 </>
               ) : null}
-              {choice && remote ? (
+              {choice ? (
                 <div className="flex flex-col items-start gap-3">
-                  {step === "diverged" ? (
+                  {choice.kind === "diverged" ? (
                     <Button
                       variant="destructive"
                       disabled={Boolean(busy)}
-                      onClick={() => setStep("replace")}
+                      onClick={() => setChoice({ ...choice, kind: "replace" })}
                     >
-                      Replace with {remote.name}&apos;s main
+                      Replace with {choice.remote.name}&apos;s main
                     </Button>
                   ) : null}
-                  {step === "replace"
+                  {choice.kind === "replace"
                     ? actionButton(
                         "replace",
                         "Replace",
-                        () => sync("pull", remote.url, true),
+                        () => sync("pull", choice.remote.url, true),
                         "destructive",
                       )
                     : actionButton(
                         "force-push",
-                        step === "diverged"
-                          ? `Push iterate's to ${remote.name}`
+                        choice.kind === "diverged"
+                          ? `Push iterate's to ${choice.remote.name}`
                           : "Push iterate's anyway",
-                        () => sync("push", remote.url, true),
+                        () => sync("push", choice.remote.url, true),
                         "destructive",
                       )}
                 </div>
@@ -392,7 +408,7 @@ function ConfigRepo({
               >
                 Cancel
               </SheetClose>
-              {sheet === "link" ? (
+              {linking ? (
                 <Button type="submit" disabled={Boolean(busy)}>
                   {busy === "link" ? <Spinner data-icon="inline-start" /> : null}
                   Link
@@ -446,7 +462,7 @@ const InstallationRepositories = z.object({
   repositories: z.array(z.object({ full_name: z.string() })),
 });
 
-/** One GitHub connection's repositories (the first thousand), listed through the project's egress
+/** One GitHub connection's repositories, every page, listed through the project's egress
  *  with the connection's token as its placeholder. A pick links over the same placeholder, so the
  *  origin never holds the token. */
 function GithubRepositories({
@@ -468,7 +484,7 @@ function GithubRepositories({
   useEffect(() => {
     const list = async () => {
       const names: string[] = [];
-      for (let page = 1; page <= 10; page += 1) {
+      for (let page = 1; ; page += 1) {
         const url = `https://api.github.com/installation/repositories?per_page=100&page=${page}`;
         const response = await api.projects.get(projectId).fetch(
           new Request(url, {
@@ -488,9 +504,8 @@ function GithubRepositories({
         }
         const { repositories } = InstallationRepositories.parse(await response.json());
         names.push(...repositories.map((repository) => repository.full_name));
-        if (repositories.length < 100) break;
+        if (repositories.length < 100) return names;
       }
-      return names;
     };
     list().then(
       (names) => setListed({ names }),
