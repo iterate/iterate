@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { installAgents, pkgPrNewVersion } from "@iterate-com/agents/install";
 import { build } from "esbuild";
 import { openItx, sleep } from "../../os/e2e/support/client.ts";
@@ -13,7 +14,8 @@ export async function openAgentItx(context: string) {
  *  and `cloudflare:workers` left to the platform): a source `installVoice` mounts without a publish. */
 export async function voiceWorkspaceSource(): Promise<{ "index.js": string }> {
   const result = await build({
-    entryPoints: [new URL("../../../packages/voice/src/index.ts", import.meta.url).pathname],
+    // the workspace package's entry: its source
+    entryPoints: [createRequire(import.meta.url).resolve("@iterate-com/voice")],
     bundle: true,
     write: false,
     format: "esm",
