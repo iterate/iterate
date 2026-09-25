@@ -356,12 +356,12 @@ test("run: run(script) appends run-requested { code } — the request's offset I
     buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(script),
   ).resolves.toEqual({ n: 1 });
   expect(appended).toEqual([
-    { type: "events.iterate.com/context/run-requested", payload: { code: script } },
+    { type: "events.iterate.com/itx/run-requested", payload: { code: script } },
   ]);
   expect(waits.map((w) => [w.type, w.afterOffset])).toEqual([
-    ["events.iterate.com/context/run-settled", 10], // after the request (offset 10)
-    ["events.iterate.com/context/run-settled", 11], // the other run's was the last seen
-    ["events.iterate.com/context/run-settled", 11], // a timeout re-arms from the same place
+    ["events.iterate.com/itx/run-settled", 10], // after the request (offset 10)
+    ["events.iterate.com/itx/run-settled", 11], // the other run's was the last seen
+    ["events.iterate.com/itx/run-settled", 11], // a timeout re-arms from the same place
   ]);
   expect(loaded).toEqual([]); // the execution is the runner's, never the caller's
   expect(runs()).toBe(0);
@@ -1253,7 +1253,7 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
 }
 
 const settledAt = (offset: number, requestOffset: number, settlement: unknown): StreamEvent => ({
-  type: "events.iterate.com/context/run-settled",
+  type: "events.iterate.com/itx/run-settled",
   payload: { requestOffset, settlement },
   offset,
   createdAt: "t",

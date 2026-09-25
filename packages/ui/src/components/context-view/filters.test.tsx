@@ -14,7 +14,7 @@ import { rendererFor, type ContextViewEvent } from "./types.tsx";
 const EMPTY_FILTER: ContextViewFilter = { query: "", types: new Set() };
 
 const log = [
-  at(1, "events.iterate.com/stream/created", { path: "/" }),
+  at(1, "events.iterate.com/itx/created", { path: "/" }),
   at(
     2,
     "events.iterate.com/account/personal-access-token-minted",
@@ -52,7 +52,7 @@ test("typeCounts: most frequent first, ties by name", () => {
   expect(typeCounts(log)).toEqual([
     ["events.iterate.com/account/personal-access-token-minted", 2],
     ["events.iterate.com/account/grant-ended", 1],
-    ["events.iterate.com/stream/created", 1],
+    ["events.iterate.com/itx/created", 1],
   ]);
 });
 
@@ -69,7 +69,7 @@ test("rendererFor: an exact type wins over a prefix, the longest prefix wins ove
     exact,
   );
   expect(rendererFor(renderers, "events.iterate.com/account/grant-ended")).toBe(account);
-  expect(rendererFor(renderers, "events.iterate.com/stream/created")).toBe(all);
+  expect(rendererFor(renderers, "events.iterate.com/itx/created")).toBe(all);
   expect(rendererFor(renderers, "custom/thing")).toBeUndefined();
   expect(rendererFor(undefined, "x")).toBeUndefined();
 });

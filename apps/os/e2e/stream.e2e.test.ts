@@ -1,7 +1,7 @@
 // stream.e2e.test.ts — THE EVENT LOG through `itx.append` / `itx.readEvents` / `itx.waitForEvent`
 // (`Stream` in stream/stream.ts, whose mechanics are src/stream/stream.test.ts; this file proves the
 // entry points end to end through the real DO). Pins:
-//   • the WAKE RECORD: the DO's constructor appends `stream/created` @1 and `stream/woken` @2 before
+//   • the WAKE RECORD: the DO's constructor appends `itx/created` @1 and `itx/woken` @2 before
 //     any call is served, and the first user append lands @3; the core reduce carries identity +
 //     incarnation; woken exactly once per incarnation, created once ever
 //   • append's runtime guards; idempotency at the commit point (an in-batch hit reduced ONCE
@@ -10,7 +10,7 @@
 //     unique)
 //   • payload depth near the codec's budget (64-deep, an idempotent retry of it, the JSON5 string half)
 //   • the pause slice (control is ordinary events; enforcement reads the reduce — the policy that
-//     DECIDES to pause is processor-facets.e2e's breaker): a bare `stream/paused` pauses; durable AND
+//     DECIDES to pause is processor-facets.e2e's breaker): a bare `itx/paused` pauses; durable AND
 //     ephemeral appends refuse, mixed batches wholesale, the resume always lands; a subscribe REFUSED
 //     while paused recalls nothing it lent
 //   • read paging's scanned-offset-range proof: a full page stops at its last row, a short page proves
@@ -48,8 +48,8 @@ test("any call materializes a fresh context: readEvents(0) starts with created t
   // A bare read sees only the birth and wake records; no implicit subscriptions.
   const page = await itx.invoke("itx.readEvents(0)");
   expect(page.events.map((e: { type: string; offset: number }) => [e.type, e.offset])).toEqual([
-    ["events.iterate.com/stream/created", 1],
-    ["events.iterate.com/stream/woken", 2],
+    ["events.iterate.com/itx/created", 1],
+    ["events.iterate.com/itx/woken", 2],
   ]);
   expect(page.events[0]).toMatchObject({ payload: { projectId: ctx, path: "/" } });
   const incarnation = page.events[1].payload.incarnation;
@@ -68,8 +68,8 @@ test("any call materializes a fresh context: readEvents(0) starts with created t
   // exactly once per incarnation (and born exactly once, ever)
   await itx.invoke(`itx.append({ type: 'again' })`);
   const types = (await itx.invoke("itx.readEvents(0)")).events.map((e: { type: string }) => e.type);
-  expect(types.filter((t: string) => t === "events.iterate.com/stream/woken")).toHaveLength(1);
-  expect(types.filter((t: string) => t === "events.iterate.com/stream/created")).toHaveLength(1);
+  expect(types.filter((t: string) => t === "events.iterate.com/itx/woken")).toHaveLength(1);
+  expect(types.filter((t: string) => t === "events.iterate.com/itx/created")).toHaveLength(1);
 });
 
 // ── the commit point: guards, idempotency, depth, the pause slice, paging ──
@@ -218,11 +218,11 @@ test("an idempotent RETRY of a 64-deep payload dedupes instead of tripping the d
 
 // ── the core reduce's pause slice (control is ordinary events; enforcement reads the reduce) ──
 
-test("a bare stream/paused event (no payload) actually pauses the stream", async () => {
+test("a bare itx/paused event (no payload) actually pauses the stream", async () => {
   // the core reduce defaults `event.payload ?? {}` — a pause that silently doesn't pause
   // would be an operator trap (the control fact is in the log while writes keep landing).
   const itx = openItx(freshCtx("barepause"));
-  await itx.append({ type: "events.iterate.com/stream/paused" });
+  await itx.append({ type: "events.iterate.com/itx/paused" });
   const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
   expect(err.message).toContain("stream paused");
 });
@@ -230,7 +230,7 @@ test("a bare stream/paused event (no payload) actually pauses the stream", async
 test("pause refuses durable AND ephemeral appends, mixed batches wholesale — control passes", async () => {
   const itx = openItx(freshCtx("pause"));
   await itx.append({
-    type: "events.iterate.com/stream/paused",
+    type: "events.iterate.com/itx/paused",
     payload: { reason: "maintenance" },
   });
   // durable → refused, with the reason on the message
@@ -243,13 +243,13 @@ test("pause refuses durable AND ephemeral appends, mixed batches wholesale — c
   // batch-atomic at append — no partial admission)
   const mixedErr = await rejection(
     itx.append(
-      { type: "events.iterate.com/stream/resumed", payload: {} },
+      { type: "events.iterate.com/itx/resumed", payload: {} },
       { type: "mark", payload: { n: 2 } },
     ),
   );
   expect(mixedErr.message).toContain("stream paused");
   // the bare resume passes — a paused stream must always accept its own resume
-  await itx.append({ type: "events.iterate.com/stream/resumed", payload: {} });
+  await itx.append({ type: "events.iterate.com/itx/resumed", payload: {} });
   const [after] = await itx.append({ type: "mark", payload: { resumed: true } });
   expect(after.offset).toBeGreaterThan(0);
 });
@@ -263,13 +263,13 @@ test("a subscribe REFUSED by a paused stream leaves the live same-name subscript
   await itx.subscribe({ name: "watch", target: () => undefined });
   expect(await itx.rpcStubs.list()).toContain("subscription:watch");
   await itx.append({
-    type: "events.iterate.com/stream/paused",
+    type: "events.iterate.com/itx/paused",
     payload: { reason: "maintenance" },
   });
   const refused = await rejection(itx.subscribe({ name: "watch", target: "itx.kv.get('k')" }));
   expect(refused.message).toContain("stream paused");
   expect(await itx.rpcStubs.list()).toContain("subscription:watch"); // still lent: nothing was recalled
-  await itx.append({ type: "events.iterate.com/stream/resumed", payload: {} });
+  await itx.append({ type: "events.iterate.com/itx/resumed", payload: {} });
   expect(await itx.rpcStubs.list()).toContain("subscription:watch"); // and the resume un-sets nothing: the key has its transport
 });
 
@@ -491,9 +491,9 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got.offset).toBeGreaterThan(head);
 });
 
-// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken { reason }` is the durable
+// ── THE WAKE TRACE PROBE (opt-in, deployed): `itx/woken { reason }` is the durable
 // incarnation boundary and says what woke it; every alarm pass of the CURRENT incarnation is an
-// ephemeral `events.iterate.com/stream/trace/alarm`, read back with `readEvents(…, { includeEphemeral })`.
+// ephemeral `events.iterate.com/itx/alarm-trace`, read back with `readEvents(…, { includeEphemeral })`.
 // A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this prints each wake's
 // story from the ring, landing inside the incarnation each wake made:
 //
@@ -523,7 +523,7 @@ probe(
           events: StreamEvent[];
         }
       ).events
-        .filter((event) => event.type === "events.iterate.com/stream/trace/alarm")
+        .filter((event) => event.type === "events.iterate.com/itx/alarm-trace")
         .map((event) => event.payload as unknown as AlarmTrace);
     const story = (ring: AlarmTrace[]) =>
       ring
@@ -540,7 +540,7 @@ probe(
     // `subscribe` are removed when the session is disposed below, and the ladder must outlive
     // every session here.
     await itx.append({
-      type: "events.iterate.com/stream/subscription-configured",
+      type: "events.iterate.com/itx/subscription-configured",
       payload: {
         name: "faildeliver",
         target: ["itx", "workers", ["get", { source: THROWING_WORKER }], "processEventBatch"],
@@ -566,7 +566,7 @@ probe(
         disposeSessions();
       }
       const events = await readAll(openItx(ctx));
-      const wokens = events.filter((e) => e.type === "events.iterate.com/stream/woken");
+      const wokens = events.filter((e) => e.type === "events.iterate.com/itx/woken");
       console.log(
         `wake-loop OBSERVE: woken=${wokens.length} reasons=${JSON.stringify(wokens.map((e) => (e.payload as { reason?: string }).reason))}`,
       );
@@ -577,7 +577,7 @@ probe(
       // The row is removed WHATEVER happened above: a deployed context must not keep laddering
       // after the observation, a failed assertion included.
       await openItx(ctx).append({
-        type: "events.iterate.com/stream/subscription-configured",
+        type: "events.iterate.com/itx/subscription-configured",
         payload: { name: "faildeliver", target: null },
       });
     }

@@ -371,7 +371,7 @@ async function landProjectOnOrganization(
   if (!record.projects[project.id])
     onOrganization.push({
       ...projectAddedFact(project.id, project.slug),
-      idempotencyKey: `organization/project-created:${project.id}`,
+      idempotencyKey: `organization/project-added:${project.id}`,
     });
   if (onOrganization.length)
     await waits.time("organizationFold", () =>
@@ -458,7 +458,7 @@ const invitationRevokedFact = (invitationId: string): StreamEventInput => ({
   payload: { invitationId },
 });
 const projectAddedFact = (projectId: string, slug: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/project-created",
+  type: "events.iterate.com/organization/project-added",
   payload: { projectId, slug },
 });
 

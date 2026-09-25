@@ -109,7 +109,7 @@ preview, 2026-09-23). So:
 
 | Signal                                                    | Written by                                                     |
 | --------------------------------------------------------- | -------------------------------------------------------------- |
-| `stream/woken` payload `facetsReset`                      | 5, on the incarnation's wake record                            |
+| `itx/woken` payload `facetsReset`                         | 5, on the incarnation's wake record                            |
 | warn `facet.start-failed`, `facet.platform-failure-start` | a start after a reset or at birth that did not start the facet |
 | log `context.facets-reset-at-birth`                       | 5                                                              |
 | log `context.facets-reset-when-quiet`                     | 6                                                              |

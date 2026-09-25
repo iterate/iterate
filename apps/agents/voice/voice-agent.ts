@@ -199,7 +199,7 @@ const VoiceState = z.object({
 });
 
 /** What a client renders live (`itx.facets.get('voice-agent').liveSnapshot()` seeds it, the
- * `live-state/changed` deltas keep it current): the fold plus the two runtime facts a page wants. */
+ * `itx/live-state-changed` deltas keep it current): the fold plus the two runtime facts a page wants. */
 export type VoiceLiveView = {
   /** No call; a call whose provider dial is not ready; a live call; the last call's aftermath. */
   phase: "idle" | "dialing" | "live" | "ended";
@@ -256,7 +256,7 @@ const VoiceAgentContract = defineProcessorContract({
       description: "The call is over; the device appends it too (the hang-up button).",
       payloadSchema: z.looseObject({ activation: Activation, reason: z.string() }),
     },
-    "events.iterate.com/voice-agent/provider-error": {
+    "events.iterate.com/voice-agent/provider-error-reported": {
       description: "The provider reported an error, verbatim.",
       payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
     },
@@ -266,7 +266,7 @@ const VoiceAgentContract = defineProcessorContract({
     },
     /* The durable transcript: one event per finished turn per side, grouped from the provider's
      * timeline fragments. The fold keeps a recap of these and seeds every new session with it. */
-    "events.iterate.com/voice-agent/utterance-transcript": {
+    "events.iterate.com/voice-agent/utterance-transcribed": {
       description: "The provider's transcription of one finished listener turn.",
       payloadSchema: z.looseObject({
         conversationId: z.string(),
@@ -274,7 +274,7 @@ const VoiceAgentContract = defineProcessorContract({
         key: z.string().optional(),
       }),
     },
-    "events.iterate.com/voice-agent/answer-transcript": {
+    "events.iterate.com/voice-agent/answer-transcribed": {
       description:
         "The provider's own transcript of one finished spoken answer — what was said, not " +
         "necessarily what was heard: the listener may have talked over it.",
@@ -284,8 +284,8 @@ const VoiceAgentContract = defineProcessorContract({
         key: z.string().optional(),
       }),
     },
-    "events.iterate.com/voice-agent/thinking": thinkingEvent,
-    "events.iterate.com/voice-agent/commentary": commentaryEvent,
+    "events.iterate.com/voice-agent/thinking-added": thinkingEvent,
+    "events.iterate.com/voice-agent/commentary-added": commentaryEvent,
     "events.iterate.com/voice-agent/delegation-requested": {
       description:
         "The live model handed a request to the backend, with the words said so far; the answer is a commentary naming the same delegationId.",
@@ -307,27 +307,27 @@ const VoiceAgentContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/voice-agent/thinking",
-    "events.iterate.com/voice-agent/commentary",
+    "events.iterate.com/voice-agent/thinking-added",
+    "events.iterate.com/voice-agent/commentary-added",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-ended",
     /* Consumed so the fold sees its own appends and the recap survives an eviction. */
-    "events.iterate.com/voice-agent/utterance-transcript",
-    "events.iterate.com/voice-agent/answer-transcript",
+    "events.iterate.com/voice-agent/utterance-transcribed",
+    "events.iterate.com/voice-agent/answer-transcribed",
     /* Ephemeral: named here because `"*"` never matches an ephemeral event. */
     "events.iterate.com/voice-agent/mic-frame",
     "events.iterate.com/voice-agent/keepalive",
   ],
   emits: [
     "events.iterate.com/voice-agent/delegation-requested",
-    "events.iterate.com/voice-agent/commentary",
-    "events.iterate.com/voice-agent/thinking",
+    "events.iterate.com/voice-agent/commentary-added",
+    "events.iterate.com/voice-agent/thinking-added",
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-ended",
-    "events.iterate.com/voice-agent/provider-error",
+    "events.iterate.com/voice-agent/provider-error-reported",
     "events.iterate.com/voice-agent/provider-disconnected",
-    "events.iterate.com/voice-agent/utterance-transcript",
-    "events.iterate.com/voice-agent/answer-transcript",
+    "events.iterate.com/voice-agent/utterance-transcribed",
+    "events.iterate.com/voice-agent/answer-transcribed",
     "events.iterate.com/voice-agent/spk-frame",
   ],
 });
@@ -518,7 +518,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
             }
           : state;
 
-      case "events.iterate.com/voice-agent/utterance-transcript":
+      case "events.iterate.com/voice-agent/utterance-transcribed":
         if (event.payload.text === "") return state;
         return {
           ...state,
@@ -528,7 +528,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
           }),
         };
 
-      case "events.iterate.com/voice-agent/answer-transcript":
+      case "events.iterate.com/voice-agent/answer-transcribed":
         if (event.payload.text === "") return state;
         return {
           ...state,
@@ -591,15 +591,20 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     if (event === null) return;
 
     switch (event.type) {
-      case "events.iterate.com/voice-agent/thinking":
-      case "events.iterate.com/voice-agent/commentary": {
+      case "events.iterate.com/voice-agent/thinking-added":
+      case "events.iterate.com/voice-agent/commentary-added": {
         const dial = this.#dial;
         const update = event.payload;
         /* A dial dies with its incarnation; a redelivered update with no dial is not forwarded. */
         if (!dial || dial.activation !== update.activation) return;
         const sessionType =
-          event.type === "events.iterate.com/voice-agent/thinking" ? "thinking" : "commentary";
-        if (event.type === "events.iterate.com/voice-agent/commentary" && event.payload.hangUp) {
+          event.type === "events.iterate.com/voice-agent/thinking-added"
+            ? "thinking"
+            : "commentary";
+        if (
+          event.type === "events.iterate.com/voice-agent/commentary-added" &&
+          event.payload.hangUp
+        ) {
           dial.hangUpReason = "the Agent hung up";
           dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
           dial.answerBeforeHangUp = dial.answer;
@@ -900,7 +905,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
       case "error":
         this.#background(() =>
           this.#append({
-            type: "events.iterate.com/voice-agent/provider-error",
+            type: "events.iterate.com/voice-agent/provider-error-reported",
             payload: {
               conversationId,
               message: JSON.stringify(live.error ?? live).slice(0, 2_000),
@@ -1084,12 +1089,12 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     this.#background(() =>
       speaker === "user"
         ? this.#append({
-            type: "events.iterate.com/voice-agent/utterance-transcript",
+            type: "events.iterate.com/voice-agent/utterance-transcribed",
             idempotencyKey: this.idempotencyKey(key),
             payload: { conversationId: dial.conversationId, text, key: transcriptKey },
           })
         : this.#append({
-            type: "events.iterate.com/voice-agent/answer-transcript",
+            type: "events.iterate.com/voice-agent/answer-transcribed",
             idempotencyKey: this.idempotencyKey(key),
             payload: { conversationId: dial.conversationId, text, key: transcriptKey },
           }),

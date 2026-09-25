@@ -19,7 +19,7 @@
 // runs the model, settles it (`llm-request-settled`) with the assistant's words as the next
 // `context-added`. The answer is markdown prose plus at most one `<codemode status="…">` block
 // (codemode-format.ts, mmkal's grammar): the prose is `web-message-sent` — what a person is shown —
-// the status `summary-updated`, the body a script: the CONTEXT's own `context/run-requested` (the
+// the status `summary-updated`, the body a script: the CONTEXT's own `itx/run-requested` (the
 // context runs it; a restart settles it `interrupted`, never re-run), whose `run-settled` result is
 // the next developer `context-added`, which triggers the next turn; prose alone ends the turn.
 // Bounded: an open request expires, N consecutive model failures pause, N consecutive
@@ -262,7 +262,7 @@ export const AgentContract = defineProcessorContract({
         triggerOffset: z.number().int().positive(),
       }),
     },
-    "events.iterate.com/agent/llm-response-chunks": {
+    "events.iterate.com/agent/llm-response-frame": {
       description:
         "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names — what a feed renders as the answer being written. The settled event carries the durable text.",
       ephemeral: true,
@@ -321,7 +321,7 @@ export const AgentContract = defineProcessorContract({
       payloadSchema: z.object({ reason: z.string().optional() }),
     },
   },
-  // The script events are the CONTEXT's (`context/run-requested` / `run-settled`): the agent asks,
+  // The script events are the CONTEXT's (`itx/run-requested` / `run-settled`): the agent asks,
   // the context runs, the agent reads the settlement as the next developer item.
   processorDeps: [RunContract],
   consumes: [
@@ -336,7 +336,7 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/context/run-settled",
+    "events.iterate.com/itx/run-settled",
   ],
   emits: [
     "events.iterate.com/agent/created",
@@ -346,12 +346,12 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/web-message-sent",
     "events.iterate.com/agent/summary-updated",
     "events.iterate.com/agent/llm-request-requested",
-    "events.iterate.com/agent/llm-response-chunks",
+    "events.iterate.com/agent/llm-response-frame",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/context/run-requested",
+    "events.iterate.com/itx/run-requested",
   ],
 });
 

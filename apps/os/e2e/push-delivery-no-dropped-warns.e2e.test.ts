@@ -49,7 +49,7 @@ localSequential(
       return s.offset >= head && s;
     });
     // Only the explicitly enabled tally is subscribed.
-    expect(snap.state.counts["events.iterate.com/stream/subscription-configured"]).toBe(1);
+    expect(snap.state.counts["events.iterate.com/itx/subscription-configured"]).toBe(1);
     await sleep(400);
     expect(deliveryErrors(worker) - before).toBe(0);
   },

@@ -104,7 +104,7 @@ export const agentEventRenderers: EventRenderers = {
       </>
     );
   },
-  "events.iterate.com/agent/llm-response-chunks": (e) => {
+  "events.iterate.com/agent/llm-response-frame": (e) => {
     const p = record(e.payload);
     const chunks = Array.isArray(p.chunks) ? p.chunks.length : 0;
     return (

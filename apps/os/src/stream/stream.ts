@@ -11,7 +11,7 @@
 // same number to a durable. Every persisted checkpoint in this package advances only on a batch
 // that carried a durable (the processor engine, the core reduce, the subscription cursors), and
 // such a batch's high-water mark is committed with it, so no durable is ever skipped; the
-// `stream/woken` record, the first event of each incarnation, marks the boundary for anyone
+// `itx/woken` record, the first event of each incarnation, marks the boundary for anyone
 // chaining ranges across it. And `read()` never PROVES a scan beyond the durable mark: a short
 // page's `scannedThroughOffset` is the mark, not the in-memory head — so nothing a reader persists
 // (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation could hand
@@ -66,16 +66,16 @@ export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
  *  pair itself (it must always accept its own resume). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   ...PLATFORM_ONLY_EVENT_TYPES,
-  "events.iterate.com/stream/paused",
-  "events.iterate.com/stream/resumed",
+  "events.iterate.com/itx/paused",
+  "events.iterate.com/itx/resumed",
   // a reset's record (`itx.abort`, `itx.facets.abort`) — a paused context must still be resettable
-  "events.iterate.com/context/aborted",
-  "events.iterate.com/context/facet-aborted",
-  "events.iterate.com/stream/append-schedule-cancelled",
+  "events.iterate.com/itx/aborted",
+  "events.iterate.com/itx/facet-aborted",
+  "events.iterate.com/itx/schedule-cancelled",
   // the runner's own record of a run's end — a paused stream must still close a script it started
-  "events.iterate.com/context/run-settled",
+  "events.iterate.com/itx/run-settled",
   // a child's announcement — a paused ancestor must still learn which contexts exist below it
-  "events.iterate.com/context/child-created",
+  "events.iterate.com/itx/child-created",
 ]);
 
 /** One waiting waitForEvent caller. In-memory only: the caller's own open RPC call keeps the DO
@@ -210,7 +210,7 @@ export class Stream {
 
   /** THE BIRTH RECORD — the DO constructor calls this before any handler runs, so a probe on a
    *  never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
-   *  gets `stream/created { projectId, path }` at offset 1 and the first incarnation's wake record
+   *  gets `itx/created { projectId, path }` at offset 1 and the first incarnation's wake record
    *  in the same batch (a birth is always a request's — nothing has an alarm before it exists). A
    *  store with rows gets nothing here: its wake is recorded by the first handler that runs (an
    *  RPC, a fetch, the alarm: `appendWakeRecord`), because only that handler knows WHY it woke —
@@ -220,18 +220,18 @@ export class Stream {
     if (this.#highestDurableOffset !== 0) return;
     this.append(
       {
-        type: "events.iterate.com/stream/created",
+        type: "events.iterate.com/itx/created",
         payload: { projectId: this.#projectId, path: this.#path },
       },
       {
-        type: "events.iterate.com/stream/woken",
+        type: "events.iterate.com/itx/woken",
         payload: { incarnation: this.storage.incarnation, reason: "request" },
       },
     );
     this.#wakeRecorded = true;
   }
 
-  /** THE WAKE RECORD, once per incarnation: `stream/woken { incarnation, reason }` — `"alarm"` from
+  /** THE WAKE RECORD, once per incarnation: `itx/woken { incarnation, reason }` — `"alarm"` from
    *  the alarm handler, `"request"` from every other handler (an RPC, a fetch, a message on a
    *  hibernated socket). The first arrival appends it, before its own work; the ones after find it done.
    *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
@@ -241,8 +241,8 @@ export class Stream {
     if (this.#wakeRecorded) return;
     const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
       (requestOffset): StreamEventInput => ({
-        type: "events.iterate.com/context/run-settled",
-        idempotencyKey: `context/run-settled:${requestOffset}`,
+        type: "events.iterate.com/itx/run-settled",
+        idempotencyKey: `itx/run-settled:${requestOffset}`,
         payload: {
           requestOffset: Number(requestOffset),
           settlement: {
@@ -255,7 +255,7 @@ export class Stream {
     );
     this.append(
       {
-        type: "events.iterate.com/stream/woken",
+        type: "events.iterate.com/itx/woken",
         payload: { incarnation: this.storage.incarnation, reason, ...this.#wakeRecordDetail?.() },
       },
       ...interrupted,
@@ -413,7 +413,7 @@ export class Stream {
     // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
     // Folded here, ahead of the core reduce's own fold, because this refusal depends on the state
     // and must land before any write: `reduceCoreEventBatch` skips a throwing event, never refuses.
-    if (freshEvents.some((event) => event.type === "events.iterate.com/stream/append-scheduled")) {
+    if (freshEvents.some((event) => event.type === "events.iterate.com/itx/schedule-set")) {
       const scheduledAppends = freshEvents.reduce(
         reduceScheduledAppends,
         this.#coreReducedState.schedules,

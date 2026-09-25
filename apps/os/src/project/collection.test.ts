@@ -22,9 +22,9 @@ test("a wait left on a replaced instance times out one slice; the next call find
   await expect(collection(context).create(path, { creator: "/" })).resolves.toEqual({ path });
   expect(context).toMatchObject({
     waits: [
-      { type: [...terminal, "events.iterate.com/stream/woken"], afterOffset: 7, timeoutMs: 5_000 },
-      { type: [...terminal, "events.iterate.com/stream/woken"], afterOffset: 7, timeoutMs: 5_000 },
-      { type: [...terminal, "events.iterate.com/stream/woken"], afterOffset: 8, timeoutMs: 5_000 },
+      { type: [...terminal, "events.iterate.com/itx/woken"], afterOffset: 7, timeoutMs: 5_000 },
+      { type: [...terminal, "events.iterate.com/itx/woken"], afterOffset: 7, timeoutMs: 5_000 },
+      { type: [...terminal, "events.iterate.com/itx/woken"], afterOffset: 8, timeoutMs: 5_000 },
     ],
   });
   expect(warns).toHaveBeenCalledExactlyOnceWith(
@@ -73,7 +73,7 @@ test("a failure is the creation's answer, thrown with its error", async () => {
 /** The context's wake record: an incarnation's first event. */
 function woken(offset: number, incarnation: number) {
   return {
-    type: "events.iterate.com/stream/woken",
+    type: "events.iterate.com/itx/woken",
     offset,
     payload: { incarnation, reason: "request" },
   };

@@ -534,7 +534,7 @@ export class FacetHost {
    *  cannot resolve right now is left to the next call's recovery. */
   refreshFacetStartupMemosFromHostingConfigurations(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
-      if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
+      if (event.type !== "events.iterate.com/itx/subscription-configured") continue;
       const { name, target } = event.payload as SubscriptionConfiguredPayload;
       if (!target || !this.#deps.stream.coreReducedState.subscriptions[name]?.hostedFacet) continue;
       try {
@@ -564,7 +564,7 @@ export class FacetHost {
     subscriptionsBeforeCommit: CoreState["subscriptions"],
   ): void {
     for (const event of committedEvents) {
-      if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
+      if (event.type !== "events.iterate.com/itx/subscription-configured") continue;
       const { name, target } = event.payload as SubscriptionConfiguredPayload;
       const removedRow = !target ? subscriptionsBeforeCommit[name] : undefined;
       // The marker, not the (source-less) target, says which facet a row hosts.

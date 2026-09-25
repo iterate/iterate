@@ -61,7 +61,7 @@ export class OrganizationProcessor extends StreamProcessor<
         const { [event.payload.invitationId]: gone, ...invitations } = state.invitations;
         return gone && { ...state, invitations };
       }
-      case "events.iterate.com/organization/project-created": {
+      case "events.iterate.com/organization/project-added": {
         const { projectId, slug } = event.payload;
         if (state.projects[projectId]) return undefined; // added once
         return {

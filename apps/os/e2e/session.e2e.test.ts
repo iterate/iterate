@@ -191,7 +191,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // the saga's own facts on /: the request, the apex pointed at the seeded commit, the certificate
   expect([requested, ...rest].map((e) => e.type)).toEqual([
     "events.iterate.com/project/create-requested",
-    "events.iterate.com/project/ingress-configured",
+    "events.iterate.com/itx/ingress-configured",
     "events.iterate.com/project/created",
   ]);
   // the request's facts, as the edge spelled them: the slug, and the organization it landed in —
@@ -388,8 +388,8 @@ test(
       e.type.startsWith("events.iterate.com/itx/run-"),
     );
     expect(runPair.map((e) => e.type)).toEqual([
-      "events.iterate.com/context/run-requested",
-      "events.iterate.com/context/run-settled",
+      "events.iterate.com/itx/run-requested",
+      "events.iterate.com/itx/run-settled",
     ]);
     expect(runPair[0]).toMatchObject({ source: { principal, grant: id } });
     // THE ACCOUNT'S RECORD: the key's SHA-256, never the key, landed before the mint answered;

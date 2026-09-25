@@ -5,7 +5,7 @@
 // the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
 // (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
 // `main` is unborn (the homepage worker and an AGENTS.md, below), the project's ingress pointed at
-// that commit (`project/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
+// that commit (`itx/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
 // THE CONFIG REPO: every `repo/commit-completed` from `/repos/config` re-points the ingress at that
 // commit — publishing a config-repo website needs a commit, not a manual ingress event.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
@@ -168,7 +168,7 @@ export class ProjectProcessor extends StreamProcessor<
           },
         };
       }
-      case "events.iterate.com/project/hostname-add-answered": {
+      case "events.iterate.com/project/hostname-add-settled": {
         // it settles only its own request — one asked since stays owed; one that lands after a
         // remove was asked changes nothing; a failure keeps what Cloudflare last said
         const { hostname, requestOffset, cloudflare, error } = event.payload;
@@ -244,7 +244,7 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
         };
-      case "events.iterate.com/project/ingress-configured": {
+      case "events.iterate.com/itx/ingress-configured": {
         // A target set by hand publishes no commit and moves nothing: the appends below are keyed
         // by their commit, so a commit once published is never owed again, whatever the apex names.
         const commitOid = configRepoCommitOf(event.payload.target);
@@ -325,8 +325,8 @@ export class ProjectProcessor extends StreamProcessor<
             tip = this.#newestTip
           ) {
             await append({
-              type: "events.iterate.com/project/ingress-configured",
-              idempotencyKey: `project/ingress-configured:${tip.commitOid}`,
+              type: "events.iterate.com/itx/ingress-configured",
+              idempotencyKey: `itx/ingress-configured:${tip.commitOid}`,
               payload: { target: configRepoIngressTarget(tip.commitOid) },
             });
             this.#published = tip.offset;
@@ -395,7 +395,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (manifest.events.length) {
           await this.withItx((itx) =>
             itx.append({
-              type: "events.iterate.com/stream/subscription-configured",
+              type: "events.iterate.com/itx/subscription-configured",
               idempotencyKey: `project/config-worker:${commitOid}`,
               payload: {
                 name: "config-worker",
@@ -407,8 +407,8 @@ export class ProjectProcessor extends StreamProcessor<
         }
         await append(
           {
-            type: "events.iterate.com/project/ingress-configured",
-            idempotencyKey: `project/ingress-configured:${commitOid}`,
+            type: "events.iterate.com/itx/ingress-configured",
+            idempotencyKey: `itx/ingress-configured:${commitOid}`,
             payload: { target: configRepoIngressTarget(commitOid) },
           },
           {
@@ -447,7 +447,7 @@ export class ProjectProcessor extends StreamProcessor<
       if (claimed && !provisioned) await hostnames!.release(hostname);
     }
     return {
-      type: "events.iterate.com/project/hostname-add-answered" as const,
+      type: "events.iterate.com/project/hostname-add-settled" as const,
       idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
       payload: { hostname, requestOffset: offset, cloudflare, error },
     };

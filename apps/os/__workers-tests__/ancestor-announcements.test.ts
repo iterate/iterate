@@ -1,5 +1,5 @@
 // Every wake of a context tells each ancestor up to `/` (src/context/paths.ts `ancestorPathsOf`)
-// that it exists: `context/child-created { childPath }`, keyed by the child, so the root's log
+// that it exists: `itx/child-created { childPath }`, keyed by the child, so the root's log
 // names every context below it and a repeat lands nothing new.
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
@@ -40,7 +40,7 @@ test("a context born at /a/b/c is announced to /, /a and /a/b — each ancestor 
 test("a paused ancestor still records a child's announcement", async () => {
   const project = `prj_announce_${crypto.randomUUID().slice(0, 8)}`;
   await stub(project).append({
-    type: "events.iterate.com/stream/paused",
+    type: "events.iterate.com/itx/paused",
     payload: { reason: "test" },
   });
   await stub(`${project}.iterate/paused-child`).read(0, 1);
@@ -56,6 +56,6 @@ async function childPathsIn(ctx: string): Promise<string[]> {
     async (instance: IterateContextDurableObject) => (await instance.read(0, 500)).events,
   );
   return events
-    .filter((event: StreamEvent) => event.type === "events.iterate.com/context/child-created")
+    .filter((event: StreamEvent) => event.type === "events.iterate.com/itx/child-created")
     .map((event: StreamEvent) => (event.payload as { childPath: string }).childPath);
 }

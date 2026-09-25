@@ -74,14 +74,14 @@ const VoiceDelegateContract = defineProcessorContract({
       description: "The live model handed a request to the backend, with the words said so far.",
       payloadSchema: DelegationRequestedPayload,
     },
-    "events.iterate.com/voice-agent/thinking": thinkingEvent,
-    "events.iterate.com/voice-agent/commentary": commentaryEvent,
+    "events.iterate.com/voice-agent/thinking-added": thinkingEvent,
+    "events.iterate.com/voice-agent/commentary-added": commentaryEvent,
   },
   consumes: [...VOICE_DELEGATE_CONSUMES],
   emits: [
     "events.iterate.com/agent/context-added",
-    "events.iterate.com/voice-agent/commentary",
-    "events.iterate.com/voice-agent/thinking",
+    "events.iterate.com/voice-agent/commentary-added",
+    "events.iterate.com/voice-agent/thinking-added",
   ],
 });
 type VoiceDelegateContract = typeof VoiceDelegateContract;
@@ -129,7 +129,7 @@ export class VoiceDelegateProcessor extends StreamProcessor<
         };
       }
 
-      case "events.iterate.com/voice-agent/commentary": {
+      case "events.iterate.com/voice-agent/commentary-added": {
         const { delegationId } = event.payload;
         if (!delegationId) return state;
         const pending = state.pending.filter((row) => row.delegationId !== delegationId);
@@ -175,14 +175,14 @@ export class VoiceDelegateProcessor extends StreamProcessor<
             ),
           progress: (note) =>
             append({
-              type: "events.iterate.com/voice-agent/thinking",
+              type: "events.iterate.com/voice-agent/thinking-added",
               payload: { activation, delegationId: null, content: note },
             }),
         },
         context,
       );
       await append({
-        type: "events.iterate.com/voice-agent/commentary",
+        type: "events.iterate.com/voice-agent/commentary-added",
         idempotencyKey: this.idempotencyKey(`commentary:${delegationId}`),
         payload: {
           activation,

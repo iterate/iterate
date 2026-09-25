@@ -44,7 +44,7 @@ test("the copied agents template installs its collection on project/created thro
   const events = await readAll(root);
   const subscription = events.find(
     (event) =>
-      event.type === "events.iterate.com/stream/subscription-configured" &&
+      event.type === "events.iterate.com/itx/subscription-configured" &&
       event.payload.name === "config-worker",
   );
   const created = events.find((event) => event.type === "events.iterate.com/project/created");

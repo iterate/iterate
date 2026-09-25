@@ -59,7 +59,7 @@ operator's `organizations.create` and `organizations.addMember`.
 
 `apply` creates the project with the operator's `projects.create` into the named
 organization, and calls it again for a project that already exists. Every creation,
-a person's or the operator's, lands `organization/project-created` on the
+a person's or the operator's, lands `organization/project-added` on the
 organization's record (the `organization` fold the dash lists an organization's
 projects from) unless the record already has it, under an idempotency key. So a
 rerun, or two creations at once, write no second event.

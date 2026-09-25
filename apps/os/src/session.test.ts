@@ -8,7 +8,7 @@ import { expect, test, vi } from "vitest";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import { appendPlatformFacts, publishPlatformFacts, SessionTeardown } from "./session.ts";
 
-const fact = { type: "events.iterate.com/account/test", payload: {} };
+const fact = { type: "events.iterate.com/test/fact-appended", payload: {} };
 
 test("appendPlatformFacts enables the owner's processor, then appends stamped platform — and a failed append rejects", async () => {
   const { namespace, calls, names } = failingAppendNamespace();

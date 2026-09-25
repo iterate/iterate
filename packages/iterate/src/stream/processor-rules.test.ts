@@ -342,7 +342,7 @@ test("live state with a sometimes-throwing projection: state advances through th
   });
   mem.engines.push(p);
   const changes = () =>
-    mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed");
+    mem.pushedEvents.filter((e) => e.type === "events.iterate.com/itx/live-state-changed");
 
   mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 0→1 — projecting NEW state throws
   await settle();
@@ -471,7 +471,7 @@ test('ephemeral windows: consumes ["*"] PLUS a named ephemeral in one contract: 
       return { n: state.n + 1 };
     }
     override projectLiveState(state: { n: number }): unknown {
-      return { n: state.n }; // emits live-state/changed — which the ENGINE never reduces, even for "*"+named (reducesEvent, not consumesEvent, is the guard)
+      return { n: state.n }; // emits itx/live-state-changed — which the ENGINE never reduces, even for "*"+named (reducesEvent, not consumesEvent, is the guard)
     }
   }
   const p = new StarPlusProcessor();
@@ -484,7 +484,7 @@ test('ephemeral windows: consumes ["*"] PLUS a named ephemeral in one contract: 
   mem.stream.append({ type: "tock" }) as StreamEvent[]; // durable → swept
   await settle();
   const liveStateOffsets = mem.pushedEvents
-    .filter((e) => e.type === "events.iterate.com/live-state/changed")
+    .filter((e) => e.type === "events.iterate.com/itx/live-state-changed")
     .map((e) => `${e.type}@${e.offset}`);
   expect(liveStateOffsets.length).toBeGreaterThan(0); // the projection did emit…
   expect(p).toMatchObject({ seen: ["tick@1", "chunk@3", "tock@5"] }); // …and nothing consumed it or the noise

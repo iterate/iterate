@@ -141,7 +141,7 @@ export const OrganizationContract = defineProcessorContract({
       description: "An owner withdrew an invitation link before anyone used it (platform fact).",
       payloadSchema: z.object({ invitationId: z.string().min(1) }),
     },
-    "events.iterate.com/organization/project-created": {
+    "events.iterate.com/organization/project-added": {
       description:
         "A project joined the organization's catalog (platform fact). It lands before, and whatever becomes of, the project's own `project/created`.",
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
@@ -159,7 +159,7 @@ export const OrganizationContract = defineProcessorContract({
     "events.iterate.com/organization/invitation-created",
     "events.iterate.com/organization/invitation-accepted",
     "events.iterate.com/organization/invitation-revoked",
-    "events.iterate.com/organization/project-created",
+    "events.iterate.com/organization/project-added",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
   ],

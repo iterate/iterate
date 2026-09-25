@@ -265,7 +265,7 @@ test("the operator's project in a named organization lands on the organization's
   const org = await owner.organizations.create({ name: "Seeded organization" });
   const projectFacts = async () =>
     (await globalLog(`/organizations/${org.id}`))
-      .filter((event) => event.type === "events.iterate.com/organization/project-created")
+      .filter((event) => event.type === "events.iterate.com/organization/project-added")
       .map(({ payload, source }) => ({ payload, platform: source?.platform }));
   const restore = (project: string, restoreProjectId: string) =>
     admin.projects.create({ project, orgId: org.id, restoreProjectId });
@@ -314,14 +314,14 @@ test("the operator's project in a named organization lands on the organization's
   // unkeyed stays on the log, attributed to them, and the fold ignores it; the platform's lands once
   using ownersRecord = await owner.organizations.get(org.id);
   const squat = {
-    type: "events.iterate.com/organization/project-created",
+    type: "events.iterate.com/organization/project-added",
     payload: { projectId: "prj_squatted", slug: "someone-elses" },
   };
   await refused(
     () =>
       ownersRecord.append({
         ...squat,
-        idempotencyKey: "organization/project-created:prj_squatted",
+        idempotencyKey: "organization/project-added:prj_squatted",
       }),
     "FORBIDDEN",
     /the platform's/,
@@ -361,7 +361,7 @@ test("a person's first project mints their organization: its record gets the cre
       payload: { orgId: org!.id, userId: actor, role: "owner", mint: true },
     },
     {
-      type: "events.iterate.com/organization/project-created",
+      type: "events.iterate.com/organization/project-added",
       payload: { projectId, slug: "first-of-mine" },
     },
   ]);
@@ -385,7 +385,7 @@ test("a person's first project mints their organization: its record gets the cre
       .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
       .map(({ type }) => type)
       .slice(3),
-  ).toEqual(["events.iterate.com/organization/project-created"]);
+  ).toEqual(["events.iterate.com/organization/project-added"]);
   // a person's first two projects at once mint one organization, created and joined once
   const racer = await operator("first-two@directory.test");
   const racing = await Promise.all([

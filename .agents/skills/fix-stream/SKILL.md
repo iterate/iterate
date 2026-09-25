@@ -75,7 +75,7 @@ WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
   PROJECT=<slug> CTX_PATH=/agents/web/<moment> pnpm exec tsx scripts/inspect-context.ts
 ```
 
-The dump holds durable events only. `agent/llm-response-chunks` is ephemeral and is never
+The dump holds durable events only. `agent/llm-response-frame` is ephemeral and is never
 stored: the settled `agent/llm-request-settled` carries the text.
 
 ## 3. Name the complaint
@@ -88,13 +88,13 @@ Print the conversation with offsets and times before reading product code. Every
   An assistant item carries `llmRequestOffset`.
 - `agent/llm-request-requested` (`triggerOffset`) and `agent/llm-request-settled`
   (`requestOffset`, `result.status`): the model calls.
-- `context/run-requested` and `context/run-settled`: the scripts the assistant's codemode ran.
+- `itx/run-requested` and `itx/run-settled`: the scripts the assistant's codemode ran.
   The UI renames them (`adaptContextRuns` in `apps/agents/src/lib/agent-events.ts`).
 - `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
   or an operator.
 - `voice-agent/*`: a call's transcripts, delegations and commentary (`apps/agents/voice/`).
 - `stream/*`: the context's own facts, such as wakes and processor rows
-  (`stream/subscription-configured`).
+  (`itx/subscription-configured`).
 
 Find where the person lost: silence after their input, a wrong answer, an error leak, or a
 chat that does not show what happened. Write the complaint down in the person's terms. A
@@ -120,7 +120,7 @@ deployment and no real model.
   (`triggerOffset`, `requestOffset`, `llmRequestOffset`). Renumber consistently or cut to a
   window where the numbering matches. The feed layer keeps the real offsets.
 - Assert the complaint in the person's terms, not the mechanism. For example: "the call's
-  words show in the chat", not "`reduceAgentUi` handles `voice-agent/utterance-transcript`".
+  words show in the chat", not "`reduceAgentUi` handles `voice-agent/utterance-transcribed`".
   The mechanism is the fix.
 - Fixtures from prd hold people's words. Commit only a chat its owner agreed to share, or
   replace the text with placeholders that still reproduce the problem.
@@ -149,7 +149,7 @@ event, assertion.
 
 ## Gotchas
 
-- Reading an idle agent wakes its context, and the wake is logged as `stream/woken`. The chat
+- Reading an idle agent wakes its context, and the wake is logged as `itx/woken`. The chat
   shows every wake after the first as a "Stream durable object woke" row. Dump once and work
   from the file. Don't tell a wake that you caused apart from one in the complaint by guesswork:
   compare its timestamp with when you ran the dump.

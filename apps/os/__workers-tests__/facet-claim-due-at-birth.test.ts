@@ -102,7 +102,7 @@ const name = "revivecounter";
  *  facet-abort-heals-cut-off-work.test.ts); its revive count. */
 async function hostedOn(ctx: string) {
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name,
       target: [

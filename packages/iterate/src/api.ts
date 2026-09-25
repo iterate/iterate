@@ -164,7 +164,7 @@ export type FetchRouteInput = {
 };
 
 /** A live route as `list()` and `match` answer it, its target parsed, with the offset of the
- *  `fetch-route/configured` fact that set it. */
+ *  `itx/fetch-route-configured` fact that set it. */
 export type FetchRouteEntry = {
   fetchRouteName: string;
   requestMatcher: FetchRouteRequestMatcher;
@@ -201,7 +201,7 @@ export interface IterateContextApi {
   url(target?: { routingSlug?: string; path?: string }): Promise<string>;
   /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in
    *  memory and the next call starts a fresh incarnation from durable storage. Resolves with the
-   *  `events.iterate.com/context/aborted { reason?, callerPath?, app? }` event it recorded — durable
+   *  `events.iterate.com/itx/aborted { reason?, callerPath?, app? }` event it recorded — durable
    *  and attributed to the caller before anything resets — and the reset follows the answer.
    *  SURVIVES: the log and everything derived from it (rewrite rules, subscriptions, schedules),
    *  every facet's storage, kv. GOES: in-memory state, every facet instance and its in-flight work,
@@ -246,7 +246,7 @@ export interface IterateContextApi {
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   };
   /** The project's fetch routes, on its root `/`: which requests on its hosts go to which itx
-   *  expression. `set` appends one `fetch-route/configured` fact (`null` deletes the route);
+   *  expression. `set` appends one `itx/fetch-route-configured` fact (`null` deletes the route);
    *  `match` answers the route a request takes, which the config worker forwards with
    *  `env.ITX.fetch` naming `itx.fetchRoutes.fetch('<name>')` (a WebSocket upgrade included). */
   fetchRoutes: {
@@ -273,7 +273,7 @@ export interface IterateContextApi {
      *  it extends the SDK's host, including one that would never answer a call. Its instance and
      *  in-memory state go, and every call in flight on it rejects `FACET_ABORTED`; its storage
      *  stays, and its next call starts it fresh. The context itself is not reset. Resolves with the
-     *  `events.iterate.com/context/facet-aborted { name, reason?, callerPath?, app? }` event;
+     *  `events.iterate.com/itx/facet-aborted { name, reason?, callerPath?, app? }` event;
      *  `NO_FACET` for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
   };
@@ -321,7 +321,7 @@ export interface IterateContextApi {
     options?: { description?: string },
   ): Promise<{ [Symbol.dispose](): void }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
-   *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
+   *  `itx/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
    *  out); resolves with the result or rejects with the settlement's error. Never re-run. A script
    *  still running ten minutes after it started is settled failed (`failureKind: "deadline"`). */
   run(script: string): Promise<unknown>;

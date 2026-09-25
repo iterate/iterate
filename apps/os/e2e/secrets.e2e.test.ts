@@ -400,18 +400,18 @@ test("the catalog is the PROJECT's: a secret set from one nested context is list
 });
 
 // Every set begins with appends on the SECRET's own path — the `secret` processor row's enablement
-// (`stream/subscription-configured`), then the `secret/set` fact — BEFORE the value is written into
+// (`itx/subscription-configured`), then the `secret/set` fact — BEFORE the value is written into
 // the facet: a paused stream there refuses the first of them and the credential is untouched — the
 // catalog, the log and the facet agree. (A facet failure after the fact is the other order — a
 // catalog row whose value egress cannot find, a loud 502, never a silent live secret.)
 test("a set refused by a paused stream on the secret's path leaves no value behind — no row, no fact, nothing in the catalog, and egress cannot substitute what was never stored", async () => {
   const itx = openItx(freshCtx("secrets-paused"));
   const ghost = itx.cd("/secrets/ghost");
-  await ghost.append({ type: "events.iterate.com/stream/paused" });
+  await ghost.append({ type: "events.iterate.com/itx/paused" });
   await expect(
     itx.secrets.set("/secrets/ghost", "v", { urls: ["https://api.example.com"] }),
   ).rejects.toThrow();
-  await ghost.append({ type: "events.iterate.com/stream/resumed" });
+  await ghost.append({ type: "events.iterate.com/itx/resumed" });
   expect(await itx.secrets.list()).toEqual([]);
   expect(await processorNames(ghost)).toEqual([]);
   expect(await changesOf(ghost)).toEqual([]);

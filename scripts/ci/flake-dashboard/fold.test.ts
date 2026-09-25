@@ -850,7 +850,7 @@ function zip(files: Record<string, string | { stored: string }>) {
 function birth() {
   return {
     type: flakeEventTypes.created,
-    idempotencyKey: "flakes/created",
+    idempotencyKey: "flake-dashboard/created",
     payload: {
       config: {
         repository: { owner: "iterate", repo: "iterate" },

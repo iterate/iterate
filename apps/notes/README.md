@@ -15,7 +15,7 @@ packages/ui's `AppShell` — the sidebar, the project switcher and the account m
 every OS app shares — with the note as its one page.
 
 Publish [config-worker.ts](config-worker.ts) as the project's config worker
-(`project/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
+(`itx/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
 project reaches its `fetch`, and it serves only the `notes` routing slug (`x-iterate-routing-slug`),
 so `notes--<project>.iterate.app` reaches Notes (see
 [specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)).

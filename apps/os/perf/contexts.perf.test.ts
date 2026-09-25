@@ -37,7 +37,7 @@ test("a context's first append, then durable appends on a warm context", async (
 });
 
 // The platform evicts an idle actor after ~10 s (client.ts `idleAcrossEvictions`: 0/6 at 10 s, 48/48
-// at 12 s+, measured 2026-09-22), and each incarnation logs one `stream/woken`: a sample counts only
+// at 12 s+, measured 2026-09-22), and each incarnation logs one `itx/woken`: a sample counts only
 // when the log proves the context was evicted in between.
 test("a context the platform evicted answers its first call", async ({ task }) => {
   const contexts = Array.from({ length: 5 }, () => openItx(freshCtx("wake")));
@@ -78,9 +78,9 @@ test("a processor's cold start: enabled on a fresh context until it reduced the 
   recordLatency(task, "facet.cold-start", samples);
 });
 
-/** How many incarnations the context's log records: one `stream/woken` each. */
+/** How many incarnations the context's log records: one `itx/woken` each. */
 async function incarnations(itx: any) {
-  return (await readAll(itx)).filter((e) => e.type === "events.iterate.com/stream/woken").length;
+  return (await readAll(itx)).filter((e) => e.type === "events.iterate.com/itx/woken").length;
 }
 
 /** `ms` of `call`, started now. */

@@ -69,7 +69,7 @@ test.each([
     });
     expect(append).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "events.iterate.com/voice-agent/commentary",
+        type: "events.iterate.com/voice-agent/commentary-added",
         payload: expect.objectContaining({ content: "The exercises are on your screen." }),
       }),
     );

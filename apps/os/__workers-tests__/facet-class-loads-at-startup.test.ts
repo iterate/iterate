@@ -91,7 +91,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
   // Enable the tally target the way `itx.processors.enable` spells it: ONE subscription-configured
   // whose target is the facet's `processEventBatch` through the load chain (alarm-and-pins.test.ts).
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "tally",
       target: [

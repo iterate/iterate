@@ -139,17 +139,17 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
   // POLICY AS A FACET PROCESSOR: a token-bucket breaker that speaks core's control events. Every
   // durable non-control event spends one token, refilled from the EVENT's createdAt (pure,
   // replayable — a rebuild from the log lands on the same tokens); the crossing (tokens ≥ 0 → < 0)
-  // trips the stream by appending stream/paused with the breaker's reason, keyed so a replay can never
+  // trips the stream by appending itx/paused with the breaker's reason, keyed so a replay can never
   // double-pause. Core knows nothing about it — the pause check reads the reduced `paused` slice.
   breaker: {
     "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const CAPACITY = 5; // tokens the bucket holds
 const REFILL_PER_SECOND = 1; // tokens restored per second of EVENT time
 const CONTROL = new Set([
-  "events.iterate.com/stream/created",
-  "events.iterate.com/stream/woken",
-  "events.iterate.com/stream/paused",
-  "events.iterate.com/stream/resumed",
+  "events.iterate.com/itx/created",
+  "events.iterate.com/itx/woken",
+  "events.iterate.com/itx/paused",
+  "events.iterate.com/itx/resumed",
 ]);
 const contract = defineProcessorContract({
   slug: "breaker",
@@ -157,7 +157,7 @@ const contract = defineProcessorContract({
   description: "A token-bucket breaker: one token per durable event, refilled by event time; crossing zero pauses the stream.",
   stateSchema: z.object({ tokens: z.number().default(CAPACITY), lastAtMs: z.number().default(0) }),
   consumes: ["*"],
-  emits: ["events.iterate.com/stream/paused"],
+  emits: ["events.iterate.com/itx/paused"],
 });
 class BreakerProcessor extends StreamProcessor {
   contract = contract;
@@ -173,7 +173,7 @@ class BreakerProcessor extends StreamProcessor {
     if (!event || !(previousState.tokens >= 0 && state.tokens < 0)) return; // trip on the crossing only
     blockProcessorWhile(() =>
       append({
-        type: "events.iterate.com/stream/paused",
+        type: "events.iterate.com/itx/paused",
         payload: { reason: "breaker: durable events exceeded the bucket" },
         idempotencyKey: this.idempotencyKey("trip", event),
       }),

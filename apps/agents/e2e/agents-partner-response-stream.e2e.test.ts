@@ -134,7 +134,7 @@ localOnly(
       const chunks = collector();
       await support.subscribe({
         name: "partner-chunks",
-        consumes: ["events.iterate.com/agent/llm-response-chunks"],
+        consumes: ["events.iterate.com/agent/llm-response-frame"],
         target: chunks.fn,
       });
       await itx.agents.create("/agents/support");

@@ -33,9 +33,9 @@ const delay = z
 // own records are refused by `normalizeControlEvent` (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`),
 // which runs over every scheduled event.
 const operatorControlEvents = new Set([
-  "events.iterate.com/stream/paused",
-  "events.iterate.com/stream/resumed",
-  "events.iterate.com/stream/subscription-delivery-resumed",
+  "events.iterate.com/itx/paused",
+  "events.iterate.com/itx/resumed",
+  "events.iterate.com/itx/subscription-delivery-resumed",
 ]);
 const EventBody = z.strictObject({
   type: z
@@ -97,7 +97,7 @@ export function reduceScheduledAppends(
 ): Record<string, ScheduledAppend> {
   if (event.ephemeral) return schedules;
   switch (event.type) {
-    case "events.iterate.com/stream/append-scheduled": {
+    case "events.iterate.com/itx/schedule-set": {
       const input = event.payload as z.output<typeof ScheduledAppendInput>;
       return {
         ...schedules,
@@ -115,7 +115,7 @@ export function reduceScheduledAppends(
         },
       };
     }
-    case "events.iterate.com/stream/append-schedule-cancelled": {
+    case "events.iterate.com/itx/schedule-cancelled": {
       const input = event.payload as ScheduledAppendCancelled;
       const row = schedules[input.key];
       if (
@@ -127,14 +127,14 @@ export function reduceScheduledAppends(
       delete next[input.key];
       return next;
     }
-    case "events.iterate.com/stream/append-schedule-completed":
-    case "events.iterate.com/stream/append-schedule-failed": {
+    case "events.iterate.com/itx/schedule-fired":
+    case "events.iterate.com/itx/schedule-failed": {
       const input = event.payload as ScheduledAppendSettled;
       const row = schedules[input.key];
       if (!row || row.scheduledAtOffset !== input.scheduledAtOffset) return schedules;
       if ("everyMs" in row.when && input.at !== row.nextAt) return schedules;
       const next = { ...schedules };
-      if (event.type === "events.iterate.com/stream/append-schedule-failed")
+      if (event.type === "events.iterate.com/itx/schedule-failed")
         next[input.key] = {
           ...row,
           failure: { error: input.error || "scheduled append failed", offset: event.offset },

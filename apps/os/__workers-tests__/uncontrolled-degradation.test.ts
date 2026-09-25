@@ -435,7 +435,7 @@ test("C3 — that row under a core version bump: the constructor's re-reduce ski
 // The core checkpoint row is a CACHE of the log: with it gone the constructor re-derives the mark
 // from the rows (`MAX(offset)`), re-reduces the core state from offset 0, and reports one issue
 // line — never fatal. BORN RED: the constructor read mark 0, decided the store was VIRGIN,
-// re-appended `stream/created` over offset 1 and died of `UNIQUE constraint failed: events.offset`
+// re-appended `itx/created` over offset 1 and died of `UNIQUE constraint failed: events.offset`
 // on EVERY wake, every entry point, `runInDurableObject` included — bricked, no operator remedy. Flipped
 // with the SQL storage module.
 test("D1 — the core checkpoint row lost: the constructor re-derives the mark from the rows, re-reduces the log, and the context wakes", async () => {
@@ -453,7 +453,7 @@ test("D1 — the core checkpoint row lost: the constructor re-derives the mark f
     state: unknown;
   };
   expect(snapshot.offset).toBeGreaterThanOrEqual(seed); // the mark came back from the rows
-  expect(JSON.stringify(snapshot.state)).toContain(ctx); // the state was re-reduced from `stream/created`
+  expect(JSON.stringify(snapshot.state)).toContain(ctx); // the state was re-reduced from `itx/created`
   expect(offsetOf(await s.append({ type: "after" }))).toBeGreaterThan(seed); // and the log goes on
 });
 
@@ -506,7 +506,7 @@ test("E3 — on a PAUSED stream the halt fact still lands (pause-exempt) and the
   const ctx = "prj_ud_ladder_paused";
   await uncallableCursorRow(ctx);
   await stub(ctx).append({
-    type: "events.iterate.com/stream/paused",
+    type: "events.iterate.com/itx/paused",
     payload: { reason: "breaker" },
   });
   drainIssues();
@@ -626,7 +626,7 @@ function enableProcessorByEvent(
   consumes?: string[],
 ) {
   return stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name,
       target: hostingTarget(name, source, className),
@@ -637,7 +637,7 @@ function enableProcessorByEvent(
 
 function disableProcessorByEvent(ctx: string, name: string) {
   return stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name, target: null },
   });
 }
@@ -707,7 +707,7 @@ function corruptRow(ctx: string, offset: number) {
 async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
   const s = stub(ctx);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "u",
       target: [
@@ -732,7 +732,7 @@ async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
 async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   const s = stub(ctx);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "u", target: "itx.kv", consumes: ["mark"] },
   });
   await s.append({ type: "mark" });

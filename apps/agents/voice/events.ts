@@ -44,5 +44,5 @@ export const VOICE_DELEGATE_CONSUMES = [
   "events.iterate.com/agent/context-added",
   "events.iterate.com/voice-agent/delegation-requested",
   /* Its own answer: consumed so the pending row it settles leaves the fold. */
-  "events.iterate.com/voice-agent/commentary",
+  "events.iterate.com/voice-agent/commentary-added",
 ] as const;

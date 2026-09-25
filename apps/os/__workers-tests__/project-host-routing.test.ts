@@ -177,7 +177,7 @@ test("a project's own hostname: added, the processor claims it and creates its w
       payload: { hostname },
     });
     return project.waitForEvent({
-      type: "events.iterate.com/project/hostname-add-answered",
+      type: "events.iterate.com/project/hostname-add-settled",
       afterOffset: asked!.offset,
       timeoutMs: 10_000,
     });

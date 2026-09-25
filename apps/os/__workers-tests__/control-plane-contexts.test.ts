@@ -243,7 +243,7 @@ test("a member cannot forge their organization's facts: it folds only what the p
         payload: { orgId: org.id, userId: "user_forged", role: "owner" },
       },
       {
-        type: "events.iterate.com/organization/project-created",
+        type: "events.iterate.com/organization/project-added",
         payload: { projectId: "prj_forged", slug: "forged" },
         source: { platform: true },
       },
@@ -295,9 +295,9 @@ test("a person cannot take the platform's keys first: `account/…` on their own
         [
           "append",
           {
-            type: "events.iterate.com/organization/project-created",
+            type: "events.iterate.com/organization/project-added",
             payload: { projectId: "prj_squatted", slug: "squatted" },
-            idempotencyKey: "organization/project-created:prj_squatted",
+            idempotencyKey: "organization/project-added:prj_squatted",
           },
         ],
       ]),

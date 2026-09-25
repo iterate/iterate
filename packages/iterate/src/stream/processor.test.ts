@@ -81,8 +81,8 @@ test("consumesEvent: undefined consumes = every durable event, no ephemerals (a 
   expect(consumesEvent(undefined, { type: "eph", ephemeral: true })).toBe(false);
 });
 
-test("consumesEvent: the wake record (stream/woken) is an ordinary durable event: swept by default and by \"*\" like any other — that a wake makes no LOOP is the delivery loop's and the alarm's to keep, never a carve-out here", () => {
-  const t = "events.iterate.com/stream/woken";
+test("consumesEvent: the wake record (itx/woken) is an ordinary durable event: swept by default and by \"*\" like any other — that a wake makes no LOOP is the delivery loop's and the alarm's to keep, never a carve-out here", () => {
+  const t = "events.iterate.com/itx/woken";
   expect(consumesEvent(undefined, { type: t })).toBe(true);
   expect(consumesEvent(["*"], { type: t })).toBe(true);
   expect(consumesEvent([t], { type: t })).toBe(true);
@@ -98,7 +98,7 @@ test("consumesEvent: a NAMED type opts that type in, INCLUDING when ephemeral", 
 test("consumesEvent: a live-state delta is an ephemeral like any other here: never swept by default or '*', delivered when NAMED", () => {
   // (That no PROCESSOR may reduce a delta is the engine's `reducesEvent`, not this rule: a
   // SUBSCRIPTION names the type to watch live state.)
-  const t = "events.iterate.com/live-state/changed";
+  const t = "events.iterate.com/itx/live-state-changed";
   expect(consumesEvent(undefined, { type: t, ephemeral: true })).toBe(false);
   expect(consumesEvent(["*"], { type: t, ephemeral: true })).toBe(false);
   expect(consumesEvent([t], { type: t, ephemeral: true })).toBe(true);
@@ -162,9 +162,9 @@ test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only
   const { storage, engine, stream } = setup();
   const before = storage.writes;
   stream.append(
-    { type: "events.iterate.com/counter/ticked" },
-    { type: "events.iterate.com/counter/ticked" },
-    { type: "events.iterate.com/counter/ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
   ) as StreamEvent[];
   await engine.catchUpFromLog();
   await settle();
@@ -235,11 +235,11 @@ test("a contiguous push reduces WITHOUT reading the log (the fast path)", async 
 
 test("a gapped push triggers repair from the own cursor (nothing skipped)", async () => {
   const mem = memoryStream();
-  mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // history
+  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }) as StreamEvent[]; // history
   const storage = memoryStorage();
   const late = new CounterProcessor();
   mem.engines.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
-  mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // gapped push
+  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }) as StreamEvent[]; // gapped push
   await settle();
   expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
   expect(mem.reads).toBeGreaterThan(0); // repair read the gap
@@ -524,7 +524,7 @@ test("version bump re-reduces via reduce only — effects never re-run", async (
       version,
       description: "",
       stateSchema: z.object({ n: z.number().default(0) }),
-      consumes: ["events.iterate.com/counter/ticked"],
+      consumes: ["events.iterate.com/test/counter-ticked"],
       emits: [],
     });
     return new ProcessorEngine(
@@ -543,8 +543,8 @@ test("version bump re-reduces via reduce only — effects never re-run", async (
   const effects: string[] = [];
   const p1 = make("1.0.0", effects);
   mem.stream.append(
-    { type: "events.iterate.com/counter/ticked" },
-    { type: "events.iterate.com/counter/ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
   ) as StreamEvent[];
   await p1.catchUpFromLog();
   expect(effects).toHaveLength(2);
@@ -564,7 +564,9 @@ test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes
   tick(); // ticks: 1,2,3,4 — milestone at state.ticks===3 (after 3rd tick)
   await engine.catchUpFromLog();
   await settle();
-  const milestones = events.filter((e) => e.type === "events.iterate.com/counter/milestone");
+  const milestones = events.filter(
+    (e) => e.type === "events.iterate.com/test/counter-milestone-reached",
+  );
   expect(milestones).toHaveLength(1);
   expect(milestones[0]).toMatchObject({
     payload: { at: 3 },
@@ -572,7 +574,9 @@ test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes
   });
   // the milestone append itself lands on the stream and re-delivers — wake again, still one
   await engine.catchUpFromLog();
-  expect(events.filter((e) => e.type === "events.iterate.com/counter/milestone")).toHaveLength(1);
+  expect(
+    events.filter((e) => e.type === "events.iterate.com/test/counter-milestone-reached"),
+  ).toHaveLength(1);
 });
 
 test("undeclared emit throws", async () => {
@@ -689,7 +693,7 @@ test("live state: no emission when consumed events leave the projection unchange
 
 test("the loop guard: a processor's reduce never sees a live-state delta, even when its contract names the type", async () => {
   // The refusal lives in the ENGINE (`reducesEvent`), not in `consumesEvent`: naming
-  // `events.iterate.com/live-state/changed` in a SUBSCRIPTION's `consumes` is how a live tab
+  // `events.iterate.com/itx/live-state-changed` in a SUBSCRIPTION's `consumes` is how a live tab
   // receives deltas, so `consumesEvent` says yes to a named delta — and the engine still never
   // reduces one (a delta feeding a reduce is the feedback-loop class, made unspellable here).
   const contract3 = defineProcessorContract({
@@ -697,7 +701,7 @@ test("the loop guard: a processor's reduce never sees a live-state delta, even w
     version: "1.0.0",
     description: "tries to consume the platform live-state type",
     stateSchema: z.object({ seen: z.number().default(0) }),
-    consumes: ["*", "events.iterate.com/live-state/changed"],
+    consumes: ["*", "events.iterate.com/itx/live-state-changed"],
     emits: [],
   });
   class SneakyProcessor extends StreamProcessor<z.infer<typeof contract3.stateSchema>> {
@@ -732,7 +736,7 @@ test("the loop guard: a processor's reduce never sees a live-state delta, even w
 test("the author class stands alone: constructible bare, `reduce` callable with no engine", () => {
   // No stream, no storage, no constructor arguments — a processor is a unit-testable plain object.
   const bare = new CounterProcessor();
-  const ticked = ev(1, "events.iterate.com/counter/ticked");
+  const ticked = ev(1, "events.iterate.com/test/counter-ticked");
   expect(bare.reduce({ event: ticked, state: { ticks: 0 } })).toEqual({ ticks: 1 });
   expect(bare.reduce({ event: ev(2, "unrelated"), state: { ticks: 1 } })).toBeUndefined();
   expect(bare.idempotencyKey("k")).toBe("counter/k");
@@ -834,7 +838,7 @@ test("a throwing/unserializable projection loses the notification, never the bat
   // the reduce committed and the read surface works — the failure was only the notification
   await expect(p.snapshot()).resolves.toMatchObject({ state: { n: 1 } });
   expect(
-    mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed"),
+    mem.pushedEvents.filter((e) => e.type === "events.iterate.com/itx/live-state-changed"),
   ).toHaveLength(0);
 });
 
@@ -1326,8 +1330,8 @@ const CounterContract = defineProcessorContract({
   version: "1.0.0",
   description: "counts ticks; emits a milestone every 3",
   stateSchema: z.object({ ticks: z.number().default(0) }),
-  consumes: ["events.iterate.com/counter/ticked"],
-  emits: ["events.iterate.com/counter/milestone"],
+  consumes: ["events.iterate.com/test/counter-ticked"],
+  emits: ["events.iterate.com/test/counter-milestone-reached"],
 });
 
 class CounterProcessor extends StreamProcessor<{ ticks: number }> {
@@ -1335,7 +1339,7 @@ class CounterProcessor extends StreamProcessor<{ ticks: number }> {
   readonly trace: string[] = [];
 
   override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
-    if (event.type !== "events.iterate.com/counter/ticked") return undefined;
+    if (event.type !== "events.iterate.com/test/counter-ticked") return undefined;
     return { ticks: state.ticks + 1 };
   }
 
@@ -1353,7 +1357,7 @@ class CounterProcessor extends StreamProcessor<{ ticks: number }> {
     if (args.state.ticks % 3 === 0)
       args.blockProcessorWhile(() =>
         args.append({
-          type: "events.iterate.com/counter/milestone",
+          type: "events.iterate.com/test/counter-milestone-reached",
           payload: { at: args.state.ticks },
           idempotencyKey: this.idempotencyKey(`milestone-${args.state.ticks}`),
         }),
@@ -1373,7 +1377,7 @@ function setup() {
     processor, // the author instance — `trace` lives here
     engine, // drives it: wake / snapshot / processEventBatch
     tick: () =>
-      (mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[])[0],
+      (mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }) as StreamEvent[])[0],
   };
 }
 
@@ -1576,7 +1580,7 @@ class TallyProcessor extends StreamProcessor<z.infer<typeof TallyContract.stateS
 }
 
 function changes(mem: ReturnType<typeof memoryStream>) {
-  return mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed");
+  return mem.pushedEvents.filter((e) => e.type === "events.iterate.com/itx/live-state-changed");
 }
 
 // ── the persisted cursor across evictions and version bumps; the barrier's failure modes ──

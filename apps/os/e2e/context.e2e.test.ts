@@ -73,7 +73,7 @@ test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api h
 test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", async () => {
   // enforcement refusals ride the same coded channel end to end
   const itx = openItx(freshCtx("codepause"));
-  await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  await itx.append({ type: "events.iterate.com/itx/paused", payload: { reason: "operator" } });
   const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
   expect(errorCode(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused");

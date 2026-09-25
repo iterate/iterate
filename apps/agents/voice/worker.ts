@@ -168,7 +168,7 @@ export default class VoiceWorker extends ConfigWorker {
       await conversation.processors.disable("agent");
       await conversation.append(
         {
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: {
             name: "voice-agent",
             target: [
@@ -194,7 +194,7 @@ export default class VoiceWorker extends ConfigWorker {
           },
         },
         {
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: {
             /* Not "agent": that is the normal agent processor this press disabled above. */
             name: "voice-delegate",

@@ -24,7 +24,7 @@ const invitation = (
   source: platform,
 });
 const projectAdded = (projectId: string, slug: string) => ({
-  type: "events.iterate.com/organization/project-created",
+  type: "events.iterate.com/organization/project-added",
   payload: { projectId, slug },
   source: platform,
 });
@@ -182,7 +182,7 @@ const rows: {
         source: platform,
       },
       {
-        type: "events.iterate.com/organization/project-created",
+        type: "events.iterate.com/organization/project-added",
         payload: { projectId: "x" },
         source: platform,
       },
@@ -208,7 +208,7 @@ const rows: {
         payload: { orgId: "org_1", userId: "user_forged", role: "owner" },
       },
       {
-        type: "events.iterate.com/organization/project-created",
+        type: "events.iterate.com/organization/project-added",
         payload: { projectId: "prj_f", slug: "forged" },
       },
       {

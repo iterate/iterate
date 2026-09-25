@@ -164,11 +164,11 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
   // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
   await context.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "a", target, consumes: ["demo/ping"] },
   });
   await context.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "b", target, consumes: ["demo/ping"] },
   });
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
@@ -177,7 +177,7 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
 
   // Remove ONE of the two rows. The other still hosts the facet.
   await context.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "a", target: null },
   });
   const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
@@ -206,7 +206,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   expect(before).toMatchObject({ state: { n: await durableCount(ctx) } });
   // The same name and class, NEW source: counts by 10.
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "counter",
       target: [
@@ -337,7 +337,7 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet is owed nothing: it is not a pin
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
-      (event) => event.type === "events.iterate.com/stream/woken",
+      (event) => event.type === "events.iterate.com/itx/woken",
     );
   const before = (await wokens()).length;
   // A due schedule fires into an evicted actor: the fresh incarnation's wake record materializes
@@ -373,7 +373,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm —
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
-      (event) => event.type === "events.iterate.com/stream/woken",
+      (event) => event.type === "events.iterate.com/itx/woken",
     );
   const before = (await wokens()).length;
   // A due schedule (set on the quiet incarnation, which is then evicted) fires for real and wakes a
@@ -524,7 +524,7 @@ test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried fr
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "fail"]]);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "flaky",
       target: ["itx", "workers", ["get", { source: { "cap.js": FLAKY_SRC } }], "processEventBatch"],
@@ -592,7 +592,7 @@ async function durableCount(ctx: string): Promise<number> {
 async function enableCounter(ctx: string, name = "counter"): Promise<void> {
   const s = stub(ctx);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name,
       target: [
@@ -609,7 +609,7 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
  *  row hosted, storage included, before the append returns. */
 async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   await stub(ctx).append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name, target: null },
   });
 }

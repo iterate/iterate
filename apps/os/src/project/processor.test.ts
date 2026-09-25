@@ -245,8 +245,8 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "project/ingress-configured:aaa",
-    "project/ingress-configured:bbb",
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:bbb",
   ]);
   // The target names the commit twice: the source read at it, the cache keyed by it.
   expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"commitOid":"bbb"');
@@ -279,7 +279,7 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     runInBackground,
   );
   await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual(["project/ingress-configured:aaa"]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa"]);
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),
@@ -498,7 +498,7 @@ function configRepoTarget(commitOid: string) {
 }
 
 function ingressAt(target: unknown[] | null) {
-  return { type: "events.iterate.com/project/ingress-configured", payload: { target } };
+  return { type: "events.iterate.com/itx/ingress-configured", payload: { target } };
 }
 
 function hostname(verb: "add-requested" | "remove-requested") {
@@ -510,7 +510,7 @@ function hostname(verb: "add-requested" | "remove-requested") {
 
 function addSettled(requestOffset: number, status: string | null, error: string | null = null) {
   return {
-    type: "events.iterate.com/project/hostname-add-answered",
+    type: "events.iterate.com/project/hostname-add-settled",
     payload: {
       hostname: "www.acme.test",
       requestOffset,

@@ -122,8 +122,8 @@ export type ProcessEventArgs<
  *  reduces all call this; there is no second copy to drift. `consumes` undefined = every durable event
  *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
  *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
- *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. The wake
- *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's. */
+ *  `consumes: ["events.iterate.com/itx/live-state-changed"]` and filters `payload.key` itself. The wake
+ *  record (`itx/woken`) is a durable event like any other: a "*" row receives every incarnation's. */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },
@@ -136,7 +136,7 @@ export function consumesEvent(
  *  react to — a live-state delta. Deltas are notifications ABOUT state; letting one feed a reduce is
  *  the feedback-loop class, made unspellable here rather than discouraged. */
 const reducesEvent = (consumes: readonly string[], event: { type: string; ephemeral?: boolean }) =>
-  event.type !== "events.iterate.com/live-state/changed" && consumesEvent(consumes, event);
+  event.type !== "events.iterate.com/itx/live-state-changed" && consumesEvent(consumes, event);
 
 /** THE AUTHOR CLASS: a contract, three hooks and one helper. Deps an effect needs arrive through
  *  the subclass's own constructor, as for any class. One instance lives as long as its host; a field
@@ -886,7 +886,7 @@ export class ReduceCheckpointTable {
 // every batch (sdk/index.ts shows both).
 //
 // MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
-// change it bumps the revision and appends the ephemeral `live-state/changed` delta carrying
+// change it bumps the revision and appends the ephemeral `itx/live-state-changed` delta carrying
 // `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED READ. The stream keeps no
 // per-subscriber state — the CLIENT owns its chain: seed from `snapshot()`, apply a payload whose
 // `from` matches its held rev, re-read the seed on any mismatch (live-state-chains-client-side.e2e).
@@ -978,7 +978,7 @@ export class LiveState<S> {
     const wirePatch = JSON.stringify(patch).length > LIVE_STATE_PATCH_MAX_CHARS ? null : patch;
     const emitDelta = () =>
       this.#liveStateSink.append({
-        type: "events.iterate.com/live-state/changed",
+        type: "events.iterate.com/itx/live-state-changed",
         ephemeral: true,
         payload: { key: this.#liveStateKey, from, to, patch: wirePatch },
       });
@@ -1065,7 +1065,7 @@ export type ConsumedEvent<Contract> = Contract extends {
   : never;
 
 /** The input for ONE event type as a catalog spells it (`EventInput`'s row) — or, for a type no
- *  catalog defines (a core control event a processor emits, `project/ingress-configured`), the plain
+ *  catalog defines (a core control event a processor emits, `itx/ingress-configured`), the plain
  *  input: it widens the whole union, so a contract that emits one undefined type appends untyped
  *  until that type is in a catalog it depends on. */
 type EventInputForType<

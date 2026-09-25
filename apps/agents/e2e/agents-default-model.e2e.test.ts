@@ -141,7 +141,7 @@ async function pongTurn(ctx: string, ai?: InterceptedResponsesAi) {
   const windows = collector();
   await support.subscribe({
     name: "chunks",
-    consumes: ["events.iterate.com/agent/llm-response-chunks"],
+    consumes: ["events.iterate.com/agent/llm-response-frame"],
     target: windows.fn,
   });
   await itx.agents.create("/agents/support");

@@ -1,5 +1,5 @@
 // agent-events.test.ts — the apps/os log through the shared reducer: `adaptContextRuns` turns the
-// CONTEXT's runs (`context/run-requested` / `run-settled`, the request's offset as identity) into the
+// CONTEXT's runs (`itx/run-requested` / `run-settled`, the request's offset as identity) into the
 // script vocabulary the shared reducer folds (`capability-host/script-run-*`, an executionId the
 // reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
 // turn renders as one activity with its code step.
@@ -30,7 +30,7 @@ test("a request the agent appended while processing the assistant's item becomes
   });
   expect(adapted.filter((e) => e.type.startsWith("events.iterate.com/itx/run-"))).toEqual([]);
   const [unasked] = adaptContextRuns([
-    at(20, "events.iterate.com/context/run-requested", { code: "async () => 1" }),
+    at(20, "events.iterate.com/itx/run-requested", { code: "async () => 1" }),
   ]);
   expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
 });
@@ -39,14 +39,14 @@ test("a failed settlement reaches the shared reducer exactly as the platform wro
   const [, settled] = adaptContextRuns([
     at(
       8,
-      "events.iterate.com/context/run-requested",
+      "events.iterate.com/itx/run-requested",
       { code: "async () => 1" },
       {
         idempotencyKey: "agent/run-requested@6",
         source: byAgentWhile(6),
       },
     ),
-    at(9, "events.iterate.com/context/run-settled", {
+    at(9, "events.iterate.com/itx/run-settled", {
       requestOffset: 8,
       settlement: {
         status: "failed",
@@ -138,13 +138,13 @@ const turn = () => [
   }),
   at(
     8,
-    "events.iterate.com/context/run-requested",
+    "events.iterate.com/itx/run-requested",
     { code: "async (itx) => { await itx.kv.put('answer', '42'); return { stored: true } }" },
     { idempotencyKey: "agent/run-requested@6", source: byAgentWhile(6) },
   ),
   // the visible message: the tag's prose, sent directly
   at(9, "events.iterate.com/agent/web-message-sent", { message: "Storing.", llmRequestOffset: 4 }),
-  at(10, "events.iterate.com/context/run-settled", {
+  at(10, "events.iterate.com/itx/run-settled", {
     requestOffset: 8,
     settlement: { status: "succeeded", result: { stored: true } },
   }),

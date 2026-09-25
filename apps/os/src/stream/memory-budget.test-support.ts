@@ -395,7 +395,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     let deltasRefused = 0;
     const stream = bareStream(storage, (fresh, after, through) => {
       for (const event of fresh)
-        if (event.type === "events.iterate.com/live-state/changed") deltasCommitted++;
+        if (event.type === "events.iterate.com/itx/live-state-changed") deltasCommitted++;
         else if (event.type === "blob")
           pushInFlight = engine.processEventBatch([event], { after, through });
       delivery.onCommit(fresh, after, through);
@@ -455,11 +455,11 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     stream.append(
       normalizeControlEvent(
         {
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: {
             name: "watcher",
             target: ["itx", "facets", ["get", "watcher"], "processEventBatch"],
-            consumes: ["events.iterate.com/live-state/changed"],
+            consumes: ["events.iterate.com/itx/live-state-changed"],
           },
         },
         "/",
@@ -510,7 +510,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       ...Array.from({ length: args.rowCount }, (_, i) =>
         normalizeControlEvent(
           {
-            type: "events.iterate.com/stream/subscription-configured",
+            type: "events.iterate.com/itx/subscription-configured",
             payload: {
               name: `p${i}`,
               target: ["itx", "facets", ["get", `p${i}`], "processEventBatch"],
@@ -556,7 +556,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       ...Array.from({ length: args.rowCount }, (_, i) =>
         normalizeControlEvent(
           {
-            type: "events.iterate.com/stream/subscription-configured",
+            type: "events.iterate.com/itx/subscription-configured",
             payload: {
               name: `sink${i}`,
               target: ["itx", "sink"],
@@ -629,7 +629,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       ...Array.from({ length: args.rowCount }, (_, i) =>
         normalizeControlEvent(
           {
-            type: "events.iterate.com/stream/subscription-configured",
+            type: "events.iterate.com/itx/subscription-configured",
             payload: {
               name: `sink${i}`,
               target: "itx.sink",
@@ -689,7 +689,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const configure = (name: string) =>
       normalizeControlEvent(
         {
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: {
             name,
             target: ["itx", "facets", ["get", name], "processEventBatch"],
@@ -723,7 +723,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     stream.append(
       normalizeControlEvent(
         {
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/itx/subscription-configured",
           payload: { name: "row0", target: null },
         },
         "/",

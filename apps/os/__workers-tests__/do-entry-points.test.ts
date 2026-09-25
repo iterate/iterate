@@ -8,7 +8,7 @@
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
 // rewrite rule exactly as the edge's `provide` does — a LITERAL `append({ type:
 // "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } })` — and a subscription
-// with `append({ type: "events.iterate.com/stream/subscription-configured", payload: … })`. The DO's
+// with `append({ type: "events.iterate.com/itx/subscription-configured", payload: … })`. The DO's
 // append boundary (stream/core-processor.ts `normalizeControlEvent`) validates + canonicalizes the
 // literal; no event-builder helper stands between the caller and the event. The pins:
 //
@@ -59,8 +59,8 @@ test("a core-snapshot probe materializes only created and woken, without subscri
       async () => owedAlarm(await state.storage.getAlarm()) === null,
     );
     expect((await instance.read(0)).events.map((e) => [e.type, e.offset])).toEqual([
-      ["events.iterate.com/stream/created", 1],
-      ["events.iterate.com/stream/woken", 2],
+      ["events.iterate.com/itx/created", 1],
+      ["events.iterate.com/itx/woken", 2],
     ]);
     expect(
       Number(
@@ -203,15 +203,15 @@ test("disposing the provide HANDLE is the other half: the stub is recalled — i
 test("a PAUSED context survives an eviction: the constructor's birth-row replay is admitted while paused, so the next incarnation can take the resume (BORN RED: the pause check ran before the idempotency lookup, and a paused context could never be rebuilt)", async () => {
   const ctx = "prj_do_paused_evict";
   const s = stub(ctx);
-  await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "operator" } });
   await evictDurableObject(s);
   // The fresh incarnation's constructor replays `config` under its idempotency key — on a paused
   // stream. Then the resume lands like any other day.
-  await stub(ctx).append({ type: "events.iterate.com/stream/resumed" });
+  await stub(ctx).append({ type: "events.iterate.com/itx/resumed" });
   const page = (await stub(ctx).invoke(["itx", ["readEvents", 0, 50]])) as {
     events: { type: string }[];
   };
-  expect(page.events.map((e) => e.type)).toContain("events.iterate.com/stream/resumed");
+  expect(page.events.map((e) => e.type)).toContain("events.iterate.com/itx/resumed");
   const [afterResume] = (await stub(ctx).append({ type: "after-resume" })) as unknown as {
     type: string;
   }[];
@@ -242,17 +242,17 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
   expect((await rewriteRulesOf(ctx))["itx.x"]).toBeUndefined();
   // SUBSCRIPTIONS: the row's identity is its configure offset.
   const [first] = (await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "digest", target: "itx.digest.processEventBatch" },
   })) as unknown as { offset: number }[];
   const [second] = (await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "digest", target: "itx.digest.processEventBatch" },
   })) as unknown as { offset: number }[];
   const row = async () =>
     (await s.invoke("itx.subscriptions.get('digest')")) as { configuredAtOffset: number } | null;
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "digest",
       target: null,
@@ -261,7 +261,7 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
   });
   expect((await row())?.configuredAtOffset).toBe(second.offset); // the replacement stands
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "digest",
       target: null,

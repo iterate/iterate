@@ -33,7 +33,7 @@ test("streams thinking and response deltas into the live llm step", () => {
       payload: { model: "gpt-test" },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
@@ -41,7 +41,7 @@ test("streams thinking and response deltas into the live llm step", () => {
       },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 1,
@@ -49,7 +49,7 @@ test("streams thinking and response deltas into the live llm step", () => {
       },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 2,
@@ -71,7 +71,7 @@ test("streams thinking and response deltas into the live llm step", () => {
   });
 });
 
-test("streams coalesced multi-chunk windows (llm-response-chunks) into the live llm step", () => {
+test("streams coalesced multi-chunk windows (llm-response-frame) into the live llm step", () => {
   const state = reduceAll([
     {
       type: "events.iterate.com/agent/context-added",
@@ -87,7 +87,7 @@ test("streams coalesced multi-chunk windows (llm-response-chunks) into the live 
       payload: { model: "gpt-test" },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
@@ -98,7 +98,7 @@ test("streams coalesced multi-chunk windows (llm-response-chunks) into the live 
       },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 1,
@@ -127,7 +127,7 @@ test("committed assistant text extends streamed windows when the tail flush was 
       payload: { model: "gpt-test" },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
@@ -160,7 +160,7 @@ test("a cancelled settle's partialText extends streamed windows with the unflush
       payload: { model: "gpt-test" },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
@@ -687,7 +687,7 @@ test("flushes a script-sent reply when its script settles and nothing else is ru
   });
 });
 
-test("accumulates agent llm-response-chunks deltas", () => {
+test("accumulates agent llm-response-frame deltas", () => {
   const state = reduceAll([
     {
       type: "events.iterate.com/agent/llm-request-requested",
@@ -695,15 +695,15 @@ test("accumulates agent llm-response-chunks deltas", () => {
       payload: { model: "test-model" },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: { llmRequestOffset: 3, sequence: 0, chunks: [{ response: "Hel" }] },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: { llmRequestOffset: 3, sequence: 1, chunks: [{ response: "lo" }] },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 3,
         sequence: 2,
@@ -721,8 +721,8 @@ test("accumulates agent llm-response-chunks deltas", () => {
 
 test("does not show the bootstrap stream wake in the agent feed", () => {
   const state = reduceAll([
-    { type: "events.iterate.com/stream/created" },
-    { type: "events.iterate.com/stream/woken" },
+    { type: "events.iterate.com/itx/created" },
+    { type: "events.iterate.com/itx/woken" },
   ]);
 
   expect(state).toMatchObject({ items: [] });
@@ -730,9 +730,9 @@ test("does not show the bootstrap stream wake in the agent feed", () => {
 
 test("shows later stream wakes in the agent feed", () => {
   const state = reduceAll([
-    { type: "events.iterate.com/stream/created" },
-    { type: "events.iterate.com/stream/woken" },
-    { type: "events.iterate.com/stream/woken" },
+    { type: "events.iterate.com/itx/created" },
+    { type: "events.iterate.com/itx/woken" },
+    { type: "events.iterate.com/itx/woken" },
   ]);
 
   expect(state).toMatchObject({
@@ -780,11 +780,11 @@ test("a durable rebuild recovers the interrupted partial from the settled fact",
 test("shows stream pause and resume events in the agent feed", () => {
   const state = reduceAll([
     {
-      type: "events.iterate.com/stream/paused",
+      type: "events.iterate.com/itx/paused",
       payload: { reason: "Agent circuit breaker tripped." },
     },
     {
-      type: "events.iterate.com/stream/resumed",
+      type: "events.iterate.com/itx/resumed",
       payload: { reason: "Operator resumed the agent." },
     },
   ]);
@@ -1173,7 +1173,7 @@ test("does not append late chunks from an interrupted request into the next turn
       payload: { model: "gpt-test" },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 7,
         sequence: 0,
@@ -1200,7 +1200,7 @@ test("does not append late chunks from an interrupted request into the next turn
       },
     },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 7,
         sequence: 1,
@@ -1520,7 +1520,7 @@ test("phases follow the running step: waiting → thinking → writing → runni
   const thinking = reduceAll([
     { ...request, offset: 5 },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 5,
         sequence: 0,
@@ -1533,7 +1533,7 @@ test("phases follow the running step: waiting → thinking → writing → runni
   const writing = reduceAll([
     { ...request, offset: 5 },
     {
-      type: "events.iterate.com/agent/llm-response-chunks",
+      type: "events.iterate.com/agent/llm-response-frame",
       payload: {
         llmRequestOffset: 5,
         sequence: 0,

@@ -337,7 +337,7 @@ export type AgentUiState = {
    * to tell a this-turn status from stale previous-turn text (code steps
    * inherit `summaryActivity` at birth regardless of age). */
   summaryActivityUpdatedAtMs: number | null;
-  /** The stream/agent is paused (agent/paused or stream/paused, uncleared by
+  /** The stream/agent is paused (agent/paused or itx/paused, uncleared by
    * a resume). A paused loop owes no follow-up round, so the "processing"
    * inference must not claim one. */
   paused: boolean;
@@ -531,7 +531,7 @@ function reduceAgentUiEvent(
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case "events.iterate.com/agent/llm-response-chunks": {
+    case "events.iterate.com/agent/llm-response-frame": {
       const llmRequestOffset = readLlmRequestOffset(event);
       if (llmRequestOffset == null) return state;
       const payload = readPayloadRecord(event);
@@ -710,7 +710,7 @@ function reduceAgentUiEvent(
       return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
     }
 
-    case "events.iterate.com/stream/woken": {
+    case "events.iterate.com/itx/woken": {
       if (isInitialStreamWake(event)) return state;
       items.push({
         kind: "stream-woken",
@@ -730,7 +730,7 @@ function reduceAgentUiEvent(
     // idle-boundary overlay. A still-running step keeps the activity
     // live: agent/paused is operator/script-appendable while a request is
     // open, and that request settles normally.
-    case "events.iterate.com/stream/paused":
+    case "events.iterate.com/itx/paused":
     case "events.iterate.com/agent/paused": {
       const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
       const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
@@ -744,7 +744,7 @@ function reduceAgentUiEvent(
       return flushed;
     }
 
-    case "events.iterate.com/stream/resumed":
+    case "events.iterate.com/itx/resumed":
     case "events.iterate.com/agent/resumed":
       items.push({
         kind: "stream-resumed",
@@ -773,7 +773,7 @@ function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): A
 }
 
 function isInitialStreamWake(event: Event): boolean {
-  // Brand-new streams commit stream/created at offset 1 and stream/woken at offset 2.
+  // Brand-new streams commit itx/created at offset 1 and itx/woken at offset 2.
   return event.offset <= 2;
 }
 
@@ -1012,7 +1012,7 @@ function updateLlmStep(
 
 /**
  * The response/thinking text deltas inside one streamed LLM chunk, in the
- * shapes apps/agents/runtime/processor.ts puts into `llm-response-chunks`:
+ * shapes apps/agents/runtime/processor.ts puts into `llm-response-frame`:
  * OpenAI Responses API events for a partner model, and a `@cf/` Workers AI
  * model's raw SSE events (`{ response }`, or `choices[].delta` from a model
  * that speaks the OpenAI chat format).

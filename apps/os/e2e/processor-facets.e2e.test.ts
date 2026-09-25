@@ -20,9 +20,9 @@
 //   • `waitUntilProcessed(future offset)` times out with its documented error and leaks no waiter
 //   • POLICY IS A FACET PROCESSOR: the token-bucket breaker (`SOURCES.breaker` — a pure reduce spending
 //     one token per durable non-control event, refilled from the EVENT's createdAt, replayable) trips
-//     exactly on the crossing by appending `stream/paused` with its reason and provenance; core knows
+//     exactly on the crossing by appending `itx/paused` with its reason and provenance; core knows
 //     nothing about breakers (the pause check reads the reduced `paused` slice); appends then refuse
-//     STREAM_PAUSED; an operator's plain `stream/resumed` restores flow
+//     STREAM_PAUSED; an operator's plain `itx/resumed` restores flow
 // (The two pins that read the worker's console — a quiet enable is clean, disable mid-drive raises no
 // error storm — are push-delivery-no-dropped-warns.e2e, which owns a worker of its own; a stale
 // subscribe handle's compare-and-set undo is __workers-tests__/do-entry-points.test.ts.)
@@ -59,7 +59,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   // Cold catch-up counts the pre-enable rule and tally's own enablement.
   // Both are subscriptions, NOT rewrite rules (an enablement is a subscription).
   expect(s1.state?.counts?.[RULE_CONFIGURED]).toBe(1);
-  expect(s1.state?.counts?.["events.iterate.com/stream/subscription-configured"]).toBe(1);
+  expect(s1.state?.counts?.["events.iterate.com/itx/subscription-configured"]).toBe(1);
 
   // two more rules + one un-set AFTER enabling — the push path
   await itx.provide("itx.a", "itx.kv");
@@ -209,7 +209,7 @@ test("the core reduce's name is refused at BOTH entry points — never a facet t
 test("the raw event-sourced form agrees with the verb — a hand-appended subscription-configured naming the facet's processEventBatch IS the enablement", async () => {
   const itx = openItx(freshCtx("rawevent"));
   await itx.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "tally",
       target: [
@@ -243,7 +243,7 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   for (let i = 0; i < 3; i++) await itxA.append({ type: "seen", payload: { i } });
   const head = await readHead(itxA);
   const expected = durableCountsByType(await readAll(itxA));
-  expect([1, 2]).toContain(expected["events.iterate.com/stream/subscription-configured"]);
+  expect([1, 2]).toContain(expected["events.iterate.com/itx/subscription-configured"]);
   const snap = await until("tally reduced the whole log exactly once", async () => {
     const s: any = await tallySnapshot(itxA);
     return s.offset >= head && s;
@@ -268,9 +268,8 @@ test("re-enable while WARM with the same spec appends NOTHING (idempotent at ena
   expect(s1.state.counts).toMatchObject({ mark: 2 });
 
   const configuredEvents = async () =>
-    (await readAll(itx)).filter(
-      (e) => e.type === "events.iterate.com/stream/subscription-configured",
-    ).length;
+    (await readAll(itx)).filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
+      .length;
   const configuredBefore = await configuredEvents();
   await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ nothing appended: enable answers from the table
   expect(await configuredEvents()).toBe(configuredBefore);
@@ -349,7 +348,7 @@ test("the raw event agrees with processors.disable — a hand-appended subscript
   });
   // ONE event, no verb: the DO deletes the hosted facet before the append returns
   await itx.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "tally", target: null },
   });
   expect(await processorNames(itx)).toEqual([]);
@@ -365,7 +364,7 @@ test("the raw event agrees with processors.disable — a hand-appended subscript
 
 // ── policy as a facet processor: the breaker pauses the stream ──
 
-const PAUSED = "events.iterate.com/stream/paused";
+const PAUSED = "events.iterate.com/itx/paused";
 
 test("a burst past the breaker's capacity pauses the stream (the facet appends `paused` with its reason); appends refuse with STREAM_PAUSED; an operator's `resumed` restores flow", async () => {
   const itx = openItx(freshCtx("breaker"));
@@ -402,7 +401,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   });
 
   // the operator's recovery is a plain control append — resume always lands on a paused stream
-  await itx.append({ type: "events.iterate.com/stream/resumed" });
+  await itx.append({ type: "events.iterate.com/itx/resumed" });
   const [after] = await itx.append({ type: "after" });
   expect(after.offset).toBeGreaterThan(paused.offset); // flow restored
   // the bucket is in debt (no second crossing) — the ONE trip is the only `paused` in the log

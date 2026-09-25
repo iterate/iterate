@@ -669,7 +669,7 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
   expect(() =>
     normalizeControlEvent(
       {
-        type: "events.iterate.com/stream/append-scheduled",
+        type: "events.iterate.com/itx/schedule-set",
         payload: {
           key: "k",
           when: { at: "2030-01-01T00:00:00Z" },
@@ -1160,7 +1160,7 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   const row = (type: string, target: unknown) => () =>
     admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
   const rule = "events.iterate.com/itx/rewrite-rule-configured";
-  const subscription = "events.iterate.com/stream/subscription-configured";
+  const subscription = "events.iterate.com/itx/subscription-configured";
   expect(row(rule, "itx.builtins.cd('/')")).toThrow(/not a loaded worker's word/);
   expect(row(rule, "itx.builtins.kv")).toThrow(/not a loaded worker's word/);
   expect(row(rule, "itx.cd('..').whoami")).toThrow(/goes down only/);
@@ -1172,7 +1172,7 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   expect(row(rule, "itx.whoami")).not.toThrow();
   expect(row(rule, "itx.cd('./b').whoami")).not.toThrow();
   expect(row(rule, null)).not.toThrow();
-  expect(row("events.iterate.com/notes/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
+  expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
 });
 
 test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {

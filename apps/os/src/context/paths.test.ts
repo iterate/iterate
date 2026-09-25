@@ -137,7 +137,7 @@ test("a global owner's id keeps the codec's charset (the `:`/`.` delimiters cann
   expect(() => resourceScope("global", "/organizations/o.1")).toThrow(/only \[A-Za-z0-9_-\]/);
 });
 
-// ── ancestors ── who a context announces itself to (`context/child-created`): every ancestor, root first.
+// ── ancestors ── who a context announces itself to (`itx/child-created`): every ancestor, root first.
 test.each([
   ["/", []],
   ["/a", ["/"]],

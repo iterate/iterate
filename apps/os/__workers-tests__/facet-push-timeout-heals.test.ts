@@ -84,7 +84,7 @@ test(
     // (alarm-and-pins.test.ts): ONE subscription-configured whose target is the facet's
     // processEventBatch through the load chain.
     await stub(ctx).append({
-      type: "events.iterate.com/stream/subscription-configured",
+      type: "events.iterate.com/itx/subscription-configured",
       payload: {
         name,
         target: [

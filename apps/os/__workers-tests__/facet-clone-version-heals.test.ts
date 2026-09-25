@@ -19,7 +19,7 @@ for (const [label, message] of Object.entries(platformFailures)) {
     const ctx = `prj_facet_${label}`;
     const s = stub(ctx);
     await s.append({
-      type: "events.iterate.com/stream/subscription-configured",
+      type: "events.iterate.com/itx/subscription-configured",
       payload: {
         name: "flaky",
         target: [

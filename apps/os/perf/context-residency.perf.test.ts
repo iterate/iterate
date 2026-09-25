@@ -170,7 +170,7 @@ timed.concurrent(
     );
     const woken = (await readAll(openItx(ctx))).filter(
       (e: any) =>
-        e.type === "events.iterate.com/stream/woken" &&
+        e.type === "events.iterate.com/itx/woken" &&
         e.offset > sleep45.offset &&
         e.offset < slept.offset,
     );

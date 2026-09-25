@@ -1,7 +1,7 @@
 // src/fetch-routes.ts — A PROJECT'S FETCH ROUTES: named rules on the project's root `/` that say
 // which requests arriving on the project's hosts go to which itx expression — a tunnel's lent stub
 // (`iterate tunnel`), a facet, a loaded worker. Each is one fact on `/`,
-// `fetch-route/configured`, and THIS FILE is the only place it is spelled, folded into the route
+// `itx/fetch-route-configured`, and THIS FILE is the only place it is spelled, folded into the route
 // table (`reduceFetchRouteConfigured`) and matched against a request (`matchFetchRoute`), all
 // pure. The table is part of the root's CORE STATE (stream/core-processor.ts `fetchRoutes`), reduced
 // inline with every commit, so reading it is a memory read. The verbs are the built-in
@@ -107,7 +107,7 @@ export type FetchRouteTable = Record<
 /** One live route as `list()` and `match` answer it: the table's row with its name. */
 export type FetchRoute = FetchRouteTable[string] & { fetchRouteName: string };
 
-/** THE FOLD of one `fetch-route/configured` fact: the route set at the fact's offset, or deleted
+/** THE FOLD of one `itx/fetch-route-configured` fact: the route set at the fact's offset, or deleted
  *  by a null matcher — `undefined` when nothing changes (the core reduce's keep-the-state signal).
  *  The table is written through `writable`: a fresh copy by default, the batch's DRAFT in the core
  *  reduce (stream/core-processor.ts `draftOf`), so a page of facts copies the table once and a

@@ -47,7 +47,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "dig",
       target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
@@ -99,7 +99,7 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   const ctx = "prj_rev_nofacet";
   const s = stub(ctx);
   await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "c2",
       target: [...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"), "processEventBatch"],
@@ -119,14 +119,14 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   const s = stub(ctx);
   const configured = offsetOf(
     await s.append({
-      type: "events.iterate.com/stream/subscription-configured",
+      type: "events.iterate.com/itx/subscription-configured",
       payload: {
         name: "counter",
         target: [
           ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
           "processEventBatch",
         ],
-        consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
+        consumes: ["tick", "events.iterate.com/itx/subscription-configured"],
       },
     }),
   );

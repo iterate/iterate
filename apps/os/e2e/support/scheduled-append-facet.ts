@@ -40,7 +40,7 @@ export const scheduledAppendProcessorSource = {
 class Reminders extends StreamProcessor {
   contract = {
     slug: "reminders", version: "1", consumes: ["invoice/opened", "invoice/reminder-due"],
-    emits: ["events.iterate.com/stream/append-scheduled"],
+    emits: ["events.iterate.com/itx/schedule-set"],
     initialState: () => ({ reminded: [] }),
   };
   reduce({ event, state }) {
@@ -49,7 +49,7 @@ class Reminders extends StreamProcessor {
   processEvent({ event, append, blockProcessorWhile }) {
     if (event?.type !== "invoice/opened") return;
     blockProcessorWhile(() => append({
-      type: "events.iterate.com/stream/append-scheduled",
+      type: "events.iterate.com/itx/schedule-set",
       idempotencyKey: this.idempotencyKey("reminder", event),
       payload: {
         key: "invoice:" + event.payload.invoiceId,

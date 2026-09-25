@@ -147,7 +147,7 @@ export async function publishConfigWorker(itx: any, target: unknown): Promise<vo
     afterOffset: 0,
     timeoutMs: 60_000,
   });
-  await itx.append({ type: "events.iterate.com/project/ingress-configured", payload: { target } });
+  await itx.append({ type: "events.iterate.com/itx/ingress-configured", payload: { target } });
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
