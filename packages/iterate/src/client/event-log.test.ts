@@ -85,6 +85,27 @@ test("all: reads every page from the first and is exhausted at once", async () =
   log.dispose();
 });
 
+test("before the first read lands, an event the subscription pushed is not the start of the log: older is loading", async () => {
+  let land!: () => void;
+  const context = fakeContext(
+    [1, 2, 3, 4],
+    undefined,
+    new Promise<void>((resolve) => (land = resolve)),
+  );
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  // subscribing appends the subscription's own event, which the subscription pushes at once
+  context.push([4]);
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: false, older: { loading: true, exhausted: false } });
+  expect(offsetsOf(log.get().events)).toEqual([4]);
+  land();
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: true, older: { loading: false, exhausted: true } });
+  expect(offsetsOf(log.get().events)).toEqual([1, 2, 3, 4]);
+  log.dispose();
+});
+
 test("who acted and the processors table's version follow the events held", async () => {
   const context = fakeContext([1, 2, 3, 4], (offset) => ({
     ...(offset === 2 && { type: "events.iterate.com/itx/subscription-configured" }),
@@ -105,6 +126,8 @@ test("who acted and the processors table's version follow the events held", asyn
 function fakeContext(
   offsets: number[],
   extra: (offset: number) => Partial<StreamEvent> = () => ({}),
+  /** every read answers once this settles */
+  readsLand: Promise<void> = Promise.resolve(),
 ) {
   const head = offsets.at(-1) ?? 0;
   const eventAt = (offset: number) =>
@@ -126,7 +149,7 @@ function fakeContext(
     async readEvents(after = 0, limit = 500) {
       reads.push([after, limit]);
       inFlight += 1;
-      await Promise.resolve();
+      await readsLand;
       inFlight -= 1;
       const cap = Math.min(Math.max(1, limit), 1000, 300); // 300: the byte budget's cut
       const rows = offsets.filter((offset) => offset > after).slice(0, cap);

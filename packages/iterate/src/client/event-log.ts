@@ -42,7 +42,8 @@ export type EventLogSnapshot = {
   error?: string;
   /** The highest offset known: the head the probe read, or the newest event since. */
   head: number;
-  /** Reading older pages: one in flight; none left (the log is held from its first event). */
+  /** Reading older pages: one in flight (the first read too); none left (the log is held from its
+   *  first event). */
   older: { loading: boolean; exhausted: boolean };
   /** Every principal that acted on an event held, newest first. */
   actors: EventLogPresence[];
@@ -145,7 +146,12 @@ export function connectEventLog(
       caughtUp,
       error,
       head,
-      older: { loading: loadingOlder, exhausted: floor === 0 },
+      // until the first read lands, what is held is only what the subscription pushed (its own
+      // subscription event, at least): the log below it is being read, not known to start there
+      older: {
+        loading: loadingOlder || (!caughtUp && !error),
+        exhausted: caughtUp && floor === 0,
+      },
       actors,
       tableVersion,
     };
