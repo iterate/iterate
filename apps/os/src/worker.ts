@@ -19,8 +19,13 @@ import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
-import { testLinkResponse } from "./issuer-session.ts";
+import { testLinkCallbackResponse, testLinkResponse } from "./issuer-session.ts";
 import { TEST_LINK_PATH } from "./test-link.ts";
+import {
+  TEST_LINK_CALLBACK_PATH,
+  TEST_LINK_CLIENT_PATH,
+  testLinkClientMetadata,
+} from "./test-link-admins.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
@@ -354,6 +359,15 @@ export default {
     // and every deployment on its own domain, which app-config.ts refuses it on.
     if (url.pathname === TEST_LINK_PATH && request.method === "GET")
       return testLinkResponse(request, env);
+    // …and where one is proven an admin's (test-link-admins.ts): the admins' issuer's answer, and
+    // this deployment's client metadata document, which that issuer fetches
+    if (appConfig.login.testLink?.admins && request.method === "GET") {
+      if (url.pathname === TEST_LINK_CALLBACK_PATH) return testLinkCallbackResponse(request, env);
+      if (url.pathname === TEST_LINK_CLIENT_PATH)
+        return Response.json(testLinkClientMetadata(platformOrigin), {
+          headers: { "cache-control": "public, max-age=300" },
+        });
+    }
     // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
     // this origin.
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });

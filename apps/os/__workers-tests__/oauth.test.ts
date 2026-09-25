@@ -55,14 +55,14 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   });
   expect(registered).toMatchObject({ status: 201 });
   expect((await registered.json<{ client_id?: string }>()).client_id).toBeTruthy();
-  // the authorization server declares its two resources (RFC 9728 `protected_resources`), and each
-  // publishes its own metadata naming the issuer and the one scope a client asks for first
+  // the authorization server declares its three resources (RFC 9728 `protected_resources`), and
+  // each publishes its own metadata naming the issuer and the one scope a client asks for first
   expect(metadata).toMatchObject({
     issuer: ORIGIN,
-    protected_resources: [`${ORIGIN}/api`, `${ORIGIN}/mcp`],
+    protected_resources: [`${ORIGIN}/api`, `${ORIGIN}/mcp`, `${ORIGIN}/oauth2/userinfo`],
     scopes_supported: ["iterate", "account", "organizations:write", "admin"],
   });
-  for (const protocol of ["api", "mcp"]) {
+  for (const protocol of ["api", "mcp", "oauth2/userinfo"]) {
     expect(
       await (await call(`/.well-known/oauth-protected-resource/${protocol}`)).json(),
     ).toMatchObject({

@@ -49,6 +49,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "test links exist only on a preview or local dev, and minting one needs its key",
     note: "env-gated: a deployment on its own domain (prd) has login.testLink off by construction (apps/os/src/app-config.ts), and a preview run needs its key from `doppler run`",
   },
+  {
+    file: "specs/os/test-link.spec.ts",
+    match: "on a preview, redeeming a link needs an admin's prd sign-in",
+    note: "env-gated: a preview's links redeem only after an admin signs in at prd (apps/os/src/test-link-admins.ts), which no spec holds; the first row proves the redirect there instead",
+  },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {
     file: "scripts/ci/tracing/vitest.test.ts",

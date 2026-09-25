@@ -163,7 +163,7 @@ test("the PR body's managed section: on a PR the heading, every app and every co
 
     New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
 
-    \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
+    \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\` once you confirm at https://os.iterate.com that you are one of \`*@nustom.com\`; no password and no Allow page on the preview. The link is for this preview only and expires in 14 days; every push mints a fresh one.
 
     Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md)."
   `);

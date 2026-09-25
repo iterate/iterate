@@ -29,7 +29,7 @@ import {
 } from "./personal-access-token.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization, so it is bound to
- * one of the authorization server's two resources: the issuer's own session or a client's. */
+ * one of the authorization server's resources: the issuer's own session or a client's. */
 export const GrantProps = z.object({
   kind: z.enum(["issuer", "app"]),
   userId: z.string().startsWith("user_"),
@@ -189,10 +189,10 @@ async function liveGrantAccount(env: Env, grant: AccessGrant): Promise<AccountSt
   return account.endedGrants[grant.grantId] ? null : account;
 }
 
-/** THE PLATFORM'S TOKEN VALIDATOR, for either resource (api.ts hosts both with it). Three bearers:
+/** THE PLATFORM'S TOKEN VALIDATOR, for every resource (api.ts hosts each with it). Three bearers:
  *  - a token the authorization server issued for `resource` (audience-checked, its props
  *    decrypted) whose grant is still live;
- *  - a personal access token (personal-access-token.ts), at either resource: the library's
+ *  - a personal access token (personal-access-token.ts), at any resource: the library's
  *    resource servers take any validator ("`validateToken` is just a function",
  *    docs/resource-servers.md "Another issuer, at your own risk"), so the key's check is a branch
  *    here, and it names the resource that asked as its audience. At `/mcp` a key is outside the MCP
@@ -390,14 +390,16 @@ export const TOKEN_ENDPOINT = "/oauth2/token";
 export const CLIENT_REGISTRATION_ENDPOINT = "/oauth2/register";
 
 /** THE AUTHORIZATION SERVER at `addresses` (the library's role-based API, its
- *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's two resources, `/api`
- *  (Cap'n Web) and `/mcp` — each hosted in this worker by api.ts. Every grant and access token is
- *  bound to exactly one of them (RFC 8707). Built per request: where `urls.os` is unset the addresses
+ *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's three resources, `/api`
+ *  (Cap'n Web), `/mcp` and `/oauth2/userinfo` (who the bearer is, and nothing else — what another
+ *  deployment asks to know an admin by, test-link.ts) — each hosted in this worker by api.ts. Every
+ *  grant and access token is bound to exactly one of them (RFC 8707): a userinfo token is refused
+ *  at `/api` and `/mcp` by the audience check itself. Built per request: where `urls.os` is unset the addresses
  *  are the request's own. */
-function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAddresses) {
+function authorizationServer(env: Env, { platformOrigin, api, mcp, userinfo }: PlatformAddresses) {
   return new OAuthAuthorizationServer<Env>({
     issuer: platformOrigin,
-    resources: [api, mcp],
+    resources: [api, mcp, userinfo],
     authorizeEndpoint: AUTHORIZE_ENDPOINT,
     tokenEndpoint: TOKEN_ENDPOINT,
     // DCR is served on every deployment (not just local http): CIMD stays the apps' own path

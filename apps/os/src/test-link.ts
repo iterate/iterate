@@ -17,6 +17,9 @@
 //     preview, and the link with it, is deleted when the PR closes.
 //   • every claim is under the MAC: nobody edits the link into another person, another `next` or
 //     another client list.
+//   • off localhost the link alone signs nobody in — it sits in a public PR body: its redeemer first
+//     proves at `login.testLink.admins.issuer` (prd) that they are one of `admins.emails`
+//     (test-link-admins.ts), which app-config.ts requires there.
 
 import { sha256Hex, signClaims, verifyClaims } from "./caller.ts";
 

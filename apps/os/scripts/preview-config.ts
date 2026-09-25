@@ -508,7 +508,7 @@ export function renderPullRequestSection(input: {
       : []),
     ...(signIn
       ? [
-          `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,
+          `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\` once you confirm at ${TEST_LINK_ADMINS_ISSUER} that you are one of ${TEST_LINK_ADMIN_EMAILS.map((pattern) => `\`${pattern}\``).join(", ")}; no password and no Allow page on the preview. The link is for this preview only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,
           "",
         ]
       : []),
@@ -590,8 +590,12 @@ export function previewWranglerConfig(input: {
         APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
         // THE ONE-CLICK SIGN-IN (src/test-link.ts), on for a per-PR preview only: this config is
         // only ever what `wrangler preview` reads (deploy.ts never does), and app-config.ts refuses
-        // the block off a workers.dev origin besides. The PR body's `Sign in ↗` links redeem here.
+        // the block off a workers.dev origin besides. The PR body's `Sign in ↗` links redeem here —
+        // but the PR body is public, so a link signs nobody in until its redeemer signs in at prd
+        // as one of `TEST_LINK_ADMIN_EMAILS` (src/test-link-admins.ts).
         APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
+        APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: TEST_LINK_ADMINS_ISSUER,
+        APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: TEST_LINK_ADMIN_EMAILS.join(","),
         // THE PREVIEW'S ADMIN (app-config.ts `admins`): one test person the admin app's specs sign
         // in as (specs/admin). A preview already signs anyone in by password or test link, so an
         // admin here opens nothing that was closed.
@@ -603,6 +607,11 @@ export function previewWranglerConfig(input: {
 
 /** The per-PR preview's one admin (`APP_CONFIG_ADMINS` above; specs/admin signs in as them). */
 const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
+
+/** Who may redeem a preview's sign-in link (src/test-link-admins.ts): an address these patterns
+ *  name, as the issuer says who signed in there. */
+const TEST_LINK_ADMINS_ISSUER = osEnvs.prd!.baseUrl;
+const TEST_LINK_ADMIN_EMAILS = ["*@nustom.com"];
 
 /** Write a preview config beside Vite's built config and return its path. */
 export function writePreviewWranglerConfig(input: {
