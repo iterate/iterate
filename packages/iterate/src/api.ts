@@ -492,7 +492,7 @@ export type RepoHandle = InvokeHandle & {
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
-  /** Append the repo's own events on its context. */
+  /** Append the repo's own events on its context; its lifecycle facts are the collection's. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
 
@@ -522,7 +522,7 @@ export type WorkspaceHandle = InvokeHandle & {
     author?: { name: string; email: string };
   }): Promise<{ commitOid: string | null; mount: string; repo: string; changedPaths: string[] }>;
   gitLog(input?: { scope?: string; limit?: number }): Promise<RepoLogEntry[]>;
-  /** Append the workspace's own events on its context. */
+  /** Append the workspace's own events on its context; its lifecycle facts are the collection's. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
 
@@ -530,7 +530,8 @@ export type WorkspaceHandle = InvokeHandle & {
  *  `list()` the project catalog, `create(path)` the creation saga on that path (the parent link the
  *  caller's context writes first, then the processor row, the request, the terminal fact — created,
  *  or create-failed thrown), `delete(path)` the deletion saga (the request, `deleted` cross-posted to
- *  `/`, the row disabled). A relative `path` means the caller's. */
+ *  `/`, the row disabled). A relative `path` means the caller's. `get` and `list` reach the whole
+ *  project; `create` and `delete` only paths strictly beneath the caller's context (FORBIDDEN). */
 export type EntityCollectionApi<Handle> = {
   get(path: string): Handle;
   list(): Promise<{ path: string; createdAt: string }[]>;

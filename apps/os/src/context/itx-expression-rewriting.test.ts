@@ -1206,6 +1206,47 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   expect(row("events.iterate.com/itx/rewrite-rule-configured", null)).not.toThrow();
   expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
 });
+test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a row has no way round the wall: loaded code removes no row (`ifTarget`, null or not), a scheduled batch is walled event by event as it is scheduled, and a fetch route is set only from the project's root", () => {
+  const append =
+    (event: { type: string; payload?: unknown }, base = "/agents/a") =>
+    () =>
+      admitLoadedCodeRow(event, base);
+  for (const ifTarget of [null, "itx.cd('./b').tool"])
+    expect(
+      append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.tool", target: null, ifTarget },
+      }),
+    ).toThrow(/removes no row/);
+  const schedule = (events: { type: string; payload?: unknown }[]) => ({
+    type: "events.iterate.com/itx/schedule-set",
+    payload: { key: "k", when: { afterMs: 0 }, events },
+  });
+  const rewrite = (target: string) => ({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.tool", target },
+  });
+  expect(append(schedule([rewrite("itx.builtins.cd('/').tool")]))).toThrow(
+    /not a loaded worker's word/,
+  );
+  expect(
+    append(schedule([{ type: "events.iterate.com/note/added" }, rewrite("itx.cd('..').tool")])),
+  ).toThrow(/goes down only/);
+  expect(
+    append(schedule([{ type: "events.iterate.com/note/added" }, rewrite("itx.cd('./b').tool")])),
+  ).not.toThrow();
+  const route = {
+    type: "events.iterate.com/itx/fetch-route-configured",
+    payload: {
+      fetchRouteName: "leak",
+      requestMatcher: { routingSlug: "leak" },
+      target: "itx.tool",
+    },
+  };
+  expect(append(route)).toThrow(/set only from the project's root/);
+  expect(append(schedule([route]))).toThrow(/set only from the project's root/);
+  expect(append(route, "/")).not.toThrow();
+});
 
 test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {
   const request = new Request("https://provider.example/", { headers: { upgrade: "websocket" } });

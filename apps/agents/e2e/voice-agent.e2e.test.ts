@@ -43,7 +43,7 @@ deployedOnly(
     expect(candidateProbe).toBeTruthy();
     const websiteScripts = [
       "return await itx.whoami();",
-      'await itx.repos.create("/repos/config"); return await itx.repos.get("/repos/config").listFiles();',
+      'return await itx.repos.get("/repos/config").listFiles();',
       'return await itx.repos.get("/repos/config").readFile("worker.ts");',
       `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
       `return await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)});`,
@@ -207,6 +207,13 @@ export default class extends WorkerEntrypoint {
         { method: "POST", url: providerUrl, status: 200 },
         { method: "POST", url: providerUrl, status: 200 },
       ]);
+      // The project's creation made and seeded the config repo the scripts below edit; a sandbox
+      // creates only beneath itself, so it cannot make that repo.
+      await root.waitForEvent({
+        type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+        afterOffset: 0,
+        timeoutMs: 60_000,
+      });
       // Seven real sandbox scripts: candidate probe, commit, then live verification.
       // The former six-step cap discarded that last check after changing the site.
       const websiteAsked = received.length;

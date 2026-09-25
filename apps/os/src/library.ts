@@ -379,35 +379,42 @@ function entityRoot<Handle>(
   contract: EntityContract,
 ): EntityRoot<Handle> {
   const collection = `${name}s` as const;
+  // CREATING AND DELETING REACH ONLY STRICTLY BENEATH THE CALLER'S ORIGIN (`Caller.path`, stamped by
+  // the platform, never an argument). Every context linked to the root inherits `itx.repos` and
+  // `itx.workspaces`; reaching further, it could delete what is not its own (`/repos/config`, for
+  // good) or plant a context anywhere, linked to itself. `get` and `list` stay project-wide: agents
+  // edit `/repos/config`, and a workspace mounts every repo.
+  const beneathTheOrigin = (verb: "create" | "delete", path: string) => {
+    const origin = originOf(deps.caller(), deps.path);
+    const absolute = resolveContextPath(origin, path);
+    if (absolute === origin || !absolute.startsWith(origin === "/" ? "/" : `${origin}/`))
+      throw codedError(
+        "FORBIDDEN",
+        `${collection}.${verb}(${JSON.stringify(path)}) from ${JSON.stringify(origin)}: a context creates and deletes only beneath itself`,
+      );
+    return { origin, absolute };
+  };
   return {
     get: (path) =>
       entityHandle(itx, path, name, contract, deps.caller(), deps.path) as InvokeHandle & Handle,
     list: () =>
       projectFacet(itx, [[collection], ["list"]]) as Promise<{ path: string; createdAt: string }[]>,
-    // THE CREATION, from the caller's context: the path resolved against it, and the CREATOR — the
-    // caller's originating context, which the platform stamped, never an argument. The collection's
-    // saga on the `project` facet writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new
-    // context with `<entity>/create-requested`, before the certificate (itx-expression-rewriting.ts
-    // rule 3: everything the new context does not claim, its creator answers). A created entity
-    // answers at once, and nothing re-points it.
+    // THE CREATION, beneath the CREATOR, the caller's origin. The collection's saga on the `project`
+    // facet writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new context with
+    // `<entity>/create-requested`, before the certificate (itx-expression-rewriting.ts rule 3:
+    // everything the new context does not claim, its creator answers). The link points up, so it
+    // closes no cycle. A created entity answers at once, and nothing re-points it.
     create: async (path) => {
-      const creator = originOf(deps.caller(), deps.path);
-      const absolute = resolveContextPath(creator, path);
-      // A context never creates its own ancestor: the link it would write there points back down at
-      // itself — a two-context cycle — and a child never holds more than its creator.
-      if (creator !== absolute && creator.startsWith(absolute === "/" ? "/" : `${absolute}/`))
-        throw codedError(
-          "FORBIDDEN",
-          `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
-        );
-      return projectFacet(itx, [[collection], ["create", absolute, { creator }]]) as Promise<{
-        path: string;
-      }>;
+      const { origin, absolute } = beneathTheOrigin("create", path);
+      return projectFacet(itx, [
+        [collection],
+        ["create", absolute, { creator: origin }],
+      ]) as Promise<{ path: string }>;
     },
     delete: async (path) =>
       projectFacet(itx, [
         [collection],
-        ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
+        ["delete", beneathTheOrigin("delete", path).absolute],
       ]) as Promise<{ path: string }>,
   };
 }
@@ -426,8 +433,12 @@ async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unkn
   return context.invoke(["facets", ["get", "project"], ...steps]);
 }
 
-/** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none. */
-type EntityContract = { payloadSchemaFor?: (type: string) => z.ZodType | undefined };
+/** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none,
+ *  and the lifecycle facts its processor consumes. */
+type EntityContract = {
+  payloadSchemaFor?: (type: string) => z.ZodType | undefined;
+  consumes: readonly string[];
+};
 
 // An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
 // dispatch), so a handle types as the facet it dispatches to — the first-party class the name hosts
@@ -471,6 +482,15 @@ function entityHandle(
         if (!schema)
           throw new Error(
             `${name}.append: ${JSON.stringify(input.type)} is not an event the ${name} contract owns`,
+          );
+        // The facts the entity's processor consumes are its lifecycle: a request starts a saga, a
+        // certificate ends one. Only the collection writes them, beneath the caller (`create`,
+        // `delete`); through here, which reaches any path, a request would delete a repo from
+        // anywhere and a forged certificate would leave one dead or half-born.
+        if (contract.consumes.includes(input.type))
+          throw codedError(
+            "FORBIDDEN",
+            `${name}.append: ${JSON.stringify(input.type)} is the ${name}'s lifecycle — only itx.${name}s.create and itx.${name}s.delete write it`,
           );
         return { ...input, payload: schema.parse(input.payload ?? {}) };
       });

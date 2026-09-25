@@ -283,8 +283,9 @@ export type CoreState = {
    *  match HERE (an implicit row: `itx.kv` and `itx.ai.run('gpt-5')` at the owner root, `itx.append`
    *  anywhere, the bare `itx` — one row denies all; or a stored shorter row with a target: `itx.tool`
    *  behind the parent link) and DELETES otherwise; `null` with `ifTarget` is a handle's
-   *  compare-and-set DELETE; a target equal to the implicit row it would restate deletes (the
-   *  default said as much), the same spelling elsewhere is a grant and is stored. */
+   *  compare-and-set DELETE, never loaded code's (itx-expression-rewriting.ts `admitLoadedCodeRow`);
+   *  a target equal to the implicit row it would restate deletes (the default said as much), the
+   *  same spelling elsewhere is a grant and is stored. */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
