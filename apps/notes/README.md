@@ -35,7 +35,7 @@ if (!request.headers.get("x-itx-principal"))
 
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to
 `https://os.iterate.com` by default; to use a local OS (`pnpm --dir ../os dev -- --port 8788`)
-put `ITERATE_ORIGIN=http://localhost:8788` in a gitignored `.dev.vars` here.
+put `APP_CONFIG_URLS__OS=http://localhost:8788` in a gitignored `.dev.vars` here.
 
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform it talks to
 (`os.iterate.com`, which follows `main`) carries `itx.repos` and

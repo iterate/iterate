@@ -2,15 +2,17 @@ import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-r
 import { createServerFn } from "@tanstack/react-start";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { appDirectory } from "../apps.ts";
 import css from "../styles.css?url";
-/** What the worker's vars say about this deployment: its PostHog project key (envs.ts, prd only;
- *  `POSTHOG_PROJECT_KEY`) and its directory of apps (`ITERATE_APP_ORIGINS`, apps.ts). */
+/** What the worker's `APP_CONFIG` says about this deployment: its PostHog project key (envs.ts,
+ *  prd only) and its directory of apps (`urls`, apps.ts). */
 const deployment = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
+  const config = startAppConfigOf(env);
   return {
-    posthogProjectKey: env.POSTHOG_PROJECT_KEY || null,
-    apps: appDirectory(env.ITERATE_APP_ORIGINS),
+    posthogProjectKey: config.posthogProjectKey || null,
+    apps: appDirectory(config.urls),
   };
 });
 

@@ -1,18 +1,21 @@
 import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import css from "../styles.css?url";
-/** What the worker's vars say about this deployment: its PostHog project key (envs.ts, prd only;
- *  `POSTHOG_PROJECT_KEY`) and its dash, where a person revokes a device's token — the worker's
- *  `ITERATE_APP_ORIGINS` (scripts/lib/start-app.ts — prd's from envs.ts; a per-PR preview's, the
- *  same PR's dash preview). `dashOrigin` is null when it names none: a preview run that did not
- *  deploy the dash, whose production dash would not know the preview's sessions. */
+/** What the worker's `APP_CONFIG` says about this deployment: its PostHog project key (envs.ts, prd
+ *  only) and its dash, where a person revokes a device's token (`urls.dash`: prd's from envs.ts; a
+ *  per-PR preview's, the same PR's dash preview). `dashOrigin` is null when it names none: a
+ *  preview run that did not deploy the dash, whose production dash would not know the preview's
+ *  sessions. */
 const deployment = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
-  const origins = z.object({ dash: z.url().optional() }).parse(JSON.parse(env.ITERATE_APP_ORIGINS));
-  return { posthogProjectKey: env.POSTHOG_PROJECT_KEY || null, dashOrigin: origins.dash || null };
+  const config = startAppConfigOf(env);
+  return {
+    posthogProjectKey: config.posthogProjectKey || null,
+    dashOrigin: config.urls.dash || null,
+  };
 });
 
 export const Route = createRootRoute({

@@ -10,12 +10,12 @@ import {
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
-/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — the zones
- *  of its projects' custom hostnames (`customHostnames`), its `admins` and a per-commit
- *  deployment's test links too — as the override vars the parser merges on top of the Doppler blob:
- *  `APP_CONFIG_URLS__<KEY>`. An object travels as a JSON STRING — the parser reads string vars
- *  only. A blank var is unset. */
-function urlVars(env: OsPreviewEnv) {
+/** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
+ *  zones of its projects' custom hostnames (`customHostnames`), its `admins`, its PostHog key and a
+ *  per-commit deployment's test links — as the override vars the parser merges on top of the
+ *  Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object travels as a JSON STRING — the parser reads
+ *  string vars only. A blank var is unset. */
+function configVars(env: OsPreviewEnv) {
   const vars: Record<string, string> = { APP_CONFIG_URLS__OS: env.baseUrl };
   if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
     vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
@@ -26,6 +26,7 @@ function urlVars(env: OsPreviewEnv) {
   const admins = [...(env.admins || []), ...(env.testLinks ? [PREVIEW_ADMIN_EMAIL] : [])];
   if (env.testLinks) vars.APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN = TEST_LINK_EMAIL_DOMAIN;
   if (admins.length) vars.APP_CONFIG_ADMINS = JSON.stringify(admins);
+  if (env.posthogProjectKey) vars.APP_CONFIG_POSTHOG_PROJECT_KEY = env.posthogProjectKey;
   if (env.ingressRouting)
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
   if (env.projectWildcard)
@@ -133,8 +134,7 @@ function deploymentWranglerConfig(env: OsEnv | OsPreviewEnv) {
           { binding: "ITX_KV", id: resources.itxKvId },
         ]
       : [{ binding: "OAUTH_KV" }, { binding: "ITX_KV" }],
-    // unset ⇒ undefined, which the JSON config drops: no var, no PostHog on the pages
-    vars: { ...urlVars(env), POSTHOG_PROJECT_KEY: env.posthogProjectKey },
+    vars: configVars(env),
   };
 }
 

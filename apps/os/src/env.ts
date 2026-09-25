@@ -19,8 +19,6 @@ export interface Env extends DurableObjectEnv {
    *  (password-and-code-sign-in.ts). Simulated by wrangler dev and the test configs; absent where a
    *  deployment has no mailbox. */
   EMAIL?: SendEmail;
-  /** PostHog's project key (envs.ts, prd only): the issuer's pages start posthog-js with it. */
-  POSTHOG_PROJECT_KEY?: string;
 }
 
 /** A worker handler with a REQUIRED fetch: the issuer's pages behind the platform's OAuth routes

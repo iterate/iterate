@@ -3,12 +3,17 @@
 // dash in as that person for an hour (apps/os consent.ts `#impersonate`).
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 
-/** The dash's origin, from the worker's directory of first-party apps (`ITERATE_APP_ORIGINS`). */
+/** The dash's origin, from the worker's first-party apps (`APP_CONFIG urls.dash`). */
 const dashOrigin = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
-  return z.object({ dash: z.url() }).parse(JSON.parse(env.ITERATE_APP_ORIGINS)).dash;
+  const { dash } = startAppConfigOf(env).urls;
+  if (!dash)
+    throw new Error(
+      "APP_CONFIG urls.dash (APP_CONFIG_URLS__DASH): unset — the admin app links into the dash",
+    );
+  return dash;
 });
 
 /** What the dash asks for at sign-in (apps/dash/src/lib/scopes.ts): viewed as someone, it gets the

@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
+import type { StartAppConfig } from "@iterate-com/shared/start-app-config";
 import {
   adminEnvs,
   agentsEnvs,
@@ -34,8 +35,8 @@ import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangl
 export interface StartAppEnv extends DeployableEnv {
   workerName: string;
   baseUrl: string;
-  /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's
-   *  `POSTHOG_PROJECT_KEY`, and the app's pages start posthog-js with it. Unset ⇒ no PostHog. */
+  /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
+   *  posthogProjectKey`, which the app's pages start posthog-js with. Unset ⇒ no PostHog. */
   posthogProjectKey?: string;
 }
 
@@ -50,8 +51,11 @@ export interface StartApp {
 }
 
 /** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
- *  `ITERATE_APP_ORIGINS` (startAppWorkerConfig) — each its envs.ts map. */
-const FIRST_PARTY_APPS: Record<string, Record<string, StartAppEnv>> = {
+ *  their `APP_CONFIG` `urls` (startAppWorkerConfig; the schema names each) — each its envs.ts map. */
+const FIRST_PARTY_APPS: Record<
+  Exclude<keyof StartAppConfig["urls"], "os">,
+  Record<string, StartAppEnv>
+> = {
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
@@ -99,6 +103,17 @@ export function ownZones(): string[] {
  *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
 export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
   const { env, platform, appOrigins } = linkedEnvironment(app, envName);
+  // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
+  // (@iterate-com/shared/start-app-config)
+  const appConfig = {
+    urls: {
+      os: platform.baseUrl,
+      // the linked environment's apps, as the issuer is
+      ...Object.fromEntries(appOrigins),
+    },
+    denyZones: ownZones(),
+    ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
+  } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName ?? app.name,
     main: "src/server.ts",
@@ -106,20 +121,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object" as const, storage: "sqlite" as const } },
-    vars: {
-      // the default issuer: the linked environment's platform origin
-      ITERATE_ORIGIN: platform.baseUrl,
-      // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
-      // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
-      // issuer is exempt) — derived from envs.ts, never spelled twice
-      ITERATE_DENY_ZONES: ownZones().join(","),
-      // the first-party apps' origins by name (JSON), what a link from one app to another follows —
-      // the dash's directory of apps, Kit's link to the sessions in the dash: the linked
-      // environment's, as the issuer is
-      ITERATE_APP_ORIGINS: JSON.stringify(Object.fromEntries(appOrigins)),
-      // unset ⇒ no var, no PostHog
-      ...(env?.posthogProjectKey && { POSTHOG_PROJECT_KEY: env.posthogProjectKey }),
-    },
+    vars: { APP_CONFIG: JSON.stringify(appConfig) },
     observability: OBSERVABILITY,
     assets: {
       binding: "ASSETS",
@@ -147,7 +149,8 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
 /** The app's own env and THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps
  *  sign in against prd's platform, main on the dev/preview account's (`preview`) against its
  *  platform, and a per-commit deployment's against that deployment's apps/os, linking to its apps
- *  — and prd's for local dev, which takes a local issuer from a gitignored .dev.vars. */
+ *  — and prd's for local dev, which names a local issuer in a gitignored .dev.vars
+ *  (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on top). */
 function linkedEnvironment(
   app: StartApp,
   envName: string | undefined,

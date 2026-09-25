@@ -77,8 +77,8 @@ export interface OsEnv {
   workerName: string;
   baseUrl: string;
   mcpBaseUrl: string;
-  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`): the worker's `POSTHOG_PROJECT_KEY`, and
-   *  the issuer's own pages start posthog-js with it. Unset ⇒ no PostHog. */
+  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
+   *  posthogProjectKey`, which the issuer's own pages start posthog-js with. Unset ⇒ no PostHog. */
   posthogProjectKey?: string;
   /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */

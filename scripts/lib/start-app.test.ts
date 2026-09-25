@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { dashEnvs, kitEnvs, notesEnvs } from "../../envs.ts";
 import { ownZones, startAppWorkerConfig } from "./start-app.ts";
 
@@ -11,12 +12,15 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
     name: "pr3144-a1b2c3d-notes",
     account_id: notesEnvs.preview.cloudflareAccountId,
     workers_dev: true,
-    vars: { ITERATE_ORIGIN: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev" },
   });
   expect(config).not.toHaveProperty("routes");
-  expect(JSON.parse(config.vars.ITERATE_APP_ORIGINS)).toMatchObject({
-    dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
-    notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
+  // its own deployment's apps/os and apps, none of main on dev's or prd's
+  expect(startAppConfigOf({ ...config.vars })).toMatchObject({
+    urls: {
+      os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
+      dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
+      notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
+    },
   });
 });
 
@@ -41,14 +45,16 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
     "prd",
   );
-  expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate.com" });
-  expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
-    dash: "https://dash.iterate.com",
-    agents: "https://agents.iterate.com",
-    notes: "https://notes.iterate.com",
-    admin: "https://admin.iterate.com",
-    voice: "https://voice.iterate.com",
-    kit: "https://k.iterate.com",
+  expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
+    urls: {
+      os: "https://os.iterate.com",
+      dash: "https://dash.iterate.com",
+      agents: "https://agents.iterate.com",
+      notes: "https://notes.iterate.com",
+      admin: "https://admin.iterate.com",
+      voice: "https://voice.iterate.com",
+      kit: "https://k.iterate.com",
+    },
   });
 });
 
@@ -57,14 +63,48 @@ test("main on dev (the app's `preview` build) signs in against main on dev's app
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
     "preview",
   );
-  expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate-dev-preview.workers.dev" });
-  expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
-    dash: "https://dash.iterate-dev-preview.workers.dev",
-    agents: "https://agents.iterate-dev-preview.workers.dev",
-    notes: "https://notes.iterate-dev-preview.workers.dev",
-    admin: "https://admin.iterate-dev-preview.workers.dev",
-    voice: "https://voice.iterate-dev-preview.workers.dev",
-    kit: "https://kit.iterate-dev-preview.workers.dev",
+  expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
+    urls: {
+      os: "https://os.iterate-dev-preview.workers.dev",
+      dash: "https://dash.iterate-dev-preview.workers.dev",
+      agents: "https://agents.iterate-dev-preview.workers.dev",
+      notes: "https://notes.iterate-dev-preview.workers.dev",
+      admin: "https://admin.iterate-dev-preview.workers.dev",
+      voice: "https://voice.iterate-dev-preview.workers.dev",
+      kit: "https://kit.iterate-dev-preview.workers.dev",
+    },
+  });
+});
+
+test("the app reads the config it is deployed with as written, and a laptop's .dev.vars names a local platform on top", () => {
+  const { vars } = startAppWorkerConfig(
+    { name: "kit", root: new URL("file:///apps/kit/"), envs: kitEnvs },
+    "prd",
+  );
+  expect(startAppConfigOf({ ...vars })).toMatchObject({
+    urls: { os: "https://os.iterate.com", dash: "https://dash.iterate.com" },
+    denyZones: ownZones(),
+    posthogProjectKey: kitEnvs.prd.posthogProjectKey,
+  });
+  // local dev starts from prd's config (no env) and overrides one key, keeping the rest
+  const local = startAppWorkerConfig(
+    { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
+    undefined,
+  ).vars;
+  expect(
+    startAppConfigOf({
+      ...local,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_URLS__NOTES: "http://localhost:5174",
+    }),
+  ).toMatchObject({
+    urls: {
+      os: "http://localhost:8788",
+      notes: "http://localhost:5174",
+      agents: "https://agents.iterate.com",
+    },
+    denyZones: ownZones(),
+    posthogProjectKey: "",
   });
 });
 

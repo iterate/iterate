@@ -66,6 +66,7 @@ import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
 import {
   ancestorPathsOf,
+  CONTEXT_DESTROYED,
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
   resourceScope,
@@ -400,7 +401,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }),
       ),
     ).then(
-      () => this.ctx.storage.kv.put("ancestors-announced", true),
+      () => {
+        // a context destroyed meanwhile writes nothing back: its storage stays empty
+        if (!this.#destroyed) this.ctx.storage.kv.put("ancestors-announced", true);
+      },
       (error: unknown) => {
         console.error({
           event: "context.announce-to-ancestors-failed",
@@ -410,6 +414,24 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       },
     );
     this.ctx.waitUntil(announced);
+  }
+
+  #destroyed = false;
+
+  /** DESTROY THIS CONTEXT (the project deletion saga, project/processor.ts): every byte it holds
+   *  goes — its log, its kv, its alarm, and every facet's storage with it (`deleteAll` deletes the
+   *  facets' databases too) — and the instance is reset in the SAME hold, so no call ever runs on an
+   *  instance whose storage is gone (it would read tables that are not there, or write them back).
+   *  The reset rejects this call too, with `CONTEXT_DESTROYED`: the caller reads that rejection as
+   *  done. A context with no storage stops existing once it shuts down. Called again on a destroyed
+   *  context, it is born empty (and announces itself) and destroyed again. */
+  async destroy(): Promise<void> {
+    this.#destroyed = true;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.deleteAll();
+      // an alarm this reset interrupts must not run again: it would wake the destroyed context
+      this.ctx.abort(CONTEXT_DESTROYED, { retryAlarm: false });
+    });
   }
 
   /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event

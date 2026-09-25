@@ -51,10 +51,10 @@ export const createProjectForConsent = createServerFn({ method: "POST" })
     return createConsentProject(getRequest(), env, ctx, data);
   });
 
-/** The worker's PostHog project key (envs.ts, prd only; wrangler var `POSTHOG_PROJECT_KEY`) — the
+/** The worker's PostHog project key (`APP_CONFIG posthogProjectKey`: envs.ts, prd only) — the
  *  root route starts posthog-js with it. */
 export const getPosthogProjectKey = createServerFn({ method: "GET" }).handler(
-  () => issuerRequestContext().env.POSTHOG_PROJECT_KEY || null,
+  () => appConfigOf(issuerRequestContext().env).posthogProjectKey || null,
 );
 
 /** Every server function the issuer serves; the Worker admits no other `/_serverFn/` path. */
