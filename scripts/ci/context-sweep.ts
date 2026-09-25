@@ -70,7 +70,7 @@ async function main() {
   if (!namespace)
     throw new Error(`no IterateContextDurableObject namespace on ${target.workerName}`);
   const stored: string[] = [];
-  for (let cursor: string | undefined; ; ) {
+  for (let cursor: string | undefined; ;) {
     const page = await cloudflare<{ id: string; hasStoredData?: boolean }[]>(
       `${api}/${namespace.id}/objects?limit=10000${cursor ? `&cursor=${cursor}` : ""}`,
     );
