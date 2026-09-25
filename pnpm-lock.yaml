@@ -248,9 +248,15 @@ importers:
       sonner:
         specifier: 'catalog:'
         version: 2.0.8(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      streamdown:
+        specifier: ^2.6.0
+        version: 2.6.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tailwindcss:
         specifier: 'catalog:'
         version: 4.3.3
+      use-stick-to-bottom:
+        specifier: ^1.1.6
+        version: 1.1.6(react@19.3.0)
       yaml:
         specifier: 'catalog:'
         version: 2.9.1
@@ -997,18 +1003,12 @@ importers:
       sonner:
         specifier: 'catalog:'
         version: 2.0.8(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      streamdown:
-        specifier: ^2.6.0
-        version: 2.6.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tailwindcss:
         specifier: 'catalog:'
         version: 4.3.3
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
-      use-stick-to-bottom:
-        specifier: ^1.1.6
-        version: 1.1.6(react@19.3.0)
       yaml:
         specifier: 'catalog:'
         version: 2.9.1

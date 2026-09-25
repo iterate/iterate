@@ -5,7 +5,6 @@
 import { useState } from "react";
 import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Sheet,
@@ -34,6 +33,7 @@ import {
   scriptTrace,
   type LlmTrace,
 } from "../lib/agent-events.ts";
+import { MessageResponse } from "./message.tsx";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
 /** Which trace the sheet shows — at most one; the route's search params carry it. */

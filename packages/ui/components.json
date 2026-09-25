@@ -17,8 +17,5 @@
     "hooks": "@iterate-com/ui/hooks",
     "lib": "@iterate-com/ui/lib",
     "ui": "@iterate-com/ui/components"
-  },
-  "registries": {
-    "@ai-elements": "https://elements.ai-sdk.dev/api/registry/{name}.json"
   }
 }

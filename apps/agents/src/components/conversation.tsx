@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "../button.tsx";
+import { Button } from "@iterate-com/ui/components/button";
 import { cn } from "cn";
 import { ArrowDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
@@ -25,15 +25,9 @@ export const Conversation = ({
   />
 );
 
-export type ConversationContentProps = ComponentProps<
-  typeof StickToBottom.Content
->;
+export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
 
-export const ConversationContent = ({
-  className,
-  style,
-  ...props
-}: ConversationContentProps) => (
+export const ConversationContent = ({ className, style, ...props }: ConversationContentProps) => (
   <StickToBottom.Content
     className={cn("flex flex-col gap-8 p-4", className)}
     style={{ overflowAnchor: "none", ...style }}
@@ -56,10 +50,7 @@ export const ConversationScrollButton = ({
   return (
     !isAtBottom && (
       <Button
-        className={cn(
-          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full",
-          className
-        )}
+        className={cn("absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full", className)}
         onClick={handleScrollToBottom}
         size="icon"
         type="button"

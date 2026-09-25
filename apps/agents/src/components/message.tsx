@@ -14,7 +14,7 @@ export const Message = ({ className, from, ...props }: MessageProps) => (
     className={cn(
       "group flex w-full max-w-[95%] flex-col gap-2",
       from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
-      className
+      className,
     )}
     {...props}
   />
@@ -22,17 +22,13 @@ export const Message = ({ className, from, ...props }: MessageProps) => (
 
 export type MessageContentProps = HTMLAttributes<HTMLDivElement>;
 
-export const MessageContent = ({
-  children,
-  className,
-  ...props
-}: MessageContentProps) => (
+export const MessageContent = ({ children, className, ...props }: MessageContentProps) => (
   <div
     className={cn(
       "is-user:dark flex w-fit max-w-full min-w-0 flex-col gap-2 overflow-hidden text-sm",
       "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
-      className
+      className,
     )}
     {...props}
   >
@@ -48,10 +44,6 @@ type MarkdownCodeProps = ComponentProps<"code"> & {
     };
   };
 };
-
-function MessageMarkdownPre({ children }: ComponentProps<"pre"> & ExtraProps) {
-  return children;
-}
 
 function MessageMarkdownCode({ children, className, node, ...props }: MarkdownCodeProps) {
   const singleLine = node?.position?.start?.line === node?.position?.end?.line;
@@ -79,9 +71,7 @@ function MessageMarkdownCode({ children, className, node, ...props }: MarkdownCo
 
 function PlainMessageResponse({ children, className }: StreamdownProps) {
   return (
-    <div className={cn("size-full whitespace-pre-wrap break-words", className)}>
-      {children}
-    </div>
+    <div className={cn("size-full whitespace-pre-wrap break-words", className)}>{children}</div>
   );
 }
 
@@ -96,20 +86,18 @@ export const MessageResponse = memo(
   ({ className, components, ...props }: StreamdownProps) => (
     <Suspense fallback={<PlainMessageResponse className={className} {...props} />}>
       <RichMessageResponse
-        className={cn(
-          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-          className
-        )}
+        className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
         components={{
           code: MessageMarkdownCode,
-          pre: MessageMarkdownPre,
+          // MessageMarkdownCode draws a block's own <pre>.
+          pre: ({ children }: ComponentProps<"pre"> & ExtraProps) => children,
           ...components,
         }}
         {...props}
       />
     </Suspense>
   ),
-  (prevProps, nextProps) => prevProps.children === nextProps.children
+  (prevProps, nextProps) => prevProps.children === nextProps.children,
 );
 
 MessageResponse.displayName = "MessageResponse";

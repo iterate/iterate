@@ -30,11 +30,6 @@ import {
   type AgentUiState,
   type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
@@ -50,6 +45,7 @@ import {
   looksLikeCode,
 } from "../lib/agent-events.ts";
 import { useTickingNowMs } from "../lib/use-ticking-now-ms.ts";
+import { Message, MessageContent, MessageResponse } from "./message.tsx";
 import { StreamingCodeBlock, StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
 /** The two traces a row can open: an LLM request (by its offset) and a script run (by id). */

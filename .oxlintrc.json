@@ -19,7 +19,6 @@
     "**/.claude/",
     "**/.cursor/",
     "**/.husky/",
-    "**/components/ai-elements/",
     "packages/ui/src/components/alert-dialog.tsx",
     "packages/ui/src/components/avatar.tsx",
     "packages/ui/src/components/badge.tsx",

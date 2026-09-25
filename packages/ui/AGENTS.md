@@ -77,10 +77,4 @@ To bump the CLI, change the `shadcn` pin in `package.json` and refresh. To vendo
 | dialog, sheet: close      | Upstream's: an sr-only "Close"                                                                                                                                                                                                                                                 |
 | breadcrumb, label         | Upstream's                                                                                                                                                                                                                                                                     |
 
-## AI Elements
-
-`components/ai-elements/` is a fork of Vercel's AI Elements, refreshed by hand. It is copy-only
-too, and Radix-only: the Base UI variant, vercel/ai-elements#450, is still open. So it is our code,
-not vendored in the sense above.
-
 Everything else here is our own code.
