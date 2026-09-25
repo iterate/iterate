@@ -5,7 +5,9 @@ size: large
 
 # Kit boards say (and sing) their connection status
 
-**Status:** spec written from a planning session; implementation not started.
+**Status:** implemented; host tests green. Built: the synth component, the config field and Kit
+select, the announcer, loop wiring, clip playback on ESP boards and the Mac. Not yet proven: the ESP
+builds (CI builds every board) and a board actually singing on the bench.
 
 ## Why
 
@@ -73,16 +75,29 @@ of a tune. Misha's pick is Greensleeves.
 
 ## Checklist
 
-- [ ] tinyvoice as a firmware component: no global state, caller-owned workspace, 4 tunes, phrase scripts
-- [ ] configuration tag 6 `status voice` (C decoder, `make-config-image.py`, TS encoder) + tests
-- [ ] Kit Flasher "Status voice" select, default Greensleeves
-- [ ] platform: Wi-Fi failure class (wrong password / not found) in transport metrics; reset "attended" flag
-- [ ] announcer policy module + scenario tests
-- [ ] voice loop: announcer wiring, render, HELLO on wake word, status on offline press + loop test
-- [ ] board ops on ESP boards (board.c) and the Mac; wake-word start skips the chime when the loop greets
-- [ ] docs: firmware README (component table, provisioning field), Kit README if the form is described
+- [x] tinyvoice as a firmware component: no global state, caller-owned workspace, 4 tunes, phrase scripts _(`components/tinyvoice`; phrase scripts live with the announcer in core; output bit-identical to the listening page)_
+- [x] configuration tag 6 `status voice` (C decoder, `make-config-image.py`, TS encoder) + tests _(`configuration_test.c`, `config-image.test.ts`)_
+- [x] Kit Flasher "Status voice" select, default Greensleeves _(after the Wi-Fi password field; threaded through `SetupInput`)_
+- [x] platform: Wi-Fi failure class (wrong password / not found) in transport metrics; reset "attended" flag _(`wifi_status` in both platforms' metrics; `iterate_kit_platform_reset_by_person()`)_
+- [x] announcer policy module + scenario tests _(`announcer.c`, `announcer_test.c`)_
+- [x] voice loop: announcer wiring, render, HELLO on wake word, status on offline press + loop test _(`status_voice_*` in `voice_loop.c`; `voice_loop_status_voice_test.c`)_
+- [x] board ops on ESP boards (board.c) and the Mac; wake-word start skips the chime when the loop greets _(`play_clip`; view `voice_answers_*`; intent `wake_word`)_
+- [x] docs: firmware README (component table, provisioning field), Kit README if the form is described _(new "Status voice" section)_
 - [ ] CI green: host tests, every board's firmware build, TS tests
 
 ## Implementation notes
 
 _(log; newest last)_
+
+- Decision 1 changed shape slightly: the loop renders synchronously on its own task, not in a render task.
+  The host/Mac shim never runs FreeRTOS tasks, and the stall only happens where it is harmless: before
+  connecting, or once per boot for "Hello!" (cached afterwards).
+- The loop decides a clip is over by time (length + 300 ms), not by asking the board: the StackChan's
+  clip player has no "still playing" query, and the shared codec reports "done" before its last slice is copied.
+- A rendered status phrase is freed only when the next one replaces it, which is always after the last one's
+  tail has passed; "Hello!" is kept.
+- The Wi-Fi reason mapping (`wifi_status()` in the ESP transport) uses ESP-IDF 5.4's `WIFI_REASON_*` names;
+  only CI's ESP builds compile it.
+- Not done, for a follow-up: a ▶ preview of each voice in Kit Flasher (needs the synth in the browser; the
+  planning page's WebAssembly build is one route), and health fields for the status voice (the health line's
+  budget is tight and truncation drops the whole line).

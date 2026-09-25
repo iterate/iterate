@@ -8,20 +8,21 @@ path and a namespace for fresh conversations, with no per-board model choice.
 
 ## Where code belongs
 
-| Path                        | Owns                                                                                                                                                                                                                         |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/core`           | Cap’n Web peer, itx mount and stream subscription, WebSocket framing, provisioning image decode, session grammar, microphone flush and playout; it includes no audio or platform header (`tests/verify_core_boundary.cmake`) |
-| `components/audio`          | PCM conversion, AEC processing and audio accounting                                                                                                                                                                          |
-| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; screens, cameras and servos where the hardware exists                                                                                 |
-| `components/avatar`         | the PCM-clocked talking head ([its README](components/avatar/README.md))                                                                                                                                                     |
-| `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                 |
-| `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, ESP-TLS WebSocket transport, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                |
-| `platforms/host`            | the host ESP-IDF (`esp_idf/esp_idf.h`): the ESP-IDF primitives the loop names, on a laptop                                                                                                                                   |
-| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec interface, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                      |
-| `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                               |
-| `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                              |
-| `devices/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                       |
-| `tests`                     | host tests; `tests/fakes/esp_idf` is the scriptable platform half a loop test needs                                                                                                                                          |
+| Path                        | Owns                                                                                                                                                                                                                                                                               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/core`           | Cap’n Web peer, itx mount and stream subscription, WebSocket framing, provisioning image decode, session grammar, the announcer (what a board says out loud, and when), microphone flush and playout; it includes no audio or platform header (`tests/verify_core_boundary.cmake`) |
+| `components/audio`          | PCM conversion, AEC processing and audio accounting                                                                                                                                                                                                                                |
+| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; screens, cameras and servos where the hardware exists                                                                                                                                       |
+| `components/avatar`         | the PCM-clocked talking head ([its README](components/avatar/README.md))                                                                                                                                                                                                           |
+| `components/tinyvoice`      | the board's own small speech synthesizer: a phoneme script in, 16 kHz PCM out, spoken or sung to a tune ([Status voice](#status-voice))                                                                                                                                            |
+| `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                                                                       |
+| `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, ESP-TLS WebSocket transport, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                                                                      |
+| `platforms/host`            | the host ESP-IDF (`esp_idf/esp_idf.h`): the ESP-IDF primitives the loop names, on a laptop                                                                                                                                                                                         |
+| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec interface, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                                                                            |
+| `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                                                                                     |
+| `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                                                                                    |
+| `devices/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                                                                             |
+| `tests`                     | host tests; `tests/fakes/esp_idf` is the scriptable platform half a loop test needs                                                                                                                                                                                                |
 
 The loop reaches its platform through five headers under
 `iterate/kit/platforms/`: `provisioning.h`, `reset_reason.h`, `restart_note.h`,
@@ -110,6 +111,30 @@ registered capabilities to include screen guidance in a call. See the
 [NOTE4 adapter](devices/zectrix_note4/README.md) and
 [Waveshare adapter](devices/waveshare_s3_rlcd/README.md).
 
+## Status voice
+
+A board says its connection state out loud before it reaches iterate, so a board
+without a screen is not silent while it joins Wi-Fi or when its key is refused.
+`components/core`'s announcer (`iterate/kit/announcer.h`) decides what and when;
+the loop renders the phrase with `components/tinyvoice` and hands the PCM to the
+board's `play_clip` op, which on ESP boards is the chime player. A board without
+`play_clip` stays silent.
+
+| When                                                    | Says                                                                                |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| boot after power-on, the reset button or USB            | each connection state that lasts a second, once, until "Ready." (at most 3 minutes) |
+| boot after an update, a crash, a watchdog or a brownout | nothing                                                                             |
+| a drop after it connected                               | nothing                                                                             |
+| the wake word, connected                                | "Hello!" instead of the wake chime                                                  |
+| the wake word, or a press, while not connected          | the current state instead of the chime ("Can't find the Wi-Fi network.")            |
+
+A phrase never cuts off another, and a state that went stale while one played is
+skipped. Nothing is said during a call. The voice is the configuration's
+`status-voice` field (Kit's **Status voice**): Greensleeves (the default, and what
+an image without the field gets), Daisy Bell, Auld Lang Syne, the Lass of Aughrim,
+spoken, or off. Phrases are scaled to the peak of the board's own `call_ended.wav`,
+which carries its speaker gain. Each one is logged as `status voice: "…"`.
+
 ## Build and provision
 
 Install ESP-IDF and build from the target directory. Use a fresh generated SDK
@@ -145,7 +170,8 @@ firmware/.build/host/iterate-kit-mac --config /tmp/cfg.bin --name mac
 ```
 
 `--config` takes the ITERKIT1 image `tools/make-config-image.py` writes for a
-board; the Wi-Fi fields ride along unused. `--name` sets the device name, `mac`
+board; the Wi-Fi fields ride along unused. It speaks its [status](#status-voice)
+through the laptop's speaker too, so `--status-voice` can be auditioned here. `--name` sets the device name, `mac`
 by default. `--no-aec` keeps the plain capture and playback queues instead of
 VoiceProcessingIO. Space or return presses the button and `q` leaves; when
 stdin is not a terminal the button is remote-only. The Mac lends
@@ -175,6 +201,7 @@ python3 tools/make-config-image.py \
   --wifi-ssid <ssid> --wifi-password <password> \
   --os-base-url https://os.iterate.com \
   --project-id prj-voice --project-api-key "$KIT_TOKEN" \
+  --status-voice greensleeves \
   --out /tmp/cfg.bin
 python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
   write_flash "$(python3 tools/make-config-image.py --offset-for havpe)" /tmp/cfg.bin
