@@ -6,17 +6,27 @@ import { housekeepingSummary } from "./core-renderers.tsx";
 import type { ContextViewEvent } from "./types.tsx";
 
 const log: ContextViewEvent[] = [
-  at(1, "itx/created", { path: "/" }),
-  at(2, "itx/woken", { incarnation: 1 }),
-  at(3, "itx/subscription-configured", { name: "account" }),
-  at(4, "account/authenticated", { credential: "cookie" }),
-  at(5, "account/authenticated", { credential: "cookie" }),
-  at(6, "account/authenticated", { credential: "cookie" }),
-  at(7, "account/authenticated", { credential: "admin-secret" }),
-  at(8, "itx/woken", { incarnation: 2 }, "2026-09-23T12:00:00.000Z"),
-  at(9, "itx/subscription-configured", { name: "sub-1" }, "2026-09-23T12:00:00.000Z"),
-  at(10, "itx/live-state-changed", undefined, "2026-09-23T12:00:01.000Z"),
-  at(11, "account/personal-access-token-minted", { id: "pat_a" }, "2026-09-23T12:00:02.000Z"),
+  at(1, "events.iterate.com/itx/created", { path: "/" }),
+  at(2, "events.iterate.com/itx/woken", { incarnation: 1 }),
+  at(3, "events.iterate.com/itx/subscription-configured", { name: "account" }),
+  at(4, "events.iterate.com/account/authenticated", { credential: "cookie" }),
+  at(5, "events.iterate.com/account/authenticated", { credential: "cookie" }),
+  at(6, "events.iterate.com/account/authenticated", { credential: "cookie" }),
+  at(7, "events.iterate.com/account/authenticated", { credential: "admin-secret" }),
+  at(8, "events.iterate.com/itx/woken", { incarnation: 2 }, "2026-09-23T12:00:00.000Z"),
+  at(
+    9,
+    "events.iterate.com/itx/subscription-configured",
+    { name: "sub-1" },
+    "2026-09-23T12:00:00.000Z",
+  ),
+  at(10, "events.iterate.com/itx/live-state-changed", undefined, "2026-09-23T12:00:01.000Z"),
+  at(
+    11,
+    "events.iterate.com/account/personal-access-token-minted",
+    { id: "pat_a" },
+    "2026-09-23T12:00:02.000Z",
+  ),
 ];
 
 // ── foldEvents ──
@@ -65,9 +75,21 @@ test("housekeepingSummary counts by kind", () => {
 // ── the same fact is the same sentence ──
 test("payloads that differ only in timestamps and ids fold when a fact key says they read the same", () => {
   const signIns = [
-    at(1, "account/authenticated", { credential: "cookie", at: 1, operationId: "a" }),
-    at(2, "account/authenticated", { credential: "cookie", at: 2, operationId: "b" }),
-    at(3, "account/authenticated", { credential: "admin-secret", at: 3, operationId: "c" }),
+    at(1, "events.iterate.com/account/authenticated", {
+      credential: "cookie",
+      at: 1,
+      operationId: "a",
+    }),
+    at(2, "events.iterate.com/account/authenticated", {
+      credential: "cookie",
+      at: 2,
+      operationId: "b",
+    }),
+    at(3, "events.iterate.com/account/authenticated", {
+      credential: "admin-secret",
+      at: 3,
+      operationId: "c",
+    }),
   ];
   expect(foldEvents(signIns, "pretty").map((item) => item.kind)).toEqual([
     "day",
@@ -96,13 +118,18 @@ test("sentenceText walks strings, numbers, arrays and elements' children", () =>
 
 test("whoBefore: carries the last named actor over housekeeping, starts afresh at a day mark", () => {
   const named = (offset: number, actor: string, iso?: string): ContextViewEvent => ({
-    ...at(offset, "account/personal-access-token-minted", { id: `pat_${String(offset)}` }, iso),
+    ...at(
+      offset,
+      "events.iterate.com/account/personal-access-token-minted",
+      { id: `pat_${String(offset)}` },
+      iso,
+    ),
     source: { principal: { actor } },
   });
   const items = foldEvents(
     [
       named(1, "user_a"),
-      at(2, "itx/woken", { incarnation: 2 }),
+      at(2, "events.iterate.com/itx/woken", { incarnation: 2 }),
       named(3, "user_a"),
       named(4, "user_b"),
       named(5, "user_b", "2026-09-23T12:00:00.000Z"),
@@ -133,7 +160,7 @@ test("whoBefore: carries the last named actor over housekeeping, starts afresh a
 function at(offset: number, type: string, payload?: unknown, iso = "2026-09-21T19:00:00.000Z") {
   return {
     offset,
-    type: `events.iterate.com/${type}`,
+    type,
     createdAt: iso,
     payload,
   } satisfies ContextViewEvent;

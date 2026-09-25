@@ -30,8 +30,6 @@ const TERMINAL_WAIT_MS = 30_000;
  *  and that instance's birth revives the claim the old one left (FacetHost), so the creation goes
  *  on within seconds. Remove when a call on a replaced instance fails. */
 const TERMINAL_WAIT_SLICE_MS = 5_000;
-/** Each incarnation's first event (stream.ts `appendWakeRecord`). */
-const WOKEN = "events.iterate.com/itx/woken";
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";
@@ -82,7 +80,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
       try {
         // Over the loopback stub a wait's answer types as an RPC result; the wire copied it.
         event = (await context.waitForEvent({
-          type: [...types, WOKEN],
+          type: [...types, "events.iterate.com/itx/woken"],
           afterOffset: after,
           timeoutMs: Math.min(TERMINAL_WAIT_SLICE_MS, remainingMs),
         })) as StreamEvent;
@@ -91,7 +89,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
         timedOut += 1;
         continue;
       }
-      if (event.type !== WOKEN) return event;
+      if (event.type !== "events.iterate.com/itx/woken") return event;
       if (timedOut > 0)
         console.warn({
           event: "iterate-context.platform-failure-wait-moved",

@@ -109,14 +109,12 @@ test.each([
 
 // ── halt once, for the right row ──
 
-const HALTED = "events.iterate.com/itx/subscription-delivery-halted";
-
 test("halt once: a push queued behind an in-flight delivery is NOT delivered to a row that halted meanwhile", async () => {
   const rig = stuckFacetRig();
   await nextMacrotask(); // the materialization (catchUpFromLog) parks — the chain's head
   rig.commitBlobs(1); // queued behind it
   rig.stream.append({
-    type: HALTED,
+    type: "events.iterate.com/itx/subscription-delivery-halted",
     payload: { name: "slow", afterOffset: rig.configuredAtOffset, attempts: 1, error: "halt" },
   });
   await rig.release();
@@ -1593,7 +1591,11 @@ function blobIndexes(push: { events: StreamEvent[] }) {
 function haltFactsFor(stream: Stream, name: string): StreamEvent[] {
   return stream
     .read(0, 500)
-    .events.filter((e) => e.type === HALTED && (e.payload as { name: string }).name === name);
+    .events.filter(
+      (e) =>
+        e.type === "events.iterate.com/itx/subscription-delivery-halted" &&
+        (e.payload as { name: string }).name === name,
+    );
 }
 
 function facetTarget(name: string): ItxExpression {

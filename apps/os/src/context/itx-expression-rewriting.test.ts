@@ -649,9 +649,11 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
 });
 
 test("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary: REFUSED against the path the row LANDS on, whichever caller appends: a bare `itx` row whose target is `cd` of that context; a bare link elsewhere, a longer match, a mask and a foreign event pass; a schedule's batch is checked as it is scheduled", () => {
-  const rule = "events.iterate.com/itx/rewrite-rule-configured";
   const at = (ownPath: string, payload: Record<string, unknown>) => () =>
-    normalizeControlEvent({ type: rule, payload }, ownPath);
+    normalizeControlEvent(
+      { type: "events.iterate.com/itx/rewrite-rule-configured", payload },
+      ownPath,
+    );
   const loop = /would route every call back to itself/;
   expect(at("/agents/a", { match: "itx", target: "itx.builtins.cd('/agents/a')" })).toThrow(loop);
   expect(at("/agents/a", { match: "itx", target: "itx.cd('.')" })).toThrow(loop);
@@ -673,7 +675,12 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
         payload: {
           key: "k",
           when: { at: "2030-01-01T00:00:00Z" },
-          events: [{ type: rule, payload: { match: "itx", target: "itx.cd('.')" } }],
+          events: [
+            {
+              type: "events.iterate.com/itx/rewrite-rule-configured",
+              payload: { match: "itx", target: "itx.cd('.')" },
+            },
+          ],
         },
       },
       "/agents/a",
@@ -1159,19 +1166,34 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
   const row = (type: string, target: unknown) => () =>
     admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
-  const rule = "events.iterate.com/itx/rewrite-rule-configured";
-  const subscription = "events.iterate.com/itx/subscription-configured";
-  expect(row(rule, "itx.builtins.cd('/')")).toThrow(/not a loaded worker's word/);
-  expect(row(rule, "itx.builtins.kv")).toThrow(/not a loaded worker's word/);
-  expect(row(rule, "itx.cd('..').whoami")).toThrow(/goes down only/);
-  expect(row(subscription, "itx.builtins.cd('/').append")).toThrow(/not a loaded worker's word/);
-  expect(row(rule, "itx.builtins.rpcStubs.get('itx.x')")).not.toThrow();
+  expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.cd('/')")).toThrow(
+    /not a loaded worker's word/,
+  );
+  expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.kv")).toThrow(
+    /not a loaded worker's word/,
+  );
+  expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.cd('..').whoami")).toThrow(
+    /goes down only/,
+  );
   expect(
-    row(subscription, ["itx", "builtins", "rpcStubs", ["get", "subscription:s"]]),
+    row("events.iterate.com/itx/subscription-configured", "itx.builtins.cd('/').append"),
+  ).toThrow(/not a loaded worker's word/);
+  expect(
+    row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.rpcStubs.get('itx.x')"),
   ).not.toThrow();
-  expect(row(rule, "itx.whoami")).not.toThrow();
-  expect(row(rule, "itx.cd('./b').whoami")).not.toThrow();
-  expect(row(rule, null)).not.toThrow();
+  expect(
+    row("events.iterate.com/itx/subscription-configured", [
+      "itx",
+      "builtins",
+      "rpcStubs",
+      ["get", "subscription:s"],
+    ]),
+  ).not.toThrow();
+  expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.whoami")).not.toThrow();
+  expect(
+    row("events.iterate.com/itx/rewrite-rule-configured", "itx.cd('./b').whoami"),
+  ).not.toThrow();
+  expect(row("events.iterate.com/itx/rewrite-rule-configured", null)).not.toThrow();
   expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
 });
 

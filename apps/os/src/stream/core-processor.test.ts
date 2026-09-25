@@ -134,21 +134,40 @@ test.each([
 
 test("an operator's pause, resume and delivery resume are parsed at the append boundary: the reduce's casts are true", () => {
   // stored as sent: a bare pause stays bare, so a keyed retry still matches the committed event
-  const paused = "events.iterate.com/itx/paused";
-  expect(normalizeControlEvent({ type: paused }, "/")).toEqual({ type: paused });
-  expect(normalizeControlEvent({ type: paused, payload: { reason: "breaker" } }, "/")).toEqual({
-    type: paused,
+  expect(normalizeControlEvent({ type: "events.iterate.com/itx/paused" }, "/")).toEqual({
+    type: "events.iterate.com/itx/paused",
+  });
+  expect(
+    normalizeControlEvent(
+      { type: "events.iterate.com/itx/paused", payload: { reason: "breaker" } },
+      "/",
+    ),
+  ).toEqual({
+    type: "events.iterate.com/itx/paused",
     payload: { reason: "breaker" },
   });
   for (const payload of [{ reason: 42 }, { reason: "breaker", extra: 1 }])
-    expect(() => normalizeControlEvent({ type: paused, payload }, "/")).toThrow();
-  const resumed = "events.iterate.com/itx/resumed";
-  expect(normalizeControlEvent({ type: resumed }, "/")).toEqual({ type: resumed });
-  expect(() => normalizeControlEvent({ type: resumed, payload: { extra: 1 } }, "/")).toThrow();
-  const deliveryResumed = "events.iterate.com/itx/subscription-delivery-resumed";
+    expect(() =>
+      normalizeControlEvent({ type: "events.iterate.com/itx/paused", payload }, "/"),
+    ).toThrow();
+  expect(normalizeControlEvent({ type: "events.iterate.com/itx/resumed" }, "/")).toEqual({
+    type: "events.iterate.com/itx/resumed",
+  });
+  expect(() =>
+    normalizeControlEvent({ type: "events.iterate.com/itx/resumed", payload: { extra: 1 } }, "/"),
+  ).toThrow();
   expect(
-    normalizeControlEvent({ type: deliveryResumed, payload: { name: "s", afterOffset: 0 } }, "/"),
-  ).toEqual({ type: deliveryResumed, payload: { name: "s", afterOffset: 0 } });
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-delivery-resumed",
+        payload: { name: "s", afterOffset: 0 },
+      },
+      "/",
+    ),
+  ).toEqual({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "s", afterOffset: 0 },
+  });
   // a non-numeric seek would have become a NaN cursor in the delivery loop; a prototype key would
   // have read `Object.prototype` as a row, and `core` is never a subscription
   for (const payload of [
@@ -162,7 +181,12 @@ test("an operator's pause, resume and delivery resume are parsed at the append b
     { name: "core" },
     { name: "a/b" },
   ])
-    expect(() => normalizeControlEvent({ type: deliveryResumed, payload }, "/")).toThrow();
+    expect(() =>
+      normalizeControlEvent(
+        { type: "events.iterate.com/itx/subscription-delivery-resumed", payload },
+        "/",
+      ),
+    ).toThrow();
 });
 
 // ── identity, incarnation, the pause latch ──
@@ -185,27 +209,27 @@ test("woken → incarnation; every wake overwrites (growth across idle is the hi
 test.each([
   {
     log: "aborted, then woken (the reset itx.abort() asked for)",
-    types: ["itx/aborted", "itx/woken"],
+    types: ["events.iterate.com/itx/aborted", "events.iterate.com/itx/woken"],
     wokenAfterContextAbortedOffset: 2,
   },
   {
     log: "aborted, woken, woken again (a later wake: hibernation, a platform reset)",
-    types: ["itx/aborted", "itx/woken", "itx/woken"],
+    types: [
+      "events.iterate.com/itx/aborted",
+      "events.iterate.com/itx/woken",
+      "events.iterate.com/itx/woken",
+    ],
     wokenAfterContextAbortedOffset: undefined,
   },
   {
     log: "woken, then aborted (the reset still to come)",
-    types: ["itx/woken", "itx/aborted"],
+    types: ["events.iterate.com/itx/woken", "events.iterate.com/itx/aborted"],
     wokenAfterContextAbortedOffset: undefined,
   },
 ])("$log → wokenAfterContextAbortedOffset $wokenAfterContextAbortedOffset", (row) => {
   const s = reduceAll(
     row.types.map((type, index) =>
-      at(
-        index + 2,
-        `events.iterate.com/${type}`,
-        type === "itx/woken" ? { incarnation: index } : {},
-      ),
+      at(index + 2, type, type === "events.iterate.com/itx/woken" ? { incarnation: index } : {}),
     ),
   );
   expect(s).toMatchObject({ wokenAfterContextAbortedOffset: row.wokenAfterContextAbortedOffset });
@@ -228,7 +252,6 @@ test('paused without a reason defaults to "paused" in the reduce (the state guar
 
 // ── the ingress target — itx/ingress-configured, normalized at the append boundary ──
 
-const ingressType = "events.iterate.com/itx/ingress-configured";
 const ingressTarget: ItxExpression = [
   "itx",
   "workers",
@@ -237,7 +260,10 @@ const ingressTarget: ItxExpression = [
 
 test("ingress target: stores and replaces the full expression without creating any rewrite alias; null clears it; an unchanged or ephemeral event keeps the state", () => {
   const event = {
-    ...normalizeControlEvent({ type: ingressType, payload: { target: ingressTarget } }, "/"),
+    ...normalizeControlEvent(
+      { type: "events.iterate.com/itx/ingress-configured", payload: { target: ingressTarget } },
+      "/",
+    ),
     offset: 1,
     path: "/",
     createdAt: "2026-09-21T00:00:00Z",
@@ -258,14 +284,20 @@ test("ingress target: stores and replaces the full expression without creating a
 test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
   "ingress target: an invalid configuration is refused at the boundary, before append: %j",
   (payload) => {
-    expect(() => normalizeControlEvent({ type: ingressType, payload }, "/")).toThrow();
+    expect(() =>
+      normalizeControlEvent({ type: "events.iterate.com/itx/ingress-configured", payload }, "/"),
+    ).toThrow();
   },
 );
 
 test("ingress target: an ephemeral configuration cannot be published", () => {
   expect(() =>
     normalizeControlEvent(
-      { type: ingressType, payload: { target: ingressTarget }, ephemeral: true },
+      {
+        type: "events.iterate.com/itx/ingress-configured",
+        payload: { target: ingressTarget },
+        ephemeral: true,
+      },
       "/",
     ),
   ).toThrow("must be durable");
@@ -273,7 +305,6 @@ test("ingress target: an ephemeral configuration cannot be published", () => {
 
 // ── the fetch routes — itx/fetch-route-configured, folded by src/fetch-routes.ts ──
 
-const routeType = "events.iterate.com/itx/fetch-route-configured";
 const blogRoute = {
   fetchRouteName: "tunnel-blog",
   requestMatcher: { routingSlug: "blog" },
@@ -281,7 +312,7 @@ const blogRoute = {
 };
 
 test("fetch routes: a fact sets its route at its offset and a null matcher deletes it; deleting a route that is not there, or an ephemeral fact, keeps the state", () => {
-  const set = reduceAll([at(4, routeType, blogRoute)]);
+  const set = reduceAll([at(4, "events.iterate.com/itx/fetch-route-configured", blogRoute)]);
   expect(set).toEqual(
     expect.objectContaining({
       fetchRoutes: {
@@ -296,18 +327,24 @@ test("fetch routes: a fact sets its route at its offset and a null matcher delet
     }),
   );
   const deleted = { fetchRouteName: "tunnel-blog", requestMatcher: null };
-  expect(reduceAll([at(5, routeType, deleted)], set)).toEqual(
+  expect(reduceAll([at(5, "events.iterate.com/itx/fetch-route-configured", deleted)], set)).toEqual(
     expect.objectContaining({ fetchRoutes: {} }),
   );
   expect(
     reduceCoreEvent({
-      event: at(5, routeType, { ...deleted, fetchRouteName: "gone" }),
+      event: at(5, "events.iterate.com/itx/fetch-route-configured", {
+        ...deleted,
+        fetchRouteName: "gone",
+      }),
       state: set,
     }),
   ).toBeUndefined();
   expect(
     reduceCoreEvent({
-      event: { ...at(5, routeType, blogRoute), ephemeral: true },
+      event: {
+        ...at(5, "events.iterate.com/itx/fetch-route-configured", blogRoute),
+        ephemeral: true,
+      },
       state: CoreContract.initialState(),
     }),
   ).toBeUndefined();
@@ -320,7 +357,10 @@ test("fetch routes: a malformed fact in the log is skipped by the reduce, never 
     requestMatcher: { url: { pathname: "(" } },
   };
   const state = reduceCoreEventBatch(
-    [at(1, routeType, badUrl), at(2, routeType, blogRoute)],
+    [
+      at(1, "events.iterate.com/itx/fetch-route-configured", badUrl),
+      at(2, "events.iterate.com/itx/fetch-route-configured", blogRoute),
+    ],
     CoreContract.initialState(),
     onError,
   );
@@ -328,8 +368,13 @@ test("fetch routes: a malformed fact in the log is skipped by the reduce, never 
 });
 
 test("fetch routes: the append boundary parses the fact and refuses a malformed or ephemeral one", () => {
-  expect(normalizeControlEvent({ type: routeType, payload: blogRoute }, "/")).toEqual({
-    type: routeType,
+  expect(
+    normalizeControlEvent(
+      { type: "events.iterate.com/itx/fetch-route-configured", payload: blogRoute },
+      "/",
+    ),
+  ).toEqual({
+    type: "events.iterate.com/itx/fetch-route-configured",
     payload: blogRoute,
   });
   for (const payload of [
@@ -339,9 +384,21 @@ test("fetch routes: the append boundary parses the fact and refuses a malformed 
     { ...blogRoute, requestMatcher: { url: { pathname: "(" } } },
     { ...blogRoute, requestMatcher: { method: "GET" } },
   ])
-    expect(() => normalizeControlEvent({ type: routeType, payload }, "/")).toThrow();
+    expect(() =>
+      normalizeControlEvent(
+        { type: "events.iterate.com/itx/fetch-route-configured", payload },
+        "/",
+      ),
+    ).toThrow();
   expect(() =>
-    normalizeControlEvent({ type: routeType, payload: blogRoute, ephemeral: true }, "/"),
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/fetch-route-configured",
+        payload: blogRoute,
+        ephemeral: true,
+      },
+      "/",
+    ),
   ).toThrow("must be durable");
 });
 
@@ -355,7 +412,13 @@ test(
     for (let first = 0; first < 14_000; first += 500)
       before.append(
         ...Array.from({ length: 500 }, (_, i) =>
-          normalizeControlEvent({ type: routeType, payload: numberedRoute(first + i) }, "/"),
+          normalizeControlEvent(
+            {
+              type: "events.iterate.com/itx/fetch-route-configured",
+              payload: numberedRoute(first + i),
+            },
+            "/",
+          ),
         ),
       );
     before.storage.reduceCheckpoints.write(
@@ -756,15 +819,18 @@ test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the inp
     configured(1, "a"),
     rule(2, "itx.x", "itx.kv"),
     configured(3, "b"),
-    at(4, routeType, numberedRoute(1)),
-    at(5, routeType, numberedRoute(2)),
+    at(4, "events.iterate.com/itx/fetch-route-configured", numberedRoute(1)),
+    at(5, "events.iterate.com/itx/fetch-route-configured", numberedRoute(2)),
   ];
   const second = [
     configured(6, "a", "itx.y.f"),
     rule(7, "itx.x", null),
     configured(8, "b", null),
-    at(9, routeType, { fetchRouteName: "route-1", requestMatcher: null }),
-    at(10, routeType, { ...numberedRoute(2), priority: 5 }),
+    at(9, "events.iterate.com/itx/fetch-route-configured", {
+      fetchRouteName: "route-1",
+      requestMatcher: null,
+    }),
+    at(10, "events.iterate.com/itx/fetch-route-configured", { ...numberedRoute(2), priority: 5 }),
   ];
   const initial = CoreContract.initialState();
   const afterFirst = reduceCoreEventBatch(first, initial, onError);

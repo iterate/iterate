@@ -649,10 +649,6 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
   return { target: expression };
 }
 
-/** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
- *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
-export const ALARM_TRACE_EVENT = "events.iterate.com/itx/alarm-trace" as const;
-
 /** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
  *  loop (the halted fact) and the DO's alarm (the trace) straight through `Stream.append`.
  *  `normalizeControlEvent` refuses them, so no caller rewrites who a context is (`created` feeds
@@ -661,7 +657,7 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
-  ALARM_TRACE_EVENT,
+  "events.iterate.com/itx/alarm-trace",
 ]);
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call

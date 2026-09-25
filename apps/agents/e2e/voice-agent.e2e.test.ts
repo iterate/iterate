@@ -17,8 +17,6 @@ import {
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
 
-const T = "events.iterate.com/voice-agent/";
-
 deployedOnly(
   "voice activation loads its hosted processors and streams audio through inherited, secret-bearing WebSocket egress",
   async () => {
@@ -129,7 +127,7 @@ export default class extends WorkerEntrypoint {
     const received: { type: string; payload: Record<string, unknown>; createdAt?: string }[] = [];
     await call.subscribe({
       name: "device",
-      consumes: ["*", `${T}spk-frame`],
+      consumes: ["*", "events.iterate.com/voice-agent/spk-frame"],
       target: (events: unknown[]) => {
         received.push(...JSON.parse(JSON.stringify(events)));
       },
@@ -140,11 +138,12 @@ export default class extends WorkerEntrypoint {
       const outcome = await until("voice accepted or failed", () =>
         received.find(
           (event) =>
-            event.type === `${T}conversation-accepted` || event.type === `${T}conversation-ended`,
+            event.type === "events.iterate.com/voice-agent/conversation-accepted" ||
+            event.type === "events.iterate.com/voice-agent/conversation-ended",
         ),
       );
       expect(outcome, JSON.stringify(outcome)).toMatchObject({
-        type: `${T}conversation-accepted`,
+        type: "events.iterate.com/voice-agent/conversation-accepted",
         payload: { activation },
       });
       for (const amplitude of [1200, 2400]) {
@@ -152,19 +151,23 @@ export default class extends WorkerEntrypoint {
         for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(amplitude, i);
         const encoded = pcm.toString("base64");
         await call.append({
-          type: `${T}mic-frame`,
+          type: "events.iterate.com/voice-agent/mic-frame",
           ephemeral: true,
           payload: { activation, pcm: encoded },
         });
         await until("microphone audio returned to the speaker", () =>
-          received.some((event) => event.type === `${T}spk-frame` && event.payload.pcm === encoded),
+          received.some(
+            (event) =>
+              event.type === "events.iterate.com/voice-agent/spk-frame" &&
+              event.payload.pcm === encoded,
+          ),
         );
       }
       // The loaded delegate must execute a script in the conversation's real sandbox. Audio
       // alone missed the regression where the sandbox redirect was rejected as app-written builtins.
       const clockStarted = Date.now();
       await call.append({
-        type: `${T}delegation-requested`,
+        type: "events.iterate.com/voice-agent/delegation-requested",
         payload: {
           activation,
           conversationId: `conv_${activation}`,
@@ -175,12 +178,13 @@ export default class extends WorkerEntrypoint {
       const commentary = await until("delegated clock result", () =>
         received.find(
           (event) =>
-            event.type === `${T}commentary-added` && event.payload.delegationId === "clock",
+            event.type === "events.iterate.com/voice-agent/commentary-added" &&
+            event.payload.delegationId === "clock",
         ),
       );
       expect(
         received
-          .filter((event) => event.type === `${T}thinking-added`)
+          .filter((event) => event.type === "events.iterate.com/voice-agent/thinking-added")
           .map((event) => event.payload.content),
       ).toEqual(["Checking the clock"]);
       const content = String(commentary.payload.content);
@@ -191,9 +195,11 @@ export default class extends WorkerEntrypoint {
       expect(Date.parse(clock.time)).toBeLessThanOrEqual(Date.now());
       expect(
         received.filter((event) =>
-          ["conversation-ended", "provider-error-reported", "provider-disconnected"].some(
-            (type) => event.type === T + type,
-          ),
+          [
+            "events.iterate.com/voice-agent/conversation-ended",
+            "events.iterate.com/voice-agent/provider-error-reported",
+            "events.iterate.com/voice-agent/provider-disconnected",
+          ].includes(event.type),
         ),
       ).toEqual([]);
       const uses = (await readAll(root.cd("/secrets/openai"))).filter(
@@ -209,7 +215,7 @@ export default class extends WorkerEntrypoint {
       const websiteAsked = received.length;
       const websiteAskedAt = Date.now();
       await call.append({
-        type: `${T}delegation-requested`,
+        type: "events.iterate.com/voice-agent/delegation-requested",
         payload: {
           activation,
           conversationId: `conv_${activation}`,
@@ -220,21 +226,26 @@ export default class extends WorkerEntrypoint {
         },
       });
       const isWebsiteAnswer = (event: (typeof received)[number]) =>
-        event.type === `${T}commentary-added` && event.payload.delegationId === "website";
+        event.type === "events.iterate.com/voice-agent/commentary-added" &&
+        event.payload.delegationId === "website";
       // What the delegation said so far, a short line an event, each at its time since the request:
       // a wait that runs out names the script it was on, and a wrong answer names what it was given.
       const websiteSteps = (events: typeof received) => {
         const asked = events.slice(websiteAsked);
         const t0 = Date.parse(String(asked[0]?.createdAt));
         return asked
-          .filter((event) => !event.type.endsWith("-frame") && event.type !== `${T}thinking-added`)
+          .filter(
+            (event) =>
+              !event.type.endsWith("-frame") &&
+              event.type !== "events.iterate.com/voice-agent/thinking-added",
+          )
           .map((event) => {
             const { role, content } = event.payload as { role?: string; content?: unknown };
             const said =
               typeof content === "string"
                 ? content.replace(/^<codemode[^>]*>\n|^Script result:\n/, "")
                 : JSON.stringify(event.payload);
-            return `+${Date.parse(String(event.createdAt)) - t0}ms ${event.type.replace(T, "").replace("events.iterate.com/agent/", "")} ${role || ""} ${said.slice(0, 64)}`;
+            return `+${Date.parse(String(event.createdAt)) - t0}ms ${event.type.replace("events.iterate.com/voice-agent/", "").replace("events.iterate.com/agent/", "")} ${role || ""} ${said.slice(0, 64)}`;
           });
       };
       // THE WAIT IS FOR PROGRESS, a step at a time (docs/testing.md: waits are progress-based): the
@@ -252,7 +263,7 @@ export default class extends WorkerEntrypoint {
           .slice(websiteAsked)
           .filter(
             (event) =>
-              event.type === `${T}thinking-added` ||
+              event.type === "events.iterate.com/voice-agent/thinking-added" ||
               event.type === "events.iterate.com/agent/context-added",
           ).length;
       let websiteAnswer: (typeof received)[number] | undefined;
@@ -284,7 +295,7 @@ export default class extends WorkerEntrypoint {
       expect(JSON.stringify(await readAll(call))).not.toContain(token);
     } finally {
       await call.append({
-        type: `${T}conversation-ended`,
+        type: "events.iterate.com/voice-agent/conversation-ended",
         payload: { activation, reason: "e2e complete" },
       });
     }

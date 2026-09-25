@@ -162,8 +162,7 @@ async function releaseTabs() {
 }
 /** Where the browser's facts go: the connected root context's append, set by `connect`. */
 let report = () => {};
-const fact = (type, payload) =>
-  report({ type: `events.iterate.com/chrome/${type}`, ephemeral: true, payload });
+const fact = (type, payload) => report({ type, ephemeral: true, payload });
 
 /** Attach the debugger to a tab the project may drive (once; Chrome shows its bar on the tab). */
 async function attach(tabId) {
@@ -178,7 +177,7 @@ async function attach(tabId) {
       expression: "location.href",
       returnByValue: true,
     });
-    fact("attached", { tabId, url: result.value });
+    fact("events.iterate.com/chrome/attached", { tabId, url: result.value });
   })().finally(() => {
     known.attaching = null;
   });
@@ -187,12 +186,12 @@ async function attach(tabId) {
 
 chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
   if (method === "Page.frameNavigated" && !params.frame.parentId)
-    fact("navigated", { tabId, url: params.frame.url });
+    fact("events.iterate.com/chrome/navigated", { tabId, url: params.frame.url });
 });
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
   const known = tabs.get(tabId);
   if (known) known.attached = false;
-  fact("detached", { tabId, reason });
+  fact("events.iterate.com/chrome/detached", { tabId, reason });
 });
 
 class ChromeBrowser extends RpcTarget {

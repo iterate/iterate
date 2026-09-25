@@ -40,8 +40,6 @@ import {
 } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 
-const RESUMED = "events.iterate.com/itx/subscription-delivery-resumed";
-
 type Range = { after: number; through: number };
 // ── the HOOKED rig: a stateless project worker whose deliveries land in this process ──
 
@@ -139,7 +137,10 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   //    pumps that name on its commit, whatever the row's `consumes` says. The stuck mark and the
   //    fresh one land on their own (3 → 5): the seek skipped exactly the poison, and at-least-once
   //    delivery resumed.
-  await itx.append({ type: RESUMED, payload: { name: "digest", afterOffset: poisoned.offset } });
+  await itx.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "digest", afterOffset: poisoned.offset },
+  });
   await until(
     "digest=5 (resume alone, past the poison)",
     async () => (await digested(itx)) === 5,
@@ -197,7 +198,10 @@ test("a resumed event appended MID-DELIVERY wins — m1 redelivers from the seek
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
   await until("delivery #1 in flight", async () => (await itx.kv.get("ledger:calls")) === "1");
   // the operator seeks to the beginning WHILE delivery #1 is held (2s)
-  await itx.append({ type: RESUMED, payload: { name: "ledger", afterOffset: 0 } });
+  await itx.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "ledger", afterOffset: 0 },
+  });
 
   // delivery #1 completes OK; the resume wins: m1 is delivered AGAIN from the seek
   const redelivered = await until(
@@ -234,7 +238,10 @@ test("a resumed { afterOffset } while HEALTHY redelivers exactly the events afte
   // The operator's ONE recovery event — a plain append. It is level-triggered onto the cursor
   // row: the pump applies it the next time it runs for this row (the next consumed commit, or
   // the DO's alarm) — the resumed event itself is not a "mark", so m4 is that trigger.
-  await itx.append({ type: RESUMED, payload: { name: "replay", afterOffset: m1.offset } });
+  await itx.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "replay", afterOffset: m1.offset },
+  });
   const [m4] = await itx.append({ type: "mark", payload: { n: 4 } });
   await until("redelivery", () => c.offsets().includes(m4.offset), 8_000);
   await sleep(400);
@@ -255,7 +262,10 @@ test("a resumed afterOffset BEYOND head must not deaden the row — the next app
   await cursorSubscribe(itx, "beyond", c.fn, ["mark"]);
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
   await until("delivery works", () => c.offsets().includes(m1.offset), 8_000);
-  await itx.append({ type: RESUMED, payload: { name: "beyond", afterOffset: m1.offset + 1000 } });
+  await itx.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "beyond", afterOffset: m1.offset + 1000 },
+  });
   const [m2] = await itx.append({ type: "mark", payload: { n: 2 } });
   // a wait that runs out names what was delivered and the row as the stream keeps it (its cursor,
   // any halt) — a slow delivery and a deadened row read differently
@@ -281,7 +291,10 @@ test("the view: a push target's row has NO cursor; a resumed fact for an unknown
   const before = await subscriptions(itx);
   expect(before).toHaveLength(1); // conny only
   expect(before.find((r: { name: string }) => r.name === "conny").cursor).toBeUndefined(); // push target: no cursor
-  const [fact] = await itx.append({ type: RESUMED, payload: { name: "never-was" } });
+  const [fact] = await itx.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "never-was" },
+  });
   expect(fact.offset).toBeGreaterThan(0); // not refused — a fact nobody reduces into a row
   // the reduce ignored never-was: no row was created for it and conny's row is untouched.
   const after = await subscriptions(itx);

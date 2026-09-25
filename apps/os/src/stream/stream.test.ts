@@ -12,8 +12,6 @@ import type { StreamEvent, SqlStorageHandle } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
-const CONFIGURED = "events.iterate.com/itx/subscription-configured";
-
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
   const batches: StreamEvent[][] = [];
   const stream = bareStream({ batches });
@@ -454,7 +452,7 @@ test("an itx/paused event pauses the stream through its own core reduce: every n
 test("a raw subscription-configured lands at the stream: a name is normalizeControlEvent's to refuse (core-processor.test.ts pins `core` and the prototype keys)", () => {
   const stream = bareStream();
   const [event] = stream.append({
-    type: CONFIGURED,
+    type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "presence",
       target: ["itx", "facets", ["get", "presence"], "processEventBatch"],
@@ -492,12 +490,15 @@ test("a malformed itx/rewrite-rule-configured (a match with an argless call step
 
 test("a malformed subscription-configured (a target that does not parse) lands as a row but adds NO subscription — the next well-formed one reduces", () => {
   const stream = bareStream();
-  stream.append({ type: CONFIGURED, payload: { name: "broken", target: "itx.broken(" } });
+  stream.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "broken", target: "itx.broken(" },
+  });
   expect(stream).toMatchObject({
     coreReducedState: expect.objectContaining({ subscriptions: {} }),
   });
   const [good] = stream.append({
-    type: CONFIGURED,
+    type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "fine", target: "itx.whoami" },
   });
   expect(Object.keys(stream.coreReducedState.subscriptions)).toEqual(["fine"]);

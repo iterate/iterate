@@ -5,8 +5,6 @@
 import type { AuthenticatedApp } from "iterate/app";
 import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
 
-const T = "events.iterate.com/voice-agent/";
-
 /** `id` counts up per call: the list key (one subscription batch can report several facts at once). */
 export type CallFact = { id: number; text: string };
 
@@ -59,19 +57,18 @@ export async function startCall(input: {
   const subscription = await call.subscribe({
     name: `web-${activation}`,
     consumes: [
-      `${T}spk-frame`,
-      `${T}conversation-accepted`,
-      `${T}conversation-ended`,
-      `${T}provider-error-reported`,
-      `${T}provider-disconnected`,
+      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/provider-error-reported",
+      "events.iterate.com/voice-agent/provider-disconnected",
     ],
     target: (events) => {
       for (const raw of events) {
         // capnweb hands each row over as a plain JSON value; the shape is the relay's event contract
         const event = raw as { type: string; payload: Record<string, unknown> };
-        const kind = event.type.slice(T.length);
         const p = event.payload;
-        if (kind === "spk-frame") {
+        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
           if (p.activation !== activation) continue;
           if (p.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
           if (typeof p.pcm === "string" && p.pcm !== "") {
@@ -80,13 +77,14 @@ export async function startCall(input: {
             stats.spkMsReceived += pcm.length / 16;
             audio.speaker.push(pcm);
           }
-        } else if (kind === "conversation-accepted") {
+        } else if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
           stats.handshakeMs = Number(p.handshakeTookMs);
           onFact({ id: factId++, text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
-        } else if (kind === "conversation-ended") {
+        } else if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
           audio.onFrame = null;
           onFact({ id: factId++, text: `ended: ${String(p.reason)}` });
         } else {
+          const kind = event.type.replace("events.iterate.com/voice-agent/", "");
           onFact({ id: factId++, text: `${kind}: ${JSON.stringify(p).slice(0, 160)}` });
         }
       }
@@ -105,7 +103,7 @@ export async function startCall(input: {
     stats.micFramesSent += 1;
     void call
       .append({
-        type: `${T}mic-frame`,
+        type: "events.iterate.com/voice-agent/mic-frame",
         ephemeral: true,
         payload: { activation, pcm: int16ToBase64(pcm) },
       })
@@ -116,7 +114,7 @@ export async function startCall(input: {
   };
   const keepalive = setInterval(() => {
     void call
-      .append({ type: `${T}keepalive`, ephemeral: true, payload: {} })
+      .append({ type: "events.iterate.com/voice-agent/keepalive", ephemeral: true, payload: {} })
       .catch(() => undefined);
   }, 20_000);
   return {
@@ -126,7 +124,10 @@ export async function startCall(input: {
       clearInterval(keepalive);
       audio.onFrame = null;
       await call
-        .append({ type: `${T}conversation-ended`, payload: { activation, reason: "hung up" } })
+        .append({
+          type: "events.iterate.com/voice-agent/conversation-ended",
+          payload: { activation, reason: "hung up" },
+        })
         .catch(() => undefined);
       try {
         subscription[Symbol.dispose]();

@@ -38,7 +38,6 @@ import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import { ALARM_TRACE_EVENT } from "../src/stream/core-processor.ts";
 import {
   adminCredentials,
   Echo,
@@ -257,7 +256,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   const rowsBefore = await durableCount(ctx);
   const observed = s.invoke([
     "itx",
-    ["waitForEvent", { type: ALARM_TRACE_EVENT, timeoutMs: 10_000 }],
+    ["waitForEvent", { type: "events.iterate.com/itx/alarm-trace", timeoutMs: 10_000 }],
   ]) as Promise<StreamEvent>;
   await new Promise((r) => setTimeout(r, 100)); // the waiter is registered
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
@@ -268,14 +267,14 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
     vi.useRealTimers();
   }
   const trace = await observed;
-  expect(trace).toMatchObject({ type: ALARM_TRACE_EVENT, ephemeral: true });
+  expect(trace).toMatchObject({ type: "events.iterate.com/itx/alarm-trace", ephemeral: true });
   expect(trace.payload).toMatchObject({ reason: "alarm-fired", dueSchedules: 1 });
   const ring = (
     (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
     }
   ).events
-    .filter((event) => event.type === ALARM_TRACE_EVENT)
+    .filter((event) => event.type === "events.iterate.com/itx/alarm-trace")
     .map((event) => event.payload as unknown as AlarmTrace);
   expect(ring.map((t) => t.reason)).toEqual(["alarm-fired", "alarm-pass"]);
   // The tick and its completion are the pass's two durable rows; the traces took none.
@@ -419,7 +418,7 @@ test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscr
     (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
     }
-  ).events.filter((event) => event.type === ALARM_TRACE_EVENT);
+  ).events.filter((event) => event.type === "events.iterate.com/itx/alarm-trace");
   expect(ring).toEqual([]); // no pass ran: nothing was due
 });
 test("A BORROW RACES THE RELEASE: a stub invoke fired concurrently with the pins' release still answers", async () => {

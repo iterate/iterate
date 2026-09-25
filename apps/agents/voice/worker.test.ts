@@ -71,19 +71,22 @@ test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(disable.mock.invocationCallOrder[0]!);
     expect(disable.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
     const events = append.mock.calls[0]!;
-    const contextType = "events.iterate.com/agent/context-added";
     const subscription = events.find((event) => event.payload?.name === "voice-delegate");
     expect(subscription).toBeDefined();
-    expect(events.some((event) => event.type === contextType)).toBe(device !== "havpe");
+    expect(events.some((event) => event.type === "events.iterate.com/agent/context-added")).toBe(
+      device !== "havpe",
+    );
     if (device !== "havpe") {
-      expect(events.find((event) => event.type === contextType).payload).toMatchObject({
+      expect(
+        events.find((event) => event.type === "events.iterate.com/agent/context-added").payload,
+      ).toMatchObject({
         content: readFileSync(new URL("./screen-context.md", import.meta.url), "utf8").replaceAll(
           "{{DEVICE}}",
           device.replaceAll("-", "_"),
         ),
       });
     }
-    expect(subscription.payload.consumes).toContain(contextType);
+    expect(subscription.payload.consumes).toContain("events.iterate.com/agent/context-added");
   },
 );
 

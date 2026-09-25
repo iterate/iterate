@@ -185,8 +185,6 @@ createFailing(
 // `itx/rpc-stub-attached` (the ephemeral presence fact) is appended AFTER the events the attach carried,
 // so the rule / the row has a LOWER offset than the key's `attached` ──
 
-const ATTACHED = "events.iterate.com/itx/rpc-stub-attached";
-
 test("provide(match, stub): the rule is appended INSIDE the pager attach — its offset is below the key's itx/rpc-stub-attached", async () => {
   const ctx = freshCtx("attach-rule");
   const { observer, attachedOffsetOf } = await watchAttached(ctx);
@@ -265,10 +263,18 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED �
 async function watchAttached(ctx: string) {
   const observer = openItx(ctx);
   const seen = collector();
-  await observer.subscribe({ name: "presence-watch", target: seen.fn, consumes: [ATTACHED] });
+  await observer.subscribe({
+    name: "presence-watch",
+    target: seen.fn,
+    consumes: ["events.iterate.com/itx/rpc-stub-attached"],
+  });
   const attachedOffsetOf = (rpcStubKey: string): number | undefined =>
     seen.invocations
       .flatMap((i) => i.events)
-      .find((e) => e.type === ATTACHED && e.payload?.rpcStubKey === rpcStubKey)?.offset;
+      .find(
+        (e) =>
+          e.type === "events.iterate.com/itx/rpc-stub-attached" &&
+          e.payload?.rpcStubKey === rpcStubKey,
+      )?.offset;
   return { observer, attachedOffsetOf };
 }
