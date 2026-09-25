@@ -146,9 +146,10 @@ export function renderDashboard(runs: SuiteRun[], repository: { owner: string; r
 
 /**
  * Every createFlake and createFailing test the runs recorded, by name. Its newest record's kind is
- * its kind, and only records of that kind count, so a flake switched to a pin starts afresh. A test
- * stays visible while it appears in any of its suites' last three complete runs: a deleted or
- * renamed test's row retires, and an incomplete run cannot retire one.
+ * its kind, and only records of that kind count, so a flake switched to a pin starts afresh; a test
+ * whose newest record is a plain test's (kind "unknown") has lost its wrapper and has no row here.
+ * A test stays visible while it appears in any of its suites' last three complete runs: a deleted
+ * or renamed test's row retires, and an incomplete run cannot retire one.
  */
 function wrappedTests(runs: SuiteRun[]) {
   const shownSince = new Map<string, string>();
@@ -165,22 +166,22 @@ function wrappedTests(runs: SuiteRun[]) {
   >();
   for (const run of runs)
     for (const record of run.records)
-      if (record.kind !== "unknown")
-        observed.set(record.name, [
-          ...(observed.get(record.name) || []),
-          {
-            ...record,
-            suite: run.suite,
-            main: run.main,
-            commit: run.summary?.headSha,
-            runAt: run.uploadedAt,
-          },
-        ]);
+      observed.set(record.name, [
+        ...(observed.get(record.name) || []),
+        {
+          ...record,
+          suite: run.suite,
+          main: run.main,
+          commit: run.summary?.headSha,
+          runAt: run.uploadedAt,
+        },
+      ]);
   return [...observed]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, all]) => {
+    .flatMap(([name, all]) => {
       const sorted = all.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
       const newest = sorted.at(-1)!;
+      if (newest.kind === "unknown") return [];
       const records = sorted.filter((record) => record.kind === newest.kind);
       const main = records.filter((record) => record.main);
       const suites = [...new Set(records.map((record) => record.suite))];
@@ -192,23 +193,25 @@ function wrappedTests(runs: SuiteRun[]) {
           streak.runs >= threshold.runs &&
           Date.parse(streak.lastAt) - Date.parse(streak.firstAt) >= threshold.minSpanMs,
       )?.[0];
-      return {
-        name,
-        kind: newest.kind,
-        pattern: newest.pattern || "",
-        suites,
-        main,
-        recent: records.slice(-10),
-        since: records[0]!.at,
-        streak,
-        transition,
-        visible: suites.some((suite) => {
-          const since = shownSince.get(suite);
-          return (
-            !since || records.some((record) => record.suite === suite && record.runAt >= since)
-          );
-        }),
-      };
+      return [
+        {
+          name,
+          kind: newest.kind,
+          pattern: newest.pattern || "",
+          suites,
+          main,
+          recent: records.slice(-10),
+          since: records[0]!.at,
+          streak,
+          transition,
+          visible: suites.some((suite) => {
+            const since = shownSince.get(suite);
+            return (
+              !since || records.some((record) => record.suite === suite && record.runAt >= since)
+            );
+          }),
+        },
+      ];
     });
 }
 

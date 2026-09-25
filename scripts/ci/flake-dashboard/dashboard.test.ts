@@ -29,6 +29,21 @@ test("streak squares show the last 10 outcomes, oldest first, and the main strea
   expect(row).toContain("<br>9× pass (main)");
 });
 
+test("a test whose wrapper came off leaves Flakes once it records as a plain test", () => {
+  const runs = Array.from({ length: 20 }, (_, n) =>
+    run(n, [record("deploy", "pass", { at: day(n) })]),
+  );
+  expect(line(render(runs), "`deploy`")).toContain("proposed: unwrap");
+
+  runs.push(
+    run(20, [record("deploy", "retried-pass", { at: day(20), kind: "unknown", error: "boom" })]),
+  );
+  const body = render(runs);
+  expect(body).not.toContain("`deploy`");
+  expect(body).toContain("deploy | `boom` | unit |");
+  expect(body).not.toContain("retired");
+});
+
 test("rows group into sections by kind, sentinels split out of Flakes", () => {
   const body = render([
     run(1, [

@@ -87,14 +87,14 @@ export async function depotCiApi(
 
 /** The Depot CLI (`depot <args> --org <iterate>`). CI passes the organization token as DEPOT_TOKEN
  *  (Doppler _shared/preview `DEPOT_CI_TELEMETRY_TOKEN`); a laptop uses the CLI's own login. */
-export async function depotCli(args: string[]) {
+async function depotCli(args: string[]) {
   return promisify(execFileCallback)("depot", [...args, "--org", DEPOT_ORG], {
     maxBuffer: 50 * 1024 * 1024,
   });
 }
 
 /** The Depot CLI's `--output json` answer. */
-export async function depotCliJson<T>(args: string[]): Promise<T> {
+async function depotCliJson<T>(args: string[]): Promise<T> {
   const { stdout } = await depotCli([...args, "--output", "json"]);
   return JSON.parse(stdout) as T;
 }
@@ -105,7 +105,7 @@ export async function depotCliJson<T>(args: string[]): Promise<T> {
  * or undefined when none of its last 20 runs kept one. A failed run
  * counts: a job that keeps its state before it fails still handed it on.
  */
-export async function newestArtifactFile(input: {
+async function newestArtifactFile(input: {
   repository: string;
   workflow: string;
   artifact: string;
