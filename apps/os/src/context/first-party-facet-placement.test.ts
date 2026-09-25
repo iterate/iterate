@@ -90,7 +90,7 @@ const LOADED_WORKER_PLACEMENT_ROWS = [
   { context: "global:/", allowed: false },
 ];
 
-test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
+test.for(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   "facet $facet on $context: allowed $allowed",
   ({ facet, context, allowed }) => {
     expect(refusalOf(() => assertFacetPlacement(facet, contextAddress(context)))).toBe(
@@ -99,7 +99,7 @@ test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   },
 );
 
-test.each(LOADED_WORKER_PLACEMENT_ROWS)(
+test.for(LOADED_WORKER_PLACEMENT_ROWS)(
   "a loaded worker on $context: allowed $allowed",
   ({ context, allowed }) => {
     expect(refusalOf(() => assertLoadedCodePlacement("workers.get", contextAddress(context)))).toBe(

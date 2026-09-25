@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test, vi } from "vitest";
 import { proxyPosthogRequest } from "./posthog.ts";
 
-test.each(["static/array.js", "array/phc_test/config.js"])(
+test.for(["static/array.js", "array/phc_test/config.js"])(
   "routes %s to PostHog's EU asset host",
   async (path) => {
     const upstream = vi.fn(async () => new Response("asset"));

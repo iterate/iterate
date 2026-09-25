@@ -63,7 +63,7 @@ test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicaliz
 // resource key (the kv prefix, a secret cell's name, the Artifacts prefix) and the secrets root.
 // A project owns its resources whole; the global namespace splits by owner subtree.
 
-test.each([
+test.for([
   // a project: byte-identical keys, whatever the path — even its own `/users/<id>` context
   {
     projectId: "prj_demo",
@@ -138,11 +138,11 @@ test("a global owner's id keeps the codec's charset (the `:`/`.` delimiters cann
 });
 
 // ── ancestors ── who a context announces itself to (`itx/child-created`): every ancestor, root first.
-test.each([
+test.for([
   ["/", []],
   ["/a", ["/"]],
   ["/a/b/c", ["/", "/a", "/a/b"]],
   ["a/b/", ["/", "/a"]],
-])("ancestorPathsOf(%s) → %j", (path, ancestors) => {
+] as const)("ancestorPathsOf(%s) → %j", ([path, ancestors]) => {
   expect(ancestorPathsOf(path)).toEqual(ancestors);
 });

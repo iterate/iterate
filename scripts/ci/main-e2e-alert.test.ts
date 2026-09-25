@@ -8,7 +8,7 @@ import {
   suiteVerdict,
 } from "./main-e2e-alert.ts";
 
-test.each<{ results: Record<string, string>; verdict: string | undefined }>([
+test.for<{ results: Record<string, string>; verdict: string | undefined }>([
   {
     results: { deploy: "success", e2e: "success", delete: "success" },
     verdict: "green",
@@ -56,7 +56,7 @@ test("a red page names each failed job, and each cancelled one as timed out", ()
   ).toEqual(["e2e (timed out)", "delete"]);
 });
 
-test.each([
+test.for([
   { previous: "green", verdict: "red", pages: "red" },
   { previous: "red", verdict: "green", pages: "green" },
   { previous: "red", verdict: "red", pages: null },
@@ -103,7 +103,7 @@ test("a red page names the commit, the failed jobs and the failing rows, and men
   );
 });
 
-test.each([
+test.for([
   { messages: [], state: "green" },
   { messages: [{ bot_id: "B", text: "🔴 main e2e red at `x`" }], state: "red" },
   {
@@ -154,7 +154,7 @@ test("failing rows are the unexpected (Playwright) or failed (vitest) tests, onc
 });
 
 // A suite: the rows tagged `slow` of main's e2e run, or the `REAL:` rows of the real-model suite.
-test.each<{ label: string; rows: Row[]; status?: string; verdict: unknown }>([
+test.for<{ label: string; rows: Row[]; status?: string; verdict: unknown }>([
   {
     label: "every slow row passed, the rest of the run skipped or failed",
     rows: [
@@ -207,7 +207,7 @@ test.each<{ label: string; rows: Row[]; status?: string; verdict: unknown }>([
   );
 });
 
-test.each<{ label: string; rows: Row[]; verdict: unknown }>([
+test.for<{ label: string; rows: Row[]; verdict: unknown }>([
   {
     label: "every REAL: row passed; the intercepted rows beside them are not the suite's",
     rows: [
@@ -241,7 +241,7 @@ test.each<{ label: string; rows: Row[]; verdict: unknown }>([
   expect(suiteVerdict([artifact(rows)], { titlePrefix: "REAL:" })).toEqual(verdict);
 });
 
-test.each(["slow e2e rows", "real-model e2e"])(
+test.for(["slow e2e rows", "real-model e2e"])(
   "the %s suite's pages name no jobs, and its state is its own, never main e2e's",
   (suite) => {
     const page = mainE2ePage({

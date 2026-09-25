@@ -4,7 +4,7 @@ import { rootManifestListing } from "./install.ts";
 const name = "@iterate-com/agents";
 const version = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@abc1234";
 
-test.each([
+test.for([
   [
     "a root without the package lists it among its devDependencies, in order",
     manifest({ private: true, devDependencies: { typescript: "^7.0.2", iterate: "x" } }),
@@ -33,7 +33,7 @@ test.each([
     null,
     manifest({ devDependencies: { [name]: version } }),
   ],
-])("%s", (_, before, after) => {
+] as const)("%s", ([, before, after]) => {
   expect(rootManifestListing(before, name, version)).toBe(after);
 });
 

@@ -187,7 +187,7 @@ test("the Test job expects its checkout's test workspaces, not main's", async ()
   ).rejects.toThrow("Missing expected test telemetry workspaces: @iterate-com/ci-reports");
 });
 
-test.each([
+test.for([
   { jobName: "playwright-1" },
   { repository: "iterate/another" },
   { workflowRunId: "122" },
@@ -263,7 +263,7 @@ test("a runner that finished with an error is failure evidence, not incomplete e
   expect(readManifest(root.path)).toMatchObject({ incompleteArtifactIds: [] });
 });
 
-test.each([undefined, "unit", "specs", "preview-e2e"] as const)(
+test.for([undefined, "unit", "specs", "preview-e2e"] as const)(
   "retains an empty cancelled manifest without inventing a %s suite result before reporters start",
   async (flakeSuites) => {
     using root = temporaryDirectory();

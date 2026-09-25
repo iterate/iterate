@@ -15,7 +15,7 @@ const agentMarkers = [
 ];
 const amendBlocked = "ERROR: AI agents are not allowed to use --amend (rewrites history)\n";
 
-test.each([
+test.for([
   { CLAUDE_CODE_CHILD_SESSION: "1" },
   { OPENCODE: "1" },
   { OPENCODE_SESSION: "ses_1" },
@@ -96,7 +96,7 @@ test("a person can amend, including in an IDE terminal that carries CLAUDECODE",
   expect(repo.git("log", "--format=%s")).toMatchObject({ stdout: "reworded\n" });
 });
 
-test.each<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGENT: "1" }])(
+test.for<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGENT: "1" }])(
   "the pre-commit hook only formats the staged files, for people and agents alike (%o)",
   (marker) => {
     expect(lintStagedCommands(marker)).toEqual(["oxfmt --no-error-on-unmatched-pattern"]);

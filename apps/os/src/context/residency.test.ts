@@ -9,7 +9,7 @@ import { Residency, decideQuietDeadline, type QuietDeadlineDecision } from "./re
 
 const T = Date.parse("2030-01-01T00:00:00Z");
 
-test.each<{
+test.for<{
   row: string;
   armedFor: number | null;
   now: number;

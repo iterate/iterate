@@ -12,7 +12,7 @@ const CHILD_VITEST_MS = 30_000;
 // Each row is one whole child Vitest run, bounded by its spawnSync timeout, so the row gets that
 // bound too (Vitest's 5 s default is not one): CI took up to 2.2 s, a loaded 4-core machine more
 // than 5 s (2026-09-24).
-test.each([
+test.for([
   ["module import", 'throw new Error("module import failed");'],
   [
     "nested suite teardown",
@@ -25,7 +25,8 @@ test.each([
   ],
 ])(
   "preserves a %s failure even when other tests pass",
-  (failure, source) => {
+  { timeout: CHILD_VITEST_MS },
+  ([failure, source]) => {
     using fixture = {
       directory: mkdtempSync(join(tmpdir(), "vitest-collection-errors-")),
       [Symbol.dispose]() {
@@ -84,5 +85,4 @@ test.each([
       expect.objectContaining({ collectionErrors: [`${failure} failed`] }),
     );
   },
-  CHILD_VITEST_MS,
 );

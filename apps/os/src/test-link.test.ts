@@ -31,7 +31,7 @@ test("a link minted for this preview signs its person in and sends them to its n
   });
 });
 
-test.each([
+test.for<[string, () => Promise<string | null>]>([
   ["no token", async () => null],
   [
     "a tampered payload (another person under the same signature)",
@@ -54,7 +54,7 @@ test.each([
   ],
   ["another deployment's key", () => mintTestLink({ ...link, key: "prd-secrets-key" })],
   ["not base64url", async () => "a+b.c/d"],
-])("%s is refused", async (_, token) => {
+])("%s is refused", async ([, token]) => {
   expect(await redeemTestLink(await token(), at(pr123))).toEqual({
     status: 403,
     message: "This sign-in link's signature is not valid here.",
@@ -76,12 +76,12 @@ test("an expired link is refused", async () => {
   });
 });
 
-test.each([
+test.for<[string, Partial<typeof link>, RegExp]>([
   ["an address outside the domain", { email: "jonas@iterate.com" }, /outside preview.iterate.test/],
   ["a next off the linked origins", { next: "https://evil.example/" }, /does not send people/],
   ["a next over http to a workers.dev host", { next: "http://x.workers.dev/" }, /send people/],
   ["a client off the linked origins", { clients: ["https://evil.example"] }, /client/],
-])("%s is refused", async (_, change, message) => {
+])("%s is refused", async ([, change, message]) => {
   expect(await redeemTestLink(await mintTestLink({ ...link, ...change }), at(pr123))).toMatchObject(
     {
       status: 403,

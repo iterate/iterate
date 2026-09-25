@@ -6,7 +6,7 @@ const main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const merge = "cccccccccccccccccccccccccccccccccccccccc";
 const olderHead = "dddddddddddddddddddddddddddddddddddddddd";
 
-test.each([
+test.for([
   {
     rule: "1: the merge commit built from this head",
     mergeCommit: { sha: merge, parents: [main, head] },
@@ -43,7 +43,7 @@ test.each([
   expect(result).toMatchObject({ ...tested, headSha: head });
 });
 
-test.each([
+test.for([
   {
     mergeCommit: { sha: merge, parents: [main, head] },
     description:

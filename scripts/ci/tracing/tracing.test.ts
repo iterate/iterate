@@ -66,7 +66,7 @@ test("a workflow cancelled before start shows its wait ending at cancellation", 
   });
 });
 
-test.each([false, true])(
+test.for([false, true])(
   "a cancelled rerun does not inherit old runner starts (inline %s)",
   (inline) => {
     const workflow = producerWorkflow("cancelled");
@@ -112,7 +112,7 @@ test("missing execution start does not turn unmeasured runner setup into queue t
   expect(spans.some((span) => span.name.startsWith("Workflow queue"))).toBe(false);
 });
 
-test.each(["finished", "failed", "cancelled"])(
+test.for(["finished", "failed", "cancelled"])(
   "inline collection reports %s preview jobs while the collector is still running",
   (status) => {
     const workflow = producerWorkflow(status);
@@ -243,7 +243,7 @@ test("time to red uses the first failed job, ignoring a recovered job attempt", 
   });
 });
 
-test.each(["finished", "cancelled"])("%s workflows do not acquire a time to red", (status) => {
+test.for(["finished", "cancelled"])("%s workflows do not acquire a time to red", (status) => {
   const workflow = producerWorkflow(status);
   const trace = assembleTrace(workflow, new Map());
   expect(
@@ -253,7 +253,7 @@ test.each(["finished", "cancelled"])("%s workflows do not acquire a time to red"
   ).toBeUndefined();
 });
 
-test.each(["missing", "previous execution"])(
+test.for(["missing", "previous execution"])(
   "a rerun without a current failed job timestamp uses workflow completion (%s)",
   (timing) => {
     const workflow = producerWorkflow("failed");
@@ -275,7 +275,7 @@ test.each(["missing", "previous execution"])(
   },
 );
 
-test.each(["finished", "failed", "cancelled"])(
+test.for(["finished", "failed", "cancelled"])(
   "only successful completion establishes green (%s)",
   (status) => {
     const trace = assembleTrace(producerWorkflow(status), new Map());
@@ -303,7 +303,7 @@ test("the shell hook preserves failures and does not double-count nested bash", 
   expect(events[1].time).toBeGreaterThanOrEqual(events[0].time);
 });
 
-test.each([0, 7])(
+test.for([0, 7])(
   "the shell hook makes exit %s available to the next step without Depot logs",
   async (exitCode) => {
     const directory = await mkdtemp(resolve(tmpdir(), "ci-verdict-"));
@@ -960,11 +960,11 @@ test("a failed deploy is red at its completion and neither suite ran", () => {
   });
 });
 
-test.each([
+test.for([
   ["preview-os.yml:e2e", "e2e"],
   ["preview-os.yml:specs", "specs"],
   ["preview-os.yml:deploy", "deploy"],
-])("%s is job %s of its workflow", (jobKey, key) => {
+])("%s is job %s of its workflow", ([jobKey, key]) => {
   expect(jobKeyInWorkflow(jobKey)).toBe(key);
 });
 

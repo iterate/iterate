@@ -78,7 +78,7 @@ test("pending-push bound: over the budget, the OLDEST events are dropped and the
 
 // ── an operator's resume wakes a halted FACET row now — the facet catches up from the log itself ──
 
-test.each([
+test.for([
   { incarnation: "the incarnation that halted it", evicted: false },
   { incarnation: "a FRESH incarnation (evicted between the halt and the resume)", evicted: true },
 ])(
@@ -488,7 +488,7 @@ test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS 
 // the read budget (8 MiB of stored bytes) and each event's offset and path ride on top, so a full
 // page serializes PAST the reservation. Acquiring the overshoot while holding the whole budget
 // waited on the reservation itself — forever — and every other cursor row on the context behind it.
-test.each([
+test.for([
   { bodyShortfall: 100, label: "CONTROL: a body 100 chars under the ceiling (the page fits)" },
   {
     bodyShortfall: 5,

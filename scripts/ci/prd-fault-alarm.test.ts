@@ -67,18 +67,15 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
   `);
 });
 
-test.each([
+test.for([
   ["a quiet prd", {}, false],
   ["one 5xx", { serverErrors: [["https://lispwoso.com/", 1]] }, true],
   ["9 heals", { heals: [["repo", 9]] }, false],
   ["10 heals", { heals: [["repo", 10]] }, true],
   ["one error", { errors: [["boom", 1]] }, true],
-] satisfies [string, Partial<FaultReading>, boolean][])(
-  "%s pages: %s",
-  (_label, reading, pages) => {
-    expect(page(reading) !== null).toBe(pages);
-  },
-);
+] satisfies [string, Partial<FaultReading>, boolean][])("%s pages: %s", ([, reading, pages]) => {
+  expect(page(reading) !== null).toBe(pages);
+});
 
 // A run that could not read prd must fail, never pass as a quiet prd.
 test("a run that cannot read prd fails: a failed Workers Logs query", async () => {

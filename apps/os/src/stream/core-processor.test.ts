@@ -121,7 +121,7 @@ test("scriptRuns: the append boundary (normalizeControlEvent) parses both payloa
   ).toThrow(/durable/);
 });
 
-test.each([
+test.for([
   ["events.iterate.com/itx/created", { projectId: "prj_other", path: "/elsewhere" }],
   ["events.iterate.com/itx/woken", { incarnation: 99 }],
   [
@@ -129,9 +129,12 @@ test.each([
     { name: "someone-elses", afterOffset: 1, attempts: 1 },
   ],
   ["events.iterate.com/itx/alarm-trace", {}],
-])("%s is the platform's own record: the append boundary refuses it", (type, payload) => {
-  expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
-});
+] as const)(
+  "%s is the platform's own record: the append boundary refuses it",
+  ([type, payload]) => {
+    expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
+  },
+);
 
 test("an operator's pause, resume and delivery resume are parsed at the append boundary: the reduce's casts are true", () => {
   // stored as sent: a bare pause stays bare, so a keyed retry still matches the committed event
@@ -207,7 +210,7 @@ test("woken → incarnation; every wake overwrites (growth across idle is the hi
   expect(s).toMatchObject({ incarnation: 2, projectId: "prj_t" });
 });
 
-test.each([
+test.for([
   {
     log: "aborted, then woken (the reset itx.abort() asked for)",
     types: ["events.iterate.com/itx/aborted", "events.iterate.com/itx/woken"],
@@ -282,7 +285,7 @@ test("ingress target: stores and replaces the full expression without creating a
   ).toBeUndefined();
 });
 
-test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
+test.for([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
   "ingress target: an invalid configuration is refused at the boundary, before append: %j",
   (payload) => {
     expect(() =>
@@ -1202,7 +1205,7 @@ test("configure: omits `consumes` from the payload when none was given", () => {
   });
 });
 
-test.each([
+test.for([
   {
     afterOffset: 0,
     becomes: "carried: { afterOffset: 0 } — the whole log",
@@ -1226,7 +1229,7 @@ test.each([
   });
 });
 
-test.each([-1, 1.5, Number.NaN, "0"])(
+test.for([-1, 1.5, Number.NaN, "0"])(
   "configure: an `afterOffset` that is not a non-negative integer (%s) is refused on append — a throw, nothing appended",
   (afterOffset) => {
     const { configure, events } = setup();

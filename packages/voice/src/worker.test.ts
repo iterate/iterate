@@ -14,7 +14,7 @@ import { admitLoadedCodeRow } from "../../../apps/os/src/context/itx-expression-
 // used to run under the hook budget; every row gets that budget.
 vi.setConfig({ testTimeout: 10_000 });
 
-test.each([0, 1, 2, 3, 4])(
+test.for([0, 1, 2, 3, 4])(
   "RGBA PNG row filter %i reaches the panel as 15000 black bytes",
   async (filter) => {
     const { worker, quickAction, setImage } = await harness(png(4, filter));
@@ -57,7 +57,7 @@ test("an incorrect device acknowledgment stops the upload", async () => {
   expect(setImage).toHaveBeenCalledTimes(1);
 });
 
-test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
+test.for(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
   "%s receives only its own screen context",
   async (device) => {
     const { worker, append, create, disable } = await harness();
@@ -104,7 +104,7 @@ test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
 
 // Regression: a photo URL in the September 21 voice stream returned HTTP 404.
 // Chromium still produced a valid PNG containing the broken-image icon.
-test.each([true, false])(
+test.for([true, false])(
   "image decode success=%s controls whether pixels reach the device",
   async (loaded) => {
     const { worker, quickAction, setImage } = await harness();

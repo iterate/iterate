@@ -5,7 +5,7 @@
 import { expect, onTestFinished, test, vi } from "vitest";
 import { providerStore } from "./oauth-store.ts";
 
-test.each([
+test.for([
   "D1_ERROR: Network connection lost.",
   "D1_ERROR: D1 DB reset because its code was updated.",
   "D1_ERROR: Internal error in D1 DB storage caused object to be reset.",
@@ -44,12 +44,12 @@ test("a second failure throws: the grant store never retries twice", async () =>
   expect(retries(warns)).toHaveLength(1);
 });
 
-test.each([
+test.for([
   // the platform's, but not to be sent again: the query may still be queued
   ["D1_ERROR: D1 DB is overloaded. Requests queued for too long.", /failed oauthGrant/],
   // ours
   ["D1_ERROR: no such table: oauth_grants: SQLITE_ERROR", /failed oauthGrant: D1_ERROR: no such/],
-])("a grant read failing with %s is not asked again", async (message, thrown) => {
+] as const)("a grant read failing with %s is not asked again", async ([message, thrown]) => {
   const store = storeOver([
     () => Promise.reject(new Error(message)),
     () => Promise.resolve({ results: [{ value: '{"id":"never read"}' }] }),
