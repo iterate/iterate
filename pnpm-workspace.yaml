@@ -63,6 +63,9 @@ catalog:
   trpc-cli: 0.16.0
   tsdown: 0.23.0
   tsx: ^4.23.15
+  # TypeScript 7, the native compiler, and no 6 anywhere. typescript-eslint, under the oxlint
+  # jsPlugin @tanstack/eslint-plugin-router, peers on typescript <6.1 (typescript-eslint#10940), so
+  # pnpm warns of an unmet peer; the one rule lint loads from it never reaches TypeScript.
   typescript: ^7.0.2
   undici: ^8.11.2
   vite: ^8.3.0
@@ -97,8 +100,5 @@ overrides:
   "@codemirror/state": "catalog:"
   wrangler: "catalog:"
   ws: "catalog:"
-# The catalog's typescript is 7, the native compiler, which has no JS API. typescript-eslint (under
-# this oxlint jsPlugin) needs TypeScript's JS API and peers on typescript <6.1; a peer resolves from
-# the parent's dependencies, which overrides cannot reach, so the plugin carries its own 6.
 patchedDependencies:
   zod@4.6.5: patches/zod@4.6.5.patch

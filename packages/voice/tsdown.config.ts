@@ -10,6 +10,7 @@ export default defineConfig({
   fixedExtension: true,
   platform: "neutral",
   target: "es2022",
+  tsconfig: "tsconfig.build.json",
   loader: { ".md": "text" },
   deps: { neverBundle: ["cloudflare:workers", "@cloudflare/workers-types"] },
   dts: true,
