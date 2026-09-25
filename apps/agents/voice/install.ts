@@ -2,8 +2,7 @@ import type { IterateContextApi } from "iterate/api";
 import { z } from "zod";
 import { installAgents } from "../../../configs/with-agents/agents/install.ts";
 
-// `kit/voice/…`: the prefix Kit first installed under, kept so installed projects keep their keys.
-const VoiceFileKey = z.string().regex(/^kit\/voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
+const VoiceFileKey = z.string().regex(/^voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
 const VoiceInstall = z.object({
   agentsRuntime: z.record(z.string(), z.string()),
   files: z.record(VoiceFileKey, z.string().min(1)),
@@ -50,7 +49,7 @@ export async function ensureVoiceAgent(
       await installAgents(project, install.agentsRuntime);
     await project.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
-      idempotencyKey: `kit/install/${install.cacheKey}`,
+      idempotencyKey: `voice/install/${install.cacheKey}`,
       payload: {
         match: "itx.voice",
         target: [

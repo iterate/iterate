@@ -403,8 +403,7 @@ export function useIterateContext(
       for (const dispose of disposers) void dispose();
     };
   }, [itx, liveStateKey]);
-  // THE CORE REDUCE has no live state (#2819 removed it: a delta per commit on every context, for
-  // one panel): its `snapshot()` — `{ offset, state }` — is read once caught up and again as the
+  // THE CORE REDUCE has no live state (a delta per commit on every context, for one panel): its `snapshot()` — `{ offset, state }` — is read once caught up and again as the
   // head moves (at most once a second), one read in flight; a head that moves during a read is
   // read once more after it.
   const wantsCore = (JSON.parse(liveStateKey) as string[]).includes("core");

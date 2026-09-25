@@ -683,8 +683,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #controlPlane = new ControlPlane(this.env);
 
   /** This context's project's slug; null for a global context (a user's, an organization's). A
-   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates or
-   *  deletes one, and an erase empties the catalog with this storage — so the control plane's
+   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates one,
+   *  and deleting the project or an erase destroys this storage with the row — so the control plane's
    *  answer is kept in this context's own storage: read once in its life, not once per isolate (a
    *  config worker asks `whoami` on every request). */
   async #projectSlug() {

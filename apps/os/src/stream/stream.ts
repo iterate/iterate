@@ -154,7 +154,7 @@ export class Stream {
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
     const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(CoreContract.slug);
-    // A log with rows but NO checkpoint (a lost row; a store from before the SQL layout) is
+    // A log with rows but NO checkpoint (a lost row) is
     // recoverable: the log is the truth and the checkpoint its cache — the mark is the highest row,
     // and the state is re-reduced below exactly as after a version bump. Reported, never fatal: the
     // alternative was re-appending the birth certificate over offset 1 and dying of a UNIQUE

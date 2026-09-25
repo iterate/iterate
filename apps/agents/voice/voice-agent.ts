@@ -247,7 +247,7 @@ const VoiceAgentContract = defineProcessorContract({
         /** Facet clock: dial to usable. */
         handshakeTookMs: z.number(),
         /** Facet clock: dial to the provider's 101, the egress and upgrade share of the handshake. */
-        upgradeTookMs: z.number().optional(),
+        upgradeTookMs: z.number(),
         /** Capture held during the handshake and released in one go. */
         heldMicFrames: z.number(),
       }),

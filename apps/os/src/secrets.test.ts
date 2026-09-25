@@ -979,15 +979,12 @@ test.for([
   else expect(normalize().refresh).toMatchObject(keeps!);
 });
 
-test("isSecretOAuthState: the signed claims must carry the kind, the secret's context and every field with its type — another claim set signed by the same key is not a state, nor is the old owner + name shape", () => {
+test("isSecretOAuthState: the signed claims must carry the kind, the secret's context and every field with its type — another claim set signed by the same key is not a state", () => {
   const state = { kind: "secret-oauth", context: "prj_x.iterate/secrets/shop", nonce: "x", exp: 1 };
   expect(isSecretOAuthState(state)).toBe(true);
   expect(isSecretOAuthState({ ...state, kind: "google-login" })).toBe(false);
   expect(isSecretOAuthState({ ...state, exp: "1" })).toBe(false);
   expect(isSecretOAuthState({ ...state, context: 7 })).toBe(false);
-  expect(
-    isSecretOAuthState({ kind: "secret-oauth", owner: "p", name: "n", nonce: "x", exp: 1 }),
-  ).toBe(false);
   expect(isSecretOAuthState([state])).toBe(false);
   expect(isSecretOAuthState({ ...state, next: "https://os.example/" })).toBe(true);
   expect(isSecretOAuthState({ ...state, next: 1 })).toBe(false);
