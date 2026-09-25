@@ -6,9 +6,8 @@
 // `subscribe` are a session's verbs (loaded code writes rows with `itx.append`). A raw `fetch()` is
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
 // egress. The chain a child inherits: own rows → the parent link → … → the root's rows → the built-ins.
-import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import { expect, test } from "vitest";
-import { freshCtx, openItx } from "./support/client.ts";
+import { expect, test, type TestContext } from "vitest";
+import { freshCtx, openItx, readAll } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
@@ -159,60 +158,39 @@ for (const kind of ["repo", "workspace"] as const)
     });
   });
 
-// A SCRIPT BENEATH A MASK — `/jail`, a workspace linked to the root, with the root's `itx.tool`
-// masked there, as an agent's sandbox is linked to its agent — reaches past the mask only where the
-// platform writes or deletes for it: a row it removes, a row it schedules, a route the root's config
-// worker serves, an entity it deletes, requests or plants outside itself.
-const beneathAMask = async (name: string) => {
-  const root = openItx(freshCtx(name));
-  await root.provide("itx.tool", () => "hello-from-root");
-  await root.workspaces.create("/jail");
-  const jail = root.cd("/jail");
-  await jail.provide("itx.tool", null);
-  return { root, jail };
-};
+// A SCRIPT BENEATH A MASK — `/jail`, a workspace linked to the root with the root's `itx.tool`
+// masked there, as an agent's sandbox is linked to its agent — gets no way round the mask: loaded
+// code removes no row, a batch it schedules meets the wall as it is scheduled, it sets no project
+// fetch route (the config worker serves those at the root), and it creates and deletes only
+// beneath itself, the lifecycle facts included.
+test("a script beneath a mask cannot lift it: loaded code removes no row (`ifTarget`)", async () => {
+  const { jail } = await beneathAMask("lift-mask");
+  const { removal, tool } = await jail.builtins.run(`async (itx) => {
+    const removal = await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.tool', target: null, ifTarget: null } }).then(() => 'removed', (e) => String(e.message));
+    return { removal, tool: await itx.tool().then((v) => v, (e) => String(e.message)) };
+  }`);
+  expect(tool, "the tool should stay masked").toMatch(/is masked/);
+  expect(removal).toMatch(/removes no row/);
+});
 
-createFailing(test, /the tool should stay masked/)(
-  "a script beneath a mask cannot lift it: loaded code removes no row (`ifTarget`)",
-  async () => {
-    const { jail } = await beneathAMask("lift-mask");
-    const { removal, tool } = await jail.builtins.run(`async (itx) => {
-      const removal = await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.tool', target: null, ifTarget: null } }).then(() => 'removed', (e) => String(e.message));
-      return { removal, tool: await itx.tool().then((v) => v, (e) => String(e.message)) };
-    }`);
-    expect(tool, "the tool should stay masked").toMatch(/is masked/);
-    expect(removal).toMatch(/removes no row/);
-  },
-);
+test("a script beneath a mask cannot schedule a row past it: a scheduled batch meets the wall when it is scheduled", async () => {
+  const { jail } = await beneathAMask("scheduled-row");
+  const { scheduled, tool } = await jail.builtins.run(`async (itx) => {
+    const scheduled = await itx.schedules.set({ key: 'escape', when: { afterMs: 0 }, events: [{ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.tool', target: "itx.builtins.cd('/').tool" } }] }).then((receipt) => receipt, (e) => String(e.message));
+    return { scheduled, tool: await itx.tool().then((v) => v, (e) => String(e.message)) };
+  }`);
+  expect(scheduled).toMatch(/not a loaded worker's word/);
+  expect(tool, "the tool should stay masked").toMatch(/is masked/);
+});
 
-createFailing(test, /the tool should stay masked/)(
-  "a script beneath a mask cannot schedule a row past it: a scheduled batch meets the wall when it is scheduled",
-  async () => {
-    const { jail } = await beneathAMask("scheduled-row");
-    const { scheduled, tool } = await jail.builtins.run(`async (itx) => {
-      const scheduled = await itx.schedules.set({ key: 'escape', when: { afterMs: 0 }, events: [{ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.tool', target: "itx.builtins.cd('/').tool" } }] }).then((receipt) => receipt, (e) => String(e.message));
-      if (typeof scheduled === 'object') await itx.waitForEvent({ type: ['events.iterate.com/itx/schedule-fired', 'events.iterate.com/itx/schedule-failed'], afterOffset: scheduled.scheduledAtOffset });
-      return { scheduled, tool: await itx.tool().then((v) => v, (e) => String(e.message)) };
-    }`);
-    expect(tool, "the tool should stay masked").toMatch(/is masked/);
-    expect(scheduled).toMatch(/not a loaded worker's word/);
-  },
-);
-
-createFailing(test, /should set no project fetch route/)(
-  "a script beneath a mask cannot set a project fetch route, which the config worker would serve at the root",
-  async () => {
-    const { root, jail } = await beneathAMask("route-from-below");
-    const set = await jail.builtins.run(
-      "async (itx) => itx.fetchRoutes.set('leak', { requestMatcher: { routingSlug: 'leak' }, target: 'itx.tool' }).then(() => 'set', (e) => String(e.message))",
-    );
-    expect(
-      await root.fetchRoutes.list(),
-      "a script beneath the root should set no project fetch route",
-    ).toEqual([]);
-    expect(set).toMatch(/fetch routes are set only from the project's root/);
-  },
-);
+test("a script beneath a mask cannot set a project fetch route, which the config worker would serve at the root", async () => {
+  const { root, jail } = await beneathAMask("route-from-below");
+  const set = await jail.builtins.run(
+    "async (itx) => itx.fetchRoutes.set('leak', { requestMatcher: { routingSlug: 'leak' }, target: 'itx.tool' }).then(() => 'set', (e) => String(e.message))",
+  );
+  expect(set).toMatch(/fetch routes are set only from the project's root/);
+  expect(await root.fetchRoutes.list()).toEqual([]);
+});
 
 test("a script beneath a mask still asks the project's fetch routes: `itx.fetchRoutes.match` answers from below, as the agents' candidate probe needs", async () => {
   const { root, jail } = await beneathAMask("route-match-from-below");
@@ -227,61 +205,63 @@ test("a script beneath a mask still asks the project's fetch routes: `itx.fetchR
   ).toMatchObject({ fetchRouteName: "blog" });
 });
 
-createFailing(test, /the config repo should outlive/)(
-  "a script beneath a mask cannot delete the config repo: `itx.repos.delete` reaches only beneath the caller",
-  async ({ onTestFinished }) => {
-    const { root, jail } = await beneathAMask("repo-delete-from-below");
-    const artifacts = await FakeArtifacts.start();
-    onTestFinished(() => artifacts.close());
-    await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
-    await root.repos.create("/repos/config");
-    const deleted = await jail.builtins.run(
-      "async (itx) => itx.repos.delete('/repos/config').then(() => 'deleted', (e) => String(e.message))",
-    );
-    expect(
-      (await root.repos.list()).map((repo: { path: string }) => repo.path),
-      "the config repo should outlive a delete from below",
-    ).toEqual(["/repos/config"]);
-    expect(deleted).toMatch(/only beneath/);
-    expect(artifacts.deleted).toEqual([]);
-  },
-);
+test("a script beneath a mask cannot delete the config repo: `itx.repos.delete` reaches only beneath the caller", async (context) => {
+  const { root, jail } = await beneathAMask("repo-delete-from-below");
+  const artifacts = await configRepo(root, context);
+  const deleted = await jail.builtins.run(
+    "async (itx) => itx.repos.delete('/repos/config').then(() => 'deleted', (e) => String(e.message))",
+  );
+  expect(deleted).toMatch(/creates and deletes only beneath itself/);
+  expect((await root.repos.list()).map((repo: { path: string }) => repo.path)).toEqual([
+    "/repos/config",
+  ]);
+  expect(artifacts).toMatchObject({ deleted: [] });
+});
 
-createFailing(test, /the config repo should outlive/)(
-  "a script beneath a mask cannot delete the config repo by appending its request: the typed append refuses the repo's lifecycle facts",
-  async ({ onTestFinished }) => {
-    const { root, jail } = await beneathAMask("repo-request-from-below");
-    const artifacts = await FakeArtifacts.start();
-    onTestFinished(() => artifacts.close());
-    await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
-    await root.repos.create("/repos/config");
-    const appended = await jail.builtins.run(
-      "async (itx) => itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} }).then(([requested]) => requested.offset, (e) => String(e.message))",
-    );
-    // An accepted request starts the deletion saga: its certificate lands before the catalog is read.
-    if (typeof appended === "number")
-      await root
-        .cd("/repos/config")
-        .waitForEvent({ type: "events.iterate.com/repo/deleted", afterOffset: appended });
-    expect(
-      (await root.repos.list()).map((repo: { path: string }) => repo.path),
-      "the config repo should outlive a lifecycle fact appended from below",
-    ).toEqual(["/repos/config"]);
-    expect(appended).toMatch(/lifecycle/);
-  },
-);
+test("a script beneath a mask cannot delete the config repo by appending its request: the typed append refuses the repo's lifecycle facts", async (context) => {
+  const { root, jail } = await beneathAMask("repo-request-from-below");
+  await configRepo(root, context);
+  const appended = await jail.builtins.run(
+    "async (itx) => itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} }).then(() => 'appended', (e) => String(e.message))",
+  );
+  expect(appended).toMatch(/is the repo's lifecycle/);
+  expect(
+    (await readAll(root.cd("/repos/config"))).filter(
+      (e: { type: string }) => e.type === "events.iterate.com/repo/delete-requested",
+    ),
+  ).toEqual([]);
+  expect((await root.repos.list()).map((repo: { path: string }) => repo.path)).toEqual([
+    "/repos/config",
+  ]);
+});
 
-createFailing(test, /should plant nothing outside itself/)(
-  "a script beneath a mask cannot plant a workspace outside itself: `itx.workspaces.create` reaches only beneath the caller",
-  async () => {
-    const { root, jail } = await beneathAMask("plant-from-below");
-    const planted = await jail.builtins.run(
-      "async (itx) => itx.workspaces.create('/other/x').then(() => 'planted', (e) => String(e.message))",
-    );
-    expect(
-      (await root.workspaces.list()).map((workspace: { path: string }) => workspace.path),
-      "a script beneath a mask should plant nothing outside itself",
-    ).toEqual(["/jail"]);
-    expect(planted).toMatch(/only beneath/);
-  },
-);
+test("a script beneath a mask cannot plant a workspace outside itself: `itx.workspaces.create` reaches only beneath the caller", async () => {
+  const { root, jail } = await beneathAMask("plant-from-below");
+  const planted = await jail.builtins.run(
+    "async (itx) => itx.workspaces.create('/other/x').then(() => 'planted', (e) => String(e.message))",
+  );
+  expect(planted).toMatch(/creates and deletes only beneath itself/);
+  expect(
+    (await root.workspaces.list()).map((workspace: { path: string }) => workspace.path),
+  ).toEqual(["/jail"]);
+});
+
+/** `/jail`: a workspace linked to the root, the root's lent `itx.tool` masked there. */
+const beneathAMask = async (name: string) => {
+  const root = openItx(freshCtx(name));
+  await root.provide("itx.tool", () => "hello-from-root");
+  await root.workspaces.create("/jail");
+  const jail = root.cd("/jail");
+  await jail.provide("itx.tool", null);
+  return { root, jail };
+};
+
+/** The config repo on a fake Artifacts proxy, created from the root. The test's own
+ *  `onTestFinished`: its rows run concurrently, which vitest's global hook does not track. */
+const configRepo = async (root: any, { onTestFinished }: TestContext) => {
+  const artifacts = await FakeArtifacts.start();
+  onTestFinished(() => artifacts.close());
+  await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
+  await root.repos.create("/repos/config");
+  return artifacts;
+};
