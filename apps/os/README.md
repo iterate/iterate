@@ -129,7 +129,9 @@ The [engineering invariant](../../docs/engineering-invariants.md) defines the re
 The control plane — users, identities, organizations, memberships, projects, invitations, custom
 hostnames and the OAuth provider's grants — is one D1 per deployment, bound as `DB`: `os-prd-db`,
 `os-parent-db`, `os-<preview>-db` for each preview, and `os-dev-db` locally
-(`src/control-plane/db/`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
+(`src/control-plane/db/`). prd's and the parent's primaries are in western Europe; a preview's is
+created near the job that creates it, which for CI is where its suites run (`scripts/d1.ts`).
+[sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
 `definitions.sql`, the migrations `migrations/*.sql`, and every query a named statement in
 `queries/*.sql`, typed into `queries/.generated/` (committed); `db/index.ts` says why each write is
 one statement or one batch.

@@ -301,10 +301,11 @@ async function writeStatus(
 
 // ── the control plane's D1 (scripts/d1.ts): created and migrated by the deploy, deleted here ────
 
-/** The preview's D1, created when missing and migrated, before any code that reads it deploys. */
+/** The preview's D1, created when missing and migrated, before any code that reads it deploys. It
+ *  is created near this job (`automatic`, scripts/d1.ts `D1Location`). */
 async function ensurePreviewDatabase(ctx: EnvContext<OsEnv>, previewName: string) {
   const databaseName = previewResourceName(previewName, "db");
-  const { uuid } = await ensureD1(ctx.cf, databaseName);
+  const { uuid } = await ensureD1(ctx.cf, databaseName, "automatic");
   await applyD1Migrations(ctx.cf, {
     databaseName,
     databaseId: uuid,
