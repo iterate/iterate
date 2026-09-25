@@ -8,6 +8,7 @@
 // Run:
 //   pnpm exec vitest run --configLoader runner --project workers __workers-tests__/processor-runs-start-in-an-alarm.test.ts
 
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
@@ -45,6 +46,35 @@ test(`a processor's ${TURNS} turns of run-requested → run-settled: every run s
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   expect(await itx.run("async () => 'at once'")).toBe("at once");
   expect(runsStartedByAlarmPasses(await readWithTraces(ctx))).toBe(TURNS);
+});
+
+test("a run the context died owing its alarm is settled `interrupted` by the incarnation that alarm wakes, never started", async () => {
+  const ctx = "prj_processor_run_owed_at_death";
+  const s = stub(ctx);
+  // The request commits, the alarm is armed for it, both are made durable — and the context dies
+  // before any alarm can run: one turn, no event in between.
+  await runInDurableObject(s, async (instance, state) => {
+    await instance.append({
+      type: "events.iterate.com/itx/run-requested",
+      payload: { code: "async () => 'never'" },
+      source: { processor: { slug: "looper", version: "1.0.0" } },
+    });
+    await state.storage.sync();
+    state.abort("killed before its alarm pass");
+  }).catch(() => {}); // abort() throws by design: nothing after it runs
+  expect(await runDurableObjectAlarm(stub(ctx))).toBe(true); // a fresh stub: the old one died with its incarnation
+  // Settled by the ALARM's wake record, in the same batch — not by the read below, whose own wake
+  // record would settle it too.
+  const log = await readWithTraces(ctx);
+  const settled = log.find((event) => event.type === "events.iterate.com/itx/run-settled");
+  expect(settled?.payload?.settlement).toMatchObject({
+    status: "failed",
+    failureKind: "interrupted",
+  });
+  expect(log.find((event) => event.offset === settled!.offset - 1)).toMatchObject({
+    type: "events.iterate.com/itx/woken",
+    payload: { reason: "alarm" },
+  });
 });
 
 /** The log with the ring's ephemerals, where the alarm passes' traces are. */
