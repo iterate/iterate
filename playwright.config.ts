@@ -76,29 +76,8 @@ export default defineConfig({
     trace: "retain-on-failure",
     video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
-  // One project per app host: its specs live in specs/<app>/ and its baseURL is that app. Workers
-  // take tests in project order, so the projects with the longest flows come first.
+  // One project per app host: its specs live in specs/<app>/ and its baseURL is that app.
   projects: [
-    {
-      name: "dash",
-      testDir: "specs/dash",
-      use: recordedAtViewport({ ...desktopWebUse, baseURL: dashBaseUrl }),
-    },
-    {
-      name: "admin",
-      testDir: "specs/admin",
-      use: recordedAtViewport({ ...desktopWebUse, baseURL: adminBaseUrl }),
-    },
-    {
-      name: "voice",
-      testDir: "specs/voice",
-      use: recordedAtViewport({ ...desktopWebUse, baseURL: voiceBaseUrl }),
-    },
-    {
-      name: "notes",
-      testDir: "specs/notes",
-      use: recordedAtViewport({ ...desktopWebUse, baseURL: notesBaseUrl }),
-    },
     {
       name: "os",
       testDir: "specs/os",
@@ -110,6 +89,26 @@ export default defineConfig({
       testDir: "specs/os",
       testMatch: ["**/auth.spec.ts", "**/issuer-pages.spec.ts"],
       use: recordedAtViewport(devices["Pixel 7"]),
+    },
+    {
+      name: "notes",
+      testDir: "specs/notes",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: notesBaseUrl }),
+    },
+    {
+      name: "voice",
+      testDir: "specs/voice",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: voiceBaseUrl }),
+    },
+    {
+      name: "dash",
+      testDir: "specs/dash",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: dashBaseUrl }),
+    },
+    {
+      name: "admin",
+      testDir: "specs/admin",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: adminBaseUrl }),
     },
     // the suite's own specs, beside the app folders: the flake sentinel and the harness's
     // local-only specs (setContent, no deployment)
