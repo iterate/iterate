@@ -730,11 +730,14 @@ close on 2026-09-24 failed `Could not find requested project 'project-worker'`: 
 ## Pull requests that conflict with main
 
 GitHub builds no test merge commit for a PR that conflicts with main, and Depot starts no
-workflow without one. It records a run with no commit and no workflows (`depot ci run list
---output json` shows it with no `sha`), and the PR shows no Lint and Typecheck, Test or Preview OS
-checks: not red, not pending, absent. On 2026-09-24 between 09:23 and 09:59 UTC there were six
-such runs, for heads of #3004, #3006 and #3007, and each head conflicted with main at that moment
-(`git merge-tree`). #3007 sat with only Bugbot's check until it was rebased.
+workflow without one. It records a run with no commit (`depot ci run list --output json` shows it
+with no `sha`) and one failed workflow with no name or jobs, whose error (`depot ci status
+<run-id>`) says the merge ref is stale, and the PR shows no Lint and Typecheck, Test or Preview OS
+checks: not red, not pending, absent. The CI telemetry sync reports that workflow as a failed run
+with no name ([CI and test telemetry](ci-test-telemetry.md)). On 2026-09-24 between 09:23 and
+09:59 UTC there were six such runs, for heads of #3004, #3006 and #3007, and each head conflicted
+with main at that moment (`git merge-tree`). #3007 sat with only Bugbot's check until it was
+rebased.
 
 The **Merges with main** check (`.github/workflows/merges-with-main.yml`, rules in
 `scripts/ci/merges-with-main.ts`) closes that gap. GitHub Actions starts `pull_request_target`

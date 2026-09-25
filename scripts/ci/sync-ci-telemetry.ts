@@ -162,7 +162,9 @@ async function main() {
 /**
  * The PostHog events for what finished inside `window`: one `ci workflow run finished` per settled
  * workflow execution (a re-run is a new execution, `attempt` 2), one `ci job attempt finished` per
- * finished job attempt (a retried job is a new attempt). A skipped job has no attempt.
+ * finished job attempt (a retried job is a new attempt). A skipped job has no attempt. A workflow
+ * Depot failed before it started (RunMetrics) is a failed workflow run with no name or commit and
+ * Depot's reason as `error_message`.
  */
 export function ciTelemetryEvents(input: {
   window: { start: number; end: number };
@@ -176,7 +178,7 @@ export function ciTelemetryEvents(input: {
   const inWindow = (time: string) => finishedIn(input.window, time);
   const context = (
     run: RunMetrics["run"],
-    workflow: { workflowId: string; workflowPath: string; name: string },
+    workflow: { workflowId: string; workflowPath: string; name?: string },
   ) => ({
     schema_version: 3,
     repository,
@@ -211,6 +213,9 @@ export function ciTelemetryEvents(input: {
             }),
             attempt: execution.execution,
             conclusion,
+            // GetWorkflow's message belongs to the workflow, not to one of its executions, so only a
+            // workflow that never started, and has one execution, carries it
+            error_message: workflow.workflowName ? undefined : workflow.workflowErrorMessage,
             queued_at: execution.createdAt,
             started_at: execution.startedAt || undefined,
             finished_at: execution.finishedAt,
@@ -407,11 +412,13 @@ async function scheduledWindow(
 /**
  * Every Depot run with a workflow created in the window or up to `longestWorkflowMs` before it,
  * with its workflows' jobs and attempts, and the window those runs cover. `ListWorkflows` returns
- * at most the newest 200 and has no paging, so the sync lists each workflow on main by name, and
- * one unnamed listing adds workflows that exist only on a branch. A named listing that fills its
- * 200 without reaching back far enough holds every workflow of its name created since its oldest,
- * so the window then starts `longestWorkflowMs` after that one, and what finished before goes
- * unreported with a warning. The listings take no time or branch filter to narrow them by.
+ * at most the newest 200 and has no paging, so the sync lists each workflow on main by name. One
+ * unnamed listing adds workflows that exist only on a branch, and one of failed workflows those
+ * Depot failed before they started (RunMetrics), which have no name to list them by. A named or
+ * failed listing that fills its 200 without reaching back far enough holds every workflow of its
+ * name or status created since its oldest, so the window then starts `longestWorkflowMs` after that
+ * one, and what finished before goes unreported with a warning. The listings take no time or branch
+ * filter to narrow them by.
  *
  * A re-run started more than `longestWorkflowMs` after its workflow was created is not reported.
  * Depot keeps the workflow's original `createdAt` for a re-run, and neither `ListWorkflows` nor
@@ -434,16 +441,20 @@ export async function candidateRuns(
             .parse(parseYaml(await readFile(new URL(file, directory), "utf8"))).name,
       ),
   );
-  const listings = await mapConcurrent([undefined, ...names], 8, async (name) => {
-    const { workflows } = WorkflowList.parse(
-      await depot("ListWorkflows", { repo: repository, pageSize: 200, name }),
-    );
-    return { name, workflows };
-  });
-  const short = listings.flatMap(({ name, workflows }) => {
-    if (!name || workflows.length < 200) return [];
+  const listings = await mapConcurrent(
+    [{}, { status: ["failed"] }, ...names.map((name) => ({ name }))],
+    8,
+    async (filter: { name?: string; status?: string[] }) => {
+      const { workflows } = WorkflowList.parse(
+        await depot("ListWorkflows", { repo: repository, pageSize: 200, ...filter }),
+      );
+      return { listing: filter.name || filter.status?.[0], workflows };
+    },
+  );
+  const short = listings.flatMap(({ listing, workflows }) => {
+    if (!listing || workflows.length < 200) return [];
     const reach = Math.min(...workflows.map((workflow) => Date.parse(workflow.createdAt)));
-    return reach + longestWorkflowMs > requested.start ? [{ name, reach }] : [];
+    return reach + longestWorkflowMs > requested.start ? [{ listing, reach }] : [];
   });
   const window = {
     start: Math.min(
@@ -457,9 +468,9 @@ export async function candidateRuns(
       event: "ci-telemetry.unreported",
       from: new Date(requested.start).toISOString(),
       until: new Date(window.start).toISOString(),
-      reason: `Depot's 200 newest workflows of each name in listings reach back only to the time given, and one created before it may finish up to ${longestWorkflowMs / 3_600_000}h later`,
+      reason: `Depot's 200 newest workflows of each name or status in listings reach back only to the time given, and one created before it may finish up to ${longestWorkflowMs / 3_600_000}h later`,
       listings: Object.fromEntries(
-        short.map(({ name, reach }) => [name, new Date(reach).toISOString()]),
+        short.map(({ listing, reach }) => [listing, new Date(reach).toISOString()]),
       ),
     });
 
@@ -498,55 +509,78 @@ const WorkflowList = z.object({
     .default([]),
 });
 
-const RunMetrics = z.object({
-  run: z.object({
-    runId: z.string(),
-    ref: z.string().default(""),
-    sha: z.string(),
-    headSha: z.string(),
-    trigger: z.string(),
-  }),
-  workflows: z
-    .array(
-      z.object({
-        workflow: z.object({
-          workflowId: z.string(),
-          workflowPath: z.string().default(""),
-          name: z.string(),
-          status: z.string(),
-          finishedAt: z.string().default(""),
-        }),
-        jobs: z
-          .array(
-            z.object({
-              job: z.object({ jobId: z.string(), jobKey: z.string() }),
-              attempts: z
-                .array(
-                  z.object({
-                    attempt: z.object({
-                      attemptId: z.string(),
-                      attempt: z.number(),
-                      conclusion: z.string().default(""),
-                      createdAt: z.string(),
-                      startedAt: z.string().default(""),
-                      finishedAt: z.string().default(""),
-                    }),
-                  }),
-                )
-                .default([]),
-            }),
-          )
-          .default([]),
-      }),
-    )
-    .default([]),
+const RunContext = z.object({
+  runId: z.string(),
+  ref: z.string().default(""),
+  sha: z.string(),
+  headSha: z.string(),
+  trigger: z.string(),
 });
+const WorkflowContext = z.object({
+  workflowId: z.string(),
+  workflowPath: z.string().default(""),
+  name: z.string(),
+  status: z.string(),
+  finishedAt: z.string().default(""),
+});
+
+const RunMetrics = z.union([
+  z.object({
+    run: RunContext,
+    workflows: z
+      .array(
+        z.object({
+          workflow: WorkflowContext,
+          jobs: z
+            .array(
+              z.object({
+                job: z.object({ jobId: z.string(), jobKey: z.string() }),
+                attempts: z
+                  .array(
+                    z.object({
+                      attempt: z.object({
+                        attemptId: z.string(),
+                        attempt: z.number(),
+                        conclusion: z.string().default(""),
+                        createdAt: z.string(),
+                        startedAt: z.string().default(""),
+                        finishedAt: z.string().default(""),
+                      }),
+                    }),
+                  )
+                  .default([]),
+              }),
+            )
+            .default([]),
+        }),
+      )
+      .default([]),
+  }),
+  // A pull request push whose merge ref GitHub has not updated, as for one that conflicts with main
+  // (docs/depot-ci.md), has no merge commit, and Depot fails the run's workflow before it starts:
+  // the workflow has no name, file or jobs, the run no commit, and GetWorkflow's
+  // `workflowErrorMessage` says the merge ref is stale.
+  z.object({
+    run: RunContext.extend({ sha: z.undefined().optional(), trigger: z.literal("pull_request") }),
+    workflows: z.array(
+      z.object({
+        workflow: WorkflowContext.extend({
+          name: z.undefined().optional(),
+          status: z.literal("failed"),
+        }),
+        jobs: z.tuple([]).default([]),
+      }),
+    ),
+  }),
+]);
 type RunMetrics = z.infer<typeof RunMetrics>;
 
-const WorkflowDetail = z.object({
+export const WorkflowDetail = z.object({
   runId: z.string(),
   workflowId: z.string(),
-  workflowName: z.string(),
+  /** Absent for a workflow Depot failed before it started (RunMetrics), which says why instead. */
+  workflowName: z.string().optional(),
+  workflowErrorMessage: z.string().optional(),
   workflowPath: z.string().default(""),
   workflowCreatedAt: z.string(),
   executions: z.array(

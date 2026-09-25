@@ -1,9 +1,11 @@
 import { expect, test, vi } from "vitest";
+import { ZodError } from "zod";
 import {
   candidateRuns,
   ciTelemetryEvents,
   runSource,
   testEvidenceAttemptIds,
+  WorkflowDetail,
   workflowRunners,
 } from "./sync-ci-telemetry.ts";
 
@@ -134,6 +136,49 @@ test("a test evidence job's attempt says whether its folder reached R2, by the p
   ]);
 });
 
+test("a conflicting pull request push, whose workflow Depot failed before it started, is a failed workflow run with no name or commit", async () => {
+  const { runs } = await candidateRuns(conflictDepot(conflict.runMetrics), conflictWindow);
+  const events = ciTelemetryEvents({
+    window: conflictWindow,
+    runs,
+    workflows: [WorkflowDetail.parse(conflict.workflow)],
+    sources: new Map([["37t76ps1gg", { pullRequestNumber: 3061, branch: "worker-bundler" }]]),
+    runners: new Map(),
+  });
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({
+    event: "ci workflow run finished",
+    timestamp: "2026-09-25T12:12:58Z",
+    properties: {
+      workflow_name: undefined,
+      workflow_path: undefined,
+      workflow_id: "b7k3d39qd2",
+      depot_run_id: "37t76ps1gg",
+      trigger: "pull_request",
+      sha: undefined,
+      head_sha: "23bebdc6292808f02b48683159cae71981a14481",
+      pull_request_number: 3061,
+      attempt: 1,
+      conclusion: "failure",
+      duration_ms: 0,
+      error_message: expect.stringMatching(/^Merge ref refs\/pull\/3061\/merge is stale/),
+    },
+  });
+});
+
+test("a run without a commit parses only as a conflicting pull request push's", async () => {
+  const { run, workflows } = conflict.runMetrics;
+  const { workflow } = workflows[0]!;
+  for (const runMetrics of [
+    { run: { ...run, trigger: "push" }, workflows },
+    { run, workflows: [{ workflow: { ...workflow, name: "Test" } }] },
+    { run, workflows: [{ workflow, jobs: [{ job: { jobId: "job1", jobKey: "test.yml:test" } }] }] },
+  ])
+    await expect(candidateRuns(conflictDepot(runMetrics), conflictWindow)).rejects.toThrow(
+      ZodError,
+    );
+});
+
 test("a pull request run is that pull request's branch", async () => {
   const github = { pullRequest: vi.fn(async () => pull), pullRequestsForCommit: vi.fn() };
   expect(await runSource(run, github)).toEqual({
@@ -172,24 +217,30 @@ test("a scheduled run has no pull request", async () => {
   expect(github.pullRequestsForCommit).not.toHaveBeenCalled();
 });
 
-test("a full listing that does not reach back starts the window two hours after its oldest workflow, and warns", async () => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const requested = {
-    start: Date.parse("2026-09-24T16:24:00Z"),
-    end: Date.parse("2026-09-24T22:24:00Z"),
-  };
-  const { window: covered, runs } = await candidateRuns(busyDepot, requested);
-  expect(covered).toEqual({ start: Date.parse("2026-09-24T21:01:00Z"), end: requested.end });
-  expect(warn).toHaveBeenCalledWith({
-    event: "ci-telemetry.unreported",
-    from: "2026-09-24T16:24:00.000Z",
-    until: "2026-09-24T21:01:00.000Z",
-    reason: expect.any(String),
-    listings: { "Lint and Typecheck": "2026-09-24T19:01:00.000Z" },
-  });
-  expect(runs).toHaveLength(200);
-  warn.mockRestore();
-});
+test.each([
+  [{ name: "Lint and Typecheck" }, "Lint and Typecheck"],
+  [{ status: ["failed"] }, "failed"],
+])(
+  "a full listing (%o) that does not reach back starts the window two hours after its oldest workflow, and warns",
+  async (listing, label) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const requested = {
+      start: Date.parse("2026-09-24T16:24:00Z"),
+      end: Date.parse("2026-09-24T22:24:00Z"),
+    };
+    const { window: covered, runs } = await candidateRuns(busyDepot(listing), requested);
+    expect(covered).toEqual({ start: Date.parse("2026-09-24T21:01:00Z"), end: requested.end });
+    expect(warn).toHaveBeenCalledWith({
+      event: "ci-telemetry.unreported",
+      from: "2026-09-24T16:24:00.000Z",
+      until: "2026-09-24T21:01:00.000Z",
+      reason: expect.any(String),
+      listings: { [label]: "2026-09-24T19:01:00.000Z" },
+    });
+    expect(runs).toHaveLength(200);
+    warn.mockRestore();
+  },
+);
 
 test("a full listing that reaches back leaves the window whole", async () => {
   const warn = vi.spyOn(console, "warn");
@@ -197,7 +248,10 @@ test("a full listing that reaches back leaves the window whole", async () => {
     start: Date.parse("2026-09-24T21:30:00Z"),
     end: Date.parse("2026-09-24T22:24:00Z"),
   };
-  const { window: covered, runs } = await candidateRuns(busyDepot, requested);
+  const { window: covered, runs } = await candidateRuns(
+    busyDepot({ name: "Lint and Typecheck" }),
+    requested,
+  );
   expect(covered).toEqual(requested);
   expect(warn).not.toHaveBeenCalled();
   // created from 19:30, two hours before the window
@@ -335,19 +389,103 @@ function attempt(id: string, finishedAt: string, conclusion = "success", number 
   };
 }
 
-/** Depot's API with 200 "Lint and Typecheck" workflows, one a minute from 19:01 to 22:20, and no others. */
-async function busyDepot(method: string, body: object) {
-  const { name, runId } = body as { name?: string; runId?: string };
-  if (method === "GetRunMetrics")
-    return { run: { runId, sha: "sha", headSha: "sha", trigger: "pull_request" } };
-  if (name !== "Lint and Typecheck") return { workflows: [] };
-  return {
-    workflows: Array.from({ length: 200 }, (_, index) => ({
-      workflowId: `wf${index}`,
-      runId: `run${index}`,
-      status: "finished",
-      trigger: "pull_request",
-      createdAt: new Date(Date.parse("2026-09-24T22:20:00Z") - index * 60_000).toISOString(),
-    })),
+/** Depot's API with 200 workflows in one listing, one a minute from 19:01 to 22:20, and no others. */
+function busyDepot(listing: { name: string } | { status: string[] }) {
+  return async (method: string, body: object) => {
+    const { repo, pageSize, runId, ...filter } = body as Record<string, unknown>;
+    if (method === "GetRunMetrics")
+      return { run: { runId, sha: "sha", headSha: "sha", trigger: "pull_request" } };
+    if (JSON.stringify(filter) !== JSON.stringify(listing)) return { workflows: [] };
+    return {
+      workflows: Array.from({ length: 200 }, (_, index) => ({
+        workflowId: `wf${index}`,
+        runId: `run${index}`,
+        status: "finished",
+        trigger: "pull_request",
+        createdAt: new Date(Date.parse("2026-09-24T22:20:00Z") - index * 60_000).toISOString(),
+      })),
+    };
   };
 }
+
+/** The window of the sync that failed on PR #3061's conflicting push. */
+const conflictWindow = {
+  start: Date.parse("2026-09-25T11:24:34Z"),
+  end: Date.parse("2026-09-25T12:24:34Z"),
+};
+
+/** Depot's API with one workflow, which only the failed listing finds: it has no name. */
+function conflictDepot(runMetrics: object) {
+  return async (method: string, body: object) => {
+    if (method === "GetRunMetrics") return runMetrics;
+    return { workflows: "status" in body ? [conflict.listed] : [] };
+  };
+}
+
+/** Depot's answers for run 37t76ps1gg, PR #3061's push of 23bebdc while it conflicted with main. */
+const conflict = {
+  listed: {
+    workflowId: "b7k3d39qd2",
+    repo: "iterate/iterate",
+    status: "failed",
+    trigger: "pull_request",
+    runId: "37t76ps1gg",
+    headSha: "23bebdc6292808f02b48683159cae71981a14481",
+    createdAt: "2026-09-25T12:12:58Z",
+    jobCounts: {},
+  },
+  runMetrics: {
+    run: {
+      runId: "37t76ps1gg",
+      repo: "iterate/iterate",
+      ref: "refs/pull/3061/merge",
+      headSha: "23bebdc6292808f02b48683159cae71981a14481",
+      trigger: "pull_request",
+      status: "failed",
+      createdAt: "2026-09-25T12:12:39.533Z",
+      startedAt: "2026-09-25T12:12:39.761Z",
+      finishedAt: "2026-09-25T12:12:58.284Z",
+    },
+    workflows: [
+      {
+        workflow: {
+          workflowId: "b7k3d39qd2",
+          status: "failed",
+          createdAt: "2026-09-25T12:12:58.047Z",
+          startedAt: "2026-09-25T12:12:58.038Z",
+          finishedAt: "2026-09-25T12:12:58.038Z",
+        },
+      },
+    ],
+    snapshotAt: "2026-09-25T12:32:18.418Z",
+  },
+  workflow: {
+    orgId: "0p91s0lz49",
+    runId: "37t76ps1gg",
+    repo: "iterate/iterate",
+    ref: "refs/pull/3061/merge",
+    headSha: "23bebdc6292808f02b48683159cae71981a14481",
+    trigger: "pull_request",
+    runStatus: "failed",
+    runCreatedAt: "2026-09-25T12:12:39Z",
+    runStartedAt: "2026-09-25T12:12:39Z",
+    runFinishedAt: "2026-09-25T12:12:58Z",
+    workflowId: "b7k3d39qd2",
+    workflowStatus: "failed",
+    workflowErrorMessage:
+      "Merge ref refs/pull/3061/merge is stale: its PR parent does not match the requested head 23bebdc6292808f02b48683159cae71981a14481 after retries, and safe recovery through empty commits against the event base could not be verified. This does not necessarily mean the pull request has conflicts. Once the merge ref updates, trigger a new PR run, for example by pushing a new commit. Retrying this failed workflow does not recompile it.",
+    workflowCreatedAt: "2026-09-25T12:12:58Z",
+    workflowStartedAt: "2026-09-25T12:12:58Z",
+    workflowFinishedAt: "2026-09-25T12:12:58Z",
+    executions: [
+      {
+        executionId: "kl1crbfvd4",
+        execution: 1,
+        status: "failed",
+        createdAt: "2026-09-25T12:12:58Z",
+        startedAt: "2026-09-25T12:12:58Z",
+        finishedAt: "2026-09-25T12:12:58Z",
+      },
+    ],
+  },
+};
