@@ -237,7 +237,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // one, each catching its own async refusal so one failure stops none of the others. A rule is
     // REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai` restores the real
     // one), never masked: `null` is the caller's deliberate deny.
-    const { ruleUnsets, subscriptionNames } = rowsNamingRpcStub({
+    const { ruleUnsets, subscriptionNames, fetchRouteNames } = rowsNamingRpcStub({
       rpcStubKey,
       ...this.#rowsForRpcStubCensus(),
     });
@@ -253,20 +253,33 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         type: "events.iterate.com/itx/subscription-configured",
         payload: { name, target: null },
       }).catch(() => undefined);
+    for (const fetchRouteName of fetchRouteNames)
+      void this.append({
+        type: "events.iterate.com/itx/fetch-route-configured",
+        payload: { fetchRouteName, requestMatcher: null },
+      }).catch(() => undefined);
   }
 
-  /** The two tables as the pure census functions read them: every rule, every subscription's target. */
+  /** The three tables as the pure census functions read them: every rule, every subscription's
+   *  target, every fetch route's target. */
   #rowsForRpcStubCensus(): {
     rules: ItxExpressionRewriteRule[];
     subscriptionTargets: Record<string, ItxExpression>;
+    fetchRouteTargets: Record<string, ItxExpression>;
     implicitRoots: ReadonlySet<string>;
   } {
-    const { itxExpressionRewriteRules, subscriptions } = this.#stream.coreReducedState;
+    const { itxExpressionRewriteRules, subscriptions, fetchRoutes } = this.#stream.coreReducedState;
     return {
       implicitRoots: this.#implicitRoots,
       rules: Object.values(itxExpressionRewriteRules),
       subscriptionTargets: Object.fromEntries(
         Object.entries(subscriptions).map(([name, row]) => [name, row.target]),
+      ),
+      fetchRouteTargets: Object.fromEntries(
+        Object.entries(fetchRoutes).map(([fetchRouteName, route]) => [
+          fetchRouteName,
+          route.target,
+        ]),
       ),
     };
   }

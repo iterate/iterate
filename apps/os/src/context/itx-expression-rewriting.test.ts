@@ -807,13 +807,20 @@ for (const [order, rules] of [
   ["stub first", [fake, alias, ownRegistry, throughOwnRegistry]],
 ] as const)
   test(`rowsNamingRpcStub — decided against a frozen table, whatever the configuration order: ${order}: the fake's own row and a row naming the key through the user's own registry go; the alias stays`, () => {
-    const { ruleUnsets, subscriptionNames } = rowsNamingRpcStub({
+    const { ruleUnsets, subscriptionNames, fetchRouteNames } = rowsNamingRpcStub({
       rpcStubKey: "itx.ai",
       implicitRoots: ROOT,
       rules: table([...rules]),
       subscriptionTargets: {
         viaShortSpelling: parse("itx.rpcStubs.get('itx.ai')"),
         viaAlias: parse("itx.llm.notify"),
+      },
+      fetchRouteTargets: {
+        "via-short-spelling": parse("itx.rpcStubs.get('itx.ai')"),
+        "via-own-registry": parse("itx.cam"),
+        "via-fake": parse("itx.ai"),
+        "via-alias": parse("itx.llm"),
+        elsewhere: parse("itx.kv"),
       },
     });
     expect(ruleUnsets.map((u) => print(u.match)).sort()).toEqual(["itx.ai", "itx.cam"]);
@@ -825,6 +832,9 @@ for (const [order, rules] of [
     // the short spelling names the registry through the platform row and goes; the alias-spelled
     // subscription resolves to the platform `ai` beneath once the fake is gone, and stays
     expect(subscriptionNames).toEqual(["viaShortSpelling"]);
+    // a route reaching the stub goes unless the table left behind still serves it: `itx.cam`
+    // dangles once its rule is gone, while `itx.ai` and its alias fall to the platform `ai`
+    expect(fetchRouteNames.sort()).toEqual(["via-own-registry", "via-short-spelling"]);
   });
 
 // ───────────────────────────── the resolver, over the reduce as the DO runs it ─────────────────────────────

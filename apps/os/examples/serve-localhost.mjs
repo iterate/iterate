@@ -1,6 +1,6 @@
 // examples/serve-localhost.mjs — `iterate tunnel` without the CLI: serve a local port on a project
-// host, WebSockets included, in one capnweb session. Lend the project a fetch-shaped RpcTarget, set a
-// fetch route whose target is it, print the URL; Ctrl-C deletes the route.
+// host, WebSockets included, in one capnweb session. Lend the project a fetch-shaped RpcTarget with a
+// fetch route to it, print the URL; Ctrl-C deletes the route (the lend's end would too).
 //
 //   npm install capnweb@npm:@iterate-com/capnweb
 //   ITERATE_BEARER_TOKEN=… node serve-localhost.mjs https://os.iterate.com my-project blog 5173
@@ -64,11 +64,9 @@ class LocalSite extends RpcTarget {
 }
 
 const fetchRouteName = `tunnel-${routingSlug}`;
-await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite());
-await project.fetchRoutes.set(fetchRouteName, {
-  requestMatcher: { routingSlug },
-  target: `itx.tunnels.${routingSlug}`,
-  authRequirement: null,
+// the route rides the lend: set again when the platform re-attaches it, gone when it ends
+await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
+  fetchRoute: { fetchRouteName, requestMatcher: { routingSlug }, authRequirement: null },
 });
 console.log(await project.url({ routingSlug }));
 process.once("SIGINT", async () => {

@@ -171,12 +171,14 @@ function causeOf(error: unknown): string {
  *  tunnel whose network is gone for good says so and exits. */
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
 
-/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>`, set
+/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>` with
  *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL on stdout, and on
- *  Ctrl-C delete the route, then end the lend. A connection that closes (its heartbeat found it dead,
- *  iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel lends and routes again
- *  over it, the same name taking its own route over. Only when every attempt fails does the tunnel
- *  end, with an error. */
+ *  Ctrl-C delete the route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
+ *  the platform sets it again whenever it re-attaches the lend and removes it when the lend ends —
+ *  a tunnel killed outright, or asleep, leaves no route behind. A connection that closes (its
+ *  heartbeat found it dead, iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel
+ *  lends and routes again over it, the same name taking its own route over. Only when every attempt
+ *  fails does the tunnel end, with an error. */
 export async function runTunnel(input: {
   connection: IterateConnection;
   reconnect: () => Promise<IterateConnection>;
@@ -218,12 +220,14 @@ export async function runTunnel(input: {
     using _lend = await project.provide(
       target,
       new LocalPortRpcTarget(input.port, (line) => console.error(line)),
+      {
+        fetchRoute: {
+          fetchRouteName,
+          requestMatcher: { routingSlug },
+          authRequirement: input.public ? null : { visitors: "project-members" },
+        },
+      },
     );
-    await project.fetchRoutes.set(fetchRouteName, {
-      requestMatcher: { routingSlug },
-      target,
-      authRequirement: input.public ? null : { visitors: "project-members" },
-    });
     if (first) {
       console.log(url);
       console.error(

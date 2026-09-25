@@ -428,17 +428,23 @@ function namesRpcStubDirectly(target: ItxExpression, rpcStubKey: string): boolea
  *  itx.builtins.rpcStubs` + `itx.reg.get('k')`). So an alias to a shadowed root (`itx.llm ⇒ itx.ai`
  *  while `itx.ai` is a lent fake) resolves to the platform row beneath and is KEPT; a row that only
  *  dangles once the stub is gone (`itx.x ⇒ itx.cam`, `cam` no built-in) is kept too — it errors like
- *  any unconfigured name and revives with the next provide. Subscriptions are read the same way. */
+ *  any unconfigured name and revives with the next provide. Subscriptions are read the same way.
+ *  A FETCH ROUTE is different: a dangling route still takes its host (a 404 for every visitor, the
+ *  routing slug blocked for the project's own router), so a route goes with the stub it serves —
+ *  its target reaches the stub through the table as it stands, and reaches nothing else once the
+ *  stub's rules are gone (a route to a shadowed root's alias is kept, like the alias). */
 export function rowsNamingRpcStub(args: {
   rpcStubKey: string;
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
+  fetchRouteTargets: Record<string, ItxExpression>;
   implicitRoots: ReadonlySet<string>;
 }): {
   ruleUnsets: { match: ItxExpressionPrefix; ifTarget: ItxExpression }[];
   subscriptionNames: string[];
+  fetchRouteNames: string[];
 } {
-  const { rpcStubKey, rules, subscriptionTargets, implicitRoots } = args;
+  const { rpcStubKey, rules, subscriptionTargets, fetchRouteTargets, implicitRoots } = args;
   const direct = rules.filter(
     (rule) => rule.target && namesRpcStubDirectly(rule.target, rpcStubKey),
   );
@@ -454,17 +460,35 @@ export function rowsNamingRpcStub(args: {
     }
   };
   const indirect = remaining.filter((rule) => rule.target && namesThroughRemaining(rule.target));
+  const unsetRules = [...direct, ...indirect];
+  const survivingRules = rules.filter((rule) => !unsetRules.includes(rule));
+  const resolvedThrough = (table: readonly ItxExpressionRewriteRule[], target: ItxExpression) => {
+    try {
+      return resolveItxExpression(() => table, target, implicitRoots).at(-1)!;
+    } catch {
+      return null;
+    }
+  };
+  const reachesOnlyRpcStub = (target: ItxExpression): boolean => {
+    const now = resolvedThrough(rules, target);
+    if (!now || !namesRpcStubDirectly(now, rpcStubKey)) return false;
+    const afterwards = resolvedThrough(survivingRules, target);
+    return !afterwards || namesRpcStubDirectly(afterwards, rpcStubKey);
+  };
   return {
     // Each unset carries the target the census SAW (`ifTarget`), so the removal is a compare-and-set:
     // the reduce removes the row only while it still names this dead stub. A `provide` that lands at
     // the same match in the detach window owns the row with a different target, and is left untouched.
-    ruleUnsets: [...direct, ...indirect].map((rule) => ({
+    ruleUnsets: unsetRules.map((rule) => ({
       match: rule.match,
       ifTarget: rule.target!,
     })),
     subscriptionNames: Object.entries(subscriptionTargets)
       .filter(([, target]) => namesThroughRemaining(target))
       .map(([name]) => name),
+    fetchRouteNames: Object.entries(fetchRouteTargets)
+      .filter(([, target]) => reachesOnlyRpcStub(target))
+      .map(([fetchRouteName]) => fetchRouteName),
   };
 }
 
@@ -553,19 +577,21 @@ export function builtInsGetStep(
     : undefined;
 }
 
-/** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
- *  whole table — the census an `itx/woken` or `itx/resumed` commit compares against the registry's
- *  presence. */
+/** Every rpc-stub key some row (a rule, a subscription, a fetch route) currently names, resolved
+ *  through the whole table — the census an `itx/woken` or `itx/resumed` commit compares against the
+ *  registry's presence. */
 export function rpcStubKeysNamed(args: {
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
+  fetchRouteTargets: Record<string, ItxExpression>;
   implicitRoots: ReadonlySet<string>;
 }): Set<string> {
-  const { rules, subscriptionTargets, implicitRoots } = args;
+  const { rules, subscriptionTargets, fetchRouteTargets, implicitRoots } = args;
   const keys = new Set<string>();
   const targets = [
     ...rules.flatMap((rule) => (rule.target ? [rule.target] : [])),
     ...Object.values(subscriptionTargets),
+    ...Object.values(fetchRouteTargets),
   ];
   for (const target of targets) {
     try {

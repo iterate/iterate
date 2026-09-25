@@ -169,7 +169,7 @@ test.for([
     public: visibility === "public",
   });
   await expect(run).rejects.toThrow("The tunnel disconnected and could not reconnect");
-  expect(fake).toMatchObject({ calls: ["provide itx.tunnels.blog", "set tunnel-blog route"] });
+  expect(fake).toMatchObject({ calls: ["provide itx.tunnels.blog with route tunnel-blog"] });
   expect(fake.routes[0]).toMatchObject({
     authRequirement: visibility === "public" ? null : { visitors: "project-members" },
   });
@@ -218,10 +218,8 @@ test("a tunnel whose connection closes reconnects, lends and routes again; it en
   );
   expect(fake).toMatchObject({
     calls: [
-      "provide itx.tunnels.blog",
-      "set tunnel-blog route",
-      "provide itx.tunnels.blog",
-      "set tunnel-blog route",
+      "provide itx.tunnels.blog with route tunnel-blog",
+      "provide itx.tunnels.blog with route tunnel-blog",
     ],
     disposedConnections: 2,
   });
@@ -259,8 +257,13 @@ function fakeProject(url: string) {
         fake.routes.push(route);
       },
     },
-    provide: async (target: string) => {
-      fake.calls.push(`provide ${target}`);
+    provide: async (
+      target: string,
+      _stub: unknown,
+      options: { fetchRoute: { fetchRouteName: string } },
+    ) => {
+      fake.calls.push(`provide ${target} with route ${options.fetchRoute.fetchRouteName}`);
+      fake.routes.push(options.fetchRoute);
       return { [Symbol.dispose]: () => {} };
     },
     [Symbol.dispose]: () => {},

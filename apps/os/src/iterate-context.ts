@@ -33,7 +33,7 @@ import {
   installPrototypeInvokeFallback,
 } from "iterate/expression";
 import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
-import type { IterateContextApi } from "iterate/api";
+import type { FetchRouteInput, IterateContextApi } from "iterate/api";
 import type { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -53,6 +53,7 @@ import {
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stubs.ts";
 import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
+import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import {
   DurableObjectNameCodec,
@@ -339,12 +340,18 @@ export class IterateContextRpcTarget extends RpcTarget {
    *    • `null` — deny `match`: kept as a MASK where an implicit row lies beneath it (a bare `itx`
    *      denies all), a deletion otherwise (and a stub THIS session lent under it is recalled).
    *  `description` is the one line a model reads for the name; it rides the rule's row.
+   *  `fetchRoute` (a lent stub on the project's root only) is a fetch route to the stub — `iterate
+   *  tunnel`'s — that rides the pager beside the rule: set on every attach, so a re-dial after a
+   *  context reset sets it again, and gone with the stub's last pager like the rule.
    *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandleRpcTarget`: disposing
    *  it, or the session ending, un-does the act. */
   async provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
-    options: { description?: string } = {},
+    options: {
+      description?: string;
+      fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
+    } = {},
   ): Promise<RewriteRuleHandleRpcTarget> {
     // LOADED CODE may lend its OWN object (a live stub answers with the code's own authority and
     // dies with its invocation); a pure rewrite or a deny is a ROW, and a row from loaded code is
@@ -357,7 +364,16 @@ export class IterateContextRpcTarget extends RpcTarget {
     const description = options.description ? { description: options.description } : {};
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
-    if (!target || typeof target === "string" || Array.isArray(target)) {
+    const isRow = !target || typeof target === "string" || Array.isArray(target);
+    if (
+      options.fetchRoute &&
+      (isRow || this.#caller.app || this.#durableObjectAddress.path !== "/")
+    )
+      throw codedError(
+        "INVALID_INPUT",
+        "provide's fetchRoute rides a lent stub on the project's root \"/\"; set any other route with itx.fetchRoutes.set",
+      );
+    if (isRow) {
       // Appended FIRST, then whatever THIS session lent under the match is recalled: the DO's un-set
       // on the pager close finds a row that no longer names the stub and removes nothing, so it can
       // never take the fresh mask or rule with it.
@@ -388,6 +404,9 @@ export class IterateContextRpcTarget extends RpcTarget {
         ...description,
       },
     };
+    const fetchRouteEvents = options.fetchRoute
+      ? [fetchRouteEventTo(normalizedItxExpression(matchString), options.fetchRoute)]
+      : [];
     // LOADED CODE's row goes through its own table FIRST (a jail's mask refuses it, and nothing is
     // lent); the platform's rides the pager and the DO appends it as it accepts the pager.
     if (this.#caller.app) await this.#append(ruleEvent);
@@ -395,7 +414,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       () => this.#durableObject,
       target,
       matchString,
-      this.#caller.app ? [] : [ruleEvent],
+      this.#caller.app ? [] : [ruleEvent, ...fetchRouteEvents],
       this.#waitUntil,
     );
     // Registered with the session so a dying session recalls it even when the handle was never
@@ -654,3 +673,25 @@ export function itxEntrypointFor(
 // THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): a context satisfies it, checked here.
 const _iterateContextApi: IterateContextApi = null as unknown as IterateContextRpcTarget;
 void _iterateContextApi;
+
+/** The `itx/fetch-route-configured` a `provide(match, stub, { fetchRoute })` rides its pager with,
+ *  its target the stub's match — refused here, before anything is lent, as `itx.fetchRoutes.set`
+ *  refuses it. */
+function fetchRouteEventTo(
+  target: ItxExpression,
+  route: Omit<FetchRouteInput, "target"> & { fetchRouteName: string },
+): StreamEventInput {
+  const parsed = FetchRouteConfiguredPayload.safeParse({
+    fetchRouteName: route.fetchRouteName,
+    requestMatcher: route.requestMatcher,
+    target,
+    authRequirement: route.authRequirement || null,
+    priority: route.priority || 0,
+  });
+  if (!parsed.success)
+    throw codedError(
+      "INVALID_INPUT",
+      `provide's fetchRoute ${JSON.stringify(route.fetchRouteName)}: ${z.prettifyError(parsed.error)}`,
+    );
+  return { type: "events.iterate.com/itx/fetch-route-configured", payload: parsed.data };
+}

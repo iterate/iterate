@@ -9,19 +9,22 @@
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
 //   • a tunnel killed outright closes a visitor's WebSocket at once, 1001 "tunnel disconnected",
-//     and leaves its route standing; the rule its target named goes with the lend, so the host
-//     answers 404
-//   • a restart takes over its own route, and Ctrl-C deletes it
+//     and its route goes with its lend: the host is the template's own 404 again
+//   • a restart sets its route again, and Ctrl-C deletes it
+//   • a visitor whose connection vanishes without a close frame (a tab closed, a laptop gone):
+//     the local server's socket closes within seconds, so nothing keeps streaming through the
+//     platform
 // The proxy's own behaviour (headers, bodies, frames) is packages/cli src/tunnel.test.ts; the route
 // and the subprotocol through the platform, e2e/fetch-routes.e2e.test.ts.
 
 import { execFile, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
@@ -32,6 +35,7 @@ import {
   freshDnsSafeProjectSlug,
   ingressRouting,
   navigateProjectUrl,
+  projectHostsAreLocal,
   projectUrlSocket,
   registerProject,
   wsRoundTripOnProjectUrl,
@@ -130,7 +134,7 @@ test(
     });
 
     // killed outright: a visitor's socket closes at once — the relay knows its provider is gone —
-    // nothing deletes the route, and the rule its target named goes with the lend
+    // and the route and the rule its target named go with the lend, though the CLI deleted nothing
     const visitor = await openSocket(publicUrl);
     const killedAt = Date.now();
     await publicTunnel.stop("SIGKILL");
@@ -142,16 +146,16 @@ test(
     });
     expect(
       await untilValue(
-        "the killed tunnel's host answers 404",
-        () => fetchProjectUrl(publicUrl),
-        (page) => page.status === 404,
-        { timeoutMs: 30_000 },
+        "the killed tunnel's route is gone",
+        () => itx.fetchRoutes.list() as Promise<unknown[]>,
+        (routes) => routes.length === 0,
+        { timeoutMs: 10_000 },
       ),
-    ).toMatchObject({ status: 404, text: expect.stringContaining("itx.tunnels.web") });
-    expect(await itx.fetchRoutes.list()).toMatchObject([{ fetchRouteName: "tunnel-web" }]);
+    ).toEqual([]);
+    expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
 
-    // a restart takes over its own route (a tunnel of the same name, which the killed one left
-    // standing); then Ctrl-C deletes it and the host is the template's own 404 again
+    // a restart sets its route again; then Ctrl-C deletes it and the host is the template's own
+    // 404 again
     const again = cli.tunnel([
       String(local.port),
       "--name",
@@ -167,6 +171,84 @@ test(
     expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
   },
 );
+
+test(
+  "iterate tunnel: a visitor whose connection vanishes without a close frame ends the local server's socket within seconds",
+  { timeout: 60_000 },
+  async () => {
+    await using local = await localServer();
+    const slug = freshDnsSafeProjectSlug("tunnel-drop");
+    const projectId = await registerProject(slug);
+    const itx = session().authenticate(adminCredentials()).projects.get(projectId);
+    await itx.waitForEvent({
+      type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+      afterOffset: 0,
+      timeoutMs: 60_000,
+    });
+    await using cli = await cliConfig();
+    const tunnel = cli.tunnel([
+      String(local.port),
+      "--name",
+      "clock",
+      "--public",
+      "--project",
+      projectId,
+    ]);
+    const url = await tunnel.url;
+    const clockUrl = new URL("clock", url.endsWith("/") ? url : `${url}/`);
+
+    const visitor = await rawVisitorSocket(clockUrl);
+    await until("the clock ticks reach the visitor", () => visitor.bytesReceived() > 20, 15_000);
+    expect(local.clockSockets()).toMatchObject({ open: 1, closed: [] });
+
+    // the visitor's TCP connection is gone: no close frame, no FIN handshake
+    const droppedAt = Date.now();
+    visitor.destroy();
+    await until("the local server's socket closed", () => local.clockSockets().open === 0, 20_000);
+    const [closed] = local.clockSockets().closed;
+    expect({ ...closed, afterMs: closed!.at - droppedAt }).toMatchObject({
+      afterMs: expect.toSatisfy((ms: number) => ms < 10_000),
+    });
+    expect(await tunnel.stop("SIGINT")).toBe(0);
+  },
+);
+
+/** A visitor's WebSocket to `url` over a bare TCP (or TLS) connection — the handshake written by
+ *  hand, so `destroy()` drops it the way a closed tab or a vanished network does: no close frame. */
+async function rawVisitorSocket(url: URL) {
+  const local = projectHostsAreLocal();
+  const worker = new URL(workerUrl("/"));
+  const port = local ? Number(worker.port) : 443;
+  const host = local ? worker.hostname : url.hostname;
+  const socket = await new Promise<Socket>((resolve, reject) => {
+    const connected: Socket = local
+      ? connect({ host, port }, () => resolve(connected))
+      : tlsConnect({ host, port, servername: url.hostname }, () => resolve(connected));
+    connected.once("error", reject);
+  });
+  let bytes = 0;
+  let head = "";
+  socket.on("data", (chunk: Uint8Array) => {
+    if (!head.includes("\r\n\r\n")) head += new TextDecoder("latin1").decode(chunk);
+    else bytes += chunk.byteLength;
+  });
+  socket.on("error", () => undefined);
+  socket.write(
+    [
+      `GET ${url.pathname}${url.search} HTTP/1.1`,
+      `Host: ${url.host}`,
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))))}`,
+      "Sec-WebSocket-Version: 13",
+      "",
+      "",
+    ].join("\r\n"),
+  );
+  await until("the 101", () => head.includes("\r\n\r\n"), 15_000);
+  expect(head.split("\r\n")[0]).toContain("101");
+  return { bytesReceived: () => bytes, destroy: () => socket.destroy() };
+}
 
 /** A WebSocket held open on `url`: one echo, then `reset()`, then two more sent across it — the
  *  echoes it saw, and the close code if the socket closed before it was done. */
@@ -211,19 +293,31 @@ async function openSocket(url: URL) {
 }
 
 /** The local server a tunnel serves: `local <path>` over HTTP, and a WebSocket choosing `vite-hmr`
- *  that echoes. */
+ *  that echoes — or, at `…/clock`, sends a tick every 100 ms and records when it closes. */
 async function localServer() {
   const server = createServer((request, response) => response.end(`local ${request.url}`));
   const wss = new WebSocketServer({
     server,
     handleProtocols: (protocols) => (protocols.has("vite-hmr") ? "vite-hmr" : false),
   });
-  wss.on("connection", (socket) =>
-    socket.on("message", (data) => socket.send(`local-echo:${data.toString()}`)),
-  );
+  const clock = { open: 0, closed: [] as { code: number; at: number }[] };
+  wss.on("connection", (socket, request) => {
+    if (!request.url?.endsWith("/clock")) {
+      socket.on("message", (data) => socket.send(`local-echo:${data.toString()}`));
+      return;
+    }
+    clock.open += 1;
+    const tick = setInterval(() => socket.send(`tick ${Date.now()}`), 100);
+    socket.on("close", (code) => {
+      clearInterval(tick);
+      clock.open -= 1;
+      clock.closed.push({ code, at: Date.now() });
+    });
+  });
   await new Promise<void>((resolve) => server.listen(0, "localhost", resolve));
   return {
     port: (server.address() as AddressInfo).port,
+    clockSockets: () => ({ open: clock.open, closed: [...clock.closed] }),
     [Symbol.asyncDispose]: async () => {
       for (const client of wss.clients) client.terminate();
       wss.close();

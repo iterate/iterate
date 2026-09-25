@@ -7,8 +7,8 @@
 //   • a WebSocket asking for a subprotocol (Vite's HMR asks for `vite-hmr`) opens: the provider's
 //     choice rides back to the eyeball's 101, or a spec-following client refuses the handshake
 //   • a private route: an anonymous page load is sent to sign in, an anonymous fetch gets the 401
-//   • the lend recalled: its rule goes with it, a 404; the route deleted: the config worker's own
-//     answer
+//   • the lend recalled: its rule and the route to it go with it, the config worker's own answer;
+//     a route deleted by hand, likewise
 //   • `set` refuses a malformed route and appends nothing for a route that stands
 // The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
 
@@ -25,7 +25,7 @@ import {
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";
 
-test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the private route's sign-in, a 404 once the lend is recalled, and the host back to the config worker once the route is deleted", async () => {
+test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the private route's sign-in, and the host back to the config worker once the lend is recalled or the route deleted", async () => {
   const slug = freshDnsSafeProjectSlug("fetch-routes");
   const projectId = await registerProject(slug);
   const itx = session().authenticate(adminCredentials()).projects.get(projectId);
@@ -63,12 +63,17 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
   provision[Symbol.dispose]();
   expect(
     await untilValue(
-      "the recalled tunnel answers 404",
-      () => fetchProjectUrl(blog),
-      (page) => page.status === 404,
+      "the recalled tunnel's route is gone",
+      () => itx.fetchRoutes.list() as Promise<unknown[]>,
+      (routes) => routes.length === 0,
     ),
-  ).toMatchObject({ status: 404, text: expect.stringContaining("itx.tunnels.blog") });
+  ).toEqual([]);
+  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 404, text: "no route\n" });
 
+  // a route deleted by hand, with the lend still up
+  using _again = await itx.provide("itx.tunnels.blog", new LocalSite());
+  await itx.fetchRoutes.set("tunnel-blog", route);
+  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 200, text: "local site" });
   await itx.fetchRoutes.set("tunnel-blog", null);
   expect(await itx.fetchRoutes.list()).toEqual([]);
   expect(await fetchProjectUrl(blog)).toMatchObject({ status: 404, text: "no route\n" });

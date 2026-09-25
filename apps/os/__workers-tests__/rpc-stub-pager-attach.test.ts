@@ -19,7 +19,8 @@
 // the swap and the new pager's lend answers it.
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { RpcTarget } from "cloudflare:workers";
+import { exports, RpcTarget } from "cloudflare:workers";
+import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
@@ -32,6 +33,7 @@ import {
   adminCredentials,
   Echo,
   openSession,
+  ORIGIN,
   releasePins,
   SRC_ECHO_APP,
   stub,
@@ -248,6 +250,122 @@ test("append REFUSES a rule match rooted at itx.builtins (the reserved fixed poi
   await until("itx.k7's own rule is un-set", async () => (await ruleAt(ctx, "itx.k7")) === null);
 });
 
+// ── a fetch route goes with the lend it serves (an `iterate tunnel` killed with no route delete) ──
+
+test("a lender's session that dies with no route delete (kill -9, a lid closed): the fetch route to its lend goes with the rule", async () => {
+  const ctx = "prj_pager_route_session_dies";
+  const upgrade = await exports.default.fetch(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket" },
+  });
+  const lenderSocket = upgrade.webSocket!;
+  lenderSocket.accept();
+  const lender = newWebSocketRpcSession(lenderSocket as unknown as WebSocket) as any;
+  const lenderItx = await lender.authenticate(adminCredentials()).projects.get(ctx);
+  await lenderItx.provide("itx.tunnels.gone", new Echo(1), {
+    fetchRoute: { fetchRouteName: "tunnel-gone", requestMatcher: { routingSlug: "gone" } },
+  });
+  const unrelated = { requestMatcher: { routingSlug: "kv" }, target: ["itx", "kv"] };
+  await stub(ctx).invoke(["itx", "fetchRoutes", ["set", "unrelated", unrelated]]);
+  expect(await fetchRouteNames(ctx)).toEqual(["tunnel-gone", "unrelated"]);
+
+  // the client's socket goes away with no dispose and no `fetchRoutes.set(name, null)`
+  lenderSocket.close(1001, "the process died");
+
+  await until(
+    "the route is gone",
+    async () => !(await fetchRouteNames(ctx)).includes("tunnel-gone"),
+  );
+  expect(await ruleAt(ctx, "itx.tunnels.gone")).toBeNull();
+  expect(await fetchRouteNames(ctx)).toEqual(["unrelated"]);
+});
+
+test("a DO reset takes a tunnel's pager with no close run: the woken incarnation removes the fetch route that reached it", async () => {
+  const ctx = "prj_pager_route_reset";
+  const pager = await openPager(ctx, "itx.tunnels.reset", [
+    ruleFor("itx.tunnels.reset"),
+    routeTo("tunnel-reset", "itx.tunnels.reset"),
+  ]);
+  expect(pager).toMatchObject({ status: 101 });
+  pager.webSocket!.accept();
+  expect(await fetchRouteNames(ctx)).toEqual(["tunnel-reset"]);
+
+  await runInDurableObject(stub(ctx), (_instance, state) => {
+    state.abort("reset under test");
+    return Promise.resolve();
+  }).catch(() => undefined);
+
+  expect(await presence(ctx)).toEqual([]);
+  await until("the route is removed", async () => (await fetchRouteNames(ctx)).length === 0);
+  expect(await ruleAt(ctx, "itx.tunnels.reset")).toBeNull();
+});
+
+test("a DO reset under a LIVE lender: the woken incarnation removes the route, and the relay's re-dial sets it again — the route rides the pager beside the rule", async () => {
+  const ctx = "prj_pager_route_reset_live";
+  const lenderItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await lenderItx.provide("itx.tunnels.live", new Echo(2), {
+    fetchRoute: { fetchRouteName: "tunnel-live", requestMatcher: { routingSlug: "live" } },
+  });
+  expect(await fetchRouteNames(ctx)).toEqual(["tunnel-live"]);
+
+  await runInDurableObject(stub(ctx), (_instance, state) => {
+    state.abort("reset under test");
+    return Promise.resolve();
+  }).catch(() => undefined);
+
+  // the relay re-dials within ~4 s (rpc-stub-pager-drop.test.ts); its attach re-appends both rows
+  await until(
+    "the re-dialed pager carries the route back",
+    async () =>
+      (await presence(ctx)).includes("itx.tunnels.live") &&
+      (await fetchRouteNames(ctx)).includes("tunnel-live"),
+    8_000,
+  );
+  expect(await lenderItx.invoke("itx.tunnels.live.echo('back')")).toBe("echo-2:back");
+});
+
+test("provide's fetchRoute is refused before anything is lent: an invalid route, and an expression target", async () => {
+  const ctx = "prj_pager_route_refused";
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await expect(
+    itx.provide("itx.tunnels.bad", new Echo(3), {
+      fetchRoute: { fetchRouteName: "Not A Label", requestMatcher: {} },
+    }),
+  ).rejects.toThrow(/DNS label/);
+  await expect(
+    itx.provide("itx.tunnels.rewrite", "itx.kv", {
+      fetchRoute: { fetchRouteName: "rewrite", requestMatcher: {} },
+    }),
+  ).rejects.toThrow(/rides a lent stub/);
+  expect(await presence(ctx)).toEqual([]);
+  expect(await fetchRouteNames(ctx)).toEqual([]);
+});
+
+test("a HIBERNATED DO whose tunnel pager rode the eviction keeps the fetch route on wake", async () => {
+  const ctx = "prj_pager_route_hibernate";
+  const s = stub(ctx);
+  const pager = await openPager(ctx, "itx.tunnels.kept", [
+    ruleFor("itx.tunnels.kept"),
+    routeTo("tunnel-kept", "itx.tunnels.kept"),
+  ]);
+  expect(pager).toMatchObject({ status: 101 });
+  pager.webSocket!.accept();
+
+  await releasePins(ctx);
+  await evictDurableObject(s);
+  try {
+    await s.append({ type: "test/wake" }); // the wake: its `woken` commit runs the census
+    expect(await presence(ctx)).toEqual(["itx.tunnels.kept"]);
+    expect(await fetchRouteNames(ctx)).toEqual(["tunnel-kept"]);
+    expect((await ruleAt(ctx, "itx.tunnels.kept"))?.target).toBe(
+      "itx.rpcStubs.get('itx.tunnels.kept')",
+    );
+  } finally {
+    pager.webSocket!.close(1000, "test done");
+  }
+  // and its last close takes both
+  await until("the route is removed", async () => (await fetchRouteNames(ctx)).length === 0);
+});
+
 // ── a replaced pager is a reconnect, not a close ──
 
 test("a pager RECONNECT while a page is in flight is a reconnect, not a close: the page (per KEY, not per socket) survives the swap and the new pager's lend answers it", async () => {
@@ -325,6 +443,25 @@ function liveSubscription(name: string, consumes?: string[]): StreamEventInput {
       consumes,
     },
   };
+}
+
+/** The route `iterate tunnel` sets beside its lend (packages/cli/src/tunnel.ts). */
+function routeTo(fetchRouteName: string, target: string): StreamEventInput {
+  return {
+    type: "events.iterate.com/itx/fetch-route-configured",
+    payload: {
+      fetchRouteName,
+      requestMatcher: { routingSlug: fetchRouteName },
+      target: target.split("."),
+    },
+  };
+}
+
+async function fetchRouteNames(ctx: string) {
+  const routes = (await stub(ctx).invoke(["itx", "fetchRoutes", ["list"]])) as {
+    fetchRouteName: string;
+  }[];
+  return routes.map((route) => route.fetchRouteName).sort();
 }
 
 async function subscriptionNames(ctx: string) {
