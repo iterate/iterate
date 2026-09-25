@@ -297,8 +297,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // The edge relay's 30s keepalive is answered at the RUNTIME level: the pager sockets stay warm
-    // (past the ~100s idle-close) WITHOUT waking this DO. DO-wide and persisted, so it also covers
+    // The edge relay's pager keepalive (every 500 ms) is answered at the RUNTIME level WITHOUT waking
+    // this DO: the relay's liveness check (a reset stops the answers) and what keeps the pager past
+    // the ~100s idle-close. DO-wide and persisted, so it also covers
     // fetch-upgrade EYEBALL sockets — which is why the literal is deliberately distinctive: a plain
     // "ping" would silently hijack any client frame that equals it (ws-fetch-live-101 caught that).
     this.ctx.setWebSocketAutoResponse(

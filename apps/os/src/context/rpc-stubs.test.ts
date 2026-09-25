@@ -9,6 +9,8 @@ import {
   type BorrowedRpcStub,
   lendRpcStubOverPager,
   encodeFetchExpression,
+  RPC_STUB_PAGER_KEEPALIVE_REQUEST,
+  RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
   stampCallerHeaders,
 } from "./rpc-stubs.ts";
 
@@ -466,6 +468,49 @@ test.each([
   },
 );
 
+// prd 2026-09-25: a deploy reset the templestein context at 13:16:33 and its fresh incarnation
+// served from 13:16:37, but its pagers' relay ends heard their close only at 13:17:35 — every stub
+// lent in it offline for a minute, its visitors answered 502. The relay no longer waits for the
+// close: the DO's auto-response stops answering the keepalive with the reset.
+test("a pager whose keepalives go unanswered (a reset whose close the relay never hears) is re-dialed within 2 s, before it is closed, its downtime counted from its last answer", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  warn.mockClear();
+  let closedBeforeRedial: number | undefined;
+  const fake = await relayOverFakeDurableObject((dial) => {
+    if (dial === 2) closedBeforeRedial = closed.mock.calls.length;
+    return new FakePagerWebSocket();
+  });
+  const dead = fake.pagers[0];
+  const closed = vi.spyOn(dead, "close").mockImplementation(() => {}); // a dead pager hears nothing
+
+  await vi.advanceTimersByTimeAsync(10_000); // the DO answers: the pager stays
+  expect(fake).toMatchObject({ dials: 1 });
+
+  dead.silent = true; // the reset, at 10 s
+  await vi.advanceTimersByTimeAsync(2_000);
+  await Promise.all(fake.waitedUntil);
+  expect(fake).toMatchObject({ dials: 2, disposed: 0 });
+  // re-dialed first: a DO that was only slow sees a swap, never a detach that un-sets the key's rows
+  expect(closedBeforeRedial).toBe(0);
+  expect(closed).toHaveBeenCalledWith(4000, "keepalive unanswered");
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "rpc-stub-pager-redialed",
+      code: 4000,
+      attempt: 1,
+      downMs: 2_000, // the last answer came at 10 s; the re-dial is in service at 12 s
+    }),
+  );
+
+  fake.pagers[1].page(); // the DO pages down the NEW pager, and the relay still lends
+  await Promise.all(fake.waitedUntil);
+  expect(fake).toMatchObject({ lends: 1 });
+  await vi.advanceTimersByTimeAsync(60_000); // and the new pager, answered, stays
+  expect(fake).toMatchObject({ dials: 2 });
+});
+
 test("a pager that closes under a live session: a re-dial the DO never answers is given up after five tries over ~30 s, logged as an error: the dup is released, the lend ends", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
@@ -722,8 +767,14 @@ const directory = () =>
  *  message the DO sends down this socket to make the edge re-mint and lend the stub. */
 class FakePagerWebSocket {
   readonly #listeners = new Map<string, Set<(e: unknown) => void>>();
+  /** A DO that answers nothing on this pager any more: reset, with no close the relay can hear. */
+  silent = false;
   accept(): void {}
-  send(_data: string): void {}
+  /** The DO's auto-response: every keepalive is answered at once, unless the pager went silent. */
+  send(data: string): void {
+    if (data === RPC_STUB_PAGER_KEEPALIVE_REQUEST && !this.silent)
+      queueMicrotask(() => this.#emit("message", { data: RPC_STUB_PAGER_KEEPALIVE_RESPONSE }));
+  }
   /** Close with `code` — 1000 is a deliberate close (this side's dispose, the DO's "replaced");
    *  anything else is the leg dropping under a live lend. */
   close(code = 1000, _reason = ""): void {
