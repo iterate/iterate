@@ -82,7 +82,7 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(11);
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(12);
   expect(slack).toMatchObject({ posts: [] });
 });
 
@@ -104,8 +104,8 @@ test.for([502, 200])(
     cloudflare.fetch.mockImplementationOnce(async () => cloudflareErrorPage(status));
     using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await expect(summary()).resolves.toBe("prd is quiet");
-    // A quiet run's 11 queries, one of them twice.
-    expect(cloudflare.fetch).toHaveBeenCalledTimes(12);
+    // A quiet run's 12 queries, one of them twice.
+    expect(cloudflare.fetch).toHaveBeenCalledTimes(13);
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith({
       event: "prd-fault-alarm.platform-failure-retry",
@@ -126,8 +126,8 @@ test("a run that cannot read prd fails: Cloudflare keeps answering its HTML erro
   await expect(summary(() => slack.client)).rejects.toMatchObject({
     message: `Workers Logs query answered HTTP 502 (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
   });
-  // Each of the 11 queries asked four times, the first and three repeats, then no more.
-  await vi.waitFor(() => expect(cloudflare.fetch).toHaveBeenCalledTimes(44));
+  // Each of the 12 queries asked four times, the first and three repeats, then no more.
+  await vi.waitFor(() => expect(cloudflare.fetch).toHaveBeenCalledTimes(48));
   expect(warn).toHaveBeenCalledWith(
     expect.objectContaining({ event: "prd-fault-alarm.platform-failure-retry", attempt: 3 }),
   );
@@ -422,7 +422,7 @@ test("a reset-only window goes quiet after the re-count and posts nothing", asyn
   const slack = fakeSlack();
   await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(14);
+  expect(logs.fetch).toHaveBeenCalledTimes(15);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -691,6 +691,35 @@ test.for(["capped", "failed"])(
   },
 );
 
+// A visitor whose connection to a tunnel's WebSocket vanished without a close frame: the edge logs
+// `fetch-upgrade.local-gone` at info, and the runtime fails that invocation with "Network connection
+// lost." and an exception summary, all in one ray (apps/os context/fetch-upgrade-splice.ts).
+test("a vanished visitor's Network connection lost. and its exception summary page nothing", async () => {
+  await using _logs = queryableWorkersLogs(vanishedVisitorRequest("gone"));
+  await expect(summary()).resolves.toBe("prd is quiet");
+});
+
+test.for([
+  [
+    "Network connection lost. in another ray",
+    vanishedVisitorRequest("other").slice(1),
+    "2 errors: Network connection lost. 1, GET https://here-public.templestein.com/… 1",
+  ],
+  [
+    "another error in the vanished visitor's ray",
+    [
+      {
+        ...vanishedVisitorRequest("gone")[1]!,
+        $metadata: { type: "cf-worker", rayId: "gone", message: "boom" },
+      },
+    ],
+    "1 errors: boom 1",
+  ],
+] as const)("%s still pages", async ([, events, line]) => {
+  await using _logs = queryableWorkersLogs([...vanishedVisitorRequest("gone"), ...events]);
+  expect(await summary()).toContain(line);
+});
+
 // A workaround whose defect is too rare for a failing test is pinned by its heal's absence.
 const [heldAlarm] = PINNED_WORKAROUNDS;
 const day = 86_400_000;
@@ -921,7 +950,7 @@ function resetPair(message = "GET https://rpc-stub-pager.internal/") {
 // count response, this fixture catches a discarded re-count or an exclusion that drops other rows.
 type LogFilter =
   | { key: string; operation: string; value?: unknown }
-  | { kind: "group"; filterCombination: "or"; filters: LogFilter[] };
+  | { kind: "group"; filterCombination: "or" | "and"; filters: LogFilter[] };
 type LogQuery = {
   view: string;
   limit?: number;
@@ -988,7 +1017,10 @@ function logField(event: unknown, key: string): unknown {
   );
 }
 function matchesLogFilter(event: unknown, filter: LogFilter): boolean {
-  if ("kind" in filter) return filter.filters.some((child) => matchesLogFilter(event, child));
+  if ("kind" in filter)
+    return filter.filterCombination === "and"
+      ? filter.filters.every((child) => matchesLogFilter(event, child))
+      : filter.filters.some((child) => matchesLogFilter(event, child));
   const value = logField(event, filter.key);
   // oxlint-disable-next-line iterate/simple-truthiness-check -- Cloudflare is_null distinguishes missing fields from present empty strings and zero
   if (filter.operation === "is_null") return value === undefined || value === null;
@@ -1032,6 +1064,34 @@ function failedDocsRequest() {
       },
     },
   }));
+}
+
+/** One visitor's WebSocket to a tunnel on the edge whose connection vanished, as prd logged it
+ *  (2026-09-25 14:56:17Z, but for the info line, which the edge logs since): the edge's
+ *  `fetch-upgrade.local-gone`, the runtime's "Network connection lost." and the invocation's
+ *  exception summary, one requestId, all in `rayId`. */
+function vanishedVisitorRequest(rayId: string) {
+  const url = "https://here-public.templestein.com/clock";
+  const invocation = { requestId: `${rayId}-edge`, rayId };
+  const $workers = { executionModel: "stateless", event: { request: { url } } };
+  return [
+    {
+      timestamp: 42,
+      event: "fetch-upgrade.local-gone",
+      $metadata: { type: "cf-worker", level: "info", ...invocation },
+      $workers,
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker", message: "Network connection lost.", ...invocation },
+      $workers,
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker-event", message: `GET ${url}`, ...invocation },
+      $workers: { ...$workers, outcome: "exception" },
+    },
+  ];
 }
 
 /** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the offline stub's info
