@@ -83,8 +83,7 @@ from, every hour.
 
 A skipped job has no attempt and no event; its workflow run still has one.
 
-Both carry `schema_version: 3` (earlier CI events, from before #2494, have 2
-and other properties) and:
+Both carry `schema_version: 3` and:
 
 | Property                                                                       | Meaning                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -122,9 +121,7 @@ GITHUB_TOKEN="$(gh auth token)" \
   pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z [--until …]
 ```
 
-Without `--dry-run` a `--since` run delivers. On 2026-09-24, a night with about
-25 merged pull requests, it counted about 4,800 events a day between 18:30 and
-23:30 UTC and about 7,000 a day between 23:30 and 05:30.
+Without `--dry-run` a `--since` run delivers.
 
 The PostHog dashboards from before #2494 (CI reliability & performance,
 839069; Test reliability & performance, 839068) were built on the old events

@@ -66,59 +66,6 @@ const row = await until("subscription row", async () =>
 );
 ```
 
-Unit tests, which cannot import those helpers, use `expect.poll` and
-`vi.waitFor`.
-
-### expect.poll() - Recommended for async assertions
-
-Polls a function until it returns the expected value or times out.
-
-```typescript
-import { expect, test } from "vitest";
-
-test("should eventually return expected value", async () => {
-  await expect
-    .poll(
-      async () => {
-        const events = await stream.getEvents();
-        return events.some((e) => e.type === "COMPLETED");
-      },
-      { timeout: 5000, interval: 100 },
-    )
-    .toBe(true);
-
-  // With more complex assertions
-  await expect
-    .poll(async () => {
-      const result = await fetchData();
-      return result.status;
-    })
-    .toBe("ready");
-});
-```
-
-### vi.waitFor() - More flexible alternative
-
-Waits for a callback to execute successfully (without throwing).
-
-```typescript
-import { vi, expect, test } from "vitest";
-
-test("should wait for condition", async () => {
-  await vi.waitFor(
-    async () => {
-      const data = await fetchData();
-      expect(data).toMatchObject({ ready: true });
-    },
-    { timeout: 5000, interval: 100 },
-  );
-
-  // Can include multiple assertions
-  const result = await vi.waitFor(async () => {
-    const response = await api.call();
-    expect(response).toMatchObject({ status: 200 });
-    expect(response.data).toHaveProperty("id");
-    return response.data;
-  });
-});
-```
+Unit tests, which cannot import those helpers, use Vitest's own
+[`expect.poll`](https://vitest.dev/api/expect.html#poll) and
+[`vi.waitFor`](https://vitest.dev/api/vi.html#vi-waitfor).

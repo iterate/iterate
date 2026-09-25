@@ -7,11 +7,7 @@ timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
 For the test telemetry artifact contract, see
-[CI and test telemetry](ci-test-telemetry.md). Every runner writes the same raw
-artifact (not only retries); one always-running CI finalizer checks that every
-expected runner left one, and the job retains them, with Vitest hook, body,
-module and import timing and Playwright attempts, as a workflow artifact.
-Nothing per test goes to PostHog (#2494): the artifacts are the record.
+[CI and test telemetry](ci-test-telemetry.md).
 
 Run commands from the repository root unless stated otherwise.
 
@@ -22,7 +18,7 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm format:check`                      | Formatting                                                                       |
 | `pnpm knip`                              | Unused files, exports and dependencies in every workspace                        |
 | `pnpm test`                              | Workspace unit tests, including OS unit and Workers projects                     |
-| `pnpm e2e`                               | OS integration suite; local Worker unless a deployed target is configured        |
+| `pnpm os e2e`                            | OS integration suite; local Worker unless a deployed target is configured        |
 | `pnpm spec`                              | Root browser specs: one project per app host, plus the issuer at phone width     |
 | `pnpm --dir apps/kit firmware:test:host` | Kit firmware host tests (needs cmake; not part of `pnpm test`)                   |
 
@@ -228,7 +224,7 @@ bespoke runner.
 
 | Dimension    | Values                                            | Controlled by                                                                                                                          | Status         |
 | ------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| Surface      | in-process / workerd / itx API / browser          | which suite you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)               | works today    |
+| Surface      | in-process / workerd / itx API / browser          | which suite you invoke (`pnpm test` / `pnpm os e2e` / `pnpm spec`) + vitest `--project` (`unit`, `workers`, `e2e`, `bench`)            | works today    |
 | Speed        | fast / slow-by-contract                           | per-test `{ timeout }`; the long poles start first (`LONG_POLES` in `apps/os/vitest.config.ts`, hand-maintained from observed seconds) | works today    |
 | Determinism  | deterministic / retry-absorbed                    | `retry: CI ? 1 : 0` + retry telemetry — a nondeterministic test that retries is visible, never silent                                  | works today    |
 | Cost         | free / pays for model inference                   | `realModelOnly` (opt-in `E2E_REAL_MODELS=1`, `REAL:` titles); other runs fake the provider ([real-model rows](#real-model-rows))       | works today    |
@@ -308,14 +304,14 @@ entry the URL falls under, so a per-PR preview inherits its parent's:
 
 ```bash
 # local: no target — the suite boots the real worker in local workerd
-pnpm e2e
+pnpm os e2e
 
 # a PR preview (its URL is in the PR body)
 doppler run --project os --config preview -- \
-  env WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev pnpm e2e
+  env WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev pnpm os e2e
 
 # production
-doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm e2e
+doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm os e2e
 ```
 
 Specs take the same shape with `DEMO_BASE_URL`; without it Playwright starts
@@ -346,7 +342,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 
 | Variable                                      | Set by                                                      | Controls                                                                                                                                          | Default                                     |
 | --------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `WORKER_BASE_URL`                             | You, the preview script, the soak and crash hunt            | THE deployed worker for `pnpm e2e`, the soak and bench                                                                                            | Boot the real worker in local workerd       |
+| `WORKER_BASE_URL`                             | You, the preview script, the soak and crash hunt            | THE deployed worker for `pnpm os e2e`, the soak and bench                                                                                         | Boot the real worker in local workerd       |
 | `DEMO_BASE_URL`                               | You, the preview script                                     | THE deployment for `pnpm spec` (and the issuer for the `notes` project)                                                                           | Local `pnpm dev` on `DEMO_PORT`             |
 | `DEMO_PORT`                                   | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
 | `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`       | Doppler (`os`, `preview` / `prd`)                           | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
@@ -355,8 +351,10 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `NOTES_BASE_URL`                              | The preview script, or you                                  | The Notes deployment the `notes` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
 | `VOICE_BASE_URL`                              | The preview script, or you                                  | The Voice deployment the `voice` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
 | `DASH_BASE_URL`                               | The preview script, or you                                  | The Dash deployment the Notes session specs sign in to, to end a Notes session                                                                    | Unset → skipped locally, a failure in CI    |
+| `ADMIN_BASE_URL`                              | The preview script, or you                                  | The Admin deployment the `admin` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
 | `RUN_ISOLATE_CRASH_HUNT`                      | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
 | `E2E_REAL_MODELS`                             | The real-model suite (`os-real-model.yml`)                  | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
+| `RUN_RESIDENCY_TIMING`                        | The soak's `residency-timing` input, or you                 | `"1"` opts in to the residency timing rows (`apps/os/perf/context-residency.perf.test.ts`)                                                        | Unset → those rows skip                     |
 | `E2E_SLOW_ROWS`                               | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone); vitest then holds each row to its timeout ceiling                | Unset → the PR's paths and label            |
 | `BENCH_OUT`                                   | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                            | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
@@ -364,12 +362,14 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `TEST_TELEMETRY_ARTIFACT_DIR`                 | CI (Test workflow: `test-results/ci-telemetry/raw`), or you | Durable canonical JSON directory consumed by the always-running finalizer                                                                         | Unset → reporter does not write             |
 | `TEST_TELEMETRY_KIND`                         | CI                                                          | Shared `unit`, `integration`, or `e2e` dimension                                                                                                  | Runner-appropriate default                  |
 | `TEST_TELEMETRY_SUITE`                        | CI                                                          | Shared suite dimension (`unit`, `vitest`, `playwright`, …)                                                                                        | Runner-appropriate default                  |
+| `TEST_TELEMETRY_WORKSPACE`                    | The preview script, per suite                               | Shared workspace dimension (`os`, `iterate-root`)                                                                                                 | The running package's name                  |
 | `TEST_TELEMETRY_APP`                          | No setter today                                             | The deployed application dimension                                                                                                                | Unset                                       |
 | `TEST_TELEMETRY_HEAD_SHA`                     | CI                                                          | Exact tested commit identity, including manually dispatched runs                                                                                  | Ambient `GITHUB_SHA`, then local HEAD       |
 | `TEST_TELEMETRY_BRANCH`                       | CI                                                          | Exact tested source branch, including manually dispatched runs                                                                                    | Ambient GitHub head/ref name                |
 | `TEST_TELEMETRY_PULL_REQUEST_NUMBER`          | CI                                                          | Exact selected PR identity for manually dispatched runs                                                                                           | Ambient pull-request ref, then unset        |
 | `TEST_TELEMETRY_EXPECTED_WORKSPACES`          | CI finalizer                                                | Comma-separated workspaces that must each leave a runner artifact (preview jobs; Test uses `--expect-unit-workspaces`)                            | Unset → require at least one artifact       |
 | `CI`                                          | Depot CI                                                    | One retry (Vitest e2e and Playwright), trace on first retry, 16 Vitest e2e workers and 6 Playwright workers, never reuse an existing server       | Unset locally                               |
+| `CI_TRACE_ENABLED`                            | Preview OS and Main OS e2e                                  | `"1"` prints each test's `@@ci-trace` records for the [CI trace](ci-traces.md)                                                                    | Unset → no trace records                    |
 | `VIDEO_MODE`                                  | You                                                         | `"1"` records spec demo videos — see [Video mode](#video-mode-recorded-spec-demos-for-prs)                                                        | No video                                    |
 | `PLAYWRIGHT_SCREENSHOT`                       | You                                                         | Semicolon-separated regexes over `locator.toString()`; each matching successful action saves a full-page PNG (`specs/test-support/screenshot.ts`) | Unset → no screenshots                      |
 
@@ -502,12 +502,13 @@ constants live in **`packages/shared/src/test-support/e2e-policy/budgets.ts`**
 (exported from `@iterate-com/shared/test-support/e2e-policy`): the root
 `playwright.config.ts` imports its spec budgets and CI retry count, and
 `apps/os/vitest.config.ts` its CI retry count; the Vitest timeouts are set in
-that config (the ladder below). The
-evidence behind the rules is the 50-consecutive-green-run marathon audit in
-[preview-e2e-flake-hunt.md](preview-e2e-flake-hunt.md) (~5,800 test
-executions: ~0.5% of tests needed their single retry, none ever needed a
-second, and every mechanism above the test layer either never fired or fired
-only on genuine infra wedges).
+that config (the ladder below). The evidence behind the rules is a marathon of
+50 consecutive green preview runs in July 2026, on the legacy fleet: about
+5,800 test executions, about 0.5% of them needed their one retry, none needed a
+second, and nothing above the test fired except on genuine infrastructure
+wedges ([the full log](https://github.com/iterate/iterate/blob/bf72f92bd76365e85533d4296fb3ddb239379f98/docs/preview-e2e-flake-hunt.md)).
+Today's evidence for or against them is the retry telemetry and the
+[flake dashboard](https://github.com/iterate/iterate/issues/2580).
 
 1. **Retries live in exactly one layer: the individual test.** The test is
    the smallest unit that owns its state — every e2e test and every spec
@@ -531,7 +532,8 @@ only on genuine infra wedges).
    extends it — up to ~30s — only while the
    app visibly reports progress. An app that goes blank fails fast instead
    of being slept through: this exact tightness caught a real blank-render
-   product bug (flake 21, [flake hunt](preview-e2e-flake-hunt.md)). Don't widen budgets to paper over a missing
+   product bug (an `ssr: false` subtree with no pending component, which is why every client
+   router sets `defaultPendingMs: 300`). Don't widen budgets to paper over a missing
    loading state. In Vitest, poll for a condition (`expect.poll`, `until`)
    instead of sleeping.
 5. **Retries are measured, never silent.** With one retry, a
@@ -647,9 +649,10 @@ reliability telemetry and must stay visible. A stability marathon has a
 different acceptance contract: any absorbed retry stops the streak so it can
 be diagnosed, even though the same test outcome remains green in normal CI.
 
-- **Run log**: every workspace's `test` script loads the Vitest
-  `RetryTelemetryReporter` (`packages/shared/src/test-support/e2e-policy/`),
-  which prints `[retry-telemetry] N test(s) needed retries: ...`. Vitest
+- **Run log**: every workspace's `vitest.config.ts` sets `test.reporters` to
+  `vitestReporters` (`packages/shared/src/test-support/e2e-policy/`), which
+  adds the `RetryTelemetryReporter`; it prints
+  `[retry-telemetry] N test(s) needed retries: ...`. Vitest
   records retain the first failed attempt's compact error even when the retry
   passes. Grep any run log for `retry-telemetry`. Playwright's `list` reporter
   marks retried specs.
@@ -736,49 +739,10 @@ coverage debt, not a reason to keep the unrelated PR open indefinitely.
 
 ### Flakes and pinned failures
 
-Two wrappers in `packages/shared/src/test-support` register through the runner's own expected-fail variant (Vitest `test.fails`, Playwright `test.fail`) and let exactly one error pattern through:
+Two wrappers in `packages/shared/src/test-support` register through the runner's own expected-fail variant (Vitest `test.fails`, Playwright `test.fail`), so they report natively, and let exactly one error pattern through. Both take the runner's own `test`, and pass fixtures and options through:
 
-- `createFlake(test, /pattern/)` ([flake-test.ts](../packages/shared/src/test-support/flake-test.ts)) marks a known flake. The body asserts real behavior. A pass or a failure matching the pattern is green, any other failure or a hang is red, and the test is never retried: one sample per run.
+- `createFlake(test, /pattern/)` ([flake-test.ts](../packages/shared/src/test-support/flake-test.ts)) marks a known flake, one that always fails with the same error. The body asserts real behavior. A pass or a failure matching the pattern is green, any other failure or a hang is red, and the test is never retried: one sample per run.
 - `createFailing(test, /pattern/)` ([failing-test.ts](../packages/shared/src/test-support/failing-test.ts)) pins a known bug. The body asserts the desired behavior and must fail with the pattern. A pass (the bug looks fixed) or a different failure is red.
-
-Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|specs|preview-e2e>`, one suite per job) adds the suite's `suite-summary.json`, and the job keeps both in its [test evidence](test-evidence.md) folder in R2, as well as in `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. Every hour the [flake dashboard](https://github.com/iterate/iterate/issues/2580) (`.depot/workflows/flake-dashboard.yml`, `scripts/ci/flake-dashboard/`) reads the recent runs' records and summaries back from R2 and recomputes the whole issue, writing it as the iterate GitHub App. It keeps nothing between runs: main's runs of the last seven days give the wrapped tests' stats and lifecycle streaks, and each suite's newest 150 runs on any branch give the squares, the last three complete runs a row must appear in to stay listed, and the Cost section. Local runs without the variable record nothing.
-
-Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. The three have distinct names, so each gets its own dashboard row: `flake sentinel` (`packages/shared/src/test-support/flake-sentinel.test.ts`), `flake sentinel (specs)` (`specs/flake-sentinel.spec.ts`) and `flake sentinel (e2e)` (`apps/os/e2e/flake-sentinel.e2e.test.ts`). A sentinel that reads 0% or goes red means the recording or ingestion pipeline is broken; distrust the dashboard, not the sentinel. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
-
-### Pinned bugs: `createFailing(test, …)`, not bare `test.fails`
-
-For a KNOWN bug held open on purpose, wrap the runner's own test function
-with `createFailing` from `@iterate-com/shared/test-support/failing-test` — it
-works for vitest and playwright alike, passing fixtures and options through:
-
-```ts
-const fail = createFailing(test, /SAME-BOOT STALENESS/, { timeoutMs: 240_000 });
-fail("a userspace facet rebuilds on a source commit", async () => {
-  // asserts the DESIRED behavior; today it throws the matched error
-});
-```
-
-`createFailing` registers through the runner's own expected-fail variant
-(vitest `test.fails`, playwright `test.fail`), so pins report natively —
-the "expected fail" summary count and telemetry's expected state need no
-extra plumbing. The wrapper filters WHICH failure satisfies that machinery:
-the body must fail matching the pattern. A different failure, a success, or
-a body still running after the wrapper's 30s deadline all come back as
-"success", which the expected-fail machinery rejects — red, with the actual
-reason in the adjacent `[failing-test]` log line. (A bare `test.fails`
-stays silently green in all three cases.) The wrapper sets the runner's own
-test timeout to that deadline plus a second, so the runner never fires first;
-a pin that legitimately runs longer raises the deadline via
-`options.timeoutMs`. Write the body so the bug throws a distinctive message,
-and so conditions that prove nothing (a coincidental restart masking the bug
-for one observation) retry instead of succeeding: a bare `test.fails` pin
-without that false-alarmed 7+ times.
-
-### Known-flaky tests: `createFlake(test, …)`
-
-For a test that is genuinely flaky — sometimes passes, sometimes fails, and
-always with the SAME error — wrap it with `createFlake` from
-`@iterate-com/shared/test-support/flake-test` instead of skipping it:
 
 ```ts
 const flake = createFlake(test, /CPU startup time exceeded \d+ms/);
@@ -786,43 +750,24 @@ flake("Worker can be deployed", async () => {
   const deployment = await system.deploy();
   await expect.poll(() => fetch(deployment.url)).toMatchObject({ status: 200 });
 });
+
+const fail = createFailing(test, /SAME-BOOT STALENESS/, { timeoutMs: 240_000 });
+fail("a userspace facet rebuilds on a source commit", async () => {
+  // asserts the DESIRED behavior; today it throws the matched error
+});
 ```
 
-Like `createFailing`, it registers through the runner's expected-fail variant, but
-the contract differs: a pass and a failure matching the one allowed pattern
-are both green; anything else — a different error, or a body still running at
-the wrapper's deadline — is red. The test keeps running on every branch and,
-when `FLAKE_RECORD_DIR` is set (CI), appends each outcome as a JSON line for
-the flake dashboard, so the flake rate stays measured instead of hidden.
+The records drive the lifecycle: a test that seems flaky moves to `createFlake`; if it stops passing entirely, switch it to `createFailing`; once it passes consistently, unwrap it back to a plain test.
 
-The lifecycle is wrapper-switching, driven by that data: a test that seems
-flaky moves to `createFlake`; if it stops passing entirely, switch it to
-`createFailing`; once it passes consistently, unwrap it back to a plain test.
+Every outcome of either wrapper (`createFailing`'s are `pinned-fail` and `unexpected-pass`), and every plain test that failed, is one JSON line in `FLAKE_RECORD_DIR`. A failed plain test is an unknown flake with the first attempt's error: `retried-pass` when its CI retry passed, `unexpected-error` when every attempt failed ([flake-record.ts](../packages/shared/src/test-support/flake-record.ts)). The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|specs|preview-e2e>`, one suite per job) adds the suite's `suite-summary.json`, and the job keeps both in its [test evidence](test-evidence.md) folder in R2, as well as in `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. Local runs without the variable record nothing.
 
-The dashboard also surfaces flakes nobody has classified: a PLAIN test that
-failed gets a `kind: "unknown"` record from the telemetry reporters (see
-`packages/shared/src/test-support/flake-record.ts`), error text included:
-`retried-pass` when its CI retry passed, `unexpected-error` when every attempt
-failed. On main either one opens or resets the test's "Unknown flakes" row, so
-a test that fails outright once and passes on the next push is still counted. Those rows are the adoption funnel — the "Unknown
-flakes" section of the dashboard shows the error samples to turn into a
-`createFlake` pattern, and once wrapped, the same test name migrates into the
-Flakes section. `createFailing` pins record too (`pinned-fail` /
-`unexpected-pass`), so the Failures section shows how long each pin has stood
-within the last seven days, and proposes deleting wrappers whose bugs look
-fixed. A proposal shows while the streak behind it holds. Each test run keeps
-its records in its evidence folder in R2, where
-`.depot/workflows/flake-dashboard.yml` reads them for
-[#2580](https://github.com/iterate/iterate/issues/2580).
+Every hour the [flake dashboard](https://github.com/iterate/iterate/issues/2580) (`.depot/workflows/flake-dashboard.yml`, `scripts/ci/flake-dashboard/`) reads the recent runs' records and summaries back from R2 and recomputes the whole issue, writing it as the iterate GitHub App. It keeps nothing between runs: main's runs of the last seven days give the wrapped tests' stats and lifecycle streaks, and each suite's newest 150 runs on any branch give the squares, the last three complete runs a row must appear in to stay listed, and the Cost section. On main an unknown flake opens or resets the test's "Unknown flakes" row, whose error samples are the patterns to wrap it with; once wrapped, the test moves to the Flakes section. The Failures section shows how long each pin has stood and proposes deleting wrappers whose bugs look fixed, while the streak behind the proposal holds.
 
-For playwright specs, `createFlake` REPLACES retries — but only for tests
-that opted in by being wrapped. A matched flake is green on the first
-attempt (no retry consumed, no retry-until-pass shrinking the measured
-rate); unwrapped specs keep the suite's ordinary retry policy.
+Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. The three have distinct names, so each gets its own dashboard row: `flake sentinel` (`packages/shared/src/test-support/flake-sentinel.test.ts`), `flake sentinel (specs)` (`specs/flake-sentinel.spec.ts`) and `flake sentinel (e2e)` (`apps/os/e2e/flake-sentinel.e2e.test.ts`). A sentinel that reads 0% or goes red means the recording or ingestion pipeline is broken; distrust the dashboard, not the sentinel. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
 
-This IS the quarantine protocol (previous section): a skipped test produces
-no data, so nothing can ever prove it deserves to come back. Skips remain
-only for tests that cannot keep executing at all.
+#### Pinned bugs: `createFailing(test, …)`, not bare `test.fails`
+
+A bare `test.fails` stays green when the body fails with a different error or outlives its timeout. `createFailing` returns a different failure, a success, or a body still running at its deadline as a success, which the expected-fail machinery rejects: red, with the actual reason in the adjacent `[failing-test]` log line. Its deadline is 30 s, and it sets the runner's own test timeout to that plus a second, so the runner never fires first; a pin that legitimately runs longer raises the deadline with `options.timeoutMs`. Write the body so the bug throws a distinctive message, and so conditions that prove nothing (a coincidental restart masking the bug for one observation) retry instead of succeeding: a bare `test.fails` pin without that false-alarmed 7+ times.
 
 ### Parked tests expire
 

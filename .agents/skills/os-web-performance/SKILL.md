@@ -1,6 +1,6 @@
 ---
 name: os-web-performance
-description: Diagnose and improve loading speed of the platform's pages (apps/os sign-in and consent) and the TanStack Start clients (dash, agents, notes, voice, kit), including Core Web Vitals, asset caching, bundle waterfalls, hydration, and the first live-state read. Use when an app feels slow, a route shows a spinner for too long, a warm visit re-downloads or revalidates assets, or a performance PR needs evidence from a deployment.
+description: Diagnose and improve loading speed of the platform's pages (apps/os sign-in and consent) and the TanStack Start clients, including Core Web Vitals, asset caching, bundle waterfalls, hydration, and the first live-state read. Use when an app feels slow, a route shows a spinner for too long, a warm visit re-downloads or revalidates assets, or a performance PR needs evidence from a deployment.
 ---
 
 # Web performance
@@ -45,7 +45,7 @@ fingerprinted `/assets/*`.
    `os/preview`, `APP_CONFIG` `login.password`) instead. Use an isolated Playwriter session
    ([browser testing](../../../docs/browser-testing.md)), never the developer's own Chrome.
    Record cold, warm, and in-app navigation on the same route, with
-   [the evidence the browser-testing doc lists](../../../docs/browser-testing.md#performance-evidence-in-the-browser).
+   [the evidence the playbook lists](references/playbook.md#measure-what-people-get).
    Measure `main` the same way for the "before".
 3. Field data is prd only (previews carry no PostHog key, per `envs.ts`). Follow the PostHog
    instructions in your agent config, confirm that web-vitals events exist for the app before

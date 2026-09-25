@@ -1,6 +1,6 @@
 ---
 name: creating-an-app
-description: Add a new first-party app under apps/, which is a TanStack Start app on its own Worker and an OAuth client of the platform, like dash, agents, notes, voice and kit. Covers the envs.ts entry, Doppler project, per-PR previews and the prd deploy workflow. Use when someone asks for a new app, client or Worker.
+description: Add a new first-party app under apps/, which is a TanStack Start app on its own Worker and an OAuth client of the platform, like the other clients in apps/. Covers the envs.ts entry, Doppler project, per-PR previews and the prd deploy workflow. Use when someone asks for a new app, client or Worker.
 ---
 
 # Creating an app

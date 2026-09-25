@@ -98,13 +98,9 @@ lines are incomplete evidence.
 
 ## The durable side
 
-- **Credentials**: a personal access token for the project, as `ITERATE_BEARER_TOKEN`. Ask the
-  person for one, or mint your own if you are signed in
-  (`pnpm exec iterate --config prd tokens create --name debugging --project <slug>`;
-  [credentials](../../../apps/os/docs/credentials.md)). It covers only projects its person
-  belongs to. For anyone else's project use the operator bearer on `/api` instead:
-  `APP_CONFIG_ADMIN_API_SECRET` (the deployment's `secrets.adminBearer`) in place of
-  `ITERATE_BEARER_TOKEN` below.
+- **Credentials**: a personal access token for the project as `ITERATE_BEARER_TOKEN`, or, for a
+  project you don't belong to, the operator bearer as `APP_CONFIG_ADMIN_API_SECRET`
+  ([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)).
 - **A context's log and processor rows**: `apps/os/scripts/inspect-context.ts`, with
   `WORKER_BASE_URL`, `ITERATE_BEARER_TOKEN`, `PROJECT` and `CTX_PATH`. The fix-stream skill
   shows the full-JSON dump.
