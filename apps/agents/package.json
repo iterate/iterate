@@ -25,7 +25,7 @@
     "@codemirror/lang-yaml": "catalog:",
     "@codemirror/language": "catalog:",
     "@codemirror/search": "catalog:",
-    "@codemirror/state": "^6.7.6",
+    "@codemirror/state": "catalog:",
     "@codemirror/view": "catalog:",
     "@fsegurai/codemirror-theme-bundle": "catalog:",
     "@iterate-com/shared": "workspace:*",
