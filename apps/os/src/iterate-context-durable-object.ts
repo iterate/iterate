@@ -16,10 +16,10 @@
 // every run the last incarnation left open), a due schedule's batch (`alarm`), a requested run's
 // settlement (`#executeRun` — the runner section) and the un-set of whatever named an rpc stub whose
 // last pager closed (onPresence); alarm diagnostics are ephemeral traces. The effects it runs off a
-// fresh commit (`#appendAndRunCommittedEffects`): deleting the facet a removed subscription hosted,
-// refreshing the startup memo of the facet a hosting subscription configures, and un-setting what
-// names an rpc stub a resumed stream finds dead; and off every commit (`onCommit`) delivery and the
-// requested runs.
+// fresh commit (`#appendAndRunCommittedEffects`): deleting the facet a removed subscription hosted and
+// refreshing the startup memo of the facet a hosting subscription configures; off every commit
+// (`onCommit`) delivery, the requested runs, and un-setting what names an rpc stub a woken or
+// resumed stream finds dead.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { codedError, errorCode, reportIssue, resolveContextPath } from "iterate/lib";
@@ -269,15 +269,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     };
   }
 
-  /** A stub whose LAST pager closed DURING a pause had its un-set refused — the un-set is an ordinary
-   *  append and `itx/paused` refuses ordinary appends — so on the `resumed` commit every key a row
-   *  still names that has NO transport right now (neither borrowed nor pager-backed) is un-set then.
-   *  Scheduled off the commit's own turn: the un-sets are appends of their own. */
-  #unsetWhatNamesDeadRpcStubsOnResume(committedEvents: StreamEvent[]): void {
-    if (!committedEvents.some((event) => event.type === "events.iterate.com/itx/resumed")) return;
-    const present = new Set(this.#rpcStubs.listRpcStubKeys());
-    for (const rpcStubKey of rpcStubKeysNamed(this.#rowsForRpcStubCensus()))
-      if (!present.has(rpcStubKey)) queueMicrotask(() => this.#unsetWhatNamesRpcStub(rpcStubKey));
+  /** A stub whose last pager closed with no close handler run never had what named it un-set: a DO
+   *  reset (every deploy) kills every hibernatable socket silently, and a stub whose last pager
+   *  closed DURING a pause had its un-set refused (`itx/paused` refuses ordinary appends). So on the
+   *  `woken` commit (a fresh incarnation) and the `resumed` one, every key a row names that has NO
+   *  transport (neither borrowed nor pager-backed) is un-set — a lender still alive re-dials, and its
+   *  attach re-appends the row. Safe across hibernation: the pager sockets that rode it rehydrate with
+   *  their attachments before any handler runs, so `listRpcStubKeys()` is exact on the wake. The
+   *  census is taken now, the un-sets are appends of their own off the commit's turn, and a key
+   *  whose pager attached in between (a re-dial is the wake) is present by then and kept. */
+  #unsetWhatNamesDeadRpcStubs(committedEvents: StreamEvent[]): void {
+    const sweep = committedEvents.some(
+      (event) =>
+        event.type === "events.iterate.com/itx/woken" ||
+        event.type === "events.iterate.com/itx/resumed",
+    );
+    if (!sweep) return;
+    const named = rpcStubKeysNamed(this.#rowsForRpcStubCensus());
+    queueMicrotask(() => {
+      const present = new Set(this.#rpcStubs.listRpcStubKeys());
+      for (const rpcStubKey of named)
+        if (!present.has(rpcStubKey)) this.#unsetWhatNamesRpcStub(rpcStubKey);
+    });
   }
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -342,6 +355,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       });
       if (events.some((event) => event.type === "events.iterate.com/itx/woken"))
         this.#announceToAncestors();
+      this.#unsetWhatNamesDeadRpcStubs(events);
       this.#alarmCoordinator.reconcile();
     },
   });
@@ -412,7 +426,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       subscriptionsBeforeCommit,
     );
     this.#facetHost.refreshFacetStartupMemosFromHostingConfigurations(freshEvents);
-    this.#unsetWhatNamesDeadRpcStubsOnResume(freshEvents);
     return committedEvents;
   }
 

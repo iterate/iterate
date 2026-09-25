@@ -689,7 +689,7 @@ export async function lendRpcStubOverPager(
       event: "rpc-stub-pager-redial-failed",
       namespace: "rpc-stubs",
       message:
-        "a lent stub's pager dropped under a live session and could not be re-dialed; the lend ends and the DO has un-set what named it",
+        "a lent stub's pager dropped under a live session and could not be re-dialed; the lend ends, and the DO un-sets what named it on the pager's close or, when the DO reset took the pager with no close run, on its next wake",
       rpcStubKey,
       code: dropped.code,
       reason: dropped.reason,

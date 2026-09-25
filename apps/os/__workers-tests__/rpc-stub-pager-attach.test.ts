@@ -11,12 +11,14 @@
 // append share one synchronous turn. A malformed header is a 400.
 //
 // The UN-SET half, same layer: the key's last pager close appends the removal — refused under a
-// pause, it lands on the `resumed` commit; a match at itx.builtins (the one row the removal spelling
+// pause, it lands on the `resumed` commit; a DO reset takes the pager with no close run, so the
+// fresh incarnation's `woken` commit un-sets it, while a pager that rode a hibernation keeps its row
+// and keeps delivering; a match at itx.builtins (the one row the removal spelling
 // could never express) is refused AT APPEND, so no such row can ever sit beside the real ones. And
 // a pager REPLACED at its key (a reconnect) is a reconnect, not a close: a page in flight survives
 // the swap and the new pager's lend answers it.
 
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
@@ -26,7 +28,15 @@ import {
   ITX_EXPRESSION_FETCH_HEADER,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "../src/context/rpc-stubs.ts";
-import { adminCredentials, Echo, openSession, SRC_ECHO_APP, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  Echo,
+  openSession,
+  releasePins,
+  SRC_ECHO_APP,
+  stub,
+  until,
+} from "./support.ts";
 
 test("a malformed pager header is a 400; a well-formed one attaches the pager AND appends the rule that names its key — one request", async () => {
   const ctx = "prj_pager_attach";
@@ -168,6 +178,54 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   await until("the rule un-set after resume", async () => (await ruleAt(ctx, "itx.k5")) === null);
 });
 
+test("a DO reset takes a live callback's pager with no close run: the woken incarnation un-sets the row that named it", async () => {
+  const ctx = "prj_pager_reset_unset";
+  const pager = await openPager(ctx, "subscription:live", [liveSubscription("live")]);
+  expect(pager).toMatchObject({ status: 101 });
+  pager.webSocket!.accept();
+  expect(await subscriptionNames(ctx)).toContain("live");
+
+  // abort() kills the request running the callback and every hibernatable socket with it, and no
+  // webSocketClose runs (rpc-stub-pager-drop.test.ts); nothing here re-dials.
+  await runInDurableObject(stub(ctx), (_instance, state) => {
+    state.abort("reset under test");
+    return Promise.resolve();
+  }).catch(() => undefined);
+
+  // Any call wakes the fresh incarnation; its `woken` commit finds the key with no transport.
+  expect(await presence(ctx)).toEqual([]);
+  await until("the row is un-set", async () => !(await subscriptionNames(ctx)).includes("live"));
+});
+
+test("a HIBERNATED DO whose pager rode the eviction keeps the row on wake, and the waking commit is delivered through it", async () => {
+  const ctx = "prj_pager_hibernate_keeps_row";
+  const s = stub(ctx);
+  const rpcStubKey = "subscription:kept";
+  const delivered: unknown[] = [];
+  const pager = await openPager(ctx, rpcStubKey, [liveSubscription("kept", ["test/kept"])]);
+  expect(pager).toMatchObject({ status: 101 });
+  pager.webSocket!.accept();
+  pager.webSocket!.addEventListener("message", (event: MessageEvent) => {
+    if (typeof event.data === "string" && event.data.includes('"page"'))
+      void s.lendRpcStub({ rpcStubKey, stub: new LentRecorder(delivered) as never });
+  });
+
+  await releasePins(ctx); // nothing borrowed: evictDurableObject's precondition
+  await evictDurableObject(s);
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
+
+  try {
+    // The wake and the commit the row consumes in one call: the sweep runs off the `woken` commit.
+    await s.append({ type: "test/kept" });
+    await until("the commit was delivered", () => delivered.length > 0);
+    expect(JSON.stringify(delivered)).toContain("test/kept");
+    expect(await subscriptionNames(ctx)).toContain("kept");
+    expect(await presence(ctx)).toEqual([rpcStubKey]);
+  } finally {
+    pager.webSocket!.close(1000, "test done");
+  }
+});
+
 test("append REFUSES a rule match rooted at itx.builtins (the reserved fixed point is no rule's to claim) — the un-expressible row can never enter the log beside the real ones", async () => {
   const ctx = "prj_pager_raw_builtins_row";
   // The DO validates every append: a match at itx.builtins — the fixed point every call rewrites
@@ -257,6 +315,23 @@ function ruleFor(rpcStubKey: string): StreamEventInput {
   };
 }
 
+/** The row a live `itx.subscribe({ target })` lends its callback under (iterate-context.ts `subscribe`). */
+function liveSubscription(name: string, consumes?: string[]): StreamEventInput {
+  return {
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name,
+      target: ["itx", "builtins", "rpcStubs", ["get", `subscription:${name}`]],
+      consumes,
+    },
+  };
+}
+
+async function subscriptionNames(ctx: string) {
+  const rows = (await stub(ctx).invoke(["itx", "subscriptions", ["list"]])) as { name: string }[];
+  return rows.map((row) => row.name);
+}
+
 async function transportState(ctx: string) {
   return (await stub(ctx).rpcStubTransportState()) as unknown as {
     rpcStubPagers: number;
@@ -283,5 +358,17 @@ class LentAnswer extends RpcTarget {
   }
   async invoke(itxExpressionSteps: unknown[]): Promise<string> {
     return `${this.#tag}:${JSON.stringify(itxExpressionSteps)}`;
+  }
+}
+
+/** What a live subscription's relay lends: every push lands in `delivered`. */
+class LentRecorder extends RpcTarget {
+  readonly #delivered: unknown[];
+  constructor(delivered: unknown[]) {
+    super();
+    this.#delivered = delivered;
+  }
+  async invoke(itxExpressionSteps: unknown[]): Promise<void> {
+    this.#delivered.push(itxExpressionSteps);
   }
 }
