@@ -78,9 +78,20 @@ function ProjectContexts() {
       <ContextTree {...tree} className="hidden w-60 shrink-0 border-r px-2 pt-1.5 pb-2 lg:flex" />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {error ? (
-          <p role="alert" data-type="error" className="p-4 text-sm text-destructive">
-            {error}
-          </p>
+          <>
+            {/* the path and, on a phone, the tree stay: the way out of a path that failed */}
+            <div className="flex items-center px-3 py-1.5 sm:px-4">
+              <ContextTreeSheet {...tree} className="lg:hidden" />
+              <ContextPath path={path} links={links} className="max-lg:hidden" />
+            </div>
+            <p
+              role="alert"
+              data-type="error"
+              className="px-3 py-2 text-sm text-destructive sm:px-4"
+            >
+              {error}
+            </p>
+          </>
         ) : (
           <ContextActivity
             state={search}
