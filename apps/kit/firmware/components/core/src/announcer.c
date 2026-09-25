@@ -88,7 +88,9 @@ void iterate_kit_announcer_step(
   if (connection_phrase(announcer->pending) && announcer->pending != state) {
     announcer->pending = announcer->pending_answers ? state : ITERATE_KIT_ANNOUNCEMENT_NONE;
   }
-  if (input->in_session && !announcer->pending_answers) {
+  /* A session is open: only the answer to its own start may still be said. */
+  if (input->in_session &&
+      (!announcer->pending_answers || announcer->pending == ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED)) {
     announcer->pending = ITERATE_KIT_ANNOUNCEMENT_NONE;
   }
 

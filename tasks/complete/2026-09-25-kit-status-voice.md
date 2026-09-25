@@ -1,13 +1,14 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
 # Kit boards say (and sing) their connection status
 
-**Status:** implemented; host tests green. Built: the synth component, the config field and Kit
-select, the announcer, loop wiring, clip playback on ESP boards and the Mac. Not yet proven: the ESP
-builds (CI builds every board) and a board actually singing on the bench.
+**Status:** done. Proven on a Voice PE: narrates its boot (renders took 46–268 ms), "Hello!" to Jarvis,
+"Call ended." at the end of a call. Every board builds in CI. Left for later: a Kit preview that flashes the
+PR's own firmware; quieter USB resets (only the first boot after a flash narrates); the Voice PE on Misha's
+laptop reboots every few minutes on its own, which the voice now makes audible (cause not found).
 
 ## Why
 
@@ -108,3 +109,8 @@ _(log; newest last)_
   "Call ended." (silent with the voice off). Its other job, setting how loud speech is on each board,
   is now explicit: make-sounds.py emits `ITERATE_KIT_SPEECH_PEAK` from the board's `GAIN`, into
   `board.sounds.speech_peak`.
+- Bench, Voice PE on Misha's laptop USB: the renders took 122 ms ("Connecting to Wi-Fi.", 2.4 s of audio),
+  268 ms ("Connecting to iterate.", while Wi-Fi and TLS were busy) and 46 ms ("Ready."); the whole narration
+  finished 15 s after boot. The board also rebooted every few minutes on its own, with its USB device
+  vanishing (power-like); those boots narrate. Opening its serial port resets it too (rst:0x15). Left alone.
+- Bugbot: a "Call ended." waiting for the speaker could play into the next call. A session opening now drops it.

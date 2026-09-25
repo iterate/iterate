@@ -161,6 +161,15 @@ static void a_call_ending_is_said_even_while_the_connection_changes(void) {
   assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED);
 }
 
+static void a_call_that_ended_is_not_announced_into_the_next_one(void) {
+  struct iterate_kit_announcer a;
+  iterate_kit_announcer_init(&a, false, 0);
+  /* Hung up while the speaker was busy, then a new session opened before it was free. */
+  STEP(&a, .now_ms = 0, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true, .call_ended = true);
+  STEP(&a, .now_ms = 300, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true, .in_session = true);
+  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_NONE);
+}
+
 static void every_phrase_can_be_said_and_sung(void) {
   static struct iterate_kit_tinyvoice voice;
   for (int i = ITERATE_KIT_ANNOUNCEMENT_NONE + 1; i < ITERATE_KIT_ANNOUNCEMENT_COUNT; i++) {
@@ -186,6 +195,7 @@ int main(void) {
   a_boot_nobody_caused_is_silent_until_someone_asks();
   a_connected_board_says_hello_to_the_wake_word_and_leaves_a_press_to_the_chime();
   a_call_ending_is_said_even_while_the_connection_changes();
+  a_call_that_ended_is_not_announced_into_the_next_one();
   every_phrase_can_be_said_and_sung();
   return 0;
 }
