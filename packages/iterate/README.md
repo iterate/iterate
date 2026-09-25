@@ -23,7 +23,7 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
-Follow-up: type the test harnesses against `iterate/api`. The decision's reasons, and how workerd, the Agents SDK, Convex,
+The decision's reasons, and how workerd, the Agents SDK, Convex,
 Supabase, tRPC, Hono and Wrangler draw the same line:
 [the decision record](https://github.com/iterate/iterate/blob/d52a4e8e0f791c96b683fe178b56570532123c05/docs/2026-09-24-sdk-platform-line.md)
 (#3018).

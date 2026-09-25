@@ -76,13 +76,8 @@ attachment the default.
 
 ## Automated browser specs
 
-The automated browser suite is `pnpm spec` from the repository root: one root
-`playwright.config.ts`, the specs under `specs/` (see `specs/AGENTS.md`). It
-starts a local Worker by default. Set `DEMO_BASE_URL` and run under the
-target's Doppler config (`doppler run --project os --config
-<preview|prd>`, which supplies its `APP_CONFIG`) to run against an existing
-deployment. Recorded demos for PRs: `VIDEO_MODE=1 pnpm spec -g <name>` — see
-[Pull requests](pull-requests.md#video) and [Testing](testing.md).
+The automated browser suite is `pnpm spec` ([specs/AGENTS.md](../specs/AGENTS.md); against a
+deployment: [Testing](testing.md#running-a-suite-against-an-environment)).
 
 Use a disposable project and verify the resulting state. Do not reuse
 production identities or shared test state merely to bypass authentication
@@ -116,23 +111,6 @@ state before calling it a UI bug.
 
 ## Performance evidence in the browser
 
-For loading-speed work on the platform's pages and the TanStack Start clients,
-record three paths for the same signed-in fixture and route: a cold direct
-navigation with an empty cache, a warm direct navigation with the cache
-retained, and an in-app navigation after hydration. Use a production build or a
-preview for asset graphs and timings; local dev is useful for red/green behavior,
-but its source modules, debug metadata and rebuild work are not a production
-bundle. Record the commit, route, browser, viewport, network/CPU conditions, UTC
-window and whether the cache was cold.
-
-Lab timing in an isolated headed or headless browser (Playwriter or Playwright)
-is useful for comparing cold vs warm loads; compare identical URLs. Playwright is
-the durable product assertion; PostHog is the field distribution; Cloudflare
-telemetry is the server-side explanation. A useful Playwright contract for
-server-rendered routes is:
-
-- create an authenticated project fixture;
-- navigate directly and read `page.goto()`'s response body;
-- assert meaningful stable UI is in that HTML;
-- interact with the hydrated locator;
-- fail on all page and hydration errors.
+Loading-speed work records the captures the
+[performance playbook](../.agents/skills/os-web-performance/references/playbook.md#measure-what-people-get)
+lists.

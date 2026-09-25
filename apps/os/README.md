@@ -16,7 +16,7 @@ pnpm install
 pnpm dev
 pnpm typecheck
 pnpm test
-pnpm e2e
+pnpm os e2e
 pnpm spec
 ```
 

@@ -27,15 +27,10 @@ shrink the fixture.
 
 ## 2. Dump the log
 
-Use a personal access token for the chat's project, as `ITERATE_BEARER_TOKEN`: the
-person who reported the chat can mint one on the Dash's Sessions page, and if you are signed
-in yourself, `pnpm exec iterate --config prd tokens create --name fix-stream --project <slug>`
-prints one ([credentials](../../../apps/os/docs/credentials.md)). Keep it in the command's
-environment and never print it. A key covers only projects its person belongs to. For a
-project nobody at hand belongs to, use the deployment's operator bearer on `/api` instead:
-`APP_CONFIG_ADMIN_API_SECRET` set to `secrets.adminBearer` from the `APP_CONFIG` of Doppler
-`os/prd` (`os/preview` for any preview), in place of `ITERATE_BEARER_TOKEN` below
-([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
+Use a personal access token for the chat's project as `ITERATE_BEARER_TOKEN`, or, for a project
+nobody at hand belongs to, the operator bearer as `APP_CONFIG_ADMIN_API_SECRET`
+([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)). Keep it in the
+command's environment and never print it.
 
 Save this in your scratchpad as `dump-agent.js`, with the agent's path filled in:
 

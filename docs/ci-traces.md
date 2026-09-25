@@ -3,10 +3,10 @@
 The Preview OS workflow (`.depot/workflows/preview-os.yml`) and Main OS e2e
 (`.depot/workflows/main-os-e2e.yml`) each end in a CI trace job (`trace`),
 reporting only. It runs once the jobs it `needs` have settled, whatever their
-outcome: Preview OS's Deploy preview, E2E tests and Browser specs (`deploy`,
-`e2e`, `specs`), main's `parent` and the same three (main's `alert` runs beside
-it and waits for none of it). A PR that changes no preview path deploys nothing
-and gets no trace. `scripts/ci/tracing/cli.ts current` reads
+outcome: Deploy preview, E2E tests and Browser specs (`deploy`, `e2e`, `specs`)
+in both workflows (main's `alert` runs beside it and waits for none of it). A PR
+that changes no preview path deploys nothing and gets no trace.
+`scripts/ci/tracing/cli.ts current` reads
 the run from Depot and writes `trace.html` and `trace.json` for exactly those
 jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`
 artifact (it asks for 30 days; Depot keeps artifacts about a week, see
@@ -37,10 +37,7 @@ telemetry uses (Doppler `_shared/preview`, shipped as the Worker's
 `DEPOT_CI_TELEMETRY_TOKEN` secret), and fetches only the ZIP directory and the
 requested entry with range reads, so opening one page of a large report does
 not download its traces. Each response's CSP confines the page to its own
-artifact's path. Misha built it for the `iterate/config` project, where each
-artifact had its own `*.iterate.app` origin; it went with that project in #2837,
-and came back here on one workers.dev origin, one path per artifact. Links expire
-with the artifact, about a week after the run.
+artifact's path. Links expire with the artifact, about a week after the run.
 
 ## What the trace shows
 
@@ -107,8 +104,8 @@ repository, and return 404 once the artifact expires or is deleted.
 
 A Playwright report is public too, and a failed spec's trace in it records
 that test's browser traffic against its preview: the throwaway test users'
-sessions on that preview, which main deletes after the run and a PR's preview
-deletes when the PR closes.
+sessions on that preview, which a PR's preview deletes when the PR closes and
+main's keeps.
 
 ## Replay
 

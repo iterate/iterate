@@ -1,7 +1,6 @@
-# Frontend development (dash, agents, notes, voice)
+# Frontend development
 
-How we write the platform's client apps — `apps/dash`, `apps/agents`,
-`apps/notes`, `apps/voice` (and Kit's installer): **one programming model, a
+How we write the platform's client apps: **one programming model, a
 handful of thin pieces over a capnweb capability tree reached through one
 WebSocket, with live state pushed from Durable Objects** — Elixir-LiveView/Phoenix
 in a React TanStack Start app.
@@ -124,10 +123,8 @@ const { api, info } = Route.useRouteContext(); // or getRouteApi("/_auth").useRo
 const context = await api.projects.get(project.id); // a project's root context, by slug or id
 ```
 
-A context handle a component holds for its life is disposed on unmount
-(`stub[Symbol.dispose]()`), and handed to a state setter as `setContext(() => stub)` —
-a capnweb stub is a callable proxy, and React would take it for an updater and
-call it (dash `routes/_auth/projects/$slug/index.tsx`, `useProjectContext`).
+A component holds a context handle for its life with `useContextStub` (below), which disposes
+it on unmount.
 
 ### Read (finite, cached)
 

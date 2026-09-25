@@ -147,7 +147,7 @@ and the old one keeps its data until its owner deletes it. Deploy the new Worker
 beside the old one, restore onto it, then move the routes:
 
 ```sh
-pnpm --dir apps/os ensure-resources --env prd   # KV, R2 and Artifacts namespace; commit the ids
+pnpm --dir apps/os ensure-resources --env prd   # D1, KV, R2 and Artifacts namespace; commit the ids
 pnpm --dir apps/os run deploy --env prd --without-routes
 ```
 

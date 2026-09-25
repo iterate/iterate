@@ -25,6 +25,6 @@ Read when relevant:
 - [Depot CI](docs/depot-ci.md): workflows, running CI without a PR, runs, logs, artifacts, and waiting on checks
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
 - [Event types](packages/iterate/README.md#event-types): naming rules for every `events.iterate.com` type; `lint/event-types.test.ts` enforces them
-- [Frontend development](docs/frontend-development.md) for the client apps (dash, agents, notes, voice)
+- [Frontend development](docs/frontend-development.md) for the client apps
 - [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy
 - [Instruction maintenance](docs/writing-agent-docs.md): instructions live in `AGENTS.md` files only

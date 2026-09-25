@@ -10,6 +10,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `apps/notes`             | Notes client                                                    |
 | `apps/voice`             | Voice client                                                    |
 | `apps/kit`               | Device installer and firmware using the platform                |
+| `apps/admin`             | Every project and person, and a raw context explorer            |
 | `apps/spa`               | Static SPA archetype; also hosts the browser extension download |
 | `apps/browser-extension` | Chrome side panel that lends a browser to a project             |
 | `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
@@ -18,6 +19,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `packages/cli`           | The `iterate` CLI and the macOS menu bar (`@iterate-com/cli`)   |
 | `packages/agents`        | The agents app a project installs (`@iterate-com/agents`)       |
 | `packages/voice`         | Voice on the agents app, installed too (`@iterate-com/voice`)   |
+| `packages/petshop-sdk`   | The dummy petshop's SDK, shaped like a vendor's                 |
 | `packages/ui`            | Components used by the apps                                     |
 | `packages/shared`        | Shared configuration, events, and test telemetry                |
 | `configs`                | Config repository templates copied into new projects            |
