@@ -1,10 +1,10 @@
 diff --git a/v4/core/errors.cjs b/v4/core/errors.cjs
-index 2aad9e501e2fda08605845a0679b7341fe821cc9..f6ee70beb9bfbb985a0be9c4f198ac97473e55a6 100644
+index 0f2cc5a..50e4d5e 100644
 --- a/v4/core/errors.cjs
 +++ b/v4/core/errors.cjs
-@@ -66,7 +66,19 @@ const initializer = (inst, def) => {
-     // Clear the shared slots; a retained `value` pins the last error's issues.
-     _zodDesc.value = undefined;
+@@ -63,7 +63,19 @@ const initializer = (inst, def) => {
+     Object.defineProperty(inst, "issues", _issuesDesc);
+     // Clear the shared slot; a retained `value` pins the last error's issues.
      _issuesDesc.value = undefined;
 -    Object.defineProperty(inst, "message", _messageDesc);
 +    // PATCHED (iterate): materialize the message as an own data property at
@@ -24,12 +24,12 @@ index 2aad9e501e2fda08605845a0679b7341fe821cc9..f6ee70beb9bfbb985a0be9c4f198ac97
       * prototype; on first access it caches a per-instance closure so
       * detached usage still works. */
 diff --git a/v4/core/errors.js b/v4/core/errors.js
-index 9be3d2d52225147e53e2a90ec1b8fc94186bbc03..66c7952b50c3dd346f884c67f9d6e550a35e0fbd 100644
+index 587a0ca..7ecbb46 100644
 --- a/v4/core/errors.js
 +++ b/v4/core/errors.js
-@@ -35,7 +35,19 @@ const initializer = (inst, def) => {
-     // Clear the shared slots; a retained `value` pins the last error's issues.
-     _zodDesc.value = undefined;
+@@ -32,7 +32,19 @@ const initializer = (inst, def) => {
+     Object.defineProperty(inst, "issues", _issuesDesc);
+     // Clear the shared slot; a retained `value` pins the last error's issues.
      _issuesDesc.value = undefined;
 -    Object.defineProperty(inst, "message", _messageDesc);
 +    // PATCHED (iterate): materialize the message as an own data property at

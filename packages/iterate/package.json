@@ -44,72 +44,72 @@
     "access": "public",
     "exports": {
       "./sdk": {
-        "types": "./dist/sdk/index.d.ts",
+        "types": "./dist/sdk.d.mts",
         "import": "./dist/sdk.mjs"
       },
       "./app": {
-        "types": "./dist/app.d.ts",
+        "types": "./dist/app.d.mts",
         "import": "./dist/app.mjs"
       },
       "./app-server": {
-        "types": "./dist/app-server.d.ts",
+        "types": "./dist/app-server.d.mts",
         "import": "./dist/app-server.mjs"
       },
       "./app-session": {
-        "types": "./dist/app-session.d.ts",
+        "types": "./dist/app-session.d.mts",
         "import": "./dist/app-session.mjs"
       },
       "./client": {
-        "types": "./dist/client/live-state.d.ts",
+        "types": "./dist/client.d.mts",
         "import": "./dist/client.mjs"
       },
       "./react": {
-        "types": "./dist/client/react.d.ts",
+        "types": "./dist/react.d.mts",
         "import": "./dist/react.mjs"
       },
       "./api": {
-        "types": "./dist/api.d.ts",
+        "types": "./dist/api.d.mts",
         "import": "./dist/api.mjs"
       },
       "./lib": {
-        "types": "./dist/lib.d.ts",
+        "types": "./dist/lib.d.mts",
         "import": "./dist/lib.mjs"
       },
       "./expression": {
-        "types": "./dist/expression.d.ts",
+        "types": "./dist/expression.d.mts",
         "import": "./dist/expression.mjs"
       },
       "./principal": {
-        "types": "./dist/principal.d.ts",
+        "types": "./dist/principal.d.mts",
         "import": "./dist/principal.mjs"
       },
       "./stream/processor": {
-        "types": "./dist/stream/processor.d.ts",
+        "types": "./dist/stream/processor.d.mts",
         "import": "./dist/stream/processor.mjs"
       },
       "./stream/test-support": {
-        "types": "./dist/stream/test-support.d.ts",
+        "types": "./dist/stream/test-support.d.mts",
         "import": "./dist/stream/test-support.mjs"
       },
       "./oauth-scopes": {
-        "types": "./dist/oauth-scopes.d.ts",
+        "types": "./dist/oauth-scopes.d.mts",
         "import": "./dist/oauth-scopes.mjs"
       },
       "./project-ingress": {
-        "types": "./dist/project-ingress.d.ts",
+        "types": "./dist/project-ingress.d.mts",
         "import": "./dist/project-ingress.mjs"
       },
       "./oauth": {
-        "types": "./dist/client/oauth.d.ts",
+        "types": "./dist/oauth.d.mts",
         "import": "./dist/oauth.mjs"
       },
       "./stream/run": {
-        "types": "./dist/stream/run.d.ts",
+        "types": "./dist/stream/run.d.mts",
         "import": "./dist/stream/run.mjs",
         "default": "./dist/stream/run.mjs"
       },
       "./node": {
-        "types": "./dist/node.d.ts",
+        "types": "./dist/node.d.mts",
         "import": "./dist/node.mjs"
       }
     }
@@ -119,17 +119,17 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.test.json",
-    "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "test": "vitest run",
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "capnweb": "npm:@iterate-com/capnweb@0.12.3",
-    "json5": "^2.2.3",
-    "oauth4webapi": "^3.8.5",
-    "zod": "4.5.4",
-    "ws": "8.19.0"
+    "capnweb": "catalog:",
+    "json5": "catalog:",
+    "oauth4webapi": "catalog:",
+    "zod": "catalog:",
+    "ws": "catalog:"
   },
   "peerDependencies": {
     "react": "^19.1.0"
@@ -140,13 +140,13 @@
     }
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "catalog:cloudflare",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.2.17",
-    "react": "^19.2.7",
-    "tsdown": "0.22.2",
-    "typescript": "^5.9.3",
-    "vitest": "4.0.15",
-    "@types/ws": "^8.18.1"
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "react": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@types/ws": "catalog:"
   }
 }

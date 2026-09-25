@@ -16,8 +16,8 @@ import { Textarea } from "./textarea.tsx";
  *  is typed into it; autocapture, dead clicks and rage clicks skip anything inside it. */
 export const NOT_RECORDED_CLASS = "ph-no-capture";
 
-/** PostHog's privacy, the same everywhere: every `posthog.init` spreads it last (posthog.tsx
- *  `posthogInitOptions` for the apps, apps/os __root.tsx for the sign-in and consent pages), and
+/** PostHog's privacy, the same everywhere: the one `posthog.init` (posthog.tsx
+ *  `posthogInitOptions`, for the apps and the sign-in and consent pages) spreads it last, and
  *  posthog-privacy.test.ts fails on any other replay or `before_send` setting.
  *
  *  - Replays record what people type, because seeing it is the point, except secrets. With

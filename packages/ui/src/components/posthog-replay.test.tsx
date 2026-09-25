@@ -23,9 +23,11 @@ test("a replay records what is typed, but no secret field, secret on screen or i
   const token = "phc_FAKE_replay_privacy_test";
   // an invitation link's page: its URL holds the token
   history.replaceState(null, "", "/invitations/FAKE-invite-token");
-  // posthog-js's preloaded remote config (what `/e/array/<token>/config.js` sets): record replays
+  // posthog-js's preloaded remote config (what `/e/array/<token>/config.js` sets): record replays and autocapture
   Object.assign(window, {
-    _POSTHOG_REMOTE_CONFIG: { [token]: { config: { sessionRecording: { endpoint: "/s/" } } } },
+    _POSTHOG_REMOTE_CONFIG: {
+      [token]: { config: { sessionRecording: { endpoint: "/s/" }, autocapture_opt_out: false } },
+    },
   });
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const root = createRoot(document.body.appendChild(document.createElement("div")));

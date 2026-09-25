@@ -1,20 +1,14 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "lib": ["esnext", "dom", "dom.iterable"],
-    "strict": true,
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    // node for the tests.
+    "types": ["node"],
     "jsx": "react-jsx",
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "moduleResolution": "bundler",
-    "skipLibCheck": true,
     "paths": {
       "@iterate-com/shared/*": ["../../packages/shared/src/*"],
       "@iterate-com/ui/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

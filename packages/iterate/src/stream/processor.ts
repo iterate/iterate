@@ -670,7 +670,7 @@ export class ProcessorEngine<State> {
     // blockProcessorWhile called from INSIDE a running blocker extends the chain (still THIS event's
     // blocking work), so re-await until it stops growing — latching the pre-nesting snapshot would
     // let the next event's processEvent (and the batch commit) overtake it.
-    for (let awaited: Promise<unknown> | undefined; awaited !== blockers; ) {
+    for (let awaited: Promise<unknown> | undefined; awaited !== blockers;) {
       awaited = blockers;
       await awaited;
     }

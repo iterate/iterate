@@ -7,6 +7,7 @@ import { dirname, extname, join, relative, resolve } from "node:path";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import {
   TestEvidenceCompleteness,
   TestEvidenceManifest,
@@ -631,46 +632,59 @@ function stepSummary(environment: NodeJS.ProcessEnv, line: string) {
   if (environment.GITHUB_STEP_SUMMARY) appendFileSync(environment.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
 
-if (isMainModule(import.meta.url)) {
+/** tests.parquet, then manifest.json, in the job's test evidence folder. */
+export async function write(
+  options: {
+    /** The job was cancelled (the workflow's `cancelled()`). */
+    cancelled?: boolean;
+  } = {},
+) {
   const repoRoot = process.cwd();
-  const command = process.argv[2];
-  const bucket = ciBucketEnvs.ci;
-  if (command !== "write" && command !== "upload") {
-    console.error("Usage: pnpm tsx scripts/ci/test-evidence.ts write [--cancelled] | upload");
-    process.exit(2);
-  }
   try {
-    if (command === "write") {
-      const manifest = await writeTestEvidence({
-        repoRoot,
-        environment: process.env,
-        cancelled: process.argv.includes("--cancelled"),
-        source: await testEvidenceSource(repoRoot),
-        toolchain: { node: process.version, platform: process.platform, arch: process.arch },
-        createdAt: new Date(),
-      });
-      const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
-      console.log(
-        `[test-evidence] ${manifest.testRunId} ${manifest.result}: ${manifest.files.length} files, ${bytes} bytes, tree ${manifest.source.tree}${manifest.source.dirty ? " (not the commit's)" : ""}`,
-      );
-      for (const diagnostic of manifest.diagnostics) console.log(`[test-evidence] ${diagnostic}`);
-    } else {
-      const { CLOUDFLARE_API_TOKEN } = process.env;
-      if (!CLOUDFLARE_API_TOKEN)
-        throw new Error("upload needs CLOUDFLARE_API_TOKEN (Doppler _shared/preview)");
-      const uploaded = await uploadTestEvidence({
-        repoRoot,
-        accountId: bucket.cloudflareAccountId,
-        bucketName: bucket.bucketName,
-        apiToken: CLOUDFLARE_API_TOKEN,
-        fetch,
-      });
-      console.log(`[test-evidence] r2://${bucket.bucketName}/${uploaded.prefix}`);
-      stepSummary(process.env, uploadedSummaryLine({ bucketName: bucket.bucketName, ...uploaded }));
-    }
+    const manifest = await writeTestEvidence({
+      repoRoot,
+      environment: process.env,
+      cancelled: options.cancelled ?? false,
+      source: await testEvidenceSource(repoRoot),
+      toolchain: { node: process.version, platform: process.platform, arch: process.arch },
+      createdAt: new Date(),
+    });
+    const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
+    console.log(
+      `[test-evidence] ${manifest.testRunId} ${manifest.result}: ${manifest.files.length} files, ${bytes} bytes, tree ${manifest.source.tree}${manifest.source.dirty ? " (not the commit's)" : ""}`,
+    );
+    for (const diagnostic of manifest.diagnostics) console.log(`[test-evidence] ${diagnostic}`);
   } catch (error) {
-    reportStepFailure({ command, error, environment: process.env });
-    console.error(error);
-    process.exitCode = 1;
+    failStep("write", error);
   }
 }
+
+/** The test evidence folder into R2, the manifest last (CLOUDFLARE_API_TOKEN, Doppler _shared/preview). */
+export async function upload() {
+  const bucket = ciBucketEnvs.ci;
+  try {
+    const { CLOUDFLARE_API_TOKEN } = process.env;
+    if (!CLOUDFLARE_API_TOKEN)
+      throw new Error("upload needs CLOUDFLARE_API_TOKEN (Doppler _shared/preview)");
+    const uploaded = await uploadTestEvidence({
+      repoRoot: process.cwd(),
+      accountId: bucket.cloudflareAccountId,
+      bucketName: bucket.bucketName,
+      apiToken: CLOUDFLARE_API_TOKEN,
+      fetch,
+    });
+    console.log(`[test-evidence] r2://${bucket.bucketName}/${uploaded.prefix}`);
+    stepSummary(process.env, uploadedSummaryLine({ bucketName: bucket.bucketName, ...uploaded }));
+  } catch (error) {
+    failStep("upload", error);
+  }
+}
+
+/** Reports the failed step (reportStepFailure) and exits 1. */
+function failStep(command: keyof typeof stepFailureTitles, error: unknown): never {
+  reportStepFailure({ command, error, environment: process.env });
+  console.error(error);
+  process.exit(1);
+}
+
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "test-evidence" }).run();

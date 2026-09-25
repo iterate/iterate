@@ -466,8 +466,7 @@ export function reduceCoreEvent(
       // Every change to the rules table re-derives the subscriptions' hosting markers through it.
       const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
         const rules = draftOf(state.itxExpressionRewriteRules, draftTables);
-        if (rule)
-          rules[matchString] = rule; // a match string is `itx…`, never a prototype key
+        if (rule) rules[matchString] = rule; // a match string is `itx…`, never a prototype key
         else delete rules[matchString];
         return withHostedFacetMarkersFollowingRules(
           { ...state, itxExpressionRewriteRules: rules },

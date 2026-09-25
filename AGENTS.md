@@ -4,6 +4,7 @@ Cloudflare Workers monorepo. The platform is `apps/os`; production issuer: `http
 
 - Read scoped `AGENTS.md` files. Follow every `rules/**/*.md` whose `files` globs match what you change, honoring exclusions: they are review rules, and no bot enforces them today.
 - Expected outcomes must be modeled; recovery must be bounded and observable. Operational changes require preview, state, and telemetry evidence. [Engineering invariant](docs/engineering-invariants.md).
+- Never hand-edit a `routeTree.gen.ts`: regenerate it with the app's `pnpm routes:generate` (`pnpm typecheck` fails when one is stale).
 - `envs.ts` owns deployment configuration; Doppler supplies secrets. Workers are never deleted as part of source cleanup.
 - Browser testing uses isolated Playwriter sessions. Personal Chrome requires explicit authorization. [Browser testing](docs/browser-testing.md).
 - Do not commit, push, open or merge PRs unless asked. [PR workflow](docs/pull-requests.md).

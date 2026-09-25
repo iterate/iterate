@@ -702,7 +702,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
         // `list()` would present page 1 as the whole truth (sweep/GC would orphan key 1001+). Drain.
         const out: string[] = [];
-        for (let cursor: string | undefined; ; ) {
+        for (let cursor: string | undefined; ;) {
           const page = await env.ITX_KV.list({
             prefix: kvPrefix + prefix,
             cursor,

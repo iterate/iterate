@@ -7,43 +7,25 @@ const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
 
 export type PosthogProperties = Record<string, boolean | number | string>;
 
-export interface PosthogPerson {
-  distinctId: string;
-  properties: PosthogProperties;
-}
-
 export interface PosthogGroup {
   type: string;
   key: string;
   properties: PosthogProperties;
 }
 
-export interface PosthogContext {
-  person: PosthogPerson;
-  groups: PosthogGroup[];
-}
-
 // Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK sends.
 // Replays record what people type, except secrets, and no event carries a secret URL
 // (`posthogPrivacy`, not-recorded.tsx): a field that takes a secret replays as `***`, and a secret
 // field (`SecretInput`, `SecretTextarea`) or a secret on screen (`NotRecorded`) is not recorded at
-// all. `api_host` is this app's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog),
-// resolved against the page's origin.
+// all. `api_host` is the page's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog).
+// `defaults` sets the rest: pageviews on history changes, page leaves, identified-only person
+// profiles, no URL hashes.
 export function posthogInitOptions() {
   return {
-    api_host: new URL("/e", window.location.origin).toString(),
+    api_host: "/e",
     ui_host: "https://eu.posthog.com",
-    defaults: "2026-06-25" as const,
-    person_profiles: "identified_only" as const,
-    capture_pageview: "history_change" as const,
-    capture_pageleave: true,
-    capture_exceptions: {
-      capture_unhandled_errors: true,
-      capture_unhandled_rejections: true,
-      capture_console_errors: false,
-    },
-    disable_session_recording: false,
-    disable_capture_url_hashes: true,
+    defaults: "2026-08-30" as const,
+    capture_exceptions: true,
     strict_script_versioning: true,
     ...posthogPrivacy(),
   };
@@ -51,9 +33,6 @@ export function posthogInitOptions() {
 
 let posthogInitStarted = false;
 let posthogClientPromise: Promise<import("posthog-js").PostHog> | undefined;
-let appliedContextSignature: string | undefined;
-let identifiedPersonSignature: string | undefined;
-const identifiedGroupMetadata = new Map<string, string>();
 
 /**
  * Once-per-app-load PostHog initialization. Nothing in our apps reads the
@@ -64,7 +43,7 @@ const identifiedGroupMetadata = new Map<string, string>();
  * once-guard lives here at module scope and the first render with config in
  * hand kicks it off. Idempotent, so safe to call during render.
  */
-export function initPosthog(apiKey: string | undefined) {
+export function initPosthog(apiKey: string | null | undefined) {
   if (posthogInitStarted || !loadPosthog || !apiKey) return;
   posthogInitStarted = true;
   const clientPromise = loadPosthog().then((posthogModule) => {
@@ -87,78 +66,35 @@ function withPosthogClient(action: (client: import("posthog-js").PostHog) => voi
   void clientPromise.then(action, () => undefined);
 }
 
-/** Synchronize identity and groups without recording a navigation. */
-export function syncPosthogContext(input: PosthogContext | null) {
-  withPosthogClient((client) => applyPosthogContext(client, input));
-}
-
 const NO_GROUPS: PosthogGroup[] = [];
 
-/** PostHog: the person is the platform user id — the same person in every app. `groups` re-sync
- *  when their identity changes, so a caller that builds them per render memoizes them. */
+/** PostHog: the person is the platform user id — the same person in every app — and `groups` are
+ *  the caller's (memoized: a new array re-runs the effect). Following PostHog's guide, a different
+ *  signed-in user resets first, so the two are never merged; identify and group skip what they
+ *  already sent. */
 export function usePosthogIdentity(
   principal: { actor: string; email?: string },
   groups: PosthogGroup[] = NO_GROUPS,
 ) {
   useEffect(() => {
-    syncPosthogContext({
-      person: {
-        distinctId: principal.actor,
-        properties: principal.email ? { email: principal.email } : {},
-      },
-      groups,
+    withPosthogClient((client) => {
+      const identified = client.get_property("$user_id");
+      if (typeof identified === "string" && identified !== principal.actor) client.reset();
+      client.identify(principal.actor, principal.email ? { email: principal.email } : undefined);
+      const types = new Set(groups.map((group) => group.type));
+      if (Object.keys(client.getGroups()).some((type) => !types.has(type))) client.resetGroups();
+      for (const group of groups) client.group(group.type, group.key, group.properties);
     });
   }, [principal.actor, principal.email, groups]);
 }
 
-function applyPosthogContext(client: import("posthog-js").PostHog, input: PosthogContext | null) {
-  const signature = JSON.stringify(input);
-  if (signature === appliedContextSignature) return;
-
-  if (!input) {
-    if (
-      typeof client.get_property("$user_id") === "string" ||
-      Object.keys(client.getGroups()).length > 0
-    ) {
-      resetPosthogClient(client);
-    }
-    appliedContextSignature = signature;
-    return;
-  }
-
-  const personSignature = JSON.stringify(input.person);
-  const currentUserId = client.get_property("$user_id");
-  if (typeof currentUserId === "string" && currentUserId !== input.person.distinctId) {
-    resetPosthogClient(client);
-  }
-  if (identifiedPersonSignature !== personSignature) {
-    client.identify(input.person.distinctId, input.person.properties);
-    identifiedPersonSignature = personSignature;
-  }
-
-  const desiredGroupTypes = new Set(input.groups.map((group) => group.type));
-  let currentGroups = client.getGroups();
-  if (Object.keys(currentGroups).some((type) => !desiredGroupTypes.has(type))) {
-    client.resetGroups();
-    currentGroups = {};
-  }
-  for (const group of input.groups) {
-    const metadataSignature = JSON.stringify([group.key, group.properties]);
-    const metadataChanged = identifiedGroupMetadata.get(group.type) !== metadataSignature;
-    if (currentGroups[group.type] !== group.key || metadataChanged) {
-      client.group(group.type, group.key, metadataChanged ? group.properties : undefined);
-    }
-    identifiedGroupMetadata.set(group.type, metadataSignature);
-  }
-  for (const type of identifiedGroupMetadata.keys()) {
-    if (!desiredGroupTypes.has(type)) identifiedGroupMetadata.delete(type);
-  }
-  appliedContextSignature = signature;
+/** Sign-out: the next person on this browser starts anonymous (PostHog's guide: reset on logout). */
+export function resetPosthog() {
+  withPosthogClient((client) => client.reset());
 }
 
-function resetPosthogClient(client: import("posthog-js").PostHog) {
-  client.reset();
-  appliedContextSignature = undefined;
-  identifiedPersonSignature = undefined;
-  identifiedGroupMetadata.clear();
+/** An error a route's error screen caught: React never lets it reach `window.onerror`, so
+ *  `capture_exceptions` alone would miss it. */
+export function capturePosthogException(error: unknown) {
+  withPosthogClient((client) => client.captureException(error));
 }

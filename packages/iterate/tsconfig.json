@@ -1,23 +1,13 @@
 {
-  // The package's Node program: `iterate/node` and the build/test configs. The Worker SDK is
-  // tsconfig.worker.json; tsconfig.node.json emits dist/node.d.ts.
+  // `iterate/*`, the SDK: Worker and browser code, typed against the Cloudflare types and never
+  // Node's, so it cannot lean on a Node global. The Node entries and the tests are
+  // tsconfig.node.json's.
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "nodenext",
-    "lib": ["esnext", "dom"],
-    "jsx": "react-jsx",
-    "jsxImportSource": "react",
-    "types": ["node"],
-    "strict": true,
-    "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "rewriteRelativeImportExtensions": true,
-    "sourceMap": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types/experimental"],
+    "jsx": "react-jsx"
   },
-  "include": ["src/node.ts", "tsdown.config.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src"],
+  "exclude": ["src/node.ts", "src/stream/test-support.ts", "src/test-support", "src/**/*.test.*"]
 }

@@ -9,18 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root.tsx";
-import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
+import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
 import { Route as AuthProjectsSlugRouteImport } from "./routes/_auth/projects.$slug.tsx";
 
-const AuthRoute = AuthRouteImport.update({
-  id: "/_auth",
-  getParentRoute: () => rootRouteImport,
-} as any);
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AuthRoute = AuthRouteImport.update({
+  id: "/_auth",
   getParentRoute: () => rootRouteImport,
 } as any);
 const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
@@ -57,11 +57,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to: "/" | "/projects/$slug" | "/projects";
   id:
-    | "__root__"
-    | "/"
-    | "/_auth"
-    | "/_auth/projects/$slug"
-    | "/_auth/projects/";
+    "__root__" | "/" | "/_auth" | "/_auth/projects/$slug" | "/_auth/projects/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -71,18 +67,18 @@ export interface RootRouteChildren {
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    "/_auth": {
-      id: "/_auth";
-      path: "";
-      fullPath: "/";
-      preLoaderRoute: typeof AuthRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/": {
       id: "/";
       path: "/";
       fullPath: "/";
       preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/_auth": {
+      id: "/_auth";
+      path: "";
+      fullPath: "/";
+      preLoaderRoute: typeof AuthRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/_auth/projects/": {

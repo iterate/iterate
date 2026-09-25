@@ -22,7 +22,7 @@ test.each(["static/array.js", "array/phc_test/config.js"])(
   },
 );
 
-test("forwards every other SDK request to ingest without application cookies", async () => {
+test("forwards every other SDK request to ingest without application cookies or credentials", async () => {
   const upstream = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
   vi.stubGlobal("fetch", upstream);
   onTestFinished(() => {
@@ -32,6 +32,7 @@ test("forwards every other SDK request to ingest without application cookies", a
     method: "POST",
     headers: {
       cookie: "session=secret",
+      authorization: "Bearer secret",
       "cf-connecting-ip": "203.0.113.7",
       "content-type": "application/json",
       host: "os.iterate.com",
@@ -49,7 +50,8 @@ test("forwards every other SDK request to ingest without application cookies", a
   expect(headers.get("cookie")).toBeNull();
   expect(headers.get("origin")).toBe("https://os.iterate.com");
   expect(headers.get("referer")).toBe("https://os.iterate.com/projects/test?token=secret");
-  expect(headers.get("host")).toBe("eu.i.posthog.com");
+  expect(headers.get("authorization")).toBeNull();
+  expect(headers.get("host")).toBeNull();
   expect(headers.get("x-forwarded-for")).toBe("203.0.113.7");
   expect(await new Response(init!.body).text()).toBe('{"snapshot":true}');
 });

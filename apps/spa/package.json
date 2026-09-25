@@ -9,9 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "wrangler": "catalog:cloudflare",
-    "tsx": "^4.20.6",
-    "typescript": "^5.9.3",
-    "zod": "^4.1.5"
+    "trpc-cli": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "wrangler": "catalog:",
+    "zod": "catalog:"
   }
 }

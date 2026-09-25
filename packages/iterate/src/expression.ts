@@ -150,8 +150,7 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
         fail(`call args are not JSON5 (${(e as Error).message})`);
       }
       const previous = steps.at(-1);
-      if (Array.isArray(previous))
-        steps.push(["", ...args]); // `f(x)(y)`: call the result itself
+      if (Array.isArray(previous)) steps.push(["", ...args]); // `f(x)(y)`: call the result itself
       else {
         const name = steps.pop();
         if (typeof name !== "string") fail("a call must follow a name");

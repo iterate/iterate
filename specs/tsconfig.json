@@ -1,15 +1,9 @@
 {
   // The repo-root config files have no program of their own.
-  "include": ["**/*.ts", "../playwright.config.ts", "../knip.ts"],
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2024",
-    "module": "ESNext",
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": ["node"],
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "strict": true
-  }
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "../playwright.config.ts", "../knip.ts"]
 }

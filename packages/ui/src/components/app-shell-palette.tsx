@@ -165,34 +165,30 @@ function PaletteBody({
 }) {
   const [query, setQuery] = useState("");
   const links = useRef(new Map<string, HTMLAnchorElement>());
-  const projectRows = projects.map(
-    (project): PaletteRow => ({
-      kind: "project",
-      id: `project:${project.id}`,
-      label: project.slug,
-      group: "Projects",
-      detail: project.org?.name,
-      active: project.id === activeProjectId,
-      href: projectHref(project),
-    }),
-  );
+  const projectRows = projects.map((project): PaletteRow => ({
+    kind: "project",
+    id: `project:${project.id}`,
+    label: project.slug,
+    group: "Projects",
+    detail: project.org?.name,
+    active: project.id === activeProjectId,
+    href: projectHref(project),
+  }));
   const navRows = withoutProjectLinks(
     nav,
     projects.map((project) => ({
       label: project.slug,
       href: new URL(projectHref(project), location.href).href,
     })),
-  ).map(
-    ({ element, label, group, detail, active }, index): PaletteRow => ({
-      kind: "nav",
-      id: `nav:${index}`,
-      label,
-      group,
-      detail,
-      active,
-      element,
-    }),
-  );
+  ).map(({ element, label, group, detail, active }, index): PaletteRow => ({
+    kind: "nav",
+    id: `nav:${index}`,
+    label,
+    group,
+    detail,
+    active,
+    element,
+  }));
   const groups = filterPaletteEntries([...navRows, ...projectRows], query);
   return (
     <Command shouldFilter={false} loop className="p-0">

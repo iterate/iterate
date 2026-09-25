@@ -18,7 +18,7 @@
 //   doppler run --config prd        -- pnpm tsx scripts/ci/do-duration-probe.ts
 //   doppler run --config preview_3  -- pnpm tsx scripts/ci/do-duration-probe.ts --hours 6
 //
-// Flags (env or CLI):
+// Flags:
 //   --hours N                 lookback window in hours (default 24)
 //   --threshold-hours N       wallTimeP99 ceiling per invocation, in hours (default 1)
 //   --prefix STR              only scripts whose name starts with STR (default "os-")
@@ -28,25 +28,14 @@
 //   --json                    human report moves to stderr; stdout carries one
 //                             ProbeSummary JSON line (for the CI alert wrapper)
 
+import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env var ${name}`);
   return value;
-}
-
-function flag(name: string, fallback: number): number {
-  const fromCli = process.argv.indexOf(`--${name}`);
-  if (fromCli !== -1 && process.argv[fromCli + 1] !== undefined)
-    return Number(process.argv[fromCli + 1]);
-  return fallback;
-}
-
-function flagStr(name: string, fallback: string): string {
-  const fromCli = process.argv.indexOf(`--${name}`);
-  if (fromCli !== -1 && process.argv[fromCli + 1] !== undefined) return process.argv[fromCli + 1]!;
-  return fallback;
 }
 
 interface CfGraphqlResponse<T> {
@@ -238,16 +227,47 @@ async function proveCredentials(input: { accountTag: string; apiToken: string })
   }
 }
 
-async function main(): Promise<void> {
+/** Both checks against Cloudflare's GraphQL analytics (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID);
+ *  exits 1 when either finds its signature, or when the probe itself fails. */
+export default async function doDurationProbe(
+  options: {
+    /** Lookback window in hours. */
+    hours?: number;
+    /** wallTimeP99 ceiling per invocation, in hours. */
+    thresholdHours?: number;
+    /** Only scripts whose name starts with this. */
+    prefix?: string;
+    /** Account-wide active-time ceiling per hour, in DO-hours. */
+    maxAccountDoHours?: number;
+    /** The human report moves to stderr; stdout carries one ProbeSummary JSON line. */
+    json?: boolean;
+  } = {},
+): Promise<void> {
+  try {
+    await probe(options);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+  if (process.exitCode === 1) process.exit(1);
+}
+
+async function probe(options: {
+  hours?: number;
+  thresholdHours?: number;
+  prefix?: string;
+  maxAccountDoHours?: number;
+  json?: boolean;
+}): Promise<void> {
   const accountTag = requireEnv("CLOUDFLARE_ACCOUNT_ID");
   const apiToken = requireEnv("CLOUDFLARE_API_TOKEN");
-  const lookbackHours = flag("hours", 24);
-  const thresholdHours = flag("threshold-hours", 1);
-  const maxAccountDoHours = flag("max-account-do-hours", 500);
-  const prefix = flagStr("prefix", "os-");
+  const lookbackHours = options.hours ?? 24;
+  const thresholdHours = options.thresholdHours ?? 1;
+  const maxAccountDoHours = options.maxAccountDoHours ?? 500;
+  const prefix = options.prefix || "os-";
   // --json: the human report moves to stderr and stdout carries exactly one
   // ProbeSummary JSON line, for the CI alert wrapper.
-  const json = process.argv.includes("--json");
+  const json = options.json ?? false;
   const report = json ? console.error : console.log;
   const thresholdMicros = thresholdHours * 3.6e9; // hours → microseconds
 
@@ -354,7 +374,5 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (isMainModule(import.meta.url))
+  void createCli({ ...import.meta, name: "do-duration-probe" }).run();

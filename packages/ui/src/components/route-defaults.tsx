@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Button } from "./button.tsx";
+import { capturePosthogException } from "./posthog.tsx";
 import { Spinner } from "./spinner.tsx";
 
 export function DefaultPendingComponent() {
@@ -37,6 +38,7 @@ type ErrorFallbackProps = {
 
 export function DefaultErrorComponent({ error, reset, secondaryAction }: ErrorFallbackProps) {
   const message = error instanceof Error ? error.message : "An unexpected error occurred";
+  useEffect(() => capturePosthogException(error), [error]);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-4 text-center">

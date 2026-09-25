@@ -4,27 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run --reporter=default --reporter=../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
     "@octokit/rest": "^22.0.0",
-    "@slack/web-api": "^7.14.1",
+    "@slack/web-api": "^8.1.1",
     "aws4fetch": "1.0.20",
-    "capnweb": "npm:@iterate-com/capnweb@^0.12.3",
+    "capnweb": "catalog:",
     "hyparquet-writer": "0.16.10",
-    "yaml": "^2.8.3",
-    "zod": "4.5.4"
+    "yaml": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@jridgewell/sourcemap-codec": "^1.5.5",
-    "@playwright/test": "1.60.0",
-    "@tanstack/router-generator": "1.166.17",
-    "@types/node": "^25.0.10",
+    "@jridgewell/sourcemap-codec": "^1.6.0",
+    "@playwright/test": "catalog:",
+    "@tanstack/router-generator": "1.167.38",
+    "@types/node": "catalog:",
     "hyparquet": "1.31.1",
-    "trpc-cli": "0.15.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.7"
+    "trpc-cli": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

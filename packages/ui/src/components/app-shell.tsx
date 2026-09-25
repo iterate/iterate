@@ -51,6 +51,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "./sidebar.tsx";
+import { resetPosthog } from "./posthog.tsx";
 
 /** A project as the switcher lists it; `org` is its organization, when the app knows it — grouped
  *  by the id (two organizations may share a name), labelled by the name. */
@@ -374,7 +375,12 @@ function AccountMenu({ email, actions }: { email: string; actions?: ReactNode })
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem onClick={() => logout.current?.requestSubmit()}>
+              <DropdownMenuItem
+                onClick={() => {
+                  resetPosthog();
+                  logout.current?.requestSubmit();
+                }}
+              >
                 <LogOutIcon />
                 <span>Sign out</span>
               </DropdownMenuItem>

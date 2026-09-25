@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../../tsconfig.app.json",
   "compilerOptions": {
     // Type-checked as a Worker: the DOM lib's globals conflict with @cloudflare/workers-types, so the
     // few DOM members the issuer pages use are declared in src/dom.d.ts.

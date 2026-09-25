@@ -16,22 +16,13 @@
 // models say numbers as digits or as words, so ask for either: --expect "132|thirty-two".
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { credentials, disposeSessions, session } from "./client.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const args = new Map<string, string>();
-for (let i = 2; i < process.argv.length; i += 2) {
-  const key = process.argv[i];
-  const value = process.argv[i + 1];
-  if (!key?.startsWith("--") || !value) throw new Error(`usage: --flag value…, got ${key}`);
-  args.set(key.slice(2), value);
-}
-const PROJECT = process.env.PROJECT || "prj-voice";
-const DEVICE = args.get("device") || "home_assistant_voice_preview_edition";
-const PROMPT = args.get("prompt") || "Hello there. Please reply with the single word banana.";
-const EXPECT = new RegExp(args.get("expect") || "banana", "i");
 type Health = Record<string, unknown> & {
   callActive?: boolean;
   conversation?: string;
@@ -54,7 +45,23 @@ async function healthWithRetry(kit: any, attempts = 20): Promise<Health> {
   throw last;
 }
 
-async function main(): Promise<void> {
+/** Proves a physical board end to end on the platform, out loud, through real air: a remote press,
+ *  the prompt spoken out of this Mac's speaker, the transcripts checked. PROJECT (env) names the
+ *  project, default prj-voice. */
+export default async function voiceBoard(
+  options: {
+    /** The device's `itx.clients.` name. */
+    device?: string;
+    /** What this Mac's speaker says to the board. */
+    prompt?: string;
+    /** Case-insensitive regular expression tested against what the board said back. */
+    expect?: string;
+  } = {},
+): Promise<void> {
+  const PROJECT = process.env.PROJECT || "prj-voice";
+  const DEVICE = options.device || "home_assistant_voice_preview_edition";
+  const PROMPT = options.prompt || "Hello there. Please reply with the single word banana.";
+  const EXPECT = new RegExp(options.expect || "banana", "i");
   const root = session().authenticate(credentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
@@ -178,4 +185,4 @@ async function main(): Promise<void> {
   process.exit(verdict === "PASS" ? 0 : 1);
 }
 
-await main();
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "voice-board" }).run();

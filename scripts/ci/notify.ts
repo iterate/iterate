@@ -1,4 +1,5 @@
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
 import { getSlackClient, slackChannelIds, slackEscape } from "./slack.ts";
 
@@ -139,32 +140,36 @@ function readOption(name: string) {
   return value;
 }
 
-async function main() {
-  const command = process.argv[2];
-  if (command === "deploy-success" || command === "deploy-failure") {
-    await notifyDeploy({
-      app: readOption("APP_DISPLAY_NAME"),
-      status: command === "deploy-success" ? "success" : "failure",
-      commitSha: readOption("GITHUB_SHA"),
-      runUrl: getRunUrl(),
-      publicUrl: process.env.PUBLIC_URL,
-    });
-    return;
-  }
-
-  if (command === "workflow-failure") {
-    await notifyWorkflowFailure();
-    return;
-  }
-
-  if (command === "pr-update") {
-    await notifyPullRequestUpdate();
-    return;
-  }
-
-  throw new Error(`Unknown notify command: ${command || "(missing)"}`);
+/** Posts the prd deploy success line for APP_DISPLAY_NAME at GITHUB_SHA (PUBLIC_URL links the app). */
+export async function deploySuccess() {
+  await notifyDeploy({
+    app: readOption("APP_DISPLAY_NAME"),
+    status: "success",
+    commitSha: readOption("GITHUB_SHA"),
+    runUrl: getRunUrl(),
+    publicUrl: process.env.PUBLIC_URL,
+  });
 }
 
-if (isMainModule(import.meta.url)) {
-  await main();
+/** Posts the prd deploy failure page for APP_DISPLAY_NAME at GITHUB_SHA. */
+export async function deployFailure() {
+  await notifyDeploy({
+    app: readOption("APP_DISPLAY_NAME"),
+    status: "failure",
+    commitSha: readOption("GITHUB_SHA"),
+    runUrl: getRunUrl(),
+    publicUrl: process.env.PUBLIC_URL,
+  });
 }
+
+/** Posts the failed workflow run to Slack. */
+export async function workflowFailure() {
+  await notifyWorkflowFailure();
+}
+
+/** Posts the pull request event (GITHUB_EVENT_PATH) to Slack. */
+export async function prUpdate() {
+  await notifyPullRequestUpdate();
+}
+
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "notify" }).run();

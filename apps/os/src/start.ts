@@ -27,7 +27,7 @@ const issuerServerFunctionRequests = createMiddleware().server(
     const body = request.body && request.clone().body;
     if (body) {
       const reader = body.getReader();
-      for (let read = 0; ; ) {
+      for (let read = 0; ;) {
         const chunk = await reader.read();
         if (chunk.done) break;
         read += chunk.value.byteLength;

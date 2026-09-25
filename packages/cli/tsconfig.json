@@ -1,19 +1,8 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "nodenext",
-    "lib": ["esnext", "dom"],
-    "types": ["node"],
-    "strict": true,
-    "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "rewriteRelativeImportExtensions": true,
-    "sourceMap": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true
+    "lib": ["ES2024", "ESNext.Disposable", "DOM"],
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tsdown.config.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*.ts", "tsdown.config.ts", "vitest.config.ts"]
 }

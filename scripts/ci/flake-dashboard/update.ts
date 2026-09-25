@@ -12,14 +12,22 @@
 import { createSign } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { ciBucketEnvs } from "../../../envs.ts";
 import { createOctokit } from "../github.ts";
 import { DASHBOARD_MARKER, renderDashboard } from "./dashboard.ts";
 import { readSuiteRuns } from "./evidence.ts";
 
-async function main() {
-  const dryRun = process.argv.includes("--dry-run");
+/** Reads CI's recent flake records and suite summaries from R2 and rewrites the flake dashboard
+ *  issue when its body changed. */
+export default async function update(
+  options: {
+    /** Print the body instead of writing the issue. */
+    dryRun?: boolean;
+  } = {},
+) {
+  const dryRun = options.dryRun ?? false;
   const repository = process.env.GITHUB_REPOSITORY || "iterate/iterate";
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new Error(`GITHUB_REPOSITORY is not owner/repo: ${repository}`);
@@ -146,4 +154,5 @@ async function findDashboardIssue(github: Octokit, repository: { owner: string; 
   return issues.find((issue) => !issue.pull_request && issue.body?.startsWith(DASHBOARD_MARKER));
 }
 
-if (isMainModule(import.meta.url)) await main();
+if (isMainModule(import.meta.url))
+  void createCli({ ...import.meta, name: "flake-dashboard-update" }).run();

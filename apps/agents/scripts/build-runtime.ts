@@ -2,6 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build, type Plugin } from "esbuild";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 
 /** The SDK modules (and zod, which the SDK bundles) the platform injects as `./processor.js` into
  *  every loaded isolate, so a loaded bundle carries none of them. */
@@ -55,7 +57,15 @@ export async function buildAgentRuntime(): Promise<string> {
     result.outputFiles[0]!.text
   );
 }
-if (process.argv[1]?.endsWith("build-runtime.ts")) {
+
+/** Rebuilds runtime/with-itx-module.ts and configs/with-agents/agents.js from this app's runtime,
+ *  or with --check fails when either committed file is stale. */
+export default async function buildRuntime(
+  options: {
+    /** Compare with the committed files instead of writing them. */
+    check?: boolean;
+  } = {},
+) {
   // with-itx-module.ts first: the runtime bundle embeds it.
   const outputs: [string, () => Promise<string>][] = [
     [new URL("../runtime/with-itx-module.ts", import.meta.url).pathname, buildWithItxModule],
@@ -66,7 +76,7 @@ if (process.argv[1]?.endsWith("build-runtime.ts")) {
   ];
   for (const [file, generate] of outputs) {
     const source = await generate();
-    if (process.argv.includes("--check")) {
+    if (options.check) {
       if ((await readFile(file, "utf8")) !== source)
         throw new Error(
           `${path.basename(file)} is stale. Run pnpm --dir apps/agents runtime:build`,
@@ -76,3 +86,5 @@ if (process.argv[1]?.endsWith("build-runtime.ts")) {
     }
   }
 }
+
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "build-runtime" }).run();

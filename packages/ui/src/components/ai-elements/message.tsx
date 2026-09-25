@@ -3,7 +3,7 @@
 import { cn } from "cn";
 import type { ComponentProps, ComponentType, HTMLAttributes } from "react";
 import { Suspense, lazy, memo } from "react";
-import type { StreamdownProps } from "streamdown";
+import type { ExtraProps, StreamdownProps } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: "user" | "assistant" | "system" | "tool";
@@ -49,7 +49,7 @@ type MarkdownCodeProps = ComponentProps<"code"> & {
   };
 };
 
-function MessageMarkdownPre({ children }: ComponentProps<"pre">) {
+function MessageMarkdownPre({ children }: ComponentProps<"pre"> & ExtraProps) {
   return children;
 }
 

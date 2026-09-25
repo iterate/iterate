@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
 
 /** The registry items packages/ui vendors: what `shadcn add` is asked for. Each writes
@@ -187,7 +188,8 @@ function drift() {
   });
 }
 
-async function check() {
+/** Fails when a vendored file differs from what `shadcn add` writes, printing each diff. */
+export async function check() {
   const found = drift();
   if (found.length === 0)
     return console.log(`${VENDORED_FILES.length} vendored files match upstream byte for byte`);
@@ -210,7 +212,13 @@ async function check() {
   );
 }
 
-async function report(dryRunOnly: boolean) {
+/** Posts upstream's changes to the vendored files to #ci, once a week per drift. */
+export async function report(
+  options: {
+    /** Print the message instead of posting it. */
+    dryRun?: boolean;
+  } = {},
+) {
   const found = drift();
   console.log(JSON.stringify({ drift: found }));
   const slack = getSlackClient();
@@ -229,29 +237,14 @@ async function report(dryRunOnly: boolean) {
   if (!text)
     return console.log("shadcn upstream: no change since the last report, nothing to post");
   console.log(text);
-  if (!dryRunOnly) await slack.chat.postMessage({ channel, text });
+  if (!options.dryRun) await slack.chat.postMessage({ channel, text });
 }
 
-function refresh() {
+/** Rewrites every vendored file with `shadcn add <every item> -o -y`. */
+export function refresh() {
   const run = shadcnAdd(["-o", "-y"]);
   process.stdout.write(`${run.stdout}${run.stderr}`);
   if (run.status !== 0) throw new Error(`shadcn add exited ${run.status}`);
 }
 
-if (isMainModule(import.meta.url)) {
-  const [command, ...rest] = process.argv.slice(2);
-  const done =
-    command === "check"
-      ? check()
-      : command === "report"
-        ? report(rest.includes("--dry-run"))
-        : command === "refresh"
-          ? Promise.resolve(refresh())
-          : Promise.reject(
-              new Error("usage: shadcn-drift.ts check | report [--dry-run] | refresh"),
-            );
-  done.catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
-}
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "shadcn-drift" }).run();

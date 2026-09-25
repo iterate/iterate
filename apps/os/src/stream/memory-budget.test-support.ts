@@ -369,7 +369,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     // The durable blobs at or below the persisted offset (ephemeral live-state deltas take offsets
     // too, so offsets are not item counts): what a consistent checkpoint must hold, exactly.
     let persistedBlobsThrough = 0;
-    for (let after = 0; ; ) {
+    for (let after = 0; ;) {
       const page = await stream.read(after, 500);
       for (const event of page.events)
         if (event.type === "blob" && event.offset <= (persisted?.reducedThroughOffset ?? 0))

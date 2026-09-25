@@ -1,17 +1,5 @@
 {
-  "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "lib": ["esnext"],
-    "types": ["node"],
-    "jsx": "react-jsx",
-    "strict": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "moduleResolution": "bundler",
-    "skipLibCheck": true
-  },
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"], "jsx": "react-jsx" },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

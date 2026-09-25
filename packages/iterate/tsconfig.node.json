@@ -1,18 +1,15 @@
 {
-  // The Node entries' declarations: `iterate/node` and `iterate/stream/test-support` (node:sqlite).
-  "files": ["src/node.ts", "src/stream/test-support.ts"],
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["node"],
-    "strict": true,
-    "declaration": true,
-    "emitDeclarationOnly": true,
-    "rootDir": "src",
-    "outDir": "dist",
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true
-  }
+  // The Node entries (`iterate/node`, `iterate/stream/test-support`), the tests and the build and
+  // test configs. The tests import the SDK, so the Cloudflare types stay.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types/experimental", "node"] },
+  "include": [
+    "src/node.ts",
+    "src/stream/test-support.ts",
+    "src/test-support",
+    "src/**/*.test.*",
+    "tsdown.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": []
 }

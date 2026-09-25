@@ -30,7 +30,7 @@ Copy these files from `apps/notes`:
 - `src/router.tsx`, `src/routes/__root.tsx`, and `src/routes/_auth.tsx`, which is `ssr: false`
   with `createIterateClient({ scopes })` in `beforeLoad`.
 - `public/client-logo.svg`, the logo the consent page shows, and `tsconfig.json`, which extends
-  `tsconfig.base.json`.
+  `tsconfig.app.json`.
 
 Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 

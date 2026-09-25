@@ -31,6 +31,7 @@ import {
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
+import { vitestReporters } from "../../packages/shared/src/test-support/e2e-policy/vitest-reporters.ts";
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -94,6 +95,8 @@ export default defineConfig({
     // option: unit and workers run as one group, which vitest refuses to split between two
     // `maxWorkers`; e2e sets its own.
     maxWorkers: process.env.CI ? 7 : undefined,
+    // A ROOT option: every project's runs, e2e's included, write the retry telemetry CI uploads.
+    reporters: vitestReporters,
     globalSetup: ["./vitest.global-setup.ts"],
     // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
     onUnhandledError,
