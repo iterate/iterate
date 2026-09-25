@@ -48,6 +48,16 @@ test.each([
   );
 });
 
+test("viewing as someone over a held sign-in asks first: a GET signs nobody out, the button POSTs the sign-out and returns to the same login", async () => {
+  // the helper's session has no `end` or `discard`: touching either fails the test
+  const path = "/.auth/login?act_as=bob%40example.com&next=%2F&scope=iterate";
+  const response = await login(path, ["iterate"]);
+  expect(response?.status).toBe(200);
+  const html = await response!.text();
+  expect(html).toContain("<h1>View notes.example as <code>bob@example.com</code>?</h1>");
+  expect(html).toContain(`action="/.auth/logout?next=${encodeURIComponent(path)}"`);
+});
+
 test("the permissions line names every held scope", async () => {
   const response = await login("/.auth/login?next=%2F&project=acme", [
     "iterate",

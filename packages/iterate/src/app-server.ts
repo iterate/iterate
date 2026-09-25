@@ -238,6 +238,21 @@ async function signInAgainPage(input: {
   });
 }
 
+/** Before viewing this app as someone else (`/.auth/login?act_as=`) over a sign-in this browser
+ *  holds: who, and that it ends the sign-in here. Continue is a same-origin POST to the logout,
+ *  which comes back to the same login with nothing held — a link alone signs nobody out. */
+function viewAsPage(input: { url: URL; actAs: string; issuer: string; defaultIssuer: string }) {
+  const { url, actAs, issuer, defaultIssuer } = input;
+  const dress = dressOf(issuer, defaultIssuer);
+  const back = nextPathOf(url.pathname + url.search, url.origin);
+  return gatePage({
+    title: "View as someone else",
+    head: dress.head,
+    csp: dress.csp,
+    body: `${dress.mark}<h1>View ${text(url.host)} as <code>${text(actAs)}</code>?</h1><p class="muted">This ends your own sign-in to <strong>${text(url.host)}</strong>. Stop impersonating signs you back in.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(back)}"><button class="primary" type="submit">Continue</button><a class="quiet" href="/">Cancel</a></form>`,
+  });
+}
+
 /** `/.auth/connect` — the one page that may bind this browser to an issuer other than the
  *  deployment's own: it names the issuer's host in plain text, says what it will end, and asks. The
  *  Continue button is a same-origin POST; the page loads nothing from the issuer it names. */
@@ -457,18 +472,15 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const host = await held();
     const target = host || { issuer, resource };
     // VIEW THIS APP AS SOMEONE ELSE (`?act_as=<email>`, the admin app's link): always a fresh
-    // authorization, whatever this browser holds — this app's own sign-in ends here — and the
-    // issuer's consent decides, as the admin it knows: anyone else is refused there (apps/os
-    // consent.ts). The grant it issues is the other person's, for an hour; signing out of it signs
-    // back in as the admin, whom the issuer still knows.
+    // authorization, and the issuer's consent decides, as the admin it knows: anyone else is refused
+    // there (apps/os consent.ts). The grant it issues is the other person's, for an hour; signing
+    // out of it signs back in as the admin, whom the issuer still knows. A GET never signs out: a
+    // browser signed in here first gets a page whose button POSTs the sign-out, then comes back to
+    // this very login with nothing held.
     const actAs = config.loginPage ? null : url.searchParams.get("act_as");
-    if (actAs && session) {
-      try {
-        await session.end();
-      } catch {
-        await session.discard();
-      }
-    }
+    if (actAs && (await session?.bearer()))
+      return viewAsPage({ url, actAs, issuer: target.issuer, defaultIssuer: issuer });
+    if (actAs) await session?.discard();
     const bearer = actAs ? null : await session?.bearer();
     if (bearer) {
       const probe = await config.api(
