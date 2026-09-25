@@ -1,7 +1,8 @@
 // The folded log as ONE virtual list in its own scroll region (TanStack Virtual): only the rows in
 // view, plus an overscan, are in the DOM, so 100,000 events scroll like 100. Opened folds list their
-// members as rows of their own. Row 0 is the top of what is loaded: "Load older events", a spinner
-// while a page is read, or the start of the log.
+// members as rows of their own. While there is more log below what is loaded, row 0 is its top:
+// "Load older events", or a spinner while a page is read; once the whole log is loaded there is no
+// such row — `#1` says it is the start.
 //
 // The scheme is the old platform's feed's (apps/os `stream-feed-view.tsx`, removed in #2837; its
 // failure modes in #1847/#1848): the stick (stick-to-bottom.ts) owns the tail in DOM truth, so
@@ -12,11 +13,11 @@
 // view) asks for the page below it. Off the tail, a "Jump to latest" pill (with how many rows came
 // in since) pins it again. The inspected row is scrolled into view once per inspection (the
 // inspector paging the log, a link to an event).
-import { useCallback, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Spinner } from "../spinner.tsx";
-import { EventRow } from "./event-row.tsx";
+import { EventRow, RowGutter } from "./event-row.tsx";
 import { DaySeparator, HousekeepingRow, RepeatRow } from "./feed-rows.tsx";
 import { actorLabel } from "./filters.tsx";
 import { type FeedItem, lastEventOf } from "./folds.tsx";
@@ -99,25 +100,28 @@ export function FeedList({
   useEffect(() => {
     if (followTail) stick();
   }, [followTail, stick]);
-  // virtual index 0 is the top row; row i is virtual index i + 1
+  const { loadOlder, loading, exhausted } = older;
+  // while more log lies below what is loaded, virtual index 0 is the top row and row i is virtual
+  // index i + 1; once it is all loaded, row i is index i
+  const top = exhausted ? 0 : 1;
   const getItemKey = useCallback(
-    (index: number) => (index === 0 ? "top" : rows[index - 1]!.key),
-    [rows],
+    (index: number) => (index < top ? "top" : rows[index - top]!.key),
+    [rows, top],
   );
   const estimateSize = useCallback(
     (index: number) => {
-      const row = index === 0 ? undefined : rows[index - 1];
-      if (!row) return 32;
-      // measured: a sentence 30, a raw line or a fold 27, both lines 48, a day 37
-      if (row.kind === "day") return 37;
-      if (row.kind === "member") return row.quiet ? 30 : 48;
-      if (row.kind !== "event") return 27;
-      return mode === "pretty-raw" ? 48 : mode === "raw" ? 27 : 30;
+      const row = index < top ? undefined : rows[index - top];
+      if (!row) return 28;
+      // every one-line row is 26px (event-row.tsx `rowClass`); a day 36; both lines 42
+      if (row.kind === "day") return 36;
+      if (row.kind === "member") return row.quiet ? 26 : 42;
+      if (row.kind !== "event") return 26;
+      return mode === "pretty-raw" ? 42 : 26;
     },
-    [rows, mode],
+    [rows, mode, top],
   );
   const virtualizer = useVirtualizer({
-    count: rows.length + 1,
+    count: rows.length + top,
     getScrollElement: () => scrollRef.current,
     estimateSize,
     getItemKey,
@@ -147,7 +151,7 @@ export function FeedList({
     const index = rows.findIndex((row) => rowOffset(row) === offset);
     if (index < 0) return; // folded away, or not loaded: the inspector shows it all the same
     release();
-    virtualizer.scrollToIndex(index + 1, { align: "auto" });
+    virtualizer.scrollToIndex(index + top, { align: "auto" });
   });
   // rows that came in since the reader left the tail, for the pill
   const lastOffset = rows.length > 0 ? lastOffsetOf(rows[rows.length - 1]!) : 0;
@@ -159,7 +163,6 @@ export function FeedList({
       if (rows[at]!.kind !== "day") arrived += 1;
 
   const firstInView = virtualItems[0]?.index ?? 0;
-  const { loadOlder, loading, exhausted } = older;
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller || loading || exhausted || rows.length === 0) return;
@@ -169,10 +172,6 @@ export function FeedList({
     if (firstInView < LOAD_OLDER_WITHIN_ROWS && (fits || !stuckRef.current)) loadOlder();
   }, [firstInView, loading, exhausted, loadOlder, rows.length, stuckRef]);
 
-  // the offset gutter fits the largest offset, `#` included, so every row's body starts in line
-  const gutter = {
-    "--offset-width": `${String(String(lastOffset).length + 1)}ch`,
-  } as CSSProperties;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
@@ -180,7 +179,6 @@ export function FeedList({
         role="log"
         aria-label="Events"
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-        style={gutter}
       >
         {rows.length === 0 ? (
           empty
@@ -198,10 +196,10 @@ export function FeedList({
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${String(virtualItem.start)}px)` }}
               >
-                {virtualItem.index === 0 ? (
-                  <OlderRow loading={loading} exhausted={exhausted} onLoad={loadOlder} />
+                {virtualItem.index < top ? (
+                  <OlderRow loading={loading} onLoad={loadOlder} />
                 ) : (
-                  renderRow(virtualItem.index - 1)
+                  renderRow(virtualItem.index - top)
                 )}
               </div>
             ))}
@@ -293,25 +291,16 @@ function lastOffsetOf(row: FeedItem | MemberRow): number {
   return row.kind === "member" ? row.event.offset : (lastEventOf(row)?.offset ?? 0);
 }
 
-/** The top of what is loaded: a way to read the page below it, that page being read, or the
- *  start of the log. One height in every state, so the rows below never shift when it changes. */
-function OlderRow({
-  loading,
-  exhausted,
-  onLoad,
-}: {
-  loading: boolean;
-  exhausted: boolean;
-  onLoad: () => void;
-}) {
+/** The top of what is loaded, while there is more below it: a way to read the page below, or that
+ *  page being read — in the body column, one height either way, so the rows below never shift. */
+function OlderRow({ loading, onLoad }: { loading: boolean; onLoad: () => void }) {
   return (
-    <div className="flex h-8 items-center justify-center gap-2 text-xs text-muted-foreground">
-      {exhausted ? (
-        "The start of the log"
-      ) : loading ? (
-        <>
+    <div className="flex h-7 items-center gap-x-3.5 px-3 sm:px-4 text-xs text-muted-foreground">
+      <RowGutter times />
+      {loading ? (
+        <span className="flex items-center gap-2">
           <Spinner /> Loading older events…
-        </>
+        </span>
       ) : (
         <button type="button" onClick={onLoad} className="underline-offset-2 hover:underline">
           Load older events

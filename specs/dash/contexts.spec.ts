@@ -1,10 +1,11 @@
 // The Dash's context explorer (apps/dash/src/routes/_auth/projects/$slug/contexts.$.tsx): every
-// context of a project, from the project's context registry, each opening live in the general-purpose
-// context view (packages/ui context-view), which appends events and reads a long log newest first.
+// context of a project, from the project's context registry, as a tree beside the context shown
+// (packages/ui context-tree), each opening live in the general-purpose context view (packages/ui
+// context-view), which appends events and reads a long log newest first.
 import { expect } from "@playwright/test";
 import { test } from "../test-support/test.ts";
 
-test("a project's contexts are listed from its registry, and one opens live and takes an appended event", async ({
+test("a project's contexts are a tree from its registry, and one opens live and takes an appended event", async ({
   page,
   baseURL,
   helpers,
@@ -16,8 +17,11 @@ test("a project's contexts are listed from its registry, and one opens live and 
     .cd("/demo/one")
     .append({ type: "manual/note-added", payload: { text: "seeded by the spec" } });
   await page.getByRole("link", { name: "Contexts", exact: true }).click();
-  const underRoot = page.getByRole("region", { name: "Contexts under this path" });
-  await underRoot.getByRole("link", { name: "demo/one", exact: true }).click();
+  // each context in the tree is a link named by its whole path (it reads as its last segment)
+  await page
+    .getByRole("navigation", { name: "Contexts" })
+    .getByRole("link", { name: "/demo/one", exact: true })
+    .click();
   await page.getByText("seeded by the spec").waitFor();
 
   await page.getByRole("button", { name: "Append event", exact: true }).click();
@@ -56,16 +60,14 @@ test("a long log opens at its newest events and reads older ones as the reader s
   expect(await page.locator("[data-index]").count()).toBeLessThan(300);
   // older pages load as the feed scrolls up, until the log's first event
   const feed = page.getByRole("log", { name: "Events" });
-  const start = feed.getByText("The start of the log");
-  while (!(await start.isVisible())) {
-    // to the top of what is loaded, which reads the page below it (a spinner while it does)
+  const first = feed.getByText("n 1", { exact: true });
+  while (!(await first.isVisible())) {
+    // to the top of what is loaded, which reads the page below it (a spinner while it does); once
+    // the whole log is loaded there is no top row, the first event is the top
     await feed.hover();
     await page.mouse.wheel(0, -1_000_000);
-    await feed
-      .getByText(/^(Loading older events|The start of the log|Load older events)/)
-      .waitFor();
+    await feed.getByText(/^(Loading older events|Load older events|n 1)$/).waitFor();
   }
-  await feed.getByText("n 1", { exact: true }).waitFor();
   expect(await page.locator("[data-index]").count()).toBeLessThan(300);
 });
 

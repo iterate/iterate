@@ -1,5 +1,5 @@
-// The path in the shell's header: Projects › <organization> › <project>, or Organizations ›
-// <organization>. The project is the one its route resolved (the shell hands it down); the
+// The path in the shell's header: Projects › <organization> › <project>, then the project's page
+// when it names itself (› Contexts), or Organizations › <organization>. The project is the one its route resolved (the shell hands it down); the
 // organization's name comes from the tree (components/organization-tree.tsx, live); the leading
 // segments hide on narrow screens.
 import { Link, useParams } from "@tanstack/react-router";
@@ -19,7 +19,7 @@ export function DashBreadcrumbs({
 }: {
   /** inside a project: the one the URL names */
   project: { id: string; slug: string; orgId: string } | null;
-  /** the label of a page outside /projects and /organizations (Sessions) */
+  /** the label a page names itself with (`staticData: { page }`): Sessions, or a project's Contexts */
   page?: string;
 }) {
   const { slug, orgId } = useParams({ strict: false });
@@ -27,11 +27,15 @@ export function DashBreadcrumbs({
   const org = tree.organizations.find(
     (candidate) => candidate.id === (project ? project.orgId : orgId),
   );
-  const crumbs: { label: string; to?: string; hideOnMobile?: boolean }[] = slug
+  const projectSlug = project?.slug || slug;
+  const crumbs: { label: string; to?: string; hideOnMobile?: boolean; mono?: boolean }[] = slug
     ? [
         { label: "Projects", to: "/projects", hideOnMobile: true },
         ...(org ? [{ label: org.name, hideOnMobile: true }] : []),
-        { label: project?.slug || slug },
+        page
+          ? { label: projectSlug!, to: `/projects/${projectSlug!}`, hideOnMobile: true, mono: true }
+          : { label: projectSlug!, mono: true },
+        ...(page ? [{ label: page }] : []),
       ]
     : orgId
       ? [
@@ -48,11 +52,16 @@ export function DashBreadcrumbs({
           return [
             <BreadcrumbItem key={`${crumb.label}-item`} className={hidden}>
               {last ? (
-                <BreadcrumbPage className={project ? "font-mono" : undefined}>
+                <BreadcrumbPage className={crumb.mono ? "font-mono" : undefined}>
                   {crumb.label}
                 </BreadcrumbPage>
               ) : crumb.to ? (
-                <BreadcrumbLink render={<Link to={crumb.to} />}>{crumb.label}</BreadcrumbLink>
+                <BreadcrumbLink
+                  className={crumb.mono ? "font-mono" : undefined}
+                  render={<Link to={crumb.to} />}
+                >
+                  {crumb.label}
+                </BreadcrumbLink>
               ) : (
                 <span>{crumb.label}</span>
               )}

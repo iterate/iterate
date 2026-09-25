@@ -1,6 +1,7 @@
 // The platform's own events, as sentences — what every context's log carries whatever the app:
 // the stream's lifecycle, its subscriptions, live state, the context's script runs. The view lays
 // an app's renderers over these (the app's win), so a page never shows `itx/woken {"incarnation"…}`.
+import { ContextPathText } from "./context-path.tsx";
 import { mono, record, str } from "./renderer-helpers.tsx";
 import type { EventInspectors, EventRenderers } from "./types.tsx";
 
@@ -19,26 +20,8 @@ export function isHousekeeping(type: string): boolean {
   );
 }
 
-/** How a marker reads: `wake` — the context's Durable Object started again (an eviction, a deploy),
- *  purple, as the old feed drew it; `lifecycle` — born, paused, resumed, a child, neutral. */
-export type MarkerTone = "wake" | "lifecycle";
-
-/** The context's lifecycle, which Pretty draws as a marker across the row rather than a sentence:
- *  where the log's life changed, visible while scrolling past (event-row.tsx). A wake inside a run of
- *  housekeeping stays in its fold. */
-export function markerToneOf(type: string): MarkerTone | undefined {
-  if (type === "events.iterate.com/itx/woken") return "wake";
-  if (
-    type === "events.iterate.com/itx/created" ||
-    type === "events.iterate.com/itx/paused" ||
-    type === "events.iterate.com/itx/resumed" ||
-    type === "events.iterate.com/itx/child-created"
-  )
-    return "lifecycle";
-  return undefined;
-}
-
-/** One line for a folded run of housekeeping: `woke ×3 · subscriptions ×8 · live state ×1`. */
+/** One line for a folded run of housekeeping: `woke, subscription ×8, live state` — a kind once,
+ *  its count only when it repeats. */
 export function housekeepingSummary(types: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const type of types) {
@@ -46,13 +29,15 @@ export function housekeepingSummary(types: readonly string[]): string {
       type === "events.iterate.com/itx/woken"
         ? "woke"
         : type.startsWith("events.iterate.com/itx/subscription-")
-          ? "subscriptions"
+          ? "subscription"
           : type === "events.iterate.com/itx/live-state-changed"
             ? "live state"
-            : "scheduled appends";
+            : "scheduled append";
     counts.set(label, (counts.get(label) || 0) + 1);
   }
-  return [...counts.entries()].map(([label, n]) => `${label} ×${String(n)}`).join(" · ");
+  return [...counts.entries()]
+    .map(([label, n]) => (n > 1 ? `${label} ×${String(n)}` : label))
+    .join(", ");
 }
 
 /** The inspector's rich bodies for the platform's events: a script run's code, its result. */
@@ -80,12 +65,21 @@ export const coreEventRenderers: EventRenderers = {
   "events.iterate.com/itx/created": () => quiet("The context was born"),
   "events.iterate.com/itx/woken": (e) => {
     const p = record(e.payload);
-    return quiet(`Woke (${str(p.reason, "?")}, incarnation ${String(p.incarnation)})`);
+    // the context's Durable Object started again (an eviction, a deploy): purple, as the old feed
+    // drew it, and nothing more
+    return (
+      <span className="text-purple-700">
+        Woke · {str(p.reason, "?")} · incarnation {String(p.incarnation)}
+      </span>
+    );
   },
   "events.iterate.com/itx/paused": (e) => quiet(`Paused ${str(record(e.payload).reason)}`),
   "events.iterate.com/itx/resumed": () => quiet("Resumed"),
-  "events.iterate.com/itx/child-created": (e) =>
-    quiet(`Child context ${str(record(e.payload).childPath)} created`),
+  "events.iterate.com/itx/child-created": (e) => (
+    <span className="text-muted-foreground">
+      Child context <ContextPathText path={str(record(e.payload).childPath)} /> created
+    </span>
+  ),
   "events.iterate.com/itx/subscription-configured": (e) => {
     const p = record(e.payload);
     const consumes = Array.isArray(p.consumes) ? p.consumes.map(String) : [];
