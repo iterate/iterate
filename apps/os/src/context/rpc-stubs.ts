@@ -672,18 +672,52 @@ export async function lendRpcStubOverPager(
   const attachPager = (ws: WebSocket): void => {
     pagerWebSocket = ws;
     ws.accept();
-    // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
-    // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the socket.
+    /** When the DO last answered on this pager (a keepalive ack or a page), and how many keepalives
+     *  it has left unanswered since. */
+    let answeredAt = Date.now();
+    let unanswered = 0;
+    /** Set once this pager is out of service; its late close event means nothing. */
+    let retired = false;
+    // THE PAGER'S LIVENESS: a keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
+    // waking it, every 500 ms; a pager that leaves three in a row unanswered is dropped and
+    // re-dialed. A deploy resets the DO and its end of every pager with it, but this end may hear no
+    // close for a minute: on prd 2026-09-25 a busy context reset at 13:16:33, its pagers' relay ends
+    // closed at 13:17:35 (all within 14 ms), and every stub lent in it was offline in between
+    // (visitors got 502s). Counted in keepalives SENT, never wall time, so an isolate that stalls
+    // does not read its own stall as the DO's silence. The keepalive also keeps the /api isolate warm.
     const keepalive = setInterval(() => {
+      if (unanswered >= 3) {
+        retired = true;
+        clearInterval(keepalive);
+        // Re-dial BEFORE closing: a DO that was only slow sees the new pager replace this one (a
+        // swap, never a detach that would un-set what names the key).
+        waitUntil(
+          redialPager({
+            code: 4000,
+            reason: `${unanswered} keepalives unanswered`,
+            answeredAt,
+          }).finally(() => {
+            try {
+              ws.close(4000, "keepalive unanswered");
+            } catch {
+              /* already closing */
+            }
+          }),
+        );
+        return;
+      }
+      unanswered += 1; // a send that throws is a keepalive the DO never answers
       try {
         ws.send(RPC_STUB_PAGER_KEEPALIVE_REQUEST);
       } catch {
-        clearInterval(keepalive);
+        /* closing: its close event, or three unanswered keepalives, takes it out of service */
       }
-    }, 30_000);
+    }, 500);
     // The keepalive ack rides this same socket, so anything that is not a page is ignored.
     ws.addEventListener("message", (event: MessageEvent) => {
       if (typeof event.data !== "string") return;
+      answeredAt = Date.now();
+      unanswered = 0;
       let page: unknown;
       try {
         page = JSON.parse(event.data);
@@ -695,13 +729,15 @@ export async function lendRpcStubOverPager(
     });
     ws.addEventListener("close", (event: CloseEvent) => {
       clearInterval(keepalive);
+      if (retired) return;
+      retired = true;
       // The lender ended it (dispose, the session broke), or the DO closed it cleanly (a newer pager
       // at this key replaced it): the lend is over and the dup goes back with the pager.
       if (lendEnded.reason || event.code === 1000) {
         disposeSessionRpcStub("was returned (its pager closed)");
         return;
       }
-      waitUntil(redialPager(event));
+      waitUntil(redialPager({ code: event.code, reason: event.reason, answeredAt }));
     });
   };
   /** The leg dropped under a live lend: dial again and take the new pager into service. Bounded:
@@ -715,8 +751,13 @@ export async function lendRpcStubOverPager(
    *  board gone, its /api socket closing) often loses its pager a moment before its own end reaches
    *  this lend, so the drop is logged with its outcome, only once the session proved live — back in
    *  service (a warn) or not (an ERROR: the client is still connected but unreachable through its
-   *  key, and the prd fault alarm pages on errors). */
-  const redialPager = async (dropped: CloseEvent): Promise<void> => {
+   *  key, and the prd fault alarm pages on errors). `downMs` counts from the pager's last answer,
+   *  the last moment the key was known reachable: a close heard late is downtime too. */
+  const redialPager = async (dropped: {
+    code: number;
+    reason: string;
+    answeredAt: number;
+  }): Promise<void> => {
     const droppedAt = Date.now();
     let lastFailure = "";
     const delaysMs = [0, 2_000, 4_000, 8_000, 16_000];
@@ -773,7 +814,7 @@ export async function lendRpcStubOverPager(
           code: dropped.code,
           reason: dropped.reason,
           attempt,
-          downMs: Date.now() - droppedAt,
+          downMs: Date.now() - dropped.answeredAt,
         });
         return;
       }
@@ -790,7 +831,7 @@ export async function lendRpcStubOverPager(
       code: dropped.code,
       reason: dropped.reason,
       lastFailure,
-      downMs: Date.now() - droppedAt,
+      downMs: Date.now() - dropped.answeredAt,
     });
     disposeSessionRpcStub("went offline (its pager dropped and could not be re-dialed)");
   };
