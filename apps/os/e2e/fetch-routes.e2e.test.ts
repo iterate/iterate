@@ -1,13 +1,14 @@
 // fetch-routes.e2e.test.ts — `itx.fetchRoutes` through `/api`, exactly as a production client
 // (the `iterate tunnel` CLI) spells it: a route set on the project's root, a config worker shaped
-// like the template's (configs/default/worker.ts) asking `match` and forwarding through its own
-// `env.ITX.fetch`, and a fetch-shaped stub lent by a plain Node capnweb client — the tunnel's shape
+// like the template's (configs/default/worker.ts) asking `match` and forwarding to the route's
+// target through its own `env.ITX.fetch`, and a fetch-shaped stub lent by a plain Node capnweb client — the tunnel's shape
 // minus the local port (the CLI itself is e2e/tunnel.e2e.test.ts). Pins:
 //   • HTTP reaches the lent stub on the route's host; a host no route takes is the config worker's
 //   • a WebSocket asking for a subprotocol (Vite's HMR asks for `vite-hmr`) opens: the provider's
 //     choice rides back to the eyeball's 101, or a spec-following client refuses the handshake
 //   • a private route: an anonymous page load is sent to sign in, an anonymous fetch gets the 401
-//   • the lend recalled: 502 naming the route; the route deleted: the config worker's own answer
+//   • the lend recalled: its rule goes with it, a 404; the route deleted: the config worker's own
+//     answer
 //   • `set` refuses a malformed route and appends nothing for a route that stands
 // The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
 
@@ -24,7 +25,7 @@ import {
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";
 
-test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the private route's sign-in, a 502 once the stub is gone, and the host back to the config worker once the route is deleted", async () => {
+test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the private route's sign-in, a 404 once the lend is recalled, and the host back to the config worker once the route is deleted", async () => {
   const slug = freshDnsSafeProjectSlug("fetch-routes");
   const projectId = await registerProject(slug);
   const itx = session().authenticate(adminCredentials()).projects.get(projectId);
@@ -62,11 +63,11 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
   provision[Symbol.dispose]();
   expect(
     await untilValue(
-      "the recalled tunnel answers 502",
+      "the recalled tunnel answers 404",
       () => fetchProjectUrl(blog),
-      (page) => page.status === 502,
+      (page) => page.status === 404,
     ),
-  ).toMatchObject({ status: 502, text: "tunnel-blog is not connected\n" });
+  ).toMatchObject({ status: 404, text: expect.stringContaining("itx.tunnels.blog") });
 
   await itx.fetchRoutes.set("tunnel-blog", null);
   expect(await itx.fetchRoutes.list()).toEqual([]);
@@ -80,6 +81,8 @@ test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it ap
     ["Tunnel_Blog", { requestMatcher: {}, target: "itx.x" }],
     ["no-target", { requestMatcher: {} }],
     ["bad-url", { requestMatcher: { url: { pathname: "(" } }, target: "itx.x" }],
+    ["files-slug", { requestMatcher: { routingSlug: "files" }, target: "itx.x" }],
+    ["builtins", { requestMatcher: {}, target: "itx.builtins.kv" }],
   ] as const)
     expect(await rejection(itx.fetchRoutes.set(name, route)), name).toMatchObject({
       code: "INVALID_INPUT",
@@ -107,12 +110,12 @@ const SRC_FETCH_ROUTER = {
   "cap.js": `import { ConfigWorker } from "./processor.js";
 export default class Router extends ConfigWorker {
   async fetch(request) {
-    const route = await this.withItx((itx) => itx.fetchRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
+    const route = await this.withItx((itx) => itx.fetchRoutes.match({ url: request.url, headers: request.headers }));
+    if (route?.authRequirement && !request.headers.has("x-itx-principal"))
+      return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
     if (route) {
-      if (route.authRequirement && !request.headers.get("x-itx-principal"))
-        return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
       const headers = new Headers(request.headers);
-      headers.set("x-itx-expression", \`itx.fetchRoutes.fetch(\${JSON.stringify(route.fetchRouteName)})\`);
+      headers.set("x-itx-expression", JSON.stringify(route.target));
       return this.env.ITX.fetch(new Request(request, { headers }));
     }
     return new Response("no route\\n", { status: 404 });

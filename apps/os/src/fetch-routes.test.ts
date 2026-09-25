@@ -6,6 +6,7 @@
 
 import { expect, test } from "vitest";
 import {
+  FetchRouteConfiguredPayload,
   matchFetchRoute,
   reduceFetchRouteConfigured,
   type FetchRouteTable,
@@ -92,6 +93,44 @@ test.for<{ name: string; facts: unknown[]; table: FetchRouteTable }>([
   },
 ])("reduceFetchRouteConfigured: $name", ({ facts, table }) => {
   expect(tableOf(facts)).toEqual(table);
+});
+
+// The target runs as the config worker's call, sent as JSON in `x-itx-expression`; the routing slug
+// is one the edge can name.
+test.for<{ name: string; route: object; error: RegExp | null }>([
+  { name: "a routing slug and a plain target", route: {}, error: null },
+  { name: "a target with a fetch step", route: { target: ["itx", "site", "fetch"] }, error: null },
+  {
+    name: "a builtins step",
+    route: { target: ["itx", "builtins", "rpcStubs", ["get", "blog"]] },
+    error: /no builtins step/,
+  },
+  {
+    name: "a non-ASCII target",
+    route: { target: ["itx", "tunnels", ["get", "blög"]] },
+    error: /ASCII/,
+  },
+  {
+    name: "a fetch call with args",
+    route: { target: ["itx", "site", ["fetch", "/x"]] },
+    error: /fetch takes no args/,
+  },
+  { name: "the reserved files slug", route: { routingSlug: "files" }, error: /reserved/ },
+  { name: "a slug with a double hyphen", route: { routingSlug: "a--b" }, error: /routing slug/ },
+  { name: "a slug starting with a digit", route: { routingSlug: "1blog" }, error: /routing slug/ },
+  { name: "a slug over 63", route: { routingSlug: "a".repeat(64) }, error: /63/ },
+])("FetchRouteConfiguredPayload: $name", ({ route, error }) => {
+  const { routingSlug = "blog", target = ["itx", "tunnels", "blog"] } = route as {
+    routingSlug?: string;
+    target?: unknown;
+  };
+  const parsed = FetchRouteConfiguredPayload.safeParse({
+    fetchRouteName: "tunnel-blog",
+    requestMatcher: { routingSlug },
+    target,
+  });
+  if (!error) expect(parsed).toMatchObject({ success: true });
+  else expect(parsed.error?.message).toMatch(error);
 });
 
 test("reduceFetchRouteConfigured: a fact that changes nothing answers undefined (the core reduce's keep-the-state signal); one that changes answers a new table and leaves the given one as it was", () => {

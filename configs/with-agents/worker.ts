@@ -11,26 +11,18 @@ export default class extends ConfigWorker {
   // Every host of the project reaches this fetch. The platform names the host's routing slug in
   // `x-iterate-routing-slug` (`blog` for `blog--<project>.<base>`; absent on the apex): route on it.
   async fetch(request) {
-    // The project's fetch routes first (`itx.fetchRoutes`; `iterate tunnel` sets one per tunnel):
-    // a matched request goes to its route's target, a private route's anonymous visitor to sign in.
+    // Fetch routes first (`iterate tunnel` sets one): a matched request goes to its route's target.
     const route = await this.withItx((itx) =>
-      itx.fetchRoutes.match({
-        method: request.method,
-        url: request.url,
-        headers: request.headers,
-      }),
+      itx.fetchRoutes.match({ url: request.url, headers: request.headers }),
     );
+    if (route?.authRequirement && !request.headers.has("x-itx-principal"))
+      return new Response("Sign in\n", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Bearer realm="iterate"' },
+      });
     if (route) {
-      if (route.authRequirement && !request.headers.get("x-itx-principal"))
-        return new Response("Sign in\n", {
-          status: 401,
-          headers: { "WWW-Authenticate": 'Bearer realm="iterate"' },
-        });
       const headers = new Headers(request.headers);
-      headers.set(
-        "x-itx-expression",
-        `itx.fetchRoutes.fetch(${JSON.stringify(route.fetchRouteName)})`,
-      );
+      headers.set("x-itx-expression", JSON.stringify(route.target));
       return this.env.ITX.fetch(new Request(request, { headers }));
     }
     const routingSlug = request.headers.get("x-iterate-routing-slug");

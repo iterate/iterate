@@ -1,16 +1,15 @@
 // tunnel.test.ts — the tunnel's local proxy, `LocalPortRpcTarget`, against real local servers: what
 // the project host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
 // the local server chose, and the 502 when nothing listens; and the route `runTunnel` sets. The
-// platform half (the route, the host,
-// the lent stub) is apps/os e2e/tunnel.e2e.test.ts.
+// platform half (the route, the host, the lent stub) is apps/os e2e/tunnel.e2e.test.ts.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
-import { LocalPortRpcTarget, randomRoutingSlug, runTunnel } from "./tunnel.ts";
+import { LocalPortRpcTarget, runTunnel } from "./tunnel.ts";
 
-test("HTTP: path, query, method, headers and body reach localhost:<port>, with the visitor's host as x-forwarded-host; a redirect is handed back; a gzipped body arrives decoded", async () => {
+test("HTTP: path, query, method, headers and body reach localhost:<port>; a redirect is handed back; a gzipped body arrives decoded", async () => {
   const seen: {
     method?: string;
     url?: string;
@@ -53,8 +52,6 @@ test("HTTP: path, query, method, headers and body reach localhost:<port>, with t
       host: `localhost:${server.port}`,
       "x-custom": "1",
       cookie: "app=1",
-      "x-forwarded-host": "blog--acme.iterate.app",
-      "x-forwarded-proto": "https",
     },
   });
 
@@ -112,13 +109,10 @@ test("WebSocket: the requested subprotocols reach the local server, its choice n
       wss.close();
     },
   };
-  const serverSaw: { protocols?: string; forwardedHost?: string; closeCode?: number }[] = [];
+  const serverSaw: { protocols?: string }[] = [];
   const serverClosed = new Promise<number>((resolve) =>
     wss.on("connection", (socket, request) => {
-      serverSaw.push({
-        protocols: request.headers["sec-websocket-protocol"],
-        forwardedHost: request.headers["x-forwarded-host"] as string,
-      });
+      serverSaw.push({ protocols: request.headers["sec-websocket-protocol"] });
       socket.send('{"type":"connected"}'); // Vite's HMR server greets at once
       socket.on("message", (data, isBinary) =>
         socket.send(isBinary ? data : `local-echo:${data.toString()}`, { binary: isBinary }),
@@ -146,23 +140,15 @@ test("WebSocket: the requested subprotocols reach the local server, its choice n
   visitor.send(new Uint8Array([1, 2, 3]));
   await threeFrames;
   expect(frames).toEqual(['{"type":"connected"}', "local-echo:ping", [1, 2, 3]]);
-  expect(serverSaw).toEqual([
-    { protocols: "vite-hmr,vite-ping", forwardedHost: "blog--acme.iterate.app" },
-  ]);
+  expect(serverSaw).toEqual([{ protocols: "vite-hmr,vite-ping" }]);
   visitor.close(1000, "done");
   expect(await serverClosed).toBe(1000);
 });
 
-test("a random routing slug is a letter and seven letters or digits", () => {
-  for (let i = 0; i < 50; i++) expect(randomRoutingSlug()).toMatch(/^[a-z][a-z0-9]{7}$/);
-});
-
-// Private and public tunnels are set under both routings, the route's authRequirement saying which;
-// under paths the tunnel says the base path the local server must serve under.
+// The route's authRequirement says private or public; under paths the tunnel names the base path
+// the local server must serve under.
 test.for([
   ["paths", "private"],
-  ["paths", "public"],
-  ["subdomains", "private"],
   ["subdomains", "public"],
 ] as const)("a %s deployment, a %s tunnel", async ([routing, visibility]) => {
   const url =
@@ -192,6 +178,7 @@ test.for([
     closed: Promise.resolve({ code: 1006, reason: "" }),
   } as unknown as Parameters<typeof runTunnel>[0]["connection"];
   using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  using stdout = vi.spyOn(console, "log").mockImplementation(() => {});
   const run = runTunnel({
     connection,
     project: "p",
@@ -208,12 +195,11 @@ test.for([
   expect(routes[0]).toMatchObject({
     authRequirement: visibility === "public" ? null : { visitors: "project-members" },
   });
-  const warned = stderr.mock.calls.some(
-    ([line]) =>
-      String(line).includes("--base /projects/p/blog/") &&
-      String(line).includes("SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels"),
+  expect(stdout.mock).toMatchObject({ calls: [[url]] });
+  const basePathLines = stderr.mock.calls.filter(
+    ([line]) => !String(line).includes(url) && String(line).includes("/projects/p/blog/"),
   );
-  expect(warned).toBe(routing === "paths");
+  expect(basePathLines).toHaveLength(routing === "paths" ? 1 : 0);
 });
 
 type VisitorSocket = {

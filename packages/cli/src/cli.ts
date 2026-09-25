@@ -534,7 +534,6 @@ const launcherProcedures = {
           .optional()
           .describe("Anyone may use it (default: signed-in project members only)"),
         project: z.string().optional().describe("Project id or slug"),
-        json: z.boolean().optional().describe("Emit the URL and each request as NDJSON"),
       }),
     )
     .meta({
@@ -550,7 +549,6 @@ const launcherProcedures = {
         port: input.port,
         routingSlug: input.name,
         public: input.public,
-        json: input.json,
       });
     }),
   config: {

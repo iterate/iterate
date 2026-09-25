@@ -11,5 +11,5 @@ after the project goes idle.
 The app mounts `itx.agents` through a rewrite rule and owns its catalog and facets.
 Edit this repository to customize it; upstream template changes do not replace it.
 `worker.ts`'s `fetch` first asks `itx.fetchRoutes.match(request)` and forwards a matched
-request to its route with `env.ITX.fetch` (`iterate tunnel <port>` sets a route per tunnel);
-keep those lines at the top of `fetch`.
+request to the route's itx expression, `route.target`, with `env.ITX.fetch`
+(`iterate tunnel <port>` sets a route per tunnel); keep those lines at the top of `fetch`.

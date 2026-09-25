@@ -11,7 +11,7 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { codedError, errorCode, jsonEqual, resolveContextPath } from "iterate/lib";
+import { codedError, jsonEqual, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -63,7 +63,6 @@ import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-f
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
-  itxExpressionFetchCall,
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
@@ -242,28 +241,23 @@ export interface BuiltInScope extends LibraryRoots {
      *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
   };
-  /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` saying which
-   *  requests on the project's hosts go to which itx expression — `iterate tunnel`'s lent stub, a
-   *  facet, a loaded worker. `set(name, route)` validates the route and appends
+  /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` mapping a
+   *  request on the project's hosts to an itx expression, the route's `target` — `iterate tunnel`'s
+   *  lent stub, a facet, a loaded worker. `set(name, route)` validates the route and appends
    *  `itx/fetch-route-configured` on `/` (`null` deletes it; the same route again appends nothing);
-   *  `list()` is the table; `match({ method, url, headers })` the first route whose matcher holds —
-   *  by priority, highest first, then by name — or null (`routingSlug` against the edge's
+   *  `list()` is the table; `match({ url, headers })` the first route whose matcher holds — by
+   *  priority, highest first, then by name — or null (`routingSlug` against the edge's
    *  `x-iterate-routing-slug`, `url` a `URLPattern` against the URL the app sees, `headers` exact).
-   *  `fetch(name, request)` forwards the request to the route's target and answers its Response,
-   *  a WebSocket upgrade included — reached on the FETCH CHANNEL (`x-itx-expression:
-   *  itx.fetchRoutes.fetch('<name>')` through `env.ITX.fetch`), since a socket cannot cross Workers
-   *  RPC; a target that is not connected (a tunnel's lent stub gone) answers 502. The config worker
-   *  asks `match` and enforces `authRequirement` itself (configs/default/worker.ts): the target sees
-   *  the request as the config worker forwarded it. Only on a project's root. */
+   *  The config worker asks `match`, enforces `authRequirement` itself and forwards a match to
+   *  `route.target` with `x-itx-expression` through `env.ITX.fetch` (configs/default/worker.ts).
+   *  Only on a project's root. */
   fetchRoutes: {
     set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
     list(): Promise<FetchRoute[]>;
     match(request: {
-      method: string;
       url: string;
       headers: Headers | Record<string, string> | [string, string][];
     }): Promise<FetchRoute | null>;
-    fetch(fetchRouteName: string, request: Request): Promise<Response>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -658,11 +652,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         `itx.fetchRoutes.${verb}: a project's fetch routes live on its root "/" — reach them there, itx.cd("/").fetchRoutes`,
       );
   };
-  /** The route by name — an own key of the table only (a DNS label may be `constructor`). */
-  const fetchRouteNamed = (fetchRouteName: string) => {
-    const table = deps.fetchRoutes();
-    return Object.hasOwn(table, fetchRouteName) ? table[fetchRouteName] : undefined;
-  };
 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
@@ -952,28 +941,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         );
         if (!parsed.success) throw refusal(z.prettifyError(parsed.error));
         const payload = parsed.data;
-        // IDEMPOTENT: the route as it stands appends nothing.
-        const current = fetchRouteNamed(fetchRouteName);
-        if (
-          !payload.requestMatcher
-            ? !current
-            : current &&
-              jsonEqual(
-                {
-                  requestMatcher: current.requestMatcher,
-                  target: current.target,
-                  authRequirement: current.authRequirement,
-                  priority: current.priority,
-                },
-                {
-                  requestMatcher: payload.requestMatcher,
-                  target: payload.target,
-                  authRequirement: payload.authRequirement,
-                  priority: payload.priority,
-                },
-              )
+        // IDEMPOTENT: the route as it stands appends nothing — an absent route stands as the
+        // deleting payload does. An own key only: a DNS label may be `constructor`.
+        const table = deps.fetchRoutes();
+        const { configuredOffset: _configuredOffset, ...current } = Object.hasOwn(
+          table,
+          fetchRouteName,
         )
-          return { fetchRouteName };
+          ? table[fetchRouteName]!
+          : { requestMatcher: null, configuredOffset: 0 };
+        if (jsonEqual({ fetchRouteName, ...current }, payload)) return { fetchRouteName };
         // Read-your-writes by construction: the core reduce folds the fact in the commit that
         // appends it, so the next `match` (the very next request) sees this route.
         await append({ type: "events.iterate.com/itx/fetch-route-configured", payload });
@@ -993,40 +970,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           url: request.url,
           headers: new Headers(request.headers),
         });
-      },
-      fetch: async (fetchRouteName, request) => {
-        assertOnProjectRoot("fetch");
-        const route = fetchRouteNamed(fetchRouteName);
-        if (!route)
-          return new Response(`no fetch route ${JSON.stringify(fetchRouteName)}\n`, {
-            status: 404,
-          });
-        // The target is the route's author's (a project member wrote the fact): it runs as the
-        // platform's own hop, never as the loaded code that asked — the rows a call rewrites through
-        // are the owner's grants. In-process, so a socket-bearing Response comes back intact.
-        try {
-          // A fetch-shaped target answers a Response (the same call `x-itx-expression` makes);
-          // `invoke` is untyped.
-          return (await ownContext().invoke(
-            itxExpressionFetchCall(route.target, request),
-            [],
-            hopCaller(),
-          )) as Response;
-        } catch (error) {
-          // A tunnel whose laptop is gone: its lent stub is offline, or the lend ended and the rule
-          // naming it went with it. The upstream's absence, never a platform fault: a 502, logged
-          // at info and never reported. The prd fault alarm (scripts/ci/prd-fault-alarm.ts) drops
-          // the 502 summaries in this line's ray; the header names the route to a client.
-          const code = errorCode(error);
-          if (code === "RPC_STUB_OFFLINE" || code === "NO_ITX_EXPRESSION_MATCH") {
-            console.info({ event: "fetch-route.target-offline", fetchRouteName, code });
-            return new Response(`${fetchRouteName} is not connected\n`, {
-              status: 502,
-              headers: { "x-iterate-fetch-route-offline": fetchRouteName },
-            });
-          }
-          throw error;
-        }
       },
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods

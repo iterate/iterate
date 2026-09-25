@@ -73,7 +73,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   secrets:
     'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
   fetchRoutes:
-    "which requests on this project's hosts go where: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ method, url, headers })` · `fetch(name, request)`",
+    "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the config worker forwards a match to `route.target`",
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
   browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
   r2: "the object store, verbatim (`files` is the friendlier surface)",
