@@ -2,7 +2,7 @@
 
 Cloudflare Workers monorepo. The platform is `apps/os`; production issuer: `https://os.iterate.com`.
 
-- Read scoped `AGENTS.md` files. Follow every `rules/**/*.md` whose `files` globs match what you change, honoring exclusions: they are review rules, and no bot enforces them today.
+- Read scoped `AGENTS.md` files. Follow every `rules/**/*.md` whose `files` globs match what you change, honoring exclusions: they are review rules, and the iterate project's AI linter reviews every pull request against them (iterate/config `ai-linter/`).
 - Expected outcomes must be modeled; recovery must be bounded and observable. Operational changes require preview, state, and telemetry evidence. [Engineering invariant](docs/engineering-invariants.md).
 - Never hand-edit a `routeTree.gen.ts`: regenerate it with the app's `pnpm routes:generate` (`pnpm typecheck` fails when one is stale).
 - `envs.ts` owns deployment configuration; Doppler supplies secrets. Workers are never deleted as part of source cleanup.
