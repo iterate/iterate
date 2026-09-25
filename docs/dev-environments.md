@@ -87,7 +87,7 @@ read secrets.
   (`scripts/getin.ts`) starts the server if need be, creates the project as the
   person through the operator bearer (idempotent), and opens a one-click sign-in
   link (below) signed with the local key. With a local Dash up at
-  `http://localhost:5173` whose `ITERATE_ORIGIN` is this server, it lands on the
+  `http://localhost:5173` whose `APP_CONFIG_URLS__OS` is this server, it lands on the
   Dash's project page with no Allow page; else on `/login`. `-e`/`-p` pick
   another `@preview.iterate.test` person and project; `--dash` another Dash.
   `pnpm -s getin --token` prints a personal access token for that person and
@@ -141,7 +141,7 @@ read secrets.
   it. Google and Cloudflare sign-in exist only where their clients are
   configured (production). The Dash and the other hosted clients are ordinary
   OAuth clients of the platform: to run one against local OS, put
-  `ITERATE_ORIGIN=http://localhost:8788` in its gitignored `.dev.vars` (see
+  `APP_CONFIG_URLS__OS=http://localhost:8788` in its gitignored `.dev.vars` (see
   `apps/dash/README.md`) and `pnpm --dir apps/dash dev`.
 - Sign in as an agent/test: use the deployment's password or operator bearer
   (next section). Never script the OAuth dance by hand: the e2e fixture

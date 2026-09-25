@@ -6,15 +6,20 @@ import { DEFAULT_FIRMWARE_VERSION, findFirmwareDevice } from "./firmware/catalog
 import { deviceVendors } from "./firmware/device-client.ts";
 
 /** Kit chooses a fresh client BEFORE consent. The stored identity then follows setup to the board.
- *  The platform it signs in to is `ITERATE_ORIGIN`, or another iterate platform (a self-hosted one)
- *  that a connect link named: `/.auth/connect?issuer=<origin>` carries it to device selection, whose
- *  login button names it and posts it back as `?issuer=`. */
+ *  The platform it signs in to is `defaultIssuer` (`APP_CONFIG urls.os`), or another iterate platform
+ *  (a self-hosted one) that a connect link named: `/.auth/connect?issuer=<origin>` carries it to
+ *  device selection, whose login button names it and posts it back as `?issuer=`. */
 export async function deviceAuth(
   request: Request,
-  env: {
-    BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
-    ITERATE_ORIGIN: string;
-    ITERATE_DENY_ZONES: string;
+  {
+    sessions,
+    defaultIssuer,
+    denyZones,
+  }: {
+    sessions: DurableObjectNamespace<BrowserSession>;
+    defaultIssuer: string;
+    /** `APP_CONFIG denyZones`: our own zones, where no other platform may be */
+    denyZones: string[];
   },
   deps: {
     /** app-server.ts `issuerAnswersAt`: null when the origin's discovery document names it */
@@ -22,11 +27,7 @@ export async function deviceAuth(
   },
 ): Promise<Response | null> {
   const url = new URL(request.url);
-  const issuerOf = (candidate: string) =>
-    issuerOriginOf(candidate, {
-      defaultIssuer: env.ITERATE_ORIGIN,
-      denyZones: env.ITERATE_DENY_ZONES.split(",").filter(Boolean),
-    });
+  const issuerOf = (candidate: string) => issuerOriginOf(candidate, { defaultIssuer, denyZones });
   const login = /^\/devices\/([^/]+)\/login$/.exec(url.pathname);
   if (login) {
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -35,10 +36,10 @@ export async function deviceAuth(
     const device = findFirmwareDevice(login[1]!);
     if (!device) return new Response("Unknown device", { status: 404 });
     // Checked before this browser's installer session ends: a refused platform changes nothing.
-    const named = issuerOf(url.searchParams.get("issuer") || env.ITERATE_ORIGIN);
+    const named = issuerOf(url.searchParams.get("issuer") || defaultIssuer);
     if ("error" in named) return refused(named.error);
     const issuer = named.origin;
-    if (issuer !== env.ITERATE_ORIGIN) {
+    if (issuer !== defaultIssuer) {
       const answer = await deps.issuerAnswersAt(issuer);
       if (answer) return refused(answer);
     }
@@ -53,13 +54,13 @@ export async function deviceAuth(
     // A deliberate POST replaces only this browser's installer session, never a flashed token. When
     // ending it fails (its platform is down, or gone), nothing new starts: the page says so and
     // offers to forget that session instead (`/.auth/forget`), the person's call to make.
-    const previous = appSession(env.BROWSER_SESSION, request);
+    const previous = appSession(sessions, request);
     try {
       await previous?.end();
     } catch (error) {
       console.error("kit.device_login_failed", { deviceId: device.id, error });
       const selection = new URLSearchParams({ device: device.id });
-      if (issuer !== env.ITERATE_ORIGIN) selection.set("issuer", issuer);
+      if (issuer !== defaultIssuer) selection.set("issuer", issuer);
       return couldNotEndPreviousSession(
         (await previous?.host().catch(() => null))?.issuer,
         `/.auth/forget?${selection}`,
@@ -67,7 +68,7 @@ export async function deviceAuth(
     }
     try {
       const { location, setCookie } = await startAppSession(
-        env.BROWSER_SESSION,
+        sessions,
         {
           origin: url.origin,
           issuer,
@@ -96,7 +97,7 @@ export async function deviceAuth(
   }
   if (url.pathname === "/device-session.json") {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
-    const session = appSession(env.BROWSER_SESSION, request);
+    const session = appSession(sessions, request);
     const client = await session?.client();
     const deviceId =
       client?.id && /^\/devices\/([^/]+)\/clients\//.exec(new URL(client.id).pathname)?.[1];
@@ -116,8 +117,8 @@ export async function deviceAuth(
     const selection = new URLSearchParams();
     const model = url.searchParams.get("device");
     if (model && findFirmwareDevice(model)) selection.set("device", model);
-    const named = issuerOf(url.searchParams.get("issuer") || env.ITERATE_ORIGIN);
-    if (!("error" in named) && named.origin !== env.ITERATE_ORIGIN)
+    const named = issuerOf(url.searchParams.get("issuer") || defaultIssuer);
+    if (!("error" in named) && named.origin !== defaultIssuer)
       selection.set("issuer", named.origin);
     return new Response(null, {
       status: 303,
@@ -142,7 +143,7 @@ export async function deviceAuth(
     if (url.pathname === "/.auth/connect" && candidate) {
       const named = issuerOf(candidate);
       if ("error" in named) return refused(named.error);
-      if (named.origin !== env.ITERATE_ORIGIN) selection.set("issuer", named.origin);
+      if (named.origin !== defaultIssuer) selection.set("issuer", named.origin);
     }
     return new Response(null, {
       status: 303,

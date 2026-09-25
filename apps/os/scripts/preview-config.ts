@@ -128,7 +128,7 @@ export const appPreviewUrl = (app: StartApp, previewName: string) =>
 
 /** The apps a run previews, by name, at their preview URLs: every link between this preview's
  *  apps — the dash the OS preview's landing page names (`APP_CONFIG_URLS__DASH`), and each app
- *  preview's `ITERATE_APP_ORIGINS` (scripts/lib/start-app.ts: the dash's directory of apps, Kit's
+ *  preview's `APP_CONFIG` `urls` (scripts/lib/start-app.ts: the dash's directory of apps, Kit's
  *  link to the sessions in the dash). An app the run does not deploy (`--apps auto|none`) is named
  *  nowhere: a link leads into this PR's preview or does not exist, never to production, where a
  *  preview's projects do not. */

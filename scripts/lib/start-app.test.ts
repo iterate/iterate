@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { dashEnvs, kitEnvs } from "../../envs.ts";
 import { ownZones, startAppPreviewConfig, startAppWorkerConfig } from "./start-app.ts";
 
@@ -11,25 +12,29 @@ test("the top level is the parent: the build's own fields, the class as a migrat
     preview_urls: true,
     migrations: [{ tag: "v1", new_sqlite_classes: ["BrowserSession"] }],
     assets: built.assets,
-    vars: { ITERATE_ORIGIN: "https://os.iterate.com" },
+    vars: built.vars,
   });
   for (const key of ["exports", "topLevelName"]) expect(config).not.toHaveProperty(key);
 });
 
-test("the preview's own block: the session class, observability, and the worker's vars with the issuer and the apps swapped for this PR's", () => {
+test("the preview's own block: the session class, observability, and the worker's config with its urls replaced by this PR's", () => {
   const { built, config } = previewConfig();
   // oxlint-disable-next-line iterate/prefer-object-property-match -- the preview block is exact: a stray key would deploy with the preview
   expect(config.previews).toEqual({
     observability: { enabled: true },
     durable_objects: built.durable_objects,
-    vars: {
-      ITERATE_ORIGIN: "https://pr123-os.iterate-dev-preview.workers.dev",
-      ITERATE_DENY_ZONES: "iterate.app,iterate.com",
-      ITERATE_APP_ORIGINS: JSON.stringify({
-        dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
-      }),
-    },
+    vars: { APP_CONFIG: expect.any(String) },
   });
+  // prd's notes origin is gone, not kept beside this PR's dash: the preview names only its own apps
+  expect(JSON.parse((config.previews as { vars: { APP_CONFIG: string } }).vars.APP_CONFIG)).toEqual(
+    {
+      urls: {
+        os: "https://pr123-os.iterate-dev-preview.workers.dev",
+        dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
+      },
+      denyZones: ["iterate.app", "iterate.com"],
+    },
+  );
 });
 
 test("on workers.dev our own zones are our apps' hosts, not the accounts they share with anyone's worker", () => {
@@ -53,14 +58,16 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
     "prd",
   );
-  expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate.com" });
-  expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
-    dash: "https://dash.iterate.com",
-    agents: "https://agents.iterate.com",
-    notes: "https://notes.iterate.com",
-    admin: "https://admin.iterate.com",
-    voice: "https://voice.iterate.com",
-    kit: "https://k.iterate.com",
+  expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
+    urls: {
+      os: "https://os.iterate.com",
+      dash: "https://dash.iterate.com",
+      agents: "https://agents.iterate.com",
+      notes: "https://notes.iterate.com",
+      admin: "https://admin.iterate.com",
+      voice: "https://voice.iterate.com",
+      kit: "https://k.iterate.com",
+    },
   });
 });
 
@@ -69,14 +76,48 @@ test("a preview parent (the app's `preview` build, main on the dev/preview accou
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
     "preview",
   );
-  expect(vars).toMatchObject({ ITERATE_ORIGIN: "https://os.iterate-dev-preview.workers.dev" });
-  expect(JSON.parse(vars.ITERATE_APP_ORIGINS)).toEqual({
-    dash: "https://dash.iterate-dev-preview.workers.dev",
-    agents: "https://agents.iterate-dev-preview.workers.dev",
-    notes: "https://notes.iterate-dev-preview.workers.dev",
-    admin: "https://admin.iterate-dev-preview.workers.dev",
-    voice: "https://voice.iterate-dev-preview.workers.dev",
-    kit: "https://kit.iterate-dev-preview.workers.dev",
+  expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
+    urls: {
+      os: "https://os.iterate-dev-preview.workers.dev",
+      dash: "https://dash.iterate-dev-preview.workers.dev",
+      agents: "https://agents.iterate-dev-preview.workers.dev",
+      notes: "https://notes.iterate-dev-preview.workers.dev",
+      admin: "https://admin.iterate-dev-preview.workers.dev",
+      voice: "https://voice.iterate-dev-preview.workers.dev",
+      kit: "https://kit.iterate-dev-preview.workers.dev",
+    },
+  });
+});
+
+test("the app reads the config it is deployed with as written, and a laptop's .dev.vars names a local platform on top", () => {
+  const { vars } = startAppWorkerConfig(
+    { name: "kit", root: new URL("file:///apps/kit/"), envs: kitEnvs },
+    "prd",
+  );
+  expect(startAppConfigOf({ ...vars })).toMatchObject({
+    urls: { os: "https://os.iterate.com", dash: "https://dash.iterate.com" },
+    denyZones: ownZones(),
+    posthogProjectKey: kitEnvs.prd.posthogProjectKey,
+  });
+  // local dev starts from prd's config (no env) and overrides one key, keeping the rest
+  const local = startAppWorkerConfig(
+    { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
+    undefined,
+  ).vars;
+  expect(
+    startAppConfigOf({
+      ...local,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_URLS__NOTES: "http://localhost:5174",
+    }),
+  ).toMatchObject({
+    urls: {
+      os: "http://localhost:8788",
+      notes: "http://localhost:5174",
+      agents: "https://agents.iterate.com",
+    },
+    denyZones: ownZones(),
+    posthogProjectKey: "",
   });
 });
 
@@ -109,9 +150,10 @@ function previewConfig() {
     assets: { binding: "ASSETS", directory: "../client", run_worker_first: true },
     workers_dev: true,
     vars: {
-      ITERATE_ORIGIN: "https://os.iterate.com",
-      ITERATE_DENY_ZONES: "iterate.app,iterate.com",
-      ITERATE_APP_ORIGINS: JSON.stringify({ dash: "https://dash.iterate.com" }),
+      APP_CONFIG: JSON.stringify({
+        urls: { os: "https://os.iterate.com", notes: "https://notes.iterate.com" },
+        denyZones: ["iterate.app", "iterate.com"],
+      }),
     },
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },

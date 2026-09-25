@@ -30,7 +30,7 @@ the app connects to, a self-hosted one included.
 ## Run
 
 ```bash
-pnpm --filter @iterate-com/voice dev          # against ITERATE_ORIGIN in .dev.vars
+pnpm --filter @iterate-com/voice dev          # against APP_CONFIG_URLS__OS in .dev.vars
 pnpm --filter @iterate-com/voice test         # the PCM helpers
 pnpm --dir apps/voice run deploy --env prd
 ```

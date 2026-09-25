@@ -2,11 +2,12 @@ import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-r
 import { createServerFn } from "@tanstack/react-start";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import css from "../styles.css?url";
-/** The worker's PostHog project key (envs.ts, prd only; wrangler var `POSTHOG_PROJECT_KEY`). */
+/** The worker's PostHog project key (`APP_CONFIG posthogProjectKey`: envs.ts, prd only). */
 const posthogProjectKey = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
-  return env.POSTHOG_PROJECT_KEY || null;
+  return startAppConfigOf(env).posthogProjectKey || null;
 });
 
 export const Route = createRootRoute({

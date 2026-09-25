@@ -4,16 +4,17 @@ import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
-/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — the zones
- *  of its projects' custom hostnames (`customHostnames`) and its `admins` too — as the
- *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
- *  travels as a JSON STRING — the parser reads string vars only. A blank var is unset. */
-function urlVars(env: OsEnv) {
+/** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
+ *  zones of its projects' custom hostnames (`customHostnames`), its `admins` and its PostHog key —
+ *  as the override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An
+ *  object travels as a JSON STRING — the parser reads string vars only. A blank var is unset. */
+function configVars(env: OsEnv) {
   const vars: Record<string, string> = { APP_CONFIG_URLS__OS: env.baseUrl };
   if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
     vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
   if (env.dashBaseUrl) vars.APP_CONFIG_URLS__DASH = env.dashBaseUrl;
   if (env.admins) vars.APP_CONFIG_ADMINS = JSON.stringify(env.admins);
+  if (env.posthogProjectKey) vars.APP_CONFIG_POSTHOG_PROJECT_KEY = env.posthogProjectKey;
   if (env.ingressRouting)
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
   if (env.projectWildcard)
@@ -127,8 +128,7 @@ function wranglerConfig() {
             { binding: "OAUTH_KV", id: env.resources.oauthKvId },
             { binding: "ITX_KV", id: env.resources.itxKvId },
           ],
-          // unset ⇒ undefined, which the JSON config drops: no var, no PostHog on the pages
-          vars: { ...urlVars(env), POSTHOG_PROJECT_KEY: env.posthogProjectKey },
+          vars: configVars(env),
         },
       ]),
     ),

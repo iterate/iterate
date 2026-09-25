@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./app-config": "./src/app-config.ts",
     "./base64": "./src/base64.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/budgets.ts",
@@ -16,6 +17,7 @@
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./slugify": "./src/slugify.ts",
+    "./start-app-config": "./src/start-app-config.ts",
     "./posthog": {
       "types": "./src/posthog/posthog.ts",
       "import": "./src/posthog/posthog.ts",
