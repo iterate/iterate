@@ -15,6 +15,8 @@ export interface CodeEditorProps {
   onSubmit?: () => void;
   language?: "yaml" | "json";
   placeholder?: string;
+  /** The editor's accessible name (its content is the textbox). */
+  label?: string;
   className?: string;
   focusOnMount?: boolean;
 }
@@ -32,6 +34,7 @@ export function CodeEditor({
   onSubmit,
   language = "yaml",
   placeholder,
+  label,
   className,
   focusOnMount = false,
 }: CodeEditorProps) {
@@ -49,11 +52,8 @@ export function CodeEditor({
       doc: value,
       parent: containerRef.current,
       extensions: [
-        basicSetup,
-        vsCodeLight,
-        (language === "json" ? json : yaml)(),
-        EditorView.lineWrapping,
-        placeholder ? placeholderExt(placeholder) : [],
+        // before basicSetup: at one precedence the earlier keymap wins, and the default keymap
+        // binds Mod-Enter to insertBlankLine
         keymap.of([
           {
             key: "Mod-Enter",
@@ -63,6 +63,12 @@ export function CodeEditor({
             },
           },
         ]),
+        basicSetup,
+        vsCodeLight,
+        (language === "json" ? json : yaml)(),
+        EditorView.lineWrapping,
+        placeholder ? placeholderExt(placeholder) : [],
+        label ? EditorView.contentAttributes.of({ "aria-label": label }) : [],
         EditorView.updateListener.of((update) => {
           if (update.docChanged) emitValueChange(update.state.doc.toString());
         }),
@@ -85,7 +91,7 @@ export function CodeEditor({
       viewRef.current = null;
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- created once per config; the value syncs via a separate effect, the callbacks are Effect Events
-  }, [language, placeholder, focusOnMount]);
+  }, [language, placeholder, label, focusOnMount]);
 
   // Keep the document in sync when the value is driven from outside.
   useEffect(() => {

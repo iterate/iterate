@@ -1,15 +1,11 @@
-// One live state for the processors panel's `renderCoreState` / `renderLiveState` slots — the core
-// reduce's under the name `core`, a hosted facet's under its own — rendered as YAML. The prop is
-// structural so packages/ui stays free of the SDK: the app runs `useIterateContext` and passes each
-// entry in.
+// One live state in the processors panel — the core reduce's under the name `core`, a hosted
+// facet's under its own — rendered as YAML (ContextView renders every entry of its source's
+// `liveState` with it).
 import { SerializedObjectCodeBlock } from "../serialized-object-code-block.tsx";
 import { Spinner } from "../spinner.tsx";
+import type { LiveStateView } from "./types.tsx";
 
-export function LiveStateValue({
-  state,
-}: {
-  state: { status: string; value: unknown; error?: string };
-}) {
+export function LiveStateValue({ state }: { state: LiveStateView }) {
   if (state.status === "error")
     return (
       <p data-type="error" className="text-xs text-destructive">

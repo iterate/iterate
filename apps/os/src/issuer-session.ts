@@ -44,8 +44,10 @@ export async function startIssuerSession(
 ): Promise<{ setCookie: string; location: string } | { error: string }> {
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin, api } = addresses;
-  // The issuer's own session holds every scope: it is the person at the issuer, and the consent
-  // page creates organizations and projects through it.
+  // The issuer's own session holds every scope but `admin`: it is the person at the issuer, and the
+  // consent page creates organizations and projects through it. `admin` is an app's to ask for
+  // (the admin app's); the issuer's session reaches every project host under paths routing, where
+  // an admin's would count as a member of every project.
   const flow = await watchSignInStep(
     "session-begin",
     startAppSession(
@@ -55,7 +57,7 @@ export async function startIssuerSession(
         client: { name: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
         issuer: platformOrigin,
         resource: api,
-        scopes: [...OAuthScope.options],
+        scopes: OAuthScope.options.filter((scope) => scope !== "admin"),
       },
       sameOriginPath(next, platformOrigin),
     ),

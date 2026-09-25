@@ -22,6 +22,10 @@ const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
 /** The Voice app deployed against that OS: the voice project's baseURL. Locally, unset skips its
  *  specs; in CI, unset fails them. */
 const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
+/** The Dash and the Admin app deployed against that OS: the dash and admin projects' baseURLs.
+ *  Locally, unset skips their specs; in CI, unset fails them. */
+const dashBaseUrl = process.env.DASH_BASE_URL?.replace(/\/+$/, "");
+const adminBaseUrl = process.env.ADMIN_BASE_URL?.replace(/\/+$/, "");
 const desktopWebUse = {
   ...devices["Desktop Chrome"],
   viewport: { width: 1280, height: 900 },
@@ -95,6 +99,16 @@ export default defineConfig({
       name: "voice",
       testDir: "specs/voice",
       use: recordedAtViewport({ ...desktopWebUse, baseURL: voiceBaseUrl }),
+    },
+    {
+      name: "dash",
+      testDir: "specs/dash",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: dashBaseUrl }),
+    },
+    {
+      name: "admin",
+      testDir: "specs/admin",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: adminBaseUrl }),
     },
     // the suite's own specs, beside the app folders: the flake sentinel and the harness's
     // local-only specs (setContent, no deployment)

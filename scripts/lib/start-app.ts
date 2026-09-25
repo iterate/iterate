@@ -15,7 +15,15 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
-import { agentsEnvs, dashEnvs, kitEnvs, notesEnvs, osEnvs, voiceEnvs } from "../../envs.ts";
+import {
+  adminEnvs,
+  agentsEnvs,
+  dashEnvs,
+  kitEnvs,
+  notesEnvs,
+  osEnvs,
+  voiceEnvs,
+} from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
@@ -46,6 +54,7 @@ const FIRST_PARTY_APPS: Record<string, Record<string, StartAppEnv>> = {
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
+  admin: adminEnvs,
   voice: voiceEnvs,
   kit: kitEnvs,
 };

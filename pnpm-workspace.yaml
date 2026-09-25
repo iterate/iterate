@@ -3,6 +3,7 @@ packages:
   - apps/dash
   - apps/agents
   - apps/notes
+  - apps/admin
   - apps/voice
   - apps/kit
   - apps/spa

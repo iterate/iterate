@@ -161,6 +161,7 @@ export const osEnvs: Record<string, OsEnv> = {
         "dash.iterate.com",
         "agents.iterate.com",
         "notes.iterate.com",
+        "admin.iterate.com",
         "k.iterate.com",
         "voice.iterate.com",
         "install.iterate.com",
@@ -241,6 +242,27 @@ export const notesEnvs = {
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
     baseUrl: "https://notes.iterate.com",
+  },
+};
+
+/** apps/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
+export const adminEnvs = {
+  // THE PARENT of admin's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "admin",
+    baseUrl: "https://admin.iterate-dev-preview.workers.dev",
+  },
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "admin",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
+    // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
+    baseUrl: "https://admin.iterate.com",
   },
 };
 

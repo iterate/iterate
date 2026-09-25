@@ -2,7 +2,7 @@ import { createFileRoute, useRouter, useRouterState } from "@tanstack/react-rout
 import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
-import { useLiveState } from "iterate/react";
+import { useFacetLiveState } from "iterate/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -19,7 +19,7 @@ import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/in
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
-/** The relay's live view (apps/agents/voice VoiceLiveView), validated when reading the initial snapshot. */
+/** The relay's live view (apps/agents/voice VoiceLiveView), validated on every read. */
 const VoiceLiveView = z.object({
   phase: z.enum(["idle", "dialing", "live", "ended"]),
   activation: z.string().nullable(),
@@ -72,7 +72,7 @@ function CallPage() {
           </BreadcrumbList>
         </Breadcrumb>
       }
-      account={{ email: info.principal.email || info.principal.actor }}
+      account={info.principal}
       locationKey={href}
     >
       {voice.installed ? (
@@ -158,14 +158,8 @@ function Phone({ project }: { project: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [lastStats, setLastStats] = useState<string>();
-  const live = useLiveState<VoiceLiveView>(call?.itx, {
-    key: "voice-agent",
-    readSeed: async () =>
-      z
-        .object({ rev: z.number(), state: VoiceLiveView })
-        .parse(await call!.itx.invoke("itx.facets.get('voice-agent').liveSnapshot()")),
-  });
-  const view = live.value;
+  const live = useFacetLiveState(call?.itx, "voice-agent");
+  const view = VoiceLiveView.safeParse(live.value).data;
   const onCall = async () => {
     setBusy(true);
     setError(undefined);

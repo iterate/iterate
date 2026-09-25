@@ -150,6 +150,9 @@ export function viteWranglerConfig(
           APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
           APP_CONFIG: JSON.stringify({
             login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
+            // `pnpm getin`'s person, so the admin app and "view as" work locally, and the admin
+            // the specs sign in as (specs/admin, as on a per-PR preview: preview-config.ts)
+            admins: [`test@${TEST_LINK_EMAIL_DOMAIN}`, `admin@${TEST_LINK_EMAIL_DOMAIN}`],
             secrets: { adminBearer: "dev-admin-api-secret" },
           }),
           APP_CONFIG_SECRETS__KEY: "dev-secrets-key",

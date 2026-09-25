@@ -4,6 +4,7 @@
 // and a glance at the payload's fields; Pretty + raw adds the raw line under it; Raw is the raw line.
 // What a line cuts the inspector (click) shows whole. The offset is in the time's tooltip and in
 // the inspector: people read the log by what happened, not by its numbers.
+import { memo } from "react";
 import { cn } from "cn";
 import { actorLabel, payloadPreview, payloadSummary, shortEventType } from "./filters.tsx";
 import {
@@ -98,7 +99,7 @@ export function EventSentence({
   );
 }
 
-export function EventRow({
+export const EventRow = memo(function EventRow({
   event,
   previous,
   renderers,
@@ -147,4 +148,4 @@ export function EventRow({
       ) : null}
     </button>
   );
-}
+});

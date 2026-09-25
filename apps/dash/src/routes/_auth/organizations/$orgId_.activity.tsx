@@ -6,9 +6,9 @@
 // page renders no outlet.
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
+import { useContextStub } from "iterate/react";
 import { ContextActivity } from "../../../components/context-activity.tsx";
 import { useOrganizationTreeEntry } from "../../../components/organization-tree.tsx";
-import { useContextStub } from "../../../lib/context-stub.ts";
 
 export const Route = createFileRoute("/_auth/organizations/$orgId_/activity")({
   // the view's every choice — mode, filter, the inspected event, the open sheet — is this URL
@@ -26,7 +26,7 @@ function OrganizationActivity() {
   const context = useContextStub(() => api.organizations.get(orgId), [api, orgId]);
   if (missing) throw notFound();
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 md:p-8">
+    <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4 p-4 md:p-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">
           <Link to="/organizations/$orgId" params={{ orgId }} className="hover:underline">

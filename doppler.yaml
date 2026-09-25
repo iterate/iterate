@@ -13,6 +13,8 @@ setup:
     path: apps/agents/
   - project: notes
     path: apps/notes/
+  - project: admin
+    path: apps/admin/
   - project: voice
     path: apps/voice/
   - project: dummy-petshop

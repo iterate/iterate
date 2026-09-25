@@ -416,6 +416,15 @@ export type ConsentAnswer =
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
     }
+  | {
+      /** a platform admin's request to view the client as `target` (the app's `?act_as=`) */
+      kind: "impersonate";
+      clientName: string;
+      clientId: string;
+      email: string;
+      target: string;
+      denyLocation: string;
+    }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
@@ -550,6 +559,19 @@ export interface IterateSessionApi {
     acceptInvitation(token: string): Promise<OrgRecord>;
   };
   user: IterateContextApi;
+  /** The global namespace's root `/` — a platform admin's session (the `admin` scope) alone. Its
+   *  `cd` reaches `/users/<id>…` and `/organizations/<id>…`, as a project root's reaches the
+   *  project. */
+  global: IterateContextApi;
+  /** Every person on the platform — a platform admin's session (the `admin` scope) or the
+   *  operator's alone. */
+  users: {
+    list(): Promise<{ id: string; email: string }[]>;
+    /** by id or email */
+    get(ref: string): Promise<{ id: string; email: string } | null>;
+    /** find-or-create */
+    create(input: { email: string }): Promise<{ id: string; email: string }>;
+  };
   logout(): unknown;
 }
 

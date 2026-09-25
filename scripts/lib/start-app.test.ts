@@ -36,6 +36,7 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
   const zones = ownZones();
   // a worker anyone deploys to these accounts (a self-host tried out on one) is not under any of them
   expect(zones.filter((zone) => zone.endsWith(".workers.dev"))).toEqual([
+    "admin.iterate-dev-preview.workers.dev",
     "agents.iterate-dev-preview.workers.dev",
     "dash.iterate-dev-preview.workers.dev",
     "kit.iterate-dev-preview.workers.dev",
@@ -57,6 +58,7 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
     dash: "https://dash.iterate.com",
     agents: "https://agents.iterate.com",
     notes: "https://notes.iterate.com",
+    admin: "https://admin.iterate.com",
     voice: "https://voice.iterate.com",
     kit: "https://k.iterate.com",
   });
@@ -72,6 +74,7 @@ test("a preview parent (the app's `preview` build, main on the dev/preview accou
     dash: "https://dash.iterate-dev-preview.workers.dev",
     agents: "https://agents.iterate-dev-preview.workers.dev",
     notes: "https://notes.iterate-dev-preview.workers.dev",
+    admin: "https://admin.iterate-dev-preview.workers.dev",
     voice: "https://voice.iterate-dev-preview.workers.dev",
     kit: "https://kit.iterate-dev-preview.workers.dev",
   });

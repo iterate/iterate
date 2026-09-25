@@ -4,11 +4,14 @@ import { z } from "zod";
  *   - `iterate`             — reach the projects the person grants (every app; implied, always granted)
  *   - `account`             — manage the person's sessions and personal access tokens
  *   - `organizations:write` — the person's organizations: list every one they belong to, create new ones
+ *   - `admin`               — operate the platform: every project and person, and viewing an app as
+ *                             someone else. Granted only to an email the deployment's `admins` lists
+ *                             (apps/os consent.ts), and only while it lists it (oauth.ts)
  *  Consent is task-based (the shape Cloudflare's own OAuth consent took in August 2026: a client
  *  requests a set, the person may deselect the optional ones, the token carries what was granted):
  *  `iterate` is required, every other requested scope is optional on the consent page, and an app
  *  reads the granted set from `session.info().scopes` rather than assuming its request. */
-export const OAuthScope = z.enum(["iterate", "account", "organizations:write"]);
+export const OAuthScope = z.enum(["iterate", "account", "organizations:write", "admin"]);
 export type OAuthScope = z.infer<typeof OAuthScope>;
 
 export const OAuthScopes = z
@@ -41,6 +44,11 @@ export const OAuthScopeDescriptions: Record<OAuthScope, Omit<ConsentScope, "name
   "organizations:write": {
     title: "See all your organizations and create new ones",
     note: "Optional.",
+    required: false,
+  },
+  admin: {
+    title: "Operate this platform: every project and every person",
+    note: "Optional. For platform admins; ends 12 hours after you allow it.",
     required: false,
   },
 };

@@ -211,6 +211,18 @@ every project. It does not impersonate a customer unless you ask it to:
 user's session (the projects of their organizations). The e2e suite's
 `adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly this.
 
+**Platform admins** are people, not the bearer: the exact emails in `APP_CONFIG`
+`admins` (`["jonas@iterate.com"]`; local dev lists `test@preview.iterate.test`).
+Signed in to the admin app (`apps/admin`), which asks for the `admin` scope, an
+admin reaches every project and person, and the global namespace as
+`session.global` (its `cd` walks `/users/<id>…` and `/organizations/<id>…`), for
+12 hours. Its Users page's "View dash as" opens the dash as that person for an
+hour (`/.auth/login?act_as=<email>` on any app): the grant is theirs, every event
+names the admin in `source.principal.impersonatedBy`, their account records
+`account/impersonation-started`, and the shell shows who is viewing whom with
+Stop impersonating. Removing an address from `admins` ends both at its next
+request.
+
 The `iterate` CLI (`packages/cli`) takes the bearer from
 `APP_CONFIG_ADMIN_API_SECRET`, ahead of `ITERATE_BEARER_TOKEN` and any stored
 login:
@@ -446,7 +458,7 @@ worker (next story).
 Every push to a PR runs the **Preview OS** workflow. When the PR touches
 preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
 [Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** builds and
-deploys the platform preview and all five clients, then writes the URL and the
+deploys the platform preview and all six clients, then writes the URL and the
 operations into the PR body's managed section. **E2E tests** (the Vitest e2e
 suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
 `pnpm preview specs`) then run side by side against that deployment, each its

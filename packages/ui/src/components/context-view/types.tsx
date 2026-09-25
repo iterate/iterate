@@ -74,3 +74,6 @@ export type ContextViewPresence = {
   grant?: string;
   lastSeenAt: string;
 };
+
+/** One live state as the processors panel renders it (the SDK's `LiveStateResult`, structurally). */
+export type LiveStateView = { status: string; value: unknown; error?: string };

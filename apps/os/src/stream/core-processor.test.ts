@@ -35,10 +35,11 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
     schedules: {},
     scriptRuns: {},
   });
-  // the events it OWNS beyond its control events: the apex target (core-events.ts, which the
-  // Project contract depends on) and the run pair
+  // the events it OWNS beyond its control events: the apex target and a child's announcement
+  // (core-events.ts, which the Project contract depends on) and the run pair
   expect(Object.keys(CoreContract.events)).toEqual([
     "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/itx/child-created",
     "events.iterate.com/itx/run-requested",
     "events.iterate.com/itx/run-settled",
   ]);

@@ -47,6 +47,7 @@
 import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { reportIssue, jsonEqual, codedError, diff } from "../lib.ts";
+import type { Principal } from "../principal.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
  *  and its initial state (`defineProcessorContract` below builds one from zod schemas). */
@@ -730,7 +731,7 @@ export type StreamEventInput = {
       version: string;
       whileProcessing?: { offset: number; type: string };
     };
-    principal?: { actor: string; email?: string };
+    principal?: Principal;
     /** THE CONNECTION the principal acted through: the OAuth grant's id — one per
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
      *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */

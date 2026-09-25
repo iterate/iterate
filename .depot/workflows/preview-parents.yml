@@ -1,6 +1,6 @@
 # THE PREVIEW PARENTS FROM MAIN (`pnpm preview deploy-parents`, apps/os/scripts/preview.ts): the
 # workers every per-PR Worker Preview branches from, on the dev/preview account — apps/os's `os` and
-# each app's (`dash`, `agents`, `notes`, `voice`, `kit`; envs.ts `<app>Envs.preview`). Deployed from
+# each app's (`dash`, `agents`, `notes`, `admin`, `voice`, `kit`; envs.ts `<app>Envs.preview`). Deployed from
 # every push to main that a pull request's preview would run for (scripts/ci/preview-paths.ts
 # `previewPaths`; depot-workflows.test.ts keeps them equal), the parents are main on the dev/preview
 # account: https://os.iterate-dev-preview.workers.dev is os.iterate.com at main, and
@@ -31,6 +31,7 @@ on:
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
@@ -39,6 +40,7 @@ on:
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
+      - apps/admin/**
       - apps/voice/**
       - apps/kit/**
       - "!apps/kit/firmware/**"

@@ -132,6 +132,7 @@ const scopeLabels: Record<string, string> = {
   iterate: "your projects",
   account: "your account",
   "organizations:write": "your organizations",
+  admin: "the whole platform",
 };
 
 const text = (value: string) => value.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -455,7 +456,20 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     }
     const host = await held();
     const target = host || { issuer, resource };
-    const bearer = await session?.bearer();
+    // VIEW THIS APP AS SOMEONE ELSE (`?act_as=<email>`, the admin app's link): always a fresh
+    // authorization, whatever this browser holds — this app's own sign-in ends here — and the
+    // issuer's consent decides, as the admin it knows: anyone else is refused there (apps/os
+    // consent.ts). The grant it issues is the other person's, for an hour; signing out of it signs
+    // back in as the admin, whom the issuer still knows.
+    const actAs = config.loginPage ? null : url.searchParams.get("act_as");
+    if (actAs && session) {
+      try {
+        await session.end();
+      } catch {
+        await session.discard();
+      }
+    }
+    const bearer = actAs ? null : await session?.bearer();
     if (bearer) {
       const probe = await config.api(
         new Request(target.resource, {
@@ -503,10 +517,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       { origin: url.origin, issuer: target.issuer, resource: target.resource, scopes, client },
       next,
     );
+    const authorize = new URL(location);
+    if (actAs) authorize.searchParams.set("act_as", actAs);
     return new Response(null, {
       status: 302,
       headers: {
-        Location: location,
+        Location: authorize.href,
         "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
@@ -538,6 +554,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // connect page for that issuer (one click, the host named), so "Sign in again" at a self-host
     // stays at the self-host instead of silently binding the browser back to the default.
     const ended = await held();
+    const endedScopes = (await session?.scopes()) ?? [];
     try {
       await session?.end();
     } catch {
@@ -547,12 +564,16 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         { status: 503 },
       );
     }
-    const next = nextPathOf(url.searchParams.get("next"), url.origin);
     // The scopes the next sign-in must hold ride along: the Sign-in-again form's `next` IS the login
     // URL that asked for them (`/.auth/login?…&scope=…`), and the connect page starts the grant from
     // its own `scope` — without this the reconnected grant would hold `iterate` alone and the login
-    // would send the person straight back to Sign in again.
-    const nextUrl = new URL(next, url.origin);
+    // would send the person straight back to Sign in again. A login `next` that names none asks for
+    // what the ended session held: the shell's Stop impersonating signs the admin back in with the
+    // app's own permissions.
+    const nextUrl = new URL(nextPathOf(url.searchParams.get("next"), url.origin), url.origin);
+    if (nextUrl.pathname === "/.auth/login" && !nextUrl.searchParams.get("scope"))
+      nextUrl.searchParams.set("scope", endedScopes.join(" "));
+    const next = nextUrl.pathname + nextUrl.search;
     const scope =
       nextUrl.pathname === "/.auth/login" ? nextUrl.searchParams.get("scope") || "" : "";
     const headers = new Headers({

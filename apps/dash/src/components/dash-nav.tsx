@@ -1,5 +1,5 @@
 // The dash's own navigation inside the shared shell (`AppShell`, packages/ui): inside a project its
-// overview, activity (any context's log, live), MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
+// overview, contexts (any context's log, live), MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
 // organizations, each with its projects (components/organization-tree.tsx, live) — and the other
 // first-party apps.
 import { getRouteApi, Link, useMatchRoute } from "@tanstack/react-router";
@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   LockKeyhole,
   Plug,
+  Waypoints,
 } from "lucide-react";
 import {
   SidebarGroup,
@@ -33,7 +34,7 @@ const root = getRouteApi("__root__");
 
 const PROJECT_PAGES = [
   { to: "/projects/$slug", label: "Overview", icon: LayoutDashboard },
-  { to: "/projects/$slug/activity/$", label: "Activity", icon: Activity },
+  { to: "/projects/$slug/contexts/$", label: "Contexts", icon: Waypoints },
   { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
   { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
   { to: "/projects/$slug/hostnames", label: "Hostnames", icon: Globe },
@@ -78,13 +79,13 @@ function ProjectNav({
             <SidebarMenuItem key={to}>
               <SidebarMenuButton
                 tooltip={label}
-                // Activity is a splat (`/activity/<any context path>`): active on every path under
+                // Contexts is a splat (`/contexts/<any context path>`): active on every path under
                 // it; the others only on their own page, so Overview is not lit everywhere
                 isActive={Boolean(
                   matchRoute({
                     to,
                     params: { slug: project.slug },
-                    fuzzy: to === "/projects/$slug/activity/$",
+                    fuzzy: to === "/projects/$slug/contexts/$",
                   }),
                 )}
                 render={<Link to={to} params={{ slug: project.slug }} />}

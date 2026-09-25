@@ -25,6 +25,7 @@
     "@codemirror/view": "catalog:",
     "@fsegurai/codemirror-theme-bundle": "catalog:",
     "@tanstack/react-router": "catalog:",
+    "@tanstack/react-virtual": "^3.14.13",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
     "cn": "catalog:",

@@ -1,0 +1,65 @@
+name: Deploy Admin
+permissions:
+  contents: read
+  deployments: write
+concurrency:
+  # Every ref deploys to the same production Worker. Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-admin-production
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/deploy-admin.yml
+      - apps/admin/**
+      - envs.ts
+      - scripts/lib/**
+      - packages/iterate/**
+      # admin renders packages/ui (the context view, the app shell); a change there is an admin change
+      - packages/ui/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ""
+jobs:
+  deploy:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config prd --project admin
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Deploy apps/admin
+        id: deploy
+        working-directory: apps/admin
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm run-script deploy
+      # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
+      # (deploy-os.yml says why `always()`).
+      - name: Notify Slack
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          APP_DISPLAY_NAME: Admin
+          PUBLIC_URL: https://admin.iterate.com
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

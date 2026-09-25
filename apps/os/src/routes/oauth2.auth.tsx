@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { ConsentCard } from "../components/consent/consent-card.tsx";
+import { ImpersonateCard } from "../components/consent/impersonate-card.tsx";
 import { InvalidRequest } from "../components/consent/invalid-request.tsx";
 import { approveConsentForm } from "../consent-page.server.ts";
 import { getConsent } from "../issuer.functions.ts";
@@ -22,7 +23,9 @@ export const Route = createFileRoute("/oauth2/auth")({
         title:
           loaderData?.view.kind === "consent"
             ? `Authorize ${loaderData.view.clientName} — iterate`
-            : "Invalid authorization request — iterate",
+            : loaderData?.view.kind === "impersonate"
+              ? `View ${loaderData.view.clientName} as ${loaderData.view.target} — iterate`
+              : "Invalid authorization request — iterate",
       },
     ],
   }),
@@ -41,5 +44,6 @@ function AuthorizePage() {
   const { view, platformOrigin } = Route.useLoaderData();
   const { authorization } = Route.useSearch();
   if (view.kind === "invalid") return <InvalidRequest description={view.description} />;
+  if (view.kind === "impersonate") return <ImpersonateCard view={view} />;
   return <ConsentCard view={view} authorization={authorization} platformOrigin={platformOrigin} />;
 }

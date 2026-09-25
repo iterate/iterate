@@ -36,15 +36,15 @@ Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 
 ## 2. Register it
 
-| File                                                                   | Change                                                                                                                                                         |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `envs.ts`                                                              | `<app>Envs` with `preview` (the per-PR parent: dev/preview account, `<app>-preview` on `iterate-dev-preview.workers.dev`) and `prd` (with `posthogProjectKey`) |
-| `scripts/lib/start-app.ts`                                             | `FIRST_PARTY_APPS`, which drives the deny zones and `ITERATE_APP_ORIGINS`                                                                                      |
-| `apps/os/scripts/preview-config.ts`                                    | `APPS`, so each PR previews it next to the platform and it gets its own `Sign in ↗` link                                                                       |
-| `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                       | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                   |
-| `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and both workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description                |
-| `apps/dash/src/apps.ts`                                                | only if the app opens a project: the dash's directory, keyed by the same name                                                                                  |
-| `envs.ts` `osEnvs.prd.projectWildcard.excludedHostnames`               | only for a custom domain under `iterate.com`                                                                                                                   |
+| File                                                                                          | Change                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `envs.ts`                                                                                     | `<app>Envs` with `preview` (the per-PR parent: dev/preview account, `<app>-preview` on `iterate-dev-preview.workers.dev`) and `prd` (with `posthogProjectKey`) |
+| `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and `ITERATE_APP_ORIGINS`                                                                                      |
+| `apps/os/scripts/preview-config.ts`                                                           | `APPS`, so each PR previews it next to the platform and it gets its own `Sign in ↗` link                                                                       |
+| `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                   |
+| `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml`, `preview-parents.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and the three workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description           |
+| `apps/dash/src/apps.ts`                                                                       | only if the app opens a project: the dash's directory, keyed by the same name                                                                                  |
+| `envs.ts` `osEnvs.prd.projectWildcard.excludedHostnames`                                      | only for a custom domain under `iterate.com`                                                                                                                   |
 
 The parent `<app>-preview` Worker does not need to exist in advance. The first preview deploy
 creates it from the same config.

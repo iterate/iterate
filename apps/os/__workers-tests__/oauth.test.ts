@@ -61,7 +61,7 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   expect(metadata).toMatchObject({
     issuer: ORIGIN,
     protected_resources: [`${ORIGIN}/api`, `${ORIGIN}/mcp`],
-    scopes_supported: ["iterate", "account", "organizations:write"],
+    scopes_supported: ["iterate", "account", "organizations:write", "admin"],
   });
   for (const protocol of ["api", "mcp"]) {
     expect(

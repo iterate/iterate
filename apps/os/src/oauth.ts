@@ -46,6 +46,11 @@ export const GrantProps = z.object({
   projects: z.array(z.string()).nullable(),
   /** Epoch ms: the grant is refused from here on, however recently it was used (`grantLifetime`). */
   deadline: z.number().int().positive(),
+  /** A PLATFORM ADMIN VIEWING AN APP AS THIS PERSON (consent.ts `#impersonate`): the grant is the
+   *  person's, and the admin is stamped beside them on every call (`Principal.impersonatedBy`). */
+  impersonatedBy: z
+    .object({ userId: z.string().startsWith("user_"), email: z.string() })
+    .optional(),
 });
 export type GrantProps = z.infer<typeof GrantProps>;
 
@@ -143,8 +148,26 @@ export async function accountStateOf(env: Env, userId: string): Promise<AccountS
   }
 }
 
+/** Whether `email` is one of the deployment's platform admins (app-config.ts `admins`), as the
+ *  configuration reads now. */
+export function isAdmin(env: Env, email: string): boolean {
+  return appConfigOf(env).admins.includes(email.trim().toLowerCase());
+}
+
+/** A grant's admin claims, against the `admins` list as it reads NOW: the `admin` scope needs its
+ *  own person listed, an impersonation its admin. Every admission and every refresh asks, so an
+ *  address the list drops loses both at its next request. */
+function adminClaimsHold(
+  env: Env,
+  grant: Pick<GrantProps, "email" | "impersonatedBy"> & { scope: readonly string[] },
+): boolean {
+  if (grant.scope.includes("admin") && !isAdmin(env, grant.email)) return false;
+  return !grant.impersonatedBy || isAdmin(env, grant.impersonatedBy.email);
+}
+
 /** Whether `grant` still admits its bearer: its token unexpired, its deadline not passed, its
- * person's email one `login.allowedEmails` admits, and no end on the person's account. A fresh read of the account on each admission — never memoized: provider
+ * person's email one `login.allowedEmails` admits, its admin claims still held (`adminClaimsHold`),
+ * and no end on the person's account. A fresh read of the account on each admission — never memoized: provider
  * KV expiry/deletion alone cannot deny a token during propagation or a refresh racing with logout,
  * and a memo here would let a revoked grant through for its life. (The live socket's 30 s
  * re-check, rpc.ts, is the one lag anywhere.) */
@@ -158,7 +181,8 @@ async function liveGrantAccount(env: Env, grant: AccessGrant): Promise<AccountSt
   if (
     grant.expiresAt <= Date.now() ||
     grant.deadline <= Date.now() ||
-    !emailAllowed(appConfigOf(env).login.allowedEmails, grant.email)
+    !emailAllowed(appConfigOf(env).login.allowedEmails, grant.email) ||
+    !adminClaimsHold(env, grant)
   )
     return null;
   const account = await accountStateOf(env, grant.userId);
@@ -208,9 +232,17 @@ export async function validateToken(
     : null;
   if (validated) {
     const authorization = await authorizationOf(env, validated);
-    if (authorization) return { ...validated, props: authorization };
-    logRefusal(resource, "grant_not_live");
-    return null;
+    if (!authorization) {
+      logRefusal(resource, "grant_not_live");
+      return null;
+    }
+    // consent grants `admin` for `/api` alone; an MCP client holding every project is refused, as
+    // the operator bearer is
+    if (authorization.reach === "every" && resource !== addresses.api) {
+      logRefusal(resource, "admin_scope_not_accepted");
+      return null;
+    }
+    return { ...validated, props: authorization };
   }
   if (await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret())) {
     if (resource === addresses.api)
@@ -270,6 +302,12 @@ export async function authorizationForToken(
   if (!validation) return null;
   if (!validation.props.grant && entryPoint !== "api") {
     logRefusal(addresses.api, "operator_bearer_not_accepted", entryPoint);
+    return null;
+  }
+  // A platform admin's grant is `/api`'s alone, like the operator bearer: a project host would
+  // count its holder a member of every project.
+  if (validation.props.reach === "every" && entryPoint !== "api") {
+    logRefusal(addresses.api, "admin_scope_not_accepted", entryPoint);
     return null;
   }
   if (validation.scope.includes("iterate")) return validation.props;
@@ -387,7 +425,10 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAdd
   });
 }
 
-/** A validated token as the platform's authorization, or null when its grant is no longer live. */
+/** A validated token as the platform's authorization, or null when its grant is no longer live. A
+ *  platform admin's grant (the `admin` scope, its person listed: `liveGrantAccount`) reaches every
+ *  project as that person; an impersonation reaches what the person viewed does, the admin named
+ *  beside them. */
 async function authorizationOf(
   env: Env,
   token: ValidatedAccessToken,
@@ -397,10 +438,19 @@ async function authorizationOf(
   const grant = { ...props.data, scope: token.scope, expiresAt: token.expiresAt * 1000 };
   const account = await liveGrantAccount(env, grant);
   if (!account) return null;
+  const { impersonatedBy } = grant;
   return {
-    principal: { actor: grant.userId, email: grant.email },
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
-    reach: { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
+    principal: {
+      actor: grant.userId,
+      email: grant.email,
+      ...(impersonatedBy && {
+        impersonatedBy: { actor: impersonatedBy.userId, email: impersonatedBy.email },
+      }),
+    },
+    reach: grant.scope.includes("admin")
+      ? "every"
+      : // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
+        { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
     grant: { ...grant, lastUsedAt: account.grantUses[grant.grantId]?.at },
   };
 }
@@ -484,6 +534,8 @@ async function grantLifetime(
   const grant = parsed.data;
   if (!emailAllowed(appConfigOf(env).login.allowedEmails, grant.email))
     throw refused("email_not_allowed", "The session is no longer active.");
+  if (!adminClaimsHold(env, { ...grant, scope: input.scope }))
+    throw refused("admin_not_listed", "The session is no longer active.");
   const remaining = Math.floor((grant.deadline - Date.now()) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime (`invalid_request`).
   if (remaining < 60) throw refused("deadline_passed", "The session has expired.");

@@ -39,6 +39,7 @@ const MINIMAL_CONFIG = {
   urls: { os: "", mcp: "", dash: "", ingressRouting: null },
   login: { password: "password" },
   cloudflareApiToken: "",
+  admins: [],
   secrets: { key: "secrets-key", previousKey: "", adminBearer: "" },
   deployId: "unversioned",
 };
@@ -120,6 +121,7 @@ const appConfigRows: {
         emailCode: { from: "iterate <login@iterate.com>" },
         google: { clientId: "google-id", clientSecret: "google-secret" },
       },
+      admins: [],
       secrets: { key: "secrets-key", previousKey: "the-old-key", adminBearer: "admin-bearer" },
       deployId: "unversioned",
     },
@@ -213,6 +215,15 @@ const appConfigRows: {
   {
     vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "[]" },
     throws: /login\.allowedEmails .*nobody could sign in/,
+  },
+  // the platform admins: exact addresses, lowercased; a pattern is refused, never read as one
+  {
+    vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]' },
+    becomes: { ...MINIMAL_CONFIG, admins: ["jonas@iterate.com"] },
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["*@iterate.com"]' },
+    throws: /admins\.0 .*expected exact email addresses/,
   },
   // Google is both halves or neither
   {
@@ -586,6 +597,7 @@ const expose = (config: AppConfig) => ({
   urls: config.urls,
   customHostnames: config.customHostnames,
   cloudflareApiToken: config.cloudflareApiToken.exposeSecret(),
+  admins: config.admins,
   login: {
     ...config.login,
     password: config.login.password.exposeSecret(),

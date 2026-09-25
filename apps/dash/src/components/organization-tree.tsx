@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
-import { useContextStub, useFacetLiveState } from "../lib/context-stub.ts";
+import { useContextStub, useFacetLiveState } from "iterate/react";
 
 export type OrganizationRole = "owner" | "member";
 type TreeProject = {

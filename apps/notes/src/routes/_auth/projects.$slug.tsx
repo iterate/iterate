@@ -2,7 +2,7 @@ import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
-import { useLiveState } from "iterate/react";
+import { useFacetLiveState } from "iterate/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -68,7 +68,7 @@ function NotesPage() {
           </BreadcrumbList>
         </Breadcrumb>
       }
-      account={{ email: info.principal.email || info.principal.actor }}
+      account={info.principal}
       locationKey={href}
     >
       <Editor key={data.project.id} project={data.project.id} initial={data.note} tip={data.tip} />
@@ -133,13 +133,7 @@ function Editor({
   // The project facet's live state says where creation stands, the same signal the dash's overview
   // reads; a project born before the saga existed has no creation record and is ready.
   const context = useProjectContext(api, project);
-  const live = useLiveState<unknown>(context, {
-    key: "project",
-    readSeed: async () =>
-      z
-        .object({ rev: z.number(), state: z.unknown() })
-        .parse(await context!.invoke("itx.facets.get('project').liveSnapshot()")),
-  });
+  const live = useFacetLiveState(context, "project");
   const creation = ProjectLive.safeParse(live.value).data?.creation;
   // oxlint-disable-next-line iterate/simple-truthiness-check -- null is a project with no creation record (ready); undefined is the live state not yet loaded (not ready)
   const ready = creation === null || creation?.status === "created";

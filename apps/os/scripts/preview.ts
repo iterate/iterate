@@ -1010,8 +1010,9 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and the parent's envs.ts entry): the vitest suite in its global-setup, the
  *  specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
- *  preview's Notes and Voice apps, the Notes session specs signing out in its Dash (NOTES_BASE_URL,
- *  VOICE_BASE_URL, DASH_BASE_URL; their specs fail in CI without them). The suite's line under the
+ *  preview's Notes, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
+ *  (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
+ *  them). The suite's line under the
  *  PR body's status line then says `passed` or `failed`. The e2e rows tagged `slow` run as asked,
  *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
  *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
@@ -1033,7 +1034,7 @@ async function runSuite(
     previewName,
     // the client apps the specs run against; the vitest rows use none
     suite === "specs"
-      ? ["notes", "voice", "dash"].map((name) => ({ name, url: appUrl(name) }))
+      ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
       : [],
   );
   let statusPr = prNumber;
@@ -1069,6 +1070,7 @@ async function runSuite(
           NOTES_BASE_URL: appUrl("notes"),
           VOICE_BASE_URL: appUrl("voice"),
           DASH_BASE_URL: appUrl("dash"),
+          ADMIN_BASE_URL: appUrl("admin"),
           ...PREVIEW_SUITE_TELEMETRY.specs,
         },
       });
