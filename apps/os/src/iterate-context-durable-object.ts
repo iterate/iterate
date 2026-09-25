@@ -156,6 +156,8 @@ export type AlarmTrace = {
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
   dueSchedules?: number;
+  /** On `alarm-fired`: how many runs a processor requested this pass started. */
+  runs?: number;
   facetWorkInFlight: number;
   /** Names, at most 32. */
   liveFacets: string[];
@@ -575,26 +577,56 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  incarnation left open is not here, and the wake record settles it `interrupted` (stream.ts) —
    *  a run is never re-run. */
   readonly #scriptRunsInFlight = new Set<number>();
+  /** Runs a PROCESSOR requested (`source.processor`, the engine's stamp), owed to the next alarm
+   *  pass, by the request's offset: the code, and when it was requested — the coordinator's
+   *  deadline, so re-deriving it writes nothing. In memory: a run a dead incarnation still owed is
+   *  open in `scriptRuns`, and the next wake record settles it `interrupted`, as it does a run cut
+   *  off mid-flight. */
+  readonly #runsOwedToTheAlarm = new Map<number, { code: string; requestedAt: number }>();
 
-  /** THE RUNNER, started at the commit of every `run-requested` — whoever appended it:
-   *  `itx.run` (library.ts: this request, then a wait for its settlement), a client's literal
-   *  append, the agent's loop, a schedule's occurrence. The request's OFFSET is the run's identity:
-   *  the settlement names it. Runs as the kernel: the loaded script's own `env.ITX` calls are
-   *  principal-less anyway (loaded code speaks for the project), and the request event carries who
-   *  asked. Not awaited — the settlement is the run's end, on the log, whether or not the requester
-   *  is still listening. */
+  /** THE RUNNER, for every `run-requested` committed — whoever appended it: `itx.run` (library.ts:
+   *  this request, then a wait for its settlement), a client's literal append, a schedule's
+   *  occurrence, the agent's loop. The request's OFFSET is the run's identity: the settlement names
+   *  it. A caller's request starts at its commit, as deep as the caller. A PROCESSOR's starts in
+   *  the next alarm pass (`#startRunsOwedToTheAlarm`), because an alarm is a fresh invocation.
+   *  Cloudflare refuses a call too many hops below the request it descends from ("Subrequest depth
+   *  limit exceeded"; not configurable — wrangler's `limits` are `cpu_ms` and `subrequests`, a
+   *  count), and a Durable Object's outgoing calls descend from one of its incoming requests
+   *  (workerd `IoContext::getCurrentIncomingRequest`). A loop of processor turns reaches this
+   *  context through ever deeper requests, so a run started at its commit ran out of hops: on a
+   *  preview (2026-09-25) an agent's script had 8 hops left at its first turn and 0 by its twelfth;
+   *  started from the alarm, 13 at every turn. */
   #startRequestedRuns(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/itx/run-requested") continue;
       const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
-      if (
-        this.#scriptRunsInFlight.has(event.offset) ||
-        !this.#stream.coreReducedState.scriptRuns[event.offset]
-      )
-        continue;
-      this.#scriptRunsInFlight.add(event.offset);
-      void this.#executeRun(event.offset, code);
+      if (event.source?.processor)
+        this.#runsOwedToTheAlarm.set(event.offset, { code, requestedAt: Date.now() });
+      else this.#startRun(event.offset, code);
     }
+  }
+
+  /** THE ALARM PASS'S FIRST JOB: every run a processor requested, started inside the alarm's own
+   *  invocation. Not awaited — the settlement is the run's end, as for any run. Answers how many. */
+  #startRunsOwedToTheAlarm(): number {
+    const owed = [...this.#runsOwedToTheAlarm];
+    this.#runsOwedToTheAlarm.clear();
+    return owed.filter(([offset, { code }]) => this.#startRun(offset, code)).length;
+  }
+
+  /** Runs as the kernel: the loaded script's own `env.ITX` calls are principal-less anyway (loaded
+   *  code speaks for the project), and the request event carries who asked. Not awaited — the
+   *  settlement is the run's end, on the log, whether or not the requester is still listening.
+   *  Answers whether it started: never a run already in flight or one already settled. */
+  #startRun(requestOffset: number, code: string): boolean {
+    if (
+      this.#scriptRunsInFlight.has(requestOffset) ||
+      !this.#stream.coreReducedState.scriptRuns[requestOffset]
+    )
+      return false;
+    this.#scriptRunsInFlight.add(requestOffset);
+    void this.#executeRun(requestOffset, code);
+    return true;
   }
 
   async #executeRun(requestOffset: number, code: string): Promise<void> {
@@ -609,20 +641,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(this.#scriptExecution(code));
-      // An agent's turns nest in the call chain until the runtime refuses a hop (#3019). The failed
-      // settlement is on the log only, so this warn is how its rate shows in Workers Logs. A run
-      // redirected to another context settles, and warns, on both.
-      if (
-        settlement.status === "failed" &&
-        settlement.error.includes("Subrequest depth limit exceeded")
-      )
-        console.warn({
-          event: "iterate-context.run-subrequest-depth-exceeded",
-          namespace: "iterate-context",
-          message: "a script run failed: the runtime refused a hop past its subrequest depth limit",
-          name: this.#durableObjectAddress.name,
-          requestOffset,
-        });
       try {
         settle(settlement);
       } catch (error) {
@@ -863,8 +881,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deadlines: () => [
       ...this.#durableAlarmDeadlines(),
       ...Object.values(this.#residency.deadlines()),
+      // The runs a processor requested: due since the earliest was requested.
+      ...[...this.#runsOwedToTheAlarm.values()].map(({ requestedAt }) => requestedAt),
     ],
-    held: () => this.#residency.holdsResident(),
+    // A run owed to the alarm holds the watch too: a held alarm would otherwise hold the run.
+    held: () => this.#residency.holdsResident() || this.#runsOwedToTheAlarm.size > 0,
     // The platform fault the watch works around (alarm-coordinator.ts): a re-arm is a warn the prd
     // fault alarm counts, and its telemetry pin (PINNED_WORKAROUNDS) waits out; a give-up is an
     // error — nothing here acts again for it.
@@ -894,7 +915,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
 
   /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the unclaimed-facet sweep is this incarnation's alone. */
+   *  claims; the unclaimed-facet sweep and the runs owed to the alarm are this incarnation's alone. */
   #durableAlarmDeadlines(): (number | null)[] {
     return [
       this.#stream.nextScheduledAppendAt(),
@@ -930,7 +951,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     facetHost: this.#facetHost,
     rpcStubs: this.#rpcStubs,
     library: this.#library,
-    scriptRunsInFlight: () => this.#scriptRunsInFlight.size,
+    scriptRunsInFlight: () => this.#scriptRunsInFlight.size + this.#runsOwedToTheAlarm.size,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     inboundCallsHeldChanged: () => this.#alarmCoordinator.watch(),
   });
@@ -938,7 +959,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #traceAlarm(
     reason: AlarmTrace["reason"],
     before: number | null,
-    extra: Pick<AlarmTrace, "error" | "dueSchedules"> = {},
+    extra: Pick<AlarmTrace, "error" | "dueSchedules" | "runs"> = {},
   ) {
     const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
@@ -1022,19 +1043,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
-   *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
-   *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
-   *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. The unclaimed-facet sweep is decided first in every pass; a wake with
-   *  nothing durable due is the sweep's alone and does nothing else. */
+  /** THE ALARM PASS, four jobs in order, under the coordinator's hold (nothing re-arms until it
+   *  completes; a pass that dies is retried by the runtime): the runs processors requested
+   *  (`#startRunsOwedToTheAlarm`), the due schedules, the stream-kept cursors' owed deliveries, the
+   *  due claims of hosted processors (each spent, then the facet's `revive()` — a facet still busy
+   *  claims again from there). Then the next deadline is derived from what is left. The
+   *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
+   *  alone and does nothing else. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
-    if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
+    if (
+      this.#runsOwedToTheAlarm.size === 0 &&
+      !this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)
+    ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
     }
@@ -1045,6 +1070,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
         this.#stream.appendWakeRecord("alarm");
+        const runs = this.#startRunsOwedToTheAlarm();
         // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
         // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
         const now = Date.now();
@@ -1056,7 +1082,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               a.scheduledAtOffset - b.scheduledAtOffset,
           )
           .slice(0, 32);
-        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length });
+        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length, runs });
         for (const row of due) {
           if (this.#stream.coreReducedState.paused) break;
           if (
