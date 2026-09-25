@@ -528,7 +528,15 @@ const launcherProcedures = {
         name: z
           .string()
           .optional()
-          .describe("Routing slug: the tunnel is <name>--<project> (default: a random one)"),
+          .describe(
+            "The tunnel's name and routing slug: the tunnel is <name>--<project> (default: a random one)",
+          ),
+        hostname: z
+          .string()
+          .optional()
+          .describe(
+            "Serve on this hostname of the project instead of the name's, e.g. hello.tunnels.example.com",
+          ),
         public: z
           .boolean()
           .optional()
@@ -554,7 +562,8 @@ const launcherProcedures = {
         reconnect: async () => (await connectConfigured()).connection,
         project,
         port: input.port,
-        routingSlug: input.name,
+        tunnelName: input.name,
+        hostname: input.hostname,
         public: input.public,
       });
     }),

@@ -171,9 +171,10 @@ function causeOf(error: unknown): string {
  *  tunnel whose network is gone for good says so and exits. */
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
 
-/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>` with
- *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL on stdout, and on
- *  Ctrl-C delete the route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
+/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<name>` with
+ *  the fetch route `tunnel-<name>` taking the `<name>` routing slug's host to it (or, given a
+ *  `hostname`, that hostname's requests alone), print the URL on stdout, and on Ctrl-C delete the
+ *  route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
  *  the platform sets it again whenever it re-attaches the lend and removes it when the lend ends —
  *  a tunnel killed outright, or asleep, leaves no route behind. A connection that closes (its
  *  heartbeat found it dead, iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel
@@ -184,14 +185,23 @@ export async function runTunnel(input: {
   reconnect: () => Promise<IterateConnection>;
   project: string;
   port: number;
-  routingSlug?: string;
+  tunnelName?: string;
+  /** the one hostname the route matches (`url: { hostname }`) instead of the name's routing slug */
+  hostname?: string;
   public?: boolean;
   /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
   reconnectDelaysMs?: readonly number[];
 }): Promise<void> {
-  const routingSlug = input.routingSlug || `t${randomBytes(4).toString("hex")}`;
-  const fetchRouteName = `tunnel-${routingSlug}`;
-  const target = `itx.tunnels.${routingSlug}`;
+  const tunnelName = input.tunnelName || `t${randomBytes(4).toString("hex")}`;
+  const fetchRouteName = `tunnel-${tunnelName}`;
+  const target = `itx.tunnels.${tunnelName}`;
+  const { hostname } = input;
+  // The platform takes any URLPattern hostname (`*` included); a tunnel's is one literal host.
+  if (hostname && !/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]+$/.test(hostname))
+    throw new Error(
+      `--hostname ${JSON.stringify(hostname)} is not one lowercase hostname, e.g. hello.tunnels.example.com`,
+    );
+  const requestMatcher = hostname ? { url: { hostname } } : { routingSlug: tunnelName };
   // Listening before the route is set: until a listener is installed the OS's default action ends
   // the process at once, which would leave the route standing.
   let stop = () => {};
@@ -210,21 +220,23 @@ export async function runTunnel(input: {
     const conflict = (await project.fetchRoutes.list()).find(
       (route) =>
         (route.fetchRouteName === fetchRouteName ||
-          route.requestMatcher.routingSlug === routingSlug) &&
+          (hostname
+            ? route.requestMatcher.url?.hostname === hostname
+            : route.requestMatcher.routingSlug === tunnelName)) &&
         !(route.fetchRouteName === fetchRouteName && route.target.join(".") === target),
     );
     if (conflict)
       throw new Error(
-        `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another --name.`,
+        `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another ${hostname ? "--name or --hostname" : "--name"}.`,
       );
-    const url = await project.url({ routingSlug });
+    const url = hostname ? `https://${hostname}/` : await project.url({ routingSlug: tunnelName });
     using lend = await project.provide(
       target,
       new LocalPortRpcTarget(input.port, (line) => console.error(line)),
       {
         fetchRoute: {
           fetchRouteName,
-          requestMatcher: { routingSlug },
+          requestMatcher,
           authRequirement: input.public ? null : { visitors: "project-members" },
         },
       },
