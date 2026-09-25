@@ -225,7 +225,7 @@ test("a name still taken past the bound is refused with its reason, and no repo 
   expect(await settle(() => a.create("/repos/config"))).toMatchObject({
     error: {
       message: expect.stringMatching(
-        /the Artifacts repo name prj_a\.repos--config is taken, yet no repo by that name has read in 19000 ms — Artifacts has not finished deleting/,
+        /the Artifacts repo name prj_a\.repos--config is taken, yet no repo by that name has read in 19000 ms — a deletion of that name Artifacts has not finished/,
       ),
     },
     logs: [{ rounds: 7, waitedMs: 19_000, outcome: "still-taken" }],

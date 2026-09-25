@@ -270,7 +270,7 @@ export function projectScopedArtifacts(input: {
         if (settled) return { created };
         if (givingUp)
           throw new Error(
-            `itx.cfArtifacts: the Artifacts repo name ${name} is taken, yet no repo by that name has read in ${waitedMs} ms — Artifacts has not finished deleting a repo of that name (it deletes asynchronously); create it again once the deletion lands`,
+            `itx.cfArtifacts: the Artifacts repo name ${name} is taken, yet no repo by that name has read in ${waitedMs} ms — a deletion of that name Artifacts has not finished (it deletes asynchronously), or a create that landed and does not read yet; create it again once the name reads or is free`,
           );
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
